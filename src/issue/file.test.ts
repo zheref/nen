@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedRunner } from "../exec/seam.js";
+import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { parseLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { createArgv, fileIssue, mentionedIssues, openPrCheck, validateFiling, type FileRequest } from "./file.js";
@@ -28,7 +28,7 @@ describe("mentionedIssues", () => {
 
 describe("openPrCheck -- the guard against closing an issue with work in flight", () => {
   it("reports blocked when an open PR closes or mentions the issue", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       {
         match:
           "gh pr list --repo zheref/nen --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
@@ -39,7 +39,7 @@ describe("openPrCheck -- the guard against closing an issue with work in flight"
         },
       },
     ]);
-    const report = openPrCheck(runner, TARGET, [5, 12, 99]);
+    const report = openPrCheck(seams, TARGET, [5, 12, 99]);
     expect(report.findings.find((f): boolean => f.issue === 5)?.blocked).toBe(true);
     expect(report.findings.find((f): boolean => f.issue === 12)?.blocked).toBe(true);
     expect(report.findings.find((f): boolean => f.issue === 99)?.blocked).toBe(false);
@@ -47,14 +47,14 @@ describe("openPrCheck -- the guard against closing an issue with work in flight"
   });
 
   it("throws, naming the repository, when the list call fails", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       {
         match:
           "gh pr list --repo zheref/nen --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
         result: { code: 1, stderr: "boom" },
       },
     ]);
-    expect(() => openPrCheck(runner, TARGET, [1])).toThrow(/zheref\/nen/);
+    expect(() => openPrCheck(seams, TARGET, [1])).toThrow(/zheref\/nen/);
   });
 });
 
@@ -145,10 +145,10 @@ describe("fileIssue", () => {
       forbiddenFamilies: [],
     };
     const argv = createArgv(TARGET, request);
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: `gh ${argv.join(" ")}`, result: { stdout: "https://github.com/zheref/nen/issues/42\n" } },
     ]);
-    expect(fileIssue(runner, TARGET, request)).toEqual({
+    expect(fileIssue(seams, TARGET, request)).toEqual({
       url: "https://github.com/zheref/nen/issues/42",
       number: 42,
     });
@@ -163,7 +163,7 @@ describe("fileIssue", () => {
       forbiddenFamilies: [],
     };
     const argv = createArgv(TARGET, request);
-    const runner = new ScriptedRunner([{ match: `gh ${argv.join(" ")}`, result: { stdout: "" } }]);
-    expect(() => fileIssue(runner, TARGET, request)).toThrow(/no issue URL/);
+    const seams = new ScriptedSeams([{ match: `gh ${argv.join(" ")}`, result: { stdout: "" } }]);
+    expect(() => fileIssue(seams, TARGET, request)).toThrow(/no issue URL/);
   });
 });

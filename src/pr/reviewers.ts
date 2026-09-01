@@ -10,7 +10,7 @@
 // something this module can enforce from inside a single `gh` call; it is
 // carried in the usage text (src/pr/verb.ts) as a warning instead.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 
 export function requestReviewsArgv(target: Target, prNumber: number, reviewers: readonly string[]): readonly string[] {
@@ -25,7 +25,7 @@ export interface RequestReviewsResult {
 }
 
 export function requestReviews(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   prNumber: number,
   reviewers: readonly string[],
@@ -33,12 +33,12 @@ export function requestReviews(
   if (reviewers.length === 0) {
     return { ok: false, message: "no reviewers named -- --reviewers takes a comma-separated list" };
   }
-  const result = runner.run({ bin: "gh", args: [...requestReviewsArgv(target, prNumber, reviewers)] });
+  const result = seams.run(GH, [...requestReviewsArgv(target, prNumber, reviewers)]);
   if (result.code !== 0) {
     return {
       ok: false,
       message: `could not request reviewers on ${target.slug}#${prNumber}: ${
-        (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`
+        outputLines(result.stderr).join(" ") || `exit ${result.code}`
       }`,
     };
   }

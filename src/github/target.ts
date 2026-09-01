@@ -17,7 +17,7 @@
 // and gets a named failure when the remote resolves to nothing.
 
 import { looksLikeOwnerSlug } from "../repo/root.js";
-import { stdoutLines, type Runner } from "../exec/seam.js";
+import { GIT, outputLines, type Seams } from "../seam/exec.js";
 
 export interface Target {
   readonly owner: string;
@@ -53,12 +53,12 @@ export function parseTarget(value: string): Target {
 // whichever repository the shell happened to be standing in -- which is exactly
 // how a mutating run lands on the wrong backlog.
 export function targetFromRemote(
-  runner: Runner,
+  seams: Seams,
   cwd: string,
   remote = "origin",
 ): Target {
-  const result = runner.run({ bin: "git", args: ["remote", "get-url", remote], cwd });
-  const url = stdoutLines(result)[0];
+  const result = seams.run(GIT, ["remote", "get-url", remote], { cwd });
+  const url = outputLines(result.stdout)[0];
   if (result.code !== 0 || url === undefined) {
     throw new TargetError(
       `no '${remote}' remote in '${cwd}', so there is nothing to resolve a repository from. Name it with --target owner/name.`,

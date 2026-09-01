@@ -16,7 +16,7 @@
 // tag" -- this module creates a local tag once and stops there unless the
 // caller explicitly asked for the push too.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GIT, outputLines, type Seams } from "../seam/exec.js";
 
 export interface CutTagOptions {
   readonly name: string;
@@ -33,12 +33,12 @@ export interface CutTagResult {
   readonly error: string | null;
 }
 
-function run(runner: Runner, args: readonly string[], cwd: string): { code: number; stdout: string; stderr: string } {
-  const result = runner.run({ bin: "git", args: [...args], cwd });
+function run(seams: Seams, args: readonly string[], cwd: string): { code: number; stdout: string; stderr: string } {
+  const result = seams.run(GIT, [...args], { cwd });
   return { code: result.code, stdout: result.stdout, stderr: result.stderr };
 }
 
-export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): CutTagResult {
+export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTagResult {
   const log: string[] = [];
   const trunk = options.trunk ?? "main";
 
@@ -49,13 +49,13 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
   // "found nothing" vs "could not look" confusion this module exists to
   // avoid (../issue/search.ts:205-208 draws the same line). A tag is never
   // cut on a name whose existence was never actually checked.
-  const existsRemote = run(runner, ["ls-remote", "--tags", "origin", options.name], cwd);
+  const existsRemote = run(seams, ["ls-remote", "--tags", "origin", options.name], cwd);
   if (existsRemote.code !== 0) {
     return {
       ok: false,
       pushed: false,
       log,
-      error: `could not determine whether '${options.name}' already exists on origin (${lines(existsRemote.stderr).join(" ") || `exit ${existsRemote.code}`}) -- a tag is never cut on an unverified name`,
+      error: `could not determine whether '${options.name}' already exists on origin (${outputLines(existsRemote.stderr).join(" ") || `exit ${existsRemote.code}`}) -- a tag is never cut on an unverified name`,
     };
   }
   if (existsRemote.stdout.trim() !== "") {
@@ -66,13 +66,13 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
       error: `tag '${options.name}' already exists on origin -- re-tagging is never the fix; cut a new name if this was a mistake`,
     };
   }
-  const existsLocal = run(runner, ["tag", "-l", options.name], cwd);
+  const existsLocal = run(seams, ["tag", "-l", options.name], cwd);
   if (existsLocal.code !== 0) {
     return {
       ok: false,
       pushed: false,
       log,
-      error: `could not determine whether '${options.name}' already exists locally (${lines(existsLocal.stderr).join(" ") || `exit ${existsLocal.code}`}) -- a tag is never cut on an unverified name`,
+      error: `could not determine whether '${options.name}' already exists locally (${outputLines(existsLocal.stderr).join(" ") || `exit ${existsLocal.code}`}) -- a tag is never cut on an unverified name`,
     };
   }
   if (existsLocal.stdout.trim() !== "") {
@@ -80,13 +80,13 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
   }
   log.push(`'${options.name}' does not exist locally or on origin`);
 
-  const ancestor = run(runner, ["merge-base", "--is-ancestor", options.at, `origin/${trunk}`], cwd);
+  const ancestor = run(seams, ["merge-base", "--is-ancestor", options.at, `origin/${trunk}`], cwd);
   if (ancestor.code > 1) {
     return {
       ok: false,
       pushed: false,
       log,
-      error: `could not test reachability of '${options.at}' against origin/${trunk}: ${lines(ancestor.stderr).join(" ") || `exit ${ancestor.code}`}`,
+      error: `could not test reachability of '${options.at}' against origin/${trunk}: ${outputLines(ancestor.stderr).join(" ") || `exit ${ancestor.code}`}`,
     };
   }
   if (ancestor.code !== 0) {
@@ -107,13 +107,13 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
   // date would see it. When no --message is given the tag name itself is the
   // message, rather than making the flag required.
   const tagArgs = ["tag", "-a", "-m", options.message ?? options.name, options.name, options.at];
-  const tag = run(runner, tagArgs, cwd);
+  const tag = run(seams, tagArgs, cwd);
   if (tag.code !== 0) {
     return {
       ok: false,
       pushed: false,
       log,
-      error: `git tag failed: ${lines(tag.stderr).join(" ") || `exit ${tag.code}`}`,
+      error: `git tag failed: ${outputLines(tag.stderr).join(" ") || `exit ${tag.code}`}`,
     };
   }
   log.push(`created local tag '${options.name}' at ${options.at}`);
@@ -123,13 +123,13 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
     return { ok: true, pushed: false, log, error: null };
   }
 
-  const push = run(runner, ["push", "origin", options.name], cwd);
+  const push = run(seams, ["push", "origin", options.name], cwd);
   if (push.code !== 0) {
     return {
       ok: false,
       pushed: false,
       log,
-      error: `tag created locally but the push failed: ${lines(push.stderr).join(" ") || `exit ${push.code}`}`,
+      error: `tag created locally but the push failed: ${outputLines(push.stderr).join(" ") || `exit ${push.code}`}`,
     };
   }
   log.push(`pushed '${options.name}' to origin`);

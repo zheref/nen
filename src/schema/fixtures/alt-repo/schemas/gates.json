@@ -23,7 +23,8 @@
       "name": "sentry",
       "login_pattern": { "pattern": "sentry|watchtower", "ignoreCase": true },
       "round_check_pattern": { "pattern": "^sentry / sweep$", "ignoreCase": true },
-      "enrolment_check_pattern": { "pattern": "^sentry / sweep$", "ignoreCase": false }
+      "enrolment_check_pattern": { "pattern": "^sentry / sweep$", "ignoreCase": false },
+      "approves_when_posted_at_head": true
     }
   ],
   "default_approvers": ["itachi", "kisame"],

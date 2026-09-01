@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedRunner } from "../exec/seam.js";
+import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { fetchPullRequest, FetchError, reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
 
@@ -10,7 +10,7 @@ function scriptedFetch(overrides: {
   reviews?: unknown[];
   threadsNodes?: unknown[];
   hasNextPage?: boolean;
-}): ScriptedRunner {
+}): ScriptedSeams {
   const view = {
     number: 9,
     headRefOid: "abc123",
@@ -29,7 +29,7 @@ function scriptedFetch(overrides: {
     reviewRequests: [],
     ...overrides.view,
   };
-  return new ScriptedRunner([
+  return new ScriptedSeams([
     { match: `gh ${viewArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(view) } },
     { match: `gh ${reviewsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(overrides.reviews ?? []) } },
     {
@@ -54,11 +54,11 @@ function scriptedFetch(overrides: {
 
 describe("fetchPullRequest -- one typed snapshot from three gh calls", () => {
   it("parses the PR, checks, reviews, requests and threads", () => {
-    const runner = scriptedFetch({
+    const seams = scriptedFetch({
       reviews: [{ user: { login: "sasuke" }, state: "APPROVED", commit_id: "abc123", submitted_at: "2026-01-01T00:00:00Z" }],
       threadsNodes: [{ id: "t1", isResolved: false }],
     });
-    const snapshot = fetchPullRequest(runner, TARGET, 9);
+    const snapshot = fetchPullRequest(seams, TARGET, 9);
     expect(snapshot.pr.number).toBe(9);
     expect(snapshot.pr.headSha).toBe("abc123");
     expect(snapshot.reviews).toEqual([
@@ -69,19 +69,19 @@ describe("fetchPullRequest -- one typed snapshot from three gh calls", () => {
   });
 
   it("flags a full review-thread page as truncated", () => {
-    const runner = scriptedFetch({ hasNextPage: true });
-    expect(fetchPullRequest(runner, TARGET, 9).threadsTruncated).toBe(true);
+    const seams = scriptedFetch({ hasNextPage: true });
+    expect(fetchPullRequest(seams, TARGET, 9).threadsTruncated).toBe(true);
   });
 
   it("throws a named FetchError rather than reading a malformed rollup as empty", () => {
-    const runner = scriptedFetch({ view: { statusCheckRollup: [{ bogus: true }] } });
-    expect(() => fetchPullRequest(runner, TARGET, 9)).toThrow(FetchError);
+    const seams = scriptedFetch({ view: { statusCheckRollup: [{ bogus: true }] } });
+    expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(FetchError);
   });
 
   it("throws when the view call itself fails", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: `gh ${viewArgv(TARGET, 9).join(" ")}`, result: { code: 1, stderr: "not found" } },
     ]);
-    expect(() => fetchPullRequest(runner, TARGET, 9)).toThrow(/not found/);
+    expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(/not found/);
   });
 });

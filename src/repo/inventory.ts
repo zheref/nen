@@ -12,7 +12,8 @@
 // discipline ../issue/chain.ts's role map already applies to the chain-state
 // labels.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { rawLines } from "../seam/lines.js";
 import type { Target } from "../github/target.js";
 import { parseIssueList, type FoundIssue } from "../issue/search.js";
 
@@ -43,17 +44,17 @@ export interface RepoInventory {
 
 const ISSUE_FIELDS = "number,title,state,url,labels,updatedAt,closedAt";
 
-function runOrThrow(runner: Runner, args: readonly string[], what: string): string {
-  const result = runner.run({ bin: "gh", args: [...args] });
+function runOrThrow(seams: Seams, args: readonly string[], what: string): string {
+  const result = seams.run(GH, [...args]);
   if (result.code !== 0) {
-    throw new Error(`could not fetch ${what}: ${(result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`}`);
+    throw new Error(`could not fetch ${what}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
   }
   return result.stdout;
 }
 
-export function listEpics(runner: Runner, target: Target, epicLabel: string): readonly FoundIssue[] {
+export function listEpics(seams: Seams, target: Target, epicLabel: string): readonly FoundIssue[] {
   const raw = runOrThrow(
-    runner,
+    seams,
     ["issue", "list", "--repo", target.slug, "--state", "open", "--label", epicLabel, "--limit", "100", "--json", ISSUE_FIELDS],
     `${target.slug}'s open epics`,
   );
@@ -62,9 +63,9 @@ export function listEpics(runner: Runner, target: Target, epicLabel: string): re
 
 // Sub-issues, resolved by the SAME REST endpoint ../issue/subissue.ts already
 // reads an id through -- gh's issue-list JSON carries no parent/child edge.
-export function listChildren(runner: Runner, target: Target, epicNumber: number): readonly FoundIssue[] {
+export function listChildren(seams: Seams, target: Target, epicNumber: number): readonly FoundIssue[] {
   const raw = runOrThrow(
-    runner,
+    seams,
     ["api", `repos/${target.slug}/issues/${epicNumber}/sub_issues`],
     `${target.slug}#${epicNumber}'s sub-issues`,
   );
@@ -91,20 +92,20 @@ export function listChildren(runner: Runner, target: Target, epicNumber: number)
 }
 
 export function listIntegrationBranches(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   prefix: string,
   trunk: string,
 ): readonly IntegrationBranch[] {
   const raw = runOrThrow(
-    runner,
+    seams,
     ["api", `repos/${target.slug}/branches`, "--paginate", "-q", ".[].name"],
     `${target.slug}'s branches`,
   );
-  const names = lines(raw).filter((name): boolean => name.startsWith(prefix));
+  const names = rawLines(raw).filter((name): boolean => name.startsWith(prefix));
   return names.map((name): IntegrationBranch => {
     const compareRaw = runOrThrow(
-      runner,
+      seams,
       ["api", `repos/${target.slug}/compare/${trunk}...${name}`],
       `${target.slug}'s ${name} vs ${trunk}`,
     );
@@ -119,9 +120,9 @@ export function listIntegrationBranches(
 
 const PR_FIELDS = "number,title,baseRefName,url,isDraft";
 
-export function listOpenPrs(runner: Runner, target: Target): readonly OpenPrSummary[] {
+export function listOpenPrs(seams: Seams, target: Target): readonly OpenPrSummary[] {
   const raw = runOrThrow(
-    runner,
+    seams,
     ["pr", "list", "--repo", target.slug, "--state", "open", "--limit", "100", "--json", PR_FIELDS],
     `${target.slug}'s open PRs`,
   );
@@ -140,19 +141,19 @@ export function listOpenPrs(runner: Runner, target: Target): readonly OpenPrSumm
 }
 
 export function inventoryRepo(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   epicLabel: string,
   integrationPrefix: string,
   trunk: string,
 ): RepoInventory {
-  const epics = listEpics(runner, target, epicLabel).map((epic): EpicEntry => ({
+  const epics = listEpics(seams, target, epicLabel).map((epic): EpicEntry => ({
     epic,
-    children: listChildren(runner, target, epic.number),
+    children: listChildren(seams, target, epic.number),
   }));
   return {
     epics,
-    integrationBranches: listIntegrationBranches(runner, target, integrationPrefix, trunk),
-    openPrs: listOpenPrs(runner, target),
+    integrationBranches: listIntegrationBranches(seams, target, integrationPrefix, trunk),
+    openPrs: listOpenPrs(seams, target),
   };
 }

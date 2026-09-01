@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedRunner } from "../exec/seam.js";
+import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { parseLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import type { FileRequest } from "../issue/file.js";
@@ -85,14 +85,14 @@ describe("compareReadBack", () => {
 
 describe("fileIdea -- file, then read back, then compare", () => {
   it("returns refusals without ever calling gh when the request is invalid", () => {
-    const runner = new ScriptedRunner([]);
-    const result = fileIdea(runner, TARGET, request({ title: "" }), "body", taxonomy());
+    const seams = new ScriptedSeams([]);
+    const result = fileIdea(seams, TARGET, request({ title: "" }), "body", taxonomy());
     expect("refusals" in result && result.refusals.length > 0).toBe(true);
-    expect(runner.calls).toEqual([]);
+    expect(seams.calls).toEqual([]);
   });
 
   it("files, reads back, and finds no mismatch on a clean round trip", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       {
         match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
@@ -102,12 +102,12 @@ describe("fileIdea -- file, then read back, then compare", () => {
         result: { stdout: JSON.stringify({ title: "an idea", body: "the body", labels: [{ name: "stage:idea" }] }) },
       },
     ]);
-    const result = fileIdea(runner, TARGET, request(), "the body", taxonomy());
+    const result = fileIdea(seams, TARGET, request(), "the body", taxonomy());
     expect("mismatches" in result && result.mismatches).toEqual([]);
   });
 
   it("surfaces a mismatch rather than reporting success", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       {
         match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
@@ -117,18 +117,18 @@ describe("fileIdea -- file, then read back, then compare", () => {
         result: { stdout: JSON.stringify({ title: "SOMETHING ELSE", body: "the body", labels: [{ name: "stage:idea" }] }) },
       },
     ]);
-    const result = fileIdea(runner, TARGET, request(), "the body", taxonomy());
+    const result = fileIdea(seams, TARGET, request(), "the body", taxonomy());
     expect("mismatches" in result && result.mismatches.length).toBe(1);
   });
 
   it("throws a named error when the read-back call itself fails -- the issue still exists", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       {
         match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       { match: "gh issue view 9 --repo zheref/nen --json title,body,labels", result: { code: 1, stderr: "down" } },
     ]);
-    expect(() => fileIdea(runner, TARGET, request(), "the body", taxonomy())).toThrow(FileIdeaError);
+    expect(() => fileIdea(seams, TARGET, request(), "the body", taxonomy())).toThrow(FileIdeaError);
   });
 });

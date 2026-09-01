@@ -25,7 +25,7 @@
 // issues are the same problem. Those are § 2's "stays with the LLM" list, and a
 // verb that guessed one would be scoped wrong rather than ambitious.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { decomposeLabelName, type LabelTaxonomy } from "../schema/labels.js";
 
@@ -105,29 +105,26 @@ export function mentionedIssues(body: string): number[] {
 }
 
 export function openPrCheck(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   issues: readonly number[],
 ): OpenPrReport {
-  const result = runner.run({
-    bin: "gh",
-    args: [
-      "pr",
-      "list",
-      "--repo",
-      target.slug,
-      "--state",
-      "open",
-      "--limit",
-      String(OPEN_PR_LIMIT),
-      "--json",
-      PR_FIELDS,
-    ],
-  });
+  const result = seams.run(GH, [
+    "pr",
+    "list",
+    "--repo",
+    target.slug,
+    "--state",
+    "open",
+    "--limit",
+    String(OPEN_PR_LIMIT),
+    "--json",
+    PR_FIELDS,
+  ]);
   if (result.code !== 0) {
     throw new Error(
       `could not list open pull requests on ${target.slug}: ${
-        (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`
+        outputLines(result.stderr).join(" ") || `exit ${result.code}`
       }`,
     );
   }
@@ -233,13 +230,11 @@ export interface FileResult {
 
 const ISSUE_URL = /https:\/\/[^\s]+\/issues\/(\d+)/;
 
-export function fileIssue(runner: Runner, target: Target, request: FileRequest): FileResult {
-  const result = runner.run({ bin: "gh", args: createArgv(target, request) });
+export function fileIssue(seams: Seams, target: Target, request: FileRequest): FileResult {
+  const result = seams.run(GH, createArgv(target, request));
   if (result.code !== 0) {
     throw new Error(
-      `issue creation failed: ${
-        (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`
-      }`,
+      `issue creation failed: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,
     );
   }
   // The URL is READ OUT of stdout rather than assumed: a `gh` that printed a

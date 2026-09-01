@@ -26,7 +26,7 @@
 // is the whole truth. A PR with over 100 review threads is already a
 // pathological case a human is looking at directly.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import {
   parseCheckRollup,
@@ -100,18 +100,16 @@ export function reviewThreadsArgv(target: Target, prNumber: number): readonly st
   ];
 }
 
-function runOrThrow(runner: Runner, args: readonly string[], what: string): string {
-  const result = runner.run({ bin: "gh", args: [...args] });
+function runOrThrow(seams: Seams, args: readonly string[], what: string): string {
+  const result = seams.run(GH, [...args]);
   if (result.code !== 0) {
-    throw new FetchError(
-      `could not fetch ${what}: ${(result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`}`,
-    );
+    throw new FetchError(`could not fetch ${what}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
   }
   return result.stdout;
 }
 
-export function fetchPullRequest(runner: Runner, target: Target, prNumber: number): PrSnapshot {
-  const viewRaw = runOrThrow(runner, viewArgv(target, prNumber), `${target.slug}#${prNumber}`);
+export function fetchPullRequest(seams: Seams, target: Target, prNumber: number): PrSnapshot {
+  const viewRaw = runOrThrow(seams, viewArgv(target, prNumber), `${target.slug}#${prNumber}`);
   let view: Record<string, unknown>;
   try {
     view = JSON.parse(viewRaw) as Record<string, unknown>;
@@ -128,12 +126,12 @@ export function fetchPullRequest(runner: Runner, target: Target, prNumber: numbe
     throw new FetchError(`${target.slug}#${prNumber}: ${reviewRequests.error.path} -- ${reviewRequests.error.message}`);
   }
 
-  const reviewsRaw = runOrThrow(runner, reviewsArgv(target, prNumber), `${target.slug}#${prNumber} reviews`);
+  const reviewsRaw = runOrThrow(seams, reviewsArgv(target, prNumber), `${target.slug}#${prNumber} reviews`);
   const reviews = parseReviews(JSON.parse(reviewsRaw === "" ? "[]" : reviewsRaw));
   if (!reviews.ok) throw new FetchError(`${target.slug}#${prNumber}: ${reviews.error.path} -- ${reviews.error.message}`);
 
   const threadsRaw = runOrThrow(
-    runner,
+    seams,
     reviewThreadsArgv(target, prNumber),
     `${target.slug}#${prNumber} review threads`,
   );

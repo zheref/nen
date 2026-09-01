@@ -15,7 +15,7 @@
 // it: the new name already present and the old name gone is "already done",
 // reported as success, not retried.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 
 export interface RenameEntry {
@@ -56,10 +56,10 @@ export interface RenameResult {
   readonly message: string;
 }
 
-export function listLabelNames(runner: Runner, target: Target): ReadonlySet<string> {
-  const result = runner.run({ bin: "gh", args: [...listLabelNamesArgv(target)] });
+export function listLabelNames(seams: Seams, target: Target): ReadonlySet<string> {
+  const result = seams.run(GH, [...listLabelNamesArgv(target)]);
   if (result.code !== 0) {
-    throw new Error(`could not list labels on ${target.slug}: ${lines(result.stderr).join(" ") || `exit ${result.code}`}`);
+    throw new Error(`could not list labels on ${target.slug}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
   }
   const parsed: unknown = JSON.parse(result.stdout.trim() === "" ? "[]" : result.stdout);
   if (!Array.isArray(parsed)) return new Set();
@@ -69,12 +69,12 @@ export function listLabelNames(runner: Runner, target: Target): ReadonlySet<stri
 }
 
 export function renameLabels(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   entries: readonly RenameEntry[],
   dryRun: boolean,
 ): readonly RenameResult[] {
-  const existing = new Set(listLabelNames(runner, target));
+  const existing = new Set(listLabelNames(seams, target));
   const results: RenameResult[] = [];
 
   for (const entry of entries) {
@@ -100,13 +100,13 @@ export function renameLabels(
       continue;
     }
 
-    const result = runner.run({ bin: "gh", args: [...renameArgv(target, entry)] });
+    const result = seams.run(GH, [...renameArgv(target, entry)]);
     if (result.code !== 0) {
       results.push({
         from: entry.from,
         to: entry.to,
         status: "failed",
-        message: lines(result.stderr).at(-1) ?? `exit ${result.code}`,
+        message: outputLines(result.stderr).at(-1) ?? `exit ${result.code}`,
       });
       continue;
     }

@@ -9,7 +9,7 @@
 // not a habit": getting it wrong needs no judgment error, only checking it
 // against the wrong two commits.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GIT, outputLines, type Seams } from "../seam/exec.js";
 
 export interface SelfCheckResult {
   readonly prMergeSha: string;
@@ -28,25 +28,25 @@ export class SelfCheckError extends Error {
   }
 }
 
-function isAncestor(runner: Runner, cwd: string, ancestor: string, descendant: string): boolean {
-  const result = runner.run({ bin: "git", args: ["merge-base", "--is-ancestor", ancestor, descendant], cwd });
+function isAncestor(seams: Seams, cwd: string, ancestor: string, descendant: string): boolean {
+  const result = seams.run(GIT, ["merge-base", "--is-ancestor", ancestor, descendant], { cwd });
   if (result.code > 1) {
     throw new SelfCheckError(
-      `could not test whether '${ancestor}' is an ancestor of '${descendant}': ${lines(result.stderr).join(" ") || `exit ${result.code}`}`,
+      `could not test whether '${ancestor}' is an ancestor of '${descendant}': ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,
     );
   }
   return result.code === 0;
 }
 
 export function checkSelfEnumeration(
-  runner: Runner,
+  seams: Seams,
   cwd: string,
   prMergeSha: string,
   previousTag: string,
   cutPoint: string,
 ): SelfCheckResult {
-  const reachableFromCutPoint = isAncestor(runner, cwd, prMergeSha, cutPoint);
-  const alreadyInPreviousTag = isAncestor(runner, cwd, prMergeSha, previousTag);
+  const reachableFromCutPoint = isAncestor(seams, cwd, prMergeSha, cutPoint);
+  const alreadyInPreviousTag = isAncestor(seams, cwd, prMergeSha, previousTag);
   return {
     prMergeSha,
     previousTag,

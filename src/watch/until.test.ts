@@ -1,32 +1,34 @@
 import { describe, expect, it } from "vitest";
-import type { Runner, RunResult } from "../exec/seam.js";
+import type { CommandResult, Seams } from "../seam/exec.js";
 import { watchUntil } from "./until.js";
 
-// A runner whose results come from a queue -- one per call -- so a test can
-// script "false, false, true" without a real subprocess or a real clock.
-class QueueRunner implements Runner {
-  private readonly queue: RunResult[];
+// A Seams whose run() results come from a queue -- one per call -- so a test
+// can script "false, false, true" without a real subprocess or a real clock.
+class QueueSeams implements Seams {
+  private readonly queue: CommandResult[];
   calls = 0;
-  constructor(queue: readonly RunResult[]) {
+  readonly now = (): Date => new Date("2026-01-01T00:00:00Z");
+  readonly env = {};
+  constructor(queue: readonly CommandResult[]) {
     this.queue = [...queue];
   }
-  run(): RunResult {
+  run: Seams["run"] = (): CommandResult => {
     this.calls += 1;
     const next = this.queue.shift();
-    if (next === undefined) throw new Error("QueueRunner ran out of scripted results");
+    if (next === undefined) throw new Error("QueueSeams ran out of scripted results");
     return next;
-  }
+  };
 }
 
-const OK = (stdout = ""): RunResult => ({ code: 0, stdout, stderr: "", spawnError: null });
-const ERR = (): RunResult => ({ code: 1, stdout: "", stderr: "boom", spawnError: "no such binary" });
+const OK = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "", spawnFailed: false });
+const ERR = (): CommandResult => ({ code: 1, stdout: "", stderr: "boom", spawnFailed: true });
 
 describe("watchUntil -- fetch, evaluate, pace, stop", () => {
   it("stops the moment the condition is true, never sleeping again after", () => {
-    const runner = new QueueRunner([OK("pending"), OK("pending"), OK("done")]);
+    const seams = new QueueSeams([OK("pending"), OK("pending"), OK("done")]);
     const sleeps: number[] = [];
-    const result = watchUntil(runner, {
-      request: { bin: "gh", args: [] },
+    const result = watchUntil(seams, {
+      request: { command: "gh", args: [] },
       isTrue: (r): boolean => r.stdout === "done",
       intervalMs: 10,
       sleep: (ms): void => void sleeps.push(ms),
@@ -38,9 +40,9 @@ describe("watchUntil -- fetch, evaluate, pace, stop", () => {
   });
 
   it("stops after 3 CONSECUTIVE observation errors, distinct from a false reading", () => {
-    const runner = new QueueRunner([OK("no"), ERR(), ERR(), ERR()]);
-    const result = watchUntil(runner, {
-      request: { bin: "gh", args: [] },
+    const seams = new QueueSeams([OK("no"), ERR(), ERR(), ERR()]);
+    const result = watchUntil(seams, {
+      request: { command: "gh", args: [] },
       isTrue: (r): boolean => r.stdout === "yes",
       intervalMs: 0,
       sleep: (): void => {},
@@ -52,9 +54,9 @@ describe("watchUntil -- fetch, evaluate, pace, stop", () => {
   });
 
   it("an error streak RESETS on a successful (even false) observation", () => {
-    const runner = new QueueRunner([ERR(), ERR(), OK("no"), ERR(), ERR(), OK("yes")]);
-    const result = watchUntil(runner, {
-      request: { bin: "gh", args: [] },
+    const seams = new QueueSeams([ERR(), ERR(), OK("no"), ERR(), ERR(), OK("yes")]);
+    const result = watchUntil(seams, {
+      request: { command: "gh", args: [] },
       isTrue: (r): boolean => r.stdout === "yes",
       intervalMs: 0,
       sleep: (): void => {},
@@ -64,9 +66,9 @@ describe("watchUntil -- fetch, evaluate, pace, stop", () => {
   });
 
   it("stops at maxIterations, a safety bound distinct from a real cap", () => {
-    const runner = new QueueRunner([OK("no"), OK("no"), OK("no")]);
-    const result = watchUntil(runner, {
-      request: { bin: "gh", args: [] },
+    const seams = new QueueSeams([OK("no"), OK("no"), OK("no")]);
+    const result = watchUntil(seams, {
+      request: { command: "gh", args: [] },
       isTrue: (r): boolean => r.stdout === "yes",
       intervalMs: 0,
       maxIterations: 3,
@@ -77,10 +79,10 @@ describe("watchUntil -- fetch, evaluate, pace, stop", () => {
   });
 
   it("calls onIteration once per observation, in order", () => {
-    const runner = new QueueRunner([OK("no"), OK("yes")]);
+    const seams = new QueueSeams([OK("no"), OK("yes")]);
     const seen: number[] = [];
-    watchUntil(runner, {
-      request: { bin: "gh", args: [] },
+    watchUntil(seams, {
+      request: { command: "gh", args: [] },
       isTrue: (r): boolean => r.stdout === "yes",
       intervalMs: 0,
       sleep: (): void => {},

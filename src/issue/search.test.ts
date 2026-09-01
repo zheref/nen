@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedRunner } from "../exec/seam.js";
+import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { closedSince, findCanonical, normalizeTitle, recipes, runSearch } from "./search.js";
 
@@ -59,8 +59,8 @@ describe("recipes -- the four duplicate searches, verbatim", () => {
 
 describe("runSearch -- skip empty passes, carry failures rather than swallow them", () => {
   it("skips a pass whose query is empty without calling gh", () => {
-    const runner = new ScriptedRunner([]);
-    const results = runSearch(runner, TARGET, {
+    const seams = new ScriptedSeams([]);
+    const results = runSearch(seams, TARGET, {
       subject: "",
       files: [],
       ruleIds: [],
@@ -68,7 +68,7 @@ describe("runSearch -- skip empty passes, carry failures rather than swallow the
       closedSince: "2026-01-01",
     });
     expect(results.every((r): boolean => r.skipped)).toBe(true);
-    expect(runner.calls).toEqual([]);
+    expect(seams.calls).toEqual([]);
   });
 
   it("parses issues from a scripted gh call", () => {
@@ -79,7 +79,7 @@ describe("runSearch -- skip empty passes, carry failures rather than swallow the
       laneLabels: [],
       closedSince: "2026-01-01",
     });
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       {
         match: `gh ${list[0]?.argv.join(" ")}`,
         result: {
@@ -90,7 +90,7 @@ describe("runSearch -- skip empty passes, carry failures rather than swallow the
       },
       { match: `gh ${list[1]?.argv.join(" ")}`, result: { stdout: "[]" } },
     ]);
-    const results = runSearch(runner, TARGET, {
+    const results = runSearch(seams, TARGET, {
       subject: "flaky test",
       files: [],
       ruleIds: [],
@@ -113,11 +113,11 @@ describe("runSearch -- skip empty passes, carry failures rather than swallow the
       laneLabels: [],
       closedSince: "2026-01-01",
     });
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: `gh ${list[0]?.argv.join(" ")}`, result: { code: 1, stderr: "network down" } },
       { match: `gh ${list[1]?.argv.join(" ")}`, result: { stdout: "[]" } },
     ]);
-    const results = runSearch(runner, TARGET, {
+    const results = runSearch(seams, TARGET, {
       subject: "x",
       files: [],
       ruleIds: [],
@@ -138,11 +138,11 @@ describe("runSearch -- skip empty passes, carry failures rather than swallow the
       closedSince: "2026-01-01",
     });
     const full = Array.from({ length: 100 }, (_, i): unknown => ({ number: i + 1, title: "t", state: "OPEN" }));
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: `gh ${list[0]?.argv.join(" ")}`, result: { stdout: JSON.stringify(full) } },
       { match: `gh ${list[1]?.argv.join(" ")}`, result: { stdout: "[]" } },
     ]);
-    const results = runSearch(runner, TARGET, {
+    const results = runSearch(seams, TARGET, {
       subject: "x",
       files: [],
       ruleIds: [],

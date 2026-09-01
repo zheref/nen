@@ -32,7 +32,7 @@
 // (CON-38; bankai-core#333: one bad entry previously killed the whole sync).
 // ============================================================================
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import type { Label, LabelTaxonomy } from "../schema/labels.js";
 
@@ -57,22 +57,22 @@ export interface SyncReport {
   readonly failed: readonly string[];
 }
 
-function syncOne(runner: Runner, target: Target, label: Label, dryRun: boolean): SyncEntry {
+function syncOne(seams: Seams, target: Target, label: Label, dryRun: boolean): SyncEntry {
   if (dryRun) {
     return { name: label.name, status: "would-sync", message: `would sync: ${label.name} (#${label.color}) -- ${label.description}` };
   }
-  const create = runner.run({ bin: "gh", args: [...createArgv(target, label)] });
+  const create = seams.run(GH, [...createArgv(target, label)]);
   if (create.code === 0) return { name: label.name, status: "created", message: null };
 
-  const edit = runner.run({ bin: "gh", args: [...editArgv(target, label)] });
+  const edit = seams.run(GH, [...editArgv(target, label)]);
   if (edit.code === 0) return { name: label.name, status: "updated", message: null };
 
-  const reason = lines(edit.stderr).at(-1) ?? lines(create.stderr).at(-1) ?? `create and edit both failed`;
+  const reason = outputLines(edit.stderr).at(-1) ?? outputLines(create.stderr).at(-1) ?? `create and edit both failed`;
   return { name: label.name, status: "failed", message: reason };
 }
 
-export function syncLabels(runner: Runner, target: Target, taxonomy: LabelTaxonomy, dryRun: boolean): SyncReport {
-  const entries = taxonomy.labels.map((label): SyncEntry => syncOne(runner, target, label, dryRun));
+export function syncLabels(seams: Seams, target: Target, taxonomy: LabelTaxonomy, dryRun: boolean): SyncReport {
+  const entries = taxonomy.labels.map((label): SyncEntry => syncOne(seams, target, label, dryRun));
   const failed = entries.filter((entry): boolean => entry.status === "failed").map((entry): string => entry.name);
   return { entries, failed };
 }

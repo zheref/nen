@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedRunner } from "../exec/seam.js";
+import { ScriptedSeams } from "../seam/scripted.js";
 import { classifyWorkingCopy, readWorkingCopyState, WcStateError, type WcState } from "./classify.js";
 
 function state(overrides: Partial<WcState> = {}): WcState {
@@ -41,13 +41,13 @@ describe("classifyWorkingCopy -- tensho §2's four cases, git-state-decidable on
 
 describe("readWorkingCopyState -- gathers the evidence via git", () => {
   it("reads branch, dirty paths and ahead-of-base commits", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
       { match: "git status --porcelain=v1 -uall", result: { stdout: " M src/a.ts\n?? src/new.ts\n" } },
       { match: "git rev-list --count main..HEAD", result: { stdout: "2\n" } },
       { match: "git log main..HEAD --format=%s", result: { stdout: "second commit\nfirst commit\n" } },
     ]);
-    const result = readWorkingCopyState(runner, "/repo", "main");
+    const result = readWorkingCopyState(seams, "/repo", "main");
     expect(result.branch).toBe("feature/x");
     expect(result.isTrunk).toBe(false);
     expect(result.dirty).toBe(true);
@@ -58,14 +58,14 @@ describe("readWorkingCopyState -- gathers the evidence via git", () => {
   });
 
   it("skips the ahead-of-base calls entirely when standing on the trunk", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { stdout: "main\n" } },
       { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
     ]);
-    const result = readWorkingCopyState(runner, "/repo", "main");
+    const result = readWorkingCopyState(seams, "/repo", "main");
     expect(result.isTrunk).toBe(true);
     expect(result.aheadOfBase).toBe(0);
-    expect(runner.calls.length).toBe(2);
+    expect(seams.calls.length).toBe(2);
   });
 
   // Review finding: a failed git command used to be silently read as empty
@@ -75,49 +75,49 @@ describe("readWorkingCopyState -- gathers the evidence via git", () => {
   // 'git status' turned into zero uncommitted paths (a DIRTY tree reported as
   // clean). Every one of these must now throw rather than manufacture a zero.
   it("throws when 'git symbolic-ref' fails (detached HEAD), rather than reading an empty branch name", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
     ]);
-    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
-    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(/detached HEAD/);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(/detached HEAD/);
   });
 
   it("throws when 'git status' fails, rather than reporting a possibly-dirty tree as clean", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
       { match: "git status --porcelain=v1 -uall", result: { code: 1, stderr: "fatal: not a git repository" } },
     ]);
-    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
-    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(/status/);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(/status/);
   });
 
   it("throws when 'git rev-list --count' fails (e.g. an invalid --base), rather than reporting 0 commits ahead", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
       { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
       { match: "git rev-list --count bogus-base..HEAD", result: { code: 128, stderr: "fatal: bad revision 'bogus-base..HEAD'" } },
     ]);
-    expect(() => readWorkingCopyState(runner, "/repo", "bogus-base")).toThrow(WcStateError);
-    expect(() => readWorkingCopyState(runner, "/repo", "bogus-base")).toThrow(/ahead of base/);
+    expect(() => readWorkingCopyState(seams, "/repo", "bogus-base")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(seams, "/repo", "bogus-base")).toThrow(/ahead of base/);
   });
 
   it("throws when 'git rev-list --count' prints something non-numeric, rather than guessing", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
       { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
       { match: "git rev-list --count main..HEAD", result: { stdout: "not-a-number\n" } },
     ]);
-    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(WcStateError);
   });
 
   it("throws when 'git log' fails after a successful rev-list, rather than reporting no existing commits", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
       { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
       { match: "git rev-list --count main..HEAD", result: { stdout: "2\n" } },
       { match: "git log main..HEAD --format=%s", result: { code: 1, stderr: "fatal: bad object" } },
     ]);
-    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
-    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(/commit subjects/);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(/commit subjects/);
   });
 });

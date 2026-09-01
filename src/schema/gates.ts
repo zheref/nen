@@ -37,6 +37,32 @@
 //   deliveryHolisticPass  a reviewer that casts ONE holistic pass on `opened`
 //                         and deliberately never re-casts, so an approval at
 //                         head is unreachable by design on a delivery PR.
+//   approvesWhenPostedAtHead
+//                         a reviewer that is NOT in `default_approvers` but
+//                         JOINS the approval set for one pull request once it
+//                         has posted a review at that PR's current head.
+//
+// THE THIRD FLAG IS ../gates/ready.ts's, and it was added by the composition
+// port (zheref/nen#2) rather than by the predicate port, because it is the one
+// structural distinction `evaluate_ready` makes that no predicate needed. The
+// shell builds its approver list as `grep -Ex 'sasuke|tenma'` over the reviewer
+// set and then appends `bisky` -- and ONLY bisky -- when bisky has a review at
+// head; a reviewer that said nothing is not an approver. Both names were
+// literals. `default_approvers` already carries the first half; this flag is
+// the second, and it must be STATED rather than inferred: "declares a
+// round_check_pattern" would also select the other check-is-the-round reviewer,
+// which the original never enrolled, and inferring it would silently ADD an
+// approver the shell does not require -- a gate that reads not-ready where the
+// original reads ready, or, with the inference pointed the other way, one that
+// reads ready where the original does not. Neither is acceptable, so the file
+// says which reviewer it means.
+//
+// It stays at `version: 1`. No repository ships `schemas/gates.json` yet -- the
+// schema is introduced by this migration and read only by builds that already
+// understand the flag -- so the version's job (stopping an older nen from
+// silently applying a SUBSET of a newer file's reviewer rules) has no older
+// reader to protect against here. The first release that ships is the first
+// version anyone can be behind.
 //
 // A REPOSITORY WITHOUT THE FILE GETS AN ERROR, NOT A DEFAULT SET. There is no
 // built-in reviewer table, not even the one this code was ported from: a
@@ -71,6 +97,7 @@ export interface ReviewerIdentity {
   readonly enrolmentCheckPattern: RegExp | null;
   readonly boundedPolicyExempt: boolean;
   readonly deliveryHolisticPass: boolean;
+  readonly approvesWhenPostedAtHead: boolean;
 }
 
 export interface DeliveryIdentity {
@@ -234,6 +261,11 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
         path,
         `${pointer}.delivery_holistic_pass`,
         record["delivery_holistic_pass"],
+      ),
+      approvesWhenPostedAtHead: readFlag(
+        path,
+        `${pointer}.approves_when_posted_at_head`,
+        record["approves_when_posted_at_head"],
       ),
     });
   });

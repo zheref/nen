@@ -14,7 +14,7 @@
 // is driving -- exactly the "what stays with the LLM" line issue #4 draws
 // everywhere else.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GIT, outputLines, type Seams } from "../seam/exec.js";
 
 export interface CascadeResult {
   readonly conflicted: boolean;
@@ -23,38 +23,34 @@ export interface CascadeResult {
   readonly error: string | null;
 }
 
-export function cascadeMain(runner: Runner, cwd: string, trunk = "main"): CascadeResult {
+export function cascadeMain(seams: Seams, cwd: string, trunk = "main"): CascadeResult {
   const log: string[] = [];
 
-  const fetch = runner.run({ bin: "git", args: ["fetch", "origin", trunk], cwd });
+  const fetch = seams.run(GIT, ["fetch", "origin", trunk], { cwd });
   if (fetch.code !== 0) {
     return {
       conflicted: false,
       pushed: false,
       log,
-      error: `could not fetch origin/${trunk}: ${(fetch.spawnError ?? lines(fetch.stderr).join(" ")) || `exit ${fetch.code}`}`,
+      error: `could not fetch origin/${trunk}: ${outputLines(fetch.stderr).join(" ") || `exit ${fetch.code}`}`,
     };
   }
   log.push(`fetched origin/${trunk}`);
 
-  const merge = runner.run({
-    bin: "git",
-    args: ["merge", "--no-edit", `origin/${trunk}`],
-    cwd,
-  });
+  const merge = seams.run(GIT, ["merge", "--no-edit", `origin/${trunk}`], { cwd });
   if (merge.code !== 0) {
     log.push(`merge left conflicts -- resolve them, then commit and push yourself; this cascade never picks a side`);
     return { conflicted: true, pushed: false, log, error: null };
   }
   log.push(`merged origin/${trunk} cleanly`);
 
-  const push = runner.run({ bin: "git", args: ["push"], cwd });
+  const push = seams.run(GIT, ["push"], { cwd });
   if (push.code !== 0) {
     return {
       conflicted: false,
       pushed: false,
       log,
-      error: `merged cleanly but could not push: ${(push.spawnError ?? lines(push.stderr).join(" ")) || `exit ${push.code}`}`,
+      error: `merged cleanly but could not push: ${outputLines(push.stderr).join(" ") || `exit ${push.code}`}`,
     };
   }
   log.push("pushed");

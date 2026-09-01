@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedRunner } from "../exec/seam.js";
+import { ScriptedSeams } from "../seam/scripted.js";
 import { parseRemoteUrl, parseTarget, targetFromRemote, TargetError } from "./target.js";
 
 describe("parseTarget -- --target owner/name, the GitHub side of the pair", () => {
@@ -50,10 +50,10 @@ describe("parseRemoteUrl -- both spellings git writes", () => {
 
 describe("targetFromRemote", () => {
   it("resolves origin's URL into a Target", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git remote get-url origin", result: { stdout: "git@github.com:zheref/nen.git\n" } },
     ]);
-    expect(targetFromRemote(runner, "/repo")).toEqual({
+    expect(targetFromRemote(seams, "/repo")).toEqual({
       owner: "zheref",
       repo: "nen",
       slug: "zheref/nen",
@@ -61,23 +61,23 @@ describe("targetFromRemote", () => {
   });
 
   it("refuses when there is no such remote", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git remote get-url origin", result: { code: 1, stderr: "error: No such remote" } },
     ]);
-    expect(() => targetFromRemote(runner, "/repo")).toThrow(TargetError);
+    expect(() => targetFromRemote(seams, "/repo")).toThrow(TargetError);
   });
 
   it("refuses when the remote does not read as GitHub", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git remote get-url origin", result: { stdout: "/local/bare/repo.git\n" } },
     ]);
-    expect(() => targetFromRemote(runner, "/repo")).toThrow(/does not read as a GitHub repository/);
+    expect(() => targetFromRemote(seams, "/repo")).toThrow(/does not read as a GitHub repository/);
   });
 
   it("takes a named remote, not just origin", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: "git remote get-url upstream", result: { stdout: "https://github.com/a/b\n" } },
     ]);
-    expect(targetFromRemote(runner, "/repo", "upstream").slug).toBe("a/b");
+    expect(targetFromRemote(seams, "/repo", "upstream").slug).toBe("a/b");
   });
 });

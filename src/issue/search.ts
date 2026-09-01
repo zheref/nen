@@ -26,7 +26,7 @@
 // judgments § 2 of the migration keeps with the LLM. This module detects; it
 // does not group.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 
 /** How many days back "recently closed" reaches. */
@@ -187,7 +187,7 @@ export function parseIssueList(json: string): FoundIssue[] {
 }
 
 export function runSearch(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   subject: SearchSubject,
 ): readonly RecipeResult[] {
@@ -195,7 +195,7 @@ export function runSearch(
     if (recipe.query.trim() === "") {
       return { recipe, skipped: true, issues: [], truncated: false, error: null };
     }
-    const result = runner.run({ bin: "gh", args: recipe.argv });
+    const result = seams.run(GH, recipe.argv);
     if (result.code !== 0) {
       return {
         recipe,
@@ -205,7 +205,7 @@ export function runSearch(
         // The failure is CARRIED, not swallowed. A pass that errored found
         // nothing, and "found nothing" and "could not look" must never read the
         // same in a report whose conclusion is "no duplicate exists".
-        error: (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`,
+        error: outputLines(result.stderr).join(" ") || `exit ${result.code}`,
       };
     }
     let issues: FoundIssue[];

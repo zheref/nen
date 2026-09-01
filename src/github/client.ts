@@ -100,16 +100,53 @@ export function tokenFromEnv(
       message: `${envVarName} is set but empty -- an empty token authenticates as nobody, and an unauthenticated read of a private repo 404s in a way that reads like a deleted PR`,
     };
   }
-  return { ok: true, token: raw };
+  // PORT CORRECTION, carried from the recorded disposition on zheref/nen#7's
+  // review thread (src/github/client.ts:103, Copilot; acknowledged by the
+  // maintainer, deferred to the readiness-core PR that adopts this module).
+  //
+  // The seed VALIDATED with `raw.trim()` and RETURNED `raw`, so a token pasted
+  // with a trailing newline -- the ordinary shape of a `gh auth token > file`
+  // or a copied secret -- passed the emptiness check and then reached octokit's
+  // `Authorization: token <value>\n` header intact. GitHub answers that with a
+  // 401, or with a 404 on a private repository, and BOTH read like a deleted PR
+  // or a missing grant rather than like whitespace. The failure is silent in the
+  // direction that costs the most time: everything about the call looks right.
+  //
+  // Trimming here rather than at the call sites, and RETURNING the trimmed value
+  // rather than trimming inside GitHubClient, because this function is already
+  // the ONE place the raw environment is read -- a second trim at a consumer
+  // would leave `result.token` and the value actually sent to GitHub as two
+  // different strings, which is the same class of gap in a smaller costume.
+  //
+  // It cannot widen anything: a value that survives `raw.trim() !== ""` is
+  // non-empty after trimming, and a token's own alphabet contains no whitespace.
+  return { ok: true, token: raw.trim() };
+}
+
+export interface GitHubClientOptions {
+  readonly baseUrl?: string;
+  // PORT ADDITION (zheref/nen#2's review record, finding 4): octokit's own
+  // `request.fetch` hook, threaded straight through. Its ONE purpose is
+  // ./client.test.ts -- every network method on this class (`reviews`,
+  // `timeline`, the two `graphql()` calls) had zero test coverage precisely
+  // because there was no seam to drive them without a live token and a live
+  // PR, and two of the four (`timeline`, `defaultBranch` on the GraphQL side)
+  // are load-bearing for readiness: `timeline` is the ONLY source of
+  // `stall_requested_at`, so a silent regression there kills the whole
+  // round-stalled conjunct, and both fail CONSERVATIVELY (the gate stays
+  // shut), which is exactly the direction a `ready`-side check can never
+  // catch. Never used in production; `createClient()` never sets it.
+  readonly request?: { readonly fetch?: unknown };
 }
 
 export class GitHubClient {
   private readonly octokit: Octokit;
 
-  constructor(token: string, options: { readonly baseUrl?: string } = {}) {
+  constructor(token: string, options: GitHubClientOptions = {}) {
     this.octokit = new Octokit({
       auth: token,
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      ...(options.request === undefined ? {} : { request: options.request }),
       // PORT CHANGE: the original names the other binary. Composed from
       // ../version.ts rather than written as a literal, so a rate-limit
       // investigation can tell WHICH build of nen made a call and the string
@@ -199,6 +236,27 @@ export class GitHubClient {
     );
   }
 
+  // The issue TIMELINE, paginated, raw.
+  //
+  // IT HAS TO EXIST, and REST is the only place it does. `reviewRequests`
+  // carries no timestamp -- a pending request says WHO owes a round and never
+  // WHEN it was asked for -- so the stall bound (`round stalled — requested N
+  // min ago and never posted`) has nothing to compute from without the
+  // `review_requested` timeline events. The shell reads the same endpoint for
+  // the same reason.
+  //
+  // Raw and unfiltered, deliberately: WHICH events matter, how they are ordered
+  // and what an unreadable one means for readiness are all readings, and no
+  // verdicts live in this module. ../gates/ready.ts's caller does the selecting.
+  async timeline(repo: RepoRef, prNumber: number): Promise<unknown[]> {
+    return await this.octokit.paginate("GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", {
+      owner: repo.owner,
+      repo: repo.repo,
+      issue_number: prNumber,
+      per_page: 100,
+    });
+  }
+
   // ONE page of review threads, raw, with its cursor.
   //
   // The walk is the caller's, deliberately: CON-32(d)'s boundary is "zero
@@ -224,5 +282,7 @@ export function createClient(
   token: string,
   options: { readonly baseUrl?: string } = {},
 ): GitHubClient {
+  // NEVER passes `request` -- see GitHubClientOptions's own comment. The
+  // production entry point mints a client that always speaks real HTTP.
   return new GitHubClient(token, options);
 }

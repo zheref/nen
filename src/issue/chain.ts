@@ -28,7 +28,7 @@
 // "building" would send an already-building epic child back through wave
 // advancement.
 
-import type { Runner } from "../exec/seam.js";
+import type { Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { readIssue, type IssueSummary } from "./subissue.js";
 
@@ -180,8 +180,8 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
 // Takes an already-parsed RoleMap, not raw --chain-labels entries -- parsing
 // is a CLI-boundary concern (parseRoleMap's `errors` need a place to be
 // reported and exited on, which is ../issue/verb.ts, not this wrapper).
-export function chainPosition(runner: Runner, target: Target, issue: number, map: RoleMap): ChainPositionResult {
-  return classifyChainPosition(readIssue(runner, target, issue), map);
+export function chainPosition(seams: Seams, target: Target, issue: number, map: RoleMap): ChainPositionResult {
+  return classifyChainPosition(readIssue(seams, target, issue), map);
 }
 
 // --- terminus ----------------------------------------------------------------
@@ -299,12 +299,12 @@ export function classifyTerminus(
 
 // Takes an already-parsed RoleMap -- see chainPosition's comment above.
 export function terminus(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   issue: number,
   map: RoleMap,
   integrationPrefix: string | null = null,
   trunk = "main",
 ): TerminusResult {
-  return classifyTerminus(readIssue(runner, target, issue), map, integrationPrefix, trunk);
+  return classifyTerminus(readIssue(seams, target, issue), map, integrationPrefix, trunk);
 }

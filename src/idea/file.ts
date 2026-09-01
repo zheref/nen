@@ -16,7 +16,7 @@
 // labels and assignee IN the call -- rather than reimplementing it. The one
 // thing this module adds is the verification step after.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { fileIssue, validateFiling, type FileRequest, type FileResult } from "../issue/file.js";
 import type { LabelTaxonomy } from "../schema/labels.js";
@@ -46,15 +46,12 @@ export class FileIdeaError extends Error {
   }
 }
 
-function readIssueForVerification(runner: Runner, target: Target, number: number): ReadBack {
-  const result = runner.run({
-    bin: "gh",
-    args: ["issue", "view", String(number), "--repo", target.slug, "--json", "title,body,labels"],
-  });
+function readIssueForVerification(seams: Seams, target: Target, number: number): ReadBack {
+  const result = seams.run(GH, ["issue", "view", String(number), "--repo", target.slug, "--json", "title,body,labels"]);
   if (result.code !== 0) {
     throw new FileIdeaError(
       `idea filed as #${number}, but the read-back could not confirm it: ${
-        (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`
+        outputLines(result.stderr).join(" ") || `exit ${result.code}`
       }. The issue exists; verify it by hand.`,
     );
   }
@@ -108,7 +105,7 @@ export function compareReadBack(
 }
 
 export function fileIdea(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   request: FileRequest,
   submittedBody: string,
@@ -117,8 +114,8 @@ export function fileIdea(
   const refusals = validateFiling(request, taxonomy);
   if (refusals.length > 0) return { refusals };
 
-  const filed = fileIssue(runner, target, request);
-  const readBack = readIssueForVerification(runner, target, filed.number);
+  const filed = fileIssue(seams, target, request);
+  const readBack = readIssueForVerification(seams, target, filed.number);
   const mismatches = compareReadBack(request, submittedBody, readBack);
   return { filed, readBack, mismatches };
 }

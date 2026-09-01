@@ -22,7 +22,14 @@
 // distinct from both convergence and the error streak, and a caller that wants
 // a truly unbounded watch simply omits it.
 
-import { lines, type Runner, type RunRequest, type RunResult } from "../exec/seam.js";
+import { outputLines, type CommandResult, type RunOptions, type Seams } from "../seam/exec.js";
+
+/** What one watched observation runs -- the same shape ../seam/exec.ts's Seams.run() takes. */
+export interface WatchRequest {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly options?: RunOptions;
+}
 
 export interface WatchIteration {
   readonly iteration: number;
@@ -39,12 +46,12 @@ export interface WatchResult {
 }
 
 export interface WatchOptions {
-  readonly request: RunRequest;
+  readonly request: WatchRequest;
   /** Decides the condition from one observation. */
-  readonly isTrue: (result: RunResult) => boolean;
+  readonly isTrue: (result: CommandResult) => boolean;
   /**
    * Decides whether an observation itself failed, distinct from a false
-   * reading. Defaults to spawnError !== null -- i.e. "the binary could not
+   * reading. Defaults to spawnFailed -- i.e. "the binary could not
    * even be started" -- which is deliberately narrow: it is the only
    * universally-safe default, because this module has no way to know which
    * non-zero exit codes a CALLER's specific command uses to mean "false" (a
@@ -56,7 +63,7 @@ export interface WatchOptions {
    * "condition is not yet true" forever instead of stopping at the error
    * streak below.
    */
-  readonly isError?: (result: RunResult) => boolean;
+  readonly isError?: (result: CommandResult) => boolean;
   readonly intervalMs: number;
   readonly maxIterations?: number;
   /** Injectable so tests never actually sleep. Defaults to a real wait. */
@@ -70,8 +77,8 @@ function defaultSleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-export function watchUntil(runner: Runner, options: WatchOptions): WatchResult {
-  const isError = options.isError ?? ((result): boolean => result.spawnError !== null);
+export function watchUntil(seams: Seams, options: WatchOptions): WatchResult {
+  const isError = options.isError ?? ((result): boolean => result.spawnFailed);
   const sleep = options.sleep ?? defaultSleep;
   const iterations: WatchIteration[] = [];
   let consecutiveErrors = 0;
@@ -79,7 +86,7 @@ export function watchUntil(runner: Runner, options: WatchOptions): WatchResult {
 
   for (;;) {
     iteration += 1;
-    const result = runner.run(options.request);
+    const result = seams.run(options.request.command, options.request.args, options.request.options);
     const errored = isError(result);
     const conditionTrue = !errored && options.isTrue(result);
 
@@ -89,7 +96,7 @@ export function watchUntil(runner: Runner, options: WatchOptions): WatchResult {
     // consecutive-error streak above exists to catch; the message itself
     // must not hide the evidence that would let someone catch it sooner.
     const message = errored
-      ? `observation failed: ${result.spawnError ?? lines(result.stderr)[0] ?? `exit ${result.code}, no stderr`}`
+      ? `observation failed: ${outputLines(result.stderr)[0] ?? `exit ${result.code}, no stderr`}`
       : conditionTrue
         ? `condition is true (exit ${result.code})`
         : `condition is not yet true (exit ${result.code})`;

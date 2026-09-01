@@ -13,7 +13,8 @@
 // branch's existing commit subjects and the uncommitted paths -- and handing
 // it to whoever judges.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GIT, outputLines, type Seams } from "../seam/exec.js";
+import { rawLines } from "../seam/lines.js";
 
 export type WcCase =
   | "must-move"
@@ -90,17 +91,17 @@ export class WcStateError extends Error {
   }
 }
 
-function runGit(runner: Runner, args: readonly string[], cwd: string): { readonly code: number; readonly stdout: string; readonly error: string } {
-  const result = runner.run({ bin: "git", args: [...args], cwd });
+function runGit(seams: Seams, args: readonly string[], cwd: string): { readonly code: number; readonly stdout: string; readonly error: string } {
+  const result = seams.run(GIT, [...args], { cwd });
   return {
     code: result.code,
     stdout: result.stdout,
-    error: (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`,
+    error: outputLines(result.stderr).join(" ") || `exit ${result.code}`,
   };
 }
 
-export function readWorkingCopyState(runner: Runner, cwd: string, base: string): WcState {
-  const branchResult = runGit(runner, ["symbolic-ref", "--short", "HEAD"], cwd);
+export function readWorkingCopyState(seams: Seams, cwd: string, base: string): WcState {
+  const branchResult = runGit(seams, ["symbolic-ref", "--short", "HEAD"], cwd);
   if (branchResult.code !== 0) {
     throw new WcStateError(
       `could not determine the current branch ('git symbolic-ref --short HEAD' failed: ${branchResult.error}). This usually means a detached HEAD, or a repository with no commits yet -- 'wc classify' classifies a checkout that is ON a branch, and refuses rather than reading a branch name off of empty output.`,
@@ -108,13 +109,13 @@ export function readWorkingCopyState(runner: Runner, cwd: string, base: string):
   }
   const branch = branchResult.stdout.trim();
 
-  const statusResult = runGit(runner, ["status", "--porcelain=v1", "-uall"], cwd);
+  const statusResult = runGit(seams, ["status", "--porcelain=v1", "-uall"], cwd);
   if (statusResult.code !== 0) {
     throw new WcStateError(
       `could not read the working copy's status ('git status --porcelain=v1 -uall' failed: ${statusResult.error}). Refusing to report a possibly-dirty working copy as clean.`,
     );
   }
-  const statusLines = lines(statusResult.stdout);
+  const statusLines = rawLines(statusResult.stdout);
   const uncommittedPaths = statusLines
     .map((line): string => line.slice(3).trim())
     .filter((path): boolean => path !== "");
@@ -123,7 +124,7 @@ export function readWorkingCopyState(runner: Runner, cwd: string, base: string):
   let aheadOfBase = 0;
   let existingCommitSubjects: string[] = [];
   if (!isTrunk) {
-    const countResult = runGit(runner, ["rev-list", "--count", `${base}..HEAD`], cwd);
+    const countResult = runGit(seams, ["rev-list", "--count", `${base}..HEAD`], cwd);
     if (countResult.code !== 0) {
       throw new WcStateError(
         `could not count commits ahead of base ('git rev-list --count ${base}..HEAD' failed: ${countResult.error}). This usually means --base '${base}' does not name a ref reachable from HEAD. Refusing to report 0 commits ahead, which would read as a checked answer rather than an unreadable one.`,
@@ -137,13 +138,13 @@ export function readWorkingCopyState(runner: Runner, cwd: string, base: string):
     }
     aheadOfBase = Number(countRaw);
 
-    const logResult = runGit(runner, ["log", `${base}..HEAD`, "--format=%s"], cwd);
+    const logResult = runGit(seams, ["log", `${base}..HEAD`, "--format=%s"], cwd);
     if (logResult.code !== 0) {
       throw new WcStateError(
         `could not read the commit subjects ahead of base ('git log ${base}..HEAD --format=%s' failed: ${logResult.error}).`,
       );
     }
-    existingCommitSubjects = lines(logResult.stdout).reverse();
+    existingCommitSubjects = rawLines(logResult.stdout).reverse();
   }
 
   return {

@@ -1,0 +1,220 @@
+import { describe, expect, it } from "vitest";
+import { runFamily, type Io } from "../index.js";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import type { Seams } from "../seam/exec.js";
+import { issueCommand } from "./command.js";
+
+async function capture(
+  argv: readonly string[],
+  script: readonly ScriptedCall[] = [],
+  options: { repoFlag?: string | null; json?: boolean; now?: Date } = {},
+): Promise<{ code: number; out: string[]; err: string[] }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: Io = {
+    out: (line): void => {
+      out.push(line);
+    },
+    err: (line): void => {
+      err.push(line);
+    },
+  };
+  const scripted = new ScriptedSeams(script, options.now === undefined ? {} : { now: (): Date => options.now! });
+  const seams: Seams = scripted;
+  const code = await runFamily(
+    issueCommand,
+    argv,
+    options.repoFlag ?? null,
+    options.json ?? false,
+    io,
+    seams,
+  );
+  return { code, out, err };
+}
+
+describe("nen issue -- CLI wiring", () => {
+  it("requires --target", async () => {
+    const result = await capture(["issue", "search", "--subject", "x"]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/--target/);
+  });
+
+  it("refuses an unknown subcommand as a usage error", async () => {
+    expect((await capture(["issue", "bogus"])).code).toBe(2);
+  });
+
+  it("open-pr-check requires --issues", async () => {
+    expect((await capture(["issue", "open-pr-check", "--target", "o/n"])).code).toBe(2);
+  });
+
+  it("search emits the stable --json contract and a non-zero exit on a failed pass", async () => {
+    const now = new Date("2026-08-31T00:00:00Z");
+    const result = await capture(
+      ["issue", "search", "--target", "o/n", "--subject", "x"],
+      [
+        {
+          match: "gh issue list --repo o/n --state open --search x --limit 100 --json number,title,state,url,labels,updatedAt,closedAt",
+          result: { code: 1, stderr: "down" },
+        },
+        {
+          match: "gh issue list --repo o/n --state closed --search x closed:>=2026-06-02 --limit 100 --json number,title,state,url,labels,updatedAt,closedAt",
+          result: { stdout: "[]" },
+        },
+      ],
+      { json: true, now },
+    );
+    expect(result.code).toBe(1);
+    const parsed = JSON.parse(result.out.join("\n")) as { ok: boolean; passes: unknown[] };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.passes.length).toBe(4);
+  });
+
+  it("file requires --body-file", async () => {
+    const result = await capture(
+      ["issue", "file", "--target", "o/n", "--title", "t", "--label", "bug", "--assignee", "me"],
+      [],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(2);
+  });
+
+  // Review finding #13: consolidate-close ran no open-PR guard at all --
+  // 'nen issue open-pr-check' existed one verb over and nothing wired it in.
+  it("consolidate-close refuses (exit 1) when a child has an open PR, and never reaches attach or close", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5"],
+      [
+        {
+          match: "gh api repos/o/n/issues/5",
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "child", state: "open", labels: [] }) },
+        },
+        {
+          match:
+            "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+          result: {
+            stdout: JSON.stringify([
+              { number: 99, title: "wip: fix the thing", url: "https://x/pull/99", isDraft: true, body: "", closingIssuesReferences: [{ number: 5 }] },
+            ]),
+          },
+        },
+        // Deliberately NOT scripting the attach (POST sub_issues) or close
+        // calls -- if the guard fails to refuse first, ScriptedSeams throws
+        // on the first unscripted call, which is itself a red test.
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/open PR/);
+    expect(result.err.join("\n")).toMatch(/#99/);
+  });
+
+  it("consolidate-close --allow-open-pr overrides the refusal and proceeds to attach and close", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5", "--allow-open-pr"],
+      [
+        {
+          match: "gh api repos/o/n/issues/5",
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "child", state: "open", labels: [] }) },
+        },
+        {
+          match:
+            "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+          result: {
+            stdout: JSON.stringify([
+              { number: 99, title: "wip: fix the thing", url: "https://x/pull/99", isDraft: true, body: "", closingIssuesReferences: [{ number: 5 }] },
+            ]),
+          },
+        },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=55", result: {} },
+        { match: "gh issue close 5 --repo o/n --comment Consolidated into #1.", result: {} },
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(0);
+  });
+
+  it("consolidate-close proceeds with no guard triggered when no child has an open PR", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5"],
+      [
+        {
+          match: "gh api repos/o/n/issues/5",
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "child", state: "open", labels: [] }) },
+        },
+        {
+          match:
+            "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+          result: { stdout: "[]" },
+        },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=55", result: {} },
+        { match: "gh issue close 5 --repo o/n --comment Consolidated into #1.", result: {} },
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(0);
+  });
+
+  // Review finding #8: an unparseable --chain-labels entry must exit 2, never
+  // be silently dropped -- and no gh call is made, since the flag is checked
+  // before anything is fetched.
+  it("chain-position exits 2 on an unparseable --chain-labels entry (typo'd role)", async () => {
+    const result = await capture([
+      "issue",
+      "chain-position",
+      "--target",
+      "o/n",
+      "--issue",
+      "5",
+      "--chain-labels",
+      "buildng=stage/building",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/unknown role 'buildng'/);
+  });
+
+  // Review finding #14: 'undecidable' is a refusal and must exit non-zero.
+  it("chain-position exits 1 when a critical role (here: 'building') was never mapped, even though the issue carries no error", async () => {
+    const result = await capture([
+      "issue",
+      "chain-position",
+      "--target",
+      "o/n",
+      "--issue",
+      "5",
+      "--chain-labels",
+      "idea=mode:idea,epic=type:epic,in-review=mode:review",
+    ], [
+      {
+        match: "gh api repos/o/n/issues/5",
+        result: { stdout: JSON.stringify({ number: 5, id: 55, title: "t", state: "open", labels: ["stage/building"] }) },
+      },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/undecidable/);
+  });
+
+  it("chain-position exits 0 for a genuine 'routable' answer with every critical role mapped", async () => {
+    const result = await capture([
+      "issue",
+      "chain-position",
+      "--target",
+      "o/n",
+      "--issue",
+      "5",
+      "--chain-labels",
+      "idea=mode:idea,epic=type:epic,in-review=mode:review,building=mode:build",
+    ], [
+      {
+        match: "gh api repos/o/n/issues/5",
+        result: { stdout: JSON.stringify({ number: 5, id: 55, title: "t", state: "open", labels: [] }) },
+      },
+    ]);
+    expect(result.code).toBe(0);
+  });
+
+  it("terminus exits 2 on an unparseable --chain-labels entry", async () => {
+    const result = await capture(["issue", "terminus", "--target", "o/n", "--issue", "5", "--chain-labels", "nonsense"]);
+    expect(result.code).toBe(2);
+  });
+});

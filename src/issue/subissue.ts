@@ -29,7 +29,7 @@
 // read from that repository's own colour precedence, falling back to the order
 // its taxonomy file declares them in. Nothing here knows a severity's name.
 
-import { lines, type Runner } from "../exec/seam.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { decomposeLabelName, type LabelTaxonomy } from "../schema/labels.js";
 
@@ -44,16 +44,11 @@ export interface IssueSummary {
 // One `gh api` read per issue. REST rather than `gh issue view`, because `id`
 // -- the field the sub-issues API actually takes -- is not one of the fields
 // `gh issue view --json` exposes.
-export function readIssue(runner: Runner, target: Target, number: number): IssueSummary {
-  const result = runner.run({
-    bin: "gh",
-    args: ["api", `repos/${target.slug}/issues/${number}`],
-  });
+export function readIssue(seams: Seams, target: Target, number: number): IssueSummary {
+  const result = seams.run(GH, ["api", `repos/${target.slug}/issues/${number}`]);
   if (result.code !== 0) {
     throw new Error(
-      `could not read ${target.slug}#${number}: ${
-        (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`
-      }`,
+      `could not read ${target.slug}#${number}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,
     );
   }
   const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
@@ -96,7 +91,7 @@ function looksUnavailable(stderr: string): boolean {
 }
 
 export function attachSub(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   parent: number,
   children: readonly number[],
@@ -110,7 +105,7 @@ export function attachSub(
   for (const child of children) {
     let summary: IssueSummary;
     try {
-      summary = readIssue(runner, target, child);
+      summary = readIssue(seams, target, child);
     } catch (error) {
       failed.push({ child, reason: error instanceof Error ? error.message : String(error) });
       continue;
@@ -135,13 +130,13 @@ export function attachSub(
       attached.push(child);
       continue;
     }
-    const result = runner.run({ bin: "gh", args: argv });
+    const result = seams.run(GH, argv);
     if (result.code === 0) {
       attached.push(child);
       log.push(`attached #${child} (id ${summary.id}) to #${parent}`);
       continue;
     }
-    const reason = (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`;
+    const reason = outputLines(result.stderr).join(" ") || `exit ${result.code}`;
     failed.push({ child, reason });
     if (fallback === null && looksUnavailable(result.stderr)) {
       fallback = children.map((entry): string => `- [ ] #${entry}`);
@@ -193,7 +188,7 @@ export function orderingFromTaxonomy(taxonomy: LabelTaxonomy, family: string): S
 }
 
 export function planConsolidation(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   parent: number,
   children: readonly number[],
@@ -201,7 +196,7 @@ export function planConsolidation(
   severityFamily: string,
   ordering?: SeverityOrdering,
 ): ConsolidationPlan {
-  const summaries = children.map((child): IssueSummary => readIssue(runner, target, child));
+  const summaries = children.map((child): IssueSummary => readIssue(seams, target, child));
   const notes: string[] = [];
 
   const resolved =
@@ -278,7 +273,7 @@ export interface ConsolidateReport {
 // by a human or an LLM, and a verb that generated them would be authoring the
 // judgment this whole surface refuses to author.
 export function consolidateClose(
-  runner: Runner,
+  seams: Seams,
   target: Target,
   plan: ConsolidationPlan,
   dryRun: boolean,
@@ -294,7 +289,7 @@ export function consolidateClose(
   for (const note of plan.notes) log.push(`note: ${note}`);
 
   const attachReport = attachSub(
-    runner,
+    seams,
     target,
     plan.parent,
     plan.children.map((child): number => child.number),
@@ -328,11 +323,9 @@ export function consolidateClose(
       closed.push(child);
       continue;
     }
-    const result = runner.run({ bin: "gh", args: argv });
+    const result = seams.run(GH, argv);
     if (result.code !== 0) {
-      failed.push(
-        `close #${child}: ${(result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`}`,
-      );
+      failed.push(`close #${child}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
       continue;
     }
     closed.push(child);

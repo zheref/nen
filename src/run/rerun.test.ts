@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedRunner } from "../exec/seam.js";
+import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { rerunFailed, rerunFailedArgv } from "./rerun.js";
 
@@ -13,15 +13,15 @@ describe("rerunFailedArgv", () => {
 
 describe("rerunFailed", () => {
   it("reports success reading gh's exit code", () => {
-    const runner = new ScriptedRunner([{ match: `gh ${rerunFailedArgv(TARGET, 42).join(" ")}`, result: {} }]);
-    expect(rerunFailed(runner, TARGET, 42).ok).toBe(true);
+    const seams = new ScriptedSeams([{ match: `gh ${rerunFailedArgv(TARGET, 42).join(" ")}`, result: {} }]);
+    expect(rerunFailed(seams, TARGET, 42).ok).toBe(true);
   });
 
   it("carries gh's failure through", () => {
-    const runner = new ScriptedRunner([
+    const seams = new ScriptedSeams([
       { match: `gh ${rerunFailedArgv(TARGET, 42).join(" ")}`, result: { code: 1, stderr: "no such run" } },
     ]);
-    const result = rerunFailed(runner, TARGET, 42);
+    const result = rerunFailed(seams, TARGET, 42);
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/no such run/);
   });
