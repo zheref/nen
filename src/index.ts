@@ -72,6 +72,7 @@ import { qualityVerb } from "./quality/verb.js";
 import { releaseVerb } from "./release/verb.js";
 import { repoVerb } from "./repo/verb.js";
 import { runVerb } from "./run/verb.js";
+import { scaffoldVerb } from "./scaffold/verb.js";
 import { splitVerb } from "./split/verb.js";
 import { stageVerb } from "./stage/verb.js";
 import { tagVerb } from "./tag/verb.js";
@@ -93,6 +94,7 @@ export const VERBS: readonly Verb[] = [
   releaseVerb,
   repoVerb,
   runVerb,
+  scaffoldVerb,
   splitVerb,
   stageVerb,
   tagVerb,
