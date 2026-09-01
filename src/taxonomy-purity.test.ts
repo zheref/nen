@@ -32,6 +32,20 @@ import { join, relative, sep } from "node:path";
 
 const SRC = join(process.cwd(), "src");
 
+// Read a shipped source with its line endings NORMALIZED.
+//
+// The tree is `* text=auto`, so a Windows checkout carries CRLF. Today that
+// would only put a stray carriage return on the end of every line this sweep
+// reports; what makes it worth fixing is the NEXT rule somebody adds, anchored
+// with a multiline end-of-line, which would then match on two of the three CI
+// lanes and not the third. This file is the guard for a rule that fails the
+// build, so it must not itself be platform-conditional -- the same hazard that
+// took pipeline.test.ts's upload assertion red on windows-latest and green
+// everywhere else.
+function readSource(file: string): string {
+  return readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+}
+
 function shippedFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
@@ -173,7 +187,7 @@ describe("§3: names are data", () => {
     it(`finds no hard-coded ${what} in shipped code`, () => {
       const offences: string[] = [];
       for (const file of files) {
-        const code = stripComments(readFileSync(file, "utf8"));
+        const code = stripComments(readSource(file));
         code.split("\n").forEach((line, index): void => {
           const match = pattern.exec(line);
           if (match === null) return;
@@ -193,7 +207,7 @@ describe("§3: names are data", () => {
     // process.cwd() at the call site plus an explicit --repo override.
     const offences: string[] = [];
     for (const file of files) {
-      const code = stripComments(readFileSync(file, "utf8"));
+      const code = stripComments(readSource(file));
       if (code.includes("import.meta.url")) {
         offences.push(relative(SRC, file).split(sep).join("/"));
       }
@@ -207,7 +221,7 @@ describe("§3: names are data", () => {
     const pattern = /["'`](make|bats|pytest|python3?|jq|yq)["'`]/;
     const offences: string[] = [];
     for (const file of files) {
-      const code = stripComments(readFileSync(file, "utf8"));
+      const code = stripComments(readSource(file));
       code.split("\n").forEach((line, index): void => {
         const match = pattern.exec(line);
         if (match !== null) {

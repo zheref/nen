@@ -184,21 +184,12 @@ describe.skipIf(!BASH)("bootstrap/nen.sh -- verification", () => {
     expect(sh(`checksum_matches '${posixPath(path)}' '${digest.toUpperCase()}'`).status).toBe(0);
   });
 
-  it("REGRESSION: reads the digest correctly for a path containing a backslash", () => {
-    // GNU coreutils' escaped-filename convention prefixes the whole LINE with a
-    // `\` when the name it echoes contains a backslash, so the first field is a
-    // 65-character string. On Windows/Git Bash an ordinary cache directory is
-    // spelled `C:\Users\...`, which means this affected the DEFAULT path on a
-    // first-class supported host (§10): the cache never hit, every run
-    // re-downloaded, and checksum_matches reported "does not match" for bytes
-    // that were correct. Found by the end-to-end cases below, fixed in
-    // sha256_of.
+  it("computes the same digest whichever spelling of the path it is handed", () => {
+    // A real-tool sanity case on whatever this host actually carries. It says
+    // nothing about output FORMAT -- that is the stubbed suite below -- only
+    // that the function agrees with itself.
     const path = tempFile("hello");
-    const windowsish = path.replace(/\//g, "\\");
-    const digest = sh(`sha256_of '${windowsish}'`).stdout;
-    expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(digest).toBe(sha256Of(path));
-    expect(sh(`checksum_matches '${windowsish}' '${digest}'`).status).toBe(0);
+    expect(sha256Of(path)).toBe(sh(`sha256_of "${posixPath(path)}"`).stdout);
   });
 
   it("DELETES the file on a mismatch and reports EXIT_CHECKSUM", () => {
@@ -602,5 +593,189 @@ describe("nen bootstrap -- corrections from review", () => {
     const result = runBootstrap({ ref: "v1", script: liar, cwd: REPO_ROOT });
     expect(result.code).toBe(BootstrapExit.CHECKSUM);
     expect(result.path).toBe("");
+  });
+});
+
+// --- sha256_of's OUTPUT PARSING, with the hashing tool stubbed ---------------
+//
+// WHY STUBBED, AND WHY THIS REPLACED A REAL-TOOL TEST. The behaviour under test
+// is how `sha256_of` PARSES its tool's output line, and the three tools disagree
+// about that line's shape:
+//
+//   sha256sum / shasum   `<digest>  <name>`, digest FIRST
+//   sha256sum / shasum   `\<digest>  <escaped name>` when the name contains a
+//                        backslash or newline -- GNU coreutils' "escaped
+//                        filename" convention, which prefixes the whole LINE
+//   openssl              `SHA2-256(<name>)= <digest>`, digest LAST
+//
+// The first version of this test tried to provoke the escaped form with a real
+// tool by handing it a backslash-spelled path. That works on Windows/Git Bash,
+// where `C:\Users\...` is a real path, and FAILS on Linux and macOS, where the
+// same string names a file that does not exist -- the tool errors, `sha256_of`
+// correctly returns non-zero, and the assertion sees an empty string. The test
+// was pinning a host, not a parser.
+//
+// Stubbing the TOOL fixes that at the root: the stub emits the exact line the
+// parser must handle, identically on all three OSes, and the assertion is about
+// the parser alone. It also lets the openssl and shasum branches be exercised on
+// a host that ships neither -- both are real production paths (macOS reaches for
+// `shasum`; a minimal container may have only `openssl`) that no runner in the
+// matrix would otherwise cover.
+//
+// The stubs are shell written into a temp directory at test time by the
+// TypeScript harness, not shell files in this repository, so AK-11's allowlist
+// is untouched -- the same reasoning as the `gh` stub further down.
+describe.skipIf(!BASH)("bootstrap/nen.sh -- sha256_of parses each tool's output", () => {
+  // Fixed and known, so the assertion is an equality rather than a shape check.
+  const DIGEST = "0123456789abcdef".repeat(4);
+
+  // A real file to hash, for the checksum_matches case at the end.
+  function tempFile(content: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-bs-"));
+    const path = join(dir, "artifact");
+    writeFileSync(path, content);
+    return path;
+  }
+
+  // A directory holding ONE stub tool that prints `line` and exits 0.
+  //
+  // `#!/bin/sh`, an ABSOLUTE interpreter, NOT `#!/usr/bin/env bash`. The `only`
+  // mode below replaces PATH entirely, and `env` is itself found on PATH -- so
+  // an env-shebang stub cannot launch there, and the branch it was meant to
+  // exercise silently reports "no hashing tool" instead. `printf` is a builtin
+  // in every /bin/sh, so the stub needs nothing else on PATH either.
+  function toolDir(tool: string, line: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-tool-"));
+    const stub = join(dir, tool);
+    // `printf '%s\n'` with the line single-quoted inside the script: the stub
+    // must reproduce the byte sequence exactly, backslashes included.
+    writeFileSync(stub, `#!/bin/sh\nprintf '%s\\n' ${shellQuote(line)}\n`);
+    chmodSync(stub, 0o755);
+    return dir;
+  }
+
+  // Single-quote for POSIX shell: wrap in ', and close/escape/reopen for any '.
+  function shellQuote(value: string): string {
+    return `'${value.split("'").join(`'\\''`)}'`;
+  }
+
+  // Run an expression with the stub directory on PATH.
+  //   `shadow` -> the stub dir goes FIRST, ahead of the real tools
+  //   `only`   -> the stub dir is the WHOLE path, so the branches ABOVE the
+  //               stubbed one find nothing and fall through to it
+  //
+  // THE DIRECTORY IS CONVERTED INSIDE BASH, via `cygpath -u`, and that is not
+  // decoration. A Windows path is `C:\Users\...`; forward-slashing it to
+  // `C:/Users/...` is still wrong for PATH specifically, because `:` is the PATH
+  // SEPARATOR there -- bash reads that entry as the two directories `C` and
+  // `/Users/...`, the stub is never found, and the REAL tool answers instead. A
+  // stub that silently fails to shadow turns every case below into a test of
+  // whatever the host happens to carry, which is precisely the fault this whole
+  // block exists to remove. `cygpath` is absent off Windows, where the raw path
+  // is already correct, so the fallback is the identity.
+  function shWithTool(
+    dir: string,
+    mode: "shadow" | "only",
+    expression: string,
+  ): { status: number; stdout: string; stderr: string } {
+    const resolve = 'STUB="$(cygpath -u "$NEN_STUB_DIR" 2>/dev/null || printf %s "$NEN_STUB_DIR")"';
+    const setPath = mode === "shadow" ? 'export PATH="$STUB:$PATH"' : 'export PATH="$STUB"';
+    const result = spawnSync(
+      "bash",
+      ["-c", `${resolve}\n${setPath}\nsource '${posixPath(SCRIPT)}'\n${expression}`],
+      { encoding: "utf8", env: { ...process.env, NEN_STUB_DIR: dir } },
+    );
+    return {
+      status: result.status ?? -1,
+      stdout: (result.stdout ?? "").trim(),
+      stderr: result.stderr ?? "",
+    };
+  }
+
+  it("the stub really does shadow the host's tool -- the premise of every case below", () => {
+    // Asserted rather than assumed. If the shadowing silently failed, every
+    // case in this block would quietly become a test of the host's own
+    // coreutils, pass on Windows, and fail on Linux -- which is exactly how the
+    // test this replaced behaved.
+    const dir = toolDir("sha256sum", `${"f".repeat(64)}  artifact`);
+    expect(shWithTool(dir, "shadow", "command -v sha256sum").stdout).toContain("nen-tool-");
+  });
+
+  it("REGRESSION: strips the leading backslash of an ESCAPED sha256sum line", () => {
+    // THE DEFECT THIS PINS. GNU coreutils prefixes the whole line with `\` when
+    // the filename contains a backslash -- which on Windows/Git Bash is every
+    // ordinary cache directory, `C:\Users\...`. Without the strip, the first
+    // field is a 65-character string starting with `\`, which never equals the
+    // manifest's digest: the cache NEVER hits, every run re-downloads, and
+    // `checksum_matches` reports "does not match" for bytes that are correct --
+    // fail-closed, but for entirely the wrong reason, on a §10 first-class host.
+    const dir = toolDir("sha256sum", `\\${DIGEST}  C:\\\\Users\\\\nen\\\\artifact`);
+    expect(shWithTool(dir, "shadow", "sha256_of /any/file").stdout).toBe(DIGEST);
+  });
+
+  it("strips it from an escaped shasum line too -- the macOS path", () => {
+    // macOS ships `shasum` and no `sha256sum`, so this branch is the one that
+    // actually runs there. `only` hides every real tool, which is what makes the
+    // branch reachable on a host that does have sha256sum.
+    const dir = toolDir("shasum", `\\${DIGEST}  /tmp/na\\\\me`);
+    expect(shWithTool(dir, "only", "sha256_of /any/file").stdout).toBe(DIGEST);
+  });
+
+  it("reads an ORDINARY line from either tool unchanged", () => {
+    // The strip must not eat anything when there is no marker.
+    for (const [tool, mode] of [
+      ["sha256sum", "shadow"],
+      ["shasum", "only"],
+    ] as const) {
+      const dir = toolDir(tool, `${DIGEST}  artifact`);
+      expect(shWithTool(dir, mode, "sha256_of /any/file").stdout, tool).toBe(DIGEST);
+    }
+  });
+
+  it("reads the BINARY-mode ` *name` spelling", () => {
+    const dir = toolDir("sha256sum", `${DIGEST} *artifact`);
+    expect(shWithTool(dir, "shadow", "sha256_of /any/file").stdout).toBe(DIGEST);
+  });
+
+  it("takes the LAST field from openssl, whose line is the other way round", () => {
+    // `SHA2-256(file)= <hex>`. A branch no runner in the matrix would otherwise
+    // exercise, and the one a minimal container falls through to.
+    const dir = toolDir("openssl", `SHA2-256(/any/file)= ${DIGEST}`);
+    expect(shWithTool(dir, "only", "sha256_of /any/file").stdout).toBe(DIGEST);
+  });
+
+  it("REFUSES when the tool fails, rather than treating no output as a digest", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-tool-"));
+    const stub = join(dir, "sha256sum");
+    writeFileSync(stub, "#!/bin/sh\nexit 1\n");
+    chmodSync(stub, 0o755);
+    const result = shWithTool(dir, "shadow", "sha256_of /any/file");
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+  });
+
+  it("REFUSES a host carrying none of the three tools", () => {
+    // The inversion that would make this script fail-OPEN: "no hashing tool, so
+    // skip the check". A host that cannot verify a binary does not get one.
+    const dir = mkdtempSync(join(tmpdir(), "nen-tool-"));
+    const result = shWithTool(dir, "only", "sha256_of /any/file");
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+  });
+
+  it("carries the parsed digest through checksum_matches, escaped line included", () => {
+    // The property the defect actually broke: a correct digest, correctly
+    // compared. `lower()` needs `tr`, so this one shadows rather than replaces
+    // the PATH.
+    const dir = toolDir("sha256sum", `\\${DIGEST}  C:\\\\Users\\\\nen\\\\artifact`);
+    const file = tempFile("hello");
+    expect(
+      shWithTool(dir, "shadow", `checksum_matches '${posixPath(file)}' '${DIGEST}'`).status,
+    ).toBe(0);
+    // ...and still refuses a digest that does not match.
+    expect(
+      shWithTool(dir, "shadow", `checksum_matches '${posixPath(file)}' '${"b".repeat(64)}'`)
+        .status,
+    ).not.toBe(0);
   });
 });

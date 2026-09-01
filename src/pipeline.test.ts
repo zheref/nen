@@ -29,7 +29,24 @@ import { parseYaml, type YamlValue } from "./schema/yaml.js";
 
 const ROOT = process.cwd();
 
+// EVERY repo-file read in this suite is LINE-ENDING NORMALIZED, and that is a
+// correctness requirement rather than tidiness.
+//
+// `.gitattributes` marks the tree `* text=auto`, so a Windows checkout gets CRLF
+// for the workflows, for `.gitattributes` itself, and for the sources. Any
+// pattern anchored with a multiline `$`, or containing a literal `\n`, then
+// fails there and passes everywhere else -- which is exactly how the
+// `gh release upload` extraction below went green on a dev host cloned with
+// `autocrlf=input` and red on `windows-latest`. A guard that holds only under
+// the maintainer's own line-ending setting is not a guard.
+//
+// The one thing that must NOT be normalized is an assertion ABOUT line endings;
+// that reads through `readRaw`.
 function read(...parts: string[]): string {
+  return readRaw(...parts).replace(/\r\n/g, "\n");
+}
+
+function readRaw(...parts: string[]): string {
   return readFileSync(join(ROOT, ...parts), "utf8");
 }
 
@@ -319,7 +336,9 @@ describe("AK-11: the shell allowlist", () => {
     expect(attributes).toMatch(/^\* text=auto$/m);
 
     // And the checked-out bytes really are LF, which is what the rule is for.
-    expect(read("bootstrap", "nen.sh")).not.toContain("\r\n");
+    // READ RAW -- normalizing here would make this assertion trivially true and
+    // it is the only one in the file that is about the bytes themselves.
+    expect(readRaw("bootstrap", "nen.sh")).not.toContain("\r\n");
   });
 
   it("keeps the one shell file executable in the index", () => {
