@@ -259,7 +259,25 @@ export function runSearch(
 //
 // This converges even without a lock: "canonical" is always the LOWEST issue
 // number among current matches — a stable, order-independent computation over
-// whatever the live open set is at run time.
+// whatever the live open set is at run time. The reusable workflow additionally
+// serializes every run repo-wide (a `concurrency:` group), which closes the
+// last-mile race where two near-simultaneous opens each still see only
+// themselves (search-before-file passing for both) — by the time the second
+// run's dedupe pass executes, the first run has already landed.
+//
+// Pure logic (`normalize_title`, `find_canonical`) is unit-testable without a
+// token; `main` is the thin `gh`-calling wrapper the reusable workflow invokes.
+// ============================================================================
+//
+// DEVIATION FROM THE CARRIED TEXT ABOVE (declared here per this repository's
+// own discipline: a deviation is reported where the reader sees it, not
+// silently applied): the "reusable workflow" and its repo-wide `concurrency:`
+// group are bankai-core's own CI wiring, which this port does not carry --
+// nen's absorbed logic is the pure normalize_title/find_canonical half only
+// (see "Pure logic..." above), never the `main` wrapper or its workflow. The
+// last-mile race the concurrency group closes is therefore NOT closed by
+// nen's port; the TOCTOU race the paragraph names as its whole reason for
+// existing is narrowed, not fully closed, by this absorption.
 // ============================================================================
 
 // --- normalize_title TITLE -----------------------------------------------------
