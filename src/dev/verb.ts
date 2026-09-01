@@ -1,6 +1,7 @@
 // src/dev/verb.ts -- `nen dev test|lint|replay`, D16's "one command" surface,
 // now including the local corpus-slice regression replay.
 
+import { join } from "node:path";
 import { assertRepoRoot } from "../repo/root.js";
 import { usage, type Verb, type VerbContext } from "../cli/verb.js";
 import { runDevTest } from "./test.js";
@@ -54,7 +55,7 @@ export const devVerb: Verb = {
 
 function replay(context: VerbContext): number {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
-  const sliceDir = context.values["slice-dir"] ?? `${root}/tests/fixtures/dualrun-slice/dedupe`;
+  const sliceDir = context.values["slice-dir"] ?? join(root, "tests", "fixtures", "dualrun-slice", "dedupe");
   const report = replayDedupeSlice(sliceDir);
 
   if (context.json) {
