@@ -2,14 +2,13 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
+import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { fanoutCommand } from "./command.js";
 
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding).
 function capture(argv: readonly string[], run: Seams["run"]): { code: number; out: string[]; err: string[] } {
   const out: string[] = [];
   const err: string[] = [];
@@ -21,16 +20,9 @@ function capture(argv: readonly string[], run: Seams["run"]): { code: number; ou
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(fanoutCommand.flags));
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  try {
-    const code = fanoutCommand.run({ args, repoFlag: BANKAI_REPO, json: args.booleans.has("json"), io, seams });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(fanoutCommand, argv, BANKAI_REPO, false, io, seams);
+  return { code, out, err };
 }
 
 const runner: Seams["run"] = (): CommandResult => ({

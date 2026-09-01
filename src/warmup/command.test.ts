@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
+import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
-import { defaultSeams } from "../seam/exec.js";
+import type { Seams } from "../seam/exec.js";
 import { warmupCommand } from "./command.js";
 
+// NEVER `defaultSeams()` HERE (review finding) -- see board/command.test.ts's
+// own note on the same fix. A `run` that throws converts a future regression
+// (this verb growing a real `gh` call) into an immediate red test instead of
+// a silent live subprocess call.
+const STUB_SEAMS: Seams = {
+  run: (): never => {
+    throw new Error("must not be called");
+  },
+  now: (): Date => new Date("2026-01-01T00:00:00Z"),
+  env: {},
+};
+
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding).
 function capture(argv: readonly string[]): { code: number; out: string[]; err: string[] } {
   const out: string[] = [];
   const err: string[] = [];
@@ -18,15 +29,8 @@ function capture(argv: readonly string[]): { code: number; out: string[]; err: s
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(warmupCommand.flags));
-  try {
-    const code = warmupCommand.run({ args, repoFlag: BANKAI_REPO, json: args.booleans.has("json"), io, seams: defaultSeams() });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(warmupCommand, argv, BANKAI_REPO, false, io, STUB_SEAMS);
+  return { code, out, err };
 }
 
 describe("nen warmup", () => {

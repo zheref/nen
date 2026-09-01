@@ -2,13 +2,30 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
-import { defaultSeams } from "../seam/exec.js";
+import { runFamily, type Io } from "../index.js";
+import type { Seams } from "../seam/exec.js";
 import { boardCommand } from "./command.js";
 
+// NEVER `defaultSeams()` HERE (review finding, src/seam/exec.ts's own header:
+// "NO SHIPPED VERB IMPORTS `node:child_process`, and no test in this
+// repository makes a network call"). None of board's covered paths spawns
+// today, but that safety was incidental rather than structural -- the day
+// this verb grows a `gh` call, `defaultSeams()` would silently start issuing
+// real subprocess calls from this test rather than failing red. A `run` that
+// throws converts that future regression into an immediate, loud test
+// failure instead (mirrors src/repo/resolve.test.ts:84).
+const STUB_SEAMS: Seams = {
+  run: (): never => {
+    throw new Error("must not be called");
+  },
+  now: (): Date => new Date("2026-01-01T00:00:00Z"),
+  env: {},
+};
+
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding: several family test files
+// re-implemented that mapping locally, which can silently drift from the
+// real one).
 function capture(argv: readonly string[], repoFlag: string | null): { code: number; out: string[]; err: string[] } {
   const out: string[] = [];
   const err: string[] = [];
@@ -20,15 +37,8 @@ function capture(argv: readonly string[], repoFlag: string | null): { code: numb
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(boardCommand.flags));
-  try {
-    const code = boardCommand.run({ args, repoFlag, json: args.booleans.has("json"), io, seams: defaultSeams() });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(boardCommand, argv, repoFlag, false, io, STUB_SEAMS);
+  return { code, out, err };
 }
 
 describe("nen board build/render/diff", () => {
