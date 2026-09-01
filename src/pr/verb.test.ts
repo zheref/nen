@@ -40,6 +40,27 @@ describe("nen pr -- CLI wiring", () => {
     expect(runPr(makeContext({ args: ["bogus"] }).context, new ScriptedRunner([]))).toBe(2);
   });
 
+  // Review finding #7: --reviewers "" (an unset shell variable passed
+  // through) must be refused, not silently read as "no reviewers owed".
+  it("next-blocker refuses an explicitly-empty --reviewers rather than treating it as an override", () => {
+    const { context, err } = makeContext({
+      args: ["next-blocker"],
+      values: { target: "o/n", pr: "1", reviewers: "" },
+    });
+    // No ScriptedRunner calls are scripted -- the guard must fire before any
+    // fetch is attempted (an unscripted call would throw first otherwise).
+    expect(runPr(context, new ScriptedRunner([]))).toBe(2);
+    expect(err.join("\n")).toMatch(/named no reviewers/);
+  });
+
+  it("next-blocker refuses a --reviewers of only commas/whitespace the same way", () => {
+    const { context } = makeContext({
+      args: ["next-blocker"],
+      values: { target: "o/n", pr: "1", reviewers: " , " },
+    });
+    expect(runPr(context, new ScriptedRunner([]))).toBe(2);
+  });
+
   it("retarget requires --base", () => {
     const { context } = makeContext({ args: ["retarget"], values: { target: "o/n", pr: "1" } });
     expect(runPr(context, new ScriptedRunner([]))).toBe(2);

@@ -133,11 +133,24 @@ function fetch(context: VerbContext, runner: Runner): number {
 function blocker(context: VerbContext, runner: Runner): number {
   const target = requireTarget(context);
   const prNumber = requirePr(context);
+  const reviewersRaw = context.values["reviewers"];
+  const reviewers = reviewersRaw === undefined ? undefined : commaList(reviewersRaw);
+  if (reviewersRaw !== undefined && reviewers?.length === 0) {
+    // "" or "," or " , " all comma-split to an empty array. Treating that as
+    // an override (no reviewers, nothing owed) rather than a usage error
+    // would silently retire the owed-reviewer-round conjunct the moment a
+    // caller's script passes an unset variable through --reviewers "$VAR".
+    // Checked before the fetch below, so a bad flag is refused without a
+    // network round trip.
+    throw new UsageErrorLike(
+      "--reviewers named no reviewers. Omit the flag to use the repository's declared set; an empty list would silently retire the owed-round check.",
+    );
+  }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const identities = loadGateIdentities(root);
   const snapshot = fetchPullRequest(runner, target, prNumber);
   const result = nextBlocker(identities, snapshot, {
-    reviewers: context.values["reviewers"] === undefined ? undefined : commaList(context.values["reviewers"]),
+    reviewers,
     policy: context.values["policy"] === "strict" ? "strict" : context.values["policy"] === "bounded" ? "bounded" : undefined,
     deliveryPr: context.booleans.has("delivery-pr"),
   });

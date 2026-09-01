@@ -76,7 +76,14 @@ export function nextBlocker(
     };
   }
 
-  const reviewers = options.reviewers ?? defaultReviewers(identities, snapshot.checks);
+  // Belt and braces alongside src/pr/verb.ts's own guard: an explicitly
+  // empty reviewer list is treated the same as an omitted one, never as "no
+  // reviewers are owed a round" -- an empty array here would silently retire
+  // the owed-reviewer-round conjunct entirely.
+  const reviewers =
+    options.reviewers === undefined || options.reviewers.length === 0
+      ? defaultReviewers(identities, snapshot.checks)
+      : options.reviewers;
   const owed = pendingRounds(
     identities,
     { reviewRequests: snapshot.reviewRequests, checks: snapshot.checks, reviews: snapshot.reviews },

@@ -99,6 +99,18 @@ describe("nextBlocker -- the FIRST condition, fixed order, and nothing past it",
     expect(result.kind).toBe("missing-body-requirement");
   });
 
+  // Review finding #7: an explicitly-empty reviewers override must not be
+  // treated as "no reviewers, nothing owed" -- it made this exact snapshot
+  // read as kind:"none" instead of the correct owed-round.
+  it("an explicitly EMPTY reviewers override falls back to the default set, not to 'nothing owed'", () => {
+    const checks = [
+      { kind: "check_run" as const, name: "ci", status: "COMPLETED" as const, conclusion: "SUCCESS" as const, startedAt: null, completedAt: null, detailsUrl: null },
+    ];
+    const result = nextBlocker(IDENTITIES, snapshot({ checks, reviews: [] }), { reviewers: [] });
+    expect(result.kind).toBe("owed-round");
+    expect(result.detail).toMatch(/sasuke/);
+  });
+
   it("finds no blocker when every condition clears", () => {
     const checks = [
       { kind: "check_run" as const, name: "ci", status: "COMPLETED" as const, conclusion: "SUCCESS" as const, startedAt: null, completedAt: null, detailsUrl: null },
