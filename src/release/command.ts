@@ -12,6 +12,7 @@ import {
   emit,
   requireSubcommand,
   requireValue,
+  splitIntegerList,
   type Command,
   type CommandContext,
 } from "../cli/command.js";
@@ -27,17 +28,33 @@ import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflig
  * created", must never read the same as a repository that genuinely has no
  * hold set -- a `gh` that is not installed, unauthenticated, or scoped
  * without variable-read access must fail the check, not fail it open.
- * `gh variable get`'s own message for a variable that was never created is
- * "variable <name> not found" -- that specific shape is the ONLY non-zero
- * exit this treats as a genuine "not set" rather than "could not be read".
+ *
+ * `gh variable get <name>`'s own message for a variable that was never
+ * created is exactly `variable <name> was not found` (confirmed against a
+ * live `gh` -- both a missing variable AND a missing/inaccessible repository
+ * produce this identical text, since GitHub's API 404s both cases the same
+ * way; there is no way to tell them apart from stderr text alone, so this
+ * treats the shape gh actually documents as "unset" and everything else,
+ * including a 403/permission error or a generic "HTTP 404: Not Found", as
+ * unreadable). A second review finding: matching any stderr that merely
+ * CONTAINS "not found" as a substring also matches unrelated errors like an
+ * `HTTP 404: Not Found` from a different failure mode -- that reintroduces
+ * the exact fail-open hole this function exists to close, so the match must
+ * be anchored to gh's whole message shape, not a substring sniff.
  */
-function resolveHoldState(result: CommandResult): HoldState {
+function isVariableNotFoundMessage(stderr: string, holdVar: string): boolean {
+  const escapedVar = holdVar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^variable ${escapedVar} (?:was )?not found$`, "i");
+  return pattern.test(stderr.trim());
+}
+
+function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
   if (result.spawnFailed) {
     return { kind: "unreadable", detail: result.stderr.trim() || "gh could not be started" };
   }
   if (result.code !== 0) {
     const stderr = result.stderr.trim();
-    if (/not found/i.test(stderr)) {
+    if (isVariableNotFoundMessage(stderr, holdVar)) {
       return { kind: "unset" };
     }
     return { kind: "unreadable", detail: stderr || `gh exited ${result.code}` };
@@ -111,12 +128,12 @@ export const releaseCommand: Command = {
     const criticalIssues =
       criticalIssuesRaw === undefined
         ? null
-        : splitList(criticalIssuesRaw).map((n): number => Number.parseInt(n, 10));
+        : splitIntegerList(splitList(criticalIssuesRaw), "critical-issues");
 
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
 
     const holdResult = context.seams.run(GH, ["variable", "get", holdVar, "--repo", repoSlug]);
-    const hold = resolveHoldState(holdResult);
+    const hold = resolveHoldState(holdResult, holdVar);
 
     const liveChoresPath = context.args.values["live-chores-from"];
     const liveChores: LiveChoreCandidate[] | null =

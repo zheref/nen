@@ -115,6 +115,27 @@ export function readInteger(
 }
 
 /**
+ * `--flag <n,n,n>` read as a list of non-negative integers, refused as a
+ * usage error (exit 2) at the FIRST non-numeric entry rather than letting it
+ * become `NaN` (review finding: `Number.parseInt` on an unvalidated entry
+ * silently produces `NaN`, which then flows into the report/JSON where a
+ * caller cannot distinguish it from a real issue number). Every entry is
+ * named in the refusal, not just the first, on the same "report the whole
+ * problem" idiom the rest of this CLI follows -- a caller fixing one typo at
+ * a time is exactly the round-trip cost this repository designs against
+ * elsewhere.
+ */
+export function splitIntegerList(entries: readonly string[], flag: string): number[] {
+  const bad = entries.filter((entry): boolean => !/^\d+$/.test(entry));
+  if (bad.length > 0) {
+    throw new VerbUsageError(
+      `--${flag} takes a comma-separated list of non-negative whole numbers, got non-numeric entr${bad.length === 1 ? "y" : "ies"}: ${bad.map((entry): string => `'${entry}'`).join(", ")}.`,
+    );
+  }
+  return entries.map((entry): number => Number.parseInt(entry, 10));
+}
+
+/**
  * Emit a report both ways: `--json` prints the object, otherwise the lines.
  *
  * EVERY VERB GOES THROUGH HERE (§1: "human-readable by default, a stable --json
