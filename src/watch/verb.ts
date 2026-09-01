@@ -7,7 +7,7 @@
 // interval, which is izanagi's shape wearing izanami's name -- so this verb
 // refuses, by name, exactly as the skill's §2 requires.
 
-import { defaultRunner, type Runner } from "../exec/seam.js";
+import { defaultRunner, type Runner, type RunResult } from "../exec/seam.js";
 import { classifyCommand } from "../parse/izanami.js";
 import { usage, type Verb, type VerbContext } from "../cli/verb.js";
 import { watchUntil, type WatchResult } from "./until.js";
@@ -17,6 +17,7 @@ const USAGE = `nen watch until -- izanami's loop: fetch, evaluate, report one li
 usage:
   nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                   [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
+                  [--error-exit-threshold <n>]
 
   --command       the observation to repeat, e.g. "gh pr checks 42 --json state".
                   Classified against izanami's read-only table before the FIRST
@@ -24,6 +25,18 @@ usage:
                   named instead.
   --true-pattern  a regex tested against the command's stdout. Omit to treat
                   exit code 0 as true (the default a check-style command uses).
+                  WHEN GIVEN, a non-zero exit is treated as an OBSERVATION
+                  ERROR, not a false reading -- the pattern decides truth, the
+                  exit code only decides whether the command's run itself
+                  succeeded.
+  --error-exit-threshold  WHEN --true-pattern is NOT given (exit-code-as-
+                  truth mode), an exit code at or above this is an
+                  OBSERVATION ERROR rather than a false reading -- codes 0/1
+                  are the ordinary true/false pair most CLIs use; 2 and above
+                  usually mean the command itself broke (bad usage, a fatal
+                  git error, an unauthenticated gh call), not "not yet".
+                  Default 2. Set higher for a command whose own false/pending
+                  exit codes exceed 1.
   --interval-ms   pace between observations. Default 5000 -- CI checks move on
                   the order of minutes; a tighter interval just spends quota.
   --max-iterations  a SAFETY bound, not izanagi's mandatory cap (izanami needs
@@ -40,7 +53,7 @@ export const watchVerb: Verb = {
   summary: "Poll a read-only command until its condition holds.",
   usage: USAGE,
   flags: {
-    values: ["command", "true-pattern", "interval-ms", "max-iterations", "cwd"],
+    values: ["command", "true-pattern", "interval-ms", "max-iterations", "cwd", "error-exit-threshold"],
     booleans: [],
   },
   run(context: VerbContext): number {
@@ -86,9 +99,26 @@ export function runWatch(context: VerbContext, runner: Runner, sleep?: (ms: numb
     return usage(context.io, "--max-iterations must be a positive integer.");
   }
 
+  const thresholdRaw = context.values["error-exit-threshold"];
+  const errorExitThreshold = thresholdRaw === undefined ? 2 : Number(thresholdRaw);
+  if (!Number.isInteger(errorExitThreshold) || errorExitThreshold < 1) {
+    return usage(context.io, "--error-exit-threshold must be a positive integer.");
+  }
+
+  // A permanently-broken observation must never masquerade as "not yet true"
+  // (until.ts's own header) -- until.ts's own default isError only catches a
+  // missing binary, and this verb is the caller until.ts's header says must
+  // supply its own. See the usage text above for the reasoning behind each
+  // branch below.
+  const isError = (observed: RunResult): boolean => {
+    if (observed.spawnError !== null) return true;
+    return regex === null ? observed.code >= errorExitThreshold : observed.code !== 0;
+  };
+
   const result = watchUntil(runner, {
     request: { bin, args, cwd: context.values["cwd"] },
     isTrue: (observed): boolean => (regex === null ? observed.code === 0 : regex.test(observed.stdout)),
+    isError,
     intervalMs,
     maxIterations,
     sleep,

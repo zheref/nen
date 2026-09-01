@@ -22,7 +22,7 @@
 // distinct from both convergence and the error streak, and a caller that wants
 // a truly unbounded watch simply omits it.
 
-import type { Runner, RunRequest, RunResult } from "../exec/seam.js";
+import { lines, type Runner, type RunRequest, type RunResult } from "../exec/seam.js";
 
 export interface WatchIteration {
   readonly iteration: number;
@@ -42,7 +42,20 @@ export interface WatchOptions {
   readonly request: RunRequest;
   /** Decides the condition from one observation. */
   readonly isTrue: (result: RunResult) => boolean;
-  /** Decides whether an observation itself failed, distinct from a false reading. Defaults to spawnError !== null. */
+  /**
+   * Decides whether an observation itself failed, distinct from a false
+   * reading. Defaults to spawnError !== null -- i.e. "the binary could not
+   * even be started" -- which is deliberately narrow: it is the only
+   * universally-safe default, because this module has no way to know which
+   * non-zero exit codes a CALLER's specific command uses to mean "false" (a
+   * normal reading) versus "broken" (auth expired, not a git repo, a 404).
+   * A caller whose observation's exit code alone cannot tell those apart
+   * MUST supply its own isError -- see ../watch/verb.ts's --error-exit-
+   * threshold for the CLI's version of that choice. Passing this default
+   * unexamined is how a permanently-broken observation command reports
+   * "condition is not yet true" forever instead of stopping at the error
+   * streak below.
+   */
   readonly isError?: (result: RunResult) => boolean;
   readonly intervalMs: number;
   readonly maxIterations?: number;
@@ -70,11 +83,16 @@ export function watchUntil(runner: Runner, options: WatchOptions): WatchResult {
     const errored = isError(result);
     const conditionTrue = !errored && options.isTrue(result);
 
+    // The exit code (and, on an error, the observation's own stderr) are
+    // ALWAYS surfaced -- a human watching a `fatal: not a git repository`
+    // masquerading as "not yet true" is exactly the failure mode the
+    // consecutive-error streak above exists to catch; the message itself
+    // must not hide the evidence that would let someone catch it sooner.
     const message = errored
-      ? `observation failed: ${result.spawnError ?? "non-zero/unreadable result"}`
+      ? `observation failed: ${result.spawnError ?? lines(result.stderr)[0] ?? `exit ${result.code}, no stderr`}`
       : conditionTrue
-        ? "condition is true"
-        : "condition is not yet true";
+        ? `condition is true (exit ${result.code})`
+        : `condition is not yet true (exit ${result.code})`;
     const entry: WatchIteration = { iteration, conditionTrue, errored, message };
     iterations.push(entry);
     options.onIteration?.(entry);
