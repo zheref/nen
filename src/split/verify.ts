@@ -27,14 +27,40 @@ export interface HunkLocation {
 
 export interface VerifyResult {
   readonly ok: boolean;
+  /** Set when the proof itself could not be run (e.g. an empty --original). ok is always false when this is set. */
+  readonly error: string | null;
   /** In the original diff, absent from every branch -- the skill's "leftover hunk". */
   readonly missing: readonly HunkLocation[];
   /** In two or more branches at once -- duplicated instead of assigned to the lower one. */
   readonly duplicated: readonly (HunkLocation & { readonly branches: readonly number[] })[];
+  /**
+   * Present in exactly one branch under the SAME header, but the hunk BODY
+   * differs from the original -- a hunk altered in transit, which "the
+   * header lands somewhere" alone would miss entirely (see diff.ts's header:
+   * identity is the hunk's exact text, not just its header).
+   */
+  readonly altered: readonly (HunkLocation & { readonly branch: number; readonly diff: string })[];
   /** In a branch's diff but not in the original -- introduced work the proof did not expect. */
   readonly extra: readonly HunkLocation[];
   readonly filesInOriginal: number;
   readonly filesInBranches: number;
+}
+
+// A short, human-scannable summary of where two hunk bodies with the SAME
+// header diverge -- not a full diff (that is what the caller's own diff tool
+// is for), just enough to tell "this is the same change" from "this is a
+// different change wearing the same header" at a glance.
+function shortDiff(originalText: string, branchText: string): string {
+  const originalLines = originalText.split("\n");
+  const branchLines = branchText.split("\n");
+  const max = Math.max(originalLines.length, branchLines.length);
+  const divergent: string[] = [];
+  for (let i = 0; i < max && divergent.length < 3; i++) {
+    const a = originalLines[i];
+    const b = branchLines[i];
+    if (a !== b) divergent.push(`  line ${i + 1}: original ${JSON.stringify(a ?? "(absent)")} vs branch ${JSON.stringify(b ?? "(absent)")}`);
+  }
+  return divergent.join("\n");
 }
 
 function index(files: readonly FileDiff[]): Map<string, Map<string, string>> {
@@ -54,8 +80,27 @@ export function verifySplit(originalDiff: string, branchDiffs: readonly string[]
   const original = index(parseDiff(originalDiff));
   const branches = branchDiffs.map((text): Map<string, Map<string, string>> => index(parseDiff(text)));
 
+  const originalHunkCount = [...original.values()].reduce((sum, hunks): number => sum + hunks.size, 0);
+  if (originalHunkCount === 0) {
+    // An empty diff is not a proof of completeness -- it is indistinguishable
+    // from "the caller pointed --original at the wrong base" or "nothing was
+    // staged", and either way the union-of-branches claim below would be
+    // vacuously true against nothing.
+    return {
+      ok: false,
+      error: "--original names no hunks -- an empty diff is not a proof of completeness. Check --original: wrong base, or nothing staged?",
+      missing: [],
+      duplicated: [],
+      altered: [],
+      extra: [],
+      filesInOriginal: original.size,
+      filesInBranches: new Set(branches.flatMap((b): string[] => [...b.keys()])).size,
+    };
+  }
+
   const missing: HunkLocation[] = [];
   const duplicated: (HunkLocation & { branches: readonly number[] })[] = [];
+  const altered: (HunkLocation & { branch: number; diff: string })[] = [];
   const extra: HunkLocation[] = [];
 
   const allPaths = new Set<string>([...original.keys(), ...branches.flatMap((b): string[] => [...b.keys()])]);
@@ -68,27 +113,50 @@ export function verifySplit(originalDiff: string, branchDiffs: readonly string[]
     ]);
 
     for (const header of headers) {
+      const originalText = originalHunks.get(header);
+      const inOriginal = originalText !== undefined;
+
+      // Every branch that carries this (path, header) at all -- identity for
+      // "is it here", independent of whether the BODY still matches.
       const owners: number[] = [];
       branches.forEach((branch, branchIndex): void => {
         if (branch.get(path)?.has(header) === true) owners.push(branchIndex);
       });
 
-      const inOriginal = originalHunks.has(header);
-      if (inOriginal && owners.length === 0) {
-        missing.push({ path, header });
-      } else if (inOriginal && owners.length > 1) {
-        duplicated.push({ path, header, branches: owners });
-      } else if (!inOriginal && owners.length > 0) {
-        extra.push({ path, header });
+      if (!inOriginal) {
+        if (owners.length > 0) extra.push({ path, header });
+        continue;
       }
-      // inOriginal && owners.length === 1: exactly the intended shape, no report.
+
+      if (owners.length === 0) {
+        missing.push({ path, header });
+      } else if (owners.length > 1) {
+        // Present in more than one branch under this header -- duplicated is
+        // the bigger problem regardless of whether the bodies also differ;
+        // TEXT is still the identity (diff.ts's header), but the count of
+        // owners is reported first since a caller fixing "which branch owns
+        // this" needs that before "is this copy also altered".
+        duplicated.push({ path, header, branches: owners });
+      } else {
+        // Exactly one branch carries this header. IDENTITY IS TEXT, NOT JUST
+        // THE HEADER -- a matching header with a different body is a hunk
+        // that changed in transit, not a hunk that landed.
+        const branchIndex = owners[0] as number;
+        const branchText = branches[branchIndex]?.get(path)?.get(header) as string;
+        if (branchText !== originalText) {
+          altered.push({ path, header, branch: branchIndex, diff: shortDiff(originalText, branchText) });
+        }
+        // else: exactly the intended shape, no report.
+      }
     }
   }
 
   return {
-    ok: missing.length === 0 && duplicated.length === 0 && extra.length === 0,
+    ok: missing.length === 0 && duplicated.length === 0 && altered.length === 0 && extra.length === 0,
+    error: null,
     missing,
     duplicated,
+    altered,
     extra,
     filesInOriginal: original.size,
     filesInBranches: new Set(branches.flatMap((b): string[] => [...b.keys()])).size,

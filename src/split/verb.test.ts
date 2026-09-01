@@ -76,4 +76,30 @@ describe("nen split verify -- CLI wiring", () => {
   it("refuses an unknown subcommand", () => {
     expect(splitVerb.run(makeContext({ args: ["bogus"] }).context)).toBe(2);
   });
+
+  // Review finding #6: an empty --original must never read as a passed proof.
+  it("exits 1 and refuses when --original names no hunks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-split-"));
+    const original = join(dir, "empty.diff");
+    const branchA = join(dir, "a.diff");
+    writeFileSync(original, "");
+    writeFileSync(branchA, "");
+    const { context, err } = makeContext({ args: ["verify"], values: { original, branches: branchA } });
+    expect(splitVerb.run(context)).toBe(1);
+    expect(err.join("\n")).toMatch(/names no hunks/);
+  });
+
+  it("exits 1 and names an ALTERED hunk when a branch's body diverges under the same header", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-split-"));
+    const original = join(dir, "original.diff");
+    const branchA = join(dir, "a.diff");
+    writeFileSync(original, diffFor("a.ts"));
+    writeFileSync(
+      branchA,
+      [`diff --git a/a.ts b/a.ts`, "index 1..2 100644", `--- a/a.ts`, `+++ a/a.ts`, "@@ -1,1 +1,1 @@", "-x", "+z", ""].join("\n"),
+    );
+    const { context, out } = makeContext({ args: ["verify"], values: { original, branches: branchA } });
+    expect(splitVerb.run(context)).toBe(1);
+    expect(out.join("\n")).toMatch(/ALTERED/);
+  });
 });
