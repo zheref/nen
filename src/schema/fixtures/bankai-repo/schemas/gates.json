@@ -1,0 +1,45 @@
+{
+  "$comment": "TEST FIXTURE -- the reviewer identities the CON-32 predicates were ported from, expressed as data. Every pattern here reproduces a literal that used to be written into cli/src/gates/predicates.ts in bankai-core, so src/gates/predicates.test.ts (the ported companion suite) proves the parameterised predicates behave identically to the originals. Not shipped; see ../../README.md.",
+  "reviewers": [
+    {
+      "name": "sasuke",
+      "login_pattern": { "pattern": "sasuke", "ignoreCase": true },
+      "review_check_pattern": { "pattern": "^sasuke / audit$", "ignoreCase": true },
+      "delivery_holistic_pass": true
+    },
+    {
+      "name": "tenma",
+      "login_pattern": { "pattern": "tenma", "ignoreCase": true },
+      "review_check_pattern": { "pattern": "^tenma / review$", "ignoreCase": true },
+      "delivery_holistic_pass": true
+    },
+    {
+      "$comment": "Posts as copilot-pull-request-reviewer[bot]; nothing re-requests it after a final push, so under the bounded policy only a PENDING request owes a round.",
+      "name": "copilot",
+      "login_pattern": { "pattern": "copilot", "ignoreCase": true },
+      "bounded_policy_exempt": true
+    },
+    {
+      "$comment": "The check IS the round: it posts a review only when it has findings. The enrolment pattern is ANCHORED and CASE-SENSITIVE on purpose -- a sibling probe job would otherwise enrol the reviewer on every PR.",
+      "name": "bisky",
+      "login_pattern": { "pattern": "bisky", "ignoreCase": true },
+      "review_check_pattern": { "pattern": "^bisky / review$", "ignoreCase": true },
+      "round_check_pattern": { "pattern": "^bisky / review$", "ignoreCase": true },
+      "enrolment_check_pattern": { "pattern": "^bisky / review$", "ignoreCase": false }
+    },
+    {
+      "$comment": "Posts under a login carrying either word depending on the installation, and its check name varies with the installation too -- hence an UNANCHORED, case-insensitive substring where bisky's is anchored.",
+      "name": "bugbot",
+      "login_pattern": { "pattern": "cursor|bugbot", "ignoreCase": true },
+      "round_check_pattern": { "pattern": "bugbot", "ignoreCase": true },
+      "enrolment_check_pattern": { "pattern": "bugbot", "ignoreCase": true }
+    }
+  ],
+  "default_approvers": ["sasuke", "tenma"],
+  "base_reviewers": ["sasuke", "tenma", "copilot"],
+  "delivery": {
+    "author_pattern": { "pattern": "(^|/)roy-bankai(\\[bot\\])?$", "ignoreCase": true },
+    "head_ref_prefixes": ["integration/"],
+    "labels": ["bankai:epic"]
+  }
+}

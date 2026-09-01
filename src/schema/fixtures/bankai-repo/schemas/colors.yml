@@ -1,0 +1,83 @@
+# TEST FIXTURE -- a trimmed excerpt of the live bankai-core schemas/colors.yml
+# shape, including every YAML construct the real file uses: folded scalars,
+# flow sequences, flow mappings, quoted colours, nulls and trailing comments.
+# Not shipped; see ../../README.md.
+
+version: 1
+
+categories:
+
+  status:
+    scope: >-
+      One per issue or PR, describing where it sits in the human-gate lifecycle.
+      Rendered in a column headed "Status".
+    precedence: [on_hold, blocked, ready_g2_g4, ready_g1, in_progress]
+    values:
+      on_hold:
+        emoji: "🔵"
+        hex: "#0052cc"
+        label: Intentionally on hold
+        means: >-
+          Deliberately parked pending another effort's resolution.
+        gate: null
+      blocked:
+        emoji: "🔴"
+        hex: "#d73a4a"
+        label: Blocked
+        means: >-
+          A human-only action is required before anything can move.
+        gate: G5
+      ready_g2_g4:
+        emoji: "🟢"
+        hex: "#0e8a16"
+        label: G2/G4-ready
+        means: The readiness gate reports the PR ready and mergeable.
+        gate: G2/G4
+        decided_by: scripts/pr_ready_gate.sh
+      ready_g1:
+        emoji: "🟡"
+        hex: "#fbca04"
+        label: G1-ready
+        means: Ready to be started, or to have its spec iterated.
+        gate: G1
+      in_progress:
+        emoji: "🟠"
+        # Deliberately NOT the severity/high hex -- two categories sharing a
+        # glyph is fine while sharing a swatch is a trap.
+        hex: "#ef6c00"
+        label: In progress
+        means: Work is moving.
+        gate: null
+
+  severity:
+    scope: A finding's or issue's severity.
+    label_source: schemas/labels.json
+    values:
+      critical:
+        emoji: "🛑"
+        hex: "#b60205"
+        label: bankai:severity/critical
+        means: Blocks and pages the human immediately, overriding normal cadence.
+      high:
+        emoji: "🔴"
+        hex: "#d93f0b"
+        label: bankai:severity/high
+        means: Must fix before merge/release.
+      medium:
+        emoji: "🟡"
+        hex: "#fbca04"
+        label: bankai:severity/medium
+        means: Fix soon.
+      low:
+        emoji: "🟢"
+        hex: "#0e8a16"
+        label: bankai:severity/low
+        means: Nice to fix.
+
+  agent_identity:
+    scope: Output header only -- the agent's own character badge.
+    values:
+      ichigo:   { emoji: "🟥", note: "Red SQUARE, deliberately -- must not collide with the circles." }
+      naruto:   { emoji: "🟠", note: "Spec-plane sibling; shares the glyph by design." }
+      sasuke:   { emoji: null }
+      tenma:    { emoji: null }

@@ -1,0 +1,24 @@
+{
+  "$comment": "TEST FIXTURE -- a DIFFERENT registry from bankai-repo/. Not shipped; see ../../README.md.",
+  "latest": "v2.0.0",
+  "consumers": [
+    {
+      "repo": "example/alpha",
+      "pinned": "v2.0.0",
+      "consumes": ["review.yml", "build.yml"],
+      "scenario": "rust-cli",
+      "phases": ["review"],
+      "code": "AL"
+    },
+    {
+      "repo": "example/beta",
+      "pinned": "v1.9.0",
+      "consumes": ["build.yml"],
+      "code": "BE"
+    }
+  ],
+  "product_codes": {
+    "AL": "alpha",
+    "BE": "beta"
+  }
+}

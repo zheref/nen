@@ -1,0 +1,41 @@
+{
+  "$comment": "TEST FIXTURE -- a trimmed excerpt of the live bankai-core schemas/repos.json shape. Not shipped; see ../../README.md.",
+  "latest": "v0.11.2",
+  "consumers": [
+    {
+      "repo": "zheref/KroApple",
+      "pinned": "v0.11.2",
+      "consumes": ["sasuke-review.yml", "tenma-review.yml", "db-migrate.yml"],
+      "scenario": "swiftui-tca-uzf-v2",
+      "phases": ["review-pair", "builder-loop"],
+      "auth": "claude-max-oauth",
+      "notes": "Records the consumer's actual state, never a target.",
+      "code": "KP"
+    },
+    {
+      "repo": "zheref/KroAndroid",
+      "pinned": "v0.11.2",
+      "consumes": ["sasuke-review.yml", "tenma-review.yml", "resolve-runner.yml"],
+      "scenario": "compose-uzf-v2",
+      "phases": ["review-pair", "builder-loop"],
+      "auth": "claude-max-oauth",
+      "code": "KN"
+    },
+    {
+      "repo": "zheref/bankai-scaffold",
+      "pinned": "v0.10.0",
+      "db_migrate_pinned": "v0.9.7",
+      "consumes": ["sasuke-review.yml"],
+      "scenario": "scaffold",
+      "code": "BS"
+    }
+  ],
+  "product_codes": {
+    "BC": "bankai-core",
+    "BS": "bankai-scaffold",
+    "KP": "KroApple",
+    "KN": "KroAndroid",
+    "KW": "KroWeb",
+    "KC": "KroCloud"
+  }
+}

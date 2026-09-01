@@ -1,0 +1,13 @@
+{
+  "$comment": "TEST FIXTURE -- a DIFFERENT vocabulary from bankai-repo/, on purpose. Nothing in the shipped tree knows any of these strings; every test that asserts the same behaviour against both fixtures is proving that the names are data. Not shipped; see ../../README.md.",
+  "labels": [
+    { "name": "akatsuki:phase/proposed", "color": "ededed", "description": "Proposed, awaiting ratification" },
+    { "name": "akatsuki:phase/ratified", "color": "1d76db", "description": "Ratified and scheduled" },
+    { "name": "akatsuki:phase/landed", "color": "006b75", "description": "Landed on the default branch" },
+    { "name": "akatsuki:impact/blocker", "color": "b60205", "description": "Blocks the migration" },
+    { "name": "akatsuki:impact/minor", "color": "0e8a16", "description": "Cosmetic or incidental" },
+    { "name": "akatsuki:crew/itachi", "color": "4527a0", "description": "Owned by Itachi" },
+    { "name": "akatsuki:crew/kisame", "color": "1565c0", "description": "Owned by Kisame" },
+    { "name": "akatsuki:migration", "color": "5319e7", "description": "A migration effort, delivered on a train branch" }
+  ]
+}
