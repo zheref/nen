@@ -33,9 +33,13 @@ export interface CutTagResult {
   readonly error: string | null;
 }
 
-function run(seams: Seams, args: readonly string[], cwd: string): { code: number; stdout: string; stderr: string } {
+function run(
+  seams: Seams,
+  args: readonly string[],
+  cwd: string,
+): { code: number; stdout: string; stderr: string; spawnFailed: boolean } {
   const result = seams.run(GIT, [...args], { cwd });
-  return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+  return { code: result.code, stdout: result.stdout, stderr: result.stderr, spawnFailed: result.spawnFailed };
 }
 
 export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTagResult {
@@ -81,7 +85,12 @@ export function cutTag(seams: Seams, cwd: string, options: CutTagOptions): CutTa
   log.push(`'${options.name}' does not exist locally or on origin`);
 
   const ancestor = run(seams, ["merge-base", "--is-ancestor", options.at, `origin/${trunk}`], cwd);
-  if (ancestor.code > 1) {
+  // A code above 1, OR a git that never started at all (spawnFailed --
+  // reported as code -1, which is NOT above 1), is a git failure and must not
+  // be read as "not an ancestor" -- that would report "is not an ancestor of
+  // origin/main" (a promise the code is NOT on the trunk) when the honest
+  // answer is "could not test reachability" at all.
+  if (ancestor.spawnFailed || ancestor.code > 1) {
     return {
       ok: false,
       pushed: false,

@@ -30,7 +30,12 @@ export class SelfCheckError extends Error {
 
 function isAncestor(seams: Seams, cwd: string, ancestor: string, descendant: string): boolean {
   const result = seams.run(GIT, ["merge-base", "--is-ancestor", ancestor, descendant], { cwd });
-  if (result.code > 1) {
+  // A git that never started (spawnFailed, reported as code -1) is not "above
+  // 1" and must not fall through to `result.code === 0` below, which would
+  // read an unrunnable git as a confident "not an ancestor" -- the worst of
+  // this module's two verdicts, because it is a silent WRONG answer rather
+  // than a refusal.
+  if (result.spawnFailed || result.code > 1) {
     throw new SelfCheckError(
       `could not test whether '${ancestor}' is an ancestor of '${descendant}': ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,
     );

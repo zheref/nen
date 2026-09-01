@@ -98,4 +98,26 @@ describe("cutTag -- the commit is ALWAYS the caller's, never HEAD", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/could not test reachability/);
   });
+
+  it("refuses with 'could not test reachability', not 'is not an ancestor', when git itself never starts (spawnFailed, code -1)", () => {
+    // The exact CommandResult src/seam/exec.ts's spawnRunner returns for an
+    // ENOENT: `{ code: -1, spawnFailed: true }`. -1 is NOT > 1, so
+    // `if (ancestor.code > 1)` alone falls through to
+    // `if (ancestor.code !== 0)`, which is also true for -1 -- reporting
+    // "'abc123' is not an ancestor of origin/main -- a tag is a promise the
+    // code is on the trunk" for a git that could not even be started,
+    // instead of "could not test reachability".
+    const seams = new ScriptedSeams([
+      { match: "git ls-remote --tags origin v1.0.0", result: { stdout: "" } },
+      { match: "git tag -l v1.0.0", result: { stdout: "" } },
+      {
+        match: "git merge-base --is-ancestor abc123 origin/main",
+        result: { code: -1, spawnFailed: true, stderr: "spawn git ENOENT" },
+      },
+    ]);
+    const result = cutTag(seams, "/repo", { name: "v1.0.0", at: "abc123" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/could not test reachability/);
+    expect(result.error).not.toMatch(/is not an ancestor/);
+  });
 });

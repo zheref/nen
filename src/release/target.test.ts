@@ -50,6 +50,25 @@ describe("resolveReleaseTarget -- resolve, THEN test reachability", () => {
     expect(() => resolveReleaseTarget(seams, "/repo", "abc")).toThrow(ResolveTargetError);
   });
 
+  it("throws, not a confident 'not an ancestor', when git itself never starts (spawnFailed, code -1)", () => {
+    // The exact CommandResult src/seam/exec.ts's spawnRunner returns for an
+    // ENOENT: `{ code: -1, spawnFailed: true }`. -1 is NOT > 1, so a
+    // regression here is `if (ancestor.code > 1)` alone falling through to
+    // `isAncestorOfTrunk: ancestor.code === 0` -- i.e. `false` -- printing
+    // "NOT an ancestor of the trunk" for a git that could not even be
+    // started, instead of throwing ResolveTargetError.
+    const seams = new ScriptedSeams([
+      { match: "git fetch origin main", result: {} },
+      { match: "git rev-parse abc", result: { stdout: "abc\n" } },
+      {
+        match: "git merge-base --is-ancestor abc origin/main",
+        result: { code: -1, spawnFailed: true, stderr: "spawn git ENOENT" },
+      },
+    ]);
+    expect(() => resolveReleaseTarget(seams, "/repo", "abc")).toThrow(ResolveTargetError);
+    expect(() => resolveReleaseTarget(seams, "/repo", "abc")).toThrow(/could not test reachability/);
+  });
+
   it("takes a custom trunk", () => {
     const seams = new ScriptedSeams([
       { match: "git fetch origin release", result: {} },

@@ -29,9 +29,13 @@ export class ResolveTargetError extends Error {
   }
 }
 
-function run(seams: Seams, args: readonly string[], cwd: string): { code: number; stdout: string; stderr: string } {
+function run(
+  seams: Seams,
+  args: readonly string[],
+  cwd: string,
+): { code: number; stdout: string; stderr: string; spawnFailed: boolean } {
   const result = seams.run(GIT, [...args], { cwd });
-  return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+  return { code: result.code, stdout: result.stdout, stderr: result.stderr, spawnFailed: result.spawnFailed };
 }
 
 export function resolveReleaseTarget(
@@ -67,11 +71,13 @@ export function resolveReleaseTarget(
 
   const ancestor = run(seams, ["merge-base", "--is-ancestor", sha, `origin/${trunk}`], cwd);
   // `merge-base --is-ancestor` reports its verdict AS the exit code (0 =
-  // ancestor, 1 = not), never on stderr -- so a code above 1 is a git failure
-  // (an unknown ref, a shallow clone missing history) and must not be read as
-  // "not an ancestor", which would send a reachable release target through
-  // getsuga §6's off-main build path for no reason.
-  if (ancestor.code > 1) {
+  // ancestor, 1 = not), never on stderr -- so a code above 1, OR a git that
+  // never started at all (spawnFailed -- reported as code -1, which is NOT
+  // above 1), is a git failure (an unknown ref, a shallow clone missing
+  // history, no `git` on PATH) and must not be read as "not an ancestor",
+  // which would send a reachable release target through getsuga §6's off-main
+  // build path for no reason.
+  if (ancestor.spawnFailed || ancestor.code > 1) {
     throw new ResolveTargetError(
       `could not test reachability of '${sha}' against origin/${trunk}: ${outputLines(ancestor.stderr).join(" ") || `exit ${ancestor.code}`}`,
     );
