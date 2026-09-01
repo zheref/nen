@@ -58,6 +58,7 @@ import { PROGRAM, VERSION } from "./version.js";
 // missing verb: a missing verb fails one invocation, a broken build fails all of
 // them.
 
+import { canonVerb } from "./canon/verb.js";
 import { commitVerb } from "./commit/verb.js";
 import { effortVerb } from "./effort/verb.js";
 import { epicVerb } from "./epic/verb.js";
@@ -65,6 +66,7 @@ import { issueVerb } from "./issue/verb.js";
 import { loopVerb } from "./loop/verb.js";
 import { parseVerb } from "./parse/verb.js";
 import { prVerb } from "./pr/verb.js";
+import { qualityVerb } from "./quality/verb.js";
 import { repoVerb } from "./repo/verb.js";
 import { runVerb } from "./run/verb.js";
 import { splitVerb } from "./split/verb.js";
@@ -73,6 +75,7 @@ import { watchVerb } from "./watch/verb.js";
 import { wcVerb } from "./wc/verb.js";
 
 export const VERBS: readonly Verb[] = [
+  canonVerb,
   commitVerb,
   effortVerb,
   epicVerb,
@@ -80,6 +83,7 @@ export const VERBS: readonly Verb[] = [
   loopVerb,
   parseVerb,
   prVerb,
+  qualityVerb,
   repoVerb,
   runVerb,
   splitVerb,
