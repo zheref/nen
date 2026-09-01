@@ -107,17 +107,23 @@ function isAbsent(value: unknown): boolean {
 //     list can only make that disjunction MORE conservative (fall back to
 //     the ordinary at-head rounds), never WIDER. Never the false-green
 //     direction, so left as page-one-only.
-//   - `reviewRequests(first:100)`: AUDITED, flagged as a follow-up rather
-//     than fixed here. It feeds ../gates/predicates.ts's pendingRounds()
-//     limb (i) via ../github/pr_state.ts's `requests` array, so a dropped
-//     101st+ entry COULD in principle hide a pending round -- structurally
-//     the same shape as the `contexts` bug. Not fixed in this PR because,
-//     unlike `contexts` (CI matrices routinely exceed 100, proven live on
-//     #927's 114), GitHub's platform-level UI limits how many reviewers can
-//     be requested on a single PR, well under 100 -- making the truncation
-//     this cap could cause exceptionally unlikely to occur in practice. See
-//     the follow-up task filed alongside PR #14 for the full reasoning and
-//     the decision on whether to close this one too.
+//   - `reviewRequests(first:100)`: WAS flagged as a follow-up rather than
+//     fixed, on the reasoning that GitHub's platform-level limit on
+//     requestable reviewers makes truncation here "exceptionally unlikely."
+//     THAT REASONING WAS ITSELF UNCITED AND UNTESTED (no linked doc, no
+//     pinned test) -- exactly the shape of claim the `contexts` bug was found
+//     by NOT trusting (zheref/nen#14's second fact-check, 2026-09-01) -- and
+//     it feeds ../gates/predicates.ts's pendingRounds() limb (i) via
+//     ../github/pr_state.ts's `requests` array, so a truncation here is the
+//     identical false-green shape. A documentation search for a citable,
+//     numbered platform limit at fact-check time turned up no authoritative
+//     source to pin the assumption to, which settles the choice on its own:
+//     PAGINATED NOW, to completion, with the identical fail-closed discipline
+//     as `contexts` -- see REVIEW_REQUESTS_PAGE_QUERY and ../github/
+//     pr_state.ts's `fullReviewRequests()`. This is deliberately NOT a
+//     "trust the platform limit" pin: a coded, tested walk is a guarantee
+//     that holds regardless of what GitHub's UI enforces this year, or
+//     whether it enforces anything at all.
 //   - `contexts(first:100)`: WAS the defect. Fixed below -- see
 //     CHECK_ROLLUP_PAGE_QUERY and its own comment.
 export const PULL_REQUEST_QUERY = `
@@ -135,6 +141,7 @@ export const PULL_REQUEST_QUERY = `
         labels(first:100) { nodes { name } }
         reviewRequests(first:100) {
           nodes { requestedReviewer { ... on User { login } ... on Bot { login } ... on Team { name } } }
+          pageInfo { hasNextPage endCursor }
         }
         statusCheckRollup: commits(last:1) {
           nodes {
@@ -158,18 +165,21 @@ export const PULL_REQUEST_QUERY = `
 
 // zheref/nen#14's fact-check on zheref/bankai-core#927 (independent
 // verification pass, 2026-08-31): `contexts(first:100)` above NEVER
-// PAGINATED. #927's rollup has totalCount 114 with hasNextPage true, and the
-// ONLY failing entry ('sasuke / audit') sits beyond the first 100 -- so
-// PULL_REQUEST_QUERY silently dropped it, ../github/pr_state.ts fed a
-// TRUNCATED-but-all-green rollup to parseCheckRollup(), and the gate answered
-// `ready` while scripts/pr_ready_gate.sh (whose `gh pr view --json
-// statusCheckRollup` paginates this same connection internally, invisibly to
-// the shell) answered `not-ready: required checks reported but are not all
-// green (CON-32a)`. Deterministic across three runs of each side. A cap that
-// silently truncates a set a VERDICT depends on is a false-GREEN bug, not a
-// completeness nicety -- CON-32(a)'s boundary is "every required check
-// green", and a check this process never even saw cannot be weighed against
-// it.
+// PAGINATED. When observed that day, #927's rollup had totalCount 114 with
+// hasNextPage true, and the ONLY failing entry ('sasuke / audit') sat beyond
+// the first 100 -- so PULL_REQUEST_QUERY silently dropped it, ../github/
+// pr_state.ts fed a TRUNCATED-but-all-green rollup to parseCheckRollup(), and
+// the gate answered `ready` while scripts/pr_ready_gate.sh (whose `gh pr view
+// --json statusCheckRollup` paginates this same connection internally,
+// invisibly to the shell) answered `not-ready: required checks reported but
+// are not all green (CON-32a)`. Deterministic across three runs of each
+// side. (Re-observed 2026-09-01: the same PR's rollup had grown to
+// totalCount 139, failing entry now at position 131 -- see docs/evidence/
+// shadow-window-p1.md's "Update 3" section; the figure was never fixed, only
+// the day it was read.) A cap that silently truncates a set a VERDICT depends
+// on is a false-GREEN bug, not a completeness nicety -- CON-32(a)'s boundary
+// is "every required check green", and a check this process never even saw
+// cannot be weighed against it.
 //
 // THE FIX IS THIS QUERY (added `pageInfo`) PLUS THE WALK BELOW. Mirroring
 // REVIEW_THREADS_QUERY's own shape deliberately: a `first:N` connection whose
@@ -196,6 +206,22 @@ export const CHECK_ROLLUP_PAGE_QUERY = `
               }
             }
           }
+        }
+      }
+    }
+  }`;
+
+// The `reviewRequests` counterpart of CHECK_ROLLUP_PAGE_QUERY just above --
+// see PULL_REQUEST_QUERY's own "PAGINATION AUDIT" comment for why this
+// connection is now paginated too, and ../github/pr_state.ts's
+// `fullReviewRequests` for the walk.
+export const REVIEW_REQUESTS_PAGE_QUERY = `
+  query($owner:String!, $name:String!, $pr:Int!, $cursor:String) {
+    repository(owner:$owner, name:$name) {
+      pullRequest(number:$pr) {
+        reviewRequests(first:100, after:$cursor) {
+          nodes { requestedReviewer { ... on User { login } ... on Bot { login } ... on Team { name } } }
+          pageInfo { hasNextPage endCursor }
         }
       }
     }
@@ -325,8 +351,23 @@ export interface PullRequestSnapshot {
     readonly hasNextPage: unknown;
     readonly endCursor: unknown;
   };
-  // Raw gh-shaped review-request objects, for parseReviewRequests().
+  // Raw gh-shaped review-request objects, for parseReviewRequests(). PAGE ONE
+  // ONLY -- see reviewRequestsPageInfo, exactly the same relationship
+  // checkRollup has to checkRollupPageInfo just above, and for the identical
+  // reason (zheref/nen#14's second fact-check, PULL_REQUEST_QUERY's own
+  // "PAGINATION AUDIT" comment above).
   readonly reviewRequests: unknown;
+  // `reviewRequests.pageInfo` of the pull request. The caller (../github/
+  // pr_state.ts's fetchPrState) MUST walk this to `hasNextPage: false` with
+  // REVIEW_REQUESTS_PAGE_QUERY before treating `reviewRequests` as the whole
+  // list -- reading page one alone is the identical false-green shape
+  // `checkRollupPageInfo` exists to close on the rollup. `hasNextPage`/
+  // `endCursor` stay `unknown` rather than coerced, for the same reason: an
+  // unreadable `hasNextPage` must not become `false` and end the walk early.
+  readonly reviewRequestsPageInfo: {
+    readonly hasNextPage: unknown;
+    readonly endCursor: unknown;
+  };
 }
 
 // The head commit's rollup `contexts`, one PAGE at a time.
@@ -457,6 +498,14 @@ export function normalizePullRequestResponse(
     // Read off the NORMALIZED node so the snapshot and the PR object can never
     // disagree about what was requested -- one unwrap, one answer.
     reviewRequests: node?.reviewRequests,
+    // PAGE ONE only, dug independently of `node.reviewRequests` because that
+    // field is already unwrapped to bare reviewer objects and no longer
+    // carries its connection's `pageInfo`. The caller MUST consult this
+    // before treating `reviewRequests` above as the whole list.
+    reviewRequestsPageInfo: {
+      hasNextPage: digPath(response, "repository", "pullRequest", "reviewRequests", "pageInfo", "hasNextPage"),
+      endCursor: digPath(response, "repository", "pullRequest", "reviewRequests", "pageInfo", "endCursor"),
+    },
   };
 }
 
@@ -474,6 +523,38 @@ export interface CheckRollupPage {
   readonly nodes: unknown;
   readonly hasNextPage: unknown;
   readonly endCursor: unknown;
+}
+
+// --- review-request pages -----------------------------------------------------
+
+// One page of the `reviewRequests` connection. Structurally identical to
+// CheckRollupPage/ReviewThreadPage, for the same reason: a `first:N`
+// connection a verdict depends on reading in full, walked by the identical
+// cursor loop shape in ../github/pr_state.ts (see `fullReviewRequests`).
+export interface ReviewRequestsPage {
+  // Raw reviewer objects, ALREADY unwrapped from `requestedReviewer` (see
+  // requestedReviewers() below) -- the same post-unwrap shape
+  // `PullRequestSnapshot.reviewRequests` carries for page one, so a caller
+  // concatenating the two never has to know which page a node came from.
+  readonly nodes: unknown;
+  readonly hasNextPage: unknown;
+  readonly endCursor: unknown;
+}
+
+// One REVIEW_REQUESTS_PAGE_QUERY response -> its nodes and its cursor.
+//
+// ../github/pr_state.ts's `fullReviewRequests` walks this exactly as
+// `fullCheckRollup` walks CheckRollupPage: call, check `hasNextPage`, follow
+// `endCursor`, and fail closed (never coerce an unreadable `hasNextPage` to
+// `false`, and never end the walk on anything other than the literal boolean
+// `false`) rather than stop early and under-count.
+export function normalizeReviewRequestsPageResponse(response: unknown): ReviewRequestsPage {
+  const connection = digPath(response, "repository", "pullRequest", "reviewRequests");
+  return {
+    nodes: requestedReviewers(connection),
+    hasNextPage: digPath(connection, "pageInfo", "hasNextPage"),
+    endCursor: digPath(connection, "pageInfo", "endCursor"),
+  };
 }
 
 // --- review threads ----------------------------------------------------------

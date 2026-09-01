@@ -58,7 +58,7 @@
 //     reaches its `.checks // []` branch on genuinely EMPTY evidence,
 //     answering `not-ready: NO checks reported at head (CON-32a)`
 //     (bankai-core#671) -- never a refusal. ../github/graphql.ts's
-//     `headCommitRollupContexts` reproduces that same reduction now: a
+//     `headCommitCheckRollupPage` reproduces that same reduction now: a
 //     present-but-null `commit.statusCheckRollup` on an otherwise-resolvable
 //     head commit normalizes to `[]`, not `undefined`, so `snapshot.checkRollup`
 //     reaching THIS guard as `undefined` means what it says -- the head commit
@@ -95,6 +95,7 @@ import {
   digPath,
   type CheckRollupPage,
   type PullRequestSnapshot,
+  type ReviewRequestsPage,
   type ReviewThreadPage,
 } from "./graphql.js";
 
@@ -125,6 +126,12 @@ export interface PrStateSource {
    * PullRequestSnapshot.checkRollupPageInfo's own comment.
    */
   checkRollupPage(repo: PrRef, prNumber: number, cursor: string): Promise<CheckRollupPage>;
+  /**
+   * Page 2+ of the `reviewRequests` connection. `pullRequestSnapshot` above
+   * returns page ONE only -- see PullRequestSnapshot.reviewRequestsPageInfo's
+   * own comment.
+   */
+  reviewRequestsPage(repo: PrRef, prNumber: number, cursor: string): Promise<ReviewRequestsPage>;
 }
 
 export interface FetchStateOptions {
@@ -146,6 +153,16 @@ export interface FetchStateOptions {
    * reports `hasNextPage:false` cannot loop forever.
    */
   readonly maxRollupPages: number;
+  /**
+   * The `reviewRequests` counterpart of maxRollupPages -- same runaway-loop
+   * backstop, same reasoning, on fullReviewRequests()'s walk (zheref/nen#14's
+   * second fact-check: `reviewRequests(first:100)` is now paginated to
+   * completion rather than left as an argued-safe cap; see ../github/
+   * graphql.ts's PULL_REQUEST_QUERY comment). Defaulted the same as
+   * maxRollupPages for the same reason, though in practice this walk should
+   * rarely if ever leave page one.
+   */
+  readonly maxReviewRequestPages: number;
 }
 
 /**
@@ -249,26 +266,32 @@ export type CheckRollupOutcome =
  * WHY THE WALK EXISTS (zheref/nen#14's fact-check, verified live against
  * zheref/bankai-core#927). `contexts(first:100)` alone -- ../github/
  * graphql.ts's PULL_REQUEST_QUERY before this walk existed -- NEVER
- * PAGINATED. #927's rollup has totalCount 114 with hasNextPage true, and the
- * ONLY failing entry ('sasuke / audit') sits beyond the first 100: this
- * process fed a truncated-but-all-green rollup to parseCheckRollup() and
- * answered `ready` while scripts/pr_ready_gate.sh -- whose `gh pr view --json
- * statusCheckRollup` paginates the identical connection INSIDE gh's own
- * client, invisibly to the shell -- answered `not-ready: required checks
- * reported but are not all green (CON-32a)`. Deterministic across three runs
- * of each side. CON-32(a)'s boundary is "every required check green"; a
+ * PAGINATED. When observed on 2026-08-31, #927's rollup had totalCount 114
+ * with hasNextPage true, with the one failing entry ('sasuke / audit')
+ * sitting beyond the first 100: this process fed a truncated-but-all-green
+ * rollup to parseCheckRollup() and answered `ready` while
+ * scripts/pr_ready_gate.sh -- whose `gh pr view --json statusCheckRollup`
+ * paginates the identical connection INSIDE gh's own client, invisibly to
+ * the shell -- answered `not-ready: required checks reported but are not all
+ * green (CON-32a)`. Deterministic across three runs of each side. (The same
+ * PR's rollup is a live figure, not a fixed one: re-observed on 2026-09-01 it
+ * had grown to totalCount 139, with the failing entry now at position 131 --
+ * see docs/evidence/shadow-window-p1.md's "Update 3" section for both
+ * readings, dated.) CON-32(a)'s boundary is "every required check green"; a
  * check this process never saw cannot be weighed against it, so reading only
  * page one is a FALSE-GREEN bug, not a completeness nicety.
  *
  * FAILS CLOSED, ALWAYS -- this is the property that makes it safe to compose
  * into a readiness gate at all. Every failure path below -- a thrown fetch, a
- * page whose `nodes` will not even parse as an array, a `hasNextPage:true`
- * page with no usable cursor, or hitting the page cap -- returns `ok:false`,
- * which fetchPrState() surfaces as `unevaluated`. NONE of them return the
- * PARTIAL set collected so far as though it were the whole rollup: a rollup
- * this process could not finish reading is exactly as untrustworthy as one it
- * never started reading, and treating a partial read as complete is the same
- * defect this function exists to close, wearing a different hat. Contrast
+ * page whose `nodes` will not even parse as an array, a page whose
+ * `hasNextPage` will not even parse as a boolean (zheref/nen#14's SECOND
+ * fact-check below), a `hasNextPage:true` page with no usable cursor, or
+ * hitting the page cap -- returns `ok:false`, which fetchPrState() surfaces
+ * as `unevaluated`. NONE of them return the PARTIAL set collected so far as
+ * though it were the whole rollup: a rollup this process could not finish
+ * reading is exactly as untrustworthy as one it never started reading, and
+ * treating a partial read as complete is the same defect this function
+ * exists to close, wearing a different hat. Contrast
  * unresolvedThreadCount() just above, which fails toward `not-ready` (a count
  * of 1) on the SAME shapes of failure -- that is safe there because
  * CON-32(d)'s predicate is a simple non-zero test with no way to be
@@ -287,7 +310,45 @@ export async function fullCheckRollup(
   let nodes: readonly unknown[] = firstPageNodes;
   let hasNextPage: unknown = firstPageInfo.hasNextPage;
   let cursor: unknown = firstPageInfo.endCursor;
-  for (let page = 2; hasNextPage === true; page += 1) {
+  for (let page = 2; ; page += 1) {
+    // FAIL-OPEN, CLOSED (zheref/nen#14's second fact-check, independent probe
+    // against this exported function, 2026-09-01). The loop used to read as
+    // `hasNextPage === true`, which is true ONLY for the boolean `true` --
+    // every other value, including `false`, ended the walk. That is correct
+    // for a genuine `false` (nothing more to page), but the SAME test also
+    // fires on `undefined` (a page whose `contexts.nodes` parsed fine while
+    // its `pageInfo.hasNextPage` did not -- a partial-data null a level
+    // deeper than `nodes` itself) and on any other non-boolean GitHub might
+    // one day answer (a stray string, a number): both silently ENDED THE WALK
+    // and returned `ok:true` with whatever had been collected so far, which is
+    // the identical false-green shape `Update 3`'s fix closed one layer down
+    // -- a truncated rollup presented as the whole one. Proven live: an
+    // independent probe against this exported function with a stubbed
+    // `hasNextPage: undefined` returned `{"ok":true,"count":200}` where a
+    // well-formed `hasNextPage: false` control returns the complete set.
+    // ../github/graphql.ts's own comment on `PullRequestSnapshot.
+    // checkRollupPageInfo` already stated the invariant this enforces --
+    // "an unreadable `hasNextPage` must not become `false` and end the walk
+    // early" -- the code just did not honor it. `false`, and ONLY `false`,
+    // ends the walk; anything else -- including the entry call from
+    // fetchPrState() below, which now hands this function every page-info it
+    // receives rather than pre-filtering on `=== true` -- fails CLOSED here,
+    // for the same reason a thrown fetch or an unparseable `nodes` does two
+    // guards below: a rollup this process could not confirm complete is
+    // exactly as untrustworthy as one it never started reading.
+    if (hasNextPage === false) break;
+    if (hasNextPage !== true) {
+      return {
+        ok: false,
+        reason:
+          `the check rollup for ${repo.owner}/${repo.repo}#${prNumber} reported an unreadable ` +
+          `hasNextPage (${describeUnreadable(hasNextPage)}) instead of the boolean true or false`,
+        remedy:
+          "Retry the read; a well-formed page reports hasNextPage as a boolean, never undefined " +
+          "or another type. Refusing to end the walk on an unreadable flag rather than treating " +
+          "the contexts read so far as the complete set.",
+      };
+    }
     if (page > maxRollupPages) {
       return {
         ok: false,
@@ -335,6 +396,123 @@ export async function fullCheckRollup(
         remedy:
           "Retry the read; the token is very likely missing a required grant. checks:read alone " +
           "is not enough: the rollup's own checkSuite.workflowRun sub-field needs actions:read too.",
+      };
+    }
+    nodes = nodes.concat(answered.nodes);
+    hasNextPage = answered.hasNextPage;
+    cursor = answered.endCursor;
+  }
+  return { ok: true, nodes };
+}
+
+/** A short, safe-to-interpolate description of a value that failed a type check. */
+function describeUnreadable(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
+  return `${typeof value} ${JSON.stringify(value)}`;
+}
+
+/**
+ * Result of walking the `reviewRequests` connection to completion. `ok:false`
+ * carries a remedy, exactly like CheckRollupOutcome -- fetchPrState() returns
+ * this branch STRAIGHT THROUGH as its own `ok:false`.
+ */
+export type ReviewRequestsOutcome =
+  | { readonly ok: true; readonly nodes: readonly unknown[] }
+  | { readonly ok: false; readonly reason: string; readonly remedy: string };
+
+/**
+ * Walks `reviewRequests`' cursor across pages of 100, to completion, with the
+ * SAME fail-closed discipline as fullCheckRollup() just above -- structurally
+ * the identical function, against a different connection.
+ *
+ * WHY THE WALK EXISTS (zheref/nen#14's second fact-check, 2026-09-01).
+ * `reviewRequests(first:100)` was the LAST unpaginated verdict input:
+ * ../github/pr_state.ts's `requests` array feeds ../gates/predicates.ts's
+ * pendingRounds() limb (i), so a dropped 101st+ requested reviewer would hide
+ * a pending round -- structurally the identical false-green shape the
+ * `contexts` bug was. The PRIOR disposition ("GitHub's platform-level limit
+ * on requestable reviewers makes this safe") was itself asserted with no
+ * citation and no test -- the exact failure mode this whole fact-check exists
+ * to close, one layer up. Rather than re-assert a safety argument, this walks
+ * the connection to completion, exactly like `contexts`.
+ *
+ * FAILS CLOSED, ALWAYS, for the identical reason fullCheckRollup() does:
+ * pendingRounds() has no backstop against a fabricated PARTIAL request list
+ * reading as "nobody is owed a round" -- an entry this process never saw
+ * cannot be weighed, so a rollup -- sorry, a review-request list -- this
+ * process could not finish reading is exactly as untrustworthy as one it
+ * never started reading. See fullCheckRollup()'s own header for the full
+ * shape of that argument; every failure path below mirrors it precisely,
+ * including honoring `hasNextPage === false` as the ONLY value that ends the
+ * walk (an unreadable or non-boolean `hasNextPage` fails closed rather than
+ * being read as "done").
+ */
+export async function fullReviewRequests(
+  source: PrStateSource,
+  repo: PrRef,
+  prNumber: number,
+  firstPageNodes: readonly unknown[],
+  firstPageInfo: { readonly hasNextPage: unknown; readonly endCursor: unknown },
+  maxReviewRequestPages: number,
+): Promise<ReviewRequestsOutcome> {
+  let nodes: readonly unknown[] = firstPageNodes;
+  let hasNextPage: unknown = firstPageInfo.hasNextPage;
+  let cursor: unknown = firstPageInfo.endCursor;
+  for (let page = 2; ; page += 1) {
+    if (hasNextPage === false) break;
+    if (hasNextPage !== true) {
+      return {
+        ok: false,
+        reason:
+          `the review requests for ${repo.owner}/${repo.repo}#${prNumber} reported an unreadable ` +
+          `hasNextPage (${describeUnreadable(hasNextPage)}) instead of the boolean true or false`,
+        remedy:
+          "Retry the read; a well-formed page reports hasNextPage as a boolean, never undefined " +
+          "or another type. Refusing to end the walk on an unreadable flag rather than treating " +
+          "the requests read so far as the complete set.",
+      };
+    }
+    if (page > maxReviewRequestPages) {
+      return {
+        ok: false,
+        reason:
+          `the review requests for ${repo.owner}/${repo.repo}#${prNumber} hit the ` +
+          `${maxReviewRequestPages}-page pagination cap before hasNextPage went false`,
+        remedy:
+          "Raise maxReviewRequestPages, or investigate why this PR reports so many requested " +
+          "reviewers; refusing to evaluate readiness on a partial list rather than treating the " +
+          "requests read so far as the complete set.",
+      };
+    }
+    if (typeof cursor !== "string" || cursor === "") {
+      return {
+        ok: false,
+        reason:
+          `the review requests for ${repo.owner}/${repo.repo}#${prNumber} reported more pages ` +
+          "(hasNextPage=true) but no usable cursor",
+        remedy: "Retry the read; a transient partial-data response can leave the cursor blank.",
+      };
+    }
+    let answered: ReviewRequestsPage;
+    try {
+      answered = await source.reviewRequestsPage(repo, prNumber, cursor);
+    } catch (error) {
+      return {
+        ok: false,
+        reason:
+          `fetching page ${page} of the review requests for ${repo.owner}/${repo.repo}#${prNumber} ` +
+          `failed: ${error instanceof Error ? error.message : String(error)}`,
+        remedy: "Retry the read; the token is very likely missing a required grant (pull-requests:read).",
+      };
+    }
+    if (!Array.isArray(answered.nodes)) {
+      return {
+        ok: false,
+        reason:
+          `page ${page} of the review requests for ${repo.owner}/${repo.repo}#${prNumber} came back ` +
+          "unreadable (a non-array or missing `nodes`)",
+        remedy: "Retry the read; the token is very likely missing a required grant (pull-requests:read).",
       };
     }
     nodes = nodes.concat(answered.nodes);
@@ -465,21 +643,34 @@ export async function fetchPrState(
   // `contexts(first:100)` with no cursor, capped at exactly the 100 entries
   // GitHub answers first. Reading it alone here is what used to let a
   // rollup's 101st-and-beyond entries (any of which may be the one FAILING
-  // context) go completely unweighed: #927's rollup has totalCount 114 with
-  // hasNextPage true, and the only failing entry ('sasuke / audit') sits at
-  // position 101+, so this process answered `ready` on a truncated,
-  // all-green-so-far view while scripts/pr_ready_gate.sh -- whose `gh pr view
-  // --json statusCheckRollup` paginates the identical connection inside gh's
-  // own client -- answered `not-ready: required checks reported but are not
-  // all green (CON-32a)`. checksAllGreen() has no backstop against a
-  // fabricated partial array reading as fully green, so the walk below MUST
-  // complete before parseCheckRollup() ever sees this data, and MUST fail
-  // closed (this whole function returning `unevaluated`, never a partial
-  // `ready`) if it cannot.
+  // context) go completely unweighed: when observed on 2026-08-31, #927's
+  // rollup had totalCount 114 with hasNextPage true, and the only failing
+  // entry ('sasuke / audit') sat at position 101+, so this process answered
+  // `ready` on a truncated, all-green-so-far view while
+  // scripts/pr_ready_gate.sh -- whose `gh pr view --json statusCheckRollup`
+  // paginates the identical connection inside gh's own client -- answered
+  // `not-ready: required checks reported but are not all green (CON-32a)`.
+  // checksAllGreen() has no backstop against a fabricated partial array
+  // reading as fully green, so the walk below MUST complete before
+  // parseCheckRollup() ever sees this data, and MUST fail closed (this whole
+  // function returning `unevaluated`, never a partial `ready`) if it cannot.
+  //
+  // THE GUARD BELOW READS `!== false`, NOT `=== true` (zheref/nen#14's SECOND
+  // fact-check, independent probe against the real exported fullCheckRollup(),
+  // 2026-09-01). `=== true` used to mean an unreadable or non-boolean
+  // `hasNextPage` -- `undefined` (a page whose `contexts.nodes` parsed but
+  // whose `pageInfo.hasNextPage` did not), or any other non-boolean value --
+  // skipped the walk ENTIRELY, silently treating page one as the whole
+  // rollup: the identical false-green shape this whole block exists to close,
+  // one call earlier. `false`, and only `false`, is now the one value that
+  // skips the walk; every other value -- including `true`, unchanged -- is
+  // handed to fullCheckRollup(), whose own first check (see its header) is
+  // exactly this same `hasNextPage === false` / `!== true` distinction, so an
+  // unreadable flag fails CLOSED there rather than being read as "done" here.
   let checkRollupNodes: readonly unknown[] = Array.isArray(snapshot.checkRollup)
     ? snapshot.checkRollup
     : [];
-  if (snapshot.checkRollupPageInfo.hasNextPage === true) {
+  if (snapshot.checkRollupPageInfo.hasNextPage !== false) {
     const full = await fullCheckRollup(
       source,
       repo,
@@ -517,13 +708,41 @@ export async function fetchPrState(
     reviews = [];
   }
 
+  // THE LAST UNPAGINATED VERDICT INPUT, CLOSED (zheref/nen#14's second
+  // fact-check, 2026-09-01). `snapshot.reviewRequests` is PAGE ONE ONLY --
+  // `reviewRequests(first:100)` with no cursor -- and it feeds
+  // pendingRounds() limb (i) via `requests` below, so a truncated 101st+
+  // entry is the identical false-green shape the check-rollup pagination
+  // above closes; see ../github/graphql.ts's PULL_REQUEST_QUERY comment for
+  // why the prior "GitHub limits this" disposition was corrected rather than
+  // kept. Same guard shape as checkRollupPageInfo just above: `!== false`,
+  // never `=== true`, so an unreadable/non-boolean hasNextPage is handed to
+  // fullReviewRequests() to fail CLOSED rather than being read as "done"
+  // here.
+  let reviewRequestNodes: readonly unknown[] = Array.isArray(snapshot.reviewRequests)
+    ? snapshot.reviewRequests
+    : [];
+  if (snapshot.reviewRequestsPageInfo.hasNextPage !== false) {
+    const full = await fullReviewRequests(
+      source,
+      repo,
+      prNumber,
+      reviewRequestNodes,
+      snapshot.reviewRequestsPageInfo,
+      options.maxReviewRequestPages,
+    );
+    if (!full.ok) {
+      return { ok: false, reason: full.reason, remedy: full.remedy };
+    }
+    reviewRequestNodes = full.nodes;
+  }
+
   // The PENDING review requests, flattened to bare logins exactly as
   // `fetch_pr_state` does. A request naming NOBODY stays in the list as "" --
   // transcribed, because dropping it here would silently remove the only
   // pre-post footprint an un-posted round has (bankai-core#564), and because
   // ./parse.ts is the layer that gets to call an unnamed request unreadable.
-  const rawRequests = snapshot.reviewRequests;
-  const requests: string[] = Array.isArray(rawRequests) ? rawRequests.map(requestLogin) : [];
+  const requests: string[] = reviewRequestNodes.map(requestLogin);
 
   const threads = await unresolvedThreadCount(source, repo, prNumber, options.maxThreadPages);
 

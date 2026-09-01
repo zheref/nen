@@ -26,6 +26,7 @@ import {
   normalizePullRequestResponse,
   type CheckRollupPage,
   type PullRequestSnapshot,
+  type ReviewRequestsPage,
   type ReviewThreadPage,
 } from "../github/graphql.js";
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
@@ -266,6 +267,7 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
     checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
+    reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
   };
   return {
     pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => snapshot,
@@ -277,6 +279,9 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
     timeline: async (): Promise<unknown[]> => [],
     checkRollupPage: async (): Promise<CheckRollupPage> => {
       throw new Error("checkRollupPage should not be called when hasNextPage is false");
+    },
+    reviewRequestsPage: async (): Promise<ReviewRequestsPage> => {
+      throw new Error("reviewRequestsPage should not be called when hasNextPage is false");
     },
     ...overrides,
   };
@@ -381,6 +386,7 @@ describe("prReady -- unevaluated is never mistaken for a verdict", () => {
         checkRollup: undefined,
         checkRollupPageInfo: { hasNextPage: undefined, endCursor: undefined },
         reviewRequests: undefined,
+        reviewRequestsPageInfo: { hasNextPage: undefined, endCursor: undefined },
       }),
     });
     const code = await prReady(input(), io, stubDeps(blanked));
@@ -417,7 +423,7 @@ describe("prReady -- the checks-rollup distinction (zheref/nen#14, empty vs. unr
           baseRefName: "main",
           author: { login: "someone" },
           labels: { nodes: [] },
-          reviewRequests: { nodes: [] },
+          reviewRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
           statusCheckRollup: { nodes: commits },
         },
       },
@@ -463,10 +469,11 @@ describe("prReady -- the checks-rollup distinction (zheref/nen#14, empty vs. unr
 
 // THE FALSE-GREEN DEFECT, PINNED (zheref/nen#14's fact-check, verified live
 // against zheref/bankai-core#927). `contexts(first:100)` never paginated:
-// #927's rollup has totalCount 114 with hasNextPage true, and the only
-// failing entry ('sasuke / audit') sits at position 101+, so this verb
-// answered `ready` on a truncated, all-green-SO-FAR view while
-// scripts/pr_ready_gate.sh -- whose `gh pr view --json statusCheckRollup`
+// when observed on 2026-08-31, #927's rollup had totalCount 114 with
+// hasNextPage true, and the only failing entry ('sasuke / audit') sat at
+// position 101+, so this verb answered `ready` on a truncated,
+// all-green-SO-FAR view while scripts/pr_ready_gate.sh -- whose
+// `gh pr view --json statusCheckRollup`
 // paginates the identical connection inside gh's own client -- answered
 // `not-ready: required checks reported but are not all green (CON-32a)`.
 // These two tests drive the whole verb end to end (not just fetchPrState's
@@ -494,6 +501,7 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
       checkRollup: [{ name: "kisuke / probe", status: "COMPLETED", conclusion: "SUCCESS" }],
       checkRollupPageInfo: { hasNextPage: true, endCursor: "cursor-2" },
       reviewRequests: [],
+      reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
     };
   }
 
@@ -752,6 +760,7 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
         checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
         checkRollupPageInfo: { hasNextPage: false, endCursor: null },
         reviewRequests: [],
+        reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
       }),
     });
     const { io, out } = capture();

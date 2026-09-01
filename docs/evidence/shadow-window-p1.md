@@ -196,7 +196,9 @@ live candidates and found ONE genuine disagreement, on
   check rollup came back empty or unreadable` — conflating that with the
   UNREADABLE case.
 
-**Root cause.** `../github/graphql.ts`'s `headCommitRollupContexts()`
+**Root cause.** `../github/graphql.ts`'s `headCommitCheckRollupPage()`
+(named `headCommitRollupContexts()` at the time this section was written;
+renamed since -- see zheref/nen#14's dangling-identifier fix)
 collapsed two different facts into the same `undefined`: a head commit this
 process could not resolve at all (genuinely unreadable), and a head commit
 that resolved fine but whose OWN `commit.statusCheckRollup` field is the
@@ -217,7 +219,7 @@ the shell's `jq -e` guard ever runs, so `fetch_pr_state` succeeds and
 comment being wrong, not the shell** — the fix reproduces the shell's real,
 verified behavior; nothing about the shell's own logic changed or needed to.
 
-**Fix.** `headCommitRollupContexts()` now distinguishes the two cases: a head
+**Fix.** `headCommitCheckRollupPage()` now distinguishes the two cases: a head
 commit it cannot resolve at all (the `commits` connection is not an array, or
 the head node carries no `commit` object) still yields `undefined`
 (unreadable); a resolved head commit whose own `commit.statusCheckRollup` is
@@ -566,9 +568,45 @@ bun src/shadow/run.ts --oracle-repo <bankai-core checkout on main> --repo <this 
 Cells backtick-wrapped for markdown, exactly as the corrections above this
 section describe; no cell's data was otherwise edited. Notably ABSENT: any
 row showing a `checks-green`-truncation disagreement — because the fix closes
-it, and `#932`/`#925`/`#504`, each with its own multi-context rollup, are live
-proof the paginated path still reaches the oracle's own `CON-32a` text
-correctly, not merely the one PR the bug was found on.
+it.
+
+**CORRECTION (zheref/nen#14's second fact-check, 2026-09-01) -- the sentence
+that used to stand here overclaimed.** It named `#932`/`#925`/`#504` as
+"each with its own multi-context rollup" proving the paginated path still
+works on more than the one PR the bug was found on. Measured directly
+(`gh api graphql`, the same `contexts(first:100)` shape this file's own
+queries use), at the moment this correction was written: `zheref/KroApple
+#504` had 42 contexts -- a SINGLE page, exercising no pagination at all --
+and `zheref/bankai-core#932` had 73 -- also a single page. Neither is
+evidence the multi-page WALK works; both are only evidence the ordinary
+single-page path still works, which was never in question. Only `#925`
+genuinely spans pages.
+
+The stronger evidence this correction replaces it with, each figure verified
+live and dated the same day:
+
+- `zheref/bankai-core#925` -- 138 contexts, spans two pages
+  (`hasNextPage:true` after the first, `totalCount:138`). This is the PR the
+  disagreement above was found and re-verified on; its rollup reads
+  `FAILURE` overall, which is the gate correctly staying strict on a real
+  failing multi-page rollup, not new evidence on its own.
+- `zheref/bankai-core#923` -- 118 contexts, spans two pages, page two
+  confirmed ALL-GREEN (`SUCCESS`/`SKIPPED` only, no `FAILURE`) by direct
+  query -- still `ready`.
+- `zheref/KroAndroid#186` -- 134 contexts, spans two pages, page two
+  likewise confirmed ALL-GREEN by direct query -- still `ready`.
+
+`#923` and `#186` are the NO-FALSE-RED evidence this section actually needed
+and did not have before: two PRs whose rollups genuinely exceed 100 contexts
+and are genuinely all green stay `ready` after pagination, so the walk is not
+merely catching real failures (`#925`, `#927`) -- it is also not making the
+gate over-strict on rollups that were never broken. `#925` is the paginated
+path proving it still reaches the oracle's real `not-ready` text on a
+multi-page rollup; `#923` and `#186` are the paginated path proving it does
+NOT invent a false `not-ready` on one. Both directions now have live,
+verified, dated evidence, each carrying `hasNextPage:true` after 100
+contexts -- confirmed by the same `gh api graphql` query this file's own
+harness runs, not merely a `totalCount` read.
 
 **This is exactly what the shadow window is for, and the record is stronger
 for showing it worked.** The window did not miss this defect through some gap
@@ -585,6 +623,131 @@ expected to catch a bug that a live system only grows into, not to catch it
 once and be done — that this file records the catch, the root cause, the
 fix, and the re-verification in one place is the window doing its job, not
 evidence against it.
+
+## Update 4: the SECOND fact-check on the pagination fix — fail-open on an unreadable cursor closed, `reviewRequests` paginated, a dangling identifier fixed (2026-09-01)
+
+An independent verification pass on `Update 3`'s own fix found that the
+pagination walk it added was itself not exhaustive: `fullCheckRollup()`'s
+loop condition was `hasNextPage === true`, which is true for exactly one
+value. Every OTHER value that reached it — including `undefined` (a page
+whose `contexts.nodes` parsed fine while its own `pageInfo.hasNextPage` did
+not) and any other non-boolean GitHub might one day answer — fell through
+the SAME test that a genuine `false` does, and silently ENDED THE WALK,
+returning `ok:true` with whatever had been collected so far. That is the
+identical false-green shape `Update 3` closed, one call earlier: a truncated
+rollup presented as the whole one. Proven live: an independent probe against
+the real exported `fullCheckRollup()`, stubbed with `hasNextPage: undefined`,
+returned `{"ok":true,"count":200}` where a well-formed `hasNextPage: false`
+control returns the complete set. `../github/graphql.ts`'s own comment on
+`PullRequestSnapshot.checkRollupPageInfo` already stated the invariant this
+enforces — "an unreadable `hasNextPage` must not become `false` and end the
+walk early" — the code simply did not honor it yet: both the walk
+(`pr_state.ts`'s loop) and the entry guard in `fetchPrState()` tested
+`=== true`, the same gap in two places.
+
+**Fix.** `false`, and ONLY the literal boolean `false`, now ends the walk —
+in `fullCheckRollup()`'s loop, on every page, not only the first, and in
+`fetchPrState()`'s two entry guards (`checkRollupPageInfo`, and
+`reviewRequestsPageInfo` below), which now read `!== false` rather than
+`=== true` and hand every other value to the walking function to fail
+CLOSED there instead of reading it as "done" one call earlier. Pinned with
+tests for both named shapes (`undefined`, and the non-boolean string
+`"true"`), at both the walk level and the `fetchPrState()` entry-guard level,
+for both the check-rollup connection and the review-requests connection
+below. Mutation-proven: reverting the loop condition and the entry guards to
+their old `=== true` form reproduces exactly this shape of failure — the new
+tests fail red (`expected true to be false`) and no other test is affected;
+restoring the fix turns them green again.
+
+**`reviewRequests(first:100)` — the last unpaginated verdict input — is now
+paginated too, closing `Update 3`'s own deferred item.** `Update 3` audited
+this connection and left it unfixed, reasoning that "GitHub's platform-level
+UI limits how many reviewers can be requested on a single PR, well under
+100." That reasoning was itself asserted with no citation and no test — a
+documentation search at this fact-check's time turned up no authoritative,
+numbered source to pin it to — which is exactly the shape of claim the
+`contexts` bug was found by not trusting. `reviewRequests` feeds
+`pendingRounds()`'s limb (i) via `fetchPrState()`'s `requests` array, so a
+dropped 101st+ requested reviewer is the identical false-green shape. Rather
+than re-argue the safety case, `../github/graphql.ts` now selects
+`pageInfo { hasNextPage endCursor }` on `reviewRequests` too and adds
+`REVIEW_REQUESTS_PAGE_QUERY`; `../github/pr_state.ts`'s new
+`fullReviewRequests()` walks it with the identical fail-closed discipline as
+`fullCheckRollup()`, structurally the same function against a different
+connection, including the same `false`-only walk-ending fix above. Pinned
+with the same shape of tests as `fullCheckRollup()`'s own suite (cursor
+walk, both unreadable-`hasNextPage` shapes, thrown fetch, unusable cursor,
+unparseable `nodes`, page cap, page-one-alone short-circuit), plus the
+`fetchPrState()` wiring and entry-guard tests, all mutation-proven the same
+way. This closes the reasoning gap `Update 3`'s own audit table left open —
+see that section's PAGINATION AUDIT bullet list, now updated in
+`../github/graphql.ts` itself to record the correction. **A re-audit for any
+other capped collection feeding a verdict found none beyond the three
+`Update 3` already enumerated** (`labels(first:100)`, safe by construction —
+`isDeliveryPr()` only ever reads it in an OR-disjunction, so truncation can
+only make the gate MORE conservative; `reviewThreads` — already paginated;
+`reviews`/`timeline` — already `octokit.paginate`d in full): `contexts` and
+`reviewRequests` were the only two `first:N` GraphQL connections a verdict
+depends on reading in full, and both are now paginated to completion with
+matching fail-closed discipline.
+
+**A dangling identifier, fixed.** `Update 3`'s pagination fix renamed
+`../github/graphql.ts`'s `headCommitRollupContexts()` to
+`headCommitCheckRollupPage()` (the walk now needed `hasNextPage`/`endCursor`
+threaded through, not just `nodes`, so the old name no longer described what
+it returned). `../github/pr_state.ts`'s own header comment (line 61) still
+cross-referenced the old name after the rename; this file's own "Update"
+section (above) did too, in two places. All three fixed to the current name;
+a repo-wide grep for the old name after the fix returns nothing under
+`src/`.
+
+**Re-run, fresh, after all of the above** — same oracle commit every prior
+run in this file cites:
+
+```
+bun src/shadow/run.ts --oracle-repo <bankai-core checkout on main> --repo <this checkout>
+```
+
+- **Run:** 2026-09-01, oracle checkout at `bankai-core` `main`
+  (`2269fe723e355dc69bf535ab40f22556e4fe4081`, working tree clean, the SAME
+  commit `Update 3`'s own re-run used), `gh` authenticated as `zheref`.
+- **Candidates: 17** — two MORE than `Update 3`'s 15/15, not fewer: two new
+  `zheref/KroApple` pull requests (`#506`, `#507`) opened between runs, and
+  `zheref/bankai-core#932` — `not-ready` in `Update 3`'s table — now reads
+  `ready` on both sides, its rollup having gone green in the interval. This
+  is the same candidate-set drift `Update 3` already named as expected by
+  design (`gh pr list --state open` enumerated live, at run time), observed
+  again here rather than merely asserted: no run of this harness has ever
+  been able to promise the next run the same denominator, and this run does
+  not either.
+- **Result:** `shadow window: 17/17 agree, 0 ready-ness disagreement(s), 0
+  reason-text disagreement(s).`
+
+| Repo | PR | Origin | Oracle | Nen | Ready agree | Reason agree |
+|---|---|---|---|---|---|---|
+| zheref/KroApple | #507 | open | `ready` | `ready` | yes | yes |
+| zheref/KroApple | #506 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/KroApple | #504 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/KroAndroid | #186 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #23 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #21 | open | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/nen | #14 | open | `not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head);tenma (no round at head)` | `not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head);tenma (no round at head)` | yes | yes |
+| zheref/akatsuki-ai | #33 | open | `not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either CI has not started yet, or its run concluded startup_failure and no check will ever attach (bankai-core#671). Tell them apart with: gh run list --branch <head-branch> --limit 5 --json conclusion,path,headSha` | `not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either CI has not started yet, or its run concluded startup_failure and no check will ever attach. Tell them apart with: gh run list --branch <head-branch> --limit 5 --json conclusion,path,headSha` | yes | yes |
+| zheref/bankai-core | #932 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-core | #925 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/bankai-core | #923 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-core | #919 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-core | #907 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #909 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #911 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #913 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #916 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+
+Cells backtick-wrapped for markdown, as every table in this file now states
+plainly is done. `#925` (138 contexts, spans two pages, `not-ready`) and
+`#923` (118 contexts, spans two pages, all green, `ready`) both agree here
+too — the SAME two PRs the correction in `Update 3` above verifies directly
+by contexts count and page count, agreeing again under the fresh sweep.
 
 ## Rollback position, unchanged
 

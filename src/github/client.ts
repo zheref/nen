@@ -54,12 +54,15 @@ import {
   CHECK_ROLLUP_PAGE_QUERY,
   normalizeCheckRollupPageResponse,
   normalizePullRequestResponse,
+  normalizeReviewRequestsPageResponse,
   normalizeReviewThreadsResponse,
   PULL_REQUEST_QUERY,
+  REVIEW_REQUESTS_PAGE_QUERY,
   REVIEW_THREADS_QUERY,
   type CheckRollupPage,
   type GhPullRequestNode,
   type PullRequestSnapshot,
+  type ReviewRequestsPage,
   type ReviewThreadPage,
 } from "./graphql.js";
 // PORT ADDITION: this binary's own name and version, for the user-agent below.
@@ -69,7 +72,13 @@ import { PROGRAM, VERSION } from "../version.js";
 // three are part of this module's published surface and are re-exported so a
 // consumer needs one import, not two.
 export { digPath } from "./graphql.js";
-export type { CheckRollupPage, GhPullRequestNode, PullRequestSnapshot, ReviewThreadPage };
+export type {
+  CheckRollupPage,
+  GhPullRequestNode,
+  PullRequestSnapshot,
+  ReviewRequestsPage,
+  ReviewThreadPage,
+};
 
 export interface RepoRef {
   readonly owner: string;
@@ -301,6 +310,29 @@ export class GitHubClient {
       cursor,
     });
     return normalizeCheckRollupPageResponse(response);
+  }
+
+  // Page 2+ of the `reviewRequests` connection.
+  //
+  // pullRequestSnapshot() above returns page ONE of this same connection;
+  // `reviewRequests(first:100)` alone was the LAST unpaginated verdict input
+  // (zheref/nen#14's second fact-check, 2026-09-01) -- see ../github/
+  // graphql.ts's PULL_REQUEST_QUERY comment and ../github/pr_state.ts's
+  // fullReviewRequests(). The walk -- and what an unreadable page means for
+  // readiness -- is the caller's, exactly like checkRollupPage() above: no
+  // verdicts live here.
+  async reviewRequestsPage(
+    repo: RepoRef,
+    prNumber: number,
+    cursor: string,
+  ): Promise<ReviewRequestsPage> {
+    const response: unknown = await this.octokit.graphql(REVIEW_REQUESTS_PAGE_QUERY, {
+      owner: repo.owner,
+      name: repo.repo,
+      pr: prNumber,
+      cursor,
+    });
+    return normalizeReviewRequestsPageResponse(response);
   }
 }
 
