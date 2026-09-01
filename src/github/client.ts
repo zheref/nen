@@ -219,6 +219,27 @@ export class GitHubClient {
     );
   }
 
+  // The issue TIMELINE, paginated, raw.
+  //
+  // IT HAS TO EXIST, and REST is the only place it does. `reviewRequests`
+  // carries no timestamp -- a pending request says WHO owes a round and never
+  // WHEN it was asked for -- so the stall bound (`round stalled — requested N
+  // min ago and never posted`) has nothing to compute from without the
+  // `review_requested` timeline events. The shell reads the same endpoint for
+  // the same reason.
+  //
+  // Raw and unfiltered, deliberately: WHICH events matter, how they are ordered
+  // and what an unreadable one means for readiness are all readings, and no
+  // verdicts live in this module. ../gates/ready.ts's caller does the selecting.
+  async timeline(repo: RepoRef, prNumber: number): Promise<unknown[]> {
+    return await this.octokit.paginate("GET /repos/{owner}/{repo}/issues/{issue_number}/timeline", {
+      owner: repo.owner,
+      repo: repo.repo,
+      issue_number: prNumber,
+      per_page: 100,
+    });
+  }
+
   // ONE page of review threads, raw, with its cursor.
   //
   // The walk is the caller's, deliberately: CON-32(d)'s boundary is "zero
