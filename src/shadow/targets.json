@@ -6,12 +6,15 @@
     "zheref/bankai-scaffold",
     "zheref/nen",
     "zheref/hatsu",
-    "zheref/akatsuki-ai"
+    "zheref/akatsuki-ai",
+    "zheref/bankai-core"
   ],
   "oracleRepo": "zheref/bankai-core",
   "identityFixture": "src/schema/fixtures/bankai-repo/schemas/gates.json",
   "closedOraclePrsComment": "Issue #2's Scope: 'bankai-core's recently closed 907, 909, 911, 913, 916' -- named explicitly rather than discovered, because a closed PR's mergeable/checks/reviews state is a moving target only until it closes; these five are fixed points the evidence table can cite. NOTE: this object has no '$comment' KEY of its own (unlike the top level) -- src/shadow/run.ts iterates Object.entries() over it directly, and a stray string-valued key would be walked as a repo name.",
   "closedOraclePrs": {
     "zheref/bankai-core": [907, 909, 911, 913, 916]
-  }
+  },
+  "knownReasonDivergenceComment": "../gates/ready.ts's header, ADOPTION DIVERGENCE (3): the oracle's empty-rollup message cites this issue by the source system's own name, which src/taxonomy-purity.test.ts forbids src/shadow/run.ts from carrying as a code literal (it is the exact class of value that sweep exists to catch) -- so the one string the reason-text comparison is allowed to strip lives here instead, in data, the same way identityFixture and the repo names above do.",
+  "knownReasonDivergence": " (bankai-core#671)"
 }

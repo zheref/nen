@@ -74,6 +74,15 @@ interface Targets {
    */
   readonly identityFixture: string;
   readonly closedOraclePrs: Readonly<Record<string, readonly number[]>>;
+  /**
+   * The ONE declared, byte-level adoption divergence between the two
+   * implementations (../gates/ready.ts's header, ADOPTION DIVERGENCE (3)): a
+   * citation the oracle's empty-rollup message carries and this binary must
+   * not emit (§3). DATA, for the same reason `identityFixture` is: the
+   * citation names the source system, and this file is swept for exactly that
+   * (see the header above).
+   */
+  readonly knownReasonDivergence: string;
 }
 
 interface Candidate {
@@ -98,6 +107,17 @@ interface Row {
   readonly candidate: Candidate;
   readonly oracle: OracleResult;
   readonly nen: NenResult;
+  /** Both sides say the same thing is READY or not. The primary contract. */
+  readonly readyAgree: boolean;
+  /**
+   * Both sides' TEXT agrees too, once the one declared adoption divergence
+   * (../gates/ready.ts's `(bankai-core#671)` citation) is normalized away.
+   * `true` whenever there is no text to compare (either side printed no
+   * verdict, or the readiness itself already disagrees -- that is `readyAgree`'s
+   * finding to report, not a second one).
+   */
+  readonly reasonAgree: boolean;
+  /** `readyAgree && reasonAgree` -- the row is clean only if BOTH hold. */
   readonly agree: boolean;
 }
 
@@ -127,7 +147,20 @@ function parseArgs(argv: readonly string[]): Args {
     if (arg === "--oracle-repo") oracleRepoPath = argv[(index += 1)] ?? null;
     else if (arg === "--repo") repo = argv[(index += 1)] ?? repo;
     else if (arg === "--out") out = argv[(index += 1)] ?? null;
-    else if (arg === "--limit") limit = Number.parseInt(argv[(index += 1)] ?? "", 10);
+    else if (arg === "--limit") {
+      const raw = argv[(index += 1)] ?? "";
+      const parsed = Number.parseInt(raw, 10);
+      // MINOR fix (zheref/nen#2's review record, finding 6): a non-numeric
+      // `--limit` used to parse to `NaN`, and `limit === null` is false for
+      // `NaN` -- so `candidates.slice(0, NaN)` silently ran ZERO candidates
+      // and the run reported "0/0 agree" as though it had proven something.
+      // Refused loudly instead: a dev tool's own flag misuse must never look
+      // like a clean, empty pass.
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error(`--limit must be a non-negative integer, got '${raw}'.`);
+      }
+      limit = parsed;
+    }
   }
   if (oracleRepoPath === null) {
     // §3's "no root derivation from where a file happens to live on disk",
@@ -204,11 +237,38 @@ function oracleReady(oracle: OracleResult): boolean | null {
   return oracle.verdictLine === "ready";
 }
 
-function agrees(oracle: OracleResult, nen: NenResult): boolean {
+function normalizeOracleLine(line: string, knownDivergence: string): string {
+  return knownDivergence === "" ? line : line.split(knownDivergence).join("");
+}
+
+function readyAgrees(oracle: OracleResult, nen: NenResult): boolean {
   const oReady = oracleReady(oracle);
   if (oReady === null) return nen.verdict === "unevaluated"; // both say "no verdict"
   if (nen.verdict === "unevaluated") return false; // oracle decided, nen could not
   return oReady === (nen.verdict === "ready");
+}
+
+/**
+ * MAJOR fix (zheref/nen#2's review record, finding 5): agreement used to be
+ * decided on READY-NESS ALONE. Two implementations that failed on DIFFERENT
+ * conjuncts, or emitted different reason text, were recorded as "agree" --
+ * which is a strictly weaker instrument than the epigraph asks for ("`nen pr
+ * ready` must equal `pr_ready_gate.sh --verdict`"), and it is exactly the
+ * property the port's header claims (byte-for-byte reason transcription)
+ * needs an automated check on, not a hand-transcribed table.
+ *
+ * `true` whenever there is nothing left to compare: no oracle text at all
+ * (both sides already agreed on "no verdict", via `readyAgrees`), or a bare
+ * `ready` on either side (a passing verdict carries no reason text on the
+ * oracle's side to diverge from). `knownDivergence` is the ONE named exemption
+ * -- ../gates/ready.ts's ADOPTION DIVERGENCE (3) -- read from `targets.json`
+ * rather than written here, because the citation it names is the name of the
+ * source system and this file is swept for exactly that (see the header).
+ */
+function reasonAgrees(oracle: OracleResult, nen: NenResult, knownDivergence: string): boolean {
+  if (oracle.verdictLine === null) return true;
+  if (oracle.verdictLine === "ready" || nen.verdict === "ready") return true;
+  return normalizeOracleLine(oracle.verdictLine, knownDivergence) === nen.gateLine;
 }
 
 // ── enumeration ──────────────────────────────────────────────────────────────
@@ -244,19 +304,22 @@ function buildCandidates(targets: Targets, limit: number | null): Candidate[] {
 
 function renderReport(rows: readonly Row[]): string {
   const lines: string[] = [];
-  lines.push("| Repo | PR | Origin | Oracle | Nen | Agree |");
-  lines.push("|---|---|---|---|---|---|");
+  // MAJOR fix (zheref/nen#2's review record, finding 5): NO truncation. The
+  // 80-char cut this table used to apply made the harness's own artifact
+  // unable to carry a full reason string to compare -- and now that
+  // `reasonAgree` decides on the FULL text, truncating it here would hide
+  // exactly the diagnostic a disagreement needs. A markdown table cell may run
+  // wide; that is a smaller cost than a comparison that cannot see what it is
+  // comparing.
+  lines.push("| Repo | PR | Origin | Oracle | Nen | Ready agree | Reason agree |");
+  lines.push("|---|---|---|---|---|---|---|");
   for (const row of rows) {
     const oracleCell =
       row.oracle.verdictLine === null
         ? `(no verdict, exit ${row.oracle.exitCode})`
-        : row.oracle.verdictLine.length > 80
-          ? `${row.oracle.verdictLine.slice(0, 77)}...`
-          : row.oracle.verdictLine;
-    const nenCell =
-      row.nen.gateLine.length > 80 ? `${row.nen.gateLine.slice(0, 77)}...` : row.nen.gateLine;
+        : row.oracle.verdictLine;
     lines.push(
-      `| ${row.candidate.repo} | #${row.candidate.number} | ${row.candidate.origin} | ${escapeCell(oracleCell)} | ${escapeCell(nenCell)} | ${row.agree ? "yes" : "**NO**"} |`,
+      `| ${row.candidate.repo} | #${row.candidate.number} | ${row.candidate.origin} | ${escapeCell(oracleCell)} | ${escapeCell(row.nen.gateLine)} | ${row.readyAgree ? "yes" : "**NO**"} | ${row.reasonAgree ? "yes" : "**NO**"} |`,
     );
   }
   return lines.join("\n");
@@ -303,9 +366,13 @@ async function main(): Promise<void> {
     process.stderr.write(`  ${candidate.repo}#${candidate.number} ... `);
     const oracle = runOracle(args.oracleRepoPath, candidate.repo, candidate.number);
     const nen = await runNen(candidate.repo, candidate.number, gatesPath);
-    const agree = agrees(oracle, nen);
-    rows.push({ candidate, oracle, nen, agree });
-    process.stderr.write(`${agree ? "agree" : "DISAGREE"}\n`);
+    const readyAgree = readyAgrees(oracle, nen);
+    const reasonAgree = reasonAgrees(oracle, nen, targets.knownReasonDivergence);
+    const agree = readyAgree && reasonAgree;
+    rows.push({ candidate, oracle, nen, readyAgree, reasonAgree, agree });
+    process.stderr.write(
+      `${agree ? "agree" : !readyAgree ? "DISAGREE (ready-ness)" : "DISAGREE (reason text)"}\n`,
+    );
   }
 
   const report = renderReport(rows);
@@ -314,11 +381,13 @@ async function main(): Promise<void> {
     writeFileSync(args.out, `${report}\n`, "utf8");
   }
 
-  const disagreements = rows.filter((row): boolean => !row.agree);
+  const readyDisagreements = rows.filter((row): boolean => !row.readyAgree);
+  const reasonDisagreements = rows.filter((row): boolean => row.readyAgree && !row.reasonAgree);
   process.stderr.write(
-    `\nshadow window: ${rows.length - disagreements.length}/${rows.length} agree, ${disagreements.length} disagreement(s).\n`,
+    `\nshadow window: ${rows.length - readyDisagreements.length - reasonDisagreements.length}/${rows.length} agree, ` +
+      `${readyDisagreements.length} ready-ness disagreement(s), ${reasonDisagreements.length} reason-text disagreement(s).\n`,
   );
-  if (disagreements.length > 0) {
+  if (readyDisagreements.length > 0 || reasonDisagreements.length > 0) {
     process.exitCode = 1;
   }
 }

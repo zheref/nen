@@ -146,6 +146,17 @@ describe("identitiesFromFlags -- the reduced, conservative identity set", () => 
   });
 
   it("an explicitly empty approver set is honoured as vacuous, not refused", () => {
+    // NOTE (zheref/nen#2's review record, finding 1): this is a UNIT-level
+    // claim about `identitiesFromFlags` taking `[]` LITERALLY -- it is not, on
+    // its own, a claim about what the CLI does when `--approvers` is never
+    // typed at all. That distinction used to be lost: `prReady` collapsed an
+    // OMITTED `--approvers` into this same `[]` one line before calling this
+    // function, which is what made the approve limb silently vacuous on the
+    // ordinary `--reviewers` path. See the `prReady`-level describe block
+    // "the --reviewers identity path never lets an omitted --approvers empty
+    // the approve limb" below for the caller-level fix and its regression
+    // test; this function's own contract -- an array it is HANDED is taken at
+    // face value -- is unchanged and correct.
     const identities = identitiesFromFlags(["alice"], []);
     expect(identities.defaultApprovers).toEqual([]);
   });
@@ -347,6 +358,123 @@ describe("prReady -- unevaluated is never mistaken for a verdict", () => {
   });
 });
 
+// BLOCKER regression (zheref/nen#2's review record, finding 1): on the
+// `--reviewers` identity path -- the ordinary way this verb runs today, since
+// no repository ships `schemas/gates.json` yet -- an OMITTED `--approvers`
+// used to be indistinguishable from an explicitly empty one, both collapsing
+// to `defaultApprovers: []` one line before `identitiesFromFlags` was ever
+// reached. That made CON-32(b)'s approve limb VACUOUSLY TRUE and returned
+// `ready` on a pull request the shell gate -- and nen's own schema-file
+// identity path -- both call not-ready. Proved here at the `prReady` level
+// (not `identitiesFromFlags`'s own unit level, which cannot see the call-site
+// collapse), against a stubbed transport with two COMMENTED-not-APPROVED
+// rounds at head, matching the reviewer's own reproduction exactly.
+describe("prReady -- the --reviewers identity path never lets an omitted --approvers empty the approve limb", () => {
+  it("--reviewers sasuke,tenma with NO --approvers cannot return exit 0 on a PR neither has approved", async () => {
+    const emptyRepo = mkdtempSync(join(tmpdir(), "nen-pr-ready-flags-"));
+    const commentedNotApproved = stubSource({
+      reviews: async (): Promise<unknown[]> => [
+        { user: { login: "sasuke" }, state: "COMMENTED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+        { user: { login: "tenma" }, state: "COMMENTED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+      ],
+    });
+    const { io, out } = capture();
+    const code = await prReady(
+      input({
+        values: { "gh-repo": "zheref/example", reviewers: "sasuke,tenma" },
+        repoFlag: emptyRepo,
+      }),
+      io,
+      stubDeps(commentedNotApproved),
+    );
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    expect(report.meta.identities.source).toBe("flags");
+    // The omitted flag defaulted to the FULL reviewer set -- the conservative
+    // reading, "every named reviewer must approve" -- never to `[]`.
+    expect(report.meta.approvers).toEqual(["sasuke", "tenma"]);
+    expect(report.gateLine).toContain("sasuke (no APPROVE at the current head)");
+    expect(report.gateLine).toContain("tenma (no APPROVE at the current head)");
+  });
+
+  it("an EXPLICIT --approvers '' is still honoured as vacuous -- the escape hatch survives the fix", async () => {
+    const emptyRepo = mkdtempSync(join(tmpdir(), "nen-pr-ready-flags-"));
+    const commentedNotApproved = stubSource({
+      reviews: async (): Promise<unknown[]> => [
+        { user: { login: "sasuke" }, state: "COMMENTED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+        { user: { login: "tenma" }, state: "COMMENTED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+      ],
+    });
+    const { io, out } = capture();
+    const code = await prReady(
+      input({
+        values: { "gh-repo": "zheref/example", reviewers: "sasuke,tenma", approvers: "" },
+        repoFlag: emptyRepo,
+      }),
+      io,
+      stubDeps(commentedNotApproved),
+    );
+    expect(code).toBe(0);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("ready");
+    expect(report.meta.approvers).toEqual([]);
+  });
+});
+
+// MINOR fix (zheref/nen#2's review record, finding 7): `--approvers` is READ
+// only on the flags identity branch; whenever a gates FILE resolved instead
+// (as `input()`'s default `--gates` fixture does), the flag was silently
+// dropped on the floor with no diagnostic, and `unevaluatedReport` published
+// the raw, unused flag value as `meta.approvers` -- a different answer to "who
+// are the approvers" depending on which branch produced the report.
+describe("prReady -- --approvers is diagnosed, never silently dropped, when identities come from a schema", () => {
+  it("warns in meta.warnings when --approvers is passed but the gates FILE decides identities", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, approvers: "someone-the-file-never-heard-of" } }),
+      io,
+      stubDeps(stubSource()),
+    );
+    expect(code).toBe(0);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.meta.identities.source).toBe("schema");
+    expect(report.meta.warnings.some((w): boolean => w.includes("--approvers is read only"))).toBe(
+      true,
+    );
+    // The FILE's own approvers decided -- the flag never touched the verdict.
+    expect(report.meta.approvers).toEqual(["sasuke", "tenma"]);
+  });
+
+  it("does not warn when --approvers is simply absent on the schema path", async () => {
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(stubSource()));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.meta.warnings.some((w): boolean => w.includes("--approvers"))).toBe(false);
+  });
+
+  it("an UNEVALUATED report on the schema path states the FILE's own reviewers/approvers, not a raw flag", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input({
+        values: {
+          ...input().values,
+          reviewers: "nobody-the-file-declares",
+          approvers: "nobody-the-file-declares-either",
+        },
+      }),
+      io,
+      stubDeps(null), // no usable token -> unevaluated, before any evaluation.context exists
+    );
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("unevaluated");
+    expect(report.meta.identities.source).toBe("schema");
+    expect(report.meta.reviewers).toEqual(["sasuke", "tenma", "copilot"]);
+    expect(report.meta.approvers).toEqual(["sasuke", "tenma"]);
+  });
+});
+
 describe("prReady -- the happy path and the frozen --json contract", () => {
   it("a fully-passing PR is 'ready', exit 0, and the JSON matches the frozen v0.1 shape", async () => {
     const { io, out } = capture();
@@ -364,6 +492,51 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     expect(report.meta.pr).toBe(9);
     expect(report.meta.headSha).toBe("cafebabe");
     expect(report.meta.identities.source).toBe("schema");
+  });
+
+  // PORT ADDITION (zheref/nen#2's review record, finding 9): `contract` and the
+  // six-row conjunct table (`clause`, `title`) are published, FROZEN v0.1
+  // strings -- pr_ready.ts's own header makes them the first thing a consumer
+  // reads and the thing it refuses on -- but nothing pinned the LITERALS
+  // before this: `expect(report.contract).toBe(CONTRACT)` above compares the
+  // symbol to itself and moves with any edit, and no test wrote the six rows
+  // down. Mutating any one of them left the whole suite green.
+  it("pins the frozen v0.1 contract string and the six-row conjunct table as LITERALS", async () => {
+    const { io, out } = capture();
+    const code = await prReady(input(), io, stubDeps(stubSource()));
+    expect(code).toBe(0);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.contract).toBe("nen.pr.ready/v0.1");
+    expect(
+      report.conjuncts.map(({ id, order, clause, title }) => ({ id, order, clause, title })),
+    ).toEqual([
+      { id: "mergeable", order: 1, clause: "CON-42/1", title: "Mergeable" },
+      {
+        id: "checks-green",
+        order: 2,
+        clause: "CON-32(a)",
+        title: "Every reported check green, on the latest run per check name",
+      },
+      {
+        id: "round-stalled",
+        order: 3,
+        clause: "CON-32(b)",
+        title: "No configured reviewer's requested round has stalled",
+      },
+      {
+        id: "rounds-owed",
+        order: 4,
+        clause: "CON-32(b)",
+        title: "No configured reviewer's round owed at the current head",
+      },
+      {
+        id: "approvals-at-head",
+        order: 5,
+        clause: "CON-32(b)/CON-16",
+        title: "Every approving reviewer's latest round is an APPROVE at the current head",
+      },
+      { id: "unresolved-threads", order: 6, clause: "CON-32(d)", title: "Zero unresolved review threads" },
+    ]);
   });
 
   it("--json wins over --explain -- a human table never lands on a program's stdout", async () => {

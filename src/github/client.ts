@@ -123,13 +123,30 @@ export function tokenFromEnv(
   return { ok: true, token: raw.trim() };
 }
 
+export interface GitHubClientOptions {
+  readonly baseUrl?: string;
+  // PORT ADDITION (zheref/nen#2's review record, finding 4): octokit's own
+  // `request.fetch` hook, threaded straight through. Its ONE purpose is
+  // ./client.test.ts -- every network method on this class (`reviews`,
+  // `timeline`, the two `graphql()` calls) had zero test coverage precisely
+  // because there was no seam to drive them without a live token and a live
+  // PR, and two of the four (`timeline`, `defaultBranch` on the GraphQL side)
+  // are load-bearing for readiness: `timeline` is the ONLY source of
+  // `stall_requested_at`, so a silent regression there kills the whole
+  // round-stalled conjunct, and both fail CONSERVATIVELY (the gate stays
+  // shut), which is exactly the direction a `ready`-side check can never
+  // catch. Never used in production; `createClient()` never sets it.
+  readonly request?: { readonly fetch?: unknown };
+}
+
 export class GitHubClient {
   private readonly octokit: Octokit;
 
-  constructor(token: string, options: { readonly baseUrl?: string } = {}) {
+  constructor(token: string, options: GitHubClientOptions = {}) {
     this.octokit = new Octokit({
       auth: token,
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      ...(options.request === undefined ? {} : { request: options.request }),
       // PORT CHANGE: the original names the other binary. Composed from
       // ../version.ts rather than written as a literal, so a rate-limit
       // investigation can tell WHICH build of nen made a call and the string
@@ -265,5 +282,7 @@ export function createClient(
   token: string,
   options: { readonly baseUrl?: string } = {},
 ): GitHubClient {
+  // NEVER passes `request` -- see GitHubClientOptions's own comment. The
+  // production entry point mints a client that always speaks real HTTP.
   return new GitHubClient(token, options);
 }

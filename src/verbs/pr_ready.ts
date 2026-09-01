@@ -345,6 +345,20 @@ export class IdentityError extends Error {}
  * The delivery author pattern is one that matches NOTHING, so the CON-40
  * carve-out is unreachable without a file. A carve-out WIDENS the gate; a
  * carve-out configured by nobody must therefore not fire.
+ *
+ * `approvers` IS TAKEN LITERALLY -- this function does not itself distinguish
+ * an omitted `--approvers` from an explicitly empty one, and it must not: that
+ * is a CALLER decision (`resolveIdentities`/`prReady`, below), because only the
+ * caller knows whether the array it is holding came from a flag the operator
+ * typed or from this function's own absence. Passing `[]` here always means
+ * "the approve limb is vacuous", the reading ../gates/predicates.ts documents.
+ * zheref/nen#2's review record: collapsing "the flag was never given" into that
+ * same `[]` one layer up (rather than here) made `--reviewers a,b` with no
+ * `--approvers` silently return `ready` on an unapproved pull request -- CON-32(b)'s
+ * approve limb going vacuously true through the one identity source every
+ * repository without a `schemas/gates.json` actually uses. Fixed at the call
+ * site: an omitted `--approvers` now defaults to the REVIEWER set (the
+ * conservative reading -- every named reviewer must approve, never nobody).
  */
 export function identitiesFromFlags(
   reviewers: readonly string[],
@@ -368,7 +382,8 @@ export function identitiesFromFlags(
     // An EXPLICITLY empty approver set is a caller that said what it means, and
     // makes the approve limb vacuous -- the reading ../gates/predicates.ts
     // documents. The FILE is refused for being silent about it; a flag is not
-    // silent, and the renderer says the limb was vacuous.
+    // silent PROVIDED the caller above never hands this an empty array to mean
+    // "unspecified" -- see the doc comment above.
     defaultApprovers: approvers,
     baseReviewers: reviewers,
     delivery: { authorPattern: /(?!)/, headRefPrefixes: [], labels: [] },
@@ -519,7 +534,19 @@ export async function prReady(
   }
   const reviewersCsv = input.values["reviewers"] ?? "";
   const reviewerNames = splitCsv(reviewersCsv);
-  const approverNames = splitCsv(input.values["approvers"] ?? "");
+  // `--approvers` OMITTED is not the same value as `--approvers ""`, and the
+  // difference has to survive to here: CON-32(b)'s approve limb reads an EMPTY
+  // approver set as vacuously satisfied (../gates/predicates.ts), so collapsing
+  // "the caller never said" into that same `[]` -- as `?? ""` did before this
+  // was fixed -- silently emptied the approve limb on the `--reviewers` identity
+  // path, which is the ordinary way this verb runs today (no repository ships
+  // `schemas/gates.json` yet). An omitted `--approvers` therefore defaults to
+  // the REVIEWER set: the conservative reading, "every named reviewer must
+  // approve", never "nobody has to". An explicit `--approvers ""` is still
+  // honoured as the caller's own vacuous statement (identitiesFromFlags's own
+  // contract, unchanged).
+  const approversFlag = input.values["approvers"];
+  const approverNames = approversFlag === undefined ? reviewerNames : splitCsv(approversFlag);
 
   let ref: ResolvedRef;
   let identities: ResolvedIdentities;
@@ -540,6 +567,18 @@ export async function prReady(
     return 2;
   }
 
+  // `--approvers` is READ only on the flags identity branch (`identitiesFromFlags`,
+  // above) -- when a gates file resolved instead, the file's own
+  // `default_approvers` decides and the flag is silently unreachable code with
+  // no diagnostic. Loud rather than silent: a caller who typed `--approvers` and
+  // sees it ignored needs to know the identity source won, not guess.
+  const flagWarnings: string[] =
+    identities.source === "schema" && approversFlag !== undefined
+      ? [
+          `--approvers is read only when reviewer identities come from --reviewers; identities came from '${identities.path ?? "?"}' instead, so --approvers was ignored.`,
+        ]
+      : [];
+
   const opened = deps.openSource(input.values["token-env"] ?? DEFAULT_TOKEN_ENV);
   if (!opened.ok) {
     return emit(
@@ -550,10 +589,9 @@ export async function prReady(
         ref,
         deps.now(),
         identities,
-        reviewerNames,
-        approverNames,
         policy,
         excludeRun,
+        flagWarnings,
         "no usable token, so GitHub could not be read",
         opened.message,
       ),
@@ -580,10 +618,9 @@ export async function prReady(
         ref,
         deps.now(),
         identities,
-        reviewerNames,
-        approverNames,
         policy,
         excludeRun,
+        flagWarnings,
         `GitHub could not be read (${error instanceof Error ? error.message : String(error)})`,
         "Check the token's grants (pull-requests:read AND checks:read AND actions:read), that it is not expired, and that the network reached github.com. Never read this as ready.",
       ),
@@ -599,10 +636,9 @@ export async function prReady(
         ref,
         deps.now(),
         identities,
-        reviewerNames,
-        approverNames,
         policy,
         excludeRun,
+        flagWarnings,
         fetched.reason,
         fetched.remedy,
       ),
@@ -634,7 +670,7 @@ export async function prReady(
       excludeRun: excludeRun === "" ? null : excludeRun,
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
-      warnings: fetched.warnings,
+      warnings: [...flagWarnings, ...fetched.warnings],
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION },
     },
@@ -653,10 +689,9 @@ function unevaluatedReport(
   ref: ResolvedRef,
   now: string,
   identities: ResolvedIdentities,
-  reviewers: readonly string[],
-  approvers: readonly string[],
   policy: RoundPolicy,
   excludeRun: string,
+  warnings: readonly string[],
   reason: string,
   remedy: string,
 ): ReadyReport {
@@ -682,13 +717,19 @@ function unevaluatedReport(
       repo: `${ref.owner}/${ref.repo}`,
       pr: ref.number,
       headSha: null,
-      reviewers,
-      approvers,
+      // Read off the RESOLVED identities, never off the raw flags: on the
+      // schema path the flags are not what the gate would apply at all (the
+      // file's own base_reviewers/default_approvers are), and reporting the
+      // raw flags there would make `meta.reviewers`/`meta.approvers` mean a
+      // different thing depending on which branch produced the report --
+      // exactly what the decided path avoids by reading `evaluation.context`.
+      reviewers: identities.identities.baseReviewers,
+      approvers: identities.identities.defaultApprovers,
       roundPolicy: policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
-      warnings: [],
+      warnings,
       evaluatedAt: now,
       generator: { program: PROGRAM, version: VERSION },
     },

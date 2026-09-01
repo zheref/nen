@@ -3,11 +3,16 @@
 // Akatsuki migration P1) -- `evaluateReady` at line 491, plus the jq-equivalent
 // helpers and `minutesSince` it is built out of.
 //
-// The header below this block is the ORIGINAL's, carried VERBATIM, as is every
-// per-branch WHY in this file. That is the BC-IS-#737 discipline and it is
-// REVIEW-BLOCKING rather than a courtesy: each comment names the production
-// incident its branch exists for, and a predicate that arrives without its
-// incident is one the next maintainer simplifies back into the bug.
+// The header below this block is the ORIGINAL's, carried WITH THE RECORDED
+// EXCEPTIONS in divergences (5) and (6) below, as is every per-branch WHY in
+// this file. That is the BC-IS-#737 discipline and it is REVIEW-BLOCKING rather
+// than a courtesy: each comment names the production incident its branch exists
+// for, and a predicate that arrives without its incident is one the next
+// maintainer simplifies back into the bug. (An earlier revision of this file
+// claimed the header was carried "VERBATIM" with no exceptions stated; that
+// claim was false -- two paragraphs were dropped and two were spliced in
+// unrecorded. zheref/nen#2's review record caught it; (5) and (6) are the
+// correction, not a courtesy either.)
 //
 // ── WHAT THIS ADOPTION CHANGES, AND WHAT IT MUST NOT ────────────────────────
 //
@@ -61,10 +66,15 @@
 //     value, and ../taxonomy-purity.test.ts fails the build on exactly that.
 //     The citation is therefore carried in the COMMENT above the string, which
 //     is where BC-IS-#737 wants it anyway, and dropped from the emitted text.
-//     Recorded loudly, in the same spirit as the original's own "WHAT THIS PORT
-//     CANNOT REPRODUCE, STATED UP FRONT" section, and flagged as an open
-//     question for the maintainer rather than settled here: the alternative is a
-//     re-worded string in the shell.
+//     Recorded loudly -- in the ORIGINAL's own bankai-core cli/src/ports/
+//     pr_ready_gate.ts, a "WHAT THIS PORT CANNOT REPRODUCE, STATED UP FRONT"
+//     section makes exactly this kind of divergence explicit rather than
+//     silent, and this numbered list plays the same role on this branch. That
+//     section itself is NOT carried onto this file -- see divergence (6) for
+//     where it went -- so it is not to be found here by name; this note
+//     describes the ORIGINAL's practice, not a cross-reference to a section of
+//     THIS file. Flagged as an open question for the maintainer rather than
+//     settled here: the alternative is a re-worded string in the shell.
 //
 // (4) THE CONJUNCT TABLE IS NEW SURFACE, and it decides nothing. `evaluateReady`
 //     already knew which conjunct failed -- it returns that conjunct's reason --
@@ -75,6 +85,44 @@
 //     (claude/skills/pr-state/SKILL.md § 3), not a new taxonomy. `line` and
 //     `ready` remain exactly what they were, so a caller that wants only the
 //     original's answer reads only those two fields.
+//
+// (5) THE ORIGINAL'S "PHASE 2 IS ADDITIVE" PARAGRAPH IS DROPPED, not carried.
+//     It stated that scripts/pr_ready_gate.sh stays untouched and stays on
+//     cli/src/guards/bc11-allowlist.txt -- both facts about bankai-core's OWN
+//     repository layout (a second, shell implementation racing this ported one
+//     under a guard list), neither of which exists once this logic is ported
+//     into a standalone binary with no shell script beside it and no allowlist
+//     to be added to. There is no nen-side "additive" claim to make in its
+//     place: this file does not race an untouched original inside the SAME
+//     repository, it replaces the original's role for THIS one.
+//
+// (6) THE ORIGINAL'S "WHAT THIS PORT CANNOT REPRODUCE, STATED UP FRONT" SECTION
+//     IS DROPPED, and its three bullets did NOT travel forward uniformly:
+//       * the `mktemp -d` pair (bankai-core#639/#695) and `native_path`
+//         (bankai-core#748) ARE paraphrased forward, in ../github/pr_state.ts's
+//         own header -- read there for why this port has no temp dir to fail to
+//         create and no MSYS path to convert.
+//       * the THIRD bullet -- `${REPO:?...}` emitting bash's OWN diagnostic,
+//         and the reasoning for declining to record it into the corpus (a
+//         Windows checkout's `C:` path makes the stderr classifier read a
+//         diagnostic LABELLED `C` where a Linux runner's does not, so the same
+//         bug would be green on one CI pool and red on the other for a reason
+//         that has nothing to do with either implementation) -- has NO home on
+//         this branch. This port's own ref-resolution errors
+//         (../verbs/pr_ready.ts's `RefError`/`IdentityError`) are nen's own
+//         messages, not a transcription of the shell's `${REPO:?...}` text, so
+//         there is no analogous bash diagnostic here to decline recording.
+//         Recorded here as an open gap, not silently dropped: if a future
+//         phase ever DOES transcribe a shell diagnostic verbatim, the
+//         Windows-path hazard this bullet names applies again and wants the
+//         same treatment.
+//     Two smaller, previously-unenumerated insertions into the carried body,
+//     named here for completeness: the "ADOPTION NOTE on layer 3" paragraph
+//     below (already labelled inline as an adoption note, but not previously
+//     counted in this list) and the closing sentence of the SCOPE NOTE
+//     ("Those are the CAVEATS `--explain` prints...") describing this file's
+//     own `CAVEATS` export. Both are nen-side prose about nen-side additions,
+//     not transcriptions of anything the original says.
 // ============================================================================
 // pr_ready_gate.ts -- the TypeScript port of scripts/pr_ready_gate.sh
 // (BC-IS-#733 Phase 2, BC-IS-#737, rank 1).

@@ -247,6 +247,33 @@ describe("evaluateReady -- CON-32(b), the approve-at-head split", () => {
     expect(evaluation.ready).toBe(true);
     expect(evaluation.context.approvers).toEqual(["sasuke", "tenma"]);
   });
+
+  it("a conditional approver posted at a SUPERSEDED commit stays OUT of the approver set -- `&& review.commitId === head` is not decoration", () => {
+    // PORT ADDITION test (zheref/nen#2's review record, finding 8): the two
+    // cases above only ever exercise "posted at head" and "posted nothing" --
+    // neither distinguishes the `&& review.commitId === head` half of the
+    // enrolment guard from its absence. bisky's round check being at head
+    // satisfies rounds-owed on its own; a review it left at a STALE commit
+    // must not additionally enrol it into the approver set, or a reviewer that
+    // said nothing about the CURRENT head would be read as though it had.
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        reviewers: "sasuke,tenma,bisky",
+        checks: [greenCheck(), { name: "bisky / review", status: "COMPLETED", conclusion: "NEUTRAL" }],
+        reviews: [
+          approvedAtHead("sasuke"),
+          approvedAtHead("tenma"),
+          // A round at a superseded commit -- the PR moved on since bisky
+          // looked at it.
+          { author: "bisky", state: "CHANGES_REQUESTED", commit_id: "stalecommit", submitted_at: NOW },
+        ],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.context.approvers).toEqual(["sasuke", "tenma"]);
+  });
 });
 
 describe("evaluateReady -- CON-32(d)", () => {

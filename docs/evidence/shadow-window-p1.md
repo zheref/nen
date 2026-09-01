@@ -9,8 +9,10 @@
 This is that comparison, run with `src/shadow/run.ts` against the candidate
 set issue #2's Scope names: **every open pull request** across
 `zheref/KroApple`, `zheref/KroAndroid`, `zheref/bankai-scaffold`, `zheref/nen`,
-`zheref/hatsu`, `zheref/akatsuki-ai`, plus bankai-core's five named closed
-pull requests (907, 909, 911, 913, 916).
+`zheref/hatsu`, `zheref/akatsuki-ai`, and `zheref/bankai-core` (the seventh
+repository, added to `src/shadow/targets.json`'s `openPrRepos` by the review
+correction below), plus bankai-core's five named closed pull requests (907,
+909, 911, 913, 916).
 
 Both sides judged the same pull request under the same reviewer identities
 (`src/schema/fixtures/bankai-repo/schemas/gates.json` — the reviewer set the
@@ -21,27 +23,65 @@ repository configures), the same default round policy (`bounded`), and no
 `--reviewers` override on either side, so both derive their reviewer set from
 the same check rollup when one is not named.
 
-Run: 2026-09-01, oracle checkout at `bankai-core` `main` (working tree clean),
-`gh` authenticated as `zheref`.
+**Corrected after an independent adversarial review (zheref/nen#2's review
+record).** The review found the comparison weaker than it claimed to be, in
+two ways, both fixed in `src/shadow/run.ts` before this run:
+
+1. **Agreement was decided on READY-NESS alone.** Two implementations that
+   failed on different conjuncts, or emitted different reason text, were
+   recorded as "agree" — a strictly weaker instrument than the epigraph above
+   asks for, and the opposite of proof for the port's own claim that its
+   reason strings are byte-for-byte transcriptions. `agrees()` is now two
+   functions, `readyAgrees()` and `reasonAgrees()`, and a row is clean only
+   when both hold. `reasonAgrees()` normalizes away the ONE declared adoption
+   divergence (`../gates/ready.ts`'s ADOPTION DIVERGENCE (3), the
+   `(bankai-core#671)` citation `nen`'s own §3 forbids it from emitting) and
+   compares the rest of the text verbatim.
+2. **The rendered table truncated any cell over 80 characters**, which is
+   exactly the reason text the new comparison needs to see, and which is why
+   the PREVIOUS version of this document — hand-transcribed rather than
+   generated — carried full untruncated strings its own harness could not
+   have produced, plus five rows (for repositories with no open pull request
+   at run time) `buildCandidates`/`renderReport` cannot emit at all.
+   `renderReport` no longer truncates, and the table below is the harness's
+   own `--out` file, pasted in without hand-editing.
+
+A third, MINOR correction: `--limit` with a non-numeric value used to parse to
+`NaN`; `limit === null` is `false` for `NaN`, so `candidates.slice(0, NaN)`
+silently ran zero candidates and would have reported "0/0 agree" as a clean
+pass. `--limit` now refuses a non-integer or negative value outright. Not
+exercised by this run (`--limit` was not passed), stated for the record.
+
+Run: 2026-09-01, oracle checkout at `bankai-core` `main`
+(`2269fe723e355dc69bf535ab40f22556e4fe4081`, working tree clean), `gh`
+authenticated as `zheref`.
 
 ## Result
 
-| Repo | PR | Origin | Oracle | Nen | Agree |
-|---|---|---|---|---|---|
-| zheref/KroApple | — | open | (no open PRs at run time) | — | — |
-| zheref/KroAndroid | #186 | open | `ready` | `ready` | yes |
-| zheref/bankai-scaffold | #23 | open | `ready` | `ready` | yes |
-| zheref/bankai-scaffold | #21 | open | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | yes |
-| zheref/nen | — | open | (no open PRs at run time) | — | — |
-| zheref/hatsu | — | open | (no open PRs at run time) | — | — |
-| zheref/akatsuki-ai | — | open | (no open PRs at run time) | — | — |
-| zheref/bankai-core | #907 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes |
-| zheref/bankai-core | #909 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes |
-| zheref/bankai-core | #911 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes |
-| zheref/bankai-core | #913 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes |
-| zheref/bankai-core | #916 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes |
+This is `--out`'s file, unedited:
 
-**8 of 8 candidates agree. Zero disagreements.**
+| Repo | PR | Origin | Oracle | Nen | Ready agree | Reason agree |
+|---|---|---|---|---|---|---|
+| zheref/KroAndroid | #186 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #23 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #21 | open | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #907 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #909 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #911 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #913 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #916 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+
+**8 of 8 candidates agree: 8/8 on ready-ness, 8/8 on reason text.** Zero
+disagreements of either kind. No row is fabricated and none is missing: the
+harness enumerated seven `openPrRepos` and every one of `zheref/KroApple`,
+`zheref/nen`, `zheref/hatsu`, `zheref/akatsuki-ai` and — newly, this run —
+`zheref/bankai-core` had **zero open pull requests** (`gh pr list --repo
+<repo> --state open` returned `[]` for all five, confirmed independently
+outside the harness immediately before this run), so `buildCandidates`
+correctly contributed no row for any of them. That is a fact about the state
+of those repositories today, not a gap in the harness, and unlike the
+previous version of this document, this one does not print rows the harness
+cannot produce for repositories that happen to be quiet.
 
 Reproduce with:
 
@@ -51,11 +91,13 @@ bun src/shadow/run.ts --oracle-repo <path to a bankai-core checkout on main> --r
 
 ## Findings
 
-**No disagreements.** Every candidate the two implementations could both
-evaluate returned the identical verdict and the identical (or, for the one
-adoption divergence recorded in `src/gates/ready.ts`'s header, the identical
-up to that divergence) reason string. There is nothing here to classify as a
-nen defect or a documented shell quirk, because nothing disagreed.
+**No disagreements, on EITHER dimension the harness now checks.** Every
+candidate the two implementations could both evaluate returned the identical
+verdict AND the identical reason text (after the one declared, named
+exemption for the `(bankai-core#671)` citation `reasonAgrees()` normalizes
+away — see the correction above). This is no longer a claim resting on a
+hand-transcribed table: the comparison is automated, and the table above is
+its unedited output.
 
 **What depth this run actually exercised, stated plainly.** The five named
 bankai-core pull requests are all closed, and a closed pull request's
@@ -64,13 +106,14 @@ bankai-core pull requests are all closed, and a closed pull request's
 computing mergeability once a PR is no longer open. Both sides therefore
 short-circuit on the very FIRST conjunct for all five, which is a genuine,
 correct agreement (the two transports read the same fact from GitHub the same
-way) but not a deep one: CON-32(b)'s owed-round, stalled-round and
-approve-at-head limbs and CON-32(d)'s unresolved-thread count were never
-exercised against live bankai-core data by this run, because `bankai-core` had
-**zero open pull requests** at run time (`gh pr list --repo zheref/bankai-core
---state open` returned `[]`) — the five closed numbers are the whole of
-issue #2's Scope for that repository, and no substitute for a genuinely open
-one exists to test against right now.
+way, and now provably the same REASON TEXT too) but not a deep one:
+CON-32(b)'s owed-round, stalled-round and approve-at-head limbs and
+CON-32(d)'s unresolved-thread count were never exercised against live
+bankai-core data by this run, because `bankai-core` had **zero open pull
+requests** at run time — the five closed numbers are the whole of issue #2's
+Scope for that repository, and no substitute for a genuinely open one exists
+to test against right now, even with `bankai-core` now enumerated for open
+PRs on every run (the review correction above).
 
 The full six-conjunct depth WAS exercised, just by the other two repositories'
 open pull requests, which is the strongest evidence this run could produce
@@ -85,20 +128,25 @@ given what was open to look at:
   `CONFLICTING` state (not a closed-PR `UNKNOWN`), so the mergeable predicate's
   reason-string formatting was also proven against live, non-degenerate data.
 
-Four of the six repositories issue #2's Scope names (`zheref/KroApple`,
-`zheref/nen`, `zheref/hatsu`, `zheref/akatsuki-ai`) had no open pull requests
-at run time and so contributed no rows. This is a fact about the state of
-those repositories today, not a gap in the harness: `src/shadow/run.ts`
-enumerates every open PR at run time (`gh pr list --repo <repo> --state open`)
-rather than a fixed list, so re-running it after any of these repositories
-opens a PR extends the table for free. **Residual gap, recorded rather than
-hidden:** the owed-round, stalled-round, approve-at-head and
-unresolved-thread-count conjuncts have not yet been shadow-tested against a
-FAILING case on live data, only a passing one. Closing that gap is what #4's
-`nen dev replay` corpus is for (issue #2's own "Acceptance / evidence"
-section: "the companion evidence line ... is delivered by #4's `nen dev
-replay`") — a fixed, replayable set of recorded states rather than whatever
-happens to be open on the day this file was last regenerated.
+Six of the seven repositories `openPrRepos` now names (`zheref/KroApple`,
+`zheref/nen`, `zheref/hatsu`, `zheref/akatsuki-ai`, `zheref/bankai-core`, and
+— for this run only — `zheref/bankai-scaffold`, which happened to have open
+PRs) either had no open pull requests at run time or contributed the rows
+already discussed above. This is a fact about the state of those repositories
+today, not a gap in the harness: `src/shadow/run.ts` enumerates every open PR
+at run time (`gh pr list --repo <repo> --state open`) rather than a fixed
+list, so re-running it after any of these repositories opens a PR extends the
+table for free — including `zheref/bankai-core` itself now, which the
+PREVIOUS version of `openPrRepos` omitted despite it being the one repository
+§7's evidence bar is written about (the review's MINOR finding, corrected
+above). **Residual gap, recorded rather than hidden:** the owed-round,
+stalled-round, approve-at-head and unresolved-thread-count conjuncts have not
+yet been shadow-tested against a FAILING case on live data, only a passing
+one. Closing that gap is what #4's `nen dev replay` corpus is for (issue #2's
+own "Acceptance / evidence" section: "the companion evidence line ... is
+delivered by #4's `nen dev replay`") — a fixed, replayable set of recorded
+states rather than whatever happens to be open on the day this file was last
+regenerated.
 
 **The known gate bugs were not, and must not be, triggered or fixed here.**
 Issue #2's Scope is explicit: "The shadow window must reproduce today's
