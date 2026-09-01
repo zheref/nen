@@ -10,7 +10,7 @@ import {
 import { readJsonFile } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
-import { detectStalePins, sweepHandbookQuestions, type Question } from "./sweep.js";
+import { detectStalePins, sweepHandbookQuestions, type Question, type QuestionGap } from "./sweep.js";
 
 const USAGE = `nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
 
@@ -22,8 +22,24 @@ handbook-question sweep.
                            registry.latest can itself be stale, so it is
                            stated explicitly rather than read from the file
                            being checked.
-  --questions-from <path>  A JSON array of { id, text }.
+  --questions-from <path>  A JSON array of { id, text }. Omitting it skips the
+                           sweep -- reported as an explicit NOT CHECKED, both
+                           in the human output and as { "checked": false } in
+                           --json, never as a silent "no gaps" (review
+                           finding: "not checked" must never render as clean).
   --answers-from <path>    A JSON object: { "<repo>": ["<question-id>", ...] }.`;
+
+/**
+ * "Not run" and "run and found nothing" are different verdicts (review
+ * finding) -- the same distinction ../release/command.ts's `Supplied<T>`
+ * and ../fanout/command.ts's explicit per-consumer 'n/a' row already make.
+ * An automated caller reading --json must be able to tell "no unanswered
+ * handbook questions" apart from "the sweep never ran" without also having
+ * to notice a flag was missing from the invocation.
+ */
+export type QuestionSweepResult =
+  | { readonly checked: false }
+  | { readonly checked: true; readonly gaps: readonly QuestionGap[] };
 
 export const warmupCommand: Command = {
   name: "warmup",
@@ -41,7 +57,7 @@ export const warmupCommand: Command = {
       lines.push(`  ${finding.repo} ${finding.field}: ${finding.pinned} -> ${current}`);
     }
 
-    let gaps: ReturnType<typeof sweepHandbookQuestions> = [];
+    let questionSweep: QuestionSweepResult = { checked: false };
     const questionsPath = context.args.values["questions-from"];
     if (questionsPath !== undefined) {
       const answersPath = requireValue(
@@ -56,13 +72,21 @@ export const warmupCommand: Command = {
         Object.entries(answersRaw).map(([repo, ids]): [string, ReadonlySet<string>] => [repo, new Set(ids)]),
       );
       const repos = registry.consumers.map((entry): string => entry.repo);
-      gaps = sweepHandbookQuestions(repos, questions, answers);
+      const gaps = sweepHandbookQuestions(repos, questions, answers);
+      questionSweep = { checked: true, gaps };
 
       lines.push(gaps.length === 0 ? "no unanswered handbook questions" : `${gaps.length} unanswered handbook question(s):`);
       for (const gap of gaps) lines.push(`  ${gap.repo}: ${gap.questionId} -- ${gap.text}`);
+    } else {
+      // SILENCE IS NOT A VERDICT (review finding): the same rule the release
+      // preflight table and the fan-out verb's explicit per-consumer 'n/a'
+      // row already honour. A missing key or an empty gap list here would be
+      // indistinguishable from "swept, and clean" to a --json caller.
+      lines.push("handbook-question sweep: NOT CHECKED (--questions-from was not supplied)");
     }
 
-    emit(context.io, context.json, { current, pinFindings, questionGaps: gaps }, lines);
-    return pinFindings.length === 0 && gaps.length === 0 ? 0 : 1;
+    emit(context.io, context.json, { current, pinFindings, questionSweep }, lines);
+    const questionsFailed = questionSweep.checked && questionSweep.gaps.length > 0;
+    return pinFindings.length === 0 && !questionsFailed ? 0 : 1;
   },
 };
