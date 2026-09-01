@@ -95,6 +95,31 @@ function isAbsent(value: unknown): boolean {
 // one here would be authoring model shape Phase 1 did not scope (BC-6). The
 // obligation to extend the model is recorded where the model lives -- see the
 // `is_delivery_pr` forward obligation in ./types.ts (BC-IS-#737).
+//
+// PAGINATION AUDIT (zheref/nen#14's fact-check, false-green defect on
+// zheref/bankai-core#927): every `first:N` connection below was checked for
+// the SAME defect the fix below closes on `contexts` -- a cap that silently
+// truncates a set a VERDICT depends on.
+//   - `labels(first:100)`: AUDITED, SAFE, left uncapped-in-practice on
+//     purpose. ../gates/predicates.ts's isDeliveryPr() reads `state.labels`
+//     only as `identities.delivery.labels.some(label => evidence.labels.
+//     includes(label))`, OR'd with a headRef pattern -- a truncated labels
+//     list can only make that disjunction MORE conservative (fall back to
+//     the ordinary at-head rounds), never WIDER. Never the false-green
+//     direction, so left as page-one-only.
+//   - `reviewRequests(first:100)`: AUDITED, flagged as a follow-up rather
+//     than fixed here. It feeds ../gates/predicates.ts's pendingRounds()
+//     limb (i) via ../github/pr_state.ts's `requests` array, so a dropped
+//     101st+ entry COULD in principle hide a pending round -- structurally
+//     the same shape as the `contexts` bug. Not fixed in this PR because,
+//     unlike `contexts` (CI matrices routinely exceed 100, proven live on
+//     #927's 114), GitHub's platform-level UI limits how many reviewers can
+//     be requested on a single PR, well under 100 -- making the truncation
+//     this cap could cause exceptionally unlikely to occur in practice. See
+//     the follow-up task filed alongside PR #14 for the full reasoning and
+//     the decision on whether to close this one too.
+//   - `contexts(first:100)`: WAS the defect. Fixed below -- see
+//     CHECK_ROLLUP_PAGE_QUERY and its own comment.
 export const PULL_REQUEST_QUERY = `
   query($owner:String!, $name:String!, $pr:Int!) {
     repository(owner:$owner, name:$name) {
@@ -121,6 +146,52 @@ export const PULL_REQUEST_QUERY = `
                     ... on CheckRun { name status conclusion startedAt completedAt detailsUrl }
                     ... on StatusContext { context state targetUrl }
                   }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }`;
+
+// zheref/nen#14's fact-check on zheref/bankai-core#927 (independent
+// verification pass, 2026-08-31): `contexts(first:100)` above NEVER
+// PAGINATED. #927's rollup has totalCount 114 with hasNextPage true, and the
+// ONLY failing entry ('sasuke / audit') sits beyond the first 100 -- so
+// PULL_REQUEST_QUERY silently dropped it, ../github/pr_state.ts fed a
+// TRUNCATED-but-all-green rollup to parseCheckRollup(), and the gate answered
+// `ready` while scripts/pr_ready_gate.sh (whose `gh pr view --json
+// statusCheckRollup` paginates this same connection internally, invisibly to
+// the shell) answered `not-ready: required checks reported but are not all
+// green (CON-32a)`. Deterministic across three runs of each side. A cap that
+// silently truncates a set a VERDICT depends on is a false-GREEN bug, not a
+// completeness nicety -- CON-32(a)'s boundary is "every required check
+// green", and a check this process never even saw cannot be weighed against
+// it.
+//
+// THE FIX IS THIS QUERY (added `pageInfo`) PLUS THE WALK BELOW. Mirroring
+// REVIEW_THREADS_QUERY's own shape deliberately: a `first:N` connection whose
+// completeness a verdict depends on gets a cursor and a caller that walks it
+// to `hasNextPage:false`, never a caller that reads page one and stops. See
+// ../github/pr_state.ts's `fullCheckRollup` for the walk, and its own header
+// for why every failure path there is `unevaluated`, never a partial `ready`.
+export const CHECK_ROLLUP_PAGE_QUERY = `
+  query($owner:String!, $name:String!, $pr:Int!, $cursor:String) {
+    repository(owner:$owner, name:$name) {
+      pullRequest(number:$pr) {
+        statusCheckRollup: commits(last:1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                contexts(first:100, after:$cursor) {
+                  nodes {
+                    __typename
+                    ... on CheckRun { name status conclusion startedAt completedAt detailsUrl }
+                    ... on StatusContext { context state targetUrl }
+                  }
+                  pageInfo { hasNextPage endCursor }
                 }
               }
             }
@@ -240,26 +311,40 @@ export interface PullRequestSnapshot {
   // rounds binding instead of WIDENING the gate on absent evidence.
   readonly defaultBranch: string | undefined;
   // Raw `statusCheckRollup.contexts.nodes` of the HEAD commit, for
-  // parseCheckRollup().
+  // parseCheckRollup(). This is PAGE ONE ONLY -- see checkRollupPageInfo.
   readonly checkRollup: unknown;
+  // `statusCheckRollup.contexts.pageInfo` of the HEAD commit's rollup. The
+  // caller (../github/pr_state.ts's fetchPrState) MUST walk this to
+  // `hasNextPage: false` with CHECK_ROLLUP_PAGE_QUERY before treating
+  // `checkRollup` as the whole rollup -- reading page one alone is exactly the
+  // false-green defect PULL_REQUEST_QUERY's own comment above documents.
+  // `hasNextPage`/`endCursor` stay `unknown` rather than coerced, for the same
+  // reason ReviewThreadPage's do: an unreadable `hasNextPage` must not become
+  // `false` and end the walk early.
+  readonly checkRollupPageInfo: {
+    readonly hasNextPage: unknown;
+    readonly endCursor: unknown;
+  };
   // Raw gh-shaped review-request objects, for parseReviewRequests().
   readonly reviewRequests: unknown;
 }
 
-// The head commit's rollup contexts.
+// The head commit's rollup `contexts`, one PAGE at a time.
 //
-// `statusCheckRollup: commits(last:1)` asks for ONE commit, so this array holds
-// at most one node -- but the LAST is taken rather than the first, deliberately:
-// `last:N` returns the N most recent in ASCENDING order, so if the selection is
-// ever widened the head commit stays the one read. Taking `[0]` would silently
-// start judging readiness on the OLDEST commit in the window, and a rollup read
-// off the wrong commit is a green verdict about work that is not at head.
+// `statusCheckRollup: commits(last:1)` asks for ONE commit, so the `commits`
+// array holds at most one node -- but the LAST is taken rather than the
+// first, deliberately: `last:N` returns the N most recent in ASCENDING
+// order, so if the selection is ever widened the head commit stays the one
+// read. Taking `[0]` would silently start judging readiness on the OLDEST
+// commit in the window, and a rollup read off the wrong commit is a green
+// verdict about work that is not at head.
 //
 // CORRECTION (zheref/nen#14's fact-check, shadow-window disagreement on
 // zheref/akatsuki-ai#33): a non-array `commits` connection, or a missing/
-// non-object head COMMIT, still yields `undefined` -- the path genuinely could
-// not be walked, which is unreadable in exactly the way ../github/pr_state.ts's
-// fetch-time guard means it. But an otherwise-readable head commit whose OWN
+// non-object head COMMIT, still yields the unreadable `{undefined,undefined,
+// undefined}` page below -- the path genuinely could not be walked, which is
+// unreadable in exactly the way ../github/pr_state.ts's fetch-time guard
+// means it. But an otherwise-readable head commit whose OWN
 // `commit.statusCheckRollup` field is the literal GraphQL value `null` is a
 // DIFFERENT fact, and this file's own comment above it used to get that wrong:
 // it claimed "manufacturing `[]` here would make 'the token could not read the
@@ -277,10 +362,19 @@ export interface PullRequestSnapshot {
 // never a refusal. This port's job is to reproduce THAT, not the read this
 // comment previously assumed: a present-but-null `commit.statusCheckRollup` on
 // an otherwise-resolvable head commit is the empty-rollup case and reads as
-// `[]`; only a head commit this function cannot resolve at all stays
-// `undefined`, and `undefined` is still what a genuinely unreadable connection
-// (a partial-data blank higher up the path, or a non-object commit) yields.
-function headCommitRollupContexts(response: unknown): unknown {
+// `[]` with `hasNextPage: false` (nothing further to page); only a head
+// commit this function cannot resolve at all stays unreadable, and
+// unreadable is still what a genuinely unreadable connection (a partial-data
+// blank higher up the path, or a non-object commit) yields.
+//
+// Shared by normalizePullRequestResponse() (PULL_REQUEST_QUERY's page one,
+// nested three levels under the aliased `statusCheckRollup: commits(last:1)`
+// field) AND normalizeCheckRollupPageResponse() (CHECK_ROLLUP_PAGE_QUERY,
+// every page after it) -- both queries select the identical shape at the
+// identical path, on purpose, so one normalizer serves both and a change to
+// one query's selection that is not mirrored in the other is a shape neither
+// can silently paper over.
+function headCommitCheckRollupPage(response: unknown): CheckRollupPage {
   const commits = digPath(
     response,
     "repository",
@@ -288,16 +382,37 @@ function headCommitRollupContexts(response: unknown): unknown {
     "statusCheckRollup",
     "nodes",
   );
-  if (!Array.isArray(commits)) return undefined;
+  if (!Array.isArray(commits)) {
+    return { nodes: undefined, hasNextPage: undefined, endCursor: undefined };
+  }
   const head: unknown = commits[commits.length - 1];
   const commit = digPath(head, "commit");
-  if (!isRecord(commit)) return undefined;
+  if (!isRecord(commit)) {
+    return { nodes: undefined, hasNextPage: undefined, endCursor: undefined };
+  }
   // The commit resolved; its OWN rollup field is what GitHub answered.
   // `=== null` (as opposed to `undefined`, an absent key) is the wire's own
   // "no runs at all on this commit" signal, and it is a fact ABOUT the
-  // commit, not a failure to read one.
-  if (commit["statusCheckRollup"] === null) return [];
-  return digPath(commit, "statusCheckRollup", "contexts", "nodes");
+  // commit, not a failure to read one -- and a commit with no rollup at all
+  // has no `contexts` connection to page, so this is complete as read.
+  if (commit["statusCheckRollup"] === null) {
+    return { nodes: [], hasNextPage: false, endCursor: undefined };
+  }
+  return {
+    nodes: digPath(commit, "statusCheckRollup", "contexts", "nodes"),
+    hasNextPage: digPath(commit, "statusCheckRollup", "contexts", "pageInfo", "hasNextPage"),
+    endCursor: digPath(commit, "statusCheckRollup", "contexts", "pageInfo", "endCursor"),
+  };
+}
+
+// One CHECK_ROLLUP_PAGE_QUERY response -> its nodes and its cursor.
+//
+// ../github/pr_state.ts's `fullCheckRollup` walks this exactly as
+// `unresolvedThreadCount` walks ReviewThreadPage: call, check `hasNextPage`,
+// follow `endCursor`, and fail closed (never coerce an unreadable
+// `hasNextPage` to `false`) rather than stop early and under-count.
+export function normalizeCheckRollupPageResponse(response: unknown): CheckRollupPage {
+  return headCommitCheckRollupPage(response);
 }
 
 function toGhPullRequestNode(raw: unknown): GhPullRequestNode | undefined {
@@ -325,6 +440,7 @@ export function normalizePullRequestResponse(
     digPath(response, "repository", "pullRequest"),
   );
   const defaultBranch = digPath(response, "repository", "defaultBranchRef", "name");
+  const rollupPage = headCommitCheckRollupPage(response);
   return {
     pullRequest: node,
     // A non-string (absent, null, or a partial-data blank) yields `undefined`,
@@ -332,11 +448,32 @@ export function normalizePullRequestResponse(
     // refused there anyway, but `undefined` says "not read" at the boundary
     // where that is still distinguishable.
     defaultBranch: typeof defaultBranch === "string" ? defaultBranch : undefined,
-    checkRollup: headCommitRollupContexts(response),
+    // PAGE ONE only -- unchanged in shape and value from before pagination
+    // existed, so every pre-existing caller and test that reads
+    // `snapshot.checkRollup` directly keeps its exact meaning. The caller MUST
+    // consult checkRollupPageInfo before treating this as the whole rollup.
+    checkRollup: rollupPage.nodes,
+    checkRollupPageInfo: { hasNextPage: rollupPage.hasNextPage, endCursor: rollupPage.endCursor },
     // Read off the NORMALIZED node so the snapshot and the PR object can never
     // disagree about what was requested -- one unwrap, one answer.
     reviewRequests: node?.reviewRequests,
   };
+}
+
+// --- check-rollup pages -------------------------------------------------------
+
+// One page of the head commit's rollup `contexts` connection. Structurally
+// identical to ReviewThreadPage -- deliberately: both are `first:100` GraphQL
+// connections a readiness verdict depends on reading IN FULL, and both are
+// walked by the identical cursor loop shape in ../github/pr_state.ts. A
+// SEPARATE named type rather than a shared alias, because the two are not
+// interchangeable at their call sites and a caller passing one where the
+// other belongs should be a compile error, not a structural coincidence.
+export interface CheckRollupPage {
+  // Raw nodes, for parseCheckRollup() to validate once the walk is complete.
+  readonly nodes: unknown;
+  readonly hasNextPage: unknown;
+  readonly endCursor: unknown;
 }
 
 // --- review threads ----------------------------------------------------------

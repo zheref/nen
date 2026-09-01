@@ -91,7 +91,12 @@
 import { defaultReviewers, type RoundPolicy } from "../gates/predicates.js";
 import { parseCheckRollup } from "./parse.js";
 import type { GateIdentities, ReviewerIdentity } from "../schema/gates.js";
-import { digPath, type PullRequestSnapshot, type ReviewThreadPage } from "./graphql.js";
+import {
+  digPath,
+  type CheckRollupPage,
+  type PullRequestSnapshot,
+  type ReviewThreadPage,
+} from "./graphql.js";
 
 export interface PrRef {
   readonly owner: string;
@@ -114,6 +119,12 @@ export interface PrStateSource {
     cursor: string | null,
   ): Promise<ReviewThreadPage>;
   timeline(repo: PrRef, prNumber: number): Promise<unknown[]>;
+  /**
+   * Page 2+ of the head commit's check-rollup `contexts` connection.
+   * `pullRequestSnapshot` above returns page ONE only -- see
+   * PullRequestSnapshot.checkRollupPageInfo's own comment.
+   */
+  checkRollupPage(repo: PrRef, prNumber: number, cursor: string): Promise<CheckRollupPage>;
 }
 
 export interface FetchStateOptions {
@@ -124,6 +135,17 @@ export interface FetchStateOptions {
   /** `--exclude-run`. EMPTY means no carve-out. */
   readonly excludeRun: string;
   readonly maxThreadPages: number;
+  /**
+   * The check-rollup counterpart of maxThreadPages -- a runaway-loop backstop
+   * on fullCheckRollup()'s walk, not an operator-facing knob the shell has:
+   * `gh pr view --json statusCheckRollup` paginates this connection INSIDE
+   * gh's own client with no configurable cap exposed to the script, so there
+   * is no `${...:-N}` default to mirror. 50 (5000 contexts) is chosen to
+   * match maxThreadPages's own default for the same reason: large enough that
+   * no real rollup should ever hit it, small enough that a server which never
+   * reports `hasNextPage:false` cannot loop forever.
+   */
+  readonly maxRollupPages: number;
 }
 
 /**
@@ -209,6 +231,117 @@ export async function unresolvedThreadCount(
     cursor = next;
   }
   return { count: total, warnings: [] };
+}
+
+/**
+ * Result of walking the head commit's check-rollup `contexts` connection to
+ * completion. `ok:false` carries a remedy, exactly like StateUnavailable --
+ * fetchPrState() returns this branch STRAIGHT THROUGH as its own `ok:false`.
+ */
+export type CheckRollupOutcome =
+  | { readonly ok: true; readonly nodes: readonly unknown[] }
+  | { readonly ok: false; readonly reason: string; readonly remedy: string };
+
+/**
+ * Walks `contexts`' cursor across pages of 100 so a rollup with MORE than 100
+ * contexts is read in full rather than silently truncated at page one.
+ *
+ * WHY THE WALK EXISTS (zheref/nen#14's fact-check, verified live against
+ * zheref/bankai-core#927). `contexts(first:100)` alone -- ../github/
+ * graphql.ts's PULL_REQUEST_QUERY before this walk existed -- NEVER
+ * PAGINATED. #927's rollup has totalCount 114 with hasNextPage true, and the
+ * ONLY failing entry ('sasuke / audit') sits beyond the first 100: this
+ * process fed a truncated-but-all-green rollup to parseCheckRollup() and
+ * answered `ready` while scripts/pr_ready_gate.sh -- whose `gh pr view --json
+ * statusCheckRollup` paginates the identical connection INSIDE gh's own
+ * client, invisibly to the shell -- answered `not-ready: required checks
+ * reported but are not all green (CON-32a)`. Deterministic across three runs
+ * of each side. CON-32(a)'s boundary is "every required check green"; a
+ * check this process never saw cannot be weighed against it, so reading only
+ * page one is a FALSE-GREEN bug, not a completeness nicety.
+ *
+ * FAILS CLOSED, ALWAYS -- this is the property that makes it safe to compose
+ * into a readiness gate at all. Every failure path below -- a thrown fetch, a
+ * page whose `nodes` will not even parse as an array, a `hasNextPage:true`
+ * page with no usable cursor, or hitting the page cap -- returns `ok:false`,
+ * which fetchPrState() surfaces as `unevaluated`. NONE of them return the
+ * PARTIAL set collected so far as though it were the whole rollup: a rollup
+ * this process could not finish reading is exactly as untrustworthy as one it
+ * never started reading, and treating a partial read as complete is the same
+ * defect this function exists to close, wearing a different hat. Contrast
+ * unresolvedThreadCount() just above, which fails toward `not-ready` (a count
+ * of 1) on the SAME shapes of failure -- that is safe there because
+ * CON-32(d)'s predicate is a simple non-zero test with no way to be
+ * mistakenly green on a fabricated 1. checksAllGreen() has no such backstop:
+ * a fabricated PARTIAL array of all-green entries reads as fully green, so
+ * this function refuses to fabricate one at all.
+ */
+export async function fullCheckRollup(
+  source: PrStateSource,
+  repo: PrRef,
+  prNumber: number,
+  firstPageNodes: readonly unknown[],
+  firstPageInfo: { readonly hasNextPage: unknown; readonly endCursor: unknown },
+  maxRollupPages: number,
+): Promise<CheckRollupOutcome> {
+  let nodes: readonly unknown[] = firstPageNodes;
+  let hasNextPage: unknown = firstPageInfo.hasNextPage;
+  let cursor: unknown = firstPageInfo.endCursor;
+  for (let page = 2; hasNextPage === true; page += 1) {
+    if (page > maxRollupPages) {
+      return {
+        ok: false,
+        reason:
+          `the check rollup for ${repo.owner}/${repo.repo}#${prNumber} hit the ` +
+          `${maxRollupPages}-page pagination cap before hasNextPage went false`,
+        remedy:
+          "Raise maxRollupPages, or investigate why this PR's head commit reports so many " +
+          "check-rollup contexts; refusing to evaluate readiness on a partial rollup rather than " +
+          "treating the contexts read so far as the complete set.",
+      };
+    }
+    // Divergence-3-shaped fallback (see this module's header): `hasNextPage`
+    // true with an unreadable cursor means more contexts exist and cannot be
+    // reached. Never treat the contexts already collected as the whole set.
+    if (typeof cursor !== "string" || cursor === "") {
+      return {
+        ok: false,
+        reason:
+          `the check rollup for ${repo.owner}/${repo.repo}#${prNumber} reported more pages ` +
+          "(hasNextPage=true) but no usable cursor",
+        remedy: "Retry the read; a transient partial-data response can leave the cursor blank.",
+      };
+    }
+    let answered: CheckRollupPage;
+    try {
+      answered = await source.checkRollupPage(repo, prNumber, cursor);
+    } catch (error) {
+      return {
+        ok: false,
+        reason:
+          `fetching page ${page} of the check rollup for ${repo.owner}/${repo.repo}#${prNumber} ` +
+          `failed: ${error instanceof Error ? error.message : String(error)}`,
+        remedy:
+          "Retry the read; the token is very likely missing a required grant. checks:read alone " +
+          "is not enough: the rollup's own checkSuite.workflowRun sub-field needs actions:read too.",
+      };
+    }
+    if (!Array.isArray(answered.nodes)) {
+      return {
+        ok: false,
+        reason:
+          `page ${page} of the check rollup for ${repo.owner}/${repo.repo}#${prNumber} came back ` +
+          "unreadable (a non-array or missing `nodes`)",
+        remedy:
+          "Retry the read; the token is very likely missing a required grant. checks:read alone " +
+          "is not enough: the rollup's own checkSuite.workflowRun sub-field needs actions:read too.",
+      };
+    }
+    nodes = nodes.concat(answered.nodes);
+    hasNextPage = answered.hasNextPage;
+    cursor = answered.endCursor;
+  }
+  return { ok: true, nodes };
 }
 
 /**
@@ -307,7 +440,7 @@ export async function fetchPrState(
 
   // Divergence 2 in the header, CORRECTED. `snapshot.checkRollup` reaching
   // here as `undefined` no longer includes "the head commit's own rollup is
-  // null" -- ../github/graphql.ts's headCommitRollupContexts() now reduces
+  // null" -- ../github/graphql.ts's headCommitCheckRollupPage() now reduces
   // that case to `[]`, matching gh's own flattening, so it never arrives here
   // at all. Only a head commit (or something above it) that this process
   // could not resolve reaches this branch, which is the SAME
@@ -325,6 +458,40 @@ export async function fetchPrState(
         "readiness on unreadable checks data rather than reporting an EMPTY rollup, which is a " +
         "different finding with a different remedy.",
     };
+  }
+
+  // FALSE-GREEN DEFECT, FIXED (zheref/nen#14's fact-check on
+  // zheref/bankai-core#927). `snapshot.checkRollup` is PAGE ONE ONLY --
+  // `contexts(first:100)` with no cursor, capped at exactly the 100 entries
+  // GitHub answers first. Reading it alone here is what used to let a
+  // rollup's 101st-and-beyond entries (any of which may be the one FAILING
+  // context) go completely unweighed: #927's rollup has totalCount 114 with
+  // hasNextPage true, and the only failing entry ('sasuke / audit') sits at
+  // position 101+, so this process answered `ready` on a truncated,
+  // all-green-so-far view while scripts/pr_ready_gate.sh -- whose `gh pr view
+  // --json statusCheckRollup` paginates the identical connection inside gh's
+  // own client -- answered `not-ready: required checks reported but are not
+  // all green (CON-32a)`. checksAllGreen() has no backstop against a
+  // fabricated partial array reading as fully green, so the walk below MUST
+  // complete before parseCheckRollup() ever sees this data, and MUST fail
+  // closed (this whole function returning `unevaluated`, never a partial
+  // `ready`) if it cannot.
+  let checkRollupNodes: readonly unknown[] = Array.isArray(snapshot.checkRollup)
+    ? snapshot.checkRollup
+    : [];
+  if (snapshot.checkRollupPageInfo.hasNextPage === true) {
+    const full = await fullCheckRollup(
+      source,
+      repo,
+      prNumber,
+      checkRollupNodes,
+      snapshot.checkRollupPageInfo,
+      options.maxRollupPages,
+    );
+    if (!full.ok) {
+      return { ok: false, reason: full.reason, remedy: full.remedy };
+    }
+    checkRollupNodes = full.nodes;
   }
 
   const mergeable = typeof node.mergeable === "string" ? node.mergeable : "";
@@ -361,7 +528,9 @@ export async function fetchPrState(
   const threads = await unresolvedThreadCount(source, repo, prNumber, options.maxThreadPages);
 
   // The reviewer set, resolved from the rollup only when the caller named none.
-  const parsedChecks = parseCheckRollup(snapshot.checkRollup, "$.checks");
+  // Reads the FULLY PAGINATED rollup, never `snapshot.checkRollup` (page one
+  // alone) -- see the pagination block above.
+  const parsedChecks = parseCheckRollup(checkRollupNodes, "$.checks");
   const reviewers =
     options.reviewersCsv !== ""
       ? options.reviewersCsv
@@ -393,7 +562,9 @@ export async function fetchPrState(
     state: {
       mergeable,
       head_sha: head,
-      checks: snapshot.checkRollup,
+      // The FULLY PAGINATED rollup -- see the pagination block above. Never
+      // `snapshot.checkRollup`, which is page one only.
+      checks: checkRollupNodes,
       reviews,
       review_requests: requests,
       unresolved_threads: threads.count,

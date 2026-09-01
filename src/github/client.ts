@@ -51,10 +51,13 @@
 
 import { Octokit } from "octokit";
 import {
+  CHECK_ROLLUP_PAGE_QUERY,
+  normalizeCheckRollupPageResponse,
   normalizePullRequestResponse,
   normalizeReviewThreadsResponse,
   PULL_REQUEST_QUERY,
   REVIEW_THREADS_QUERY,
+  type CheckRollupPage,
   type GhPullRequestNode,
   type PullRequestSnapshot,
   type ReviewThreadPage,
@@ -66,7 +69,7 @@ import { PROGRAM, VERSION } from "../version.js";
 // three are part of this module's published surface and are re-exported so a
 // consumer needs one import, not two.
 export { digPath } from "./graphql.js";
-export type { GhPullRequestNode, PullRequestSnapshot, ReviewThreadPage };
+export type { CheckRollupPage, GhPullRequestNode, PullRequestSnapshot, ReviewThreadPage };
 
 export interface RepoRef {
   readonly owner: string;
@@ -275,6 +278,29 @@ export class GitHubClient {
       cursor,
     });
     return normalizeReviewThreadsResponse(response);
+  }
+
+  // Page 2+ of the head commit's check-rollup `contexts` connection.
+  //
+  // pullRequestSnapshot() above returns page ONE of this same connection;
+  // `contexts(first:100)` alone silently truncated a rollup past its 100th
+  // entry, which is the false-green defect ../github/graphql.ts's
+  // CHECK_ROLLUP_PAGE_QUERY and ../github/pr_state.ts's fullCheckRollup()
+  // exist to close (zheref/nen#14's fact-check, zheref/bankai-core#927). The
+  // walk -- and what an unreadable page means for readiness -- is the
+  // caller's, exactly like reviewThreadsPage() above: no verdicts live here.
+  async checkRollupPage(
+    repo: RepoRef,
+    prNumber: number,
+    cursor: string,
+  ): Promise<CheckRollupPage> {
+    const response: unknown = await this.octokit.graphql(CHECK_ROLLUP_PAGE_QUERY, {
+      owner: repo.owner,
+      name: repo.repo,
+      pr: prNumber,
+      cursor,
+    });
+    return normalizeCheckRollupPageResponse(response);
   }
 }
 
