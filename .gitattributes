@@ -1,0 +1,22 @@
+# .gitattributes -- line endings, and one file where they are load-bearing.
+#
+# `bootstrap/nen.sh` MUST check out with LF endings, on every platform, and this
+# file is the only thing that makes that true. Git for Windows installs with
+# `core.autocrlf=true` by DEFAULT, so without a rule here a Windows clone gets
+# CRLF -- and bash then reads the shebang line's trailing `\r` as part of the
+# interpreter path and dies with `/usr/bin/env: 'bash\r': No such file or
+# directory`, or trips over `$'\r': command not found` on the first construct it
+# meets. That is a total failure of the ONE file whose entire job is to run on a
+# machine that has nothing else, and it fails in a way that looks like a corrupt
+# download rather than a checkout setting.
+#
+# It is not hypothetical for this repository in particular: the maintainer's own
+# host is Windows/Git Bash, §10 makes that a first-class supported platform, and
+# `src/pipeline.test.ts` drives this script through `bash` on it.
+#
+# `* text=auto` first, so git normalizes to LF in the object database and leaves
+# the working-tree spelling to the platform for everything else; then the
+# explicit `eol=lf` for the shell file, which overrides autocrlf rather than
+# merely asking it nicely.
+* text=auto
+*.sh text eol=lf

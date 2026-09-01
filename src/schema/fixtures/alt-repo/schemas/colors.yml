@@ -1,0 +1,41 @@
+# TEST FIXTURE -- a DIFFERENT colour vocabulary from bankai-repo/, with
+# different category names, different value names and different glyphs.
+# Not shipped; see ../../README.md.
+
+version: 3
+
+categories:
+
+  phase:
+    scope: One per effort.
+    precedence: [landed, ratified, proposed]
+    values:
+      proposed:
+        emoji: "⬜"
+        hex: "#ededed"
+        label: Proposed
+        means: Awaiting ratification.
+      ratified:
+        emoji: "🟦"
+        hex: "#1d76db"
+        label: Ratified
+        means: Scheduled for a phase.
+      landed:
+        emoji: "🟩"
+        hex: "#006b75"
+        label: Landed
+        means: On the default branch.
+
+  impact:
+    scope: How much of the migration an issue holds up.
+    values:
+      blocker:
+        emoji: "⛔"
+        hex: "#b60205"
+        label: akatsuki:impact/blocker
+        means: Blocks the migration.
+      minor:
+        emoji: "▫️"
+        hex: "#0e8a16"
+        label: akatsuki:impact/minor
+        means: Cosmetic or incidental.

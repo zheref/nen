@@ -1,0 +1,34 @@
+{
+  "name": "nen",
+  "version": "0.1.0-dev.1",
+  "private": true,
+  "type": "module",
+  "description": "Nen -- the local dev CLI for repository-driven agentic delivery. Taxonomy is read from the target repo as data; nothing here hard-codes a persona, label, check name or colour.",
+  "bin": {
+    "nen": "./src/index.ts"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "build:linux-x64": "bun build --compile --target=bun-linux-x64 --sourcemap --outfile dist/nen-linux-x64 ./src/index.ts",
+    "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 --sourcemap --outfile dist/nen-darwin-arm64 ./src/index.ts",
+    "build:windows-x64": "bun build --compile --target=bun-windows-x64 --sourcemap --outfile dist/nen-windows-x64.exe ./src/index.ts"
+  },
+  "dependencies": {
+    "octokit": "4.1.2",
+    "yaml": "2.7.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "@types/node": "22.10.5",
+    "@typescript-eslint/eslint-plugin": "8.19.1",
+    "@typescript-eslint/parser": "8.19.1",
+    "eslint": "9.18.0",
+    "typescript": "5.7.3",
+    "vitest": "2.1.8"
+  }
+}

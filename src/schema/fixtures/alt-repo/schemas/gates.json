@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "$comment": "TEST FIXTURE -- reviewer identities with DIFFERENT names, DIFFERENT logins, DIFFERENT check names and a DIFFERENT delivery convention from bankai-repo/. src/gates/predicates.test.ts runs the same structural cases against both; that pair is the proof that the predicates carry no reviewer knowledge of their own. Not shipped; see ../../README.md.",
+  "reviewers": [
+    {
+      "name": "itachi",
+      "login_pattern": { "pattern": "itachi", "ignoreCase": true },
+      "review_check_pattern": { "pattern": "^itachi / inspect$", "ignoreCase": true },
+      "delivery_holistic_pass": true
+    },
+    {
+      "name": "kisame",
+      "login_pattern": { "pattern": "kisame", "ignoreCase": true },
+      "review_check_pattern": { "pattern": "^kisame / inspect$", "ignoreCase": true },
+      "delivery_holistic_pass": true
+    },
+    {
+      "name": "scribe",
+      "login_pattern": { "pattern": "scribe-reviewer", "ignoreCase": true },
+      "bounded_policy_exempt": true
+    },
+    {
+      "name": "sentry",
+      "login_pattern": { "pattern": "sentry|watchtower", "ignoreCase": true },
+      "round_check_pattern": { "pattern": "^sentry / sweep$", "ignoreCase": true },
+      "enrolment_check_pattern": { "pattern": "^sentry / sweep$", "ignoreCase": false }
+    }
+  ],
+  "default_approvers": ["itachi", "kisame"],
+  "base_reviewers": ["itachi", "kisame", "scribe"],
+  "delivery": {
+    "author_pattern": { "pattern": "(^|/)train-bot(\\[bot\\])?$", "ignoreCase": true },
+    "head_ref_prefixes": ["train/"],
+    "labels": ["akatsuki:migration"]
+  }
+}
