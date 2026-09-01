@@ -72,11 +72,19 @@ function readIssueForVerification(runner: Runner, target: Target, number: number
   };
 }
 
-// CRLF-normalized before comparison: GitHub always stores LF, and a body read
-// from a Windows-checked-out file would otherwise mismatch on line endings
-// alone -- a false positive this verb exists to avoid, not manufacture.
+// CRLF-normalized before comparison, and ONLY CRLF-normalized: GitHub always
+// stores LF, and a body read from a Windows-checked-out file would otherwise
+// mismatch on line endings alone -- a false positive this verb exists to
+// avoid, not manufacture. Nothing else is normalized here. This function's
+// whole value IS the read-back proof -- the verb's job is to confirm GitHub
+// stored the body as submitted -- so a comparison looser than that advertised
+// single exception (trimming whitespace, collapsing blank lines, ...) would
+// hide a real mismatch (trailing spaces, a leading blank line, ...) behind a
+// confident match. If GitHub's own storage behavior is ever found to require
+// a second normalization, it must be named explicitly here AND in the
+// mismatch report below, never folded into this function silently.
 function normalize(text: string): string {
-  return text.replace(/\r\n/g, "\n").trim();
+  return text.replace(/\r\n/g, "\n");
 }
 
 export function compareReadBack(

@@ -25,13 +25,35 @@ function request(overrides: Partial<FileRequest> = {}): FileRequest {
 }
 
 describe("compareReadBack", () => {
-  it("finds no mismatch when everything matches, ignoring CRLF-vs-LF and whitespace", () => {
+  it("finds no mismatch when bodies differ only by CRLF-vs-LF line endings", () => {
     const mismatches = compareReadBack(
       request(),
       "line one\r\nline two\r\n",
-      { title: "an idea", body: "line one\nline two", labels: ["stage:idea"] },
+      { title: "an idea", body: "line one\nline two\n", labels: ["stage:idea"] },
     );
     expect(mismatches).toEqual([]);
+  });
+
+  // Review finding: normalize() used to also .trim(), which silently hid a
+  // real read-back mismatch (trailing whitespace, a leading blank line) behind
+  // the CRLF exception this verb advertises as the ONLY normalization applied.
+  // The comparison must be exactly CRLF-normalization, nothing looser.
+  it("reports a body mismatch on trailing whitespace GitHub did not add, rather than trimming it away", () => {
+    const mismatches = compareReadBack(
+      request(),
+      "line one\nline two",
+      { title: "an idea", body: "line one\nline two ", labels: ["stage:idea"] },
+    );
+    expect(mismatches.some((m): boolean => m.field === "body")).toBe(true);
+  });
+
+  it("reports a body mismatch on a leading blank line, rather than trimming it away", () => {
+    const mismatches = compareReadBack(
+      request(),
+      "line one",
+      { title: "an idea", body: "\nline one", labels: ["stage:idea"] },
+    );
+    expect(mismatches.some((m): boolean => m.field === "body")).toBe(true);
   });
 
   it("reports a title mismatch", () => {
