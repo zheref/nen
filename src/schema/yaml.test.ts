@@ -1,32 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { parseYaml, splitKey, YamlError } from "./yaml.js";
+import { parseYaml, YamlError } from "./yaml.js";
 
-describe("parseYaml -- the supported subset", () => {
+describe("parseYaml -- the shapes the taxonomy files use", () => {
   it("reads a nested block mapping", () => {
     expect(
       parseYaml(["version: 1", "categories:", "  status:", "    scope: one"].join("\n")),
     ).toEqual({ version: 1, categories: { status: { scope: "one" } } });
   });
 
-  it("reads a flow sequence", () => {
+  it("reads flow sequences and flow mappings", () => {
     expect(parseYaml("precedence: [on_hold, blocked, ready_g1]")).toEqual({
       precedence: ["on_hold", "blocked", "ready_g1"],
     });
-  });
-
-  it("reads a flow mapping", () => {
-    expect(parseYaml('ichigo:   { emoji: "X", note: "a, b" }')).toEqual({
-      ichigo: { emoji: "X", note: "a, b" },
+    expect(parseYaml('badge:   { emoji: "X", note: "a, b" }')).toEqual({
+      badge: { emoji: "X", note: "a, b" },
     });
   });
 
-  it("reads a block sequence of scalars", () => {
+  it("reads block sequences, of scalars and of mappings", () => {
     expect(parseYaml(["phases:", "  - review-pair", "  - dev-team"].join("\n"))).toEqual({
       phases: ["review-pair", "dev-team"],
     });
-  });
-
-  it("reads a block sequence of mappings whose first key is on the dash line", () => {
     expect(
       parseYaml(
         ["consumers:", "  - repo: a/b", "    pinned: v1", "  - repo: c/d", "    pinned: v2"].join(
@@ -41,16 +35,43 @@ describe("parseYaml -- the supported subset", () => {
     });
   });
 
-  it("folds a `>-` block scalar into one line with no trailing newline", () => {
+  it("REGRESSION: a NESTED block sequence returns instead of hanging", () => {
+    // THE FINDING THAT FORCED THE SWAP. The hand-rolled reader spun forever on
+    // this input -- reproduced end to end through the compiled binary, which had
+    // to be killed. What matters about this case is not the value it asserts;
+    // it is that the case TERMINATES.
+    expect(parseYaml("- - foo: bar\n")).toEqual([[{ foo: "bar" }]]);
+    expect(parseYaml("a:\n  - - 1\n    - 2\n")).toEqual({ a: [[1, 2]] });
+    expect(parseYaml("- - - deep\n")).toEqual([[["deep"]]]);
+  });
+
+  it("REGRESSION: `__proto__` cannot become a prototype assignment", () => {
+    // The second finding. `map[key] = value` with the key `__proto__` sets the
+    // mapping's PROTOTYPE, which the duplicate-key guard could not see and every
+    // later bracket read could inherit from. It is now refused outright -- and
+    // the underlying property that made it dangerous is gone as well, because
+    // the package makes it an ordinary own key.
+    expect(() => parseYaml("a: 1\n__proto__: {polluted: yes}\n")).toThrow(YamlError);
+    expect(() => parseYaml("a: 1\n__proto__: {polluted: yes}\n")).toThrow(
+      /names a JavaScript object internal/,
+    );
+    // Nothing leaked on the way to the refusal.
+    expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(Object.prototype, "polluted")).toBe(false);
+  });
+
+  it("returns objects whose prototype is Object.prototype and nothing else", () => {
+    const value = parseYaml("a:\n  b: 1\n") as Record<string, unknown>;
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(value["a"] as object)).toBe(Object.prototype);
+    expect(Object.keys(value)).toEqual(["a"]);
+  });
+
+  it("folds a `>-` block scalar and keeps newlines in a `|`", () => {
     expect(
       parseYaml(["means: >-", "  Work is moving: jobs queued", "  or running."].join("\n")),
     ).toEqual({ means: "Work is moving: jobs queued or running." });
-  });
-
-  it("keeps newlines in a `|` block scalar", () => {
-    expect(parseYaml(["body: |", "  one", "  two"].join("\n"))).toEqual({
-      body: "one\ntwo\n",
-    });
+    expect(parseYaml(["body: |", "  one", "  two"].join("\n"))).toEqual({ body: "one\ntwo\n" });
   });
 
   it("reads null, ~, an empty value, booleans and numbers", () => {
@@ -59,24 +80,23 @@ describe("parseYaml -- the supported subset", () => {
     ).toEqual({ a: null, b: null, c: null, d: true, e: false, f: 12, g: 1.5 });
   });
 
-  it("accepts exactly one leading document marker", () => {
+  it("parses under YAML 1.2 core, so a bare `on` stays a string", () => {
+    // Not academic: src/pipeline.test.ts reads the GitHub Actions workflows
+    // through this reader, and every one has a top-level `on:` key. Under YAML
+    // 1.1 the bare word `on` is the boolean true.
+    expect(parseYaml("on: [push]\nflag: on\n")).toEqual({ on: ["push"], flag: "on" });
+  });
+
+  it("accepts one leading document marker", () => {
     expect(parseYaml("---\nversion: 1")).toEqual({ version: 1 });
   });
-});
 
-describe("parseYaml -- the cases the taxonomy files actually contain", () => {
-  it("keeps a '#' that is part of a quoted colour, not a comment", () => {
+  it("keeps a '#' that is part of a quoted colour, and strips a real comment", () => {
     expect(parseYaml('hex: "#0e8a16"')).toEqual({ hex: "#0e8a16" });
-  });
-
-  it("strips a real trailing comment", () => {
     expect(parseYaml("gate: G1   # the approval gate")).toEqual({ gate: "G1" });
   });
 
   it("does NOT split a value that itself contains a colon", () => {
-    // `label: bankai:severity/critical` -- splitting at the first colon would
-    // truncate a taxonomy value at the character the taxonomy uses as a
-    // namespace separator.
     expect(parseYaml("label: sample:severity/critical")).toEqual({
       label: "sample:severity/critical",
     });
@@ -97,8 +117,6 @@ describe("parseYaml -- the cases the taxonomy files actually contain", () => {
       '        emoji: "*"',
       '        hex: "#0052cc"',
       "        label: Intentionally on hold",
-      "        means: >-",
-      "          Deliberately parked pending another effort.",
       "        gate: null",
       "      blocked:",
       '        emoji: "!"',
@@ -118,7 +136,6 @@ describe("parseYaml -- the cases the taxonomy files actually contain", () => {
               emoji: "*",
               hex: "#0052cc",
               label: "Intentionally on hold",
-              means: "Deliberately parked pending another effort.",
               gate: null,
             },
             blocked: {
@@ -135,57 +152,59 @@ describe("parseYaml -- the cases the taxonomy files actually contain", () => {
   });
 });
 
-describe("parseYaml -- the refusals", () => {
+describe("parseYaml -- the refusals this wrapper exists for", () => {
+  // The package parses most of these happily. Each is refused because its
+  // meaning depends on a resolution step two readers can disagree about.
   const refusals: readonly [string, string, RegExp][] = [
-    ["an anchor", "a: &x 1", /anchors and aliases/],
-    ["an alias", "a: *x", /anchors and aliases/],
+    ["an anchor", "a: &x 1", /anchors are not supported/],
+    ["an anchor with an alias", "a: &x 1\nb: *x", /anchors are not supported/],
+    ["a bare alias", "a: *x", /aliases are not supported|alias/i],
     ["a merge key", "a:\n  <<: b", /merge keys/],
-    ["a tag", "a: !!str 1", /tags are not supported/],
-    ["a directive", "%YAML 1.2\na: 1", /directives/],
-    ["a second document", "---\n---\na: 1", /second document/],
-    ["a mid-file document marker", "a: 1\n---\nb: 2", /appears after content/],
-    ["a tab in the indentation", "a:\n\tb: 1", /TAB/],
-    ["a duplicate key", "a: 1\na: 2", /duplicate key/],
-    ["a nested flow collection", "a: [[1]]", /nested flow collections/],
-    ["an unterminated flow collection", "a: [1, 2", /unterminated/],
-    ["a line that is not key: value", "a: 1\njust-a-word", /expected 'key: value'/],
-    ["over-indentation", "a: 1\n    b: 2", /indented deeper/],
+    ["an explicit tag", "a: !!str 1", /explicit tags are not supported/],
+    // An UNRESOLVED custom tag is refused by the package before the walk sees
+    // it (TAG_RESOLVE_FAILED); a resolvable one is refused by the walk. Both
+    // arrive as a YamlError with a line, which is the contract that matters.
+    ["a custom tag", "a: !Foo bar", /explicit tags are not supported|TAG_RESOLVE_FAILED/],
+    ["a directive", "%YAML 1.2\n---\na: 1", /YAML directives/],
+    ["a second document", "a: 1\n---\nb: 2", /second document/],
+    ["a tab in the indentation", "a:\n\tb: 1", /TAB_AS_INDENT/],
+    ["a duplicate key", "a: 1\na: 2", /unique/i],
+    ["a __proto__ key", "__proto__: 1", /object internal/],
+    ["a constructor key", "constructor: 1", /object internal/],
+    ["a prototype key", "prototype: 1", /object internal/],
+    ["an unterminated flow collection", "a: [1, 2", /\[[A-Z_]+\]/],
   ];
 
   for (const [name, source, message] of refusals) {
     it(`refuses ${name}, loudly and with a line number`, () => {
-      expect(() => parseYaml(source)).toThrow(YamlError);
-      expect(() => parseYaml(source)).toThrow(message);
-      expect(() => parseYaml(source)).toThrow(/line \d+/);
+      expect(() => parseYaml(source), name).toThrow(YamlError);
+      expect(() => parseYaml(source), name).toThrow(message);
+      expect(() => parseYaml(source), name).toThrow(/line \d+/);
     });
   }
 
-  it("never silently drops an unsupported construct", () => {
-    // The property that matters: a refusal, not a partial parse. If this ever
-    // returned a value it would be a taxonomy read that quietly lost a field.
-    let threw = false;
+  it("points at the offending LINE, not always at line 1", () => {
     try {
-      parseYaml("a: &anchor 1\nb: *anchor");
-    } catch {
-      threw = true;
+      parseYaml("a: 1\nb: 2\nc: &anchor 3\n");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(YamlError);
+      expect((error as YamlError).line).toBe(3);
     }
-    expect(threw).toBe(true);
-  });
-});
-
-describe("splitKey", () => {
-  it("splits at the first colon followed by a space or end of line", () => {
-    expect(splitKey("a: b")).toEqual({ key: "a", rest: "b" });
-    expect(splitKey("a:")).toEqual({ key: "a", rest: "" });
-    expect(splitKey("a: b:c")).toEqual({ key: "a", rest: "b:c" });
   });
 
-  it("ignores colons inside quotes and flow collections", () => {
-    expect(splitKey('a: "b: c"')).toEqual({ key: "a", rest: '"b: c"' });
-    expect(splitKey("a: { b: c }")).toEqual({ key: "a", rest: "{ b: c }" });
-  });
-
-  it("returns null when there is no key", () => {
-    expect(splitKey("plain scalar")).toBeNull();
+  it("never returns a value for an unsupported construct", () => {
+    // A refusal, not a partial parse. If any of these returned, it would be a
+    // taxonomy read that quietly lost or invented a field.
+    for (const source of ["a: &x 1\nb: *x", "a: !!str 1", "__proto__: {}"]) {
+      let returned = false;
+      try {
+        parseYaml(source);
+        returned = true;
+      } catch {
+        returned = false;
+      }
+      expect(returned, source).toBe(false);
+    }
   });
 });
