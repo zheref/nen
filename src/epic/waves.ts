@@ -1,37 +1,68 @@
-// src/epic/waves.ts -- the wave computation, ported from the coordinator that
-// already computed it.
+// ============================================================================
+// PORTED FROM bankai-core `scripts/epic_coordinator.py` (zheref/nen#4,
+// Akatsuki migration P1).
 //
-// PORTED, NOT REDESIGNED. `scripts/epic_coordinator.py` has been the single
-// releaser for long enough that its edge cases are scar tissue, and every one of
-// them is preserved here deliberately:
-//
-//   * A blocker clears ONLY if it is a known child of this parent AND checked.
-//     An id that is not in the checklist -- a typo, an external reference -- is
-//     treated as NOT satisfied, so an unknown id can never open the gate.
-//   * The dependency edge is declared in EITHER direction: B's line saying
-//     `blocked by #A`, or A's line saying `blocks #B`. The template documents
-//     ordering the second way, so honouring only the first silently ignores
-//     half the declarations.
-//   * In-flight children count against the cap ONLY while they are still
-//     unchecked. A child whose delivery already merged can keep its in-review
-//     label through the human's merge window; counting it would stick the cap at
-//     zero forever once `cap` children had merged.
-//   * The progress block is rewritten idempotently -- replaced where it exists,
-//     PREPENDED where it does not -- so a fresh parent gets one and a rewritten
-//     one does not accumulate.
+// The header below this block is the ORIGINAL's own module docstring, carried
+// VERBATIM (the BC-IS-#737 discipline: every WHY in it names a reason a branch
+// exists, and a port that drops it is a port whose next maintainer
+// "simplifies" it back into the bug). Only file/flag references were adjusted
+// where TypeScript's shape differs from the CLI wrapper's (the Python's own
+// `--out`/`--citation` argparse flags live one layer up, in ./verb.ts); the
+// algorithm and every edge case below are the original's, unchanged.
 //
 // TWO DELIBERATE DEVIATIONS FROM THE ORIGINAL, both because the original had a
-// default this repository may not have:
+// default this repository may not have -- named here rather than silently
+// applied:
 //
-//   1. THE CITATION IS REQUIRED. The Python defaulted the footer's rule id and
-//      took an override for the other caller. A default here would be a clause
-//      id from one system hard-coded into a binary that serves several (§3), so
-//      the caller names it.
-//   2. ROUNDING IS BANKER'S, EXPLICITLY. Python's `round()` rounds halves to
-//      even; JavaScript's `Math.round` rounds them up. Left alone, a parent at
-//      exactly 50% of an even child count would render a different bar than the
-//      coordinator rendered yesterday, and the diff would look like a content
-//      change rather than a port artefact.
+//   1. THE CITATION IS REQUIRED, NEVER DEFAULTED. The Python defaulted
+//      `--citation` to a specific clause id and took an override for its one
+//      other caller. A default here would be a clause id from one system
+//      hard-coded into a binary that serves several (§3), so the caller names
+//      it every time.
+//   2. ROUNDING IS BANKER'S, EXPLICITLY (../epic/waves.ts's roundHalfEven).
+//      Python's `round()` rounds halves to even; JavaScript's `Math.round`
+//      rounds them up. Left alone, a parent at exactly 50% of an even child
+//      count would render a different bar than the coordinator rendered
+//      yesterday, and the diff would look like a content change rather than a
+//      port artefact.
+// ============================================================================
+// epic_coordinator — CON-23's deterministic epic-progress + wave-release core.
+//
+// Also reused, unmodified in shape, by `.github/workflows/chore-coordinator.yml`
+// for `CON-36`'s wave-release (bankai-core#807 leg 2): a chore issue's leg
+// enumeration is the SAME checklist grammar an epic's child checklist already
+// is (a parent issue whose body lists children by `- [ ] #<num>`, with optional
+// `blocked by`/`blocks` edges), so this module is the one shared engine rather
+// than a second parser. The `--citation` CLI flag (default `CON-23`) exists
+// solely so the progress-bar footer cites the RIGHT rule for whichever issue
+// shape it is rewriting — chore-coordinator.yml passes `CON-36`.
+//
+// Pure logic (no network) so it is unit-testable; the reusable workflow
+// `.github/workflows/epic-coordinator.yml` wires it to `gh`. Given an epic body,
+// the just-completed child, and the currently in-flight set, it:
+//
+//   1. flips the completed child's `- [ ]` -> `- [x]` (idempotent),
+//   2. recomputes the `## Progress` bar + fraction, and
+//   3. computes the next wave: unchecked children whose declared blockers are ALL
+//      satisfied, not already in-flight, up to the in-flight CAP (default 3).
+//
+// CON-23: the canonical "child done" event is that child's completion PR merging
+// into the epic's `integration/*` branch — the workflow passes that child here.
+// The coordinator is the SINGLE releaser (Roy MODE B defers wave-release to it),
+// so there is never a double wave.
+//
+// Dependency model — a child B is blocked by A when EITHER edge is declared:
+//   * B's line says `blocked by #A`, OR
+//   * A's line says `blocks #B`  (the inverse edge — the epic template documents
+//     ordering this way, so both directions must be honored).
+// A blocker is "satisfied" only if it is a KNOWN child of this epic AND checked;
+// a blocker id absent from the checklist (typo / external ref) is treated as NOT
+// satisfied, so an unknown id can never clear the gate.
+//
+// In-flight (for the cap) = children currently `bankai:stage/building` OR
+// `bankai:stage/in-review` — both still occupy Roy's <=3 slots; counting only
+// `building` would over-release once builders move children to review.
+// ============================================================================
 
 export const BAR_WIDTH = 12;
 export const PROGRESS_HEADER = "## Progress";

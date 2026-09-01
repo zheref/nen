@@ -1,23 +1,36 @@
-// src/labels/sync.ts -- ported from scripts/sync-labels.sh (create-or-update,
-// per-label isolation).
+// ============================================================================
+// PORTED FROM bankai-core `scripts/sync-labels.sh` (zheref/nen#4, Akatsuki
+// migration P1).
 //
-// PORT SOURCE: scripts/sync-labels.sh, carried behaviourally intact --
+// The comment blocks below this one are the ORIGINAL script's own, carried
+// VERBATIM (the BC-IS-#737 discipline). `parse_labels` is NOT reproduced as a
+// function -- its job (validate the taxonomy file, emit name/color/description
+// triples) is exactly what ../schema/labels.ts's loadLabelTaxonomy() already
+// does, through a real validating parser rather than jq over raw JSON, and
+// re-deriving the same validation a second way here is how the two would
+// quietly drift. `sync_label` and the per-entry loop are ported behaviourally
+// intact: create() first, edit() as the fallback -- gh's own
+// fails-on-duplicate idiom for create IS the create-or-update logic, not a
+// special case of it -- and a label's failure is isolated to that label,
+// never aborting the run.
+// ============================================================================
+// sync-labels.sh — install/update the Bankai label taxonomy on a GitHub repo.
 //
-//   create() first, edit() on failure. `gh label create` fails when the label
-//   already exists, so the shell's own idiom -- try create, fall back to edit
-//   -- IS the create-or-update logic, not a special case of it.
+// Usage:
+//   ./scripts/sync-labels.sh --repo owner/name [--file schemas/labels.json] [--dry-run]
 //
-//   ONE BAD LABEL MUST NOT ABORT THE RUN (CON-38; bankai-core#333: one bad
-//   entry previously killed the whole sync). A description over GitHub's
-//   100-char limit -- caught earlier here, at schema load, by
-//   ../schema/labels.ts's own guard, so a taxonomy that violates it never
-//   reaches this module at all -- or any other per-label GitHub rejection is
-//   isolated to that label; every other label still lands.
+// Requirements: jq; gh (authenticated) unless --dry-run.
+// Idempotent: existing labels are updated (color/description), missing ones created.
 //
-// THE TAXONOMY IS READ THROUGH ../schema/labels.ts, not re-parsed here. The
-// original's `parse_labels` was jq over the raw file; this repository already
-// has a validating loader for exactly that file, and re-deriving the same
-// validation a second way is how the two quietly drift.
+// --- sync_label REPO NAME COLOR DESC ---------------------------------------
+// Creates the label, or updates it if it already exists (gh exits non-zero on dupes).
+// Returns 1 (never exits — see the `set -e` note on its caller) when BOTH the
+// create and the update attempt fail, e.g. a description GitHub rejects.
+//
+// A label that fails to sync (e.g. a description over GitHub's 100-char
+// limit) must not abort the run — every OTHER good label still lands
+// (CON-38; bankai-core#333: one bad entry previously killed the whole sync).
+// ============================================================================
 
 import { lines, type Runner } from "../exec/seam.js";
 import type { Target } from "../github/target.js";

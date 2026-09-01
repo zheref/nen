@@ -230,34 +230,61 @@ export function runSearch(
   });
 }
 
+// ============================================================================
 // --- the absorbed dedupe -----------------------------------------------------
 //
-// `scripts/dedupe_handbook_questions.sh` existed and was never invoked. Its
-// logic is not lost: it is the exact-title half of this search. The
-// normalization and the canonical-pick rule are carried verbatim, including the
-// two properties that make it converge without a lock -- the canonical issue is
-// the LOWEST number among current matches, and only numbers STRICTLY LESS than
-// the new one can be canonical.
+// PORTED FROM bankai-core `scripts/dedupe_handbook_questions.sh` (zheref/nen#4,
+// Akatsuki migration P1). The script existed and was never invoked by anything
+// in that repository; its logic is not lost -- it is exactly the exact-title
+// half of this search, and is absorbed here rather than shipped as a separate
+// verb. The comment blocks immediately below are the ORIGINAL's own, carried
+// VERBATIM (BC-IS-#737): its module header, and each function's own comment
+// ported onto its TypeScript equivalent (normalize_title -> normalizeTitle,
+// find_canonical -> findCanonical). Only the case fold's IMPLEMENTATION
+// deviates -- see asciiLower() below -- to match tr's own C-locale behaviour
+// exactly rather than approximate it with JS's Unicode-aware toLowerCase().
+// ============================================================================
+// dedupe_handbook_questions.sh — CON-11's idempotent-filing guard for
+// `bankai:handbook-question` issues (bankai-core#196).
+//
+// CON-11 already mandates search-before-file, but two agent runs finding the
+// SAME handbook gap seconds apart both pass that search (neither sees the
+// other's not-yet-created issue) and both file — a classic TOCTOU race. This is
+// the deterministic, POST-HOC close of that race: whenever a new
+// `bankai:handbook-question` issue is opened, compare its (normalized) title
+// against every OTHER currently-open issue carrying that label. If an OLDER one
+// already covers the same gap, close this new one as a duplicate and comment on
+// the older (canonical) issue — collapsing concurrent filings to one open issue
+// + a comment, exactly as CON-11 requires.
+//
+// This converges even without a lock: "canonical" is always the LOWEST issue
+// number among current matches — a stable, order-independent computation over
+// whatever the live open set is at run time.
+// ============================================================================
 
-// ASCII-only lowercase, matching `tr '[:upper:]' '[:lower:]'` in the C locale
-// -- the port source's own case fold -- rather than JS's `String.toLowerCase()`,
-// which is Unicode-aware. The difference is load-bearing, not cosmetic: `tr`'s
-// C-locale mapping touches ONLY A-Z, so a title carrying U+0130 (LATIN CAPITAL
-// LETTER I WITH DOT ABOVE, e.g. "İstanbul") reaches the punctuation-stripping
-// pass below untouched and is stripped as punctuation, while
-// `"İ".toLowerCase()` expands it to "i" plus a COMBINING DOT ABOVE (U+0307) --
-// a different codepoint sequence that keys differently and would silently miss
-// a duplicate the original always caught (proved by the imported corpus slice,
-// tests/fixtures/dualrun-slice/dedupe_handbook_questions.sh/non-ascii-uppercase-survives-the-lowercaser.json).
+// --- normalize_title TITLE -----------------------------------------------------
+// Lowercases, collapses everything that isn't a-z/0-9 into single spaces, and
+// trims — a deliberately simple, deterministic key. This is NOT semantic
+// dedup (two differently-worded reports of the same underlying gap won't
+// match) — it targets the race this guards against, where two runs of the SAME
+// agent finding the SAME gap in the SAME session tend to title it identically
+// or near-identically.
+//
+// IMPLEMENTATION DEVIATION FROM THE ORIGINAL, reported rather than silent: the
+// shell's `tr '[:upper:]' '[:lower:]'` is ASCII-only in the C locale, touching
+// ONLY A-Z; JavaScript's `String.toLowerCase()` is Unicode-aware. A title
+// carrying U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE, e.g. "İstanbul")
+// reaches the punctuation-stripping pass untouched under `tr` and is stripped
+// as punctuation, while `.toLowerCase()` expands it to "i" plus a COMBINING
+// DOT ABOVE (U+0307) -- a different codepoint sequence that would silently
+// miss a duplicate the original always caught. asciiLower() below replicates
+// `tr`'s exact C-locale mapping instead, found necessary and verified by the
+// imported corpus slice (tests/fixtures/dualrun-slice/dedupe/
+// non-ascii-uppercase-survives-the-lowercaser.json).
 function asciiLower(text: string): string {
   return text.replace(/[A-Z]/g, (letter): string => letter.toLowerCase());
 }
 
-// Collapse every non-alphanumeric run to a single space, trim.
-//
-// Deliberately NOT semantic. Two differently-worded reports of one gap will not
-// match, and that is the documented bound: this targets the race where two runs
-// of the same agent find the same gap seconds apart and title it identically.
 export function normalizeTitle(title: string): string {
   return asciiLower(title)
     .replace(/[^a-z0-9]+/g, " ")
@@ -269,13 +296,19 @@ export interface Candidate {
   readonly title: string;
 }
 
-// The canonical issue a new filing duplicates, or `null` when the new one is
-// itself canonical.
+// --- find_canonical NEW_NUMBER NEW_TITLE ---------------------------------------
+// Reads TSV `number<TAB>title` on stdin (every currently-open
+// bankai:handbook-question issue, INCLUDING the new one). Echoes the lowest
+// issue number strictly less than NEW_NUMBER whose normalized title matches
+// NEW_TITLE's — the canonical issue this NEW_NUMBER duplicates — or nothing if
+// NEW_NUMBER is itself canonical (no older match).
 //
-// ORDER-INDEPENDENT BY CONSTRUCTION: it is a minimum over whatever the live
-// open set is, so two concurrent runs computing it from different snapshots
-// still agree on the answer. A blank normalized title matches nothing at all --
-// a title of pure punctuation must never collapse every filing into one.
+// PORT NOTE: the shell reads its candidate set off stdin as TSV; this takes it
+// as an already-parsed `Candidate[]` instead (../issue/search.ts's own
+// `runSearch` supplies it from gh's typed --json output), so there is no TSV
+// field-splitting step to port at all -- see tests/fixtures/dualrun-slice/
+// MANIFEST.json for the fixtures that pin exactly that shell-specific parsing
+// and are excluded here for having no nen equivalent to replay against.
 export function findCanonical(
   newNumber: number,
   newTitle: string,

@@ -2,45 +2,64 @@
 // PORTED FROM bankai-core `scripts/sync_canon.py` (zheref/nen#4, Akatsuki
 // migration P1).
 //
-// The header below this block is drawn from the ORIGINAL's own docstring,
-// carried behaviourally intact. It is not decoration: every WHY in it names
-// the reason a branch exists, and a port that arrives without it is a port
-// whose next maintainer "simplifies" it back into the bug (the BC-IS-#737
-// discipline). Only the LANGUAGE changed -- Python's os/re calls become
-// node:fs and RegExp, argparse becomes ./verb.ts's CLI wiring -- and the
-// prefix in the generated-file header and the not-mirrored filename set,
-// which are the target repository's own conventions and are now caller data
-// (see below) rather than literals baked into this module.
+// The comment block below this one is the ORIGINAL's own module docstring,
+// carried VERBATIM (the BC-IS-#737 discipline: every WHY in it names the
+// reason a branch exists, and a port that arrives without it is a port whose
+// next maintainer "simplifies" it back into the bug). Only the LANGUAGE
+// changed -- Python's os/re calls become node:fs and RegExp, argparse becomes
+// ./verb.ts's CLI wiring, `dict[str, str]` becomes `Map`/`Record` -- and the
+// generated-file header pattern and the not-mirrored filename set, which the
+// original hard-codes (`handbooks/stacks/<scenario>/rules/...` in its header
+// text, `{'README.md', 'placeholders.md'}` as the never-mirrored set), are now
+// CALLER DATA (HeaderTemplate, notMirrored below): both are the target
+// repository's own conventions, and hardcoding either would be exactly the §3
+// violation this migration exists to remove.
 // ============================================================================
-// src/canon/mirror.ts -- canon-mirror generation + drift check, CON-13's own
-// mechanism: a target-repo's `.claude/rules/`-shaped mirror of a stack's
-// canonical rule files, token-substituted and traceable to the ref it was
-// generated from.
+// sync_canon — CON-13's canon-mirror generator + drift-check core (Phase 0b, #34).
 //
-// Pure logic (no network, no git) -- given a stack rules directory, a
-// canon-values file (a `{{TOKEN}}` -> literal-value binding), it substitutes
-// every token in each canonical rule file and prepends a generated-file
-// header carrying the ref the mirror was generated from.
+// Pure logic (no network, no git) so it is unit-testable; the reusable workflow
+// `.github/workflows/sync-canon.yml` checks out bankai-core@<ref> + the caller's own
+// repo and wires this to `gh`/git for the actual PR open. Given:
 //
-// `generate` writes only files whose content actually changed, and deletes an
-// ORPHANED mirror file -- one in the canon-managed filename universe with no
-// corresponding canon source any more (removed/renamed upstream) -- so the
-// mirror stays an exact, self-healing image of canon rather than one that
-// only ever grows.
+//   - a bankai-core stack-rules dir (`handbooks/stacks/<scenario>/rules/`, the canon
+//     the product's `.claude/rules/` mirrors),
+//   - a product's canon-values file (a `{{TOKEN}}` -> literal-value binding,
+//     `.claude/canon-values.yml` in the product repo — see `parse_canon_values`),
 //
-// `check` regenerates from the same inputs and diffs against the committed
-// mirror without writing anything, classifying every file as MISSING, EXTRA,
-// STALE (header ref lags the pinned ref), HAND_EDITED (content differs from a
-// fresh generation) or OK. Drift is non-zero exit -- MISSING/EXTRA/STALE/
-// HAND_EDITED is CI's fail signal.
+// it substitutes every `{{TOKEN}}` in each canonical rule file and prepends a
+// generated-file header carrying the bankai-core ref the mirror was generated from.
+// `README.md` and `placeholders.md` are the stack directory's OWN meta/index files,
+// never mirrored (a product's `.claude/rules/` holds only the numbered rule files).
 //
-// THE HEADER PATTERN AND THE NOT-MIRRORED FILENAME SET ARE CALLER DATA. The
-// original hard-codes `handbooks/stacks/<scenario>/rules/` into its header
-// text and `{'README.md', 'placeholders.md'}` as the meta files never
-// mirrored -- both are specific to the system this ports from, and hardcoding
-// them here would be exactly the §3 violation the whole migration exists to
-// remove. The caller supplies the header TEMPLATE (with `{ref}`, `{scenario}`,
-// `{file}` placeholders) and the not-mirrored set.
+// Two subcommands:
+//
+//   generate --rules-dir DIR --canon-values FILE --out-dir DIR --ref REF [--scenario S]
+//       Writes the generated mirror into --out-dir (creating it if needed), only
+//       touching files whose content actually changed. Prints JSON:
+//         {"written": ["01-folder-layout.md", ...], "unchanged": [...]}
+//
+//   check --rules-dir DIR --canon-values FILE --mirror-dir DIR --ref REF [--scenario S]
+//       Regenerates from the SAME inputs and diffs against the committed mirror in
+//       --mirror-dir, without writing anything. A mirror file is:
+//         - MISSING    — canon has no corresponding file in --mirror-dir yet.
+//         - EXTRA      — --mirror-dir has a file with no corresponding canon source
+//                        (an orphan — usually a rule that was removed upstream).
+//         - STALE      — the file's own generated-header ref != --ref (it was never
+//                        regenerated after the pin moved).
+//         - HAND_EDITED — header ref matches --ref, but the content differs from a
+//                        fresh generation (CON-13: "never hand-edited").
+//         - OK         — byte-identical to a fresh generation at --ref.
+//       Prints a JSON report and exits non-zero iff MISSING/EXTRA/STALE/HAND_EDITED
+//       is non-empty — that's the CI drift-check's pass/fail signal.
+//
+// write_mirror's own docstring: "Writes `generated` into `out_dir`, then deletes
+// any orphan mirror file — one that falls in the canon-managed filename universe
+// (`.md`, not NOT_MIRRORED — the same filter `canon_filenames()` applies to the
+// rules dir) but has no corresponding entry in `generated` (its canon source was
+// removed/renamed upstream). Never touches a file outside that universe, so
+// unrelated files a repo may keep in `out_dir` are left alone (CON-13: the
+// mirror must be an exact, self-healing image of canon)."
+// ============================================================================
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
