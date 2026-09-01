@@ -64,6 +64,7 @@ import { effortVerb } from "./effort/verb.js";
 import { epicVerb } from "./epic/verb.js";
 import { ideaVerb } from "./idea/verb.js";
 import { issueVerb } from "./issue/verb.js";
+import { labelsVerb } from "./labels/verb.js";
 import { loopVerb } from "./loop/verb.js";
 import { parseVerb } from "./parse/verb.js";
 import { prVerb } from "./pr/verb.js";
@@ -84,6 +85,7 @@ export const VERBS: readonly Verb[] = [
   epicVerb,
   ideaVerb,
   issueVerb,
+  labelsVerb,
   loopVerb,
   parseVerb,
   prVerb,
