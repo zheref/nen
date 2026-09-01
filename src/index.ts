@@ -9,25 +9,40 @@
 // whose output contract is tested by nobody, and the `--json` shape is the half
 // that other programs depend on.
 //
-// P1 SHIPS THE SUPPLY, DEV AND READINESS VERBS. `nen --version` and
-// `nen bootstrap` are what zheref/hatsu#1's D10 minimum-version contract needs;
-// `nen dev test` is D16's one-command harness; `nen schema check` exists
-// because "taxonomy behavior demonstrably follows the target repo's schema
-// files" has to be demonstrable from the command line and not only from a
-// test; `nen pr ready` is zheref/nen#2 -- CON-32's readiness verdict for a
-// human, a skill, and CI, from one authority. The backlog and wake verbs are
-// #3/#4 and are deliberately absent -- an empty verb that printed "not
+// THE SUPPLY AND DEV VERBS LIVE HERE; EVERY OTHER FAMILY LIVES IN ./cli/registry.ts.
+// `nen --version` and `nen bootstrap` are what zheref/hatsu#1's D10
+// minimum-version contract needs; `nen dev test` is D16's one-command harness;
+// `nen schema check` exists because "taxonomy behavior demonstrably follows the
+// target repo's schema files" has to be demonstrable from the command line and
+// not only from a test. Those four stay written out below because they predate
+// the registry and their exit codes are pinned by name in tests; everything
+// added since is a Command in the registry, which is what keeps two sessions
+// adding verbs in parallel from colliding on this file. `nen pr ready` (CON-32's
+// readiness verdict, zheref/nen#2) is one such family: it lives in
+// ./pr/command.ts alongside `nen pr staleness` / `nen pr body-check`, as one
+// more subcommand of the SAME registered "pr" family rather than a second
+// competing entry point.
+//
+// AN EMPTY VERB IS STILL WORSE THAN A MISSING ONE. A family that printed "not
 // implemented" would be a surface other repositories could start depending on
-// before it means anything.
+// before it means anything, so a family appears in the registry only when it
+// does something.
+//
+// TWO-STAGE PARSE. The top-level parse understands the GLOBAL flags and stops at
+// the first positional; the family re-parses the remainder against its own spec
+// plus the globals. Without the stop, this file would have to know every flag
+// every family accepts merely in order not to reject them -- and a union of all
+// of them is the same as not being strict at all, because one family's typo
+// would parse as another family's flag (./cli/args.ts).
 //
 // `run()` IS ASYNC because `nen pr ready` reads GitHub over the network
-// (../github/pr_state.ts, on top of octokit) and there is no synchronous way
-// to do that from Node. Every other verb here is still synchronous under the
-// hood (spawnSync, readFileSync) and returns its number the same way it always
-// did; awaiting a already-resolved value costs nothing. This is a signature
-// change from the P1 scaffold, made once, here, so the two sibling verb
-// families (#3, #4) -- which are GitHub-backed the same way -- inherit an
-// already-async entry point instead of each having to make the same change.
+// (./github/pr_state.ts, on top of octokit) and there is no synchronous way to
+// do that from Node. Every other verb here and in the registry is still
+// synchronous under the hood (spawnSync, readFileSync) and returns its number
+// the same way it always did; awaiting an already-resolved value costs nothing.
+// `runFamily`, below, awaits `family.run(...)` for exactly the same reason: the
+// "pr" family is a Command like any other, and the dispatch layer cannot know
+// in advance which of its subcommands needed the network.
 //
 // EXIT CODES. 0 success, 1 a verb's own failure, 2 a usage error, and whatever
 // the bootstrap script returned for `nen bootstrap` (its codes are a published
@@ -36,11 +51,13 @@
 // not work" want different reactions from a caller.
 
 import { parseArgs, UsageError } from "./cli/args.js";
+import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
+import { COMMANDS, findCommand } from "./cli/registry.js";
 import { runDevTest } from "./dev/test.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
+import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
-import { prReady, PR_READY_FLAGS, PR_READY_USAGE } from "./verbs/pr_ready.js";
 import { PROGRAM, VERSION } from "./version.js";
 
 export interface Io {
@@ -66,7 +83,9 @@ commands:
   dev test [-- <args>]      Run this repository's own harness (bun + vitest).
                             A checkout verb: a compiled binary has no harness.
 
-${PR_READY_USAGE}
+${COMMANDS.map((command): string => `  ${command.name.padEnd(24)}${command.summary}`).join("\n")}
+
+Run '${PROGRAM} <command> --help' for a family's own verbs and flags.
 
 global options:
   --repo <path>             The TARGET repository's working-tree root. A PATH,
@@ -77,19 +96,68 @@ global options:
   --version, -v             Print the version and exit.
   --help, -h                Print this and exit.`;
 
-// PR_READY_FLAGS is SPREAD in, not restated: ../verbs/pr_ready.ts owns its own
-// flag names, and a flag list every verb edited by hand here would be a merge
-// conflict per verb once the sibling branches (#3, #4) add theirs.
+// The flags the FOUR pre-registry commands share. Left as one spec because
+// those four are parsed together, exactly as they always were; a registry family
+// never sees it (see ./cli/command.ts's mergeFlags). A registry family --
+// including "pr", whose `ready` subcommand owns its own `--gh-repo` /
+// `--reviewers` / `--approvers` / `--round-policy` / `--exclude-run` / `--gates`
+// / `--token-env` / `--explain` flags -- declares its OWN flags in its own
+// Command entry instead of adding them here, for the same reason: a flag list
+// every verb edited by hand here would be a merge conflict per verb.
 const GLOBAL_FLAGS = {
-  values: ["repo", "source", "cache-dir", "script", "ref", ...PR_READY_FLAGS.values],
-  booleans: ["json", "version", "help", ...PR_READY_FLAGS.booleans],
+  values: ["repo", "source", "cache-dir", "script", "ref"],
+  booleans: ["json", "version", "help"],
   aliases: { v: "version", h: "help" },
 } as const;
 
-export async function run(argv: readonly string[], io: Io): Promise<number> {
+// STAGE ONE: the flags that may appear BEFORE a command, and nothing else. It
+// stops at the first positional so that a family's own flags are never
+// interpreted here -- see ./cli/args.ts's stopAtFirstPositional.
+const TOP_FLAGS = {
+  values: ["repo"],
+  booleans: ["json", "version", "help"],
+  aliases: { v: "version", h: "help" },
+  stopAtFirstPositional: true,
+} as const;
+
+export async function run(argv: readonly string[], io: Io, seams: Seams = defaultSeams()): Promise<number> {
+  let head;
+  try {
+    head = parseArgs(argv, TOP_FLAGS);
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.err(`${PROGRAM}: ${error.message}`);
+      io.err(`Run '${PROGRAM} --help'.`);
+      return 2;
+    }
+    throw error;
+  }
+
+  // `--version` and `--help` are answered from stage one, before a family's
+  // parser can refuse the invocation for its own reasons: `nen --version` must
+  // work even when everything after it is nonsense, because zheref/hatsu#1's
+  // D10 gate calls it on a binary it has not yet decided to trust.
+  if (head.booleans.has("version")) {
+    io.out(VERSION);
+    return 0;
+  }
+  if (head.booleans.has("help")) {
+    io.out(USAGE);
+    return 0;
+  }
+  if (head.rest.length === 0) {
+    io.err(USAGE);
+    return 2;
+  }
+
+  const family = findCommand(head.rest[0] ?? "");
+  if (family !== undefined) {
+    return runFamily(family, head.rest, head.values["repo"] ?? null, head.booleans.has("json"), io, seams);
+  }
+
   let parsed;
   try {
-    parsed = parseArgs(argv, GLOBAL_FLAGS);
+    parsed = parseArgs(head.rest, GLOBAL_FLAGS);
   } catch (error) {
     if (error instanceof UsageError) {
       io.err(`${PROGRAM}: ${error.message}`);
@@ -122,8 +190,12 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     return 2;
   }
 
-  const repoFlag = parsed.values["repo"] ?? null;
-  const json = parsed.booleans.has("json");
+  // A global flag counts whether it was typed before the command or after it,
+  // which is what makes `nen --repo X schema check` and `nen schema check
+  // --repo X` the same invocation. Stage one owns the former, this parse the
+  // latter, and neither can see the other's tokens.
+  const repoFlag = parsed.values["repo"] ?? head.values["repo"] ?? null;
+  const json = parsed.booleans.has("json") || head.booleans.has("json");
   const [command, subcommand] = parsed.positionals;
 
   try {
@@ -149,12 +221,6 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         }
         return devTest(repoFlag, parsed.passthrough, io);
 
-      case "pr":
-        return await prReady(
-          { positionals: parsed.positionals, values: parsed.values, booleans: parsed.booleans, repoFlag },
-          io,
-        );
-
       default:
         io.err(`${PROGRAM}: unknown command '${command}'.`);
         io.err(`Run '${PROGRAM} --help'.`);
@@ -173,6 +239,68 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     // The two want different reactions, which is the entire reason this CLI
     // separates the codes; getting it wrong here would have a retry wrapper
     // retrying a typo forever.
+    return error instanceof RepoRootError ? 2 : 1;
+  }
+}
+
+// Dispatch to a registry family: re-parse the remainder against ITS spec plus
+// the globals, then run it.
+//
+// EVERY FAMILY GETS THE SAME ERROR CONTRACT, written once here rather than
+// fifteen times: a UsageError or a VerbUsageError is exit 2, anything else is
+// exit 1, and the message is printed whole because each verb's messages are
+// written to be actionable on their own.
+//
+// EXPORTED so a family's own test file drives THIS function rather than
+// hand-copying its error-to-exit-code mapping into a local `capture()`
+// helper (review finding: several test files did exactly that, and a
+// hand-copy can drift from the real mapping silently). Calling this directly
+// also exercises the real two-stage re-parse (`mergeFlags`) and the real
+// `--repo`/`--json` merge across the two stages, neither of which a test that
+// only calls `family.run(...)` touches at all.
+//
+// ASYNC because a family's `run()` may itself be async (the "pr" family's
+// `ready` subcommand reads GitHub over the network); `await`ing a synchronous
+// family's already-resolved return costs nothing.
+export async function runFamily(
+  family: Command,
+  argv: readonly string[],
+  headRepo: string | null,
+  headJson: boolean,
+  io: Io,
+  seams: Seams,
+): Promise<number> {
+  let args;
+  try {
+    args = parseArgs(argv, mergeFlags(family.flags));
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.err(`${PROGRAM} ${family.name}: ${error.message}`);
+      io.err(`Run '${PROGRAM} ${family.name} --help'.`);
+      return 2;
+    }
+    throw error;
+  }
+
+  if (args.booleans.has("help")) {
+    io.out(family.usage);
+    return 0;
+  }
+
+  try {
+    return await family.run({
+      args,
+      repoFlag: args.values["repo"] ?? headRepo,
+      json: args.booleans.has("json") || headJson,
+      io,
+      seams,
+    });
+  } catch (error) {
+    io.err(`${PROGRAM} ${family.name}: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof VerbUsageError) {
+      io.err(`Run '${PROGRAM} ${family.name} --help'.`);
+      return 2;
+    }
     return error instanceof RepoRootError ? 2 : 1;
   }
 }
