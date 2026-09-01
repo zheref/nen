@@ -181,6 +181,6 @@ MIT — see [LICENSE](LICENSE).
 ## Origin
 
 Nen is one of several tools built from a larger internal system. That
-history isn't required to use Nen — everything above is the whole contract
-— the migration that produced it is tracked in a private issue, so there's
+history isn't required to use Nen: everything above is the whole contract.
+The migration that produced it is tracked in a private issue, so there's
 no public link to follow here.
