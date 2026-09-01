@@ -19,7 +19,10 @@ usage:
             default discipline every other mutating verb here applies.
 
 Refuses if the name already exists locally or on origin (never re-tagged),
-and if --at is not an ancestor of origin/--trunk (never tags off-trunk).`;
+if --at is not an ancestor of origin/--trunk (never tags off-trunk), or if
+either existence check itself fails to run (never cut on an unverified name).
+The tag is always ANNOTATED (git tag -a) -- --message becomes the tag's
+message when given, and defaults to the tag name otherwise.`;
 
 export const tagVerb: Verb = {
   name: "tag",

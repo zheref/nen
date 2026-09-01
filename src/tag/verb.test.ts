@@ -26,7 +26,7 @@ describe("nen tag cut -- CLI wiring", () => {
       { match: "git ls-remote --tags origin v1.0.0", result: { stdout: "" } },
       { match: "git tag -l v1.0.0", result: { stdout: "" } },
       { match: "git merge-base --is-ancestor abc origin/main", result: { code: 0 } },
-      { match: "git tag v1.0.0 abc", result: {} },
+      { match: "git tag -a -m v1.0.0 v1.0.0 abc", result: {} },
     ]);
     const { context, out } = makeContext({ args: ["cut"], values: { name: "v1.0.0", at: "abc" } });
     expect(runTag(context, runner)).toBe(0);
@@ -38,7 +38,7 @@ describe("nen tag cut -- CLI wiring", () => {
       { match: "git ls-remote --tags origin v1.0.0", result: { stdout: "" } },
       { match: "git tag -l v1.0.0", result: { stdout: "" } },
       { match: "git merge-base --is-ancestor abc origin/main", result: { code: 0 } },
-      { match: "git tag v1.0.0 abc", result: {} },
+      { match: "git tag -a -m v1.0.0 v1.0.0 abc", result: {} },
       { match: "git push origin v1.0.0", result: {} },
     ]);
     const { context } = makeContext({ args: ["cut"], values: { name: "v1.0.0", at: "abc" }, booleans: new Set(["push"]) });

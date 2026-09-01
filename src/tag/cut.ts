@@ -42,8 +42,23 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
   const log: string[] = [];
   const trunk = options.trunk ?? "main";
 
+  // "Does not exist" is a claim that must be VERIFIED, never assumed from a
+  // failed check. An unreachable remote, an expired credential, a flaky
+  // proxy -- any of these makes `ls-remote`/`tag -l` fail without answering
+  // the question, and treating that failure as "not found" is exactly the
+  // "found nothing" vs "could not look" confusion this module exists to
+  // avoid (../issue/search.ts:205-208 draws the same line). A tag is never
+  // cut on a name whose existence was never actually checked.
   const existsRemote = run(runner, ["ls-remote", "--tags", "origin", options.name], cwd);
-  if (existsRemote.code === 0 && existsRemote.stdout.trim() !== "") {
+  if (existsRemote.code !== 0) {
+    return {
+      ok: false,
+      pushed: false,
+      log,
+      error: `could not determine whether '${options.name}' already exists on origin (${lines(existsRemote.stderr).join(" ") || `exit ${existsRemote.code}`}) -- a tag is never cut on an unverified name`,
+    };
+  }
+  if (existsRemote.stdout.trim() !== "") {
     return {
       ok: false,
       pushed: false,
@@ -52,7 +67,15 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
     };
   }
   const existsLocal = run(runner, ["tag", "-l", options.name], cwd);
-  if (existsLocal.code === 0 && existsLocal.stdout.trim() !== "") {
+  if (existsLocal.code !== 0) {
+    return {
+      ok: false,
+      pushed: false,
+      log,
+      error: `could not determine whether '${options.name}' already exists locally (${lines(existsLocal.stderr).join(" ") || `exit ${existsLocal.code}`}) -- a tag is never cut on an unverified name`,
+    };
+  }
+  if (existsLocal.stdout.trim() !== "") {
     return { ok: false, pushed: false, log, error: `tag '${options.name}' already exists locally -- never re-tagged` };
   }
   log.push(`'${options.name}' does not exist locally or on origin`);
@@ -76,10 +99,14 @@ export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): Cut
   }
   log.push(`'${options.at}' is an ancestor of origin/${trunk}`);
 
-  const tagArgs =
-    options.message === undefined
-      ? ["tag", options.name, options.at]
-      : ["tag", "-m", options.message, options.name, options.at];
+  // ALWAYS ANNOTATED, never lightweight. bankai-core's own tag_cut.sh cuts an
+  // annotated tag, and bankai-core's own releases are annotated tag objects
+  // (`git cat-file -t v0.11.3` -> `tag`, not `commit`) -- a lightweight tag
+  // from an omitted --message would differ in KIND from every release this
+  // system has made, and any tooling that resolves `v*^{}` or reads a tagger
+  // date would see it. When no --message is given the tag name itself is the
+  // message, rather than making the flag required.
+  const tagArgs = ["tag", "-a", "-m", options.message ?? options.name, options.name, options.at];
   const tag = run(runner, tagArgs, cwd);
   if (tag.code !== 0) {
     return {
