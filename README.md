@@ -27,9 +27,11 @@ decides what to do about it.
 
 ## Install
 
-Binaries are published for three targets — `linux-x64`, `darwin-arm64`,
-`windows-x64` — alongside a `SHA256SUMS` manifest, attached to the GitHub
-release for each tag. The bootstrap script fetches the binary for your
+Each published GitHub release attaches binaries for three targets —
+`linux-x64`, `darwin-arm64`, `windows-x64` — alongside a `SHA256SUMS`
+manifest; cutting a tag does not by itself create a release, so the assets
+exist once a release has actually been published for that tag, not the
+moment the tag is cut. The bootstrap script fetches the binary for your
 platform, verifies it against that manifest, caches it, and refuses outright
 on any integrity gap (unfetchable manifest, missing entry, digest mismatch)
 rather than falling back to an unverified download:
@@ -180,5 +182,5 @@ MIT — see [LICENSE](LICENSE).
 
 Nen is one of several tools built from a larger internal system. That
 history isn't required to use Nen — everything above is the whole contract
-— but if you're curious, the migration that produced it is tracked at
-[zheref/akatsuki-ai#1](https://github.com/zheref/akatsuki-ai/issues/1).
+— the migration that produced it is tracked in a private issue, so there's
+no public link to follow here.
