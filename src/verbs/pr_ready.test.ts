@@ -4,7 +4,7 @@
 // network -- `deps.openSource` is the one seam this file drives).
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -24,6 +24,7 @@ import {
 import type { PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot, ReviewThreadPage } from "../github/graphql.js";
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { SchemaError } from "../schema/errors.js";
 import { GATES_FILE, schemaPath } from "../schema/source.js";
 
 function capture(): { io: Io; out: string[]; err: string[] } {
@@ -124,6 +125,28 @@ describe("resolveIdentities", () => {
   it("refuses outright with NO default reviewer set when none of the three sources apply", () => {
     const empty = mkdtempSync(join(tmpdir(), "nen-pr-ready-"));
     expect(() => resolveIdentities(empty, undefined, [], [])).toThrow(IdentityError);
+  });
+
+  it("a malformed in-repo schemas/gates.json fails as a path-bearing SchemaError, not a bare SyntaxError", () => {
+    // Mirrors ../schema/source.test.ts's "reports malformed JSON as itself"
+    // case, but through the --gates-less fallback branch this same function
+    // takes -- the branch Copilot's review on PR #9 found reading the file with
+    // a raw JSON.parse and no SchemaError shaping (zheref/nen#9, pr_ready.ts:429).
+    const root = mkdtempSync(join(tmpdir(), "nen-pr-ready-corrupt-gates-"));
+    mkdirSync(join(root, "schemas"));
+    const gatesPath = join(root, "schemas", "gates.json");
+    writeFileSync(gatesPath, "{ not json");
+    try {
+      resolveIdentities(root, undefined, [], []);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchemaError);
+      const schemaError = error as SchemaError;
+      // Path-bearing: names the exact file, not just "a schema".
+      expect(schemaError.path).toBe(gatesPath);
+      expect(schemaError.message).toContain(gatesPath);
+      expect(schemaError.message).toMatch(/not valid JSON/);
+    }
   });
 });
 

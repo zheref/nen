@@ -75,7 +75,7 @@ import {
   type ReviewerIdentity,
 } from "../schema/gates.js";
 import { loadRepoRegistry } from "../schema/repos.js";
-import { GATES_FILE, schemaPath } from "../schema/source.js";
+import { GATES_FILE, readSchemaJson, schemaPath } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
 
 /**
@@ -424,8 +424,15 @@ export function resolveIdentities(
   }
   const inRepo = schemaPath(repoRoot, GATES_FILE);
   if (existsSync(inRepo)) {
-    const value: unknown = JSON.parse(readFileSync(inRepo, "utf8"));
-    return { identities: parseGateIdentities(inRepo, value), source: "schema", path: inRepo };
+    // Same shaping as the `--gates <path>` branch above: a malformed
+    // schemas/gates.json must fail as a path-bearing SchemaError, not as a bare
+    // SyntaxError with no file/pointer context. readSchemaJson is the shared
+    // reader every other in-repo taxonomy load already goes through (see
+    // ../schema/gates.ts's own loadGateIdentities, ../schema/repos.ts's
+    // loadRepoRegistry) -- reusing it here instead of hand-rolling a second
+    // JSON.parse keeps this the ONE failure channel schema/errors.ts documents.
+    const { path, value } = readSchemaJson(repoRoot, GATES_FILE);
+    return { identities: parseGateIdentities(path, value), source: "schema", path };
   }
   if (reviewers.length > 0) {
     return { identities: identitiesFromFlags(reviewers, approvers), source: "flags", path: null };
