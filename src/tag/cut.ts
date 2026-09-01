@@ -1,0 +1,110 @@
+// src/tag/cut.ts -- `nen tag cut --at <sha>`, getsuga §4: "pin the commit
+// explicitly -- 'cut from main' is not an instruction a script can follow".
+//
+// THE SHA IS THE CALLER'S, ALWAYS -- never HEAD, never re-resolved here. The
+// skill's own incident is exactly this class of bug: main advances between a
+// release PR merging and the cut running, and a script that tags "the current
+// HEAD" tags a LATER commit than the one that was verified. This module
+// refuses to default; --at is required, and it is checked for reachability
+// and non-existence before a single write.
+//
+// NEVER AUTO-PUSHED. Pushing a tag is a separate, explicit step
+// (--push) -- the same discipline every other mutating verb in this
+// repository already applies (--dry-run everywhere else): a tag that exists
+// only locally can be inspected and discarded; one already pushed to a shared
+// remote cannot be un-cut. "Never re-tag, never move a tag, never force a
+// tag" -- this module creates a local tag once and stops there unless the
+// caller explicitly asked for the push too.
+
+import { lines, type Runner } from "../exec/seam.js";
+
+export interface CutTagOptions {
+  readonly name: string;
+  readonly at: string;
+  readonly message?: string;
+  readonly trunk?: string;
+  readonly push?: boolean;
+}
+
+export interface CutTagResult {
+  readonly ok: boolean;
+  readonly pushed: boolean;
+  readonly log: readonly string[];
+  readonly error: string | null;
+}
+
+function run(runner: Runner, args: readonly string[], cwd: string): { code: number; stdout: string; stderr: string } {
+  const result = runner.run({ bin: "git", args: [...args], cwd });
+  return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+}
+
+export function cutTag(runner: Runner, cwd: string, options: CutTagOptions): CutTagResult {
+  const log: string[] = [];
+  const trunk = options.trunk ?? "main";
+
+  const existsRemote = run(runner, ["ls-remote", "--tags", "origin", options.name], cwd);
+  if (existsRemote.code === 0 && existsRemote.stdout.trim() !== "") {
+    return {
+      ok: false,
+      pushed: false,
+      log,
+      error: `tag '${options.name}' already exists on origin -- re-tagging is never the fix; cut a new name if this was a mistake`,
+    };
+  }
+  const existsLocal = run(runner, ["tag", "-l", options.name], cwd);
+  if (existsLocal.code === 0 && existsLocal.stdout.trim() !== "") {
+    return { ok: false, pushed: false, log, error: `tag '${options.name}' already exists locally -- never re-tagged` };
+  }
+  log.push(`'${options.name}' does not exist locally or on origin`);
+
+  const ancestor = run(runner, ["merge-base", "--is-ancestor", options.at, `origin/${trunk}`], cwd);
+  if (ancestor.code > 1) {
+    return {
+      ok: false,
+      pushed: false,
+      log,
+      error: `could not test reachability of '${options.at}' against origin/${trunk}: ${lines(ancestor.stderr).join(" ") || `exit ${ancestor.code}`}`,
+    };
+  }
+  if (ancestor.code !== 0) {
+    return {
+      ok: false,
+      pushed: false,
+      log,
+      error: `'${options.at}' is not an ancestor of origin/${trunk} -- a tag is a promise the code is on the trunk, and this commit is not on it. Use 'nen release resolve-target' first.`,
+    };
+  }
+  log.push(`'${options.at}' is an ancestor of origin/${trunk}`);
+
+  const tagArgs =
+    options.message === undefined
+      ? ["tag", options.name, options.at]
+      : ["tag", "-m", options.message, options.name, options.at];
+  const tag = run(runner, tagArgs, cwd);
+  if (tag.code !== 0) {
+    return {
+      ok: false,
+      pushed: false,
+      log,
+      error: `git tag failed: ${lines(tag.stderr).join(" ") || `exit ${tag.code}`}`,
+    };
+  }
+  log.push(`created local tag '${options.name}' at ${options.at}`);
+
+  if (options.push !== true) {
+    log.push("NOT pushed -- pass --push to push this tag; it is never automatic");
+    return { ok: true, pushed: false, log, error: null };
+  }
+
+  const push = run(runner, ["push", "origin", options.name], cwd);
+  if (push.code !== 0) {
+    return {
+      ok: false,
+      pushed: false,
+      log,
+      error: `tag created locally but the push failed: ${lines(push.stderr).join(" ") || `exit ${push.code}`}`,
+    };
+  }
+  log.push(`pushed '${options.name}' to origin`);
+  return { ok: true, pushed: true, log, error: null };
+}

@@ -67,10 +67,12 @@ import { loopVerb } from "./loop/verb.js";
 import { parseVerb } from "./parse/verb.js";
 import { prVerb } from "./pr/verb.js";
 import { qualityVerb } from "./quality/verb.js";
+import { releaseVerb } from "./release/verb.js";
 import { repoVerb } from "./repo/verb.js";
 import { runVerb } from "./run/verb.js";
 import { splitVerb } from "./split/verb.js";
 import { stageVerb } from "./stage/verb.js";
+import { tagVerb } from "./tag/verb.js";
 import { watchVerb } from "./watch/verb.js";
 import { wcVerb } from "./wc/verb.js";
 
@@ -84,10 +86,12 @@ export const VERBS: readonly Verb[] = [
   parseVerb,
   prVerb,
   qualityVerb,
+  releaseVerb,
   repoVerb,
   runVerb,
   splitVerb,
   stageVerb,
+  tagVerb,
   watchVerb,
   wcVerb,
 ];
