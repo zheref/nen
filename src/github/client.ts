@@ -100,7 +100,27 @@ export function tokenFromEnv(
       message: `${envVarName} is set but empty -- an empty token authenticates as nobody, and an unauthenticated read of a private repo 404s in a way that reads like a deleted PR`,
     };
   }
-  return { ok: true, token: raw };
+  // PORT CORRECTION, carried from the recorded disposition on zheref/nen#7's
+  // review thread (src/github/client.ts:103, Copilot; acknowledged by the
+  // maintainer, deferred to the readiness-core PR that adopts this module).
+  //
+  // The seed VALIDATED with `raw.trim()` and RETURNED `raw`, so a token pasted
+  // with a trailing newline -- the ordinary shape of a `gh auth token > file`
+  // or a copied secret -- passed the emptiness check and then reached octokit's
+  // `Authorization: token <value>\n` header intact. GitHub answers that with a
+  // 401, or with a 404 on a private repository, and BOTH read like a deleted PR
+  // or a missing grant rather than like whitespace. The failure is silent in the
+  // direction that costs the most time: everything about the call looks right.
+  //
+  // Trimming here rather than at the call sites, and RETURNING the trimmed value
+  // rather than trimming inside GitHubClient, because this function is already
+  // the ONE place the raw environment is read -- a second trim at a consumer
+  // would leave `result.token` and the value actually sent to GitHub as two
+  // different strings, which is the same class of gap in a smaller costume.
+  //
+  // It cannot widen anything: a value that survives `raw.trim() !== ""` is
+  // non-empty after trimming, and a token's own alphabet contains no whitespace.
+  return { ok: true, token: raw.trim() };
 }
 
 export class GitHubClient {

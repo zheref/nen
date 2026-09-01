@@ -49,6 +49,24 @@ describe("tokenFromEnv", () => {
     expect(tokenFromEnv("GITHUB_TOKEN", { GITHUB_TOKEN: "   " }).ok).toBe(false);
   });
 
+  it("returns the TRIMMED value -- a pasted token's trailing newline reaches the Authorization header otherwise", () => {
+    // zheref/nen#7's review thread on src/github/client.ts:103: the seed
+    // validated with `raw.trim()` and returned `raw`, so a token copied with
+    // surrounding whitespace passed the emptiness check and then authenticated
+    // as a malformed credential -- 401, or 404 on a private repository, which
+    // reads like a deleted PR rather than like whitespace.
+    //
+    // Whitespace-ONLY values stay a refusal; only the surrounds are removed.
+    expect(tokenFromEnv("GITHUB_TOKEN", { GITHUB_TOKEN: "ghs_x\n" })).toEqual({
+      ok: true,
+      token: "ghs_x",
+    });
+    expect(tokenFromEnv("GITHUB_TOKEN", { GITHUB_TOKEN: "  ghs_x  " })).toEqual({
+      ok: true,
+      token: "ghs_x",
+    });
+  });
+
   it("NEVER falls back to another variable -- the identity a call runs as is a property of the code, not of the environment", () => {
     // The failure this prevents: a job that forgot to mint its App token
     // silently running as whatever GH_TOKEN happened to be exported, which is
