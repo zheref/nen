@@ -23,14 +23,14 @@ function makeContext(overrides: Partial<VerbContext> = {}): { context: VerbConte
 describe("nen stage triage -- CLI wiring", () => {
   it("exits 0 when nothing is flagged", () => {
     const runner = new ScriptedRunner([
-      { match: "git status --porcelain=v1 --ignored -uall", result: { stdout: " M src/a.ts\n" } },
+      { match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall", result: { stdout: " M src/a.ts\0" } },
     ]);
     expect(runStage(makeContext({ args: ["triage"] }).context, runner)).toBe(0);
   });
 
   it("exits 1 and lists the reason(s) when something is flagged", () => {
     const runner = new ScriptedRunner([
-      { match: "git status --porcelain=v1 --ignored -uall", result: { stdout: "?? .env\n" } },
+      { match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall", result: { stdout: "?? .env\0" } },
     ]);
     const { context, out } = makeContext({ args: ["triage"] });
     expect(runStage(context, runner)).toBe(1);
@@ -39,13 +39,25 @@ describe("nen stage triage -- CLI wiring", () => {
 
   it("passes --scope and --mentions through to the triage", () => {
     const runner = new ScriptedRunner([
-      { match: "git status --porcelain=v1 --ignored -uall", result: { stdout: " M src/old.ts\n" } },
+      { match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall", result: { stdout: " M src/old.ts\0" } },
     ]);
     const { context } = makeContext({
       args: ["triage"],
       values: { scope: "src/", mentions: "renames src/old.ts" },
     });
     expect(runStage(context, runner)).toBe(0);
+  });
+
+  it("flags a real secret file even at a non-ASCII path (BLOCKER #3)", () => {
+    const runner = new ScriptedRunner([
+      {
+        match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall",
+        result: { stdout: "?? secrëts/.env\0" },
+      },
+    ]);
+    const { context, out } = makeContext({ args: ["triage"] });
+    expect(runStage(context, runner)).toBe(1);
+    expect(out.join("\n")).toMatch(/secrëts\/\.env {2}\[secret-shape\]/);
   });
 
   it("refuses an unknown subcommand", () => {

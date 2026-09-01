@@ -47,7 +47,11 @@ export function runStage(context: VerbContext, runner: Runner): number {
     return usage(context.io, `unknown 'stage' subcommand '${subcommand ?? "(none)"}'. Try 'stage triage'.`);
   }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
-  const result = runner.run({ bin: "git", args: ["status", "--porcelain=v1", "--ignored", "-uall"], cwd: root });
+  const result = runner.run({
+    bin: "git",
+    args: ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--ignored", "-uall"],
+    cwd: root,
+  });
   if (result.code !== 0) {
     context.io.err(`nen: could not read working-copy status: ${lines(result.stderr).join(" ") || `exit ${result.code}`}`);
     return 1;

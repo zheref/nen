@@ -19,24 +19,44 @@ export interface StatusEntry {
   readonly ignored: boolean;
 }
 
-// `git status --porcelain=v1 --ignored -uall`. Two status columns (index,
-// worktree), a space, then the path -- except a rename, which spells
-// `old -> new`; only the NEW path is kept, since that is what would be staged.
+// `git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall`.
+//
+// -z, NOT NEWLINE-SPLIT, AND core.quotePath=false FORCED. With the default
+// (newline-terminated) porcelain format, git C-quotes any path containing a
+// non-ASCII byte -- `secrëts/.env` comes back as `"secr\303\253ts/.env"`,
+// quotes and octal escapes included -- which defeats every `$`-anchored
+// shape check below on exactly the paths most worth catching (a name someone
+// chose to make less greppable). `-z` disables that quoting unconditionally
+// and NUL-terminates every record instead of newline-terminating it, so an
+// embedded space or newline in a path cannot be confused with a field
+// separator either; `core.quotePath=false` is forced too, defensively, in
+// case a caller's global config has already turned quoting off in a way that
+// changes the non-`-z` behavior this comment doesn't rely on.
+//
+// A rename or copy is not a single NUL-terminated record with an " -> " in
+// it (that spelling is newline-mode only) -- in `-z` mode it is TWO
+// consecutive NUL-terminated records, `XY NEW_PATH\0ORIG_PATH\0`. Only the
+// NEW path is kept, since that is what would be staged; the ORIG_PATH record
+// is consumed and never treated as an entry of its own.
 export function parseStatusPorcelain(text: string): readonly StatusEntry[] {
   const entries: StatusEntry[] = [];
-  for (const raw of text.replace(/\r\n/g, "\n").split("\n")) {
-    if (raw === "") continue;
+  const records = text.split("\0").filter((record): boolean => record !== "");
+  for (let i = 0; i < records.length; i++) {
+    const raw = records[i] ?? "";
     const indexStatus = raw[0] ?? " ";
     const worktreeStatus = raw[1] ?? " ";
-    let path = raw.slice(3);
-    const arrow = path.indexOf(" -> ");
-    if (arrow !== -1) path = path.slice(arrow + 4);
+    const path = raw.slice(3);
     entries.push({
       path,
       indexStatus,
       worktreeStatus,
       ignored: indexStatus === "!" && worktreeStatus === "!",
     });
+    const isRenameOrCopy = indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C";
+    if (isRenameOrCopy) {
+      // The next record is ORIG_PATH -- skip it, it is not its own entry.
+      i++;
+    }
   }
   return entries;
 }

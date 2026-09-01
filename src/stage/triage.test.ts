@@ -1,24 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { parseStatusPorcelain, triageStage } from "./triage.js";
 
-describe("parseStatusPorcelain", () => {
+describe("parseStatusPorcelain -- -z / NUL-delimited format", () => {
   it("parses ordinary modified/added/deleted/untracked entries", () => {
-    const entries = parseStatusPorcelain(" M src/a.ts\nA  src/b.ts\n D src/c.ts\n?? src/new.ts\n");
+    const entries = parseStatusPorcelain(" M src/a.ts\0A  src/b.ts\0 D src/c.ts\0?? src/new.ts\0");
     expect(entries.map((e): string => e.path)).toEqual(["src/a.ts", "src/b.ts", "src/c.ts", "src/new.ts"]);
   });
 
   it("marks '!!' entries ignored", () => {
-    const entries = parseStatusPorcelain("!! node_modules/x\n");
+    const entries = parseStatusPorcelain("!! node_modules/x\0");
     expect(entries[0]).toMatchObject({ path: "node_modules/x", ignored: true });
   });
 
-  it("keeps only the NEW path of a rename", () => {
-    const entries = parseStatusPorcelain("R  old/name.ts -> new/name.ts\n");
-    expect(entries[0]?.path).toBe("new/name.ts");
+  it("keeps only the NEW path of a rename, consuming the ORIG_PATH record rather than treating it as its own entry", () => {
+    const entries = parseStatusPorcelain("R  new/name.ts\0old/name.ts\0");
+    expect(entries.map((e): string => e.path)).toEqual(["new/name.ts"]);
   });
 
   it("returns empty for empty input", () => {
     expect(parseStatusPorcelain("")).toEqual([]);
+  });
+
+  // Review finding #3: the default (non -z) porcelain format C-quotes any
+  // path with a non-ASCII byte -- "secr\303\253ts/.env" -- which defeated the
+  // $-anchored secret-shape check. -z disables quoting unconditionally.
+  it("does not corrupt a non-ASCII path the way the default quoted format would", () => {
+    const entries = parseStatusPorcelain("?? secrëts/.env\0");
+    expect(entries[0]?.path).toBe("secrëts/.env");
+    expect(entries[0]?.path.endsWith('"')).toBe(false);
   });
 });
 
@@ -26,6 +35,11 @@ describe("triageStage -- detects, never decides; every flag reported, not just t
   it("flags a secret-shaped filename", () => {
     const result = triageStage([{ path: ".env", indexStatus: "?", worktreeStatus: "?", ignored: false }]);
     expect(result.flagged).toEqual([{ path: ".env", reasons: ["secret-shape"] }]);
+  });
+
+  it("flags a secret-shaped filename with a non-ASCII path component (BLOCKER #3 -- must not depend on the caller unquoting the path)", () => {
+    const result = triageStage([{ path: "secrëts/.env", indexStatus: "?", worktreeStatus: "?", ignored: false }]);
+    expect(result.flagged).toEqual([{ path: "secrëts/.env", reasons: ["secret-shape"] }]);
   });
 
   it("flags credentials*, *.pem and *.key too", () => {
