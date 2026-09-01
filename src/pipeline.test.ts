@@ -22,6 +22,7 @@
 // stay green. That is precisely the failure a comment cannot prevent.
 
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml, type YamlValue } from "./schema/yaml.js";
@@ -204,9 +205,8 @@ describe("AK-11: the shell allowlist", () => {
   it("has exactly one shell file in the repository", () => {
     // "Only bootstrap-class shell may exist at all." A second .sh appearing is a
     // review finding by construction, not by anybody remembering to look.
-    const tracked = Bun.spawnSync(["git", "ls-files"], { cwd: ROOT });
-    const files = new TextDecoder()
-      .decode(tracked.stdout)
+    const tracked = spawnSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" });
+    const files = (tracked.stdout ?? "")
       .split("\n")
       .filter((line): boolean => line.trim() !== "");
     expect(files.length).toBeGreaterThan(10);
@@ -218,7 +218,10 @@ describe("AK-11: the shell allowlist", () => {
     // `chmod +x` is a no-op on a Windows checkout, so the mode has to be
     // asserted from the INDEX. A 100644 bootstrap is a bootstrap a consumer
     // cannot run.
-    const listed = Bun.spawnSync(["git", "ls-files", "-s", "bootstrap/nen.sh"], { cwd: ROOT });
-    expect(new TextDecoder().decode(listed.stdout)).toMatch(/^100755 /);
+    const listed = spawnSync("git", ["ls-files", "-s", "bootstrap/nen.sh"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    expect(listed.stdout ?? "").toMatch(/^100755 /);
   });
 });

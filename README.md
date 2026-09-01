@@ -10,3 +10,17 @@ Design principles (ratified in the migration plan):
 - **One readiness authority** — `nen pr ready` produces the same verdict for the human, the plugin, and CI.
 - **Deterministic verbs, LLM judgment** — Nen detects, computes, formats, and verifies; it never decides what only judgment can.
 - **One binary** — plus `git` and `gh`; no make, no jq/yq, no runtime Python.
+
+## Working on Nen
+
+Requires [bun](https://bun.sh) 1.4.0 or newer, and nothing else. Identical on
+macOS and Windows/Git Bash.
+
+```
+bun install --frozen-lockfile
+bun run typecheck && bun run lint && bun run test   # or: bun src/index.ts dev test
+```
+
+Tests live beside their sources (`src/**/*.test.ts`). `bun run build:linux-x64`
+(and the `darwin-arm64` / `windows-x64` siblings) cross-compile the release
+binaries from any one host.
