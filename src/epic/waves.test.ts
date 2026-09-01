@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coordinate, parseChildren, renderProgress, roundHalfEven } from "./waves.js";
+import { coordinate, DuplicateChildIdError, parseChildren, renderProgress, roundHalfEven } from "./waves.js";
 
 describe("roundHalfEven -- banker's rounding, to match Python's round()", () => {
   it("rounds a half down to the even neighbour", () => {
@@ -108,5 +108,35 @@ describe("coordinate -- the full choreography", () => {
     const two = ["- [x] #1", "- [ ] #2", "- [ ] #3"].join("\n");
     const result = coordinate(two, null, new Set([1]), 1, "UZF-1");
     expect(result.summary.release.map((r): number => r.child)).toEqual([2]);
+  });
+
+  // Review finding #18: a duplicated checklist id diverged from the Python
+  // original's per-object `checked` tracking (last-wins) once the port
+  // unioned checked numbers into a Set -- Python: done=1/2 (50%),
+  // satisfied(5)=false (reads the LAST duplicate, unchecked); nen before the
+  // fix: done=2/2 (100%), satisfied(5)=true -- a wave could release against
+  // a blocker that was not, in truth, done. Refusing outright (rather than
+  // picking either tie-break silently) is the fix.
+  it("refuses (DuplicateChildIdError) rather than silently reading a duplicated checklist id either way", () => {
+    const duplicated = ["- [x] #5 **[alice]**", "- [ ] #5 **[bob]**"].join("\n");
+    expect(() => coordinate(duplicated, null, new Set(), 3, "UZF-1")).toThrow(DuplicateChildIdError);
+    try {
+      coordinate(duplicated, null, new Set(), 3, "UZF-1");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DuplicateChildIdError);
+      expect((error as DuplicateChildIdError).duplicates).toEqual([5]);
+      expect((error as Error).message).toMatch(/#5/);
+    }
+  });
+
+  it("a duplicated id used as a BLOCKER also refuses, rather than computing a wave against it", () => {
+    const body2 = ["- [x] #5 **[a]**", "- [ ] #5 **[b]**", "- [ ] #6 **[c]** blocked by #5"].join("\n");
+    expect(() => coordinate(body2, null, new Set(), 3, "UZF-1")).toThrow(DuplicateChildIdError);
+  });
+
+  it("does not refuse when every id is unique, even with several children", () => {
+    const fine = ["- [ ] #1", "- [ ] #2", "- [ ] #3"].join("\n");
+    expect(() => coordinate(fine, null, new Set(), 3, "UZF-1")).not.toThrow();
   });
 });

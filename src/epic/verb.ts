@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { usage, type Verb, type VerbContext } from "../cli/verb.js";
-import { coordinate } from "./waves.js";
+import { coordinate, DuplicateChildIdError } from "./waves.js";
 
 const USAGE = `nen epic next-wave -- flip a completed child, redraw progress, compute the next wave.
 
@@ -33,7 +33,10 @@ usage:
 
 Prints {"total","done","release"} on stdout with --json, or a short report
 otherwise. A child is released only when EVERY declared blocker is a known,
-checked child of this parent -- an unknown id never clears the gate.`;
+checked child of this parent -- an unknown id never clears the gate. Exits 1
+(never writing --out) when the same child id appears more than once in the
+checklist -- a duplicate is an authoring error this coordinator refuses to
+guess past rather than silently pick a tie-break for.`;
 
 export const epicVerb: Verb = {
   name: "epic",
@@ -88,7 +91,16 @@ export const epicVerb: Verb = {
       return usage(context.io, `--cap '${capRaw ?? ""}' must be a non-negative integer.`);
     }
 
-    const result = coordinate(body, completed, inflight, cap, citation);
+    let result;
+    try {
+      result = coordinate(body, completed, inflight, cap, citation);
+    } catch (error) {
+      if (error instanceof DuplicateChildIdError) {
+        context.io.err(`nen: ${error.message}`);
+        return 1;
+      }
+      throw error;
+    }
     const out = context.values["out"];
     if (out !== undefined) {
       writeFileSync(out, result.body, "utf8");

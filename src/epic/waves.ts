@@ -145,6 +145,28 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// A checklist ID that appears MORE THAN ONCE in the body -- `- [x] #5` and
+// `- [ ] #5` both present -- is an ordinary hand-editing typo, and it is a
+// DEVIATION from the original: the Python tracks `checked` per Child OBJECT
+// (`by_num[b].checked`, last-wins over duplicates by dict-comprehension
+// order), while a union-of-numbers Set (the natural TS translation) makes
+// EITHER duplicate checking mark the id done -- so the two implementations
+// would compute a different `done` count and a different `satisfied()`
+// verdict for the exact same body, without either one being wrong on its
+// own terms. Rather than pick a silent tie-break, a duplicate is refused: a
+// wave computed against an ambiguous checklist could release a child whose
+// blocker is not actually done.
+export class DuplicateChildIdError extends Error {
+  readonly duplicates: readonly number[];
+  constructor(duplicates: readonly number[]) {
+    super(
+      `duplicate child checklist id(s): ${duplicates.map((n): string => `#${n}`).join(", ")} -- each child must appear in the checklist exactly once. A duplicated id is an authoring error this coordinator refuses to guess past, because which line is authoritative changes both the done-count and which blockers read as satisfied.`,
+    );
+    this.name = "DuplicateChildIdError";
+    this.duplicates = duplicates;
+  }
+}
+
 export function coordinate(
   body: string,
   completed: number | null,
@@ -154,6 +176,15 @@ export function coordinate(
 ): CoordinateResult {
   const lines = body.split("\n");
   const children = parseChildren(lines);
+
+  const counts = new Map<number, number>();
+  for (const child of children) counts.set(child.num, (counts.get(child.num) ?? 0) + 1);
+  const duplicates = [...counts.entries()]
+    .filter(([, count]): boolean => count > 1)
+    .map(([num]): number => num)
+    .sort((a, b): number => a - b);
+  if (duplicates.length > 0) throw new DuplicateChildIdError(duplicates);
+
   const byNum = new Map(children.map((child): [number, Child] => [child.num, child]));
   const checked = new Set(children.filter((child): boolean => child.checked).map((c): number => c.num));
 

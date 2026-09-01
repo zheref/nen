@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VerbContext } from "../cli/verb.js";
@@ -63,6 +63,23 @@ describe("nen epic next-wave -- CLI wiring", () => {
     });
     expect(epicVerb.run(context)).toBe(1);
     expect(err.join("\n")).toMatch(/could not read/);
+  });
+
+  // Review finding #18: exits 1 and never writes --out on a duplicated
+  // checklist id, instead of silently picking a tie-break.
+  it("exits 1 and does NOT write --out when the checklist has a duplicated child id", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-epic-"));
+    const bodyFile = join(dir, "body.md");
+    const outFile = join(dir, "out.md");
+    writeFileSync(bodyFile, ["- [x] #5 **[alice]**", "- [ ] #5 **[bob]**"].join("\n"));
+    const { context, err } = makeContext({
+      args: ["next-wave"],
+      values: { "body-file": bodyFile, citation: "UZF-1", out: outFile },
+    });
+    expect(epicVerb.run(context)).toBe(1);
+    expect(err.join("\n")).toMatch(/duplicate child checklist id/);
+    expect(err.join("\n")).toMatch(/#5/);
+    expect(existsSync(outFile)).toBe(false);
   });
 
   it("refuses an unknown subcommand", () => {
