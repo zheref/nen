@@ -95,8 +95,17 @@ export interface BootstrapResult {
 }
 
 // Where the script is, or a loud error saying why it is not.
+//
+// `options.env` FALLS BACK TO `process.env`, and that fallback is the fix for a
+// doc claim that was false: the error message below offers `$NEN_BOOTSTRAP_SH`
+// as one of the two ways out, but this function only ever read `options.env` --
+// which `src/index.ts` does not pass -- so the variable was dead from the CLI
+// and the advice sent an operator to set something that could not work. An
+// escape hatch nobody can reach is worse than none, because the message
+// promises it.
 export function resolveScript(options: BootstrapOptions): string {
-  const explicit = options.script ?? options.env?.["NEN_BOOTSTRAP_SH"];
+  const env = options.env ?? process.env;
+  const explicit = options.script ?? env["NEN_BOOTSTRAP_SH"];
   if (explicit !== undefined && explicit !== "") {
     if (!existsSync(explicit)) {
       throw new Error(
@@ -168,7 +177,7 @@ export function runBootstrap(options: BootstrapOptions): BootstrapResult {
       code: BootstrapExit.WRAPPER,
       path: "",
       stderr: missing
-        ? "nen bootstrap: no 'bash' on PATH. The checksum bootstrap is a POSIX shell script -- deliberately, because it must run on a machine that has no nen yet. On Windows, run from Git Bash (or put its bin/ on PATH).\n"
+        ? "nen bootstrap: no 'bash' on PATH. The checksum bootstrap is a BASH script -- deliberately, because it must run on a machine that has no nen yet. (It is bash rather than plain POSIX sh: it uses BASH_SOURCE, `local`, and ${var//} substitution.) On Windows, run from Git Bash (or put its bin/ on PATH).\n"
         : `nen bootstrap: could not run the bootstrap script (${result.error.message}).\n`,
     };
   }
@@ -176,9 +185,20 @@ export function runBootstrap(options: BootstrapOptions): BootstrapResult {
   // stdout carries the verified path ALONE -- the script sends every diagnostic
   // to stderr precisely so this is safe. Trimmed, never parsed: if it ever
   // carried more than a path, taking the first line would silently hide that.
+  //
+  // AND IT IS EMPTIED ON A NON-ZERO STATUS, which this function's own doc
+  // comment on `path` already promised ("Empty on failure") and did not deliver.
+  // The script is careful never to print a path it did not verify, so today the
+  // two agree -- but a caller reading `result.path` without checking
+  // `result.code` is the caller this wrapper exists to keep safe, and "the thing
+  // we call is well behaved" is not a guarantee, it is an assumption about
+  // somebody else's code. The one thing this must never do is hand back a path
+  // to a binary that was not verified, and that is worth enforcing on BOTH sides
+  // of the boundary.
+  const code = result.status ?? BootstrapExit.WRAPPER;
   return {
-    code: result.status ?? BootstrapExit.WRAPPER,
-    path: (result.stdout ?? "").trim(),
+    code,
+    path: code === BootstrapExit.OK ? (result.stdout ?? "").trim() : "",
     stderr: result.stderr ?? "",
   };
 }

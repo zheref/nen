@@ -542,3 +542,65 @@ describe.skipIf(!BASH)("bootstrap/nen.sh -- end to end, transport stubbed", () =
     expect(result.stderr).toMatch(/no entry/);
   });
 });
+
+describe("nen bootstrap -- corrections from review", () => {
+  it("honors $NEN_BOOTSTRAP_SH from the ambient environment, not just from options", () => {
+    // The error message offers `$NEN_BOOTSTRAP_SH` as one of two ways out, but
+    // resolveScript only ever read `options.env` -- which src/index.ts does not
+    // pass -- so the variable was DEAD from the CLI and the advice sent an
+    // operator to set something that could not work. An escape hatch nobody can
+    // reach is worse than none, because the message promises it.
+    const empty = mkdtempSync(join(tmpdir(), "nen-bs-"));
+    const previous = process.env["NEN_BOOTSTRAP_SH"];
+    try {
+      process.env["NEN_BOOTSTRAP_SH"] = SCRIPT;
+      expect(resolveScript({ ref: "v0.1.0", repoFlag: empty })).toBe(SCRIPT);
+    } finally {
+      if (previous === undefined) delete process.env["NEN_BOOTSTRAP_SH"];
+      else process.env["NEN_BOOTSTRAP_SH"] = previous;
+    }
+  });
+
+  it("refuses a $NEN_BOOTSTRAP_SH pointing at nothing, rather than falling back", () => {
+    const empty = mkdtempSync(join(tmpdir(), "nen-bs-"));
+    const previous = process.env["NEN_BOOTSTRAP_SH"];
+    try {
+      process.env["NEN_BOOTSTRAP_SH"] = join(empty, "not-here.sh");
+      expect(() => resolveScript({ ref: "v0.1.0", cwd: REPO_ROOT })).toThrow(/does not exist/);
+    } finally {
+      if (previous === undefined) delete process.env["NEN_BOOTSTRAP_SH"];
+      else process.env["NEN_BOOTSTRAP_SH"] = previous;
+    }
+  });
+
+  it.skipIf(!BASH)("returns an EMPTY path on any non-zero status, as its doc promises", () => {
+    // The `path` field is documented "Empty on failure" and did not deliver it:
+    // it relayed stdout whatever the exit code was. The script is careful never
+    // to print a path it did not verify, so the two agree today -- but a caller
+    // reading `result.path` without checking `result.code` is exactly the caller
+    // this wrapper exists to keep safe, and "the thing we call is well behaved"
+    // is an assumption about somebody else's code, not a guarantee.
+    const cache = mkdtempSync(join(tmpdir(), "nen-bs-cache-"));
+    const result = runBootstrap({
+      ref: "v0.0.0-does-not-exist",
+      source: "zheref/nen",
+      cacheDir: cache,
+      cwd: REPO_ROOT,
+    });
+    expect(result.code).not.toBe(BootstrapExit.OK);
+    expect(result.path).toBe("");
+  });
+
+  it.skipIf(!BASH)("empties the path even if the script were to print one on failure", () => {
+    // Proved rather than asserted: a stub that prints a path AND exits non-zero
+    // is the misbehaviour the guard exists for, and nothing else in the suite
+    // can produce it.
+    const dir = mkdtempSync(join(tmpdir(), "nen-bs-liar-"));
+    const liar = join(dir, "liar.sh");
+    writeFileSync(liar, "#!/usr/bin/env bash\necho /tmp/unverified-binary\nexit 5\n");
+    chmodSync(liar, 0o755);
+    const result = runBootstrap({ ref: "v1", script: liar, cwd: REPO_ROOT });
+    expect(result.code).toBe(BootstrapExit.CHECKSUM);
+    expect(result.path).toBe("");
+  });
+});

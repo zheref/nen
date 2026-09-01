@@ -26,6 +26,7 @@
 
 import { parseArgs, UsageError } from "./cli/args.js";
 import { runDevTest } from "./dev/test.js";
+import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
@@ -89,9 +90,19 @@ export function run(argv: readonly string[], io: Io): number {
     io.out(VERSION);
     return 0;
   }
-  if (parsed.booleans.has("help") || parsed.positionals.length === 0) {
+  // ASKED-FOR HELP GOES TO STDOUT; help printed BECAUSE the invocation was
+  // wrong goes to STDERR. The two are different events and only one of them is
+  // success: `nen --help | less` should work, while `nen > out.txt` with no
+  // command must not leave a usage message sitting in a file the caller will
+  // read as output. The exit code already distinguished them; the stream did
+  // not.
+  if (parsed.booleans.has("help")) {
     io.out(USAGE);
-    return parsed.positionals.length === 0 && !parsed.booleans.has("help") ? 2 : 0;
+    return 0;
+  }
+  if (parsed.positionals.length === 0) {
+    io.err(USAGE);
+    return 2;
   }
 
   const repoFlag = parsed.values["repo"] ?? null;
@@ -127,13 +138,19 @@ export function run(argv: readonly string[], io: Io): number {
         return 2;
     }
   } catch (error) {
-    // A thrown error is reported as a FAILURE (1), never as a usage error, and
-    // its message is printed whole. The schema loaders' messages are written to
-    // be actionable on their own -- path, expectation, and how to point nen
-    // somewhere else -- so truncating or re-wording them here would throw away
-    // the thing that makes them useful.
+    // The message is printed WHOLE, always. The schema loaders' messages are
+    // written to be actionable on their own -- path, expectation, and how to
+    // point nen somewhere else -- so truncating or re-wording them here would
+    // throw away the thing that makes them useful.
     io.err(`${PROGRAM}: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
+    // A RepoRootError IS A USAGE ERROR (2), not a failure (1). `--repo
+    // zheref/nen` is a malformed invocation -- the flag takes a path and was
+    // handed an owner/name slug -- and reporting it as 1 tells a caller "the
+    // thing you asked for did not work" when the truth is "you typed it wrong".
+    // The two want different reactions, which is the entire reason this CLI
+    // separates the codes; getting it wrong here would have a retry wrapper
+    // retrying a typo forever.
+    return error instanceof RepoRootError ? 2 : 1;
   }
 }
 

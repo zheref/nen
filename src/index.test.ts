@@ -120,11 +120,9 @@ describe("nen schema check", () => {
     expect(checks.every((c): boolean => c.ok)).toBe(true);
   });
 
-  it("refuses an owner/name slug as --repo, naming the flag that takes one", () => {
-    const result = capture(["schema", "check", "--repo", "zheref/bankai-core"]);
-    expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/--source/);
-  });
+  // The owner/name-slug refusal is asserted in the exit-code block at the end of
+  // this file, where its CODE (2, a usage error, corrected in review) is the
+  // point rather than an aside.
 });
 
 describe("nen bootstrap", () => {
@@ -140,5 +138,46 @@ describe("nen bootstrap", () => {
     expect(result.code).toBe(7);
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toMatch(/bootstrap\/nen\.sh/);
+  });
+});
+
+describe("exit codes distinguish a typo from a failure (review finding)", () => {
+  it("reports a malformed --repo as a USAGE error (2), not a failure (1)", () => {
+    // `--repo zheref/nen` is a malformed invocation -- the flag takes a path and
+    // was handed an owner/name slug. Reporting it as 1 tells a caller "the thing
+    // you asked for did not work" when the truth is "you typed it wrong", and a
+    // retry wrapper obeying that distinction would retry a typo forever.
+    const result = capture(["schema", "check", "--repo", "zheref/bankai-core"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--source/);
+  });
+
+  it("keeps a genuine verb failure at 1", () => {
+    const empty = mkdtempSync(join(tmpdir(), "nen-cli-"));
+    // The repository exists and is readable; its taxonomy is simply not there.
+    // That is a failure, not a usage error.
+    expect(capture(["schema", "check", "--repo", empty]).code).toBe(1);
+  });
+
+  it("reports an empty --repo as a usage error too", () => {
+    expect(capture(["schema", "check", "--repo="]).code).toBe(2);
+  });
+});
+
+describe("usage goes to the right stream (review finding)", () => {
+  it("prints ASKED-FOR help on stdout", () => {
+    const result = capture(["--help"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/usage: nen/);
+    expect(result.err).toEqual([]);
+  });
+
+  it("prints usage on STDERR when it is a complaint about the invocation", () => {
+    // `nen > out.txt` with no command must not leave a usage message in a file
+    // the caller will read as this command's output.
+    const result = capture([]);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/usage: nen/);
   });
 });
