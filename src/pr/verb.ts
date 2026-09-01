@@ -10,6 +10,7 @@ import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
 import { nextBlocker } from "./blocker.js";
 import { cascadeMain } from "./cascade.js";
 import { retarget } from "./retarget.js";
+import { requestReviews } from "./reviewers.js";
 
 function requireTarget(context: VerbContext): Target {
   const raw = context.values["target"];
@@ -62,14 +63,19 @@ usage:
       clean merge. Reports a conflict rather than resolving it.
 
   nen pr retarget --target <owner/name> --pr <n> --base <branch>
-      gh pr edit --base, for a stacked PR after its predecessor merges.`;
+      gh pr edit --base, for a stacked PR after its predecessor merges.
+
+  nen pr request-reviews --target <owner/name> --pr <n> --add-reviewers a,b
+      gh pr edit --add-reviewer, once per name. Request on the MAINTAINER's
+      user token -- a bot token silently no-ops on this call (S6); this verb
+      cannot enforce which credential ran it, only warn.`;
 
 export const prVerb: Verb = {
   name: "pr",
   summary: "Fetch a PR whole, name its first blocker, cascade trunk in, retarget.",
   usage: USAGE,
   flags: {
-    values: ["target", "pr", "reviewers", "policy", "trunk", "base"],
+    values: ["target", "pr", "reviewers", "policy", "trunk", "base", "add-reviewers"],
     booleans: ["delivery-pr"],
   },
   run(context: VerbContext): number {
@@ -89,6 +95,8 @@ export function runPr(context: VerbContext, runner: Runner): number {
         return cascade(context, runner);
       case "retarget":
         return doRetarget(context, runner);
+      case "request-reviews":
+        return doRequestReviews(context, runner);
       default:
         return usage(context.io, `unknown 'pr' subcommand '${subcommand ?? "(none)"}'. Run 'nen pr --help'.`);
     }
@@ -166,6 +174,19 @@ function doRetarget(context: VerbContext, runner: Runner): number {
     return usage(context.io, "--base <branch> is required.");
   }
   const result = retarget(runner, target, prNumber, base);
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+  context.io.out(result.message);
+  return result.ok ? 0 : 1;
+}
+
+function doRequestReviews(context: VerbContext, runner: Runner): number {
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  const reviewers = commaList(context.values["add-reviewers"]);
+  const result = requestReviews(runner, target, prNumber, reviewers);
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;

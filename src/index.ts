@@ -58,15 +58,29 @@ import { PROGRAM, VERSION } from "./version.js";
 // missing verb: a missing verb fails one invocation, a broken build fails all of
 // them.
 
+import { commitVerb } from "./commit/verb.js";
 import { epicVerb } from "./epic/verb.js";
 import { issueVerb } from "./issue/verb.js";
 import { loopVerb } from "./loop/verb.js";
 import { parseVerb } from "./parse/verb.js";
 import { prVerb } from "./pr/verb.js";
 import { splitVerb } from "./split/verb.js";
+import { stageVerb } from "./stage/verb.js";
 import { watchVerb } from "./watch/verb.js";
+import { wcVerb } from "./wc/verb.js";
 
-export const VERBS: readonly Verb[] = [epicVerb, issueVerb, loopVerb, parseVerb, prVerb, splitVerb, watchVerb];
+export const VERBS: readonly Verb[] = [
+  commitVerb,
+  epicVerb,
+  issueVerb,
+  loopVerb,
+  parseVerb,
+  prVerb,
+  splitVerb,
+  stageVerb,
+  watchVerb,
+  wcVerb,
+];
 
 export interface Io {
   readonly out: (line: string) => void;

@@ -65,4 +65,19 @@ describe("nen pr -- CLI wiring", () => {
     ]);
     expect(runPr(context, runner)).toBe(1);
   });
+
+  it("request-reviews adds one --add-reviewer per name", () => {
+    const { context, out } = makeContext({
+      args: ["request-reviews"],
+      values: { target: "zheref/nen", pr: "9", "add-reviewers": "copilot,sasuke" },
+    });
+    const runner = new ScriptedRunner([
+      {
+        match: "gh pr edit 9 --repo zheref/nen --add-reviewer copilot --add-reviewer sasuke",
+        result: {},
+      },
+    ]);
+    expect(runPr(context, runner)).toBe(0);
+    expect(out.join("\n")).toMatch(/requested copilot, sasuke/);
+  });
 });
