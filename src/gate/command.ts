@@ -55,8 +55,29 @@ export const gateCommand: Command = {
     requireSubcommand("gate", context.args, ["derive"]);
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     const changed = changedFiles(context, root);
-    const policy = splitList(context.args.values["policy-paths"]);
-    const process = splitList(context.args.values["process-paths"]);
+    // BOTH FLAGS MUST BE PRESENT (review finding, blocker-adjacent): an
+    // ABSENT flag and an explicitly-empty one must not read the same. Forget
+    // --process-paths and its set silently contributes no hits -- a diff that
+    // touches only the process surface then derives G2 (agent-mergeable)
+    // instead of G4, and the basis line went on to claim "the diff touches
+    // neither path set", an affirmative statement that both were consulted
+    // when one never was. `--policy-paths ""` / `--process-paths ""` stay
+    // legal: that is a caller's explicit assertion that the set is empty, not
+    // an omission.
+    const policyPathsRaw = context.args.values["policy-paths"];
+    const processPathsRaw = context.args.values["process-paths"];
+    if (policyPathsRaw === undefined) {
+      throw new VerbUsageError(
+        "--policy-paths is required. An absent flag would silently contribute zero hits and could derive G2 for a policy change nen never checked; pass --policy-paths '' to explicitly assert this repository has none.",
+      );
+    }
+    if (processPathsRaw === undefined) {
+      throw new VerbUsageError(
+        "--process-paths is required. Same reasoning as --policy-paths: an absent flag must never derive G2 by silently checking nothing; pass --process-paths '' to explicitly assert this repository has none.",
+      );
+    }
+    const policy = splitList(policyPathsRaw);
+    const process = splitList(processPathsRaw);
     const asserted = context.args.values["asserted"] ?? null;
     if (asserted !== null && asserted !== "G2" && asserted !== "G4") {
       throw new VerbUsageError(`--asserted takes G2 or G4, got '${asserted}'.`);
