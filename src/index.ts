@@ -9,14 +9,25 @@
 // whose output contract is tested by nobody, and the `--json` shape is the half
 // that other programs depend on.
 //
-// P1 SHIPS THE SUPPLY AND DEV VERBS ONLY. `nen --version` and `nen bootstrap`
-// are what zheref/hatsu#1's D10 minimum-version contract needs; `nen dev test`
-// is D16's one-command harness; `nen schema check` exists because "taxonomy
-// behavior demonstrably follows the target repo's schema files" has to be
-// demonstrable from the command line and not only from a test. The readiness,
-// backlog and wake verbs are #2/#3/#4 and are deliberately absent -- an empty
-// verb that printed "not implemented" would be a surface other repositories
-// could start depending on before it means anything.
+// P1 SHIPS THE SUPPLY, DEV AND READINESS VERBS. `nen --version` and
+// `nen bootstrap` are what zheref/hatsu#1's D10 minimum-version contract needs;
+// `nen dev test` is D16's one-command harness; `nen schema check` exists
+// because "taxonomy behavior demonstrably follows the target repo's schema
+// files" has to be demonstrable from the command line and not only from a
+// test; `nen pr ready` is zheref/nen#2 -- CON-32's readiness verdict for a
+// human, a skill, and CI, from one authority. The backlog and wake verbs are
+// #3/#4 and are deliberately absent -- an empty verb that printed "not
+// implemented" would be a surface other repositories could start depending on
+// before it means anything.
+//
+// `run()` IS ASYNC because `nen pr ready` reads GitHub over the network
+// (../github/pr_state.ts, on top of octokit) and there is no synchronous way
+// to do that from Node. Every other verb here is still synchronous under the
+// hood (spawnSync, readFileSync) and returns its number the same way it always
+// did; awaiting a already-resolved value costs nothing. This is a signature
+// change from the P1 scaffold, made once, here, so the two sibling verb
+// families (#3, #4) -- which are GitHub-backed the same way -- inherit an
+// already-async entry point instead of each having to make the same change.
 //
 // EXIT CODES. 0 success, 1 a verb's own failure, 2 a usage error, and whatever
 // the bootstrap script returned for `nen bootstrap` (its codes are a published
@@ -29,6 +40,7 @@ import { runDevTest } from "./dev/test.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
+import { prReady, PR_READY_FLAGS, PR_READY_USAGE } from "./verbs/pr_ready.js";
 import { PROGRAM, VERSION } from "./version.js";
 
 export interface Io {
@@ -54,6 +66,8 @@ commands:
   dev test [-- <args>]      Run this repository's own harness (bun + vitest).
                             A checkout verb: a compiled binary has no harness.
 
+${PR_READY_USAGE}
+
 global options:
   --repo <path>             The TARGET repository's working-tree root. A PATH,
                             never an owner/name slug. Defaults to the current
@@ -63,13 +77,16 @@ global options:
   --version, -v             Print the version and exit.
   --help, -h                Print this and exit.`;
 
+// PR_READY_FLAGS is SPREAD in, not restated: ../verbs/pr_ready.ts owns its own
+// flag names, and a flag list every verb edited by hand here would be a merge
+// conflict per verb once the sibling branches (#3, #4) add theirs.
 const GLOBAL_FLAGS = {
-  values: ["repo", "source", "cache-dir", "script", "ref"],
-  booleans: ["json", "version", "help"],
+  values: ["repo", "source", "cache-dir", "script", "ref", ...PR_READY_FLAGS.values],
+  booleans: ["json", "version", "help", ...PR_READY_FLAGS.booleans],
   aliases: { v: "version", h: "help" },
 } as const;
 
-export function run(argv: readonly string[], io: Io): number {
+export async function run(argv: readonly string[], io: Io): Promise<number> {
   let parsed;
   try {
     parsed = parseArgs(argv, GLOBAL_FLAGS);
@@ -131,6 +148,12 @@ export function run(argv: readonly string[], io: Io): number {
           return 2;
         }
         return devTest(repoFlag, parsed.passthrough, io);
+
+      case "pr":
+        return await prReady(
+          { positionals: parsed.positionals, values: parsed.values, booleans: parsed.booleans, repoFlag },
+          io,
+        );
 
       default:
         io.err(`${PROGRAM}: unknown command '${command}'.`);
@@ -215,12 +238,14 @@ function devTest(repoFlag: string | null, passthrough: readonly string[], io: Io
 // -- unlike `import.meta.url`, which resolves to a `/$bunfs/` path and is why
 // this repository derives no root from it (§3).
 if (import.meta.main) {
-  process.exitCode = run(process.argv.slice(2), {
+  run(process.argv.slice(2), {
     out: (line): void => {
       process.stdout.write(`${line}\n`);
     },
     err: (line): void => {
       process.stderr.write(`${line}\n`);
     },
+  }).then((code): void => {
+    process.exitCode = code;
   });
 }
