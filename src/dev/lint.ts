@@ -50,7 +50,7 @@ export function runDevLint(options: DevLintOptions = {}): DevLintResult {
     return {
       code: 2,
       message: missing
-        ? "no 'bun' on PATH. The harness is bun + eslint (D16); install bun 1.4.0 or newer."
+        ? "no 'bun' on PATH. The harness is bun + eslint; install bun 1.4.0 or newer."
         : `could not run the linter (${result.error.message}).`,
     };
   }

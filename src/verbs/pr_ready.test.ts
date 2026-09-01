@@ -22,7 +22,13 @@ import {
   type ReadyReport,
 } from "./pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
-import type { PullRequestSnapshot, ReviewThreadPage } from "../github/graphql.js";
+import {
+  normalizePullRequestResponse,
+  type CheckRollupPage,
+  type PullRequestSnapshot,
+  type ReviewRequestsPage,
+  type ReviewThreadPage,
+} from "../github/graphql.js";
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { SchemaError } from "../schema/errors.js";
 import { GATES_FILE, schemaPath } from "../schema/source.js";
@@ -259,7 +265,9 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
     },
     defaultBranch: "main",
     checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
+    checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
+    reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
   };
   return {
     pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => snapshot,
@@ -269,6 +277,12 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
     ],
     reviewThreadsPage: async (): Promise<ReviewThreadPage> => ({ nodes: [], hasNextPage: false, endCursor: null }),
     timeline: async (): Promise<unknown[]> => [],
+    checkRollupPage: async (): Promise<CheckRollupPage> => {
+      throw new Error("checkRollupPage should not be called when hasNextPage is false");
+    },
+    reviewRequestsPage: async (): Promise<ReviewRequestsPage> => {
+      throw new Error("reviewRequestsPage should not be called when hasNextPage is false");
+    },
     ...overrides,
   };
 }
@@ -370,7 +384,9 @@ describe("prReady -- unevaluated is never mistaken for a verdict", () => {
         pullRequest: undefined,
         defaultBranch: undefined,
         checkRollup: undefined,
+        checkRollupPageInfo: { hasNextPage: undefined, endCursor: undefined },
         reviewRequests: undefined,
+        reviewRequestsPageInfo: { hasNextPage: undefined, endCursor: undefined },
       }),
     });
     const code = await prReady(input(), io, stubDeps(blanked));
@@ -378,6 +394,151 @@ describe("prReady -- unevaluated is never mistaken for a verdict", () => {
     const report = JSON.parse(out.join("\n")) as ReadyReport;
     expect(report.verdict).toBe("unevaluated");
     expect(report.remedy).toContain("private repository");
+  });
+});
+
+// zheref/nen#14's fact-check, FINDING 1: the shadow window's real disagreement
+// on zheref/akatsuki-ai#33 -- the oracle answered
+// "not-ready: NO checks reported at head (CON-32a)" (an EMPTY, READABLE
+// rollup) and nen answered "unevaluated: the check rollup came back empty or
+// unreadable" (conflating that with the genuinely UNREADABLE case). These two
+// tests drive the WHOLE live transport path -- a raw PULL_REQUEST_QUERY-shaped
+// response through ../github/graphql.ts's normalizePullRequestResponse(),
+// exactly as ../github/client.ts hands it to fetchPrState() -- rather than a
+// hand-built PullRequestSnapshot that would skip the normalizer this bug lived
+// in. Every other conjunct is held fixed and satisfied (mergeable, both
+// approvers posted at head, zero unresolved threads) so checks-green is the
+// ONLY thing either case is testing.
+describe("prReady -- the checks-rollup distinction (zheref/nen#14, empty vs. unreadable)", () => {
+  function rawResponse(commits: unknown): unknown {
+    return {
+      repository: {
+        defaultBranchRef: { name: "main" },
+        pullRequest: {
+          number: 9,
+          mergeable: "MERGEABLE",
+          isDraft: false,
+          headRefOid: "cafebabe",
+          headRefName: "feature/x",
+          baseRefName: "main",
+          author: { login: "someone" },
+          labels: { nodes: [] },
+          reviewRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          statusCheckRollup: { nodes: commits },
+        },
+      },
+    };
+  }
+
+  function sourceFor(commits: unknown): PrStateSource {
+    return stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> =>
+        normalizePullRequestResponse(rawResponse(commits)),
+    });
+  }
+
+  it("a head commit whose OWN statusCheckRollup is null -- readable, empty -- is not-ready with the shell's byte-identical reason, never unevaluated", async () => {
+    const { io, out } = capture();
+    const source = sourceFor([{ commit: { statusCheckRollup: null } }]);
+    const code = await prReady(input(), io, stubDeps(source));
+    expect(code).toBe(1); // not-ready still exits 1; only `verdict` distinguishes it from unevaluated
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    expect(report.gateLine).toBe(
+      "not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either " +
+        "CI has not started yet, or its run concluded startup_failure and no check will ever " +
+        "attach. Tell them apart with: gh run list --branch <head-branch> --limit 5 --json " +
+        "conclusion,path,headSha",
+    );
+  });
+
+  it("a head commit that cannot be resolved at all is unevaluated, never a manufactured not-ready", async () => {
+    const { io, out } = capture();
+    // No `commit` object on the node at all -- the shape a partial-data blank
+    // or an unrecognised response produces, distinct from a commit that
+    // resolved and answered `null` for its own field.
+    const source = sourceFor([{}]);
+    const code = await prReady(input(), io, stubDeps(source));
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("unevaluated");
+    expect(report.gateLine).toContain("the check rollup could not be read");
+    expect(report.conjuncts.every((c): boolean => c.status !== "ready")).toBe(true);
+  });
+});
+
+// THE FALSE-GREEN DEFECT, PINNED (zheref/nen#14's fact-check, verified live
+// against zheref/bankai-core#927). `contexts(first:100)` never paginated:
+// when observed on 2026-08-31, #927's rollup had totalCount 114 with
+// hasNextPage true, and the only failing entry ('sasuke / audit') sat at
+// position 101+, so this verb answered `ready` on a truncated,
+// all-green-SO-FAR view while scripts/pr_ready_gate.sh -- whose
+// `gh pr view --json statusCheckRollup`
+// paginates the identical connection inside gh's own client -- answered
+// `not-ready: required checks reported but are not all green (CON-32a)`.
+// These two tests drive the whole verb end to end (not just fetchPrState's
+// raw state, which ../github/pr_state.test.ts already pins) with a SMALLER
+// stubbed two-page rollup: the failure on page two, and a page-two FETCH
+// FAILURE, so both "the truncation is fixed" and "a partial read never reads
+// as ready" are proved at the level a reader actually consumes.
+describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref/bankai-core#927)", () => {
+  function pagedSnapshot(): PullRequestSnapshot {
+    return {
+      pullRequest: {
+        number: 9,
+        mergeable: "MERGEABLE",
+        isDraft: false,
+        headRefOid: "cafebabe",
+        headRefName: "feature/x",
+        baseRefName: "main",
+        author: { login: "someone" },
+        labels: [],
+        reviewRequests: [],
+      },
+      defaultBranch: "main",
+      // Page ONE: a single green entry, but hasNextPage:true -- exactly
+      // #927's shape, scaled down from 100+114 entries to 1+1.
+      checkRollup: [{ name: "kisuke / probe", status: "COMPLETED", conclusion: "SUCCESS" }],
+      checkRollupPageInfo: { hasNextPage: true, endCursor: "cursor-2" },
+      reviewRequests: [],
+      reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
+    };
+  }
+
+  it("THE PIN: a rollup spanning two pages, with the FAILING entry on page two, is not-ready -- byte-identical to the oracle's own reason, never a false green", async () => {
+    const source = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => pagedSnapshot(),
+      checkRollupPage: async (): Promise<CheckRollupPage> => ({
+        nodes: [{ name: "sasuke / audit", status: "COMPLETED", conclusion: "FAILURE" }],
+        hasNextPage: false,
+        endCursor: null,
+      }),
+    });
+    const { io, out } = capture();
+    const code = await prReady(input(), io, stubDeps(source));
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    expect(report.firstFailing).toBe("checks-green");
+    // The oracle's OWN reason string (scripts/pr_ready_gate.sh's
+    // `evaluate_ready`), quoted verbatim -- this is the CON-32(a) branch the
+    // shell reaches once the failing entry is actually visible to it.
+    expect(report.gateLine).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+  });
+
+  it("a FETCH FAILURE on page two is unevaluated, NEVER a partial ready -- the entry never seen cannot be weighed as green", async () => {
+    const source = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => pagedSnapshot(),
+      checkRollupPage: async (): Promise<CheckRollupPage> => {
+        throw new Error("checks:read grant missing");
+      },
+    });
+    const { io, out } = capture();
+    const code = await prReady(input(), io, stubDeps(source));
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("unevaluated");
+    expect(report.conjuncts.every((c): boolean => c.status !== "ready")).toBe(true);
   });
 });
 
@@ -597,7 +758,9 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
         },
         defaultBranch: "main",
         checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
+        checkRollupPageInfo: { hasNextPage: false, endCursor: null },
         reviewRequests: [],
+        reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
       }),
     });
     const { io, out } = capture();

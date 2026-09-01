@@ -118,6 +118,19 @@ const DEFAULT_TOKEN_ENV = "GH_TOKEN";
 // two numeric knobs, at the shell's values. Operator settings, not PR data.
 const STALL_MINUTES = 30;
 const MAX_THREAD_PAGES = 50;
+// The check-rollup pagination cap (../github/pr_state.ts's `fullCheckRollup`,
+// zheref/nen#14's fact-check on zheref/bankai-core#927). NO shell counterpart
+// to mirror: `gh pr view --json statusCheckRollup` paginates this connection
+// inside gh's own client with no configurable cap the script exposes. Set to
+// MAX_THREAD_PAGES's own default for the same reasoning -- large enough that
+// no real rollup should ever hit it, small enough to backstop a server that
+// never reports `hasNextPage:false`.
+const MAX_ROLLUP_PAGES = 50;
+// The reviewRequests pagination cap (../github/pr_state.ts's
+// `fullReviewRequests`, zheref/nen#14's SECOND fact-check, 2026-09-01). Same
+// reasoning as MAX_ROLLUP_PAGES: no shell counterpart, no operator-facing
+// knob to mirror, set to the same default backstop value.
+const MAX_REVIEW_REQUEST_PAGES = 50;
 
 export interface Io {
   readonly out: (line: string) => void;
@@ -613,6 +626,8 @@ export async function prReady(
       policy,
       excludeRun,
       maxThreadPages: MAX_THREAD_PAGES,
+      maxRollupPages: MAX_ROLLUP_PAGES,
+      maxReviewRequestPages: MAX_REVIEW_REQUEST_PAGES,
     });
   } catch (error) {
     // A network failure, a 403 from a token without checks:read, an
