@@ -10,7 +10,7 @@ import {
 } from "../cli/command.js";
 import { readJsonFile, splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
-import { GH, mustJson } from "../seam/exec.js";
+import { GH, mustJson, type Seams } from "../seam/exec.js";
 import { assembleRows, type RawIssue, type RawPr } from "./fetch.js";
 import { orderBacklog, type OrderableRow } from "./order.js";
 
@@ -21,8 +21,15 @@ fetch:
   Fetches open issues and open pull requests fresh over 'gh api' (NEVER
   cached) and assembles one row per effort -- an issue plus the PRs that
   reference it, or a lone PR that references no open issue.
-  --limit <n>   Caps the fetch. NO SILENT CAPS: a limited fetch is reported as
-                truncated in the output, never presented as complete.
+  PAGINATED, not one page: GitHub clamps a single page at 100 rows, so this
+  follows '?page=N' until a short page comes back rather than stopping at the
+  first one (review finding: a one-page fetch capped a repository with >100
+  open issues at 100 with no way to lift it -- '--limit' then couldn't raise
+  it, and omitting '--limit' selected the cap it was supposed to remove).
+  --limit <n>   Caps the TOTAL rows fetched per resource (issues, PRs), across
+                as many pages as it takes to reach it. Omit it to fetch every
+                open row with NO CAP. A capped fetch is always reported as
+                TRUNCATED, never presented as complete.
 
 order:
   Applies the backlog-loop §2 priority order to a pre-fetched row set:
@@ -45,20 +52,59 @@ interface RawGhIssue {
   readonly pull_request?: unknown;
 }
 
+// GitHub's REST API clamps a single page's `per_page` at 100 -- that is a
+// PAGE SIZE, not a cap, and `fetchPaginated` follows `?page=N` until a page
+// comes back short of it rather than stopping at the first one (review
+// finding).
+const PAGE_SIZE = 100;
+// A defensive ceiling only, never a normal cap: it stops a malformed/looping
+// API response from paginating forever. No real repository's open-issue or
+// open-PR count is expected to approach it, and hitting it is reported as
+// truncated exactly like an explicit --limit would be.
+const MAX_PAGES = 200;
+
+interface PaginatedFetch<T> {
+  readonly items: T[];
+  readonly truncated: boolean;
+}
+
+function fetchPaginated<T>(seams: Seams, pathWithQuery: string, limit: number | null): PaginatedFetch<T> {
+  const items: T[] = [];
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const batch = mustJson<readonly T[]>(seams, GH, [
+      "api",
+      `${pathWithQuery}&per_page=${PAGE_SIZE}&page=${page}`,
+    ]);
+    items.push(...batch);
+    const isLastPage = batch.length < PAGE_SIZE;
+    if (limit !== null && items.length >= limit) {
+      // Genuinely truncated only when there is something left to cut: either
+      // this page overshot the limit on its own (items.length > limit), or
+      // the page that got us to the limit was FULL, so a further page has
+      // not been ruled out. When the limit lands exactly on the true last
+      // (short) page, nothing was actually cut off.
+      const truncated = items.length > limit || !isLastPage;
+      return { items: items.slice(0, limit), truncated };
+    }
+    if (isLastPage) {
+      return { items, truncated: false };
+    }
+  }
+  return { items, truncated: true };
+}
+
 function fetch(context: CommandContext): number {
   const repo = requireValue(context.args, "repo-slug", "The owner/name to fetch fresh from.");
-  const limit = context.args.values["limit"];
-  const perPage = limit === undefined ? 100 : Number.parseInt(limit, 10);
-  if (limit !== undefined && (!/^\d+$/.test(limit) || perPage < 1)) {
-    throw new VerbUsageError(`--limit takes a positive whole number, got '${limit}'.`);
+  const limitRaw = context.args.values["limit"];
+  const limit = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10);
+  if (limitRaw !== undefined && (!/^\d+$/.test(limitRaw) || (limit ?? 0) < 1)) {
+    throw new VerbUsageError(`--limit takes a positive whole number, got '${limitRaw}'.`);
   }
 
   // `issues?state=open` returns BOTH issues and PRs (GitHub's own API shape);
   // split by the presence of `.pull_request`.
-  const raw = mustJson<readonly RawGhIssue[]>(context.seams, GH, [
-    "api",
-    `repos/${repo}/issues?state=open&per_page=${perPage}`,
-  ]);
+  const rawFetch = fetchPaginated<RawGhIssue>(context.seams, `repos/${repo}/issues?state=open`, limit);
+  const raw = rawFetch.items;
   const issues: RawIssue[] = raw
     .filter((item): boolean => item.pull_request === undefined)
     .map((item): RawIssue => ({
@@ -68,24 +114,28 @@ function fetch(context: CommandContext): number {
       createdAt: item.created_at,
     }));
 
-  const rawPrs = mustJson<readonly { number: number; title: string; body: string | null; created_at: string }[]>(
+  const prsFetch = fetchPaginated<{ number: number; title: string; body: string | null; created_at: string }>(
     context.seams,
-    GH,
-    ["api", `repos/${repo}/pulls?state=open&per_page=${perPage}`],
+    `repos/${repo}/pulls?state=open`,
+    limit,
   );
-  const prs: RawPr[] = rawPrs.map((pr): RawPr => ({
+  const prs: RawPr[] = prsFetch.items.map((pr): RawPr => ({
     number: pr.number,
     title: pr.title,
     body: pr.body ?? "",
     createdAt: pr.created_at,
   }));
 
-  const truncated = raw.length >= perPage || rawPrs.length >= perPage;
+  const truncated = rawFetch.truncated || prsFetch.truncated;
   const assembly = assembleRows(issues, prs);
 
   const lines = [`${assembly.rows.length} row(s) -- ${assembly.issueCount} issue(s), ${assembly.prCount} PR(s)`];
   if (truncated) {
-    lines.push(`TRUNCATED at --limit ${perPage}: the fetch may not be complete. Raise --limit or omit it.`);
+    lines.push(
+      limit === null
+        ? `TRUNCATED at a defensive ${MAX_PAGES}-page ceiling: the fetch may not be complete.`
+        : `TRUNCATED at --limit ${limit}: the fetch may not be complete. Raise --limit, or omit it to fetch every open row.`,
+    );
   }
   for (const row of assembly.rows) {
     const subject = row.issueNumber === null ? `PR #${row.prNumbers[0]}` : `#${row.issueNumber}`;

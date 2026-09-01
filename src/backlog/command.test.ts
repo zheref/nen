@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
+import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { backlogCommand } from "./command.js";
 
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding: several family test files
+// re-implemented that mapping locally, which can silently drift from the
+// real one). This also exercises the real re-parse against
+// `mergeFlags(family.flags)` and the real `--repo`/`--json` merge, the same
+// path a live invocation takes.
 function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "[]", stderr: "", spawnFailed: false })): {
   code: number;
   out: string[];
@@ -24,16 +27,9 @@ function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult 
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(backlogCommand.flags));
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  try {
-    const code = backlogCommand.run({ args, repoFlag: null, json: args.booleans.has("json"), io, seams });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(backlogCommand, argv, null, false, io, seams);
+  return { code, out, err };
 }
 
 describe("nen backlog fetch", () => {
@@ -56,14 +52,66 @@ describe("nen backlog fetch", () => {
     expect(result.out.join("\n")).not.toMatch(/TRUNCATED/);
   });
 
-  it("reports truncation explicitly rather than silently capping", () => {
+  it("reports truncation explicitly, and NAMES A WORKING REMEDY, when --limit actually cuts something", () => {
+    const twoIssues = JSON.stringify([
+      { number: 1, title: "a", labels: [], created_at: "2026-01-01T00:00:00Z" },
+      { number: 2, title: "b", labels: [], created_at: "2026-01-01T00:00:00Z" },
+    ]);
+    const result = capture(["backlog", "fetch", "--repo-slug", "o/r", "--limit", "1"], (command, args): CommandResult => {
+      const joined = args.join(" ");
+      if (joined.includes("/issues?")) return { code: 0, stdout: twoIssues, stderr: "", spawnFailed: false };
+      return { code: 0, stdout: "[]", stderr: "", spawnFailed: false };
+    });
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/TRUNCATED at --limit 1/);
+    // "Raise --limit" is a working remedy now that --limit caps a TOTAL
+    // across pages rather than the per_page a single 'gh api' call was
+    // silently clamped to (review finding).
+    expect(result.out.join("\n")).toMatch(/Raise --limit, or omit it/);
+  });
+
+  it("does NOT report truncation when --limit lands exactly on the true total (nothing was actually cut)", () => {
     const result = capture(["backlog", "fetch", "--repo-slug", "o/r", "--limit", "1"], (command, args): CommandResult => {
       const joined = args.join(" ");
       if (joined.includes("/issues?")) return { code: 0, stdout: issues, stderr: "", spawnFailed: false };
       return { code: 0, stdout: "[]", stderr: "", spawnFailed: false };
     });
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/TRUNCATED at --limit 1/);
+    expect(result.out.join("\n")).not.toMatch(/TRUNCATED/);
+  });
+
+  it("PAGINATES past GitHub's 100-row page clamp -- a >100-issue repo is no longer capped with no way to lift it (review finding)", () => {
+    // Page 1 comes back FULL (100 rows, GitHub's own per_page maximum); page
+    // 2 comes back short (30 rows) -- the true signal that there is no page
+    // 3. Omitting --limit must fetch every row across both pages.
+    const page1 = JSON.stringify(
+      Array.from({ length: 100 }, (_unused, i): unknown => ({
+        number: i + 1,
+        title: `issue ${i + 1}`,
+        labels: [],
+        created_at: "2026-01-01T00:00:00Z",
+      })),
+    );
+    const page2 = JSON.stringify(
+      Array.from({ length: 30 }, (_unused, i): unknown => ({
+        number: 100 + i + 1,
+        title: `issue ${100 + i + 1}`,
+        labels: [],
+        created_at: "2026-01-01T00:00:00Z",
+      })),
+    );
+    const calls: string[] = [];
+    const result = capture(["backlog", "fetch", "--repo-slug", "o/r"], (command, args): CommandResult => {
+      const joined = args.join(" ");
+      calls.push(joined);
+      if (joined.includes("/issues?") && /[?&]page=1(&|$)/.test(joined)) return { code: 0, stdout: page1, stderr: "", spawnFailed: false };
+      if (joined.includes("/issues?") && /[?&]page=2(&|$)/.test(joined)) return { code: 0, stdout: page2, stderr: "", spawnFailed: false };
+      return { code: 0, stdout: "[]", stderr: "", spawnFailed: false };
+    });
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/130 row\(s\)/);
+    expect(result.out.join("\n")).not.toMatch(/TRUNCATED/);
+    expect(calls.some((c): boolean => c.includes("/issues?") && /[?&]page=2(&|$)/.test(c))).toBe(true);
   });
 });
 
