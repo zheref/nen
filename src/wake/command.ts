@@ -3,7 +3,19 @@
 // `nen wake verify` is the seam-driven half of the ../wake/detect.ts port: it
 // fetches the inputs (open PRs, their workflow runs, their comments) over
 // `gh api`, hands them to the pure decision engine, and executes what it
-// decided (a redrive, a flag comment) unless `--dry-run` says otherwise.
+// decided (a redrive, a flag comment) -- but ONLY when `--run` is given.
+// DRY-RUN IS THE DEFAULT (review finding): this verb reruns workflows and
+// posts comments on GitHub, so despite its name reading as an inspection it
+// follows the same CON-38 dry-run-first convention as `nen wake fire --run`
+// and `nen label apply --run` rather than being the one write-by-default
+// exception.
+//
+// A FAILED REDRIVE OR A FAILED COMMENT POST NEVER ABORTS THE SWEEP (ported
+// from bankai-core#398 and PR #411, both of which this port had silently
+// reverted before review): a failing `gh run rerun` falls back to posting a
+// human flag instead, and a failing comment POST is a warning, not a thrown
+// ToolError -- either would otherwise strand every PR after the failing one
+// unscanned. See `postCommentBestEffort` below.
 //
 // FIDELITY GAP, DISCLOSED RATHER THAN SILENT: the source paginates every one
 // of these three fetches with `gh api --paginate`, so a PR list, a run
@@ -36,12 +48,13 @@ import {
 import { GH, must, mustJson, type Seams } from "../seam/exec.js";
 import {
   decideActions,
+  flagBody,
   type PlannedAction,
   type StampedComment,
   type WorkflowRun,
 } from "./detect.js";
 
-const USAGE = `nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <regex> [--max-prs <n>] [--max-runs-per-pr <n>] [--marker <text>] [--dry-run]
+const USAGE = `nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <regex> [--max-prs <n>] [--max-runs-per-pr <n>] [--flag-marker <text>] [--redrive-marker <text>] [--run]
 nen wake fire --repo-slug <owner/name> --ref <object-ref> --label <name> [--comment <text>] [--run]
 
 verify:
@@ -54,10 +67,24 @@ verify:
   --author-pattern <regex>  Which PR authors are in scope. Nen carries no
                             repository's agent-login list; this is a required
                             flag rather than a default.
-  --marker <text>           The idempotency-stamp prefix this run's own
-                            comments are recognised by (default nen-wake-guard).
+  --flag-marker <text>      The full idempotency-stamp phrase a detect-only
+                            flag comment is recognised by (default
+                            nen-wake-guard). NOT interoperable at its default
+                            with the shell sweep this was ported from -- a
+                            migration caller running both against the same
+                            repository should set this to that script's own
+                            marker phrase (this module's own header comment
+                            names it).
+  --redrive-marker <text>   The full idempotency-stamp phrase a redrive
+                            comment is recognised by (default
+                            nen-wake-redrive). Same interoperability note as
+                            --flag-marker.
   --max-prs <n>             Default 6. --max-runs-per-pr <n>  Default 3.
-  --dry-run                 Report the planned actions; write nothing.
+  --run                     Without it, nothing is written -- CON-38's
+                            dry-run-first convention (scripts/sync-labels.sh);
+                            this verb MUTATES GitHub (reruns workflows, posts
+                            comments) and stays report-only until --run is
+                            given, the same as every other mutating verb here.
 
 fire:
   Fires a wake ALONE on one object by removing then re-applying a label (the
@@ -120,10 +147,24 @@ function verify(context: CommandContext): number {
       `--author-pattern '${authorPatternRaw}' is not a valid regular expression (${error instanceof Error ? error.message : String(error)}).`,
     );
   }
-  const marker = context.args.values["marker"] ?? "nen-wake-guard";
+  // TWO FULL MARKER PHRASES, not one marker with a kind word appended: the
+  // source stamps a flag with `bankai swallowed-wake-guard` and a redrive
+  // with `bankai swallowed-wake-redrive`, and no single shared value can
+  // reproduce both (review finding). A migration caller running nen
+  // alongside the still-scheduled shell sweep can set these to the source's
+  // exact phrases so each recognises the other's stamps.
+  const flagMarker = context.args.values["flag-marker"] ?? "nen-wake-guard";
+  const redriveMarker = context.args.values["redrive-marker"] ?? "nen-wake-redrive";
   const maxPrs = readInteger(context.args, "max-prs", 6);
   const maxRunsPerPr = readInteger(context.args, "max-runs-per-pr", 3);
-  const dryRun = context.args.booleans.has("dry-run");
+  // MUTATES GITHUB ONLY WHEN --run IS GIVEN. This is a scan that reruns
+  // workflows and posts comments, not an inspection -- every other mutating
+  // verb on this branch (`nen wake fire --run`, `nen label apply --run`) is
+  // dry-run-first (CON-38, scripts/sync-labels.sh), and a verb whose name
+  // reads as verification must not be the one exception that writes by
+  // default (review finding).
+  const write = context.args.booleans.has("run");
+  const dryRun = !write;
 
   const prs = mustJson<RawPr[]>(context.seams, GH, [
     "api",
@@ -140,6 +181,7 @@ function verify(context: CommandContext): number {
     readonly prNumber: number;
     readonly actions: readonly PlannedAction[];
   }[] = [];
+  const warnings: string[] = [];
 
   let scanned = 0;
   for (const pr of scoped) {
@@ -161,21 +203,39 @@ function verify(context: CommandContext): number {
       body: comment.body ?? "",
     }));
 
-    const actions = decideActions({ runs, comments, now, marker, maxRunsPerPr });
+    const actions = decideActions({ runs, comments, now, flagMarker, redriveMarker, maxRunsPerPr });
     results.push({ prNumber: pr.number, actions });
 
-    if (dryRun) continue;
+    if (!write) continue;
+    // A FAILED REDRIVE OR A FAILED COMMENT POST MUST NEVER TAKE THE WHOLE
+    // SWEEP DOWN (bankai-core#398/PR #411, ported behaviour): the source uses
+    // `seams.run` here rather than `must`, warns, and moves on to the next PR
+    // rather than throwing ToolError and stranding every PR after this one
+    // unscanned.
     for (const action of actions) {
       if (action.kind === "redrive") {
-        must(context.seams, GH, ["run", "rerun", action.run.id, "--repo", repo]);
+        const rerun = context.seams.run(GH, ["run", "rerun", action.run.id, "--repo", repo]);
+        if (rerun.spawnFailed || rerun.code !== 0) {
+          warnings.push(`#${pr.number}: gh run rerun ${action.run.id} failed -- falling back to a human flag.`);
+          postCommentBestEffort(
+            context.seams,
+            repo,
+            pr.number,
+            flagBody({
+              flagMarker,
+              runId: action.run.id,
+              htmlUrl: action.run.htmlUrl,
+              now,
+              conclusion: action.run.conclusion ?? "",
+              note: `Auto-redrive attempted 'gh run rerun ${action.run.id}' and it failed -- needs a human.`,
+            }),
+            warnings,
+          );
+          continue;
+        }
       }
       if (action.commentBody !== null) {
-        must(context.seams, GH, [
-          "api",
-          `repos/${repo}/issues/${pr.number}/comments`,
-          "-f",
-          `body=${action.commentBody}`,
-        ]);
+        postCommentBestEffort(context.seams, repo, pr.number, action.commentBody, warnings);
       }
     }
   }
@@ -189,9 +249,32 @@ function verify(context: CommandContext): number {
     }
   }
   if (total === 0) lines.push("no swallowed wakes found");
+  for (const warning of warnings) lines.push(`warning: ${warning}`);
 
-  emit(context.io, context.json, { repo, now, dryRun, scanned, results }, lines);
+  emit(context.io, context.json, { repo, now, dryRun, scanned, results, warnings }, lines);
   return 0;
+}
+
+/**
+ * Post a comment, tolerating a transient failure of the POST itself: by the
+ * time this is called the tick already took its real action (a redrive, or
+ * deciding to flag), so a failed comment must never take the whole sweep
+ * down -- see the caller's own header for the incident this preserves
+ * (bankai-core#398/PR #411).
+ */
+function postCommentBestEffort(
+  seams: Seams,
+  repo: string,
+  prNumber: number,
+  body: string,
+  warnings: string[],
+): void {
+  const result = seams.run(GH, ["api", `repos/${repo}/issues/${prNumber}/comments`, "-f", `body=${body}`]);
+  if (result.spawnFailed || result.code !== 0) {
+    warnings.push(
+      `#${prNumber}: the action above this line took effect, but posting its follow-up comment failed -- this tick is not marked, so a later sweep may retry it.`,
+    );
+  }
 }
 
 function pickSwallowedCount(runs: readonly WorkflowRun[]): number {
@@ -241,14 +324,15 @@ export const wakeCommand: Command = {
       "repo-slug",
       "now",
       "author-pattern",
-      "marker",
+      "flag-marker",
+      "redrive-marker",
       "max-prs",
       "max-runs-per-pr",
       "ref",
       "label",
       "comment",
     ],
-    booleans: ["dry-run", "run"],
+    booleans: ["run"],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("wake", context.args, ["fire", "verify"]);

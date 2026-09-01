@@ -76,10 +76,26 @@ describe("hasActiveRun", () => {
 
 describe("alreadyFlagged / alreadyRedriven", () => {
   it("matches the stamp for its own run id and not a numeric superstring", () => {
-    const comments = [{ body: "<!-- nen-wake-guard flag run_id=12 at=2026-01-01T00:00:00Z -->" }];
+    const comments = [{ body: "<!-- nen-wake-guard run_id=12 at=2026-01-01T00:00:00Z -->" }];
     expect(alreadyFlagged(comments, "nen-wake-guard", "12")).toBe(true);
     expect(alreadyFlagged(comments, "nen-wake-guard", "1")).toBe(false);
-    expect(alreadyRedriven(comments, "nen-wake-guard", "12")).toBe(false);
+  });
+
+  it("uses TWO FULL, DISTINCT marker phrases -- a flag stamp is never mistaken for a redrive stamp (review finding)", () => {
+    // At default markers a flag comment's stamp is `nen-wake-guard run_id=N`
+    // and a redrive comment's is `nen-wake-redrive run_id=N`; the two share no
+    // prefix, unlike the earlier "one marker plus an appended kind word"
+    // scheme this replaces.
+    const flagComment = [{ body: "<!-- nen-wake-guard run_id=12 at=2026-01-01T00:00:00Z -->" }];
+    expect(alreadyRedriven(flagComment, "nen-wake-redrive", "12")).toBe(false);
+    const redriveComment = [{ body: "<!-- nen-wake-redrive run_id=12 at=2026-01-01T00:00:00Z -->" }];
+    expect(alreadyFlagged(redriveComment, "nen-wake-guard", "12")).toBe(false);
+    expect(alreadyRedriven(redriveComment, "nen-wake-redrive", "12")).toBe(true);
+  });
+
+  it("a caller can point both markers at bankai-core's own source phrases for interop during migration", () => {
+    const comments = [{ body: "<!-- bankai swallowed-wake-guard pr=7 run_id=12 at=2026-01-01T00:00:00Z -->" }];
+    expect(alreadyFlagged(comments, "bankai swallowed-wake-guard", "12")).toBe(true);
   });
 });
 
@@ -89,7 +105,8 @@ describe("decideActions", () => {
       runs: [run()],
       comments: [],
       now: "2026-01-01T01:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 3,
     });
     expect(actions).toHaveLength(1);
@@ -102,7 +119,8 @@ describe("decideActions", () => {
       runs: [run({ conclusion: "startup_failure" })],
       comments: [],
       now: "2026-01-01T01:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 3,
     });
     expect(actions[0]?.kind).toBe("flag-not-redrivable");
@@ -113,19 +131,21 @@ describe("decideActions", () => {
       runs: [run({ event: "workflow_dispatch" })],
       comments: [],
       now: "2026-01-01T01:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 3,
     });
     expect(actions[0]?.kind).toBe("flag-not-redrivable");
   });
 
   it("falls back to a human flag once a run is still swallowed after one redrive", () => {
-    const comments = [{ body: "<!-- nen-wake-guard redrive run_id=1 at=2026-01-01T00:00:00Z -->" }];
+    const comments = [{ body: "<!-- nen-wake-redrive run_id=1 at=2026-01-01T00:00:00Z -->" }];
     const actions = decideActions({
       runs: [run()],
       comments,
       now: "2026-01-01T02:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 3,
     });
     expect(actions[0]?.kind).toBe("flag-already-redriven");
@@ -133,14 +153,15 @@ describe("decideActions", () => {
 
   it("never redrives a run a second time once redriven AND flagged", () => {
     const comments = [
-      { body: "<!-- nen-wake-guard redrive run_id=1 at=2026-01-01T00:00:00Z -->" },
-      { body: "<!-- nen-wake-guard flag run_id=1 at=2026-01-01T02:00:00Z -->" },
+      { body: "<!-- nen-wake-redrive run_id=1 at=2026-01-01T00:00:00Z -->" },
+      { body: "<!-- nen-wake-guard run_id=1 at=2026-01-01T02:00:00Z -->" },
     ];
     const actions = decideActions({
       runs: [run()],
       comments,
       now: "2026-01-01T03:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 3,
     });
     expect(actions[0]?.kind).toBe("skip-already-handled");
@@ -155,7 +176,8 @@ describe("decideActions", () => {
       runs,
       comments: [],
       now: "2026-01-01T03:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 3,
     });
     expect(actions[0]?.kind).toBe("redrive"); // run 1, newest first
@@ -168,7 +190,8 @@ describe("decideActions", () => {
       runs,
       comments: [],
       now: "2026-01-01T03:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 3,
     });
     expect(actions[0]?.kind).toBe("skip-active-run");
@@ -176,8 +199,8 @@ describe("decideActions", () => {
 
   it("counts only actions TAKEN toward the cap, never rows merely examined", () => {
     const comments = [
-      { body: "<!-- nen-wake-guard redrive run_id=1 at=2026-01-01T00:00:00Z -->" },
-      { body: "<!-- nen-wake-guard flag run_id=1 at=2026-01-01T00:00:00Z -->" },
+      { body: "<!-- nen-wake-redrive run_id=1 at=2026-01-01T00:00:00Z -->" },
+      { body: "<!-- nen-wake-guard run_id=1 at=2026-01-01T00:00:00Z -->" },
     ];
     const runs = [
       run({ id: "1", createdAt: "2026-01-03T00:00:00Z" }), // already handled -- no-op
@@ -187,7 +210,8 @@ describe("decideActions", () => {
       runs,
       comments,
       now: "2026-01-01T03:00:00Z",
-      marker: "nen-wake-guard",
+      flagMarker: "nen-wake-guard",
+      redriveMarker: "nen-wake-redrive",
       maxRunsPerPr: 1,
     });
     expect(actions[0]?.kind).toBe("skip-already-handled");

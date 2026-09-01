@@ -1,14 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
+import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { wakeCommand } from "./command.js";
 
-// Mirrors ../index.ts's own runFamily() error-to-exit-code mapping, so a test
-// calling a family's run() directly still sees the same contract a real
-// invocation would.
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding).
 function capture(argv: readonly string[], run: Seams["run"]): { code: number; out: string[]; err: string[] } {
   const out: string[] = [];
   const err: string[] = [];
@@ -20,16 +16,9 @@ function capture(argv: readonly string[], run: Seams["run"]): { code: number; ou
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(wakeCommand.flags));
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  try {
-    const code = wakeCommand.run({ args, repoFlag: null, json: args.booleans.has("json"), io, seams });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(wakeCommand, argv, null, false, io, seams);
+  return { code, out, err };
 }
 
 function ok(stdout: string): CommandResult {
@@ -93,10 +82,28 @@ describe("nen wake verify", () => {
     ],
   });
 
-  it("redrives a swallowed run and posts the redrive stamp", () => {
-    const calls: string[][] = [];
+  it("is a dry run by default and mutates nothing (review finding: was write-by-default)", () => {
+    const mutations: string[][] = [];
     const result = capture(
       ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$"],
+      (command, args): CommandResult => {
+        const joined = args.join(" ");
+        if (joined.includes("/pulls?")) return ok(openPr);
+        if (joined.includes("/actions/runs")) return ok(runsWithSwallow);
+        if (joined.includes("/comments")) return ok("[]");
+        if (command === "gh" && (args[0] === "run" || joined.includes("/comments"))) mutations.push([command, ...args]);
+        return ok("");
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(mutations).toEqual([]);
+    expect(result.out.join("\n")).toMatch(/redrive/);
+  });
+
+  it("redrives a swallowed run and posts the FULL, conclusion-selected body when --run is given", () => {
+    const calls: string[][] = [];
+    const result = capture(
+      ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$", "--run"],
       (command, args): CommandResult => {
         calls.push([command, ...args]);
         const joined = args.join(" ");
@@ -109,25 +116,58 @@ describe("nen wake verify", () => {
     );
     expect(result.code).toBe(0);
     expect(calls.some((call): boolean => call[0] === "gh" && call[1] === "run" && call[2] === "rerun" && call[3] === "100")).toBe(true);
-    expect(calls.some((call): boolean => call.join(" ").includes("/issues/7/comments") && call.includes("-f"))).toBe(true);
+    const commentCall = calls.find((call): boolean => call.join(" ").includes("/issues/7/comments") && call.includes("-f"));
+    expect(commentCall).toBeDefined();
+    const body = commentCall?.find((arg): boolean => arg.startsWith("body="))?.slice("body=".length) ?? "";
+    // The full conclusion-selected message, not only the idempotency stamp
+    // (review finding: the port had dropped bankai-core#273/#398's prose and
+    // posted an empty-reading HTML-comment-only body).
+    expect(body).toContain("Swallowed wake auto-redriven");
+    expect(body).toContain("gh run rerun 100");
+    expect(body).toContain("<!-- nen-wake-redrive run_id=100");
   });
 
-  it("--dry-run reports the plan and writes nothing", () => {
-    const mutations: string[][] = [];
+  it("falls back to a human flag, and warns, rather than aborting the sweep, when the rerun fails", () => {
+    const calls: string[][] = [];
     const result = capture(
-      ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$", "--dry-run"],
+      ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$", "--run"],
       (command, args): CommandResult => {
+        calls.push([command, ...args]);
         const joined = args.join(" ");
         if (joined.includes("/pulls?")) return ok(openPr);
         if (joined.includes("/actions/runs")) return ok(runsWithSwallow);
         if (joined.includes("/comments")) return ok("[]");
-        if (command === "gh" && args[0] === "run") mutations.push([command, ...args]);
+        if (command === "gh" && args[0] === "run") return { code: 1, stdout: "", stderr: "HTTP 403: rerun refused", spawnFailed: false };
+        return ok("");
+      },
+    );
+    // The sweep completes (exit 0), not a thrown ToolError -- a failed rerun
+    // must not strand every PR after this one unscanned (bankai-core#398/PR
+    // #411, review finding).
+    expect(result.code).toBe(0);
+    const commentCall = calls.find((call): boolean => call.join(" ").includes("/issues/7/comments") && call.includes("-f"));
+    const body = commentCall?.find((arg): boolean => arg.startsWith("body="))?.slice("body=".length) ?? "";
+    expect(body).toContain("gh run rerun 100");
+    expect(body).toContain("<!-- nen-wake-guard run_id=100");
+    expect(result.out.join("\n")).toMatch(/warning:.*gh run rerun 100 failed/);
+  });
+
+  it("warns rather than aborting when the follow-up comment POST fails", () => {
+    const result = capture(
+      ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$", "--run"],
+      (command, args): CommandResult => {
+        const joined = args.join(" ");
+        if (joined.includes("/pulls?")) return ok(openPr);
+        if (joined.includes("/actions/runs")) return ok(runsWithSwallow);
+        if (joined.includes("/issues/7/comments") && args.includes("-f")) {
+          return { code: 1, stdout: "", stderr: "HTTP 500", spawnFailed: false };
+        }
+        if (joined.includes("/comments")) return ok("[]");
         return ok("");
       },
     );
     expect(result.code).toBe(0);
-    expect(mutations).toEqual([]);
-    expect(result.out.join("\n")).toMatch(/redrive/);
+    expect(result.out.join("\n")).toMatch(/warning:.*posting its follow-up comment failed/);
   });
 
   it("refuses an unparseable --author-pattern as a usage error", () => {
