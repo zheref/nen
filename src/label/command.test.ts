@@ -12,11 +12,11 @@ import { parseLedger } from "./ledger.js";
 // error-to-exit-code mapping (review finding: a hand-copy can silently drift
 // from the real one). This also exercises the real re-parse against
 // `mergeFlags(family.flags)`.
-function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "", stderr: "", spawnFailed: false })): {
+async function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "", stderr: "", spawnFailed: false })): Promise<{
   code: number;
   out: string[];
   err: string[];
-} {
+}> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -28,16 +28,16 @@ function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult 
     },
   };
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  const code = runFamily(labelCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(labelCommand, argv, BANKAI_REPO, false, io, seams);
   return { code, out, err };
 }
 
 describe("nen label apply", () => {
-  it("is a dry run by default: writes a ledger line with outcome:dry-run and no gh call", () => {
+  it("is a dry run by default: writes a ledger line with outcome:dry-run and no gh call", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-label-"));
     const ledger = join(dir, "l.jsonl");
     let calls = 0;
-    const result = capture(
+    const result = await capture(
       ["label", "apply", "XX-PR-#12", "--label", "bankai:stage/idea", "--repo-slug", "o/r", "--ledger", ledger],
       (): CommandResult => {
         calls += 1;
@@ -51,11 +51,11 @@ describe("nen label apply", () => {
     expect(parsed.entries[0]).toMatchObject({ object: "XX-PR-#12", label: "bankai:stage/idea", outcome: "dry-run" });
   });
 
-  it("--run applies the label via gh and logs outcome:applied", () => {
+  it("--run applies the label via gh and logs outcome:applied", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-label-"));
     const ledger = join(dir, "l.jsonl");
     const calls: string[][] = [];
-    const result = capture(
+    const result = await capture(
       ["label", "apply", "XX-PR-#12", "--label", "bankai:stage/idea", "--repo-slug", "o/r", "--ledger", ledger, "--run"],
       (command, args): CommandResult => {
         calls.push([command, ...args]);
@@ -68,13 +68,13 @@ describe("nen label apply", () => {
     expect(parsed.entries[0]?.outcome).toBe("applied");
   });
 
-  it("a REFUSED mutation logs outcome:failed, never a false 'applied' claim (review finding)", () => {
+  it("a REFUSED mutation logs outcome:failed, never a false 'applied' claim (review finding)", async () => {
     // Reproduces the review's exact scenario: gh refuses the label (404) and
     // the process must exit non-zero WHILE the ledger records what actually
     // happened, not what was attempted.
     const dir = mkdtempSync(join(tmpdir(), "nen-label-"));
     const ledger = join(dir, "l.jsonl");
-    const result = capture(
+    const result = await capture(
       ["label", "apply", "XX-PR-#12", "--label", "bankai:stage/idea", "--repo-slug", "o/r", "--ledger", ledger, "--run"],
       (): CommandResult => ({ code: 1, stdout: "", stderr: "HTTP 404: not found", spawnFailed: false }),
     );
@@ -84,10 +84,10 @@ describe("nen label apply", () => {
     expect(parsed.entries[0]).toMatchObject({ object: "XX-PR-#12", label: "bankai:stage/idea", outcome: "failed" });
   });
 
-  it("refuses a label the target taxonomy does not declare", () => {
+  it("refuses a label the target taxonomy does not declare", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-label-"));
     const ledger = join(dir, "l.jsonl");
-    const result = capture([
+    const result = await capture([
       "label",
       "apply",
       "XX-PR-#12",
@@ -102,10 +102,10 @@ describe("nen label apply", () => {
     expect(result.err.join("\n")).toMatch(/is not in/);
   });
 
-  it("refuses a malformed object ref", () => {
+  it("refuses a malformed object ref", async () => {
     // RefError is not a VerbUsageError -- like GateError/ColorError elsewhere
     // in this codebase, a malformed-input domain error exits 1, not 2.
-    const result = capture(["label", "apply", "not-a-ref", "--label", "bankai:stage/idea", "--repo-slug", "o/r"]);
+    const result = await capture(["label", "apply", "not-a-ref", "--label", "bankai:stage/idea", "--repo-slug", "o/r"]);
     expect(result.code).toBe(1);
   });
 });

@@ -12,11 +12,11 @@ import { backlogCommand } from "./command.js";
 // real one). This also exercises the real re-parse against
 // `mergeFlags(family.flags)` and the real `--repo`/`--json` merge, the same
 // path a live invocation takes.
-function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "[]", stderr: "", spawnFailed: false })): {
+async function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "[]", stderr: "", spawnFailed: false })): Promise<{
   code: number;
   out: string[];
   err: string[];
-} {
+}> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -28,7 +28,7 @@ function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult 
     },
   };
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  const code = runFamily(backlogCommand, argv, null, false, io, seams);
+  const code = await runFamily(backlogCommand, argv, null, false, io, seams);
   return { code, out, err };
 }
 
@@ -40,8 +40,8 @@ describe("nen backlog fetch", () => {
     { number: 5, title: "fix #1", body: "closes #1", created_at: "2026-01-02T00:00:00Z" },
   ]);
 
-  it("assembles one row per effort and reports no truncation under the limit", () => {
-    const result = capture(["backlog", "fetch", "--repo-slug", "o/r"], (command, args): CommandResult => {
+  it("assembles one row per effort and reports no truncation under the limit", async () => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r"], (command, args): CommandResult => {
       const joined = args.join(" ");
       if (joined.includes("/issues?")) return { code: 0, stdout: issues, stderr: "", spawnFailed: false };
       if (joined.includes("/pulls?")) return { code: 0, stdout: prs, stderr: "", spawnFailed: false };
@@ -52,12 +52,12 @@ describe("nen backlog fetch", () => {
     expect(result.out.join("\n")).not.toMatch(/TRUNCATED/);
   });
 
-  it("reports truncation explicitly, and NAMES A WORKING REMEDY, when --limit actually cuts something", () => {
+  it("reports truncation explicitly, and NAMES A WORKING REMEDY, when --limit actually cuts something", async () => {
     const twoIssues = JSON.stringify([
       { number: 1, title: "a", labels: [], created_at: "2026-01-01T00:00:00Z" },
       { number: 2, title: "b", labels: [], created_at: "2026-01-01T00:00:00Z" },
     ]);
-    const result = capture(["backlog", "fetch", "--repo-slug", "o/r", "--limit", "1"], (command, args): CommandResult => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r", "--limit", "1"], (command, args): CommandResult => {
       const joined = args.join(" ");
       if (joined.includes("/issues?")) return { code: 0, stdout: twoIssues, stderr: "", spawnFailed: false };
       return { code: 0, stdout: "[]", stderr: "", spawnFailed: false };
@@ -70,8 +70,8 @@ describe("nen backlog fetch", () => {
     expect(result.out.join("\n")).toMatch(/Raise --limit, or omit it/);
   });
 
-  it("does NOT report truncation when --limit lands exactly on the true total (nothing was actually cut)", () => {
-    const result = capture(["backlog", "fetch", "--repo-slug", "o/r", "--limit", "1"], (command, args): CommandResult => {
+  it("does NOT report truncation when --limit lands exactly on the true total (nothing was actually cut)", async () => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r", "--limit", "1"], (command, args): CommandResult => {
       const joined = args.join(" ");
       if (joined.includes("/issues?")) return { code: 0, stdout: issues, stderr: "", spawnFailed: false };
       return { code: 0, stdout: "[]", stderr: "", spawnFailed: false };
@@ -80,7 +80,7 @@ describe("nen backlog fetch", () => {
     expect(result.out.join("\n")).not.toMatch(/TRUNCATED/);
   });
 
-  it("PAGINATES past GitHub's 100-row page clamp -- a >100-issue repo is no longer capped with no way to lift it (review finding)", () => {
+  it("PAGINATES past GitHub's 100-row page clamp -- a >100-issue repo is no longer capped with no way to lift it (review finding)", async () => {
     // Page 1 comes back FULL (100 rows, GitHub's own per_page maximum); page
     // 2 comes back short (30 rows) -- the true signal that there is no page
     // 3. Omitting --limit must fetch every row across both pages.
@@ -101,7 +101,7 @@ describe("nen backlog fetch", () => {
       })),
     );
     const calls: string[] = [];
-    const result = capture(["backlog", "fetch", "--repo-slug", "o/r"], (command, args): CommandResult => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r"], (command, args): CommandResult => {
       const joined = args.join(" ");
       calls.push(joined);
       if (joined.includes("/issues?") && /[?&]page=1(&|$)/.test(joined)) return { code: 0, stdout: page1, stderr: "", spawnFailed: false };
@@ -116,7 +116,7 @@ describe("nen backlog fetch", () => {
 });
 
 describe("nen backlog order", () => {
-  it("orders a pre-fetched row file by severity", () => {
+  it("orders a pre-fetched row file by severity", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-backlog-"));
     const file = join(dir, "rows.json");
     writeFileSync(
@@ -126,7 +126,7 @@ describe("nen backlog order", () => {
         { id: "critical", severity: "critical", createdAt: "2026-01-01T00:00:00Z", number: 2 },
       ]),
     );
-    const result = capture(["backlog", "order", "--rows-from", file, "--severity-order", "critical,high,medium,low"]);
+    const result = await capture(["backlog", "order", "--rows-from", file, "--severity-order", "critical,high,medium,low"]);
     expect(result.code).toBe(0);
     expect(result.out[0]).toMatch(/1\. critical/);
     expect(result.out[1]).toMatch(/2\. low/);

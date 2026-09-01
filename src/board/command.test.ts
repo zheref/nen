@@ -26,7 +26,7 @@ const STUB_SEAMS: Seams = {
 // error-to-exit-code mapping (review finding: several family test files
 // re-implemented that mapping locally, which can silently drift from the
 // real one).
-function capture(argv: readonly string[], repoFlag: string | null): { code: number; out: string[]; err: string[] } {
+async function capture(argv: readonly string[], repoFlag: string | null): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -37,27 +37,27 @@ function capture(argv: readonly string[], repoFlag: string | null): { code: numb
       err.push(line);
     },
   };
-  const code = runFamily(boardCommand, argv, repoFlag, false, io, STUB_SEAMS);
+  const code = await runFamily(boardCommand, argv, repoFlag, false, io, STUB_SEAMS);
   return { code, out, err };
 }
 
 describe("nen board build/render/diff", () => {
-  it("builds a board from a rows file and renders a padded table", () => {
+  it("builds a board from a rows file and renders a padded table", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
     const rows = join(dir, "rows.json");
     writeFileSync(rows, JSON.stringify([{ id: "1", title: "t", refs: [], gate: "G2", status: "🟢 ready", needs: null }]));
-    const result = capture(["board", "build", "--repo-slug", "o/r", "--rows-from", rows], dir);
+    const result = await capture(["board", "build", "--repo-slug", "o/r", "--rows-from", rows], dir);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/G2/);
   });
 
-  it("diffs two board snapshots", () => {
+  it("diffs two board snapshots", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
     const before = join(dir, "before.json");
     const after = join(dir, "after.json");
     writeFileSync(before, JSON.stringify({ repo: "o/r", generatedAt: "t", rows: [{ id: "1", title: "t", refs: [], gate: null, status: "a", needs: null }] }));
     writeFileSync(after, JSON.stringify({ repo: "o/r", generatedAt: "t", rows: [{ id: "1", title: "t", refs: [], gate: null, status: "b", needs: null }] }));
-    const result = capture(["board", "diff", "--before", before, "--after", after], dir);
+    const result = await capture(["board", "diff", "--before", before, "--after", after], dir);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/changed\s+1:/);
   });

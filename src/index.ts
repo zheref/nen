@@ -17,7 +17,11 @@
 // not only from a test. Those four stay written out below because they predate
 // the registry and their exit codes are pinned by name in tests; everything
 // added since is a Command in the registry, which is what keeps two sessions
-// adding verbs in parallel from colliding on this file.
+// adding verbs in parallel from colliding on this file. `nen pr ready` (CON-32's
+// readiness verdict, zheref/nen#2) is one such family: it lives in
+// ./pr/command.ts alongside `nen pr staleness` / `nen pr body-check`, as one
+// more subcommand of the SAME registered "pr" family rather than a second
+// competing entry point.
 //
 // AN EMPTY VERB IS STILL WORSE THAN A MISSING ONE. A family that printed "not
 // implemented" would be a surface other repositories could start depending on
@@ -30,6 +34,15 @@
 // every family accepts merely in order not to reject them -- and a union of all
 // of them is the same as not being strict at all, because one family's typo
 // would parse as another family's flag (./cli/args.ts).
+//
+// `run()` IS ASYNC because `nen pr ready` reads GitHub over the network
+// (./github/pr_state.ts, on top of octokit) and there is no synchronous way to
+// do that from Node. Every other verb here and in the registry is still
+// synchronous under the hood (spawnSync, readFileSync) and returns its number
+// the same way it always did; awaiting an already-resolved value costs nothing.
+// `runFamily`, below, awaits `family.run(...)` for exactly the same reason: the
+// "pr" family is a Command like any other, and the dispatch layer cannot know
+// in advance which of its subcommands needed the network.
 //
 // EXIT CODES. 0 success, 1 a verb's own failure, 2 a usage error, and whatever
 // the bootstrap script returned for `nen bootstrap` (its codes are a published
@@ -85,7 +98,12 @@ global options:
 
 // The flags the FOUR pre-registry commands share. Left as one spec because
 // those four are parsed together, exactly as they always were; a registry family
-// never sees it (see ./cli/command.ts's mergeFlags).
+// never sees it (see ./cli/command.ts's mergeFlags). A registry family --
+// including "pr", whose `ready` subcommand owns its own `--gh-repo` /
+// `--reviewers` / `--approvers` / `--round-policy` / `--exclude-run` / `--gates`
+// / `--token-env` / `--explain` flags -- declares its OWN flags in its own
+// Command entry instead of adding them here, for the same reason: a flag list
+// every verb edited by hand here would be a merge conflict per verb.
 const GLOBAL_FLAGS = {
   values: ["repo", "source", "cache-dir", "script", "ref"],
   booleans: ["json", "version", "help"],
@@ -102,7 +120,7 @@ const TOP_FLAGS = {
   stopAtFirstPositional: true,
 } as const;
 
-export function run(argv: readonly string[], io: Io, seams: Seams = defaultSeams()): number {
+export async function run(argv: readonly string[], io: Io, seams: Seams = defaultSeams()): Promise<number> {
   let head;
   try {
     head = parseArgs(argv, TOP_FLAGS);
@@ -240,14 +258,18 @@ export function run(argv: readonly string[], io: Io, seams: Seams = defaultSeams
 // also exercises the real two-stage re-parse (`mergeFlags`) and the real
 // `--repo`/`--json` merge across the two stages, neither of which a test that
 // only calls `family.run(...)` touches at all.
-export function runFamily(
+//
+// ASYNC because a family's `run()` may itself be async (the "pr" family's
+// `ready` subcommand reads GitHub over the network); `await`ing a synchronous
+// family's already-resolved return costs nothing.
+export async function runFamily(
   family: Command,
   argv: readonly string[],
   headRepo: string | null,
   headJson: boolean,
   io: Io,
   seams: Seams,
-): number {
+): Promise<number> {
   let args;
   try {
     args = parseArgs(argv, mergeFlags(family.flags));
@@ -266,7 +288,7 @@ export function runFamily(
   }
 
   try {
-    return family.run({
+    return await family.run({
       args,
       repoFlag: args.values["repo"] ?? headRepo,
       json: args.booleans.has("json") || headJson,
@@ -344,12 +366,14 @@ function devTest(repoFlag: string | null, passthrough: readonly string[], io: Io
 // -- unlike `import.meta.url`, which resolves to a `/$bunfs/` path and is why
 // this repository derives no root from it (§3).
 if (import.meta.main) {
-  process.exitCode = run(process.argv.slice(2), {
+  run(process.argv.slice(2), {
     out: (line): void => {
       process.stdout.write(`${line}\n`);
     },
     err: (line): void => {
       process.stderr.write(`${line}\n`);
     },
+  }).then((code): void => {
+    process.exitCode = code;
   });
 }

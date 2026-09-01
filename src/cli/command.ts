@@ -39,7 +39,14 @@ export interface Command {
   readonly usage: string;
   /** Flags this family accepts, ON TOP of the global ones. */
   readonly flags: FlagSpec;
-  run(context: CommandContext): number;
+  /**
+   * A `Promise<number>` is allowed because ONE subcommand of ONE family --
+   * `nen pr ready` (../verbs/pr_ready.ts) -- reads GitHub over the network and
+   * there is no synchronous way to do that. Every other family stays
+   * synchronous under the hood (spawnSync, readFileSync); ../index.ts's
+   * `runFamily` awaits either return the same way.
+   */
+  run(context: CommandContext): number | Promise<number>;
 }
 
 /** The global flags every family also accepts. */

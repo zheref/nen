@@ -25,7 +25,7 @@ const STUB_SEAMS: Seams = {
 // finding elsewhere in this file) surface as a real `UsageError` thrown by
 // `runFamily`'s own `parseArgs` call, exactly as a live invocation would see
 // it.
-function capture(argv: readonly string[], repoFlag: string | null = null): { code: number; out: string[]; err: string[] } {
+async function capture(argv: readonly string[], repoFlag: string | null = null): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -36,13 +36,13 @@ function capture(argv: readonly string[], repoFlag: string | null = null): { cod
       err.push(line);
     },
   };
-  const code = runFamily(stopCommand, argv, repoFlag, false, io, STUB_SEAMS);
+  const code = await runFamily(stopCommand, argv, repoFlag, false, io, STUB_SEAMS);
   return { code, out, err };
 }
 
 describe("nen stop --template", () => {
-  it("renders a blank 5-column table and no signal line", () => {
-    const result = capture(["stop", "--template"]);
+  it("renders a blank 5-column table and no signal line", async () => {
+    const result = await capture(["stop", "--template"]);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).not.toMatch(/YOUR INPUT IS NEEDED/);
     expect(result.out.join("\n")).toMatch(/Effort/);
@@ -51,50 +51,50 @@ describe("nen stop --template", () => {
 });
 
 describe("nen stop", () => {
-  it("carries no built-in persona name -- --who states it, or it is absent", () => {
-    const result = capture(["stop"]);
+  it("carries no built-in persona name -- --who states it, or it is absent", async () => {
+    const result = await capture(["stop"]);
     expect(result.out.join("\n")).toMatch(/YOUR INPUT IS NEEDED/);
     expect(result.out.join("\n")).not.toMatch(/who:/);
   });
 
-  it("names the gate given by --gate", () => {
-    const result = capture(["stop", "--gate", "G4"]);
+  it("names the gate given by --gate", async () => {
+    const result = await capture(["stop", "--gate", "G4"]);
     expect(result.out.join("\n")).toMatch(/G4 -- policy\/spec change/);
   });
 
-  it("refuses an unknown gate", () => {
-    expect(capture(["stop", "--gate", "G9"]).code).toBe(2);
+  it("refuses an unknown gate", async () => {
+    expect((await capture(["stop", "--gate", "G9"])).code).toBe(2);
   });
 
-  it("reports rung 1's status honestly, and states rungs 2-3 are not fired", () => {
-    const notFired = capture(["stop"]);
+  it("reports rung 1's status honestly, and states rungs 2-3 are not fired", async () => {
+    const notFired = await capture(["stop"]);
     expect(notFired.out.join("\n")).toMatch(/NOT fired/);
-    const fired = capture(["stop", "--notified"]);
+    const fired = await capture(["stop", "--notified"]);
     expect(fired.out.join("\n")).toMatch(/reported sent by the caller/);
     expect(fired.out.join("\n")).toMatch(/not fired by nen/);
   });
 
-  it("renders an efforts table read from a file, padded", () => {
+  it("renders an efforts table read from a file, padded", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-stop-"));
     const file = join(dir, "efforts.md");
     writeFileSync(file, "| a | bb |\n| --- | --- |\n| x | yy |\n");
-    const result = capture(["stop", file], dir);
+    const result = await capture(["stop", file], dir);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/\| a\s+\| bb\s+\|/);
   });
 
-  it("emits a stable --json contract", () => {
-    const result = capture(["stop", "--gate", "G2", "--json"]);
+  it("emits a stable --json contract", async () => {
+    const result = await capture(["stop", "--gate", "G2", "--json"]);
     const parsed: unknown = JSON.parse(result.out.join("\n"));
     expect(parsed).toMatchObject({ gate: "G2", who: null, notified: false });
   });
 
-  it("refuses '--from' as an unknown option, rather than silently accepting it as a no-op (review finding)", () => {
+  it("refuses '--from' as an unknown option, rather than silently accepting it as a no-op (review finding)", async () => {
     // The efforts file is a POSITIONAL ('nen stop efforts.md'), never
     // '--from'. Declaring '--from' with no reader let this parse cleanly and
     // silently render no table at all -- a plausible typo given every other
     // family's convention is '--<noun>-from'.
-    const result = capture(["stop", "--from", "efforts.md", "--gate", "G2"]);
+    const result = await capture(["stop", "--from", "efforts.md", "--gate", "G2"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/unknown option '--from'/);
   });

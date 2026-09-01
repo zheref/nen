@@ -5,7 +5,7 @@ import { wakeCommand } from "./command.js";
 
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping (review finding).
-function capture(argv: readonly string[], run: Seams["run"]): { code: number; out: string[]; err: string[] } {
+async function capture(argv: readonly string[], run: Seams["run"]): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -17,7 +17,7 @@ function capture(argv: readonly string[], run: Seams["run"]): { code: number; ou
     },
   };
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  const code = runFamily(wakeCommand, argv, null, false, io, seams);
+  const code = await runFamily(wakeCommand, argv, null, false, io, seams);
   return { code, out, err };
 }
 
@@ -26,9 +26,9 @@ function ok(stdout: string): CommandResult {
 }
 
 describe("nen wake fire", () => {
-  it("is a dry run by default and mutates nothing", () => {
+  it("is a dry run by default and mutates nothing", async () => {
     let calls = 0;
-    const result = capture(
+    const result = await capture(
       ["wake", "fire", "--repo-slug", "o/r", "--ref", "XX-PR-#12", "--label", "wake"],
       (): CommandResult => {
         calls += 1;
@@ -40,9 +40,9 @@ describe("nen wake fire", () => {
     expect(result.out.join("\n")).toMatch(/dry run/);
   });
 
-  it("removes then re-applies the label when --run is given", () => {
+  it("removes then re-applies the label when --run is given", async () => {
     const seen: string[][] = [];
-    capture(["wake", "fire", "--repo-slug", "o/r", "--ref", "XX-PR-#12", "--label", "wake", "--run"], (command, args): CommandResult => {
+    await capture(["wake", "fire", "--repo-slug", "o/r", "--ref", "XX-PR-#12", "--label", "wake", "--run"], (command, args): CommandResult => {
       seen.push([command, ...args]);
       return ok("");
     });
@@ -52,8 +52,8 @@ describe("nen wake fire", () => {
     ]);
   });
 
-  it("refuses a ref carrying no #<N>", () => {
-    const result = capture(["wake", "fire", "--repo-slug", "o/r", "--ref", "not-a-ref", "--label", "wake"], (): CommandResult => ok(""));
+  it("refuses a ref carrying no #<N>", async () => {
+    const result = await capture(["wake", "fire", "--repo-slug", "o/r", "--ref", "not-a-ref", "--label", "wake"], (): CommandResult => ok(""));
     expect(result.code).toBe(2);
   });
 });
@@ -82,9 +82,9 @@ describe("nen wake verify", () => {
     ],
   });
 
-  it("is a dry run by default and mutates nothing (review finding: was write-by-default)", () => {
+  it("is a dry run by default and mutates nothing (review finding: was write-by-default)", async () => {
     const mutations: string[][] = [];
-    const result = capture(
+    const result = await capture(
       ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$"],
       (command, args): CommandResult => {
         const joined = args.join(" ");
@@ -100,9 +100,9 @@ describe("nen wake verify", () => {
     expect(result.out.join("\n")).toMatch(/redrive/);
   });
 
-  it("redrives a swallowed run and posts the FULL, conclusion-selected body when --run is given", () => {
+  it("redrives a swallowed run and posts the FULL, conclusion-selected body when --run is given", async () => {
     const calls: string[][] = [];
-    const result = capture(
+    const result = await capture(
       ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$", "--run"],
       (command, args): CommandResult => {
         calls.push([command, ...args]);
@@ -127,9 +127,9 @@ describe("nen wake verify", () => {
     expect(body).toContain("<!-- nen-wake-redrive run_id=100");
   });
 
-  it("falls back to a human flag, and warns, rather than aborting the sweep, when the rerun fails", () => {
+  it("falls back to a human flag, and warns, rather than aborting the sweep, when the rerun fails", async () => {
     const calls: string[][] = [];
-    const result = capture(
+    const result = await capture(
       ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$", "--run"],
       (command, args): CommandResult => {
         calls.push([command, ...args]);
@@ -152,8 +152,8 @@ describe("nen wake verify", () => {
     expect(result.out.join("\n")).toMatch(/warning:.*gh run rerun 100 failed/);
   });
 
-  it("warns rather than aborting when the follow-up comment POST fails", () => {
-    const result = capture(
+  it("warns rather than aborting when the follow-up comment POST fails", async () => {
+    const result = await capture(
       ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$", "--run"],
       (command, args): CommandResult => {
         const joined = args.join(" ");
@@ -170,8 +170,8 @@ describe("nen wake verify", () => {
     expect(result.out.join("\n")).toMatch(/warning:.*posting its follow-up comment failed/);
   });
 
-  it("refuses an unparseable --author-pattern as a usage error", () => {
-    const result = capture(
+  it("refuses an unparseable --author-pattern as a usage error", async () => {
+    const result = await capture(
       ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "("],
       (): CommandResult => ok("[]"),
     );

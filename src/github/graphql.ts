@@ -222,6 +222,23 @@ export interface PullRequestSnapshot {
   // answered as partial data, a permission that blanked it). parsePullRequest()
   // reports that as its own error rather than this file guessing.
   readonly pullRequest: GhPullRequestNode | undefined;
+  // `defaultBranchRef.name`, a SIBLING of the pullRequest node rather than a
+  // field of it -- which is why it is carried on the SNAPSHOT and not on
+  // GhPullRequestNode.
+  //
+  // FORWARD OBLIGATION DISCHARGED (../github/types.ts, item 1: "#737 must carry
+  // it through and add the field; nothing else needs to change on the wire").
+  // The composition phase is the caller that finally needs it: CON-40's
+  // delivery carve-out is `base is the DEFAULT branch`, and the shell READS the
+  // trunk (`gh repo view --json defaultBranchRef`) rather than assuming `main`,
+  // so a repository that renames its trunk is not silently mis-gated. The query
+  // has selected it since Phase 1; only the normalizer dropped it.
+  //
+  // `undefined` rather than a guess when the response did not carry it. That
+  // direction is the safe one: ../gates/predicates.ts's isDeliveryPr() requires
+  // a NON-EMPTY default branch, so an unread trunk leaves the ordinary at-head
+  // rounds binding instead of WIDENING the gate on absent evidence.
+  readonly defaultBranch: string | undefined;
   // Raw `statusCheckRollup.contexts.nodes` of the HEAD commit, for
   // parseCheckRollup().
   readonly checkRollup: unknown;
@@ -279,8 +296,14 @@ export function normalizePullRequestResponse(
   const node = toGhPullRequestNode(
     digPath(response, "repository", "pullRequest"),
   );
+  const defaultBranch = digPath(response, "repository", "defaultBranchRef", "name");
   return {
     pullRequest: node,
+    // A non-string (absent, null, or a partial-data blank) yields `undefined`,
+    // never `""`: an empty string would reach isDeliveryPr() as evidence and be
+    // refused there anyway, but `undefined` says "not read" at the boundary
+    // where that is still distinguishable.
+    defaultBranch: typeof defaultBranch === "string" ? defaultBranch : undefined,
     checkRollup: headCommitRollupContexts(response),
     // Read off the NORMALIZED node so the snapshot and the PR object can never
     // disagree about what was requested -- one unwrap, one answer.
