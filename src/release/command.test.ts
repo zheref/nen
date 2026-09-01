@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
+import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { releaseCommand } from "./command.js";
 
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding).
 function capture(argv: readonly string[], repoFlag: string | null, run: Seams["run"]): { code: number; out: string[]; err: string[] } {
   const out: string[] = [];
   const err: string[] = [];
@@ -20,16 +19,9 @@ function capture(argv: readonly string[], repoFlag: string | null, run: Seams["r
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(releaseCommand.flags));
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  try {
-    const code = releaseCommand.run({ args, repoFlag, json: args.booleans.has("json"), io, seams });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(releaseCommand, argv, repoFlag, false, io, seams);
+  return { code, out, err };
 }
 
 describe("nen release preflight", () => {
@@ -37,9 +29,31 @@ describe("nen release preflight", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
     const changelog = join(dir, "CHANGELOG.md");
     writeFileSync(changelog, "https://github.com/o/r/pull/5\n");
+    const liveChoresFrom = join(dir, "live-chores.json");
+    writeFileSync(liveChoresFrom, "[]");
 
     const result = capture(
-      ["release", "preflight", "--repo-slug", "o/r", "--tag", "v1.1.0", "--range", "v1.0.0..v1.1.0", "--changelog", changelog, "--owner-repo", "o/r"],
+      [
+        "release",
+        "preflight",
+        "--repo-slug",
+        "o/r",
+        "--tag",
+        "v1.1.0",
+        "--range",
+        "v1.0.0..v1.1.0",
+        "--changelog",
+        changelog,
+        "--owner-repo",
+        "o/r",
+        // Explicitly asserted, not omitted (review finding): omitting either
+        // of these must fail the corresponding row rather than reading as
+        // "none".
+        "--critical-issues",
+        "",
+        "--live-chores-from",
+        liveChoresFrom,
+      ],
       dir,
       (command, args): CommandResult => {
         const joined = args.join(" ");
@@ -90,5 +104,91 @@ describe("nen release preflight", () => {
     expect(result.code).toBe(1);
     const failing = result.out.filter((line): boolean => line.startsWith("FAIL"));
     expect(failing.length).toBeGreaterThanOrEqual(4); // hold, critical, changelog, tag
+  });
+
+  describe("RELEASE_HOLD fails CLOSED rather than reading 'not set' (review finding)", () => {
+    function runWithHold(holdResult: CommandResult): { code: number; out: string[] } {
+      const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "https://github.com/o/r/pull/5\n");
+      const liveChoresFrom = join(dir, "live-chores.json");
+      writeFileSync(liveChoresFrom, "[]");
+      return capture(
+        [
+          "release",
+          "preflight",
+          "--repo-slug",
+          "o/r",
+          "--tag",
+          "v1.1.0",
+          "--range",
+          "v1.0.0..v1.1.0",
+          "--changelog",
+          changelog,
+          "--owner-repo",
+          "o/r",
+          "--critical-issues",
+          "",
+          "--live-chores-from",
+          liveChoresFrom,
+        ],
+        dir,
+        (command, args): CommandResult => {
+          const joined = args.join(" ");
+          if (joined.includes("variable get")) return holdResult;
+          if (joined.includes("log ") && joined.includes("--merges")) {
+            return { code: 0, stdout: "Merge pull request #5 from x/y\n", stderr: "", spawnFailed: false };
+          }
+          if (joined.includes("ls-remote")) return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+          return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+        },
+      );
+    }
+
+    it("a gh that could not be started fails the table (was: 'not set')", () => {
+      const result = runWithHold({ code: -1, stdout: "", stderr: "spawn gh ENOENT", spawnFailed: true });
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toMatch(/FAIL {2}RELEASE_HOLD -- could not be read/);
+    });
+
+    it("an unauthenticated gh (non-zero, not a 'not found') fails the table (was: 'not set')", () => {
+      const result = runWithHold({ code: 1, stdout: "", stderr: "gh: To use GitHub CLI, please run `gh auth login`", spawnFailed: false });
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toMatch(/FAIL {2}RELEASE_HOLD -- could not be read/);
+    });
+
+    it("a genuine 'variable not found' still reads as 'not set' and passes", () => {
+      const result = runWithHold({ code: 1, stdout: "", stderr: "variable RELEASE_HOLD not found", spawnFailed: false });
+      expect(result.out.join("\n")).toMatch(/ok\s+RELEASE_HOLD -- not set/);
+    });
+
+    it("a set RELEASE_HOLD still fails the table", () => {
+      const result = runWithHold({ code: 0, stdout: "waiting on legal\n", stderr: "", spawnFailed: false });
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toMatch(/FAIL {2}RELEASE_HOLD -- HELD/);
+    });
+  });
+
+  it("omitting --critical-issues and --live-chores-from fails the table rather than reading 'none' (review finding)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, "https://github.com/o/r/pull/5\n");
+
+    const result = capture(
+      ["release", "preflight", "--repo-slug", "o/r", "--tag", "v1.1.0", "--range", "v1.0.0..v1.1.0", "--changelog", changelog, "--owner-repo", "o/r"],
+      dir,
+      (command, args): CommandResult => {
+        const joined = args.join(" ");
+        if (joined.includes("variable get")) return { code: 1, stdout: "", stderr: "variable RELEASE_HOLD not found", spawnFailed: false };
+        if (joined.includes("log ") && joined.includes("--merges")) {
+          return { code: 0, stdout: "Merge pull request #5 from x/y\n", stderr: "", spawnFailed: false };
+        }
+        if (joined.includes("ls-remote")) return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+        return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+      },
+    );
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/FAIL {2}open critical issues -- not supplied/);
+    expect(result.out.join("\n")).toMatch(/FAIL {2}CON-36 live chores -- not supplied/);
   });
 });

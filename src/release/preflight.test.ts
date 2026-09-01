@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { evaluateLiveChores, runPreflight, type PreflightInputs } from "./preflight.js";
+import { evaluateLiveChores, runPreflight, type HoldState, type PreflightInputs } from "./preflight.js";
+
+const UNSET: HoldState = { kind: "unset" };
 
 function inputs(overrides: Partial<PreflightInputs> = {}): PreflightInputs {
   return {
-    holdValue: null,
+    hold: UNSET,
     openCriticalIssueNumbers: [],
     liveChores: [],
     fragmentFilesAtCutPoint: [],
@@ -35,7 +37,7 @@ describe("runPreflight", () => {
   it("reports EVERY failing precondition, never stopping at the first", () => {
     const report = runPreflight(
       inputs({
-        holdValue: "waiting on legal",
+        hold: { kind: "held", value: "waiting on legal" },
         openCriticalIssueNumbers: [7],
         tagAlreadyExists: true,
         tag: "v1.1.0",
@@ -56,5 +58,53 @@ describe("runPreflight", () => {
     expect(chore?.ok).toBe(false);
     expect(chore?.detail).toContain("chore-x");
     expect(chore?.detail).toMatch(/G5/);
+  });
+
+  describe("RELEASE_HOLD fails CLOSED, never open (review finding)", () => {
+    it("a 'not found' gh answer is a genuine, checked 'not set'", () => {
+      const report = runPreflight(inputs({ hold: { kind: "unset" } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(true);
+      expect(row?.detail).toBe("not set");
+    });
+
+    it("gh failing to spawn does NOT read as 'not set'", () => {
+      const report = runPreflight(inputs({ hold: { kind: "unreadable", detail: "gh could not be started" } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toContain("could not be read");
+    });
+
+    it("an unauthenticated/scope-denied gh does NOT read as 'not set'", () => {
+      const report = runPreflight(inputs({ hold: { kind: "unreadable", detail: "HTTP 403: Resource not accessible" } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toContain("could not be read");
+    });
+  });
+
+  describe("a caller-supplied fact omitted is NOT the same as asserting none (review finding)", () => {
+    it("omitting --critical-issues fails the row rather than reading 'none open'", () => {
+      const report = runPreflight(inputs({ openCriticalIssueNumbers: null }));
+      expect(report.ok).toBe(false);
+      const row = report.checks.find((c): boolean => c.name === "open critical issues");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toContain("not supplied");
+    });
+
+    it("--critical-issues '' (given, empty) passes -- an explicit assertion, not a default", () => {
+      const report = runPreflight(inputs({ openCriticalIssueNumbers: [] }));
+      const row = report.checks.find((c): boolean => c.name === "open critical issues");
+      expect(row?.ok).toBe(true);
+      expect(row?.detail).toBe("none open");
+    });
+
+    it("omitting --live-chores-from fails the row rather than reading 'none live'", () => {
+      const report = runPreflight(inputs({ liveChores: null }));
+      expect(report.ok).toBe(false);
+      const row = report.checks.find((c): boolean => c.name === "CON-36 live chores");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toContain("not supplied");
+    });
   });
 });

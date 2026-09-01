@@ -26,6 +26,15 @@
 // input up front and hands all six here at once, and the report names every
 // failure in one pass.
 //
+// THREE STATES, NOT TWO, FOR RELEASE_HOLD AND FOR EACH CALLER-SUPPLIED FACT
+// (review finding). `gh variable get` failing (not installed, unauthenticated,
+// no variable-read scope) is NOT the same as a repository that genuinely has
+// no hold set, and omitting `--critical-issues`/`--live-chores-from` is NOT
+// the same as asserting there are none of either -- so `HoldState` and
+// `Supplied<T>` below make "checked and clear" and "never checked"
+// distinguishable types rather than two situations that both produced an
+// empty value.
+//
 // THE LIVE-CHORE THREE-PART TEST IS DATA IN, VERDICT OUT: whether a given
 // chore has an open issue, an existing integration branch, and an open PR
 // targeting either the branch or main is gathered by the caller (three
@@ -53,11 +62,31 @@ export function evaluateLiveChores(candidates: readonly LiveChoreCandidate[]): L
   }));
 }
 
+/**
+ * The RELEASE_HOLD row's three states -- not two. `gh variable get` failing
+ * open into "not set" (review finding, BLOCKER-adjacent: a `gh` that is not
+ * installed, unauthenticated, or scoped without variable-read access must
+ * never read the same as a repository that genuinely has no hold set) is
+ * exactly what this type exists to make impossible to construct by accident.
+ */
+export type HoldState =
+  | { readonly kind: "unset" }
+  | { readonly kind: "held"; readonly value: string }
+  | { readonly kind: "unreadable"; readonly detail: string };
+
+/**
+ * A caller-supplied fact that was never given, versus one the caller
+ * explicitly gave as empty. `null` means "the flag was omitted" -- distinct
+ * from `[]`, which means "the flag was given and the answer is empty" (review
+ * finding: omitting `--critical-issues`/`--live-chores-from` must not read the
+ * same as asserting there are none).
+ */
+export type Supplied<T> = readonly T[] | null;
+
 export interface PreflightInputs {
-  /** The RELEASE_HOLD variable's value, or null when unset/empty. */
-  readonly holdValue: string | null;
-  readonly openCriticalIssueNumbers: readonly number[];
-  readonly liveChores: readonly LiveChoreCandidate[];
+  readonly hold: HoldState;
+  readonly openCriticalIssueNumbers: Supplied<number>;
+  readonly liveChores: Supplied<LiveChoreCandidate>;
   readonly fragmentFilesAtCutPoint: readonly string[];
   readonly missingChangelogPrs: readonly number[];
   readonly tagAlreadyExists: boolean;
@@ -77,33 +106,44 @@ export interface PreflightReport {
 }
 
 export function runPreflight(inputs: PreflightInputs): PreflightReport {
-  const liveChores = evaluateLiveChores(inputs.liveChores);
+  const liveChores = inputs.liveChores === null ? [] : evaluateLiveChores(inputs.liveChores);
   const liveNames = liveChores.filter((chore): boolean => chore.live).map((chore): string => chore.name);
 
   const checks: PreflightCheck[] = [
     {
       name: "RELEASE_HOLD",
-      ok: inputs.holdValue === null || inputs.holdValue.trim() === "",
+      ok: inputs.hold.kind === "unset",
       detail:
-        inputs.holdValue === null || inputs.holdValue.trim() === ""
+        inputs.hold.kind === "unset"
           ? "not set"
-          : `HELD: RELEASE_HOLD = '${inputs.holdValue}'`,
+          : inputs.hold.kind === "held"
+            ? `HELD: RELEASE_HOLD = '${inputs.hold.value}'`
+            // A `gh` that could not be reached, is unauthenticated, or lacks
+            // variable-read scope is NOT the same as a repository that
+            // genuinely has no hold -- collapsing them (review finding) made
+            // the single most safety-critical row of this table assert
+            // "not set" for a check that never actually ran.
+            : `could not be read: ${inputs.hold.detail}`,
     },
     {
       name: "open critical issues",
-      ok: inputs.openCriticalIssueNumbers.length === 0,
+      ok: inputs.openCriticalIssueNumbers !== null && inputs.openCriticalIssueNumbers.length === 0,
       detail:
-        inputs.openCriticalIssueNumbers.length === 0
-          ? "none open"
-          : `${inputs.openCriticalIssueNumbers.length} open: ${inputs.openCriticalIssueNumbers.map((n): string => `#${n}`).join(", ")}`,
+        inputs.openCriticalIssueNumbers === null
+          ? "not supplied -- not checked (pass --critical-issues, or --critical-issues '' to assert none)"
+          : inputs.openCriticalIssueNumbers.length === 0
+            ? "none open"
+            : `${inputs.openCriticalIssueNumbers.length} open: ${inputs.openCriticalIssueNumbers.map((n): string => `#${n}`).join(", ")}`,
     },
     {
       name: "CON-36 live chores",
-      ok: liveNames.length === 0,
+      ok: inputs.liveChores !== null && liveNames.length === 0,
       detail:
-        liveNames.length === 0
-          ? "none live (issue open AND branch exists AND an open PR targets it or main)"
-          : `LIVE: ${liveNames.join(", ")} -- whether this blocks the cut is a G5 judgement, not decided here`,
+        inputs.liveChores === null
+          ? "not supplied -- not checked (pass --live-chores-from, or a file containing '[]' to assert none)"
+          : liveNames.length === 0
+            ? "none live (issue open AND branch exists AND an open PR targets it or main)"
+            : `LIVE: ${liveNames.join(", ")} -- whether this blocks the cut is a G5 judgement, not decided here`,
     },
     {
       name: "changelog.d/ empty at cut point",
