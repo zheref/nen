@@ -9,14 +9,27 @@
 // whose output contract is tested by nobody, and the `--json` shape is the half
 // that other programs depend on.
 //
-// P1 SHIPS THE SUPPLY AND DEV VERBS ONLY. `nen --version` and `nen bootstrap`
-// are what zheref/hatsu#1's D10 minimum-version contract needs; `nen dev test`
-// is D16's one-command harness; `nen schema check` exists because "taxonomy
-// behavior demonstrably follows the target repo's schema files" has to be
-// demonstrable from the command line and not only from a test. The readiness,
-// backlog and wake verbs are #2/#3/#4 and are deliberately absent -- an empty
-// verb that printed "not implemented" would be a surface other repositories
-// could start depending on before it means anything.
+// THE SUPPLY AND DEV VERBS LIVE HERE; EVERY OTHER FAMILY LIVES IN ./cli/registry.ts.
+// `nen --version` and `nen bootstrap` are what zheref/hatsu#1's D10
+// minimum-version contract needs; `nen dev test` is D16's one-command harness;
+// `nen schema check` exists because "taxonomy behavior demonstrably follows the
+// target repo's schema files" has to be demonstrable from the command line and
+// not only from a test. Those four stay written out below because they predate
+// the registry and their exit codes are pinned by name in tests; everything
+// added since is a Command in the registry, which is what keeps two sessions
+// adding verbs in parallel from colliding on this file.
+//
+// AN EMPTY VERB IS STILL WORSE THAN A MISSING ONE. A family that printed "not
+// implemented" would be a surface other repositories could start depending on
+// before it means anything, so a family appears in the registry only when it
+// does something.
+//
+// TWO-STAGE PARSE. The top-level parse understands the GLOBAL flags and stops at
+// the first positional; the family re-parses the remainder against its own spec
+// plus the globals. Without the stop, this file would have to know every flag
+// every family accepts merely in order not to reject them -- and a union of all
+// of them is the same as not being strict at all, because one family's typo
+// would parse as another family's flag (./cli/args.ts).
 //
 // EXIT CODES. 0 success, 1 a verb's own failure, 2 a usage error, and whatever
 // the bootstrap script returned for `nen bootstrap` (its codes are a published
@@ -25,9 +38,12 @@
 // not work" want different reactions from a caller.
 
 import { parseArgs, UsageError } from "./cli/args.js";
+import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
+import { COMMANDS, findCommand } from "./cli/registry.js";
 import { runDevTest } from "./dev/test.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
+import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
 
@@ -54,6 +70,10 @@ commands:
   dev test [-- <args>]      Run this repository's own harness (bun + vitest).
                             A checkout verb: a compiled binary has no harness.
 
+${COMMANDS.map((command): string => `  ${command.name.padEnd(24)}${command.summary}`).join("\n")}
+
+Run '${PROGRAM} <command> --help' for a family's own verbs and flags.
+
 global options:
   --repo <path>             The TARGET repository's working-tree root. A PATH,
                             never an owner/name slug. Defaults to the current
@@ -63,16 +83,63 @@ global options:
   --version, -v             Print the version and exit.
   --help, -h                Print this and exit.`;
 
+// The flags the FOUR pre-registry commands share. Left as one spec because
+// those four are parsed together, exactly as they always were; a registry family
+// never sees it (see ./cli/command.ts's mergeFlags).
 const GLOBAL_FLAGS = {
   values: ["repo", "source", "cache-dir", "script", "ref"],
   booleans: ["json", "version", "help"],
   aliases: { v: "version", h: "help" },
 } as const;
 
-export function run(argv: readonly string[], io: Io): number {
+// STAGE ONE: the flags that may appear BEFORE a command, and nothing else. It
+// stops at the first positional so that a family's own flags are never
+// interpreted here -- see ./cli/args.ts's stopAtFirstPositional.
+const TOP_FLAGS = {
+  values: ["repo"],
+  booleans: ["json", "version", "help"],
+  aliases: { v: "version", h: "help" },
+  stopAtFirstPositional: true,
+} as const;
+
+export function run(argv: readonly string[], io: Io, seams: Seams = defaultSeams()): number {
+  let head;
+  try {
+    head = parseArgs(argv, TOP_FLAGS);
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.err(`${PROGRAM}: ${error.message}`);
+      io.err(`Run '${PROGRAM} --help'.`);
+      return 2;
+    }
+    throw error;
+  }
+
+  // `--version` and `--help` are answered from stage one, before a family's
+  // parser can refuse the invocation for its own reasons: `nen --version` must
+  // work even when everything after it is nonsense, because zheref/hatsu#1's
+  // D10 gate calls it on a binary it has not yet decided to trust.
+  if (head.booleans.has("version")) {
+    io.out(VERSION);
+    return 0;
+  }
+  if (head.booleans.has("help")) {
+    io.out(USAGE);
+    return 0;
+  }
+  if (head.rest.length === 0) {
+    io.err(USAGE);
+    return 2;
+  }
+
+  const family = findCommand(head.rest[0] ?? "");
+  if (family !== undefined) {
+    return runFamily(family, head.rest, head.values["repo"] ?? null, head.booleans.has("json"), io, seams);
+  }
+
   let parsed;
   try {
-    parsed = parseArgs(argv, GLOBAL_FLAGS);
+    parsed = parseArgs(head.rest, GLOBAL_FLAGS);
   } catch (error) {
     if (error instanceof UsageError) {
       io.err(`${PROGRAM}: ${error.message}`);
@@ -105,8 +172,12 @@ export function run(argv: readonly string[], io: Io): number {
     return 2;
   }
 
-  const repoFlag = parsed.values["repo"] ?? null;
-  const json = parsed.booleans.has("json");
+  // A global flag counts whether it was typed before the command or after it,
+  // which is what makes `nen --repo X schema check` and `nen schema check
+  // --repo X` the same invocation. Stage one owns the former, this parse the
+  // latter, and neither can see the other's tokens.
+  const repoFlag = parsed.values["repo"] ?? head.values["repo"] ?? null;
+  const json = parsed.booleans.has("json") || head.booleans.has("json");
   const [command, subcommand] = parsed.positionals;
 
   try {
@@ -150,6 +221,56 @@ export function run(argv: readonly string[], io: Io): number {
     // The two want different reactions, which is the entire reason this CLI
     // separates the codes; getting it wrong here would have a retry wrapper
     // retrying a typo forever.
+    return error instanceof RepoRootError ? 2 : 1;
+  }
+}
+
+// Dispatch to a registry family: re-parse the remainder against ITS spec plus
+// the globals, then run it.
+//
+// EVERY FAMILY GETS THE SAME ERROR CONTRACT, written once here rather than
+// fifteen times: a UsageError or a VerbUsageError is exit 2, anything else is
+// exit 1, and the message is printed whole because each verb's messages are
+// written to be actionable on their own.
+function runFamily(
+  family: Command,
+  argv: readonly string[],
+  headRepo: string | null,
+  headJson: boolean,
+  io: Io,
+  seams: Seams,
+): number {
+  let args;
+  try {
+    args = parseArgs(argv, mergeFlags(family.flags));
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.err(`${PROGRAM} ${family.name}: ${error.message}`);
+      io.err(`Run '${PROGRAM} ${family.name} --help'.`);
+      return 2;
+    }
+    throw error;
+  }
+
+  if (args.booleans.has("help")) {
+    io.out(family.usage);
+    return 0;
+  }
+
+  try {
+    return family.run({
+      args,
+      repoFlag: args.values["repo"] ?? headRepo,
+      json: args.booleans.has("json") || headJson,
+      io,
+      seams,
+    });
+  } catch (error) {
+    io.err(`${PROGRAM} ${family.name}: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof VerbUsageError) {
+      io.err(`Run '${PROGRAM} ${family.name} --help'.`);
+      return 2;
+    }
     return error instanceof RepoRootError ? 2 : 1;
   }
 }
