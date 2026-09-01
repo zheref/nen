@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ScriptedRunner } from "../exec/seam.js";
-import { classifyWorkingCopy, readWorkingCopyState, type WcState } from "./classify.js";
+import { classifyWorkingCopy, readWorkingCopyState, WcStateError, type WcState } from "./classify.js";
 
 function state(overrides: Partial<WcState> = {}): WcState {
   return {
@@ -66,5 +66,58 @@ describe("readWorkingCopyState -- gathers the evidence via git", () => {
     expect(result.isTrunk).toBe(true);
     expect(result.aheadOfBase).toBe(0);
     expect(runner.calls.length).toBe(2);
+  });
+
+  // Review finding: a failed git command used to be silently read as empty
+  // output, which then defaulted to a confident (and wrong) reading -- a
+  // detached HEAD or an invalid --base made 'rev-list' fail, but
+  // `Number("") === 0` turned that into a clean `aheadOfBase: 0`, and a failed
+  // 'git status' turned into zero uncommitted paths (a DIRTY tree reported as
+  // clean). Every one of these must now throw rather than manufacture a zero.
+  it("throws when 'git symbolic-ref' fails (detached HEAD), rather than reading an empty branch name", () => {
+    const runner = new ScriptedRunner([
+      { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
+    ]);
+    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(/detached HEAD/);
+  });
+
+  it("throws when 'git status' fails, rather than reporting a possibly-dirty tree as clean", () => {
+    const runner = new ScriptedRunner([
+      { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
+      { match: "git status --porcelain=v1 -uall", result: { code: 1, stderr: "fatal: not a git repository" } },
+    ]);
+    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(/status/);
+  });
+
+  it("throws when 'git rev-list --count' fails (e.g. an invalid --base), rather than reporting 0 commits ahead", () => {
+    const runner = new ScriptedRunner([
+      { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
+      { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
+      { match: "git rev-list --count bogus-base..HEAD", result: { code: 128, stderr: "fatal: bad revision 'bogus-base..HEAD'" } },
+    ]);
+    expect(() => readWorkingCopyState(runner, "/repo", "bogus-base")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(runner, "/repo", "bogus-base")).toThrow(/ahead of base/);
+  });
+
+  it("throws when 'git rev-list --count' prints something non-numeric, rather than guessing", () => {
+    const runner = new ScriptedRunner([
+      { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
+      { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
+      { match: "git rev-list --count main..HEAD", result: { stdout: "not-a-number\n" } },
+    ]);
+    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
+  });
+
+  it("throws when 'git log' fails after a successful rev-list, rather than reporting no existing commits", () => {
+    const runner = new ScriptedRunner([
+      { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
+      { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
+      { match: "git rev-list --count main..HEAD", result: { stdout: "2\n" } },
+      { match: "git log main..HEAD --format=%s", result: { code: 1, stderr: "fatal: bad object" } },
+    ]);
+    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(WcStateError);
+    expect(() => readWorkingCopyState(runner, "/repo", "main")).toThrow(/commit subjects/);
   });
 });

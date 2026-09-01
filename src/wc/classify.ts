@@ -71,14 +71,50 @@ export function classifyWorkingCopy(state: WcState): WcClassification {
   };
 }
 
-function runOrEmpty(runner: Runner, args: readonly string[], cwd: string): string {
+// FAIL-CLOSED, THE HOUSE DEFAULT. A failed git invocation must surface as an
+// error, never as a confident empty/zero -- "not checked" must never render
+// as "clean". The helper this replaced (runOrEmpty) turned ANY git failure
+// into "" and let the caller's own defaulting (Number("") === 0, lines("")
+// === []) manufacture a fully-formed, wrong answer: a detached HEAD or a
+// missing/invalid --base made 'rev-list' fail, and the verb printed
+// `aheadOfBase: 0` -- indistinguishable from a real, checked zero. A failed
+// 'git status' was worse still: it read as zero uncommitted paths, i.e. a
+// DIRTY working copy reported as clean. Every call below throws a named,
+// located error instead; ../../src/index.ts's top-level catch turns it into
+// a stderr message and a non-zero exit for both the text and --json paths --
+// there is no successful JSON shape for "the state could not be read".
+export class WcStateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WcStateError";
+  }
+}
+
+function runGit(runner: Runner, args: readonly string[], cwd: string): { readonly code: number; readonly stdout: string; readonly error: string } {
   const result = runner.run({ bin: "git", args: [...args], cwd });
-  return result.code === 0 ? result.stdout : "";
+  return {
+    code: result.code,
+    stdout: result.stdout,
+    error: (result.spawnError ?? lines(result.stderr).join(" ")) || `exit ${result.code}`,
+  };
 }
 
 export function readWorkingCopyState(runner: Runner, cwd: string, base: string): WcState {
-  const branch = runOrEmpty(runner, ["symbolic-ref", "--short", "HEAD"], cwd).trim();
-  const statusLines = lines(runOrEmpty(runner, ["status", "--porcelain=v1", "-uall"], cwd));
+  const branchResult = runGit(runner, ["symbolic-ref", "--short", "HEAD"], cwd);
+  if (branchResult.code !== 0) {
+    throw new WcStateError(
+      `could not determine the current branch ('git symbolic-ref --short HEAD' failed: ${branchResult.error}). This usually means a detached HEAD, or a repository with no commits yet -- 'wc classify' classifies a checkout that is ON a branch, and refuses rather than reading a branch name off of empty output.`,
+    );
+  }
+  const branch = branchResult.stdout.trim();
+
+  const statusResult = runGit(runner, ["status", "--porcelain=v1", "-uall"], cwd);
+  if (statusResult.code !== 0) {
+    throw new WcStateError(
+      `could not read the working copy's status ('git status --porcelain=v1 -uall' failed: ${statusResult.error}). Refusing to report a possibly-dirty working copy as clean.`,
+    );
+  }
+  const statusLines = lines(statusResult.stdout);
   const uncommittedPaths = statusLines
     .map((line): string => line.slice(3).trim())
     .filter((path): boolean => path !== "");
@@ -87,9 +123,27 @@ export function readWorkingCopyState(runner: Runner, cwd: string, base: string):
   let aheadOfBase = 0;
   let existingCommitSubjects: string[] = [];
   if (!isTrunk) {
-    const countRaw = runOrEmpty(runner, ["rev-list", "--count", `${base}..HEAD`], cwd).trim();
-    aheadOfBase = Number.isInteger(Number(countRaw)) ? Number(countRaw) : 0;
-    existingCommitSubjects = lines(runOrEmpty(runner, ["log", `${base}..HEAD`, "--format=%s"], cwd)).reverse();
+    const countResult = runGit(runner, ["rev-list", "--count", `${base}..HEAD`], cwd);
+    if (countResult.code !== 0) {
+      throw new WcStateError(
+        `could not count commits ahead of base ('git rev-list --count ${base}..HEAD' failed: ${countResult.error}). This usually means --base '${base}' does not name a ref reachable from HEAD. Refusing to report 0 commits ahead, which would read as a checked answer rather than an unreadable one.`,
+      );
+    }
+    const countRaw = countResult.stdout.trim();
+    if (!/^\d+$/.test(countRaw)) {
+      throw new WcStateError(
+        `'git rev-list --count ${base}..HEAD' printed a non-numeric count ('${countRaw}') -- refusing to guess an ahead-of-base figure from it.`,
+      );
+    }
+    aheadOfBase = Number(countRaw);
+
+    const logResult = runGit(runner, ["log", `${base}..HEAD`, "--format=%s"], cwd);
+    if (logResult.code !== 0) {
+      throw new WcStateError(
+        `could not read the commit subjects ahead of base ('git log ${base}..HEAD --format=%s' failed: ${logResult.error}).`,
+      );
+    }
+    existingCommitSubjects = lines(logResult.stdout).reverse();
   }
 
   return {

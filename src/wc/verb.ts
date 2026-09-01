@@ -16,8 +16,11 @@ usage:
 Reports one of: must-move (on the trunk, dirty), on-branch-dirty (on a branch
 with uncommitted work -- whether it is the SAME effort as the branch's
 existing commits is a judgement this verb hands you evidence for, never
-decides), on-branch-clean (nothing to commit). Always exits 0 -- this is a
-report, not a guard.`;
+decides), on-branch-clean (nothing to commit). Exits 0 for any of those three
+-- this is a report, not a guard. A git command that FAILS (a detached HEAD,
+a --base that does not resolve) is never folded into one of the three cases
+as an empty/zero reading; it is reported as an error on stderr and exits
+non-zero instead, in both plain and --json invocations.`;
 
 export const wcVerb: Verb = {
   name: "wc",
