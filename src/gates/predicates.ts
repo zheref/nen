@@ -1,4 +1,50 @@
-// cli/src/gates/predicates.ts -- the CON-32 readiness predicates, ported from
+// ============================================================================
+// SEEDED FROM bankai-core `cli/src/gates/predicates.ts` (zheref/nen#1, Akatsuki
+// migration P1).
+//
+// The header below this block is the ORIGINAL's, carried VERBATIM, as is every
+// per-predicate WHY in this file. That is the BC-IS-#737 discipline and it is
+// not decoration: each comment names the production incident its branch exists
+// for, and a predicate that arrives without its incident is one the next
+// maintainer simplifies back into the bug.
+//
+// ONE THING CHANGED, AND IT CHANGED EVERYWHERE: the reviewer IDENTITIES this
+// file used to hard-code are now DATA, supplied by the caller as a
+// `GateIdentities` read from the target repository's `schemas/gates.json` (see
+// ../schema/gates.ts). The Akatsuki migration's §3 makes that mandatory -- "no
+// hard-coded personas, labels, check names, or colours" -- and §3 names this
+// module by way of example: the `case "sasuke": return /^sasuke \/ audit$/i`
+// arms, the `/(^|\/)roy-bankai(\[bot\])?$/` author pattern, the
+// `labels.includes("bankai:epic")` test and the `["sasuke", "tenma",
+// "copilot"]` default set were all names written into a binary.
+//
+// THE LOGIC IS UNCHANGED, and that is the property under test. Every branch,
+// every ordering, every asymmetry and every conservative direction is exactly
+// as it was; only the VALUES the branches compare against arrive from outside.
+// The ported companion suite runs against a fixture that states this system's
+// own identities, so any behavioural divergence from the original shows up as a
+// failing assertion rather than as a difference nobody looked for -- and it runs
+// the same structural cases a second time against a fixture with entirely
+// different names, which is what makes "the names are data" a proved claim
+// rather than an asserted one.
+//
+// WHERE A NAME BECAME A STRUCTURAL PROPERTY, the mapping is:
+//   `case "copilot"` under the bounded policy -> `boundedPolicyExempt`
+//   `name === "sasuke" || name === "tenma"`   -> `deliveryHolisticPass`
+//   `name === "bisky" || name === "bugbot"`   -> a `roundCheckPattern` exists
+//   the bisky/bugbot enrolment patterns       -> `enrolmentCheckPattern`
+//   `reviewerLoginPattern`'s switch arms      -> `loginPattern`
+//   `reviewerReviewCheckPattern`'s switch     -> `reviewCheckPattern`
+//   `DEFAULT_APPROVERS`                       -> `defaultApprovers`
+//   `defaultReviewers`' base set              -> `baseReviewers`
+//   `ROY_AUTHOR` / `integration/` / the label -> `delivery.*`
+// Each is named at its own call site too; this list is the index.
+//
+// Only file PATHS are otherwise rewritten. References to bankai-core's scripts,
+// workflows and clause IDs are left alone: they are accurate about the system
+// this code came from and about where its reasoning is recorded.
+// ============================================================================
+// src/gates/predicates.ts -- the CON-32 readiness predicates, ported from
 // scripts/pr_ready_gate.sh's jq programs (BC-IS-#736, epic BC-IS-#733 Phase 1).
 //
 // PURE. Data in, verdict out: no gh, no network, no process spawning, no clock,
@@ -36,6 +82,11 @@ import {
   type ReviewRequest,
   type RollupEntry,
 } from "../github/types.js";
+// PORT ADDITION: the identities every reviewer-aware predicate below is now
+// parameterised by. A TYPE-ONLY import -- these predicates stay pure and never
+// read a file; the CALLER loads the target repository's `schemas/gates.json`
+// and hands the result in.
+import type { GateIdentities, ReviewerIdentity } from "../schema/gates.js";
 
 // --- shared helpers ----------------------------------------------------------
 
@@ -334,15 +385,18 @@ function shellApproverNames(approvers: readonly string[]): string[] {
 // carrying `cursor` OR `bugbot` depending on the installation, so a reviewer
 // configured as `bugbot` must match either. Every other name matches itself,
 // unanchored, which is what lets `sasuke` match `sasuke-bankai[bot]`.
-export function reviewerLoginPattern(name: string): RegExp {
-  switch (name) {
-    case "copilot":
-      return /copilot/i;
-    case "bugbot":
-      return /cursor|bugbot/i;
-    default:
-      return safePattern(name);
-  }
+//
+// PORT CHANGE (§3): the switch arms were the two exceptions written into the
+// binary; each is now that reviewer's `login_pattern` in the target repository's
+// `schemas/gates.json`. THE FALL-THROUGH IS KEPT, and it is not a fallback of
+// the kind ../schema/errors.ts refuses: it applies to a name the file does NOT
+// declare, and it reproduces the original's `default:` arm exactly -- an
+// undeclared reviewer matches itself, case-insensitively, and an unparseable one
+// matches nothing. Reproducing it matters because a caller may pass
+// `--reviewers` a name the registry has never heard of, and the original's
+// answer to that is "treat it as its own login", not "crash".
+export function reviewerLoginPattern(identities: GateIdentities, name: string): RegExp {
+  return identities.reviewer(name)?.loginPattern ?? safePattern(name);
 }
 
 // --- reviewerReviewCheckPattern ----------------------------------------------
@@ -359,17 +413,19 @@ export function reviewerLoginPattern(name: string): RegExp {
 // ever ran, so `^sasuke / ` would let a delivery PR clear its CON-40 round on a
 // check that says nothing about review. An unknown name yields `null`, and every
 // caller treats that as "no check can satisfy this reviewer".
-export function reviewerReviewCheckPattern(name: string): RegExp | null {
-  switch (name) {
-    case "sasuke":
-      return /^sasuke \/ audit$/i;
-    case "tenma":
-      return /^tenma \/ review$/i;
-    case "bisky":
-      return /^bisky \/ review$/i;
-    default:
-      return null;
-  }
+//
+// PORT CHANGE (§3): the three arms are now each reviewer's
+// `review_check_pattern`. The `default: null` becomes "the file declares none",
+// which reaches every caller as the same `null` and therefore the same reading
+// -- no check can satisfy this reviewer's round. That direction is the
+// conservative one and is preserved deliberately: a repository that forgets to
+// declare a reviewer's review check gets a gate that stays SHUT, never one that
+// clears on a check nobody identified.
+export function reviewerReviewCheckPattern(
+  identities: GateIdentities,
+  name: string,
+): RegExp | null {
+  return identities.reviewer(name)?.reviewCheckPattern ?? null;
 }
 
 // --- reviewsAllApprovedAtHead ------------------------------------------------
@@ -411,7 +467,15 @@ export function reviewerReviewCheckPattern(name: string): RegExp | null {
 
 // The shell's `${2:-sasuke,tenma}`: CON-32(b)'s approval set, with `bisky`
 // joining it where configured. Carried across verbatim, not chosen here.
-export const DEFAULT_APPROVERS: readonly string[] = ["sasuke", "tenma"];
+//
+// PORT CHANGE (§3): the two names were a constant in the binary and are now
+// `default_approvers` in the target repository's `schemas/gates.json`. The
+// accessor takes the identities rather than exporting an array, because an
+// exported array would have to be SOMETHING when no repository has been read --
+// and whatever it was would be a hard-coded approver set with a different name.
+export function defaultApprovers(identities: GateIdentities): readonly string[] {
+  return identities.defaultApprovers;
+}
 
 // `group_by(.author) | map(sort_by(.submitted_at) | last)` -- the LATEST review
 // per author. An absent submitted_at sorts first, as jq's null does, so a review
@@ -450,11 +514,21 @@ export interface UnapprovedApprover {
   readonly reading: ApprovalReading;
 }
 
-function approvalReading(name: string, deliveryPr: boolean): ApprovalReading {
+function approvalReading(
+  identities: GateIdentities,
+  name: string,
+  deliveryPr: boolean,
+): ApprovalReading {
   // CON-40 names exactly two reviewers. The comparison is on the exact
   // configured name, never a pattern: a reviewer configured as something that
   // merely MATCHES `sasuke` must not inherit the carve-out.
-  return deliveryPr && (name === "sasuke" || name === "tenma")
+  //
+  // PORT CHANGE (§3): "exactly two reviewers" becomes "the reviewers the file
+  // marks `delivery_holistic_pass`". The EXACT-NAME lookup is preserved
+  // literally -- `identities.reviewer(name)` is a Map get, never a pattern
+  // match -- because that was the original's stated defence and it is the one
+  // that keeps a look-alike name out of a gate-widening carve-out.
+  return deliveryPr && identities.reviewer(name)?.deliveryHolisticPass === true
     ? "con40-holistic-pass"
     : "current-head";
 }
@@ -475,9 +549,14 @@ function approverApproved(
 }
 
 export function reviewsAllApprovedAtHead(
+  identities: GateIdentities,
   reviews: readonly Review[],
   headSha: string,
-  approvers: readonly string[] = DEFAULT_APPROVERS,
+  // PORT CHANGE (§3): the default is the FILE's approver set, referenced off
+  // the earlier parameter. The distinction the original's own comment turns on
+  // -- "omitted" and "empty" are different values in TypeScript -- is preserved
+  // exactly: an explicitly empty array still makes this vacuously true.
+  approvers: readonly string[] = identities.defaultApprovers,
   deliveryPr = false,
 ): boolean {
   // An EMPTY approver list makes this predicate VACUOUSLY true, exactly as jq's
@@ -500,7 +579,7 @@ export function reviewsAllApprovedAtHead(
   // NOT normalizeReviewerNames(): the shell does not trim here, and trimming
   // would widen the gate. See shellApproverNames().
   return shellApproverNames(approvers).every((name): boolean =>
-    approverApproved(latest, name, headSha, approvalReading(name, deliveryPr)),
+    approverApproved(latest, name, headSha, approvalReading(identities, name, deliveryPr)),
   );
 }
 
@@ -517,9 +596,10 @@ export function reviewsAllApprovedAtHead(
 // class of "plausible, wrong" output bankai-core#639 and #698 were both about: a
 // reader sent to re-run the wrong thing.
 export function unapprovedApprovers(
+  identities: GateIdentities,
   reviews: readonly Review[],
   headSha: string,
-  approvers: readonly string[] = DEFAULT_APPROVERS,
+  approvers: readonly string[] = identities.defaultApprovers,
   deliveryPr = false,
 ): UnapprovedApprover[] {
   const latest = latestReviewPerAuthor(reviews);
@@ -528,7 +608,7 @@ export function unapprovedApprovers(
   // function must name exactly the approvers that predicate failed, so the two
   // cannot disagree about which names are in the set.
   for (const name of shellApproverNames(approvers)) {
-    const reading = approvalReading(name, deliveryPr);
+    const reading = approvalReading(identities, name, deliveryPr);
     if (!approverApproved(latest, name, headSha, reading)) {
       unapproved.push({ reviewer: name, reading });
     }
@@ -653,6 +733,7 @@ function hasCompletedNonSkippedCheck(
 }
 
 export function pendingRounds(
+  identities: GateIdentities,
   inputs: RoundInputs,
   headSha: string,
   reviewers: readonly string[],
@@ -671,7 +752,15 @@ export function pendingRounds(
   const owed: OwedRound[] = [];
 
   for (const name of names) {
-    const loginPattern = reviewerLoginPattern(name);
+    // PORT CHANGE (§3): one lookup, at the top of the loop, replaces four
+    // separate name comparisons further down. `undefined` means the caller
+    // named a reviewer the repository does not declare -- which is exactly the
+    // original's `default:` world: it matches its own login, has no review
+    // check, is not bounded-exempt, has no delivery carve-out and no check that
+    // can stand in for its round. Every one of those is the conservative
+    // reading, so an unknown reviewer OWES a round rather than being excused.
+    const identity: ReviewerIdentity | undefined = identities.reviewer(name);
+    const loginPattern = identity?.loginPattern ?? safePattern(name);
 
     if (
       inputs.reviewRequests.some((request): boolean =>
@@ -682,7 +771,11 @@ export function pendingRounds(
       continue;
     }
 
-    if (name === "copilot" && policy === "bounded") continue;
+    // PORT CHANGE (§3): `name === "copilot"` -> the file's
+    // `bounded_policy_exempt` flag. The reviewer this named is the one nothing
+    // re-requests after a final push, which is a STRUCTURAL property of how a
+    // reviewer participates, not a fact about its name.
+    if (identity?.boundedPolicyExempt === true && policy === "bounded") continue;
 
     if (
       inputs.reviews.some(
@@ -693,11 +786,12 @@ export function pendingRounds(
       continue;
     }
 
-    if (deliveryPr && (name === "sasuke" || name === "tenma")) {
+    // PORT CHANGE (§3): the two names -> `delivery_holistic_pass`.
+    if (deliveryPr && identity?.deliveryHolisticPass === true) {
       // CON-40's abstain-green round (bankai-core#720). Only reached once the
       // reviewer has NO review at head -- which on a delivery PR is the DESIGNED
       // state from the first `synchronize` onwards.
-      const checkPattern = reviewerReviewCheckPattern(name);
+      const checkPattern = identity.reviewCheckPattern;
       if (
         checkPattern === null ||
         !hasDefinitiveSuccessCheck(checks, checkPattern)
@@ -724,12 +818,16 @@ export function pendingRounds(
       continue;
     }
 
-    if (name === "bisky" || name === "bugbot") {
-      // Bugbot's check name varies with the installation, so it is matched by
-      // substring; bisky's is exact, because `bisky / probe` must not clear a
-      // review round the way a prefix match would.
-      const checkPattern = name === "bugbot" ? /bugbot/i : /^bisky \/ review$/i;
-      if (hasCompletedNonSkippedCheck(checks, checkPattern)) continue;
+    // PORT CHANGE (§3): `name === "bisky" || name === "bugbot"` -> "the file
+    // declares a `round_check_pattern` for this reviewer", i.e. a reviewer whose
+    // CHECK IS THE ROUND because it posts a review only when it has findings.
+    // The two patterns move with it, and their asymmetry moves intact: one is
+    // anchored so a sibling probe job cannot clear a review round, the other an
+    // unanchored substring because that check's name varies with the
+    // installation. Both are stated by the file, per pattern, including
+    // case-sensitivity -- see ../schema/gates.ts.
+    if (identity?.roundCheckPattern != null) {
+      if (hasCompletedNonSkippedCheck(checks, identity.roundCheckPattern)) continue;
     }
 
     owed.push({ reviewer: name, reason: "no-round-at-head" });
@@ -847,7 +945,20 @@ export function cancelledLatestReport(
 // or a replay fixture captured before these fields existed, carries none of them
 // and is therefore NOT a delivery PR -- so the ordinary at-head rounds keep
 // binding. ABSENT EVIDENCE NEVER WIDENS A GATE.
-const ROY_AUTHOR = /(^|\/)roy-bankai(\[bot\])?$/i;
+// PORT CHANGE (§3): `const ROY_AUTHOR = /(^|\/)roy-bankai(\[bot\])?$/i`, the
+// `integration/` head-ref prefix and the `bankai:epic` label were three names
+// written into the binary. All three now come from the target repository's
+// `delivery` block. The prefix and the label become LISTS because a repository
+// may legitimately have more than one delivery convention; a single-entry list
+// behaves exactly as the single literal did, and ../schema/gates.ts refuses a
+// delivery block that declares neither -- a carve-out nothing can trigger is
+// worse than no carve-out, because it looks configured.
+//
+// The ANCHORING of the author pattern is the file's responsibility now, and
+// that is worth saying out loud: BC-PR-#372's security fix is that the author
+// match is anchored so `roy-bankai-evil` is refused. A repository that writes
+// an unanchored author pattern re-opens that hole. The predicate cannot decide
+// this for the file without re-hard-coding the name it is being handed.
 
 export interface DeliveryEvidence {
   /** `""` when the fetch could not establish it. Never widens the gate. */
@@ -858,7 +969,10 @@ export interface DeliveryEvidence {
   readonly labels: readonly string[];
 }
 
-export function isDeliveryPr(evidence: DeliveryEvidence): boolean {
+export function isDeliveryPr(
+  identities: GateIdentities,
+  evidence: DeliveryEvidence,
+): boolean {
   if (
     evidence.author === "" ||
     evidence.baseRef === "" ||
@@ -866,11 +980,12 @@ export function isDeliveryPr(evidence: DeliveryEvidence): boolean {
   ) {
     return false;
   }
-  if (!ROY_AUTHOR.test(evidence.author)) return false;
+  if (!identities.delivery.authorPattern.test(evidence.author)) return false;
   if (evidence.baseRef !== evidence.defaultBranch) return false;
   return (
-    evidence.headRef.startsWith("integration/") ||
-    evidence.labels.includes("bankai:epic")
+    identities.delivery.headRefPrefixes.some((prefix): boolean =>
+      evidence.headRef.startsWith(prefix),
+    ) || identities.delivery.labels.some((label): boolean => evidence.labels.includes(label))
   );
 }
 
@@ -904,10 +1019,18 @@ export function isDeliveryPr(evidence: DeliveryEvidence): boolean {
 // case-insensitive substring, because the Bugbot check's name varies with the
 // installation (`Cursor Bugbot` today). "Fixing" either into the other's shape
 // changes which reviewers a PR is gated by.
-const BISKY_REVIEW_CHECK = /^bisky \/ review$/;
-const BUGBOT_CHECK = /bugbot/i;
-
-export function defaultReviewers(checks: readonly RollupEntry[]): string[] {
+// PORT CHANGE (§3): `["sasuke", "tenma", "copilot"]` is now the file's
+// `base_reviewers`, and the two enrolment patterns are each reviewer's
+// `enrolment_check_pattern`. The asymmetry the original insists on -- one
+// ANCHORED and CASE-SENSITIVE, the other an unanchored case-insensitive
+// substring -- survives because ../schema/gates.ts makes `ignoreCase` a
+// per-pattern field the file must state rather than something inferred from the
+// pattern's shape. Enrolment order is the file's `reviewers` order, which is the
+// analogue of the two `if`s the original ran in sequence.
+export function defaultReviewers(
+  identities: GateIdentities,
+  checks: readonly RollupEntry[],
+): string[] {
   const latest = latestChecks(checks);
   const enrolled = (pattern: RegExp): boolean =>
     latest.some((entry): boolean => {
@@ -922,8 +1045,16 @@ export function defaultReviewers(checks: readonly RollupEntry[]): string[] {
       return pattern.test(name) && checkRunConclusion(entry) !== "SKIPPED";
     });
 
-  const set = ["sasuke", "tenma", "copilot"];
-  if (enrolled(BISKY_REVIEW_CHECK)) set.push("bisky");
-  if (enrolled(BUGBOT_CHECK)) set.push("bugbot");
+  const set = [...identities.baseReviewers];
+  for (const reviewer of identities.reviewers) {
+    if (reviewer.enrolmentCheckPattern === null) continue;
+    // A reviewer that is BOTH in the base set and enrollable would otherwise be
+    // named twice, and a duplicate in this list means pendingRounds() reports
+    // the same owed round twice. The original could not reach this state
+    // because its two lists were disjoint literals; a file can write it, so it
+    // is handled rather than assumed away.
+    if (set.includes(reviewer.name)) continue;
+    if (enrolled(reviewer.enrolmentCheckPattern)) set.push(reviewer.name);
+  }
   return set;
 }

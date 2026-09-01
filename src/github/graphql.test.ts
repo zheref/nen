@@ -35,6 +35,13 @@ import {
 } from "./parse.js";
 import { pendingRounds } from "../gates/predicates.js";
 import type { ReviewRequest, RollupEntry } from "./types.js";
+// PORT ADDITION (zheref/nen#1): the predicates are parameterised by identities
+// read from the target repository, so the composition case below needs a
+// repository to read them from.
+import { loadGateIdentities } from "../schema/gates.js";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+
+const IDENTITIES = loadGateIdentities(BANKAI_REPO);
 
 // A response with exactly PULL_REQUEST_QUERY's selections, in exactly the shape
 // GitHub answers them: every connection is a `{ nodes: [...] }` OBJECT, and each
@@ -231,6 +238,7 @@ describe("COMPOSITION: a PULL_REQUEST_QUERY response driven to typed models", ()
 
     expect(
       pendingRounds(
+        IDENTITIES,
         { reviewRequests: requests.value, checks: checks.value, reviews: [] },
         "d4f0a1cf401a39",
         ["copilot"],

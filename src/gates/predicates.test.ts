@@ -31,9 +31,29 @@ import {
   reviewerReviewCheckPattern,
   reviewsAllApprovedAtHead,
   unapprovedApprovers,
+  defaultApprovers,
   type OwedRound,
   type RoundInputs,
 } from "./predicates.js";
+import { loadGateIdentities } from "../schema/gates.js";
+import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
+
+// --- the identities every case below is run against --------------------------
+//
+// PORT CHANGE (zheref/nen#1). Every reviewer-aware predicate now takes a
+// `GateIdentities` as its first argument, and this is the one the ported cases
+// use: a fixture repository whose `schemas/gates.json` states EXACTLY the
+// identities the original wrote into its own source. That is what makes this
+// suite a regression test for the refactor rather than merely a test of new
+// code -- the assertions below are the originals, unchanged, so a behavioural
+// divergence shows up here instead of in production.
+//
+// `ALT` is the same structure with entirely different names, used by the
+// NAMES ARE DATA section at the end of this file. Nothing in the shipped tree
+// knows any of its strings, so a predicate that behaves identically against
+// both cannot be carrying reviewer knowledge of its own.
+const BANKAI = loadGateIdentities(BANKAI_REPO);
+const ALT = loadGateIdentities(ALT_REPO);
 
 // --- fixtures ----------------------------------------------------------------
 
@@ -577,23 +597,23 @@ describe("normalizeReviewers (bankai-core#577)", () => {
 describe("reviewerLoginPattern", () => {
   it("maps copilot to the login Copilot actually posts under", () => {
     expect(
-      reviewerLoginPattern("copilot").test("copilot-pull-request-reviewer[bot]"),
+      reviewerLoginPattern(BANKAI, "copilot").test("copilot-pull-request-reviewer[bot]"),
     ).toBe(true);
   });
 
   it("maps bugbot to cursor OR bugbot -- the login varies with the installation", () => {
-    expect(reviewerLoginPattern("bugbot").test("cursor[bot]")).toBe(true);
-    expect(reviewerLoginPattern("bugbot").test("bugbot[bot]")).toBe(true);
+    expect(reviewerLoginPattern(BANKAI, "bugbot").test("cursor[bot]")).toBe(true);
+    expect(reviewerLoginPattern(BANKAI, "bugbot").test("bugbot[bot]")).toBe(true);
   });
 
   it("maps every other name to itself, unanchored and case-insensitive", () => {
-    expect(reviewerLoginPattern("sasuke").test("sasuke-bankai[bot]")).toBe(true);
-    expect(reviewerLoginPattern("tenma").test("TENMA-bankai[bot]")).toBe(true);
-    expect(reviewerLoginPattern("sasuke").test("tenma-bankai[bot]")).toBe(false);
+    expect(reviewerLoginPattern(BANKAI, "sasuke").test("sasuke-bankai[bot]")).toBe(true);
+    expect(reviewerLoginPattern(BANKAI, "tenma").test("TENMA-bankai[bot]")).toBe(true);
+    expect(reviewerLoginPattern(BANKAI, "sasuke").test("tenma-bankai[bot]")).toBe(false);
   });
 
   it("ADDED: a name that is not a valid regex matches NOTHING -- conservative, so it can only fail to satisfy a round, never satisfy one", () => {
-    expect(reviewerLoginPattern("sasuke[").test("sasuke-bankai[bot]")).toBe(false);
+    expect(reviewerLoginPattern(BANKAI, "sasuke[").test("sasuke-bankai[bot]")).toBe(false);
   });
 });
 
@@ -601,14 +621,14 @@ describe("reviewerLoginPattern", () => {
 
 describe("reviewerReviewCheckPattern (CON-40, bankai-core#720)", () => {
   it("names the REVIEW job, never a name prefix", () => {
-    expect(reviewerReviewCheckPattern("sasuke")?.source).toBe("^sasuke \\/ audit$");
-    expect(reviewerReviewCheckPattern("tenma")?.source).toBe("^tenma \\/ review$");
-    expect(reviewerReviewCheckPattern("bisky")?.source).toBe("^bisky \\/ review$");
-    expect(reviewerReviewCheckPattern("copilot")).toBeNull();
+    expect(reviewerReviewCheckPattern(BANKAI, "sasuke")?.source).toBe("^sasuke \\/ audit$");
+    expect(reviewerReviewCheckPattern(BANKAI, "tenma")?.source).toBe("^tenma \\/ review$");
+    expect(reviewerReviewCheckPattern(BANKAI, "bisky")?.source).toBe("^bisky \\/ review$");
+    expect(reviewerReviewCheckPattern(BANKAI, "copilot")).toBeNull();
   });
 
   it("ADDED: the runner probe does not match -- it is green on every PR whether or not the review ran", () => {
-    const pattern = reviewerReviewCheckPattern("sasuke");
+    const pattern = reviewerReviewCheckPattern(BANKAI, "sasuke");
 
     expect(pattern?.test("sasuke / probe / probe")).toBe(false);
     expect(pattern?.test("sasuke / audit")).toBe(true);
@@ -620,7 +640,7 @@ describe("reviewerReviewCheckPattern (CON-40, bankai-core#720)", () => {
 describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)", () => {
   it("is true when every reviewer's latest review approves the head", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [
           review({ author: "sasuke-bankai[bot]", submittedAt: "2026-08-14T01:00:00Z" }),
           review({ author: "tenma-bankai[bot]", submittedAt: "2026-08-14T01:05:00Z" }),
@@ -632,7 +652,7 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
   it("takes the LATEST review per author, not the first", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [
           review({
             author: "sasuke-bankai[bot]",
@@ -650,7 +670,7 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
   it("is false when a reviewer's latest review is stale (superseded commit)", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [review({ author: "sasuke-bankai[bot]", commitId: "oldsha" })],
         "headsha",
       ),
@@ -659,7 +679,7 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
   it("is false when any reviewer's latest round is not an approval", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [
           review({ author: "sasuke-bankai[bot]" }),
           review({ author: "tenma-bankai[bot]", state: "COMMENTED" }),
@@ -670,12 +690,12 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
   });
 
   it("is false for an EMPTY array -- no review signal is not ready", () => {
-    expect(reviewsAllApprovedAtHead([], "headsha")).toBe(false);
+    expect(reviewsAllApprovedAtHead(BANKAI, [], "headsha")).toBe(false);
   });
 
   it("is false when a NON-approving, NON-required reviewer (Copilot) is the only entry -- it must not block, and it also must not satisfy", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [
           review({
             author: "copilot-pull-request-reviewer[bot]",
@@ -689,7 +709,7 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
   it("is true when sasuke+tenma approved at head even with a Copilot COMMENTED round present -- Copilot never blocks here", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [
           review({ author: "sasuke-bankai[bot]" }),
           review({ author: "tenma-bankai[bot]", submittedAt: "2026-08-14T01:05:00Z" }),
@@ -706,13 +726,13 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
   it("is false when only ONE required reviewer approved -- a single approver must not satisfy", () => {
     expect(
-      reviewsAllApprovedAtHead([review({ author: "sasuke-bankai[bot]" })], "headsha"),
+      reviewsAllApprovedAtHead(BANKAI, [review({ author: "sasuke-bankai[bot]" })], "headsha"),
     ).toBe(false);
   });
 
   it("handles reviews INTERLEAVED by author rather than grouped", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [
           review({
             author: "tenma-bankai[bot]",
@@ -740,16 +760,16 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
     // predicate -- behaviourally the same as this vacuous true. Here "omitted"
     // and "empty" are different values, so no caller-side guard is needed
     // (bankai-core#577).
-    expect(reviewsAllApprovedAtHead([], "headsha", [])).toBe(true);
-    expect(unapprovedApprovers([], "headsha", [])).toEqual([]);
+    expect(reviewsAllApprovedAtHead(BANKAI, [], "headsha", [])).toBe(true);
+    expect(unapprovedApprovers(BANKAI, [], "headsha", [])).toEqual([]);
   });
 
   it("ADDED: defaults to CON-32(b)'s approval set, sasuke and tenma", () => {
     expect(
-      reviewsAllApprovedAtHead([review({ author: "sasuke-bankai[bot]" })], "headsha"),
+      reviewsAllApprovedAtHead(BANKAI, [review({ author: "sasuke-bankai[bot]" })], "headsha"),
     ).toBe(false);
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [review({ author: "sasuke-bankai[bot]" })],
         "headsha",
         ["sasuke"],
@@ -759,7 +779,7 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
   it("ADDED: a review with NO submitted_at never displaces a timestamped one", () => {
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [
           review({ author: "sasuke-bankai[bot]", submittedAt: "2026-08-14T02:00:00Z" }),
           review({
@@ -791,14 +811,14 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
     ];
 
     expect(
-      reviewsAllApprovedAtHead(approvedAtHead, "headsha", [" sasuke ", " tenma "]),
+      reviewsAllApprovedAtHead(BANKAI, approvedAtHead, "headsha", [" sasuke ", " tenma "]),
     ).toBe(false);
 
     // ... and unapprovedApprovers must name the SAME set, or the verdict and the
     // reason disagree about who the approvers even are -- BC-PR-#773's failure
     // mode approached from the other end.
     expect(
-      unapprovedApprovers(approvedAtHead, "headsha", [" sasuke ", " tenma "]),
+      unapprovedApprovers(BANKAI, approvedAtHead, "headsha", [" sasuke ", " tenma "]),
     ).toEqual([
       { reviewer: " sasuke ", reading: "current-head" },
       { reviewer: " tenma ", reading: "current-head" },
@@ -806,7 +826,7 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
     // Normalizing FIRST is the supported path, and restores the approval.
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         approvedAtHead,
         "headsha",
         normalizeReviewers(" sasuke , tenma "),
@@ -820,14 +840,14 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
     // `--approvers` would otherwise satisfy the approve limb against any review
     // at all.
     expect(
-      reviewsAllApprovedAtHead(
+      reviewsAllApprovedAtHead(BANKAI,
         [review({ author: "sasuke-bankai[bot]" })],
         "headsha",
         ["sasuke", ""],
       ),
     ).toBe(true);
     expect(
-      unapprovedApprovers([review({ author: "sasuke-bankai[bot]" })], "headsha", [
+      unapprovedApprovers(BANKAI, [review({ author: "sasuke-bankai[bot]" })], "headsha", [
         "sasuke",
         "",
       ]),
@@ -846,19 +866,19 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
 
     it("sasuke and tenma pass under the delivery reading, on their `opened` pass", () => {
       expect(
-        reviewsAllApprovedAtHead(staleButApproved, "headsha", ["sasuke", "tenma"], true),
+        reviewsAllApprovedAtHead(BANKAI, staleButApproved, "headsha", ["sasuke", "tenma"], true),
       ).toBe(true);
     });
 
     it("... and fail without it -- the ordinary path is unchanged", () => {
       expect(
-        reviewsAllApprovedAtHead(staleButApproved, "headsha", ["sasuke", "tenma"], false),
+        reviewsAllApprovedAtHead(BANKAI, staleButApproved, "headsha", ["sasuke", "tenma"], false),
       ).toBe(false);
     });
 
     it("... while bisky is refused even WITH it -- the relaxation reaches the two reviewers CON-40 names and no others", () => {
       expect(
-        reviewsAllApprovedAtHead(
+        reviewsAllApprovedAtHead(BANKAI,
           staleButApproved,
           "headsha",
           ["sasuke", "tenma", "bisky"],
@@ -875,13 +895,13 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
       );
 
       expect(
-        reviewsAllApprovedAtHead(changesRequested, "headsha", ["sasuke", "tenma"], true),
+        reviewsAllApprovedAtHead(BANKAI, changesRequested, "headsha", ["sasuke", "tenma"], true),
       ).toBe(false);
     });
 
     it("defaults DELIVERY_PR to false -- every pre-#720 caller is unchanged", () => {
       expect(
-        reviewsAllApprovedAtHead(
+        reviewsAllApprovedAtHead(BANKAI,
           [review({ author: "sasuke-bankai[bot]", commitId: "opensha" })],
           "headsha",
           ["sasuke"],
@@ -890,7 +910,7 @@ describe("reviewsAllApprovedAtHead (CON-32b approve limb, CON-16 current head)",
     });
 
     it("ADDED: a delivery reviewer with NO review at all is still not approved -- the carve-out relocates the round, it does not waive it", () => {
-      expect(reviewsAllApprovedAtHead([], "headsha", ["sasuke", "tenma"], true)).toBe(
+      expect(reviewsAllApprovedAtHead(BANKAI, [], "headsha", ["sasuke", "tenma"], true)).toBe(
         false,
       );
     });
@@ -920,7 +940,7 @@ describe("unapprovedApprovers (BC-PR-#773 mis-blame)", () => {
   ];
 
   it("reports the READING applied per name under the delivery reading", () => {
-    expect(unapprovedApprovers(mixed, "headsha", ["sasuke", "tenma", "bisky"], true)).toEqual(
+    expect(unapprovedApprovers(BANKAI, mixed, "headsha", ["sasuke", "tenma", "bisky"], true)).toEqual(
       [
         { reviewer: "sasuke", reading: "con40-holistic-pass" },
         { reviewer: "bisky", reading: "current-head" },
@@ -929,7 +949,7 @@ describe("unapprovedApprovers (BC-PR-#773 mis-blame)", () => {
   });
 
   it("reports the at-head reading for everyone on the ordinary path", () => {
-    expect(unapprovedApprovers(mixed, "headsha", ["sasuke", "tenma", "bisky"], false)).toEqual(
+    expect(unapprovedApprovers(BANKAI, mixed, "headsha", ["sasuke", "tenma", "bisky"], false)).toEqual(
       [
         { reviewer: "sasuke", reading: "current-head" },
         { reviewer: "tenma", reading: "current-head" },
@@ -944,8 +964,8 @@ describe("unapprovedApprovers (BC-PR-#773 mis-blame)", () => {
       review({ author: "tenma-bankai[bot]" }),
     ];
 
-    expect(unapprovedApprovers(approved, "headsha", ["sasuke", "tenma"], false)).toEqual([]);
-    expect(reviewsAllApprovedAtHead(approved, "headsha", ["sasuke", "tenma"], false)).toBe(
+    expect(unapprovedApprovers(BANKAI, approved, "headsha", ["sasuke", "tenma"], false)).toEqual([]);
+    expect(reviewsAllApprovedAtHead(BANKAI, approved, "headsha", ["sasuke", "tenma"], false)).toBe(
       true,
     );
   });
@@ -964,7 +984,7 @@ describe("unapprovedApprovers (BC-PR-#773 mis-blame)", () => {
     ];
 
     expect(
-      unapprovedApprovers(state, "headsha", ["sasuke", "tenma", "bisky"], true),
+      unapprovedApprovers(BANKAI, state, "headsha", ["sasuke", "tenma", "bisky"], true),
     ).toEqual([{ reviewer: "bisky", reading: "current-head" }]);
   });
 
@@ -972,8 +992,8 @@ describe("unapprovedApprovers (BC-PR-#773 mis-blame)", () => {
     const cases: readonly Review[][] = [[], DELIVERY_REVIEWS, mixed];
     for (const reviews of cases) {
       for (const delivery of [false, true]) {
-        const named = unapprovedApprovers(reviews, "headsha", ["sasuke", "tenma"], delivery);
-        const verdict = reviewsAllApprovedAtHead(
+        const named = unapprovedApprovers(BANKAI, reviews, "headsha", ["sasuke", "tenma"], delivery);
+        const verdict = reviewsAllApprovedAtHead(BANKAI,
           reviews,
           "headsha",
           ["sasuke", "tenma"],
@@ -989,7 +1009,7 @@ describe("unapprovedApprovers (BC-PR-#773 mis-blame)", () => {
 
 describe("pendingRounds (CON-32b owed limb)", () => {
   it("names every reviewer owed a round when nothing has been posted (strict)", () => {
-    const owed = pendingRounds(rounds(), "headsha", ["sasuke", "tenma", "copilot"], "strict");
+    const owed = pendingRounds(BANKAI, rounds(), "headsha", ["sasuke", "tenma", "copilot"], "strict");
 
     expect(owedNames(owed)).toEqual(["sasuke", "tenma", "copilot"]);
     expect(owed.every((entry): boolean => entry.reason === "no-round-at-head")).toBe(true);
@@ -998,7 +1018,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   it("under BOUNDED does not wait on a Copilot round nobody requested", () => {
     // 0 of 8 merged PRs sampled carried a Copilot round at their final head, so
     // `strict` holds every one of them not-ready indefinitely (bankai-core#570).
-    const owed = pendingRounds(rounds(), "headsha", ["sasuke", "tenma", "copilot"], "bounded");
+    const owed = pendingRounds(BANKAI, rounds(), "headsha", ["sasuke", "tenma", "copilot"], "bounded");
 
     expect(owedNames(owed)).toEqual(["sasuke", "tenma"]);
   });
@@ -1006,7 +1026,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   it("under BOUNDED still owes Copilot while its review request is PENDING -- the #564 shape", () => {
     // bounded is not "ignore Copilot": a pending request is the one footprint an
     // un-posted Copilot round has, and it is honoured under both policies.
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         reviewRequests: [request("Copilot")],
         reviews: [
@@ -1025,7 +1045,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("ADDED: a pending request is owed under STRICT too", () => {
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({ reviewRequests: [request("Copilot")] }),
       "headsha",
       ["copilot"],
@@ -1038,7 +1058,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("ADDED: a request naming an UNCONFIGURED login (the human maintainer) is ignored -- the human is the gate, never a round the gate waits on", () => {
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         reviewRequests: [request("zheref")],
         reviews: [review({ author: "sasuke-bankai[bot]" })],
@@ -1054,7 +1074,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   it("a COMPLETED non-SKIPPED 'bisky / review' check at head satisfies bisky's round without a posted review", () => {
     // Bisky posts a review only when it has findings; a clean run concludes its
     // check silently, so the check IS the round.
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         checks: [
           checkRun({ name: "bisky / review", conclusion: "SUCCESS", status: "COMPLETED" }),
@@ -1078,7 +1098,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("a still-running 'bisky / review' check does NOT satisfy bisky's round", () => {
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         checks: [
           checkRun({ name: "bisky / review", conclusion: null, status: "IN_PROGRESS" }),
@@ -1095,7 +1115,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   it("a SUPERSEDED non-SKIPPED bisky run must not satisfy the round when the LATEST is SKIPPED (bankai-core#577)", () => {
     // The reduction must happen BEFORE the round test. Reading the raw rollup
     // let an obsolete SUCCESS clear a reviewer whose latest run says otherwise.
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         checks: [
           checkRun({
@@ -1122,7 +1142,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
 
   it("a green 'sasuke / audit' check at head is NOT a substitute for Sasuke's review", () => {
     // The proxy-vs-evidence rule, and the shape KroApple#329 merged in.
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         checks: [
           checkRun({ name: "sasuke / audit", conclusion: "SUCCESS", status: "COMPLETED" }),
@@ -1137,7 +1157,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("tolerates a whitespace-padded reviewer list (bankai-core#577)", () => {
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         reviews: [
           review({ author: "sasuke-bankai[bot]", commitId: "h" }),
@@ -1153,7 +1173,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("ADDED: a COMPLETED, non-SKIPPED Cursor Bugbot check satisfies bugbot's round", () => {
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         checks: [
           checkRun({ name: "Cursor Bugbot", conclusion: "SUCCESS", status: "COMPLETED" }),
@@ -1168,7 +1188,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("ADDED: a SKIPPED Bugbot check does NOT satisfy the round -- accepting it would be a gate that can never clear", () => {
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         checks: [
           checkRun({ name: "Cursor Bugbot", conclusion: "SKIPPED", status: "COMPLETED" }),
@@ -1185,7 +1205,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   it("ADDED: a review at head in ANY state satisfies the owed limb -- a COMMENTED round IS a round", () => {
     // The owed limb asks whether the reviewer SHOWED UP; whether it approved is
     // the approve limb's question, one clause later.
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({ reviews: [review({ author: "sasuke-bankai[bot]", state: "COMMENTED" })] }),
       "headsha",
       ["sasuke"],
@@ -1196,7 +1216,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("ADDED: a review on a SUPERSEDED commit does not satisfy the owed limb", () => {
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({ reviews: [review({ author: "sasuke-bankai[bot]", commitId: "oldsha" })] }),
       "headsha",
       ["sasuke"],
@@ -1209,7 +1229,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   it("ADDED: a legacy StatusContext named like a reviewer check cannot satisfy a round -- the rule reads .name alone", () => {
     // A commit status from an external CI system is not bisky's review job
     // concluding silently, however it is named.
-    const owed = pendingRounds(
+    const owed = pendingRounds(BANKAI,
       rounds({
         checks: [statusContext({ context: "bisky / review", state: "SUCCESS" })],
       }),
@@ -1222,7 +1242,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
   });
 
   it("ADDED: an empty reviewer set owes nothing", () => {
-    expect(pendingRounds(rounds(), "headsha", [], "strict")).toEqual([]);
+    expect(pendingRounds(BANKAI, rounds(), "headsha", [], "strict")).toEqual([]);
   });
 
   describe("CON-40 delivery-PR carve-out (bankai-core#720)", () => {
@@ -1233,12 +1253,12 @@ describe("pendingRounds (CON-32b owed limb)", () => {
 
     it("a delivery PR one synchronize past `opened` owes nothing -- the abstain-green round counts", () => {
       expect(
-        pendingRounds(deliveryInputs(), "headsha", ["sasuke", "tenma"], "bounded", true),
+        pendingRounds(BANKAI, deliveryInputs(), "headsha", ["sasuke", "tenma"], "bounded", true),
       ).toEqual([]);
     });
 
     it("the SAME state WITHOUT the delivery reading is still owed -- the carve-out fires on evidence, never on shape", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs(),
         "headsha",
         ["sasuke", "tenma"],
@@ -1257,7 +1277,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
       // followed it, so Tenma abstained green having never reviewed at all. An
       // abstain-green check cannot stand in for a review that never happened --
       // and Sasuke, who DID post, must clear.
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({
           reviews: DELIVERY_REVIEWS.filter(
             (entry): boolean => !entry.author.includes("tenma"),
@@ -1275,7 +1295,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("a delivery reviewer whose review check is SKIPPED at head is owed -- CON-40 requires a definitive pass, never a skip", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({
           checks: DELIVERY_CHECKS.map((entry): RollupEntry =>
             entry.kind === "check_run" && entry.name === "tenma / review"
@@ -1295,7 +1315,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("a green 'sasuke / probe / probe' does NOT satisfy sasuke's delivery round -- only the REVIEW job does", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({
           checks: DELIVERY_CHECKS.map((entry): RollupEntry =>
             entry.kind === "check_run" && entry.name === "sasuke / audit"
@@ -1315,7 +1335,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("ADDED: a NEUTRAL review check is not a definitive pass either", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({
           checks: [
             checkRun({ name: "sasuke / audit", conclusion: "NEUTRAL", status: "COMPLETED" }),
@@ -1334,7 +1354,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("ADDED: an IN_PROGRESS review check is not a definitive pass either", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({
           checks: [
             checkRun({ name: "sasuke / audit", conclusion: "SUCCESS", status: "IN_PROGRESS" }),
@@ -1353,7 +1373,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("ADDED: a delivery reviewer WITH a round at head clears by the ordinary path, never reaching the carve-out", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({
           checks: [],
           reviews: [
@@ -1371,7 +1391,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("ADDED: the carve-out never reaches bisky or copilot, however green their checks are", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({
           checks: [
             ...DELIVERY_CHECKS,
@@ -1391,7 +1411,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("defaults DELIVERY_PR to false -- every pre-#720 caller is unchanged", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         rounds({
           checks: [
             checkRun({ name: "sasuke / audit", conclusion: "SUCCESS", status: "COMPLETED" }),
@@ -1406,7 +1426,7 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("ADDED: a PENDING request still wins over the carve-out -- limb (i) is tested first", () => {
-      const owed = pendingRounds(
+      const owed = pendingRounds(BANKAI,
         deliveryInputs({ reviewRequests: [request("sasuke-bankai")] }),
         "headsha",
         ["sasuke"],
@@ -1502,49 +1522,49 @@ describe("isDeliveryPr (CON-40 delivery-PR carve-out)", () => {
   };
 
   it("accepts both of issue #106's login formats", () => {
-    expect(isDeliveryPr(DELIVERY)).toBe(true);
-    expect(isDeliveryPr({ ...DELIVERY, author: "roy-bankai[bot]" })).toBe(true);
+    expect(isDeliveryPr(BANKAI, DELIVERY)).toBe(true);
+    expect(isDeliveryPr(BANKAI, { ...DELIVERY, author: "roy-bankai[bot]" })).toBe(true);
   });
 
   it("accepts the bankai:epic label as the head-ref fallback (BC-PR-#372)", () => {
-    expect(isDeliveryPr({ ...DELIVERY, headRef: "roy/epic-193-delivery" })).toBe(true);
+    expect(isDeliveryPr(BANKAI, { ...DELIVERY, headRef: "roy/epic-193-delivery" })).toBe(true);
   });
 
   it("accepts an integration/* head with NO labels at all", () => {
-    expect(isDeliveryPr({ ...DELIVERY, labels: [] })).toBe(true);
+    expect(isDeliveryPr(BANKAI, { ...DELIVERY, labels: [] })).toBe(true);
   });
 
   it("REFUSES the label alone on a non-Roy author — BC-PR-#372's security fix", () => {
     // The label is self-declared (CON-34, applied by Roy). Accepting it without
     // the author would let ANY actor attach `bankai:epic` to an ordinary PR and
     // permanently exempt its reviewers from a round at head.
-    expect(isDeliveryPr({ ...DELIVERY, author: "some-human", headRef: "x/y" })).toBe(false);
+    expect(isDeliveryPr(BANKAI, { ...DELIVERY, author: "some-human", headRef: "x/y" })).toBe(false);
   });
 
   it("REFUSES a near-miss login — the match is anchored, never a substring", () => {
     for (const author of ["roy-bankai-evil", "app/roy-bankai-evil", "evilroy-bankai2", "notroy-bankai-x"]) {
-      expect(isDeliveryPr({ ...DELIVERY, author }), author).toBe(false);
+      expect(isDeliveryPr(BANKAI, { ...DELIVERY, author }), author).toBe(false);
     }
   });
 
   it("REFUSES a non-default base — a child PR onto integration/* is not a delivery PR", () => {
     expect(
-      isDeliveryPr({ ...DELIVERY, baseRef: "integration/epic-193", headRef: "roy/193-child" }),
+      isDeliveryPr(BANKAI, { ...DELIVERY, baseRef: "integration/epic-193", headRef: "roy/193-child" }),
     ).toBe(false);
   });
 
   it("REFUSES when any of the three REQUIRED fields is empty — absent evidence never widens a gate", () => {
     for (const field of ["author", "baseRef", "defaultBranch"] as const) {
-      expect(isDeliveryPr({ ...DELIVERY, [field]: "" }), field).toBe(false);
+      expect(isDeliveryPr(BANKAI, { ...DELIVERY, [field]: "" }), field).toBe(false);
     }
   });
 
   it("ADDED: an empty head ref AND no labels is false, but either one alone suffices", () => {
     // The fourth conjunct is a DISJUNCTION: neither of its two limbs is
     // individually required, and what it cannot do is pass on nothing.
-    expect(isDeliveryPr({ ...DELIVERY, headRef: "", labels: [] })).toBe(false);
-    expect(isDeliveryPr({ ...DELIVERY, headRef: "", labels: ["bankai:epic"] })).toBe(true);
-    expect(isDeliveryPr({ ...DELIVERY, headRef: "integration/x", labels: [] })).toBe(true);
+    expect(isDeliveryPr(BANKAI, { ...DELIVERY, headRef: "", labels: [] })).toBe(false);
+    expect(isDeliveryPr(BANKAI, { ...DELIVERY, headRef: "", labels: ["bankai:epic"] })).toBe(true);
+    expect(isDeliveryPr(BANKAI, { ...DELIVERY, headRef: "integration/x", labels: [] })).toBe(true);
   });
 });
 
@@ -1552,7 +1572,7 @@ describe("isDeliveryPr (CON-40 delivery-PR carve-out)", () => {
 
 describe("defaultReviewers (the DEFAULT production path)", () => {
   it("is the base three when no reviewer check is present at head", () => {
-    expect(defaultReviewers([checkRun({ name: "sasuke / audit", conclusion: "SUCCESS" })])).toEqual([
+    expect(defaultReviewers(BANKAI, [checkRun({ name: "sasuke / audit", conclusion: "SUCCESS" })])).toEqual([
       "sasuke",
       "tenma",
       "copilot",
@@ -1560,7 +1580,7 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
   });
 
   it("enrols bisky on a present, non-SKIPPED `bisky / review` check", () => {
-    expect(defaultReviewers([checkRun({ name: "bisky / review", conclusion: "SUCCESS" })])).toEqual([
+    expect(defaultReviewers(BANKAI, [checkRun({ name: "bisky / review", conclusion: "SUCCESS" })])).toEqual([
       "sasuke",
       "tenma",
       "copilot",
@@ -1569,7 +1589,7 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
   });
 
   it("does NOT enrol bisky on a SKIPPED check — the job gated this PR out", () => {
-    expect(defaultReviewers([checkRun({ name: "bisky / review", conclusion: "SKIPPED" })])).toEqual([
+    expect(defaultReviewers(BANKAI, [checkRun({ name: "bisky / review", conclusion: "SKIPPED" })])).toEqual([
       "sasuke",
       "tenma",
       "copilot",
@@ -1577,16 +1597,16 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
   });
 
   it("does NOT enrol bugbot on a SKIPPED check — enrolling it created an UNSATISFIABLE gate", () => {
-    // Sasuke's high-severity finding on bankai-core#577: pendingRounds() accepts
+    // Sasuke's high-severity finding on bankai-core#577: pendingRounds(BANKAI, ) accepts
     // only a COMPLETED, non-SKIPPED check as bugbot's round, so a SKIPPED Bugbot
     // check enrolled a reviewer that could never clear -- no review ever posts,
     // the check never un-skips, not-ready forever with no path out.
-    expect(defaultReviewers([checkRun({ name: "Cursor Bugbot", conclusion: "SKIPPED" })])).toEqual([
+    expect(defaultReviewers(BANKAI, [checkRun({ name: "Cursor Bugbot", conclusion: "SKIPPED" })])).toEqual([
       "sasuke",
       "tenma",
       "copilot",
     ]);
-    expect(defaultReviewers([checkRun({ name: "Cursor Bugbot", conclusion: "SUCCESS" })])).toEqual([
+    expect(defaultReviewers(BANKAI, [checkRun({ name: "Cursor Bugbot", conclusion: "SUCCESS" })])).toEqual([
       "sasuke",
       "tenma",
       "copilot",
@@ -1596,7 +1616,7 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
 
   it("evaluates the LATEST run per name — a superseded non-SKIPPED run must not enrol", () => {
     expect(
-      defaultReviewers([
+      defaultReviewers(BANKAI, [
         checkRun({ name: "bisky / review", conclusion: "SUCCESS", startedAt: "2026-08-22T10:00:00Z" }),
         checkRun({ name: "bisky / review", conclusion: "SKIPPED", startedAt: "2026-08-22T11:00:00Z" }),
       ]),
@@ -1604,13 +1624,13 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
   });
 
   it("survives an empty rollup", () => {
-    expect(defaultReviewers([])).toEqual(["sasuke", "tenma", "copilot"]);
+    expect(defaultReviewers(BANKAI, [])).toEqual(["sasuke", "tenma", "copilot"]);
   });
 
   it("ADDED: bisky's pattern is ANCHORED — `bisky / probe / probe` must not enrol it", () => {
     // The probe is green on every PR whether or not the review ever ran, so a
     // prefix match would gate the PR on a check that says nothing about review.
-    expect(defaultReviewers([checkRun({ name: "bisky / probe / probe", conclusion: "SUCCESS" })])).toEqual([
+    expect(defaultReviewers(BANKAI, [checkRun({ name: "bisky / probe / probe", conclusion: "SUCCESS" })])).toEqual([
       "sasuke",
       "tenma",
       "copilot",
@@ -1621,7 +1641,7 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
     // The Bugbot check's name varies with the installation, so the asymmetry
     // with bisky's anchored pattern is deliberate and carried across.
     for (const name of ["Cursor Bugbot", "bugbot", "BUGBOT / review"]) {
-      expect(defaultReviewers([checkRun({ name, conclusion: "SUCCESS" })]), name).toContain("bugbot");
+      expect(defaultReviewers(BANKAI, [checkRun({ name, conclusion: "SUCCESS" })]), name).toContain("bugbot");
     }
   });
 
@@ -1629,10 +1649,230 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
     // `.name // ""` alone -- an external CI system's commit status is not
     // bisky's or Bugbot's review job concluding silently.
     expect(
-      defaultReviewers([
+      defaultReviewers(BANKAI, [
         statusContext({ context: "bisky / review", state: "SUCCESS" }),
         statusContext({ context: "Cursor Bugbot", state: "SUCCESS" }),
       ]),
     ).toEqual(["sasuke", "tenma", "copilot"]);
+  });
+});
+
+// =============================================================================
+// NAMES ARE DATA (ADDED for zheref/nen#1; no counterpart in the original suite)
+// =============================================================================
+//
+// Everything above this line runs against `BANKAI` -- a fixture repository whose
+// `schemas/gates.json` states exactly the identities the original wrote into its
+// own source -- and passes UNCHANGED. That proves the refactor did not move the
+// behaviour.
+//
+// It does NOT prove the second half of the claim. A predicate that still had a
+// reviewer name written into it somewhere would also pass every case above,
+// because every case above uses those names. So this section runs the SAME
+// structural cases against `ALT`: a repository with different reviewer names,
+// different logins, different check names, a different delivery author, a
+// different delivery branch prefix and a different delivery label. Not one of
+// its strings appears anywhere in the shipped tree.
+//
+// If any predicate carried a reviewer identity of its own, these would fail.
+
+describe("names are data -- the same predicates against a different vocabulary", () => {
+  it("matches a reviewer's login through the FILE's pattern", () => {
+    expect(reviewerLoginPattern(ALT, "itachi").test("itachi-akatsuki[bot]")).toBe(true);
+    expect(reviewerLoginPattern(ALT, "sentry").test("watchtower-app[bot]")).toBe(true);
+    // A reviewer the ALT file does not declare falls through to the original's
+    // `default:` reading -- it matches its own name, case-insensitively.
+    expect(reviewerLoginPattern(ALT, "sasuke").test("sasuke-bankai[bot]")).toBe(true);
+    // ...but it does NOT inherit the other repository's identity: the bankai
+    // fixture's `bugbot` matches `cursor`, and ALT declares no such reviewer.
+    expect(reviewerLoginPattern(BANKAI, "bugbot").test("cursor[bot]")).toBe(true);
+    expect(reviewerLoginPattern(ALT, "bugbot").test("cursor[bot]")).toBe(false);
+  });
+
+  it("resolves a reviewer's review check through the FILE's pattern", () => {
+    const itachi = reviewerReviewCheckPattern(ALT, "itachi");
+    expect(itachi?.test("itachi / inspect")).toBe(true);
+    // ANCHORED, never a name prefix: a probe job is green on every PR whether
+    // or not the review ever ran, so `^itachi / ` would clear a round on a
+    // check that says nothing about review.
+    expect(itachi?.test("itachi / probe / probe")).toBe(false);
+    expect(reviewerReviewCheckPattern(ALT, "sasuke")).toBeNull();
+    expect(reviewerReviewCheckPattern(BANKAI, "itachi")).toBeNull();
+  });
+
+  it("uses the FILE's default approver set", () => {
+    expect(defaultApprovers(ALT)).toEqual(["itachi", "kisame"]);
+    expect(defaultApprovers(BANKAI)).toEqual(["sasuke", "tenma"]);
+
+    const approvals: Review[] = [
+      review({ author: "itachi-akatsuki[bot]", commitId: "headsha" }),
+      review({ author: "kisame-akatsuki[bot]", commitId: "headsha" }),
+    ];
+    expect(reviewsAllApprovedAtHead(ALT, approvals, "headsha")).toBe(true);
+    // The same reviews against the OTHER repository's approver set: nobody it
+    // names approved, so it is not approved there.
+    expect(reviewsAllApprovedAtHead(BANKAI, approvals, "headsha")).toBe(false);
+  });
+
+  it("enrols reviewers from the FILE's base set plus its enrolment checks", () => {
+    expect(defaultReviewers(ALT, [])).toEqual(["itachi", "kisame", "scribe"]);
+    expect(
+      defaultReviewers(ALT, [checkRun({ name: "sentry / sweep", conclusion: "SUCCESS" })]),
+    ).toEqual(["itachi", "kisame", "scribe", "sentry"]);
+    // ANCHORED and CASE-SENSITIVE, exactly as the file states -- the same
+    // asymmetry the original hard-coded, now carried as data.
+    expect(
+      defaultReviewers(ALT, [checkRun({ name: "Sentry / Sweep", conclusion: "SUCCESS" })]),
+    ).toEqual(["itachi", "kisame", "scribe"]);
+    // The non-SKIPPED filter is not optional: enrolling on a skipped check
+    // creates a gate that can never be satisfied (bankai-core#577).
+    expect(
+      defaultReviewers(ALT, [checkRun({ name: "sentry / sweep", conclusion: "SKIPPED" })]),
+    ).toEqual(["itachi", "kisame", "scribe"]);
+  });
+
+  it("owes and clears rounds by the FILE's structural flags", () => {
+    // The bounded-policy exemption follows the FLAG, not a name: `scribe` is
+    // ALT's exempt reviewer and clears with no round, while `itachi` owes one.
+    expect(
+      owedNames(pendingRounds(ALT, rounds(), "headsha", ["scribe", "itachi"], "bounded")),
+    ).toEqual(["itachi"]);
+    // Under `strict` the exemption does not apply.
+    expect(
+      owedNames(pendingRounds(ALT, rounds(), "headsha", ["scribe"], "strict")),
+    ).toEqual(["scribe"]);
+
+    // A reviewer whose CHECK IS THE ROUND clears on a completed, non-skipped
+    // check -- identified by the file's `round_check_pattern`.
+    expect(
+      owedNames(
+        pendingRounds(
+          ALT,
+          rounds({
+            checks: [
+              checkRun({ name: "sentry / sweep", status: "COMPLETED", conclusion: "SUCCESS" }),
+            ],
+          }),
+          "headsha",
+          ["sentry"],
+          "bounded",
+        ),
+      ),
+    ).toEqual([]);
+    // ...and the SAME shape of check leaves the round owed for a reviewer whose
+    // review is the evidence and whose check is only a proxy.
+    expect(
+      owedNames(
+        pendingRounds(
+          ALT,
+          rounds({
+            checks: [
+              checkRun({ name: "itachi / inspect", status: "COMPLETED", conclusion: "SUCCESS" }),
+            ],
+          }),
+          "headsha",
+          ["itachi"],
+          "bounded",
+        ),
+      ),
+    ).toEqual(["itachi"]);
+  });
+
+  it("applies the delivery carve-out by the FILE's convention", () => {
+    const evidence = {
+      author: "train-bot[bot]",
+      baseRef: "main",
+      headRef: "train/2-something",
+      defaultBranch: "main",
+      labels: [] as readonly string[],
+    };
+    expect(isDeliveryPr(ALT, evidence)).toBe(true);
+    // The other repository's convention says no: different author, different
+    // prefix, different label.
+    expect(isDeliveryPr(BANKAI, evidence)).toBe(false);
+
+    // The label limb, with a head ref that matches no prefix.
+    expect(
+      isDeliveryPr(ALT, { ...evidence, headRef: "fix/x", labels: ["akatsuki:migration"] }),
+    ).toBe(true);
+    expect(
+      isDeliveryPr(ALT, { ...evidence, headRef: "fix/x", labels: ["bankai:epic"] }),
+    ).toBe(false);
+
+    // BC-PR-#372's security property survives the move to data: the author
+    // pattern the file states is anchored, so a look-alike is refused.
+    expect(isDeliveryPr(ALT, { ...evidence, author: "train-bot-evil" })).toBe(false);
+    expect(isDeliveryPr(ALT, { ...evidence, author: "eviltrain-bot2" })).toBe(false);
+  });
+
+  it("reads the delivery holistic-pass carve-out off the FILE's flag", () => {
+    const checks: RollupEntry[] = [
+      checkRun({ name: "itachi / inspect", status: "COMPLETED", conclusion: "SUCCESS" }),
+      checkRun({ name: "kisame / inspect", status: "COMPLETED", conclusion: "SUCCESS" }),
+    ];
+    const reviews: Review[] = [
+      review({ author: "itachi-akatsuki[bot]", commitId: "opensha" }),
+      review({ author: "kisame-akatsuki[bot]", commitId: "opensha" }),
+    ];
+
+    // On a delivery PR the one holistic pass plus a definitive green review
+    // check satisfies both rounds, even though neither review is at head.
+    expect(
+      owedNames(
+        pendingRounds(
+          ALT,
+          rounds({ checks, reviews }),
+          "headsha",
+          ["itachi", "kisame"],
+          "bounded",
+          true,
+        ),
+      ),
+    ).toEqual([]);
+    // Off a delivery PR the ordinary at-head rule binds and both owe a round.
+    expect(
+      owedNames(
+        pendingRounds(
+          ALT,
+          rounds({ checks, reviews }),
+          "headsha",
+          ["itachi", "kisame"],
+          "bounded",
+          false,
+        ),
+      ),
+    ).toEqual(["itachi", "kisame"]);
+
+    // The approval limb reads the same flag: their latest round is an APPROVE
+    // cast on `opensha`, and the carve-out drops the at-head requirement.
+    expect(
+      reviewsAllApprovedAtHead(ALT, reviews, "headsha", ["itachi", "kisame"], true),
+    ).toBe(true);
+    expect(
+      reviewsAllApprovedAtHead(ALT, reviews, "headsha", ["itachi", "kisame"], false),
+    ).toBe(false);
+    expect(
+      unapprovedApprovers(ALT, reviews, "headsha", ["itachi", "kisame"], false).map(
+        (entry): string => entry.reviewer,
+      ),
+    ).toEqual(["itachi", "kisame"]);
+  });
+
+  it("leaves the identity-FREE predicates identity-free", () => {
+    // These take no identities and must not have grown any: each is a function
+    // of a check rollup or a string alone.
+    const entries: RollupEntry[] = [
+      checkRun({ name: "anything", conclusion: "SUCCESS", startedAt: "2026-01-01T00:00:00Z" }),
+      checkRun({ name: "anything", conclusion: "CANCELLED", startedAt: "2026-01-01T00:00:01Z" }),
+    ];
+    expect(latestChecks(entries).length).toBe(1);
+    expect(checksAllGreen(entries)).toBe(true);
+    expect(cancelledLatestReport(latestChecks(entries))).toEqual({
+      cancelled: [],
+      failing: [],
+    });
+    expect(excludeCheckRun(entries, null).length).toBe(2);
+    expect(normalizeReviewers(" a , b ")).toEqual(["a", "b"]);
+    expect(normalizeReviewerNames([" a ", ""])).toEqual(["a"]);
   });
 });
