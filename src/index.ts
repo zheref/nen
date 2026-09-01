@@ -32,7 +32,6 @@ import {
   peekCommand,
   type Verb,
 } from "./cli/verb.js";
-import { runDevTest } from "./dev/test.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
@@ -45,12 +44,9 @@ import { PROGRAM, VERSION } from "./version.js";
 // once, and a one-line insertion into a sorted list is the shape a three-way
 // merge resolves by itself. See ./cli/verb.ts's header.
 //
-// `bootstrap`, `schema`, `version` and `dev test` are deliberately NOT here:
-// they predate the registry, are exercised by tests that pin their exact
-// wording, and moving them would be churn in the one file every sibling branch
-// touches. `dev` itself joins the registry once `dev lint`/`dev replay` exist
-// alongside `dev test` (issue #4's last checkbox); until then the special case
-// below is the whole of `dev`.
+// `bootstrap`, `schema` and `version` are deliberately NOT here: they predate
+// the registry, are exercised by tests that pin their exact wording, and
+// moving them would be churn in the one file every sibling branch touches.
 //
 // THIS LIST GROWS ONE LINE AT A TIME AS EACH VERB FAMILY LANDS. It is not
 // pre-declared for verbs that do not exist yet -- a registry entry for a module
@@ -60,6 +56,7 @@ import { PROGRAM, VERSION } from "./version.js";
 
 import { canonVerb } from "./canon/verb.js";
 import { commitVerb } from "./commit/verb.js";
+import { devVerb } from "./dev/verb.js";
 import { effortVerb } from "./effort/verb.js";
 import { epicVerb } from "./epic/verb.js";
 import { ideaVerb } from "./idea/verb.js";
@@ -82,6 +79,7 @@ import { wcVerb } from "./wc/verb.js";
 export const VERBS: readonly Verb[] = [
   canonVerb,
   commitVerb,
+  devVerb,
   effortVerb,
   epicVerb,
   ideaVerb,
@@ -211,13 +209,6 @@ export function run(argv: readonly string[], io: Io): number {
         }
         return schemaCheck(repoFlag, json, io);
 
-      case "dev":
-        if (subcommand !== "test") {
-          io.err(`${PROGRAM}: unknown 'dev' subcommand '${subcommand ?? "(none)"}'. Try 'dev test'.`);
-          return 2;
-        }
-        return devTest(repoFlag, parsed.passthrough, io);
-
       default: {
         if (verb !== undefined) {
           // `nen <verb> --help` is the verb's own block, on stdout, exit 0 --
@@ -296,12 +287,6 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     );
   }
   return report.ok ? 0 : 1;
-}
-
-function devTest(repoFlag: string | null, passthrough: readonly string[], io: Io): number {
-  const result = runDevTest({ repoFlag, passthrough });
-  if (result.message !== null) io.err(`${PROGRAM}: ${result.message}`);
-  return result.code;
 }
 
 // The one place `process` is touched, and it is three lines. Everything above is

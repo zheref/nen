@@ -1,0 +1,50 @@
+{
+  "script": "dedupe_handbook_questions.sh",
+  "id": "a-newer-twin-is-never-canonical",
+  "note": "ABSENCE CASE. #150 is the OLDEST of two twins, so it is canonical and closes nothing -- even though a same-titled #400 is open. A port comparing titles without the strictly-less-than number test would close the canonical issue and leave the duplicate open, inverting the guard. One gh call. Synthetic gh stub; no live network. THE REPO SLUG HERE IS SYNTHETIC (fake/repo) AND MUST STAY THAT WAY. Nothing in this case needs a real repository -- the shim answers every call -- and `bankai dual-run record` spawns the REAL gh with no dry run and no confirmation, so a fixture naming a live repo files real issues, posts real comments and starts real CI the moment someone re-records it (BC-PR-#886 review finding F2).",
+  "recordedAt": "2026-08-30T02:16:54.403Z",
+  "argv": [],
+  "env": {
+    "REPO": "fake/repo",
+    "NUMBER": "150",
+    "TITLE": "Same gap"
+  },
+  "stdin": "",
+  "recorded": {
+    "stdout": "#150 is canonical (no older open duplicate) — no-op.\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "subprocess": [
+    {
+      "bin": "gh",
+      "argv": [
+        "issue",
+        "list",
+        "--repo",
+        "fake/repo",
+        "--label",
+        "bankai:handbook-question",
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title",
+        "-q",
+        ".[] | [(.number|tostring), .title] | @tsv"
+      ],
+      "stdout": "150\tSame gap\n400\tSame gap\n",
+      "stderr": "",
+      "exitCode": 0
+    }
+  ],
+  "provenance": {
+    "sourceRepo": "zheref/bankai-core",
+    "sourceTag": "v0.11.3",
+    "sourceSha": "23d53c84a1e5d2f75ceb266f51c387c51ef128cb",
+    "sourcePath": "tests/fixtures/dualrun/dedupe_handbook_questions.sh/a-newer-twin-is-never-canonical.json",
+    "importedAt": "2026-08-31",
+    "recordingHostCaveat": "recordedAt, comment URLs/IDs and issue numbers above are the ORIGINAL recording host's synthetic fixture values (a stubbed gh, per the fixture's own note) -- they are fixture-shaped, not reproducible facts, and must never be treated as real GitHub state or replayed against a live repository."
+  }
+}

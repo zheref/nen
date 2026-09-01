@@ -1,0 +1,82 @@
+{
+  "script": "dedupe_handbook_questions.sh",
+  "id": "lowest-of-several-older-matches-wins",
+  "note": "CONVERGENCE WITHOUT A LOCK. Three concurrent filings of one gap collapse onto the LOWEST number, which is order-independent, so every racing run computes the same canonical. A port that took the FIRST match, or the newest, would still close something and still look green on the two-issue cases -- this is the case that separates them. Synthetic gh stub; no live network. THE REPO SLUG HERE IS SYNTHETIC (fake/repo) AND MUST STAY THAT WAY. Nothing in this case needs a real repository -- the shim answers every call -- and `bankai dual-run record` spawns the REAL gh with no dry run and no confirmation, so a fixture naming a live repo files real issues, posts real comments and starts real CI the moment someone re-records it (BC-PR-#886 review finding F2).",
+  "recordedAt": "2026-08-30T02:16:53.722Z",
+  "argv": [],
+  "env": {
+    "REPO": "fake/repo",
+    "NUMBER": "300",
+    "TITLE": "Same gap"
+  },
+  "stdin": "",
+  "recorded": {
+    "stdout": "✓ Closed issue fake/repo#300 (Gap: missing rule for X)\nhttps://github.com/fake/repo/issues/150#issuecomment-2001\n#300 closed as a duplicate of #150.\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "subprocess": [
+    {
+      "bin": "gh",
+      "argv": [
+        "issue",
+        "list",
+        "--repo",
+        "fake/repo",
+        "--label",
+        "bankai:handbook-question",
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title",
+        "-q",
+        ".[] | [(.number|tostring), .title] | @tsv"
+      ],
+      "stdout": "150\tSame gap\n200\tSame gap\n300\tSame gap\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "bin": "gh",
+      "argv": [
+        "issue",
+        "close",
+        "300",
+        "--repo",
+        "fake/repo",
+        "--reason",
+        "not planned",
+        "--comment",
+        "Duplicate filing collapsed (CON-11 idempotent-filing guard): this gap is already tracked at #150. Closing this one — see #150 for the open question."
+      ],
+      "stdout": "✓ Closed issue fake/repo#300 (Gap: missing rule for X)\n",
+      "stderr": "",
+      "exitCode": 0
+    },
+    {
+      "bin": "gh",
+      "argv": [
+        "issue",
+        "comment",
+        "150",
+        "--repo",
+        "fake/repo",
+        "--body",
+        "A concurrent duplicate filing (#300) was just collapsed into this issue (CON-11 idempotent-filing guard, bankai-core#196)."
+      ],
+      "stdout": "https://github.com/fake/repo/issues/150#issuecomment-2001\n",
+      "stderr": "",
+      "exitCode": 0
+    }
+  ],
+  "provenance": {
+    "sourceRepo": "zheref/bankai-core",
+    "sourceTag": "v0.11.3",
+    "sourceSha": "23d53c84a1e5d2f75ceb266f51c387c51ef128cb",
+    "sourcePath": "tests/fixtures/dualrun/dedupe_handbook_questions.sh/lowest-of-several-older-matches-wins.json",
+    "importedAt": "2026-08-31",
+    "recordingHostCaveat": "recordedAt, comment URLs/IDs and issue numbers above are the ORIGINAL recording host's synthetic fixture values (a stubbed gh, per the fixture's own note) -- they are fixture-shaped, not reproducible facts, and must never be treated as real GitHub state or replayed against a live repository."
+  }
+}

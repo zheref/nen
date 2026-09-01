@@ -239,14 +239,27 @@ export function runSearch(
 // the LOWEST number among current matches, and only numbers STRICTLY LESS than
 // the new one can be canonical.
 
-// Lowercase, collapse every non-alphanumeric run to a single space, trim.
+// ASCII-only lowercase, matching `tr '[:upper:]' '[:lower:]'` in the C locale
+// -- the port source's own case fold -- rather than JS's `String.toLowerCase()`,
+// which is Unicode-aware. The difference is load-bearing, not cosmetic: `tr`'s
+// C-locale mapping touches ONLY A-Z, so a title carrying U+0130 (LATIN CAPITAL
+// LETTER I WITH DOT ABOVE, e.g. "İstanbul") reaches the punctuation-stripping
+// pass below untouched and is stripped as punctuation, while
+// `"İ".toLowerCase()` expands it to "i" plus a COMBINING DOT ABOVE (U+0307) --
+// a different codepoint sequence that keys differently and would silently miss
+// a duplicate the original always caught (proved by the imported corpus slice,
+// tests/fixtures/dualrun-slice/dedupe_handbook_questions.sh/non-ascii-uppercase-survives-the-lowercaser.json).
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, (letter): string => letter.toLowerCase());
+}
+
+// Collapse every non-alphanumeric run to a single space, trim.
 //
 // Deliberately NOT semantic. Two differently-worded reports of one gap will not
 // match, and that is the documented bound: this targets the race where two runs
 // of the same agent find the same gap seconds apart and title it identically.
 export function normalizeTitle(title: string): string {
-  return title
-    .toLowerCase()
+  return asciiLower(title)
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }

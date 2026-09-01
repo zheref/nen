@@ -184,4 +184,14 @@ describe("findCanonical -- lowest-number-wins, order-independent", () => {
   it("returns null when nothing matches", () => {
     expect(findCanonical(10, "unique", [{ number: 1, title: "other" }])).toBeNull();
   });
+
+  it("case-folds ASCII-only, matching tr's C-locale rule rather than Unicode toLowerCase (found via the imported corpus slice, tests/fixtures/dualrun-slice/dedupe/non-ascii-uppercase-survives-the-lowercaser.json)", () => {
+    // U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) survives an ASCII-only
+    // fold untouched and is then stripped as punctuation -- "İstanbul gap"
+    // and "stanbul gap" must normalize to the SAME key, exactly as the
+    // ported shell's `tr '[:upper:]' '[:lower:]'` does.
+    expect(normalizeTitle("İstanbul gap")).toBe(normalizeTitle("stanbul gap"));
+    const canonical = findCanonical(300, "İstanbul gap", [{ number: 150, title: "stanbul gap" }]);
+    expect(canonical).toBe(150);
+  });
 });

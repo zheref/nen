@@ -77,7 +77,7 @@ describe("usage errors are exit 2, distinct from failures", () => {
 
   it("refuses an unknown subcommand", () => {
     expect(capture(["schema", "list"]).code).toBe(2);
-    expect(capture(["dev", "lint"]).code).toBe(2);
+    expect(capture(["dev", "bogus"]).code).toBe(2);
     expect(capture(["schema"]).code).toBe(2);
   });
 });
