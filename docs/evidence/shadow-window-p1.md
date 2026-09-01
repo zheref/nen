@@ -1,6 +1,6 @@
 # Shadow window — P1 evidence (zheref/nen#2)
 
-§7's P1 evidence bar, verbatim:
+The P1 evidence bar zheref/nen#5 requires, verbatim:
 
 > Shadow window: on live bankai-core PRs, `nen pr ready` must equal
 > `pr_ready_gate.sh --verdict` — every disagreement is a finding before Nen may
@@ -35,7 +35,8 @@ two ways, both fixed in `src/shadow/run.ts` before this run:
    functions, `readyAgrees()` and `reasonAgrees()`, and a row is clean only
    when both hold. `reasonAgrees()` normalizes away the ONE declared adoption
    divergence (`../gates/ready.ts`'s ADOPTION DIVERGENCE (3), the
-   `(bankai-core#671)` citation `nen`'s own §3 forbids it from emitting) and
+   `(bankai-core#671)` citation `nen`'s own taxonomy-purity rule (no hard-coded
+   system names in shipped code) forbids it from emitting) and
    compares the rest of the text verbatim.
 2. **The rendered table truncated any cell over 80 characters**, which is
    exactly the reason text the new comparison needs to see, and which is why
@@ -138,7 +139,7 @@ at run time (`gh pr list --repo <repo> --state open`) rather than a fixed
 list, so re-running it after any of these repositories opens a PR extends the
 table for free — including `zheref/bankai-core` itself now, which the
 PREVIOUS version of `openPrRepos` omitted despite it being the one repository
-§7's evidence bar is written about (the review's MINOR finding, corrected
+the P1 evidence bar is written about (the review's MINOR finding, corrected
 above). **Residual gap, recorded rather than hidden:** the owed-round,
 stalled-round, approve-at-head and unresolved-thread-count conjuncts have not
 yet been shadow-tested against a FAILING case on live data, only a passing
@@ -173,7 +174,7 @@ above are where the eventual, reviewed fix is designed in.
 
 ## Rollback position, unchanged
 
-Per §7 P1: the shell gate (`scripts/pr_ready_gate.sh`) remains CON-32's sole
+Per zheref/nen#2's own rollback position: the shell gate (`scripts/pr_ready_gate.sh`) remains CON-32's sole
 authority. This shadow window is evidence toward retiring that authority, not
 a transfer of it — `nen pr ready` holds no readiness authority yet, and
 nothing in `src/verbs/pr_ready.ts` writes to GitHub.
