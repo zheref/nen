@@ -27,6 +27,17 @@ export interface FlagSpec {
   readonly booleans?: readonly string[];
   /** Single-dash aliases, e.g. `{ v: "version", h: "help" }`. */
   readonly aliases?: Readonly<Record<string, string>>;
+  /**
+   * Stop at the FIRST positional and hand it, and everything after it, back
+   * untouched in `rest`.
+   *
+   * This is what lets each verb family own its own flags instead of every flag
+   * in the CLI living in one union (see ./command.ts). Without it the top-level
+   * parse would have to know every family's flags in order not to reject them --
+   * which is the same as not being strict at all, because a typo in one family's
+   * flag would then be silently accepted as another family's.
+   */
+  readonly stopAtFirstPositional?: boolean;
 }
 
 export interface ParsedArgs {
@@ -36,6 +47,12 @@ export interface ParsedArgs {
   readonly booleans: ReadonlySet<string>;
   /** Everything after a bare `--`, passed through untouched. */
   readonly passthrough: readonly string[];
+  /**
+   * Under `stopAtFirstPositional`, the unparsed remainder starting AT the first
+   * positional. Empty otherwise -- never `undefined`, so a caller cannot forget
+   * which mode it asked for and read a missing field as "nothing left".
+   */
+  readonly rest: readonly string[];
 }
 
 export class UsageError extends Error {
@@ -54,6 +71,7 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
   const values: Record<string, string> = {};
   const booleans = new Set<string>();
   const passthrough: string[] = [];
+  const rest: string[] = [];
 
   let index = 0;
   while (index < argv.length) {
@@ -71,6 +89,10 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
     }
 
     if (!token.startsWith("-") || token === "-") {
+      if (spec.stopAtFirstPositional === true) {
+        rest.push(token, ...argv.slice(index));
+        break;
+      }
       positionals.push(token);
       continue;
     }
@@ -124,5 +146,5 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
     );
   }
 
-  return { positionals, values, booleans, passthrough };
+  return { positionals, values, booleans, passthrough, rest };
 }
