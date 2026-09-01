@@ -2,16 +2,29 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
-import { defaultSeams } from "../seam/exec.js";
+import { runFamily, type Io } from "../index.js";
+import type { Seams } from "../seam/exec.js";
 import { stopCommand } from "./command.js";
 
-// Mirrors ../index.ts's own runFamily() error-to-exit-code mapping, so a test
-// calling a family's run() directly still sees the same contract a real
-// invocation would.
+// NEVER `defaultSeams()` HERE (review finding) -- see board/command.test.ts's
+// own note on the same fix. A `run` that throws converts a future regression
+// (this verb growing a real `gh` call) into an immediate red test instead of
+// a silent live subprocess call.
+const STUB_SEAMS: Seams = {
+  run: (): never => {
+    throw new Error("must not be called");
+  },
+  now: (): Date => new Date("2026-01-01T00:00:00Z"),
+  env: {},
+};
+
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding: several family test files
+// re-implemented that mapping locally, which can silently drift from the
+// real one). This is also what lets an UNDECLARED flag ('--from', review
+// finding elsewhere in this file) surface as a real `UsageError` thrown by
+// `runFamily`'s own `parseArgs` call, exactly as a live invocation would see
+// it.
 function capture(argv: readonly string[], repoFlag: string | null = null): { code: number; out: string[]; err: string[] } {
   const out: string[] = [];
   const err: string[] = [];
@@ -23,15 +36,8 @@ function capture(argv: readonly string[], repoFlag: string | null = null): { cod
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(stopCommand.flags));
-  try {
-    const code = stopCommand.run({ args, repoFlag, json: args.booleans.has("json"), io, seams: defaultSeams() });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(stopCommand, argv, repoFlag, false, io, STUB_SEAMS);
+  return { code, out, err };
 }
 
 describe("nen stop --template", () => {
@@ -81,5 +87,15 @@ describe("nen stop", () => {
     const result = capture(["stop", "--gate", "G2", "--json"]);
     const parsed: unknown = JSON.parse(result.out.join("\n"));
     expect(parsed).toMatchObject({ gate: "G2", who: null, notified: false });
+  });
+
+  it("refuses '--from' as an unknown option, rather than silently accepting it as a no-op (review finding)", () => {
+    // The efforts file is a POSITIONAL ('nen stop efforts.md'), never
+    // '--from'. Declaring '--from' with no reader let this parse cleanly and
+    // silently render no table at all -- a plausible typo given every other
+    // family's convention is '--<noun>-from'.
+    const result = capture(["stop", "--from", "efforts.md", "--gate", "G2"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/unknown option '--from'/);
   });
 });

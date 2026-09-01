@@ -88,7 +88,15 @@ export const stopCommand: Command = {
   name: "stop",
   summary: "Render the gate-stop banner and efforts table.",
   usage: USAGE,
-  flags: { values: ["who", "gate", "from"], booleans: ["notified", "template"] },
+  // NO "--from" HERE (review finding): it was declared with no reader --
+  // `efforts.md | -` is read off the POSITIONAL, so `nen stop --from
+  // efforts.md` parsed cleanly, silently rendered the banner with no table,
+  // and exited 0. "--from" is also a highly plausible typo given
+  // --files-from/--body-from/--rows-from/--board-from/--wakes-from/
+  // --live-chores-from are this branch's convention everywhere else -- so a
+  // dropped, undeclared flag becomes ../cli/args.ts's own strictness: a hard
+  // usage error naming it, rather than a silently accepted no-op.
+  flags: { values: ["who", "gate"], booleans: ["notified", "template"] },
   run(context: CommandContext): number {
     const gate = context.args.values["gate"] ?? null;
     if (gate !== null && !(gate in GATE_NAMES)) {
