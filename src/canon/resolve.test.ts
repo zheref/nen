@@ -44,7 +44,7 @@ describe("resolveCanon -- always-load (caller data) + exactly one derived stack 
   it("refuses an empty scenario", () => {
     const result = resolveCanon({ scenario: "", alwaysLoad: ALWAYS_LOAD, stackDir: "d" });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/empty or path-shaped/);
+    if (!result.ok) expect(result.reason).toMatch(/not a plain token/);
   });
 
   it("refuses '.' and '..' as a scenario", () => {
@@ -52,9 +52,35 @@ describe("resolveCanon -- always-load (caller data) + exactly one derived stack 
     expect(resolveCanon({ scenario: "..", alwaysLoad: ALWAYS_LOAD, stackDir: "d" }).ok).toBe(false);
   });
 
-  it("refuses a scenario containing a path separator, which would traverse outside --stack-dir", () => {
+  it("refuses a scenario containing a forward slash, which would traverse outside --stack-dir", () => {
     const result = resolveCanon({ scenario: "../../etc", alwaysLoad: ALWAYS_LOAD, stackDir: "d" });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/empty or path-shaped/);
+    if (!result.ok) expect(result.reason).toMatch(/not a plain token/);
+  });
+
+  // Review finding: the guard only rejected '/', but on Windows '\' is also a
+  // path separator, and `scenario` is loaded as an unconstrained string from
+  // JSON -- so a value like '..\..\etc' used to pass and derive a path that
+  // escapes --stack-dir once used with filesystem APIs.
+  it("refuses a scenario containing a backslash, Windows' own path separator", () => {
+    const result = resolveCanon({ scenario: "..\\..\\etc", alwaysLoad: ALWAYS_LOAD, stackDir: "d" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/not a plain token/);
+  });
+
+  it("refuses a scenario that is a single backslash-separated segment with no leading dots", () => {
+    expect(resolveCanon({ scenario: "a\\b", alwaysLoad: ALWAYS_LOAD, stackDir: "d" }).ok).toBe(false);
+  });
+
+  it("refuses a scenario starting or ending with '.', '_' or '-' even without a separator", () => {
+    expect(resolveCanon({ scenario: ".hidden", alwaysLoad: ALWAYS_LOAD, stackDir: "d" }).ok).toBe(false);
+    expect(resolveCanon({ scenario: "trailing.", alwaysLoad: ALWAYS_LOAD, stackDir: "d" }).ok).toBe(false);
+    expect(resolveCanon({ scenario: "-leading", alwaysLoad: ALWAYS_LOAD, stackDir: "d" }).ok).toBe(false);
+  });
+
+  it("accepts a plain token scenario with interior dots, underscores and hyphens", () => {
+    const result = resolveCanon({ scenario: "swiftui_tca.v2-beta", alwaysLoad: ALWAYS_LOAD, stackDir: "d" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.stackHandbook).toBe("d/swiftui_tca.v2-beta/architecture.md");
   });
 });
