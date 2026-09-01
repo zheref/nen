@@ -533,13 +533,40 @@ function approvalReading(
     : "current-head";
 }
 
+// PORT CORRECTION (§3), and a merge-blocking one rather than a tidy-up.
+//
+// The original matches the approver RAW (`test($name; "i")`) and its own comment
+// defends that: "the approver set is only ever sasuke/tenma/bisky, each of which
+// matches its own login, so the two idioms coincide in practice". That defence
+// is a statement about ONE repository's names, and it stops being true the
+// moment the names are data. A repository whose approver is declared with a
+// `login_pattern` that does not equal its name -- exactly what the fixtures'
+// `sentry` (`sentry|watchtower`) and `scribe` (`scribe-reviewer`) look like --
+// gets the two halves of CON-32(b) reading different evidence:
+//
+//   pendingRounds()          clears the round via the DECLARED pattern
+//   reviewsAllApprovedAtHead() cannot see the approval, because it looks for a
+//                            login literally spelled like the reviewer's name
+//
+// which is an UNSATISFIABLE gate: no round is owed, and the approval limb can
+// never pass. `unapprovedApprovers()` then names that reviewer as the problem,
+// which is the BC-PR-#773 failure class exactly -- a verdict that is wrong and a
+// reason that sends the reader to re-run the wrong thing.
+//
+// So the approver is matched through the same `login_pattern` every other limb
+// uses, with the SAME fall-through the original's `default:` arm has for a name
+// the file does not declare. For a repository whose reviewer names equal their
+// login patterns the two readings coincide, which is why the 118 seeded cases
+// are unaffected -- and that coincidence is now a property of the DATA rather
+// than an assumption in the code.
 function approverApproved(
+  identities: GateIdentities,
   latest: readonly Review[],
   name: string,
   headSha: string,
   reading: ApprovalReading,
 ): boolean {
-  const pattern = safePattern(name);
+  const pattern = identities.reviewer(name)?.loginPattern ?? safePattern(name);
   return latest.some(
     (review): boolean =>
       pattern.test(review.author) &&
@@ -579,7 +606,7 @@ export function reviewsAllApprovedAtHead(
   // NOT normalizeReviewerNames(): the shell does not trim here, and trimming
   // would widen the gate. See shellApproverNames().
   return shellApproverNames(approvers).every((name): boolean =>
-    approverApproved(latest, name, headSha, approvalReading(identities, name, deliveryPr)),
+    approverApproved(identities, latest, name, headSha, approvalReading(identities, name, deliveryPr)),
   );
 }
 
@@ -609,7 +636,7 @@ export function unapprovedApprovers(
   // cannot disagree about which names are in the set.
   for (const name of shellApproverNames(approvers)) {
     const reading = approvalReading(identities, name, deliveryPr);
-    if (!approverApproved(latest, name, headSha, reading)) {
+    if (!approverApproved(identities, latest, name, headSha, reading)) {
       unapproved.push({ reviewer: name, reading });
     }
   }

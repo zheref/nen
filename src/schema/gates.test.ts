@@ -75,9 +75,12 @@ describe("loadGateIdentities -- reads the TARGET repository", () => {
 describe("parseGateIdentities -- validation", () => {
   const at = "/fake/schemas/gates.json";
   const minimal = {
+    version: 1,
     reviewers: [
       { name: "a", login_pattern: { pattern: "a", ignoreCase: true } },
     ],
+    default_approvers: ["a"],
+    base_reviewers: ["a"],
     delivery: {
       author_pattern: { pattern: "bot", ignoreCase: true },
       head_ref_prefixes: ["x/"],
@@ -87,8 +90,49 @@ describe("parseGateIdentities -- validation", () => {
   it("accepts a minimal file", () => {
     const identities = parseGateIdentities(at, minimal);
     expect(identities.reviewers.length).toBe(1);
-    expect(identities.defaultApprovers).toEqual([]);
-    expect(identities.baseReviewers).toEqual([]);
+    expect(identities.version).toBe(1);
+    expect(identities.defaultApprovers).toEqual(["a"]);
+    expect(identities.baseReviewers).toEqual(["a"]);
+  });
+
+  it("REFUSES an omitted or empty default_approvers -- it would OPEN the approve limb", () => {
+    // MERGE-BLOCKING CORRECTION. `reviewsAllApprovedAtHead` is vacuously true
+    // over an empty approver set (deliberately -- it reproduces jq's `all` over
+    // an empty list). Pairing that with a silently-defaulted `[]` here meant a
+    // gates.json that simply forgot the key left CON-32(b)'s approve limb OPEN:
+    // a pull request read ready with nobody having approved it. An earlier
+    // version of this very suite asserted the empty default as correct.
+    const withoutKey = { ...minimal, default_approvers: undefined };
+    expect(() => parseGateIdentities(at, withoutKey)).toThrow(/default_approvers/);
+    expect(() => parseGateIdentities(at, withoutKey)).toThrow(/VACUOUSLY TRUE/);
+    expect(() => parseGateIdentities(at, { ...minimal, default_approvers: [] })).toThrow(
+      /is empty/,
+    );
+  });
+
+  it("REFUSES an omitted or empty base_reviewers", () => {
+    const withoutKey = { ...minimal, base_reviewers: undefined };
+    expect(() => parseGateIdentities(at, withoutKey)).toThrow(/base_reviewers/);
+    expect(() => parseGateIdentities(at, { ...minimal, base_reviewers: [] })).toThrow(/is empty/);
+  });
+
+  it("requires a version, and refuses one it does not understand", () => {
+    const withoutVersion = { ...minimal, version: undefined };
+    expect(() => parseGateIdentities(at, withoutVersion)).toThrow(/version[\s\S]*is required/);
+    expect(() => parseGateIdentities(at, { ...minimal, version: 2 })).toThrow(
+      /understands version 1 only/,
+    );
+    expect(() => parseGateIdentities(at, { ...minimal, version: "1" })).toThrow(
+      /understands version 1 only/,
+    );
+  });
+
+  it("reads the version BEFORE interpreting any field", () => {
+    // A version mismatch diagnosed as five unrelated field defects is a version
+    // mismatch nobody recognises as one.
+    expect(() => parseGateIdentities(at, { version: 99, reviewers: "not-an-array" })).toThrow(
+      /version/,
+    );
   });
 
   it("requires a login pattern for every declared reviewer", () => {

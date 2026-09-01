@@ -1,4 +1,5 @@
 {
+  "version": 1,
   "$comment": "TEST FIXTURE -- reviewer identities with DIFFERENT names, DIFFERENT logins, DIFFERENT check names and a DIFFERENT delivery convention from bankai-repo/. src/gates/predicates.test.ts runs the same structural cases against both; that pair is the proof that the predicates carry no reviewer knowledge of their own. Not shipped; see ../../README.md.",
   "reviewers": [
     {

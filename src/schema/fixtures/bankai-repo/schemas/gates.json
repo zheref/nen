@@ -1,4 +1,5 @@
 {
+  "version": 1,
   "$comment": "TEST FIXTURE -- the reviewer identities the CON-32 predicates were ported from, expressed as data. Every pattern here reproduces a literal that used to be written into cli/src/gates/predicates.ts in bankai-core, so src/gates/predicates.test.ts (the ported companion suite) proves the parameterised predicates behave identically to the originals. Not shipped; see ../../README.md.",
   "reviewers": [
     {

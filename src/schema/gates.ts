@@ -82,8 +82,24 @@ export interface DeliveryIdentity {
   readonly labels: readonly string[];
 }
 
+/**
+ * The only `version` this reader understands. A file is REQUIRED to state it.
+ *
+ * It is an adoption discriminator, not decoration. This schema does not exist in
+ * bankai-core today, so the repositories that grow one will grow it at different
+ * times and a later phase will want to change its shape. Without a stated
+ * version, an older `nen` meeting a newer file reads whichever fields it happens
+ * to recognise and IGNORES the rest -- which for a gate means silently applying
+ * a subset of the reviewer rules a repository asked for, with no signal that it
+ * did. Refusing an unknown version turns that into one loud error naming both
+ * numbers.
+ */
+export const GATES_SCHEMA_VERSION = 1;
+
 export interface GateIdentities {
   readonly path: string;
+  /** Always `GATES_SCHEMA_VERSION`; an unknown version is refused at load. */
+  readonly version: number;
   readonly reviewers: readonly ReviewerIdentity[];
   /** The approval set when a caller names none. */
   readonly defaultApprovers: readonly string[];
@@ -151,6 +167,25 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 export function parseGateIdentities(path: string, value: unknown): GateIdentities {
   const root = requireRecord(path, "$", value);
 
+  // The version is read FIRST, before any field is interpreted. Validating a
+  // file against the wrong schema and then complaining about its fields is how a
+  // version mismatch gets diagnosed as five unrelated defects.
+  const rawVersion = root["version"];
+  if (rawVersion === undefined || rawVersion === null) {
+    throw new SchemaError(
+      path,
+      "version",
+      `is required. State \`"version": ${GATES_SCHEMA_VERSION}\`. An unversioned file cannot be told apart from a future one, and an older nen reading a newer file would silently apply a subset of the reviewer rules it asks for.`,
+    );
+  }
+  if (rawVersion !== GATES_SCHEMA_VERSION) {
+    throw new SchemaError(
+      path,
+      "version",
+      `is ${describeValue(rawVersion)}, and this build of nen understands version ${GATES_SCHEMA_VERSION} only. Refusing rather than reading the fields it happens to recognise: a gate that applied part of a repository's reviewer rules would report a readiness verdict nobody configured.`,
+    );
+  }
+
   const rawReviewers = requireArray(path, "reviewers", root["reviewers"]);
   const reviewers: ReviewerIdentity[] = [];
   const seen = new Map<string, number>();
@@ -210,10 +245,32 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   // matched by the fall-back "a name matches itself" rule and could silently
   // approve under a login nobody intended, and a base reviewer with no identity
   // owes a round no check can ever satisfy -- a gate with no path out.
-  const readNames = (key: string): string[] => {
+  //
+  // AND AN OMITTED OR EMPTY LIST IS REFUSED TOO. This is a merge-blocking
+  // correction, not tidiness: `default_approvers` fed
+  // `reviewsAllApprovedAtHead`'s default, and that predicate is VACUOUSLY TRUE
+  // over an empty approver set -- deliberately, because it reproduces jq's `all`
+  // over an empty list and because owed rounds are still enforced elsewhere. The
+  // consequence of pairing that with a silent `[]` here is that a
+  // `schemas/gates.json` which simply forgets the key leaves CON-32(b)'s APPROVE
+  // LIMB OPEN, and the gate reports ready with nobody having approved anything.
+  //
+  // The vacuous reading stays -- a caller that passes an explicitly empty list
+  // has said what it means. What is refused is the FILE being silent, because
+  // "no approvers configured" and "the author forgot a key" are indistinguishable
+  // from here and only one of them is safe. Same reasoning, same shape, as the
+  // delivery-block refusal below: a gate that cannot be failed is worse than no
+  // gate, because it looks configured.
+  const readNames = (key: string, why: string): string[] => {
     const raw = root[key];
-    if (raw === undefined || raw === null) return [];
-    return requireArray(path, key, raw).map((item, index): string => {
+    if (raw === undefined || raw === null) {
+      throw new SchemaError(
+        path,
+        key,
+        `is required and must name at least one declared reviewer. ${why} Declared reviewers: ${[...declared].join(", ")}.`,
+      );
+    }
+    const names = requireArray(path, key, raw).map((item, index): string => {
       const name = requireString(path, `${key}[${index}]`, item);
       if (!declared.has(name)) {
         throw new SchemaError(
@@ -224,10 +281,24 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
       }
       return name;
     });
+    if (names.length === 0) {
+      throw new SchemaError(
+        path,
+        key,
+        `is empty. ${why} If that is genuinely intended, it has to be said somewhere a reviewer will read it, not by omission.`,
+      );
+    }
+    return names;
   };
 
-  const defaultApprovers = readNames("default_approvers");
-  const baseReviewers = readNames("base_reviewers");
+  const defaultApprovers = readNames(
+    "default_approvers",
+    "An empty approval set makes the approve limb of the readiness gate VACUOUSLY TRUE, so a pull request would read ready with nobody having approved it.",
+  );
+  const baseReviewers = readNames(
+    "base_reviewers",
+    "An empty base set means no reviewer is configured on any pull request unless a check enrols one, so nothing owes a round by default.",
+  );
 
   const rawDelivery = requireRecord(path, "delivery", root["delivery"]);
   const rawPrefixes = rawDelivery["head_ref_prefixes"];
@@ -266,6 +337,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
 
   return {
     path,
+    version: GATES_SCHEMA_VERSION,
     reviewers,
     defaultApprovers,
     baseReviewers,

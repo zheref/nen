@@ -1876,3 +1876,146 @@ describe("names are data -- the same predicates against a different vocabulary",
     expect(normalizeReviewerNames([" a ", ""])).toEqual(["a"]);
   });
 });
+
+// =============================================================================
+// THE PARAMETERIZATION'S CONSERVATIVE DEFAULTS (added in review)
+// =============================================================================
+//
+// The most important property of making the identities data, and the one that
+// was previously carried only by a comment: a reviewer the FILE DOES NOT DECLARE
+// must reproduce the original's `default:` world exactly, and every branch of
+// that world is the SHUT direction. It matches its own login, has no review
+// check, is not policy-exempt, gets no delivery carve-out, and has no check that
+// can stand in for its round -- so it OWES one, under every policy, on every
+// kind of pull request.
+//
+// This matters because an undeclared reviewer is reachable in production, not
+// hypothetically: `--reviewers` takes names from a caller, and a repository can
+// rename a reviewer in schemas/gates.json without touching the caller that names
+// it. The dangerous direction would be for that mismatch to CLEAR a round.
+
+describe("an UNDECLARED reviewer owes a round, in every configuration", () => {
+  const undeclared = "nobody-declares-this";
+
+  it("owes a round under the bounded policy", () => {
+    expect(
+      pendingRounds(BANKAI, rounds(), "headsha", [undeclared], "bounded"),
+    ).toEqual([{ reviewer: undeclared, reason: "no-round-at-head" }]);
+  });
+
+  it("owes a round under the strict policy", () => {
+    expect(
+      pendingRounds(BANKAI, rounds(), "headsha", [undeclared], "strict"),
+    ).toEqual([{ reviewer: undeclared, reason: "no-round-at-head" }]);
+  });
+
+  it("owes a round on a DELIVERY pull request, even with a matching green check", () => {
+    // The carve-out cannot be inherited by a name the file says nothing about.
+    // A green check named after the reviewer is the most plausible way it might
+    // have leaked in, so that is the case asserted.
+    const checks: RollupEntry[] = [
+      checkRun({
+        name: `${undeclared} / audit`,
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+      }),
+      checkRun({
+        name: `${undeclared} / review`,
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+      }),
+    ];
+    expect(
+      pendingRounds(BANKAI, rounds({ checks }), "headsha", [undeclared], "bounded", true),
+    ).toEqual([{ reviewer: undeclared, reason: "no-round-at-head" }]);
+  });
+
+  it("is not policy-exempt, however the exempt reviewer is spelled", () => {
+    // `boundedPolicyExempt` is a FLAG on a declared identity, never a guess from
+    // a name. A caller naming something copilot-ish that the file does not
+    // declare must still owe a round.
+    expect(
+      owedNames(pendingRounds(BANKAI, rounds(), "headsha", ["copilot-lookalike"], "bounded")),
+    ).toEqual(["copilot-lookalike"]);
+  });
+
+  it("gets no review check, so nothing can satisfy it by check alone", () => {
+    expect(reviewerReviewCheckPattern(BANKAI, undeclared)).toBeNull();
+  });
+
+  it("still matches its own login, exactly as the original's `default:` arm did", () => {
+    // The fall-through is a REPRODUCTION, not a fallback: a review actually
+    // posted by that login satisfies the round, which is what keeps an
+    // undeclared reviewer usable rather than permanently blocking.
+    expect(reviewerLoginPattern(BANKAI, undeclared).test(`${undeclared}[bot]`)).toBe(true);
+    expect(
+      pendingRounds(
+        BANKAI,
+        rounds({ reviews: [review({ author: `${undeclared}[bot]`, commitId: "headsha" })] }),
+        "headsha",
+        [undeclared],
+        "bounded",
+      ),
+    ).toEqual([]);
+  });
+});
+
+// =============================================================================
+// THE APPROVE LIMB READS THE FILE'S login_pattern (added in review)
+// =============================================================================
+//
+// MERGE-BLOCKING CORRECTION. `approverApproved` matched the approver by its NAME
+// (`safePattern(name)`) rather than by the identity's declared `login_pattern`.
+// The original defends that with "the approver set is only ever
+// sasuke/tenma/bisky, each of which matches its own login" -- a statement about
+// ONE repository's names, which stops being true the moment the names are data.
+//
+// The consequence is an UNSATISFIABLE gate plus a wrong reason, which is the
+// BC-PR-#773 class exactly: `pendingRounds` clears the round through the
+// declared pattern while the approve limb cannot see the approval, so no round
+// is owed, the approval never registers, and `unapprovedApprovers` blames the
+// reviewer who did nothing wrong.
+describe("the approve limb matches through the FILE's login_pattern", () => {
+  // ALT's `sentry` posts as `watchtower`/`sentry` and its `scribe` posts as
+  // `scribe-reviewer` -- neither login is spelled like the reviewer's name,
+  // which is the shape the original's assumption cannot survive.
+  const reviews: Review[] = [
+    review({ author: "watchtower-app[bot]", commitId: "headsha" }),
+    review({ author: "scribe-reviewer[bot]", commitId: "headsha" }),
+  ];
+
+  it("sees an approval posted under a login that is NOT the reviewer's name", () => {
+    expect(reviewsAllApprovedAtHead(ALT, reviews, "headsha", ["sentry", "scribe"])).toBe(true);
+    expect(unapprovedApprovers(ALT, reviews, "headsha", ["sentry", "scribe"])).toEqual([]);
+  });
+
+  it("agrees with pendingRounds about who has posted -- the gate stays satisfiable", () => {
+    // The property the defect broke: both limbs must read the SAME evidence. If
+    // one clears the round and the other cannot see the approval, there is no
+    // action a reviewer can take that makes the pull request ready.
+    const owed = pendingRounds(ALT, rounds({ reviews }), "headsha", ["sentry", "scribe"], "strict");
+    expect(owedNames(owed)).toEqual([]);
+    expect(reviewsAllApprovedAtHead(ALT, reviews, "headsha", ["sentry", "scribe"])).toBe(true);
+  });
+
+  it("still refuses an approval from a login the pattern does not match", () => {
+    // The fix widens nothing: a login the FILE does not associate with the
+    // reviewer cannot approve on its behalf.
+    const impostor: Review[] = [review({ author: "someone-else[bot]", commitId: "headsha" })];
+    expect(reviewsAllApprovedAtHead(ALT, impostor, "headsha", ["sentry"])).toBe(false);
+    expect(
+      unapprovedApprovers(ALT, impostor, "headsha", ["sentry"]).map((e): string => e.reviewer),
+    ).toEqual(["sentry"]);
+  });
+
+  it("keeps the CON-16 current-head rule -- a stale approval is not an approval", () => {
+    const stale: Review[] = [review({ author: "watchtower-app[bot]", commitId: "oldsha" })];
+    expect(reviewsAllApprovedAtHead(ALT, stale, "headsha", ["sentry"])).toBe(false);
+  });
+
+  it("falls through to the name for an UNDECLARED approver, as the original did", () => {
+    const posted: Review[] = [review({ author: "stranger[bot]", commitId: "headsha" })];
+    expect(reviewsAllApprovedAtHead(ALT, posted, "headsha", ["stranger"])).toBe(true);
+    expect(reviewsAllApprovedAtHead(ALT, posted, "headsha", ["someone-absent"])).toBe(false);
+  });
+});
