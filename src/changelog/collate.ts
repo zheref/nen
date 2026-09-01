@@ -4,7 +4,7 @@
 //
 // CON-33(b): when a release tag is cut, the release PR collates every
 // fragment file currently in the fragment directory directly into a new dated
-// `### vX.Y.Z -- <theme>` section (placed newest-first, directly below
+// `### vX.Y.Z — <theme>` section (placed newest-first, directly below
 // `### Unreleased`), deletes each collated fragment file, and leaves
 // `### Unreleased` empty. This module is the pure text transformation; the
 // caller (../changelog/command.ts) does the file I/O the source's CLI half
@@ -41,10 +41,22 @@ export function sortFragments(fragments: readonly Fragment[]): Fragment[] {
   return withKey.map((item): Fragment => item.fragment);
 }
 
-/** The rendered `### vX.Y.Z -- <theme>` section, fragments in the given order. */
+/**
+ * The rendered `### vX.Y.Z — <theme>` section, fragments in the given order.
+ *
+ * THE SEPARATOR IS AN EM DASH ("—"), matching the source's `printf '### v%s
+ * — %s\n'` (changelog_collate_fragments.sh:59) and every existing dated
+ * section in a real CHANGELOG.md -- an ASCII double-hyphen here was an
+ * undisclosed behavioural delta from a strict porting source (review
+ * finding): a section nen collates would visibly disagree with every section
+ * above it. Cosmetic (nothing downstream matches on the separator -- see
+ * ../changelog/completeness.ts and getsuga's own tag-precondition check,
+ * which both match only the leading `### v<semver>`), but a port fidelity
+ * deviation is a finding to report, never a silent "improvement".
+ */
 export function renderDatedSection(version: string, theme: string, fragments: readonly Fragment[]): string {
   const bareVersion = version.startsWith("v") ? version.slice(1) : version;
-  let out = `### v${bareVersion} -- ${theme}\n`;
+  let out = `### v${bareVersion} — ${theme}\n`;
   for (const fragment of fragments) {
     out += fragment.content.endsWith("\n") ? fragment.content : `${fragment.content}\n`;
   }

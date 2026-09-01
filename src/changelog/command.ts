@@ -129,7 +129,7 @@ function collateCmd(context: CommandContext): number {
   }
 
   const lines = [
-    `${write ? "collated" : "(no --write) would collate"} ${fragments.length} fragment(s) into ${changelogPath} ### v${version.replace(/^v/, "")} -- ${theme}`,
+    `${write ? "collated" : "(no --write) would collate"} ${fragments.length} fragment(s) into ${changelogPath} ### v${version.replace(/^v/, "")} — ${theme}`,
     ...names.map((name): string => `  ${name}`),
   ];
   emit(context.io, context.json, { version, theme, fragments: names, written: write }, lines);

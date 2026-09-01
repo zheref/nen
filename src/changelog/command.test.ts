@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, UsageError } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
+import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { changelogCommand } from "./command.js";
 
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding).
 function capture(argv: readonly string[], repoFlag: string | null, run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "", stderr: "", spawnFailed: false })): {
   code: number;
   out: string[];
@@ -24,16 +23,9 @@ function capture(argv: readonly string[], repoFlag: string | null, run: Seams["r
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(changelogCommand.flags));
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  try {
-    const code = changelogCommand.run({ args, repoFlag, json: args.booleans.has("json"), io, seams });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(changelogCommand, argv, repoFlag, false, io, seams);
+  return { code, out, err };
 }
 
 describe("nen changelog fragment-required", () => {
@@ -66,7 +58,7 @@ describe("nen changelog collate", () => {
   it("renders without writing unless --write is given", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
     const changelog = join(dir, "CHANGELOG.md");
-    writeFileSync(changelog, "### Unreleased\n_(nothing awaiting release.)_\n\n### v1.0.0 -- prior\n- **x**\n");
+    writeFileSync(changelog, "### Unreleased\n_(nothing awaiting release.)_\n\n### v1.0.0 — prior\n- **x**\n");
     const fragmentDir = join(dir, "changelog.d");
     mkdirSync(fragmentDir);
     writeFileSync(join(fragmentDir, "1-a.md"), "- **A** thing\n");
@@ -79,13 +71,13 @@ describe("nen changelog collate", () => {
   it("writes the collated changelog and deletes fragments when --write is given", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
     const changelog = join(dir, "CHANGELOG.md");
-    writeFileSync(changelog, "### Unreleased\n_(nothing awaiting release.)_\n\n### v1.0.0 -- prior\n- **x**\n");
+    writeFileSync(changelog, "### Unreleased\n_(nothing awaiting release.)_\n\n### v1.0.0 — prior\n- **x**\n");
     const fragmentDir = join(dir, "changelog.d");
     mkdirSync(fragmentDir);
     writeFileSync(join(fragmentDir, "1-a.md"), "- **A** thing\n");
     const result = capture(["changelog", "collate", "--version", "v1.1.0", "--theme", "theme", "--changelog", changelog, "--fragment-dir", "changelog.d", "--write"], dir);
     expect(result.code).toBe(0);
-    expect(readFileSync(changelog, "utf8")).toContain("### v1.1.0 -- theme");
+    expect(readFileSync(changelog, "utf8")).toContain("### v1.1.0 — theme");
   });
 });
 

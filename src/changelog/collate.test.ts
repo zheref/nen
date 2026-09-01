@@ -18,22 +18,22 @@ describe("renderDatedSection", () => {
       { name: "1-a.md", content: "- **A** thing" },
       { name: "2-b.md", content: "- **B** thing\n" },
     ]);
-    expect(out).toBe("### v1.2.0 -- theme\n- **A** thing\n- **B** thing\n");
+    expect(out).toBe("### v1.2.0 — theme\n- **A** thing\n- **B** thing\n");
   });
 });
 
 describe("collateIntoChangelog", () => {
-  const base = "### Unreleased\n_(nothing awaiting release.)_\n\n### v1.0.0 -- prior\n- **old** entry\n";
+  const base = "### Unreleased\n_(nothing awaiting release.)_\n\n### v1.0.0 — prior\n- **old** entry\n";
 
   it("inserts the new dated section below an empty Unreleased", () => {
     const out = collateIntoChangelog(base, "v1.1.0", "theme", [{ name: "1-a.md", content: "- **A** thing\n" }]);
-    expect(out).toContain("### v1.1.0 -- theme");
+    expect(out).toContain("### v1.1.0 — theme");
     expect(out.indexOf("### v1.1.0")).toBeLessThan(out.indexOf("### v1.0.0"));
-    expect(out).toContain("### v1.0.0 -- prior");
+    expect(out).toContain("### v1.0.0 — prior");
   });
 
   it("refuses when Unreleased still has entries", () => {
-    const dirty = "### Unreleased\n- **X** thing\n\n### v1.0.0 -- prior\n";
+    const dirty = "### Unreleased\n- **X** thing\n\n### v1.0.0 — prior\n";
     expect(() => collateIntoChangelog(dirty, "v1.1.0", "theme", [{ name: "1-a.md", content: "x\n" }])).toThrow(CollateError);
   });
 
