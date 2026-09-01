@@ -28,11 +28,11 @@ decides what to do about it.
 ## Install
 
 Binaries are published for three targets — `linux-x64`, `darwin-arm64`,
-`windows-x64` — alongside a `SHA256SUMS` manifest, attached to each GitHub
-release. The bootstrap script fetches the binary for your platform, verifies
-it against that manifest, caches it, and refuses outright on any integrity
-gap (unfetchable manifest, missing entry, digest mismatch) rather than
-falling back to an unverified download:
+`windows-x64` — alongside a `SHA256SUMS` manifest, attached to the GitHub
+release for each tag. The bootstrap script fetches the binary for your
+platform, verifies it against that manifest, caches it, and refuses outright
+on any integrity gap (unfetchable manifest, missing entry, digest mismatch)
+rather than falling back to an unverified download:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.1.0/bootstrap/nen.sh -o nen-bootstrap.sh
@@ -46,11 +46,6 @@ else, so it composes directly:
 nen="$(bash nen-bootstrap.sh --ref v0.1.0)"
 "$nen" --version
 ```
-
-`v0.1.0` is not tagged or released yet — that tag and its release are gated
-on a maintainer decision (see **License** below), so both commands above will
-fail (the `curl` with a 404, `bash nen-bootstrap.sh` with a refusal) until it
-is cut. Once it is, no other part of either invocation changes.
 
 `bootstrap/nen.sh` is the one shell script this repository ships — everything
 else, including the CLI itself, is TypeScript. See the script's own header
@@ -179,9 +174,7 @@ equivalent of the release pipeline's `SHA256SUMS`.
 
 ## License
 
-No license file is published yet. The license for this repository is a
-maintainer decision made at the v0.1.0 release; check back there, or open
-an issue if you need clarity sooner.
+MIT — see [LICENSE](LICENSE).
 
 ## Origin
 

@@ -16,11 +16,13 @@ describe("VERSION", () => {
     expect(version).toBe(VERSION);
   });
 
-  it("is a semver-shaped string with an explicit pre-release", () => {
-    // Pre-release is deliberate while the repo is private: zheref/hatsu#1's D10
-    // contract compares versions, and a `0.1.0` that is not the published 0.1.0
-    // is the one value that would satisfy a gate it should not.
-    expect(VERSION).toMatch(/^\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/);
+  it("is a semver-shaped string", () => {
+    // The `-dev.N` pre-release suffix is gone as of the v0.1.0 release: this
+    // is the exact string zheref/hatsu#1's D10 gate is meant to see. The
+    // pre-release group stays optional (rather than dropped outright) so this
+    // test does not need to change again for a future `-rc.N` or `-dev.N`
+    // cycle ahead of v0.2.0.
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
   });
 
   it("names the program", () => {

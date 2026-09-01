@@ -20,7 +20,7 @@
 // THE DRIFT IS GUARDED, NOT TRUSTED. version.test.ts reads package.json from the
 // repo root and asserts the two agree, so the duplication costs one test and can
 // never ship out of step. Bump BOTH in the same commit.
-export const VERSION = "0.1.0-dev.1";
+export const VERSION = "0.1.0";
 
 // The binary's own name, used in usage text, error prefixes and the octokit
 // user-agent. Not a persona and not taxonomy: it is this executable's identity,
