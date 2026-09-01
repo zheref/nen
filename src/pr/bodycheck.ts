@@ -37,8 +37,28 @@ export class BodyCheckError extends Error {
   }
 }
 
+// AN EMPTY REQUIREMENT LIST IS REFUSED, NEVER A VACUOUS PASS (review finding).
+// `results.every(...)` over zero elements is `true` by the empty-vacuous-truth
+// rule of `Array.prototype.every` -- so an empty file, a mis-shaped file whose
+// array sits one level down, or a file the caller meant to populate but didn't
+// would otherwise report success having checked NOTHING, and print no output
+// at all. ../cli/inputs.ts's `changedFiles` applies exactly this rule to the
+// changed-file set ("An empty set is the permissive answer for every verb
+// that reads one, so it is never assumed") -- this module carries the same
+// rule for the requirement list.
 export function checkBody(body: string, requirements: readonly BodyRequirement[]): BodyCheckReport {
-  const results = requirements.map((requirement): RequirementResult => {
+  if (requirements.length === 0) {
+    throw new BodyCheckError(
+      "the requirement list is empty -- a body-check with nothing to check would report success having checked nothing. Give --requirements-from a file with at least one { name, pattern } entry.",
+    );
+  }
+  const results = requirements.map((requirement, index): RequirementResult => {
+    if (typeof requirement.name !== "string" || requirement.name === "") {
+      throw new BodyCheckError(`requirement at index ${index} has no string 'name'.`);
+    }
+    if (typeof requirement.pattern !== "string" || requirement.pattern === "") {
+      throw new BodyCheckError(`requirement '${requirement.name}' has no string 'pattern'.`);
+    }
     let regex: RegExp;
     try {
       regex = new RegExp(requirement.pattern, "im");

@@ -34,10 +34,55 @@ body-check:
                               repository's own template convention, never a
                               literal shipped here.`;
 
+/**
+ * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
+ * (review finding). Left unrefused, an unparseable instant survived as
+ * `Date.parse` NaN, through `Math.max(0, NaN)`, into "NaN/60 idle minute(s)"
+ * on the human line and `"idleMinutes": null` in --json, at exit 0 -- a
+ * machine consumer of --json cannot distinguish "computed zero-ish idle time"
+ * from "could not parse the timestamp at all", and neither can a human
+ * reading a bare `null`.
+ */
+function requireIsoInstant(context: CommandContext, flag: string, why: string): string {
+  const value = requireValue(context.args, flag, why);
+  if (Number.isNaN(Date.parse(value))) {
+    throw new VerbUsageError(`--${flag} '${value}' is not a parseable ISO-8601 instant. ${why}`);
+  }
+  return value;
+}
+
+// EVERY WAKE ELEMENT IS VALIDATED, NOT TRUTHINESS-TESTED (review finding).
+// `wake.noCommit` read straight off unvalidated JSON would let the STRING
+// "false" -- truthy in JavaScript -- count toward the threshold that
+// authorizes the one merge a non-human actor may make. Each element must be
+// an object with a string `at` and a BOOLEAN `noCommit`, or this refuses by
+// index rather than silently coercing.
+function validateWakes(raw: unknown, path: string): VerifiedWake[] {
+  if (!Array.isArray(raw)) {
+    throw new VerbUsageError(`'${path}' must be a JSON array of { at, noCommit }.`);
+  }
+  return raw.map((item, index): VerifiedWake => {
+    if (typeof item !== "object" || item === null) {
+      throw new VerbUsageError(`'${path}': element ${index} is not an object.`);
+    }
+    const at = (item as Record<string, unknown>)["at"];
+    const noCommit = (item as Record<string, unknown>)["noCommit"];
+    if (typeof at !== "string") {
+      throw new VerbUsageError(`'${path}': element ${index} has no string 'at'.`);
+    }
+    if (typeof noCommit !== "boolean") {
+      throw new VerbUsageError(
+        `'${path}': element ${index} has 'noCommit' of type ${typeof noCommit}, not a boolean -- a truthy non-boolean (e.g. the string "false") must never count toward the merge-permitting threshold.`,
+      );
+    }
+    return { at, noCommit };
+  });
+}
+
 function staleness(context: CommandContext): number {
   const wakesPath = requireValue(context.args, "wakes-from", "The verified-wake history to reason over.");
-  const lastActivity = requireValue(context.args, "last-activity", "The pull request's last-activity instant.");
-  const now = requireValue(context.args, "now", "Read once, never the live clock -- so a replay is reproducible.");
+  const lastActivity = requireIsoInstant(context, "last-activity", "The pull request's last-activity instant.");
+  const now = requireIsoInstant(context, "now", "Read once, never the live clock -- so a replay is reproducible.");
   const ready = context.args.booleans.has("ready");
   const minVerifiedWakes = context.args.values["min-verified-wakes"];
   const idleMinutes = context.args.values["idle-minutes"];
@@ -49,7 +94,7 @@ function staleness(context: CommandContext): number {
   }
 
   const cwd = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const wakes = readJsonFile<readonly VerifiedWake[]>(wakesPath, cwd);
+  const wakes = validateWakes(readJsonFile<unknown>(wakesPath, cwd), wakesPath);
 
   const result = computeStaleness({
     wakes,
@@ -78,7 +123,13 @@ function bodyCheck(context: CommandContext): number {
   const requirements = readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd);
 
   const report = checkBody(body, requirements);
-  const lines = report.results.map((result): string => `${result.satisfied ? "ok" : "MISSING"}  ${result.name}`);
+  const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
+  // A VERDICT LINE ALWAYS PRINTS (review finding): zero output must never be a
+  // passing result a caller's script can mistake for "nothing to report".
+  const lines = [
+    `${satisfiedCount}/${report.results.length} requirement(s) satisfied`,
+    ...report.results.map((result): string => `${result.satisfied ? "ok" : "MISSING"}  ${result.name}`),
+  ];
   emit(context.io, context.json, report, lines);
   return report.ok ? 0 : 1;
 }

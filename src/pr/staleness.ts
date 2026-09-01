@@ -50,7 +50,12 @@ export function computeStaleness(input: StalenessInput): StalenessResult {
   const minWakes = input.minVerifiedWakes ?? DEFAULT_MIN_VERIFIED_WAKES;
   const idleThreshold = input.idleMinutes ?? DEFAULT_IDLE_MINUTES;
 
-  const verifiedNoCommitWakes = input.wakes.filter((wake): boolean => wake.noCommit).length;
+  // `=== true`, not a truthiness test (review finding): the caller
+  // (../pr/command.ts) validates the parsed JSON before this is ever called,
+  // but this module is defensive on its own -- a truthy non-boolean must
+  // never count toward the threshold that authorizes the one merge a
+  // non-human actor may make.
+  const verifiedNoCommitWakes = input.wakes.filter((wake): boolean => wake.noCommit === true).length;
   const idleMs = Date.parse(input.now) - Date.parse(input.lastActivityAt);
   const idleMinutes = Math.max(0, Math.floor(idleMs / 60_000));
 
