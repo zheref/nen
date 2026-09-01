@@ -1,0 +1,292 @@
+# release-assets — attach the three compiled `nen` binaries, and the SHA256SUMS
+# that make them verifiable, to the release for a tag (zheref/nen#1, Akatsuki
+# migration P1).
+#
+# PORTED from bankai-core's .github/workflows/cli-release-assets.yml. The
+# reasoning below is carried across because it is the deliverable: every rule
+# here exists because of something that happened, and a pipeline that arrives
+# without its reasons is a pipeline somebody "simplifies" into the incident.
+#
+# WHAT THIS DOES NOT DO: CREATE A RELEASE. The release go/no-go is the human's,
+# and the tag/release distinction is load-bearing rather than cosmetic: a MARKER
+# tag is a reference point that a consumer repin MUST NOT adopt, and it exists
+# precisely so a tag can be cut without asserting that a release is complete. A
+# workflow that turned every `v*` tag into a GitHub Release would silently
+# promote every marker into the thing it is not — machinery authoring a release
+# decision. So this attaches to a release that ALREADY exists, and says so
+# loudly when there is none.
+#
+# That is why there are two triggers, not one. `push: tags` covers the ordinary
+# order (the human publishes the release, then cuts/pushes the tag, or publishes
+# from an existing tag), and `release: published` covers the reverse — a tag cut
+# today and released next week — so the assets land whenever the human's half
+# happens, without this file ever making that call itself. `workflow_dispatch` is
+# the recovery lane: an upload that failed, or a release published before this
+# workflow existed. All three converge on ONE idempotent upload (`--clobber`), so
+# a tag+release pair that fires both events attaches the same four bytes-
+# identical assets twice rather than half of them once.
+#
+# BUILD-ONCE-FROM-ONE-HOST: bun cross-compiles all three targets from whichever
+# runner this lands on (package.json's `build:*` scripts hold the triples), so
+# there is no matrix and no per-OS runner to keep in sync — and no way for two of
+# the three binaries to come from a different commit than the third.
+name: release-assets
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Existing tag whose release should receive the four assets (e.g.
+          v0.1.0). Required: this lane never guesses "the latest tag" — the
+          binaries are pinned to a ref by definition.
+        required: true
+        type: string
+
+# PERMISSIONS. The floor is `contents: read`, and the single elevation is on the
+# one job that needs it:
+#   * `contents: write` — REQUIRED. A GitHub release asset lives under the
+#     `contents` scope, so `gh release upload` cannot attach a file with
+#     `contents: read`. This is the ONE thing above the floor and it is the
+#     entire reason this workflow exists.
+# Nothing else is granted and nothing else is needed: no `issues:`, no
+# `pull-requests:`, no `actions:`. `gh release view`/`upload` are the only API
+# calls made, both against `contents`.
+permissions:
+  contents: read
+
+# Serialized per tag, NEVER cancelled. `cancel-in-progress: true` on an upload
+# lane could kill a run midway through attaching the four assets and leave a
+# release carrying two binaries and no SHA256SUMS — the exact "silently ships two
+# of three" state this workflow's preflight exists to prevent, arrived at from
+# the other direction. (ci.yml takes the opposite setting, correctly: a
+# superseded check has nothing to leave half-finished.)
+concurrency:
+  group: release-assets-${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # A fresh hosted VM, deliberately. For bytes that consumers will EXECUTE,
+    # "built on a clean machine from a checked-out tag" is worth more than any
+    # minutes a long-lived self-hosted machine would save.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      # The one elevation. See the block above the `permissions:` floor.
+      contents: write
+    env:
+      # Resolved once, from whichever of the three triggers fired:
+      #   push     -> github.ref_name is the tag (the trigger filters to v*)
+      #   release  -> github.event.release.tag_name
+      #   dispatch -> github.event.inputs.tag (required input)
+      TAG: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # PINNED, and load-bearing rather than hygiene. `bun build --compile`
+      # embeds the bun RUNTIME in every artifact, so the bun version is an INPUT
+      # to the bytes: "the same commit produces the same binary" is only true at
+      # a fixed compiler. A floating installer would make a re-run of this
+      # workflow on the same tag produce different assets the day bun ships a
+      # release.
+      #
+      # MUST MATCH ci.yml's BUN_VERSION EXACTLY, and does. That workflow PROVES
+      # the build on every pull request; this one SHIPS it. If the two pins
+      # drift, the binary CI verified and the binary a consumer downloads are
+      # compiled by different compilers and are not the same bytes — which
+      # silently voids the one property this pipeline exists to provide, while
+      # both workflows stay green. Bump them in the same pull request or not at
+      # all.
+      BUN_VERSION: '1.4.0'
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+        with:
+          # The expression is spelled out again rather than referencing env.TAG:
+          # `with:` is evaluated before the job's `env:` is guaranteed visible in
+          # every runner context, and a checkout that silently resolved to the
+          # default branch would build the wrong commit and attach it to a tag's
+          # release — a failure that produces a green run and wrong bytes.
+          ref: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+          # Shallow is fine and deliberate: nothing here reads history.
+          fetch-depth: 1
+
+      # THE PINNED INSTALLER, NOT setup-bun, and this is the ONE place the two
+      # workflows deliberately differ. ci.yml uses `oven-sh/setup-bun` because a
+      # check lane is allowed a convenience; this lane produces the bytes a
+      # consumer executes, and the fewer third-party actions stand between a
+      # reviewed commit and those bytes, the smaller the set of things that must
+      # be trusted to make a checksum mean anything. `bash -s "bun-v${VERSION}"`
+      # is the installer's documented version-pinning form; without the argument
+      # it fetches whatever is current, which is the reproducibility hole
+      # BUN_VERSION exists to close.
+      #
+      # Shell is permitted HERE for the same reason bootstrap/nen.sh is permitted
+      # at all: environment bootstrap that cannot depend on the toolchain it
+      # installs.
+      - name: Install bun (version-pinned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          # Echoed so the log records which compiler produced the artifacts a
+          # consumer is about to trust, next to the SHA256SUMS they verify with.
+          "$HOME/.bun/bin/bun" --version
+
+      # `--frozen-lockfile`. On a pull request a lockfile drift is a nuisance; on
+      # a release it is a different dependency tree compiled into a published
+      # binary under a tag that claims to be the reviewed source. Fail instead.
+      - name: Install dependencies (frozen lockfile)
+        shell: bash
+        run: bun install --ignore-scripts --frozen-lockfile
+
+      # The three `build:*` scripts are invoked BY NAME, each with a hard-coded
+      # `--outfile` in package.json, rather than through a wrapper: a build whose
+      # output NAME varies run to run breaks reproducibility (a compiled binary
+      # embeds its own `--outfile` basename), so the names stay literal in one
+      # place and are not derived here.
+      #
+      # `set -e` makes any one target's failure red the job BEFORE the manifest
+      # is written, so SHA256SUMS can never describe a partial set. The
+      # completeness check below re-asserts the same thing from the other side,
+      # against the manifest rather than against the exit codes.
+      - name: Cross-compile the three release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run build:linux-x64
+          bun run build:darwin-arm64
+          bun run build:windows-x64
+
+      # The manifest is what a consumer verifies against (bootstrap/nen.sh), so
+      # it is generated HERE, from the bytes actually about to be uploaded,
+      # rather than carried in the repository.
+      #
+      # `sha256sum` over an explicit, sorted, literal file list: NOT a glob. A
+      # glob would silently produce a shorter manifest if a target were missing,
+      # which is the exact "silently ships two of three" failure the next step
+      # exists to catch — and a manifest derived from whatever happens to be on
+      # disk cannot catch it, because it would agree with itself. Filenames
+      # ascending, matching the completeness check below.
+      #
+      # `bun build --compile` also drops an `index.js.map` beside each outfile;
+      # naming the three binaries explicitly keeps that side artifact out of the
+      # manifest and out of the release.
+      - name: Write dist/SHA256SUMS from the bytes about to be uploaded
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum \
+            'nen-darwin-arm64' \
+            'nen-linux-x64' \
+            'nen-windows-x64.exe' \
+            > SHA256SUMS
+          cat SHA256SUMS
+
+      # FAIL LOUDLY BEFORE ANY UPLOAD. A release that silently ships two of three
+      # binaries is worse than one that fails: the missing target's users get a
+      # 404 at bootstrap time while everyone else sees a healthy release, so the
+      # gap is discovered by whoever is unlucky rather than by CI. Two commands,
+      # each of which IS the verdict — no `if`, nothing to get subtly wrong, and
+      # `set -e` turns either one's non-zero exit into a red job.
+      #
+      # (1) INTEGRITY + PRESENCE. `sha256sum -c --strict` fails if SHA256SUMS is
+      #     absent or empty, if any line in it is malformed (`--strict`), or if
+      #     any file it names is missing, truncated or corrupt. One command
+      #     covers the whole "are the bytes on disk the bytes the manifest
+      #     claims" question, and it is the same check a consumer performs
+      #     through bootstrap/nen.sh — so a release that passes here cannot fail
+      #     there for a reason this workflow could have caught.
+      #
+      # (2) COMPLETENESS. `sha256sum -c` is satisfied by a manifest listing ONE
+      #     file, so integrity alone cannot detect a short set. The expected
+      #     three names are therefore RESTATED here as literals rather than
+      #     derived from package.json's `build:*` scripts: a check that reads its
+      #     expectations from the table it is checking is a tautology and would
+      #     pass unchanged if a target were deleted from that table. This is the
+      #     third independent copy of the published filename contract — the other
+      #     two are package.json (which produces them) and bootstrap/nen.sh
+      #     (which consumes them) — and the `diff -u` output names precisely which
+      #     one drifted.
+      - name: Verify the release set is COMPLETE and intact
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -l
+          sha256sum -c --strict SHA256SUMS
+          diff -u \
+            <(printf '%s\n' 'nen-darwin-arm64' 'nen-linux-x64' 'nen-windows-x64.exe') \
+            <(awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS)
+
+      # Does the human's half exist yet? `continue-on-error` makes the ANSWER
+      # available as `steps.release_probe.outcome` without the absence of a
+      # release turning the job red — a marker tag legitimately has no release,
+      # and a lane that went red on every marker would train everyone to ignore
+      # it. The job stays green; the two mutually exclusive steps below say which
+      # world we are in, out loud.
+      - name: Is there a release for this tag yet?
+        id: release_probe
+        continue-on-error: true
+        shell: bash
+        run: gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease
+
+      # Idempotent by `--clobber`: re-running after a partial upload, or having
+      # both the push and release events fire for one tag, replaces the assets
+      # with byte-identical ones instead of erroring on "already exists". All
+      # four in ONE invocation so the manifest and the binaries it describes are
+      # attached together — uploading SHA256SUMS separately would open a window
+      # where a release advertises checksums for files that are not there yet.
+      - name: Attach the four assets to the release
+        if: steps.release_probe.outcome == 'success'
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            'nen-darwin-arm64' \
+            'nen-linux-x64' \
+            'nen-windows-x64.exe' \
+            'SHA256SUMS' \
+            --repo "$REPO" --clobber
+          echo "Attached 4 assets to ${REPO} release ${TAG}."
+
+      # The other world, and it is a WARNING rather than an error on purpose —
+      # see the probe step. It is not SILENCE, though: an absent release and a
+      # successful upload must not look the same in the run list.
+      - name: No release for this tag — nothing attached
+        if: steps.release_probe.outcome != 'success'
+        shell: bash
+        run: |
+          echo "::warning title=No release for ${TAG}::The binaries built and verified, but ${REPO} has no release for tag ${TAG}, so nothing was attached. This workflow never CREATES one: the release go/no-go is the human's, and a marker tag is a deliberate non-release. Publish the release and this workflow re-runs on 'release: published' — or re-run it by hand via workflow_dispatch with tag=${TAG}."
+
+      # The manifest, in the run summary, on every run — attached or not. This is
+      # what makes "the same commit produces the same binary" auditable after the
+      # fact rather than merely asserted: the sums are readable from the run that
+      # produced them, independently of the release they were (or were not)
+      # attached to.
+      #
+      # NOT `working-directory: dist`: this step runs on a FAILED job too, and
+      # `dist/` only exists once the build has succeeded. A step whose working
+      # directory is missing fails with "directory does not exist" — a second,
+      # meaningless error stacked on top of the real one, in the step whose job
+      # is to explain what happened.
+      - name: Record SHA256SUMS in the run summary
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          {
+            echo "### nen release assets — ${TAG}"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS 2>/dev/null || echo '(no SHA256SUMS — the build did not reach the manifest step)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

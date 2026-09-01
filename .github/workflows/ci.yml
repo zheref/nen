@@ -1,0 +1,148 @@
+# ci — typecheck, lint and the whole vitest harness, on every pull request and
+# every push to main (zheref/nen#1, Akatsuki migration P1).
+#
+# WHY IT EXISTS BEFORE ANY VERB DOES. Future pull requests need required-check
+# material, and a repository that acquires branch protection after it has a
+# backlog of green-by-default merges has protected nothing. The three commands
+# are the same three a developer runs (`bun run typecheck|lint|test`), invoked
+# by name rather than re-spelled here: a CI job that reimplements the local
+# commands is a CI job that will one day disagree with them about what passing
+# means.
+#
+# TWO OSes, DELIBERATELY. §10 requires identical behaviour on macOS and
+# Windows/Git Bash, and this repository's supply layer is where that stops being
+# free: bootstrap/nen.sh is POSIX shell exercised from vitest through `bash`, and
+# the escaped-filename defect that fix commit records was a Windows-only
+# divergence that a Linux-only matrix would have shipped. ubuntu is the required
+# lane; windows runs the same harness on the host the maintainer actually works
+# on. macOS is deliberately NOT in the matrix yet -- it is the third D19 target
+# and it is worth adding, but a hosted macOS runner is ten times the minutes and
+# nothing in P1 is macOS-specific. Flagged for the reviewer rather than decided
+# silently.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Nothing here writes anything: it reads the checkout and runs three commands.
+permissions:
+  contents: read
+
+# One run per ref. Cancelling an in-flight CI run when a newer commit arrives is
+# correct here and is the opposite of the release lane's rule -- a superseded
+# check has nothing to leave half-finished.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # PINNED, and it must match release-assets.yml's pin EXACTLY. That workflow
+  # PROVES nothing about the bytes a consumer downloads unless the compiler that
+  # produced them is the compiler this workflow verified against. If the two
+  # pins drift, the code CI checked and the binary a consumer runs were built by
+  # different toolchains while both workflows stay green. Bump them in the same
+  # pull request or not at all.
+  BUN_VERSION: '1.4.0'
+
+jobs:
+  check:
+    strategy:
+      # A Windows failure and a Linux failure are different findings; running
+      # both to completion says which one it is in a single run.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install bun (version-pinned)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # `--frozen-lockfile` on CI as well as on release. A pull request whose
+      # dependency tree differs from bun.lock is a pull request whose green
+      # checks describe a tree nobody reviewed.
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      # The whole harness, including the cases that drive bootstrap/nen.sh
+      # through `bash`. Those skip themselves on a host with no bash; the guard
+      # below makes sure that never silently becomes "the shell is untested".
+      - name: Test
+        run: bun run test
+
+      # A skip is invisible in a summary, and the shell coverage is exactly the
+      # part that a Windows-vs-Linux difference lives in. On ubuntu, bash always
+      # exists, so its absence would mean the harness had stopped finding it --
+      # which would take the whole supply-layer suite with it, quietly.
+      - name: Assert the shell suite actually ran (ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bash >/dev/null || { echo "::error::no bash on the ubuntu runner"; exit 1; }
+          # Only the supply suite is re-run, with a machine-readable reporter --
+          # it is the one that skips itself, so it is the only one worth paying
+          # a second run for.
+          bunx vitest run src/supply/bootstrap.test.ts \
+            --reporter=json --outputFile=vitest-supply.json >/dev/null
+          skipped="$(bun -e 'const r = await Bun.file("vitest-supply.json").json(); console.log(r.numPendingTests ?? 0)')"
+          echo "skipped in the supply suite: ${skipped}"
+          if [ "${skipped}" != "0" ]; then
+            echo "::error::${skipped} supply test(s) skipped on ubuntu — the shell coverage must never skip here"
+            exit 1
+          fi
+
+  # Proves the three D19 targets still compile from ONE host on every change,
+  # rather than discovering it at release time. It does NOT upload anything and
+  # does NOT touch a release: publishing is release-assets.yml's job, and that
+  # workflow never creates a release either.
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install bun (version-pinned)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Cross-compile the three release binaries
+        run: |
+          set -euo pipefail
+          bun run build:linux-x64
+          bun run build:darwin-arm64
+          bun run build:windows-x64
+
+      # The one that can actually be executed here, run for real. A binary that
+      # compiles and then cannot answer `--version` is the failure mode
+      # zheref/hatsu#1's D10 contract cannot tolerate, and it is invisible to a
+      # build that only checks an exit code from the compiler.
+      - name: The compiled linux binary answers --version
+        run: |
+          set -euo pipefail
+          printed="$(./dist/nen-linux-x64 --version)"
+          expected="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
+          echo "binary says '${printed}', package.json says '${expected}'"
+          [ "${printed}" = "${expected}" ]
