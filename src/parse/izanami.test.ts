@@ -72,6 +72,52 @@ describe("classifyCommand -- an allowlist, an explicit refusal list, and unknown
   it("treats an unrecognized command as unknown, never as safe", () => {
     expect(classifyCommand("curl https://example.com").classification).toBe("unknown");
   });
+
+  // Review finding #1: git branch/remote were matched on subcommand name
+  // only, so their mutating flag forms classified read-only.
+  it("refuses mutating flag forms of git branch even though 'branch' is read-only bare", () => {
+    expect(classifyCommand("git branch -D probe-victim").classification).toBe("mutating");
+    expect(classifyCommand("git branch -d probe-victim").classification).toBe("mutating");
+    expect(classifyCommand("git branch -m old new").classification).toBe("mutating");
+    expect(classifyCommand("git branch -M old new").classification).toBe("mutating");
+    expect(classifyCommand("git branch --delete probe-victim").classification).toBe("mutating");
+    expect(classifyCommand("git branch --move old new").classification).toBe("mutating");
+  });
+
+  it("still allows the listing forms of git branch", () => {
+    expect(classifyCommand("git branch").classification).toBe("read-only");
+    expect(classifyCommand("git branch -l").classification).toBe("read-only");
+    expect(classifyCommand("git branch --list").classification).toBe("read-only");
+    expect(classifyCommand("git branch -a").classification).toBe("read-only");
+    expect(classifyCommand("git branch -r").classification).toBe("read-only");
+    expect(classifyCommand("git branch -v").classification).toBe("read-only");
+    expect(classifyCommand("git branch --show-current").classification).toBe("read-only");
+  });
+
+  it("refuses mutating forms of git remote even though 'remote' is read-only bare", () => {
+    expect(classifyCommand("git remote add evil https://example.com").classification).toBe("mutating");
+    expect(classifyCommand("git remote remove origin").classification).toBe("mutating");
+    expect(classifyCommand("git remote rm origin").classification).toBe("mutating");
+    expect(classifyCommand("git remote set-url origin https://example.com").classification).toBe("mutating");
+    expect(classifyCommand("git remote rename origin upstream").classification).toBe("mutating");
+  });
+
+  it("still allows the listing forms of git remote", () => {
+    expect(classifyCommand("git remote").classification).toBe("read-only");
+    expect(classifyCommand("git remote -v").classification).toBe("read-only");
+    expect(classifyCommand("git remote show origin").classification).toBe("read-only");
+    expect(classifyCommand("git remote get-url origin").classification).toBe("read-only");
+  });
+
+  // Review finding #2: gh api's write-method detection missed --method=POST,
+  // -XPOST, the implicit POST from -f/-F field flags, and graphql.
+  it("refuses gh api forms that are writes without a whitespace-separated -X POST", () => {
+    expect(classifyCommand("gh api --method=POST /repos/o/r/issues").classification).toBe("mutating");
+    expect(classifyCommand("gh api -XPOST /repos/o/r/issues").classification).toBe("mutating");
+    expect(classifyCommand("gh api /repos/o/r/issues -f title=pwned").classification).toBe("mutating");
+    expect(classifyCommand("gh api graphql -f query=mutation").classification).toBe("mutating");
+    expect(classifyCommand("gh api graphql -f query={viewer{login}}").classification).toBe("mutating");
+  });
 });
 
 describe("classifyInvocation -- refuse the WHOLE run, not the offending step", () => {
