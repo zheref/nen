@@ -56,7 +56,7 @@ export function referencedIssueNumbers(text: string): Set<number> {
     const digits = match[1];
     if (digits !== undefined) found.add(Number.parseInt(digits, 10));
   }
-    return found;
+  return found;
 }
 
 /** Assemble one row per issue (with the PRs that reference it), plus one row per unreferenced PR. */
