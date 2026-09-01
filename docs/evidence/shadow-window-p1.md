@@ -274,12 +274,12 @@ open PRs at the time of that earlier run).
 
 ## Update 2: fresh 16-candidate re-run, committed as evidence (zheref/nen#14's finishing pass)
 
-The 12/12 table above (the "Update" section, immediately before this one) was
-itself never re-run after being written — the strongest parity claim in the
-PR (and in `docs/evidence/p1-evidence.md`) had, until this section, no
-committed evidence file behind it. This section closes that gap: a fresh,
-independent run of the exact same harness, committed in full rather than
-described secondhand.
+The 12/12 table above (the "Update" section, immediately before this one) is
+committed, but it was never re-run after being written — the strongest
+parity claim available to a reader of this file was already a few hours
+stale by the time an independent fact-check of PR #14 asked for the current
+state. This section closes that gap: a fresh, independent run of the exact
+same harness, committed in full rather than left to go stale again.
 
 ```
 bun src/shadow/run.ts --oracle-repo <bankai-core checkout on main> --repo <this checkout>
