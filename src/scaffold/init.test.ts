@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { renderCanonValuesTemplate, scaffoldInit } from "./init.js";
 
 const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
@@ -30,7 +30,48 @@ describe("scaffoldInit", () => {
     const root = tempRoot();
     const result = scaffoldInit({ root, directories: [], hook: HOOK });
     expect(result.hookWritten).toBe(join(root, ".git", "hooks", "commit-msg"));
+    expect(result.hookOutcome).toBe("installed");
     expect(readFileSync(result.hookWritten, "utf8")).toContain("X-Agent");
+  });
+
+  it("is idempotent for the hook -- a second run with the same spec reports 'unchanged', not 'installed'", () => {
+    const root = tempRoot();
+    scaffoldInit({ root, directories: [], hook: HOOK });
+    const second = scaffoldInit({ root, directories: [], hook: HOOK });
+    expect(second.hookOutcome).toBe("unchanged");
+  });
+
+  // Review finding #5: scaffoldInit used to clobber an existing hook
+  // unconditionally, with no guard, no backup and no record.
+  it("REFUSES to clobber a pre-existing, DIFFERENT commit-msg hook (MAJOR #5)", () => {
+    const root = tempRoot();
+    const hookPath = join(root, ".git", "hooks", "commit-msg");
+    mkdirSync(dirname(hookPath), { recursive: true });
+    const projectsOwnHook = "#!/bin/sh\n# THE PROJECT OWNS THIS HOOK - do not clobber\nexit 0\n";
+    writeFileSync(hookPath, projectsOwnHook);
+
+    const result = scaffoldInit({ root, directories: [], hook: HOOK });
+
+    expect(result.hookOutcome).toBe("refused");
+    expect(result.hookError).toMatch(/already exists/);
+    expect(result.hookError).toMatch(/--force/);
+    // The project's hook must survive untouched.
+    expect(readFileSync(hookPath, "utf8")).toBe(projectsOwnHook);
+    expect(existsSync(`${hookPath}.bak`)).toBe(false);
+  });
+
+  it("--force replaces a differing hook, but backs up the original first", () => {
+    const root = tempRoot();
+    const hookPath = join(root, ".git", "hooks", "commit-msg");
+    mkdirSync(dirname(hookPath), { recursive: true });
+    const projectsOwnHook = "#!/bin/sh\n# THE PROJECT OWNS THIS HOOK\nexit 0\n";
+    writeFileSync(hookPath, projectsOwnHook);
+
+    const result = scaffoldInit({ root, directories: [], hook: HOOK, force: true });
+
+    expect(result.hookOutcome).toBe("installed");
+    expect(readFileSync(hookPath, "utf8")).toContain("X-Agent");
+    expect(readFileSync(`${hookPath}.bak`, "utf8")).toBe(projectsOwnHook);
   });
 
   it("takes a caller-supplied hook path", () => {

@@ -14,7 +14,7 @@
 // A later pass absorbing the seven scenario generators extends this module
 // rather than replacing it.
 
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { renderCommitMsgHook, type HookSpec } from "./hook.js";
 
@@ -25,14 +25,30 @@ export interface ScaffoldInitOptions {
   readonly hook: HookSpec;
   /** Repo-relative path for the git hook. Default '.git/hooks/commit-msg'. */
   readonly hookPath?: string;
+  /**
+   * When a DIFFERENT hook already lives at the hook path, overwrite it
+   * anyway -- backing up the previous content to '<path>.bak' first. Without
+   * it, a differing existing hook is refused rather than silently replaced.
+   */
+  readonly force?: boolean;
   /** Repo-relative path for the canon-values template. Omit to skip it. */
   readonly canonValuesPath?: string;
   readonly scenario?: string;
 }
 
+export type HookOutcome = "installed" | "unchanged" | "refused";
+
 export interface ScaffoldInitResult {
   readonly createdDirectories: readonly string[];
   readonly hookWritten: string;
+  /**
+   * "installed": no hook existed, or --force replaced a differing one.
+   * "unchanged": a hook already existed with the SAME generated content.
+   * "refused": a DIFFERENT hook already existed and --force was not given --
+   * see hookError.
+   */
+  readonly hookOutcome: HookOutcome;
+  readonly hookError: string | null;
   readonly canonValuesWritten: string | null;
 }
 
@@ -63,13 +79,35 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
 
   const hookPath = join(options.root, options.hookPath ?? join(".git", "hooks", "commit-msg"));
   ensureDir(dirname(hookPath), createdDirectories);
-  writeFileSync(hookPath, renderCommitMsgHook(options.hook), "utf8");
-  try {
-    chmodSync(hookPath, 0o755);
-  } catch {
-    // Windows filesystems that do not model the POSIX executable bit --
-    // git itself only consults it on a POSIX checkout, so a failed chmod
-    // here is not a failure of the hook install.
+  const desiredHook = renderCommitMsgHook(options.hook);
+  let hookOutcome: HookOutcome;
+  let hookError: string | null = null;
+  const existingHook = existsSync(hookPath) ? readFileSync(hookPath, "utf8").replace(/\r\n/g, "\n") : null;
+  if (existingHook !== null && existingHook === desiredHook) {
+    // Same content already installed -- nothing to do, and nothing to back up.
+    hookOutcome = "unchanged";
+  } else if (existingHook !== null && options.force !== true) {
+    // A DIFFERENT hook already lives here. Writing over it unconditionally
+    // would destroy whatever the project already had installed -- with no
+    // guard, no backup and no record -- for a script that has no way to know
+    // whether that hook was load-bearing. Refuse; --force is the explicit
+    // override, and even then a backup is written first (below).
+    hookOutcome = "refused";
+    hookError = `a different commit-msg hook already exists at '${hookPath}' -- refusing to overwrite it. Pass --force to replace it (the existing hook is backed up to '${hookPath}.bak' first).`;
+  } else {
+    if (existingHook !== null) {
+      // --force: back up what was there before replacing it.
+      writeFileSync(`${hookPath}.bak`, existingHook, "utf8");
+    }
+    writeFileSync(hookPath, desiredHook, "utf8");
+    try {
+      chmodSync(hookPath, 0o755);
+    } catch {
+      // Windows filesystems that do not model the POSIX executable bit --
+      // git itself only consults it on a POSIX checkout, so a failed chmod
+      // here is not a failure of the hook install.
+    }
+    hookOutcome = "installed";
   }
 
   let canonValuesWritten: string | null = null;
@@ -82,5 +120,5 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     canonValuesWritten = path;
   }
 
-  return { createdDirectories, hookWritten: hookPath, canonValuesWritten };
+  return { createdDirectories, hookWritten: hookPath, hookOutcome, hookError, canonValuesWritten };
 }
