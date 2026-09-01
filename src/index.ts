@@ -62,6 +62,7 @@ import { canonVerb } from "./canon/verb.js";
 import { commitVerb } from "./commit/verb.js";
 import { effortVerb } from "./effort/verb.js";
 import { epicVerb } from "./epic/verb.js";
+import { ideaVerb } from "./idea/verb.js";
 import { issueVerb } from "./issue/verb.js";
 import { loopVerb } from "./loop/verb.js";
 import { parseVerb } from "./parse/verb.js";
@@ -81,6 +82,7 @@ export const VERBS: readonly Verb[] = [
   commitVerb,
   effortVerb,
   epicVerb,
+  ideaVerb,
   issueVerb,
   loopVerb,
   parseVerb,
