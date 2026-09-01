@@ -81,7 +81,11 @@ export function resolveRepoRoot(options: RepoRootOptions = {}): string {
 
   if (flag.trim() === "") {
     throw new RepoRootError(
-      "--repo was given an empty value. It takes the PATH of the target repository's working tree (e.g. --repo ../bankai-core); omit it entirely to use the current directory.",
+      // The example is deliberately anonymous. Naming a real repository here
+      // would put a system's name into a shipped string, which is §3's
+      // prohibition arriving through the one door a value-level sweep would
+      // otherwise wave through: an error message.
+      "--repo was given an empty value. It takes the PATH of the target repository's working tree (e.g. --repo ../my-checkout); omit it entirely to use the current directory.",
     );
   }
 

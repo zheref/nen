@@ -672,7 +672,20 @@ export function unapprovedApprovers(
 // skipped reviewer check is the workflow declining to run at all, which is not
 // an abstain.
 
-export type CopilotPolicy = "bounded" | "strict";
+// PORT CHANGE (§3): the original names this `CopilotPolicy`, after the one
+// reviewer it applied to. The rename is not cosmetic and it is not tidying: the
+// VALUES were already structural (`bounded` / `strict`) and the reviewer it
+// applies to is now whichever ones the target repository marks
+// `bounded_policy_exempt`, so a type called after a persona would be a persona
+// name shipped in a binary's public API -- exactly what §3 forbids, surviving in
+// the one place a value-level sweep does not look. Found by exactly such a
+// sweep; the rename is what made it true rather than nearly true.
+//
+// `bounded`: a reviewer marked exempt owes a round only when a request for it
+// is PENDING. `strict`: it is a configured reviewer like any other. The reading
+// behind the distinction, and why the choice is the maintainer's rather than
+// this module's, is in the block above -- unchanged.
+export type RoundPolicy = "bounded" | "strict";
 
 export interface RoundInputs {
   readonly reviewRequests: readonly ReviewRequest[];
@@ -737,7 +750,7 @@ export function pendingRounds(
   inputs: RoundInputs,
   headSha: string,
   reviewers: readonly string[],
-  policy: CopilotPolicy,
+  policy: RoundPolicy,
   deliveryPr = false,
 ): OwedRound[] {
   const names = normalizeReviewerNames(reviewers);

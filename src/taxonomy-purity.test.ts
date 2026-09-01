@@ -128,6 +128,15 @@ const FORBIDDEN: readonly Forbidden[] = [
     pattern: /(?<![A-Za-z0-9_])(bankai|akatsuki|shikai)\s*:/i,
   },
   {
+    what: "the name of a system nen serves",
+    // BROADER than the label-namespace rule above, and it caught something the
+    // narrower one waved through: an example repository name inside an ERROR
+    // MESSAGE (`e.g. --repo ../bankai-core`). Not a value the binary decides
+    // with, but a system's name shipped in a string all the same -- and error
+    // messages are exactly where such a name survives a value-level sweep.
+    pattern: /(?<![A-Za-z0-9_])(bankai|akatsuki|shikai|hatsu|ninjutsu)(?![A-Za-z0-9_])/i,
+  },
+  {
     what: "a check-name fragment",
     // `<caller job> / <called job>` is the rollup's shape; a literal naming a
     // specific reviewer job is a check name written into the binary.
