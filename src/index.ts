@@ -92,6 +92,35 @@ global options:
   --version, -v             Print the version and exit.
   --help, -h                Print this and exit.`;
 
+// `bootstrap` and `schema` are the two PRE-REGISTRY commands (see the header
+// above) that ALSO take `--help`, so each needs its own usage block the same
+// way a registry family's `command.usage` does -- these two are it, read by
+// `run()` below rather than by ../cli/command.ts's mergeFlags path a
+// registered family goes through.
+const BOOTSTRAP_USAGE = `${PROGRAM} bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script <path>] [--repo <path>]
+
+Fetch, checksum-verify and cache a pinned ${PROGRAM} binary. There is
+deliberately no default and no 'latest': a bootstrap that picked the newest
+release would convert a source-pinned supply chain into an unpinned one.
+Refuses on any integrity gap; prints the verified path on stdout and nothing
+else.
+
+  --ref <tag>              The tag to pin to. Required -- no default.
+  --source <owner/name>    GitHub repository to fetch release assets from.
+  --cache-dir <dir>        Cache root.
+  --script <path>          The bootstrap script, when not under --repo.
+  --repo <path>            The target repository's working-tree root.`;
+
+const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
+
+Load and validate the target repository's taxonomy files -- schemas/labels.json,
+schemas/repos.json, schemas/colors.yml, schemas/gates.json -- and report each
+one's verdict: ok, or FAIL naming what is wrong.
+
+  --repo <path>    The target repository's working-tree root. Defaults to the
+                   current directory.
+  --json           Machine-readable output: { root, ok, checks: [...] }.`;
+
 // The flags the TWO pre-registry commands share. Left as one spec because
 // those two are parsed together, exactly as they always were; a registry
 // family never sees it (see ./cli/command.ts's mergeFlags). A registry family --
@@ -178,6 +207,22 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
   // read as output. The exit code already distinguished them; the stream did
   // not.
   if (parsed.booleans.has("help")) {
+    // `bootstrap`/`schema` are pre-registry (this file's header explains why),
+    // so unlike a registered family they never reach ../cli/command.ts's
+    // mergeFlags -> `family.usage` path. Without this, 'nen schema --help' and
+    // 'nen bootstrap --help' fell through to the GLOBAL usage below -- true of
+    // every OTHER command name too, but wrong for these two specifically,
+    // since (unlike a genuinely unknown command) each has its own usage to
+    // print.
+    const requested = parsed.positionals[0];
+    if (requested === "bootstrap") {
+      io.out(BOOTSTRAP_USAGE);
+      return 0;
+    }
+    if (requested === "schema") {
+      io.out(SCHEMA_USAGE);
+      return 0;
+    }
     io.out(USAGE);
     return 0;
   }

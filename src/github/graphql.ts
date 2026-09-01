@@ -255,10 +255,31 @@ export interface PullRequestSnapshot {
 // start judging readiness on the OLDEST commit in the window, and a rollup read
 // off the wrong commit is a green verdict about work that is not at head.
 //
-// A non-array (absent, null, or a partial-data blank) yields `undefined`, NOT
-// `[]`. parseCheckRollup() turns `undefined` into the empty array that is never
-// green (bankai-core#671); manufacturing `[]` here would make "the token could
-// not read the checks" indistinguishable from "no checks reported".
+// CORRECTION (zheref/nen#14's fact-check, shadow-window disagreement on
+// zheref/akatsuki-ai#33): a non-array `commits` connection, or a missing/
+// non-object head COMMIT, still yields `undefined` -- the path genuinely could
+// not be walked, which is unreadable in exactly the way ../github/pr_state.ts's
+// fetch-time guard means it. But an otherwise-readable head commit whose OWN
+// `commit.statusCheckRollup` field is the literal GraphQL value `null` is a
+// DIFFERENT fact, and this file's own comment above it used to get that wrong:
+// it claimed "manufacturing `[]` here would make 'the token could not read the
+// checks' indistinguishable from 'no checks reported'" and treated the two as
+// one case. Verified live against zheref/akatsuki-ai#33 (`gh api graphql` on
+// that PR's head commit answers `commit: { statusCheckRollup: null }` for
+// exactly the "no runs have ever attached to this commit" case) and against
+// `gh pr view --json statusCheckRollup` on the SAME PR, which prints `[]`, not
+// `null` -- `scripts/pr_ready_gate.sh`'s `fetch_pr_state` never even sees a
+// null, because gh's own flattening has already reduced it to a readable empty
+// array before the shell's `jq -e` guard runs. The oracle's `evaluate_ready`
+// then reaches its `.checks // []` branch on genuinely EMPTY (not unreadable)
+// evidence and answers "not-ready: NO checks reported at head (CON-32a)" --
+// which is CON-32(a)'s own distinct, empty-rollup finding (bankai-core#671),
+// never a refusal. This port's job is to reproduce THAT, not the read this
+// comment previously assumed: a present-but-null `commit.statusCheckRollup` on
+// an otherwise-resolvable head commit is the empty-rollup case and reads as
+// `[]`; only a head commit this function cannot resolve at all stays
+// `undefined`, and `undefined` is still what a genuinely unreadable connection
+// (a partial-data blank higher up the path, or a non-object commit) yields.
 function headCommitRollupContexts(response: unknown): unknown {
   const commits = digPath(
     response,
@@ -269,7 +290,14 @@ function headCommitRollupContexts(response: unknown): unknown {
   );
   if (!Array.isArray(commits)) return undefined;
   const head: unknown = commits[commits.length - 1];
-  return digPath(head, "commit", "statusCheckRollup", "contexts", "nodes");
+  const commit = digPath(head, "commit");
+  if (!isRecord(commit)) return undefined;
+  // The commit resolved; its OWN rollup field is what GitHub answered.
+  // `=== null` (as opposed to `undefined`, an absent key) is the wire's own
+  // "no runs at all on this commit" signal, and it is a fact ABOUT the
+  // commit, not a failure to read one.
+  if (commit["statusCheckRollup"] === null) return [];
+  return digPath(commit, "statusCheckRollup", "contexts", "nodes");
 }
 
 function toGhPullRequestNode(raw: unknown): GhPullRequestNode | undefined {

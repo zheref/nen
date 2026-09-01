@@ -115,7 +115,7 @@ jobs:
             exit 1
           fi
 
-  # Proves the three D19 targets still compile from ONE host on every change,
+  # Proves the three release-target platforms still compile from ONE host on every change,
   # rather than discovering it at release time. It does NOT upload anything and
   # does NOT touch a release: publishing is release-assets.yml's job, and that
   # workflow never creates a release either.
@@ -145,7 +145,7 @@ jobs:
 
       # The one that can actually be executed here, run for real. A binary that
       # compiles and then cannot answer `--version` is the failure mode
-      # zheref/hatsu#1's D10 contract cannot tolerate, and it is invisible to a
+      # zheref/hatsu#1's minimum-version gate cannot tolerate, and it is invisible to a
       # build that only checks an exit code from the compiler.
       - name: The compiled linux binary answers --version
         run: |

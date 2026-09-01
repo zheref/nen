@@ -150,6 +150,18 @@ describe("nen schema check", () => {
   // The owner/name-slug refusal is asserted in the exit-code block at the end of
   // this file, where its CODE (2, a usage error, corrected in review) is the
   // point rather than an aside.
+
+  it("'nen schema --help' answers its OWN usage, not the global one (zheref/nen#14's fact-check)", async () => {
+    // Pre-registry, so this never reaches ../cli/command.ts's mergeFlags ->
+    // family.usage path a registered family gets for free -- it used to fall
+    // straight through to the GLOBAL usage instead, the same as any other
+    // command name would, README's own "each family's --help documents its
+    // verbs and flags in full" claim notwithstanding.
+    const result = await capture(["schema", "--help"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/^nen schema check --repo <path>/);
+    expect(result.out.join("\n")).not.toMatch(/usage: nen \[--version\]/);
+  });
 });
 
 describe("nen bootstrap", () => {
@@ -165,6 +177,21 @@ describe("nen bootstrap", () => {
     expect(result.code).toBe(7);
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toMatch(/bootstrap\/nen\.sh/);
+  });
+
+  it("'nen bootstrap --help' answers its OWN usage, not the global one (zheref/nen#14's fact-check)", async () => {
+    const result = await capture(["bootstrap", "--help"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/^nen bootstrap --ref <tag>/);
+    expect(result.out.join("\n")).not.toMatch(/usage: nen \[--version\]/);
+  });
+});
+
+describe("an unknown command with --help still gets the global usage (zheref/nen#14's fact-check, regression)", () => {
+  it("'nen frobnicate --help' is not mistaken for a family with its own usage", async () => {
+    const result = await capture(["frobnicate", "--help"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/usage: nen \[--version\]/);
   });
 });
 

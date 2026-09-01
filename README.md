@@ -35,7 +35,7 @@ gap (unfetchable manifest, missing entry, digest mismatch) rather than
 falling back to an unverified download:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/main/bootstrap/nen.sh -o nen-bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.1.0/bootstrap/nen.sh -o nen-bootstrap.sh
 bash nen-bootstrap.sh --ref v0.1.0
 ```
 
@@ -46,6 +46,11 @@ else, so it composes directly:
 nen="$(bash nen-bootstrap.sh --ref v0.1.0)"
 "$nen" --version
 ```
+
+`v0.1.0` is not tagged or released yet — that tag and its release are gated
+on a maintainer decision (see **License** below), so both commands above will
+fail (the `curl` with a 404, `bash nen-bootstrap.sh` with a refusal) until it
+is cut. Once it is, no other part of either invocation changes.
 
 `bootstrap/nen.sh` is the one shell script this repository ships — everything
 else, including the CLI itself, is TypeScript. See the script's own header
@@ -75,12 +80,17 @@ test fixture so it runs without any setup:
 
 ```
 $ nen schema check --repo src/schema/fixtures/bankai-repo
-repository: .../src/schema/fixtures/bankai-repo
+repository: <absolute path to your checkout>/src/schema/fixtures/bankai-repo
   ok    schemas/labels.json  13 labels
   ok    schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
   ok    schemas/colors.yml  3 categories, 13 values
   ok    schemas/gates.json  5 reviewer identities
 ```
+
+(`repository:` prints the resolved absolute path, which is unique to wherever
+you checked this out — elided above to `<absolute path to your checkout>` so
+this block reads the same regardless of where that is; every other line is
+pasted verbatim.)
 
 Point `--repo` at any checkout instead of the fixture and Nen reads that
 repository's own `schemas/labels.json`, `schemas/repos.json`,
@@ -162,8 +172,10 @@ bun run typecheck && bun run lint && bun run test   # or: bun src/index.ts dev t
 
 Tests live beside their sources (`src/**/*.test.ts`). `bun run build:linux-x64`
 (and the `darwin-arm64` / `windows-x64` siblings) cross-compile the release
-binaries from any one host; `bun run build:<target> && sha256sum dist/*` is
-the local equivalent of the release pipeline's `SHA256SUMS`.
+binaries from any one host; `bun run build:<target> && sha256sum dist/*` (or,
+on a stock macOS dev setup, which has no `sha256sum` by default: `shasum -a
+256 dist/*` — the same fallback `bootstrap/nen.sh` itself uses) is the local
+equivalent of the release pipeline's `SHA256SUMS`.
 
 ## License
 

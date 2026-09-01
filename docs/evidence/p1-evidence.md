@@ -38,9 +38,11 @@ The per-candidate table is identical to the one already recorded in
 `zheref/bankai-scaffold#23`, `zheref/bankai-scaffold#21`, and bankai-core's
 five named closed pull requests 907/909/911/913/916), same verdicts, same
 reason text, `yes`/`yes` on every row for both ready-ness and reason-text
-agreement. Re-running it today rather than re-quoting yesterday's table is
-the point: this confirms the equality still holds now, not only at the time
-`shadow-window-p1.md` was written. See that file for the full methodology,
+agreement. Re-running it now rather than re-quoting the table
+`shadow-window-p1.md` already recorded is the point: this confirms the
+equality still holds a few hours later the same day (about nine hours after
+that file's own run), not only at the earlier moment it was written. See
+that file for the full methodology,
 the two corrections an independent review made to the comparison before this
 result was trustworthy, the depth analysis of what each candidate actually
 exercised, and the residual gap this repeat run inherits unchanged — none of
@@ -53,6 +55,16 @@ from `gh pr list --repo <repo> --state open` at run time. Re-running the
 command above after any of the seven watched repositories opens a new pull
 request extends the comparison for free — nothing here needs to change to
 pick that up.
+
+**UPDATE, after this run:** a fresh sweep of exactly that kind (an
+independent fact-check of this PR, enumerating live rather than reusing this
+page's 8) found a genuine disagreement this 8-candidate run did not have open
+pull requests to surface — a genuinely empty (not closed-PR-degenerate)
+checks rollup, on `zheref/akatsuki-ai#33`. Root cause, fix, and a re-run
+showing 12/12 agree (including that exact PR) are recorded in
+`shadow-window-p1.md`'s own "Update: a real disagreement, found, fixed, and
+re-verified" section, dated the same day as this page — not duplicated here,
+per this page's own "referenced rather than duplicated" rule above.
 
 ## 2. Corpus-slice replay
 
@@ -89,7 +101,18 @@ replayed 10 fixture(s): 10 passed, 0 failed
 $ nen dev replay --json
 {
   "total": 10,
-  "passed": [ "a-newer-twin-is-never-canonical", "a-newest-first-listing-still-picks-the-lowest", "a-punctuation-only-title-is-always-canonical", "canonical-no-older-open-duplicate", "distinct-gaps-never-cross-match", "empty-open-set-is-canonical", "lowest-of-several-older-matches-wins", "non-ascii-uppercase-survives-the-lowercaser", "older-exact-title-closes-the-new-issue", "punctuation-and-case-collapse-to-one-canonical" ],
+  "passed": [
+    "a-newer-twin-is-never-canonical",
+    "a-newest-first-listing-still-picks-the-lowest",
+    "a-punctuation-only-title-is-always-canonical",
+    "canonical-no-older-open-duplicate",
+    "distinct-gaps-never-cross-match",
+    "empty-open-set-is-canonical",
+    "lowest-of-several-older-matches-wins",
+    "non-ascii-uppercase-survives-the-lowercaser",
+    "older-exact-title-closes-the-new-issue",
+    "punctuation-and-case-collapse-to-one-canonical"
+  ],
   "failed": [],
   "error": null
 }

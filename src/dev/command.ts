@@ -23,8 +23,8 @@ usage:
   nen dev lint [-- <args>]     bun run lint -> eslint, this repo's own linter.
   nen dev replay [--slice-dir <path>]
       Replays the imported corpus slice
-      (tests/fixtures/dualrun-slice/, §7 P1 evidence's "local corpus slice
-      replays green") against nen's own equivalent logic -- currently
+      (tests/fixtures/dualrun-slice/, docs/evidence/p1-evidence.md's "local
+      corpus slice replays green") against nen's own equivalent logic -- currently
       src/issue/search.ts's normalizeTitle/findCanonical, absorbed from
       dedupe_handbook_questions.sh. See tests/fixtures/dualrun-slice/
       MANIFEST.json for exactly which fixtures were imported and why every

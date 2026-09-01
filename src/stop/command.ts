@@ -65,8 +65,8 @@ one renderer.
                       waited on, so no signal line is printed.
 
 Rungs 2-3 of the escalation ladder (an OS notification, an audible cue) are
-NOT fired by this command: D16 restricts nen to shelling out to git and gh
-only, and neither is a notification primitive. Wire them through your own
+NOT fired by this command: nen only ever shells out to git and gh, and
+neither is a notification primitive. Wire them through your own
 host if you need them; this command renders rung 4 (the banner and table) and
 states rung 1's status, which is the caller's to have fired.`;
 

@@ -44,16 +44,31 @@
 //     it" sends the reader to fix the wrong thing, and the pr-state skill's § 4
 //     already has the right classification for it: `unevaluated`, never `ready`,
 //     never silently omitted, with what would fix it.
-//  2. THE NULL-ROLLUP REFUSAL IS REPRODUCED, deliberately, because it is not a
-//     bug: `gh pr view --json statusCheckRollup --jq '.statusCheckRollup'`
-//     prints `null` for a PR whose rollup GitHub answered as null, and the
-//     shell's `jq -e` guard exits non-zero on a `null` OUTPUT -- not only on
-//     unparseable input. So the shell refuses that PR at the FETCH, with a
-//     missing-permission diagnostic and NO verdict at all. The first cut of the
-//     original's own port parsed `null`, carried on, and emitted
-//     `not-ready: NO checks reported at head` instead, which is a DIFFERENT
-//     answer. Reproduced here as `unevaluated`, which is what "no verdict at
-//     all" means in this CLI's vocabulary.
+//  2. THE GUARD BELOW STILL REFUSES ON `undefined`/`null` -- CORRECTED
+//     (zheref/nen#14's fact-check) to refuse for the right reason. This
+//     module's own comment used to claim `gh pr view --json statusCheckRollup
+//     --jq '.statusCheckRollup'` "prints `null` for a PR whose rollup GitHub
+//     answered as null", and that claim was never verified and is FALSE:
+//     checked live against zheref/akatsuki-ai#33 (a head commit whose own
+//     `statusCheckRollup` GraphQL field genuinely is `null` -- no runs have
+//     ever attached to it), `gh pr view --json statusCheckRollup` prints `[]`,
+//     not `null`. gh's own flattening already reduces a null-because-no-runs
+//     commit rollup to a readable empty array before the shell's `jq -e`
+//     guard ever runs, so `fetch_pr_state` succeeds and `evaluate_ready`
+//     reaches its `.checks // []` branch on genuinely EMPTY evidence,
+//     answering `not-ready: NO checks reported at head (CON-32a)`
+//     (bankai-core#671) -- never a refusal. ../github/graphql.ts's
+//     `headCommitRollupContexts` reproduces that same reduction now: a
+//     present-but-null `commit.statusCheckRollup` on an otherwise-resolvable
+//     head commit normalizes to `[]`, not `undefined`, so `snapshot.checkRollup`
+//     reaching THIS guard as `undefined` means what it says -- the head commit
+//     itself, or something above it in the path, could not be resolved at all
+//     (a partial-data blank, a permission that truncated the selection). That
+//     is the case with no shell-side counterpart to reproduce a specific
+//     reason string for -- the shell's OWN `gh pr view --json statusCheckRollup`
+//     failing outright is the nearest analogue, and its diagnostic is
+//     "the token is very likely missing a required grant", which is exactly
+//     the remedy below.
 //  3. THE PAGINATION CAP AND THE NULL CURSOR COLLAPSE INTO ONE FALLBACK. The
 //     shell, on `hasNextPage=true` with `endCursor: null`, keeps paginating with
 //     the literal four-character cursor `null` until it hits MAX_THREAD_PAGES
@@ -290,20 +305,24 @@ export async function fetchPrState(
     };
   }
 
-  // Divergence 2 in the header: the rollup came back absent or null. gh EXITS 0
-  // on partial GraphQL data, so an unreadable rollup is the SAME
-  // missing-permission signature wearing a different costume. Refuse rather
-  // than evaluate readiness on it -- an empty rollup and an unread one are
-  // different facts, and only one of them is a finding about the pull request.
+  // Divergence 2 in the header, CORRECTED. `snapshot.checkRollup` reaching
+  // here as `undefined` no longer includes "the head commit's own rollup is
+  // null" -- ../github/graphql.ts's headCommitRollupContexts() now reduces
+  // that case to `[]`, matching gh's own flattening, so it never arrives here
+  // at all. Only a head commit (or something above it) that this process
+  // could not resolve reaches this branch, which is the SAME
+  // missing-permission signature `gh pr view --json statusCheckRollup`
+  // itself fails loudly on. Refuse rather than evaluate readiness on it -- an
+  // empty rollup and an unread one are different facts, and only one of them
+  // is a finding about the pull request.
   if (snapshot.checkRollup === undefined || snapshot.checkRollup === null) {
     return {
       ok: false,
-      reason:
-        `the check rollup came back empty or unreadable for ${repo.owner}/${repo.repo}#${prNumber}`,
+      reason: `the check rollup could not be read for ${repo.owner}/${repo.repo}#${prNumber}`,
       remedy:
         "The token is very likely missing a required grant. checks:read alone is not enough: the " +
         "rollup's own checkSuite.workflowRun sub-field needs actions:read too. Refusing to judge " +
-        "readiness on absent checks data rather than reporting an EMPTY rollup, which is a " +
+        "readiness on unreadable checks data rather than reporting an EMPTY rollup, which is a " +
         "different finding with a different remedy.",
     };
   }

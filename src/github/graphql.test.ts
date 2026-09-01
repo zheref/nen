@@ -432,17 +432,52 @@ describe("head-commit rollup selection", () => {
     expect(normalizePullRequestResponse(responseWithCommits([])).checkRollup).toBeUndefined();
   });
 
-  it("yields undefined when the head commit reports `statusCheckRollup: null` -- a real answer for a PR with no runs (bankai-core#671)", () => {
+  it("yields undefined when the head commit ITSELF cannot be resolved -- a genuinely unreadable connection", () => {
+    // A commits node with no `commit` object at all (a non-object, or the key
+    // simply absent) is the shape a partial-data blank or an unrecognised
+    // response produces, and is unreadable in the sense ../github/pr_state.ts's
+    // fetch-time guard means it.
+    expect(
+      normalizePullRequestResponse(responseWithCommits([{}])).checkRollup,
+    ).toBeUndefined();
+    expect(
+      normalizePullRequestResponse(responseWithCommits(["nope"])).checkRollup,
+    ).toBeUndefined();
+  });
+
+  it("yields [] -- readable, EMPTY -- when the head commit reports `commit.statusCheckRollup: null` (zheref/nen#14's fact-check)", () => {
+    // CORRECTION: this test used to assert `undefined` here, on the claim that
+    // reading a present-but-null commit-level rollup as `[]` would make "the
+    // token could not read the checks" indistinguishable from "no checks
+    // reported". That claim was never checked against gh's own live behavior,
+    // and it is false. Verified live on zheref/akatsuki-ai#33: `gh api
+    // graphql` on that PR's head commit answers `commit: { statusCheckRollup:
+    // null }` -- no runs have ever attached to it -- and `gh pr view --json
+    // statusCheckRollup` on the SAME PR prints `[]`, not `null`: gh's own
+    // flattening already reduces this exact shape to a readable empty array,
+    // so `scripts/pr_ready_gate.sh`'s `fetch_pr_state` never refuses it, and
+    // `evaluate_ready` reaches its `.checks // []` branch on genuinely EMPTY
+    // evidence and answers `not-ready: NO checks reported at head (CON-32a)`
+    // (bankai-core#671) -- never `unevaluated`. The HEAD COMMIT resolving at
+    // all is what makes this case different from the genuinely-unreadable one
+    // above: `commit` is a real object here, and its own field is the literal
+    // value `null`, which is GitHub's answer, not a gap in the answer.
     expect(
       normalizePullRequestResponse(
         responseWithCommits([{ commit: { statusCheckRollup: null } }]),
       ).checkRollup,
-    ).toBeUndefined();
+    ).toEqual([]);
   });
 
-  it("and every one of those undefineds parses to the EMPTY rollup, which is never green", () => {
+  it("and every one of the genuinely-unreadable undefineds still parses to the EMPTY rollup, which is never green", () => {
     // The chain that matters: `undefined` -> `[]` -> checksAllGreen()'s
-    // non-empty test says "no signal", not "passed" (bankai-core#671).
+    // non-empty test says "no signal", not "passed" (bankai-core#671). This is
+    // true of BOTH kinds of empty evidence -- the genuinely unreadable
+    // `undefined` (parsed by parseCheckRollup's own `isAbsent` branch) and the
+    // readable `[]` a null commit-level rollup now normalizes to above -- but
+    // only the readable one may ever reach a `not-ready` verdict; the
+    // unreadable one is refused earlier, at ../github/pr_state.ts's own guard,
+    // and never reaches parseCheckRollup at all in the live path.
     expect(parseCheckRollup(normalizePullRequestResponse(responseWithCommits([])).checkRollup)).toEqual({
       ok: true,
       value: [],

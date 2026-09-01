@@ -172,6 +172,106 @@ being a property of the ORIGINAL's logic, is inherited rather than
 independently reintroduced or accidentally fixed. The three akatsuki-ai seeds
 above are where the eventual, reviewed fix is designed in.
 
+## Update: a real disagreement, found, fixed, and re-verified (zheref/nen#14's fact-check)
+
+An independent fact-check of PR #14 ran the same harness fresh against 11
+live candidates and found ONE genuine disagreement, on
+`zheref/akatsuki-ai#33`:
+
+- **Oracle** (`scripts/pr_ready_gate.sh --verdict`): `not-ready: NO checks
+  reported at head (CON-32a)` — an EMPTY, READABLE rollup.
+- **Nen** (`nen pr ready 33 --gh-repo zheref/akatsuki-ai`): `unevaluated: the
+  check rollup came back empty or unreadable` — conflating that with the
+  UNREADABLE case.
+
+**Root cause.** `../github/graphql.ts`'s `headCommitRollupContexts()`
+collapsed two different facts into the same `undefined`: a head commit this
+process could not resolve at all (genuinely unreadable), and a head commit
+that resolved fine but whose OWN `commit.statusCheckRollup` field is the
+literal GraphQL value `null` — GitHub's documented answer for "no runs have
+ever attached to this commit," which is a fact ABOUT the commit, not a gap in
+reading it. `../github/pr_state.ts`'s fetch-time guard then refused both
+alike, so a genuinely empty-but-readable rollup was reported `unevaluated`
+instead of reaching `evaluateReady`'s own `.checks // []` branch. This
+module's own header carried an unverified claim that caused it: it asserted
+"`gh pr view --json statusCheckRollup --jq '.statusCheckRollup'` prints
+`null` for a PR whose rollup GitHub answered as null." Checked live against
+`zheref/akatsuki-ai#33` (`gh api graphql` on that PR's head commit answers
+`commit: { statusCheckRollup: null }`), that claim is FALSE: `gh pr view
+--json statusCheckRollup` on the SAME PR prints `[]`, not `null` — gh's own
+flattening already reduces this exact shape to a readable empty array before
+the shell's `jq -e` guard ever runs, so `fetch_pr_state` succeeds and
+`evaluate_ready` reaches the genuinely-empty branch. **This is nen's own
+comment being wrong, not the shell** — the fix reproduces the shell's real,
+verified behavior; nothing about the shell's own logic changed or needed to.
+
+**Fix.** `headCommitRollupContexts()` now distinguishes the two cases: a head
+commit it cannot resolve at all (the `commits` connection is not an array, or
+the head node carries no `commit` object) still yields `undefined`
+(unreadable); a resolved head commit whose own `commit.statusCheckRollup` is
+the literal value `null` now yields `[]` (empty, readable), matching gh's own
+reduction. `../github/pr_state.ts`'s fetch-time guard is unchanged in logic —
+it still refuses on `undefined`/`null` — but what reaches it is now correct.
+Both known gate bugs' sequencing is untouched: nothing about required
+contexts, `mergeStateStatus`, or the dependabot carve-out (bankai-core#877/
+#876/#791, zheref/akatsuki-ai#18/#19/#20) was touched by this fix, and none of
+those three conditions were triggered live by this fix or its verification,
+consistent with the "reproduce today's behavior, bugs included" rule this
+file already states above.
+
+A test now pins the distinction directly (`src/github/graphql.test.ts`,
+`src/verbs/pr_ready.test.ts`): a present-but-null commit-level rollup on an
+otherwise-resolvable head commit parses to `[]` and reaches the shell's own
+byte-identical not-ready reason; a head commit that cannot be resolved at all
+stays `unevaluated`. Reverting the fix and re-running the suite makes both new
+tests fail with exactly the disagreement above (`unevaluated` where
+`not-ready` was expected) — the mutation-proof that they bite.
+
+**Fresh re-run, same harness, after the fix:**
+
+```
+bun src/shadow/run.ts --oracle-repo <bankai-core checkout on main> --repo <this checkout>
+```
+
+- **Run:** 2026-09-01, oracle checkout at `bankai-core` `main`
+  (`2269fe723e355dc69bf535ab40f22556e4fe4081`, working tree clean), `gh`
+  authenticated as `zheref`.
+- **Candidates:** 12 this time (one more than the fact-check's 11 — an
+  additional pull request, `zheref/bankai-core#919`, opened between the two
+  runs; `src/shadow/run.ts` enumerates live at run time, by design, rather
+  than against a fixed count).
+- **Result:** `shadow window: 12/12 agree, 0 ready-ness disagreement(s), 0
+  reason-text disagreement(s).`
+
+| Repo | PR | Origin | Oracle | Nen | Ready agree | Reason agree |
+|---|---|---|---|---|---|---|
+| zheref/KroAndroid | #186 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #23 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #21 | open | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/nen | #14 | open | `not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head);tenma (no round at head)` | `not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head);tenma (no round at head)` | yes | yes |
+| zheref/akatsuki-ai | #33 | open | `not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either CI has not started yet, or its run concluded startup_failure and no check will ever attach (bankai-core#671). Tell them apart with: gh run list --branch <head-branch> --limit 5 --json conclusion,path,headSha` | `not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either CI has not started yet, or its run concluded startup_failure and no check will ever attach. Tell them apart with: gh run list --branch <head-branch> --limit 5 --json conclusion,path,headSha` | yes | yes |
+| zheref/bankai-core | #923 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/bankai-core | #919 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/bankai-core | #907 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #909 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #911 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #913 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #916 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+
+Note the row this update exists for: `zheref/akatsuki-ai#33` now agrees on
+BOTH dimensions — the exact PR the fact-check's disagreement was found on,
+now closing clean. This is also the FIRST time this comparison has exercised
+a live, genuinely-empty (not closed-PR-degenerate) checks rollup, which the
+"depth exercised" discussion above (before this update) named as untested;
+that gap is now closed too, incidentally, by the same PR that exposed the
+bug.
+
+**No new disagreement of either kind was introduced by the fix**: all 12
+rows agree, including the four rows this run added or changed relative to
+the 8-candidate run recorded above (`zheref/nen#14`, `zheref/akatsuki-ai#33`,
+`zheref/bankai-core#923`, `zheref/bankai-core#919` — none of which existed as
+open PRs at the time of that earlier run).
+
 ## Rollback position, unchanged
 
 Per zheref/nen#2's own rollback position: the shell gate (`scripts/pr_ready_gate.sh`) remains CON-32's sole

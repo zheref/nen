@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # bootstrap/nen.sh — fetch, checksum-verify and cache the compiled `nen` binary
-# pinned to a tag (zheref/nen#1, Akatsuki migration P1).
+# pinned to a tag (zheref/nen#1).
 #
 # THIS IS THE ONE SHELL FILE THIS REPOSITORY IS ALLOWED TO HAVE. The AK-11
-# successor keeps a near-empty allowlist: only bootstrap-class shell may exist
-# at all (Akatsuki migration §3), and this is that file. The exception is not a
+# rule keeps a near-empty allowlist: only bootstrap-class shell may exist
+# at all, and this is that file. The exception is not a
 # courtesy, it is a bootstrap constraint — this script's entire job is to
 # PRODUCE the `nen` binary, and written in TypeScript it would need that binary
 # (or a bun toolchain) to run, which is precisely the thing a consumer does not
@@ -116,7 +116,7 @@ artifact_for_host() {
 
   # Case patterns, not equality: MSYS2/Git-for-Windows/Cygwin all report a
   # DECORATED kernel name (`MINGW64_NT-10.0-26200`, `CYGWIN_NT-10.0`), and Git
-  # Bash on Windows is a first-class supported host (§10), not an afterthought.
+  # Bash on Windows is a first-class supported host, not an afterthought.
   case "$uname_s" in
     Linux) os="linux" ;;
     Darwin) os="darwin" ;;
@@ -236,8 +236,8 @@ sha256_of() {
     # `${out%% *}` — the digest is the first field; sha256sum's separator is two
     # spaces in text mode and ` *` in binary mode, and both start with a space.
     #
-    # THEN STRIP A LEADING BACKSLASH, and this one is a real §10 (macOS ==
-    # Windows/Git Bash) defect found by test rather than a hypothetical. GNU
+    # THEN STRIP A LEADING BACKSLASH, and this one is a real platform-parity
+    # (macOS == Windows/Git Bash) defect found by test rather than a hypothetical. GNU
     # coreutils uses an "escaped filename" convention: when the name it echoes
     # contains a backslash or a newline, the whole LINE is prefixed with `\` and
     # the name's backslashes are doubled. On Windows/Git Bash a perfectly

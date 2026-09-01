@@ -1,6 +1,5 @@
 # release-assets — attach the three compiled `nen` binaries, and the SHA256SUMS
-# that make them verifiable, to the release for a tag (zheref/nen#1, Akatsuki
-# migration P1).
+# that make them verifiable, to the release for a tag (zheref/nen#1).
 #
 # PORTED from bankai-core's .github/workflows/cli-release-assets.yml. The
 # reasoning below is carried across because it is the deliverable: every rule
