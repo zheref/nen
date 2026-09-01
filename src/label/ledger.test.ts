@@ -5,7 +5,7 @@ const ENTRY: LedgerEntry = {
   object: "XX-PR-#12",
   label: "wake",
   time: "2026-01-01T00:00:00Z",
-  run: true,
+  outcome: "applied",
   reason: null,
 };
 
@@ -25,9 +25,15 @@ describe("ledgerLine / parseLedger", () => {
   });
 
   it("appends in order across multiple calls", () => {
-    const second: LedgerEntry = { ...ENTRY, run: false, reason: "dry run" };
+    const second: LedgerEntry = { ...ENTRY, outcome: "dry-run", reason: "dry run" };
     const text = ledgerLine(ENTRY) + "\n" + ledgerLine(second) + "\n";
     const parsed = parseLedger(text);
-    expect(parsed.entries.map((e): boolean => e.run)).toEqual([true, false]);
+    expect(parsed.entries.map((e): string => e.outcome)).toEqual(["applied", "dry-run"]);
+  });
+
+  it("carries the THIRD outcome, 'failed', for a mutation GitHub refused", () => {
+    const failed: LedgerEntry = { ...ENTRY, outcome: "failed", reason: null };
+    const parsed = parseLedger(ledgerLine(failed) + "\n");
+    expect(parsed.entries).toEqual([failed]);
   });
 });

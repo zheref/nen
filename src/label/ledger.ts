@@ -16,11 +16,21 @@
 // corrupts under a concurrent writer, which two labelling calls in the same
 // tick are.
 //
-// A DRY-RUN STILL WRITES A LEDGER LINE, WITH `run: false`. The decision to
-// label something is worth recording even when nothing was mutated -- it is
-// the difference between "nobody considered labelling this" and "this was
-// weighed and deliberately not applied yet" (CON-38's dry-run-first
-// convention, carried from scripts/sync-labels.sh).
+// A DRY-RUN STILL WRITES A LEDGER LINE, WITH `outcome: "dry-run"`. The
+// decision to label something is worth recording even when nothing was
+// mutated -- it is the difference between "nobody considered labelling this"
+// and "this was weighed and deliberately not applied yet" (CON-38's
+// dry-run-first convention, carried from scripts/sync-labels.sh).
+//
+// `outcome` IS THREE STATES, NOT A BOOLEAN (review finding). The line is
+// appended AFTER the mutation is attempted, never before: this is the
+// after-the-fact record the module's own header above promises, and a ledger
+// that asserted `run: true` before GitHub had even answered was wrong in
+// exactly the case an audit trail exists for -- a 404, a 403, a rate limit,
+// or a PR closed since would exit 1 while the ledger kept a permanent record
+// claiming the label was applied.
+
+export type LedgerOutcome = "dry-run" | "applied" | "failed";
 
 export interface LedgerEntry {
   /** The object token, e.g. `<CODE>-<IS|PR>-#<N>`. */
@@ -28,8 +38,8 @@ export interface LedgerEntry {
   readonly label: string;
   /** ISO-8601. Always the caller's `Seams.now()`, never re-read per line. */
   readonly time: string;
-  /** True iff this call actually mutated GitHub; false for a dry run. */
-  readonly run: boolean;
+  /** What actually happened: never mutated (dry run), mutated, or GitHub refused it. */
+  readonly outcome: LedgerOutcome;
   readonly reason: string | null;
 }
 
@@ -51,7 +61,7 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
     typeof record["object"] === "string" &&
     typeof record["label"] === "string" &&
     typeof record["time"] === "string" &&
-    typeof record["run"] === "boolean" &&
+    (record["outcome"] === "dry-run" || record["outcome"] === "applied" || record["outcome"] === "failed") &&
     (record["reason"] === null || typeof record["reason"] === "string")
   );
 }

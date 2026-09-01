@@ -2,19 +2,16 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs } from "../cli/args.js";
-import { mergeFlags, VerbUsageError } from "../cli/command.js";
-import type { Io } from "../index.js";
-import { RepoRootError } from "../repo/root.js";
+import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
-import { UsageError } from "../cli/args.js";
 import { labelCommand } from "./command.js";
 import { parseLedger } from "./ledger.js";
 
-// Mirrors ../index.ts's own runFamily() error-to-exit-code mapping, so a test
-// calling a family's run() directly (rather than through the whole CLI
-// dispatch) still sees the SAME contract a real invocation would.
+// DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
+// error-to-exit-code mapping (review finding: a hand-copy can silently drift
+// from the real one). This also exercises the real re-parse against
+// `mergeFlags(family.flags)`.
 function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "", stderr: "", spawnFailed: false })): {
   code: number;
   out: string[];
@@ -30,20 +27,13 @@ function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult 
       err.push(line);
     },
   };
-  const args = parseArgs(argv, mergeFlags(labelCommand.flags));
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  try {
-    const code = labelCommand.run({ args, repoFlag: BANKAI_REPO, json: args.booleans.has("json"), io, seams });
-    return { code, out, err };
-  } catch (error) {
-    err.push(error instanceof Error ? error.message : String(error));
-    const code = error instanceof VerbUsageError || error instanceof UsageError || error instanceof RepoRootError ? 2 : 1;
-    return { code, out, err };
-  }
+  const code = runFamily(labelCommand, argv, BANKAI_REPO, false, io, seams);
+  return { code, out, err };
 }
 
 describe("nen label apply", () => {
-  it("is a dry run by default: writes a ledger line with run:false and no gh call", () => {
+  it("is a dry run by default: writes a ledger line with outcome:dry-run and no gh call", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-label-"));
     const ledger = join(dir, "l.jsonl");
     let calls = 0;
@@ -58,10 +48,10 @@ describe("nen label apply", () => {
     expect(calls).toBe(0);
     const parsed = parseLedger(readFileSync(ledger, "utf8"));
     expect(parsed.entries).toHaveLength(1);
-    expect(parsed.entries[0]).toMatchObject({ object: "XX-PR-#12", label: "bankai:stage/idea", run: false });
+    expect(parsed.entries[0]).toMatchObject({ object: "XX-PR-#12", label: "bankai:stage/idea", outcome: "dry-run" });
   });
 
-  it("--run applies the label via gh and logs run:true", () => {
+  it("--run applies the label via gh and logs outcome:applied", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-label-"));
     const ledger = join(dir, "l.jsonl");
     const calls: string[][] = [];
@@ -75,7 +65,23 @@ describe("nen label apply", () => {
     expect(result.code).toBe(0);
     expect(calls).toEqual([["gh", "pr", "edit", "12", "--repo", "o/r", "--add-label", "bankai:stage/idea"]]);
     const parsed = parseLedger(readFileSync(ledger, "utf8"));
-    expect(parsed.entries[0]?.run).toBe(true);
+    expect(parsed.entries[0]?.outcome).toBe("applied");
+  });
+
+  it("a REFUSED mutation logs outcome:failed, never a false 'applied' claim (review finding)", () => {
+    // Reproduces the review's exact scenario: gh refuses the label (404) and
+    // the process must exit non-zero WHILE the ledger records what actually
+    // happened, not what was attempted.
+    const dir = mkdtempSync(join(tmpdir(), "nen-label-"));
+    const ledger = join(dir, "l.jsonl");
+    const result = capture(
+      ["label", "apply", "XX-PR-#12", "--label", "bankai:stage/idea", "--repo-slug", "o/r", "--ledger", ledger, "--run"],
+      (): CommandResult => ({ code: 1, stdout: "", stderr: "HTTP 404: not found", spawnFailed: false }),
+    );
+    expect(result.code).toBe(1);
+    const parsed = parseLedger(readFileSync(ledger, "utf8"));
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0]).toMatchObject({ object: "XX-PR-#12", label: "bankai:stage/idea", outcome: "failed" });
   });
 
   it("refuses a label the target taxonomy does not declare", () => {
