@@ -37,7 +37,11 @@ describe("nen canon resolve -- CLI wiring", () => {
   });
 
   it("exits 1 when the target repo has no recorded scenario", () => {
-    const { context, err } = canonContext({ target: "zheref/nonexistent", "stack-dir": "handbooks/stacks" });
+    const { context, err } = canonContext({
+      target: "zheref/nonexistent",
+      "always-load": "handbooks/uzf-core.md",
+      "stack-dir": "handbooks/stacks",
+    });
     expect(canonVerb.run(context)).toBe(1);
     expect(err.join("\n")).toMatch(/is not a consumer/);
   });
@@ -45,6 +49,25 @@ describe("nen canon resolve -- CLI wiring", () => {
   it("requires --target and --stack-dir", () => {
     expect(canonVerb.run(canonContext({}).context)).toBe(2);
     expect(canonVerb.run(canonContext({ target: "o/n" }).context)).toBe(2);
+  });
+
+  // Review finding #19: --always-load used to be optional and silently
+  // resolved to "(none)" -- indistinguishable from "this repo truly loads
+  // nothing unconditionally".
+  it("requires --always-load", () => {
+    const { context, err } = canonContext({ target: "zheref/KroApple", "stack-dir": "handbooks/stacks" });
+    expect(canonVerb.run(context)).toBe(2);
+    expect(err.join("\n")).toMatch(/--always-load/);
+  });
+
+  it("refuses an empty --always-load rather than silently resolving to '(none)'", () => {
+    const { context, err } = canonContext({
+      target: "zheref/KroApple",
+      "always-load": "",
+      "stack-dir": "handbooks/stacks",
+    });
+    expect(canonVerb.run(context)).toBe(2);
+    expect(err.join("\n")).toMatch(/named no paths/);
   });
 
   it("refuses an unknown subcommand", () => {

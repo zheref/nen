@@ -226,7 +226,25 @@ export function checkMirror(
       continue;
     }
     const existing = readFileSync(join(mirrorDir, filename), "utf8");
-    const match = header.pattern.exec(existing);
+    // ANCHORED AT THE FIRST LINE, DELIBERATELY -- the Python original matches
+    // with `HEADER_RE.match(existing)`, which is anchored at position 0 (and
+    // its own pattern additionally starts with `^`); `RegExp#exec` is
+    // unanchored, so testing it against the WHOLE file would let a header-
+    // shaped line anywhere below the real header -- a quoted example, a
+    // nested code fence, in a file whose actual generated header was deleted
+    // -- match, and the one drift class this check exists to catch (a
+    // removed header) would read as `stale`/`ok` instead of `handEdited`.
+    // Restricting the test to the first line reproduces the original's
+    // anchoring without requiring every caller-supplied --header-pattern to
+    // remember to write its own `^`.
+    const normalized = existing.replace(/\r\n/g, "\n");
+    const firstLineEnd = normalized.indexOf("\n");
+    // Includes the trailing '\n' when present -- a header template's own
+    // pattern (see mirror.test.ts's HEADER) is written to match through the
+    // newline that terminates the header line, and stripping it here would
+    // silently break every caller pattern written that way.
+    const firstLine = firstLineEnd === -1 ? normalized : normalized.slice(0, firstLineEnd + 1);
+    const match = header.pattern.exec(firstLine);
     if (match === null) {
       handEdited.push(filename);
     } else if (match.groups?.["ref"] !== ref) {

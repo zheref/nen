@@ -24,19 +24,48 @@ export interface CanonResolution {
 
 export interface ResolveCanonOptions {
   readonly scenario: string;
-  /** Repo-relative paths, e.g. ["handbooks/uzf-core.md", "handbooks/security-baseline.md"]. Caller data -- see header. */
+  /** Repo-relative paths, e.g. ["handbooks/uzf-core.md", "handbooks/security-baseline.md"]. Caller data -- see header. REQUIRED and never defaulted to empty -- see ResolveCanonResult. */
   readonly alwaysLoad: readonly string[];
   readonly stackDir: string;
   /** Default 'architecture.md'; quality resolution wants a different leaf under the same directory. */
   readonly leaf?: string;
 }
 
-export function resolveCanon(options: ResolveCanonOptions): CanonResolution {
+export type ResolveCanonResult =
+  | { readonly ok: true; readonly value: CanonResolution }
+  | { readonly ok: false; readonly reason: string };
+
+// A path-shaped ("."/".."/empty) segment; used to refuse a scenario the
+// derived stack path would otherwise silently traverse out of --stackDir with.
+const TRAVERSAL_OR_EMPTY = /^$|^\.\.?$|\//;
+
+export function resolveCanon(options: ResolveCanonOptions): ResolveCanonResult {
+  // ALWAYS-LOAD IS REQUIRED, NEVER DEFAULTED TO EMPTY. The module header
+  // states the always-load set is what a repository loads unconditionally
+  // (its security baseline among them) -- "the caller forgot the flag" and
+  // "this repository loads nothing unconditionally" must not produce the
+  // same confident answer, the same way --stack-dir is already required
+  // rather than silently defaulted.
+  if (options.alwaysLoad.length === 0) {
+    return {
+      ok: false,
+      reason: "--always-load named no paths. Omitting it reads as 'this repository loads nothing unconditionally', which is never the actual intent -- pass the repository's own always-load set explicitly.",
+    };
+  }
+  if (TRAVERSAL_OR_EMPTY.test(options.scenario)) {
+    return {
+      ok: false,
+      reason: `scenario '${options.scenario}' is empty or path-shaped ('.', '..', or contains '/') -- the stack handbook path is derived directly from it ('<stackDir>/<scenario>/<leaf>'), so an empty or traversal-shaped scenario would resolve outside --stack-dir instead of refusing.`,
+    };
+  }
   const leaf = options.leaf ?? "architecture.md";
   const stackDir = options.stackDir.replace(/\/+$/, "");
   return {
-    scenario: options.scenario,
-    alwaysLoad: options.alwaysLoad,
-    stackHandbook: `${stackDir}/${options.scenario}/${leaf}`,
+    ok: true,
+    value: {
+      scenario: options.scenario,
+      alwaysLoad: options.alwaysLoad,
+      stackHandbook: `${stackDir}/${options.scenario}/${leaf}`,
+    },
   };
 }

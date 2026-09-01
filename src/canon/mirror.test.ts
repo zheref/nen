@@ -162,6 +162,37 @@ describe("checkMirror -- ok/missing/extra/stale/handEdited", () => {
     expect(report.handEdited).toEqual(["01-a.md"]);
   });
 
+  // Review finding #16: header.pattern.exec was unanchored, so an UNANCHORED
+  // caller pattern (the port dropped the original's implicit ^-anchoring)
+  // would match a header-shaped line ANYWHERE in the file. The category this
+  // actually flips (not just "not ok", but the WRONG not-ok reason a caller
+  // would route differently) is stale vs. handEdited: a hand-written file
+  // that happens to quote an OLD ref somewhere below (a changelog entry, a
+  // worked example) has no real header at all -- correctly HAND_EDITED -- but
+  // an unanchored whole-file search finds that quoted old ref, sees it does
+  // not match --ref, and reports STALE ("just needs regenerating") instead,
+  // which sends a caller who trusts that category to the wrong remediation.
+  it("reports HAND_EDITED, never STALE, when the real header is gone but an OLD-ref-shaped line survives further down, even with an UNANCHORED caller pattern", () => {
+    const { rulesDir, mirrorDir } = setup();
+    // Deliberately unanchored -- no leading ^ -- exactly the caller mistake
+    // the finding describes (--header-pattern has no requirement to anchor).
+    const unanchored: HeaderTemplate = {
+      template: HEADER.template,
+      pattern: /<!-- GENERATED from (?<ref>\S+)\/(?<scenario>[^/]+)\/(?<file>\S+) -- DO NOT EDIT\. -->\n/,
+    };
+    writeFileSync(
+      join(mirrorDir, "01-a.md"),
+      // No generated header on line 1 -- a human wrote this by hand -- but a
+      // header-shaped line quoting an OLD ref (v0.9.0, not the v1 pinned
+      // below) appears further down, e.g. a changelog note.
+      `Hello World, hand-written.\n\nPreviously:\n<!-- GENERATED from v0.9.0/s/01-a.md -- DO NOT EDIT. -->\n`,
+    );
+    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1", "s", unanchored, NOT_MIRRORED);
+    expect(report.handEdited).toEqual(["01-a.md"]);
+    expect(report.stale).toEqual([]);
+    expect(report.ok).toEqual([]);
+  });
+
   it("reports EXTRA for a mirror file with no canon source", () => {
     const { rulesDir, mirrorDir } = setup();
     const generated = generateMirror(rulesDir, { NAME: "World" }, "v1", "s", HEADER, NOT_MIRRORED);

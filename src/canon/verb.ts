@@ -34,7 +34,11 @@ usage:
                     [--leaf architecture.md]
       Always-load + exactly one stack handbook. --always-load is caller data
       (the repository's own canon manifest); the stack path is derived
-      directly from the scenario, never looked up in a table.
+      directly from the scenario, never looked up in a table. --always-load
+      is REQUIRED and refused if it names no paths -- an omitted flag must
+      never read as "this repository loads nothing unconditionally". A
+      resolved scenario that is empty or path-shaped ('.', '..', contains
+      '/') is refused too, since the stack path is built directly from it.
 
   nen canon mirror generate --rules-dir <dir> --canon-values <path>
                             --out-dir <dir> --ref <ref>
@@ -59,7 +63,10 @@ usage:
       template 'generate' used); --header-pattern is a JS regex with named
       groups (?<ref>...) (?<scenario>...) (?<file>...) that reads the ref back
       out of the COMMITTED mirror's own header, to tell 'stale' from
-      'hand-edited'.`;
+      'hand-edited'. --header-pattern is matched against the mirror file's
+      FIRST LINE ONLY (never the whole file) -- you do not need to anchor it
+      with '^' yourself, and a header-shaped line elsewhere in the file (a
+      quoted example, a nested code fence) is never mistaken for the real one.`;
 
 export const canonVerb: Verb = {
   name: "canon",
@@ -102,6 +109,10 @@ function resolve(context: VerbContext): number {
   if (targetRaw === undefined) return usage(context.io, "--target owner/name is required.");
   const stackDir = context.values["stack-dir"];
   if (stackDir === undefined) return usage(context.io, "--stack-dir <dir> is required.");
+  const alwaysLoadRaw = context.values["always-load"];
+  if (alwaysLoadRaw === undefined) {
+    return usage(context.io, "--always-load <path,path,...> is required -- see 'nen canon resolve --help'.");
+  }
 
   let root: string;
   let target;
@@ -120,19 +131,29 @@ function resolve(context: VerbContext): number {
     return 1;
   }
 
-  const resolution = resolveCanon({
+  const alwaysLoad = commaList(alwaysLoadRaw);
+  if (alwaysLoad.length === 0) {
+    return usage(context.io, "--always-load named no paths. Omit it entirely only if you truly mean an empty always-load set is impossible -- this flag has no meaningful empty form.");
+  }
+
+  const result = resolveCanon({
     scenario: scenarioResult.scenario,
-    alwaysLoad: commaList(context.values["always-load"]),
+    alwaysLoad,
     stackDir,
     leaf: context.values["leaf"],
   });
+  if (!result.ok) {
+    context.io.err(`nen: ${result.reason}`);
+    return 1;
+  }
+  const resolution = result.value;
 
   if (context.json) {
     context.io.out(JSON.stringify(resolution, null, 2));
     return 0;
   }
   context.io.out(`scenario: ${resolution.scenario}`);
-  context.io.out(`always load: ${resolution.alwaysLoad.join(", ") || "(none)"}`);
+  context.io.out(`always load: ${resolution.alwaysLoad.join(", ")}`);
   context.io.out(`stack handbook: ${resolution.stackHandbook}`);
   return 0;
 }
