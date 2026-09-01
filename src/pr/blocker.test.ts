@@ -27,7 +27,6 @@ function snapshot(overrides: Partial<PrSnapshot> = {}): PrSnapshot {
     reviews: [],
     reviewRequests: [],
     reviewThreads: [],
-    threadsTruncated: false,
     ...overrides,
   };
 }

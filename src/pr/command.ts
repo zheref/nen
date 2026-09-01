@@ -315,9 +315,10 @@ function printSnapshot(context: CommandContext, snapshot: PrSnapshot): void {
   context.io.out(`  mergeable: ${snapshot.pr.mergeable}  mergeStateStatus: ${snapshot.mergeStateStatus}`);
   context.io.out(`  checks: ${snapshot.checks.length}  reviews: ${snapshot.reviews.length}  review requests: ${snapshot.reviewRequests.length}`);
   const unresolved = snapshot.reviewThreads.filter((thread): boolean => !thread.isResolved).length;
-  context.io.out(
-    `  review threads: ${snapshot.reviewThreads.length} (${unresolved} unresolved)${snapshot.threadsTruncated ? "  WARNING: page was full, more may exist" : ""}`,
-  );
+  // No truncation caveat here: ../pr/fetch.ts's fetchPullRequest() now walks
+  // reviewThreads to completion or throws, so `snapshot.reviewThreads` is
+  // never a partial page by the time this prints (zheref/nen#14's fact-check).
+  context.io.out(`  review threads: ${snapshot.reviewThreads.length} (${unresolved} unresolved)`);
 }
 
 function fetch(context: CommandContext): number {

@@ -433,15 +433,18 @@ Deterministic across three runs of each side.
 
 **Root cause.** `../github/graphql.ts`'s `PULL_REQUEST_QUERY` asked for the
 head commit's status-check contexts with `contexts(first:100)` and never
-paginated — no cursor, no `pageInfo`, no walk. `zheref/bankai-core#927`'s
-rollup has `totalCount` 114 with `hasNextPage: true`, and the ONE failing
-entry (`sasuke / audit`) sits at position 101+, past the cap. `../github/
-pr_state.ts` fed that truncated, all-green-so-far page straight to
-`parseCheckRollup()`, and `checksAllGreen()` has no way to know a context it
-was never shown exists — a fabricated PARTIAL array of all-green entries
-reads as fully green. The oracle has no counterpart blind spot because `gh pr
-view --json statusCheckRollup` paginates this same connection INSIDE gh's own
-client, invisibly to the shell script that reads its output.
+paginated — no cursor, no `pageInfo`, no walk. When observed on 2026-08-31,
+`zheref/bankai-core#927`'s rollup had `totalCount` 114 with `hasNextPage:
+true`, and the ONE failing entry (`sasuke / audit`) sat at position 101+,
+past the cap. (The same PR's rollup is a live figure, not a fixed one:
+re-observed on 2026-09-01 it had grown to `totalCount` 139, with the failing
+entry now at position 131.) `../github/pr_state.ts` fed that truncated,
+all-green-so-far page straight to `parseCheckRollup()`, and `checksAllGreen()`
+has no way to know a context it was never shown exists — a fabricated PARTIAL
+array of all-green entries reads as fully green. The oracle has no
+counterpart blind spot because `gh pr view --json statusCheckRollup`
+paginates this same connection INSIDE gh's own client, invisibly to the shell
+script that reads its output.
 
 **Why this is the SAME class of defect the "Update" section above fixed, not
 a coincidence.** That fix corrected which EMPTY rollups count as readable.
@@ -635,10 +638,15 @@ not) and any other non-boolean GitHub might one day answer — fell through
 the SAME test that a genuine `false` does, and silently ENDED THE WALK,
 returning `ok:true` with whatever had been collected so far. That is the
 identical false-green shape `Update 3` closed, one call earlier: a truncated
-rollup presented as the whole one. Proven live: an independent probe against
-the real exported `fullCheckRollup()`, stubbed with `hasNextPage: undefined`,
-returned `{"ok":true,"count":200}` where a well-formed `hasNextPage: false`
-control returns the complete set. `../github/graphql.ts`'s own comment on
+rollup presented as the whole one. Proven live, against the PRE-FIX code —
+a historical observation, not a result an independent reader can re-derive
+by running this probe at this HEAD, because the fix documented below is what
+changed the answer: an independent probe against the then-exported
+`fullCheckRollup()`, stubbed with `hasNextPage: undefined`, returned
+`{"ok":true,"count":200}` where a well-formed `hasNextPage: false` control
+returned the complete set. The identical probe run against this function
+AFTER the fix below no longer returns that result — it returns `ok:false`
+(unreadable-cursor) instead. `../github/graphql.ts`'s own comment on
 `PullRequestSnapshot.checkRollupPageInfo` already stated the invariant this
 enforces — "an unreadable `hasNextPage` must not become `false` and end the
 walk early" — the code simply did not honor it yet: both the walk
@@ -681,15 +689,27 @@ unparseable `nodes`, page cap, page-one-alone short-circuit), plus the
 `fetchPrState()` wiring and entry-guard tests, all mutation-proven the same
 way. This closes the reasoning gap `Update 3`'s own audit table left open —
 see that section's PAGINATION AUDIT bullet list, now updated in
-`../github/graphql.ts` itself to record the correction. **A re-audit for any
-other capped collection feeding a verdict found none beyond the three
-`Update 3` already enumerated** (`labels(first:100)`, safe by construction —
-`isDeliveryPr()` only ever reads it in an OR-disjunction, so truncation can
-only make the gate MORE conservative; `reviewThreads` — already paginated;
-`reviews`/`timeline` — already `octokit.paginate`d in full): `contexts` and
-`reviewRequests` were the only two `first:N` GraphQL connections a verdict
-depends on reading in full, and both are now paginated to completion with
-matching fail-closed discipline.
+`../github/graphql.ts` itself to record the correction.
+
+**A re-audit's scope, stated precisely (corrected by zheref/nen#14's fifth
+fact-check below — see "Update 5").** This update's re-audit found no other
+capped collection feeding a verdict beyond the three `Update 3` already
+enumerated (`labels(first:100)`, safe by construction — `isDeliveryPr()` only
+ever reads it in an OR-disjunction, so truncation can only make the gate MORE
+conservative; `reviewThreads` — already paginated; `reviews`/`timeline` —
+already `octokit.paginate`d in full): `contexts` and `reviewRequests` were the
+only two `first:N` GraphQL connections **the `nen pr ready` / `fetchPrState()`
+path (`../github/graphql.ts`, `../github/pr_state.ts`) reads that a verdict
+depends on**, and both are now paginated to completion with matching
+fail-closed discipline. **That scope statement, as written at the time, did
+NOT say "the `nen pr ready` path" — it read as repo-wide** ("no other capped
+collection feeding a verdict"), and it was false at that wider scope: a
+SECOND, independent CON-32-predicate composer exists at `../pr/fetch.ts` /
+`../pr/blocker.ts` (the `nen pr next-blocker` verb, a different transport —
+raw `gh api graphql` rather than octokit — reading a different `reviewThreads`
+query than the one audited here), and its own `reviewThreads(first:100)` was
+unpaginated at the time this section was written. See "Update 5" for the fix
+and the corrected, actually repo-wide audit.
 
 **A dangling identifier, fixed.** `Update 3`'s pagination fix renamed
 `../github/graphql.ts`'s `headCommitRollupContexts()` to
@@ -748,6 +768,157 @@ plainly is done. `#925` (138 contexts, spans two pages, `not-ready`) and
 `#923` (118 contexts, spans two pages, all green, `ready`) both agree here
 too — the SAME two PRs the correction in `Update 3` above verifies directly
 by contexts count and page count, agreeing again under the fresh sweep.
+
+## Update 5: a fifth independent fact-check — the SAME false-green defect class in a second, separate verdict composer, plus three documentation-accuracy corrections this section's own text left undone in two prior updates (2026-09-01)
+
+Eight items, all addressed.
+
+**1. `../pr/blocker.ts` (the `nen pr next-blocker` verb, the drive skill's own
+readiness composer) turned out to be a SECOND, independent place the
+`contexts`/`reviewRequests` defect class lived, missed by every prior audit in
+this file because every prior audit scoped itself to `../github/graphql.ts`'s
+`PULL_REQUEST_QUERY` — the `nen pr ready` / `fetchPrState()` path — without
+ever stating that scoping explicitly.** `../pr/blocker.ts` composes the same
+`checksAllGreen`/`pendingRounds`/`defaultReviewers` CON-32 predicates
+(`../gates/predicates.ts`) as `../gates/ready.ts` does, but over an entirely
+different fetch: `../pr/fetch.ts`'s own `reviewThreads(first:100)` GraphQL
+query, read via raw `gh api graphql` rather than octokit, with its own
+`threadsTruncated` flag rather than a walked cursor. That flag was surfaced
+only in the `unresolved-thread` branch's `detail` STRING, and only when page
+one already had an unresolved thread — a PR whose first 100 threads are all
+resolved but whose 101st+ thread is not fell straight through `nextBlocker()`
+to the NEXT conjunct as though zero unresolved threads were a confirmed fact,
+invisible in `--json` (whose `Blocker` shape carries no truncation field at
+all). The exact same false-green shape `Update 3` and `Update 4` closed in
+`../github/graphql.ts`'s `contexts` and `reviewRequests` connections, living
+one file tree over, missed because "re-audited for any other capped
+collection feeding a verdict: none found" in `Update 4` above was true only
+of the path that update actually walked, and did not say so.
+
+**2. Fixed the same way, in the sibling module.** `../pr/fetch.ts`'s
+`REVIEW_THREADS_QUERY` now selects `endCursor` alongside `hasNextPage`, and a
+new `REVIEW_THREADS_PAGE_QUERY` + `fetchAllReviewThreads()` walk every page to
+completion — ONLY the literal boolean `false` for `hasNextPage` ends the walk,
+mirroring `../github/pr_state.ts`'s `fullCheckRollup()`/`fullReviewRequests()`
+discipline exactly. Every failure path — an unreadable `hasNextPage`, a
+`nodes` that will not parse (via `../github/parse.ts`'s `parseReviewThreads`,
+never read by hand), a page with no usable cursor, hitting the
+50-page cap (`MAX_REVIEW_THREAD_PAGES`, matching `src/verbs/pr_ready.ts`'s own
+`MAX_THREAD_PAGES` default) — throws `FetchError`, this module's own
+pre-existing fail-closed contract (every other failure in `fetchPullRequest()`
+already threw the same way; this fix brings review-thread pagination in line
+with it rather than inventing a new failure shape). The now-meaningless
+`threadsTruncated` field (pagination now either completes or throws, so it
+would always read `false`) is removed from `PrSnapshot`, `../pr/blocker.ts`'s
+`detail` string, and `../pr/command.ts`'s human-readable `nen pr fetch`
+output, rather than left as a field that could no longer honestly carry
+information.
+
+**3. Tests, pinned and mutation-proved.** `../pr/fetch.test.ts` adds: a
+page-one-clean/page-two-unresolved case (the exact false-green shape,
+asserting both threads are returned); an unreadable-`hasNextPage`
+(`undefined`) fail-closed case; a `hasNextPage:true`-with-no-cursor
+fail-closed case; and a page-cap case (`maxReviewThreadPages` is now an
+optional, test-injectable parameter on `fetchPullRequest()`, mirroring
+`../github/pr_state.ts`'s own testable `maxRollupPages`). Mutation-proved
+directly: reverting `fetchAllReviewThreads()`'s walk-ending test from
+`page.hasNextPage === false` to `page.hasNextPage !== true` (the shape of the
+`Update 4` bug, transplanted here) makes the unreadable-`hasNextPage` test
+fail red (`expected function to throw an error, but it didn't`); restoring the
+fix turns it green again with no other test affected. Net +3 tests (1305 →
+1308): the old, now-inapplicable "flags a full review-thread page as
+truncated" test is replaced by the four above.
+
+**4. `../pr/fetch.ts`'s remaining unpaginated read, audited and left as a
+named, deliberate gap rather than silently ignored.** `reviewsArgv()`'s REST
+call (`per_page=100`, no `--paginate`) feeds `snapshot.reviews` into the same
+`pendingRounds()` predicate `nextBlocker()` calls — a review round history
+over 100 entries on one PR could in principle be truncated the identical way.
+This is NOT fixed in this pass: the function's own existing comment already
+documents the choice ("a review ROUND count over 100 on one PR is itself the
+finding... `--paginate` output is line-delimited JSON pages rather than one
+array, which this module's single-parse shape does not want to grow a second
+code path for yet"), and unlike `contexts`/`reviewRequests`/`reviewThreads`,
+hitting this cap is at least locally OBSERVABLE (`reviews.length === 100`)
+rather than silently indistinguishable from "no more reviews." Recorded here
+as a genuine residual gap, not swept under the "audited, safe" language the
+`labels(first:100)` case earns structurally — this one is not safe by
+construction, only unlikely and locally detectable, which is a materially
+weaker claim.
+
+**5. The complete, repo-wide audit, stated as such rather than scoped
+silently.** Grepped for `first:100`, `first:`, `per_page=100`, `per_page:
+100`, and `.paginate(` across all of `src/**/*.ts` (excluding tests). Every
+site found: `../github/client.ts`'s `reviews`/`timeline` — already
+`octokit.paginate`d in full; `../github/graphql.ts`'s `labels`,
+`reviewRequests`, `contexts`, `reviewThreads` — all now paginated to
+completion or (`labels`) safe by construction, per `Update 3`/`Update 4`
+above; `../pr/fetch.ts`'s `reviewThreads` — fixed by this update (item 2);
+`../pr/fetch.ts`'s `reviews` — audited, left as a named gap (item 4, above);
+`../wake/command.ts`'s PR list, comments, and workflow-run reads
+(`per_page=100`/`per_page=50`) — explicitly disclosed in that module's own
+header as "under-scanned rather than mis-scanned" by design, and not a
+readiness verdict at all (`nen wake` fires redrives and posts stall comments;
+it never answers ready/not-ready), so out of scope for a "feeds a verdict"
+audit on its own terms. **The corrected, true scope**: two independent
+CON-32-predicate composers exist in this codebase — `../gates/ready.ts` (via
+`../github/pr_state.ts`'s `fetchPrState()`) and `../pr/blocker.ts` (via
+`../pr/fetch.ts`'s `fetchPullRequest()`) — and every capped collection either
+composer reads that a verdict depends on is now either paginated to
+completion with fail-closed discipline, safe by construction, or a named,
+documented residual gap. No claim above generalizes past what this grep
+actually found.
+
+**6. `Update 3`'s own "Root cause" paragraph was still present-tense and
+undated, even though `../github/pr_state.ts`, `../github/graphql.ts` and
+`../verbs/pr_ready.test.ts` had already been corrected to the dated pair of
+readings.** It read "`zheref/bankai-core#927`'s rollup HAS totalCount 114...
+sits at position 101+" with no date and no mention of the 2026-09-01
+re-observation (totalCount 139, position 131) those three other sites already
+carried. Fixed in place above: the paragraph now states both dated readings,
+matching the code comments word for word in substance.
+
+**7. `../github/pr_state.ts`:279 and `../github/graphql.ts`:178 both point
+readers at "`Update 3`'s section for both readings, dated" — a cross-reference
+that did not resolve until item 6 above was fixed, because `Update 3` carried
+only the first, undated reading.** Both citations are now accurate: `Update
+3`'s "Root cause" paragraph carries both the 2026-08-31 and 2026-09-01
+readings, dated. `../github/pr_state.test.ts`:126-128 carried the identical
+present-tense, undated text as a THIRD site none of the previous two
+enumeration passes caught (each enumerated from memory rather than grepping,
+which is exactly how a site gets missed twice); fixed the same way. A repo-wide
+grep for `114`, `101+`, `139`, and `\b101\b` across every `.ts` and `.md` file
+was run to check for any other site (this file's own text above, and this
+correction's, necessarily also match the grep by quoting these same figures —
+a self-reference the grep does not distinguish from a live one, so each hit
+was read by eye rather than trusted by count): every match resolves to one of
+three categories, and none is a fourth, undated, present-tense live figure —
+(a) the now-dated code comments (`../github/pr_state.ts` ×2, `../github/
+graphql.ts`, `../verbs/pr_ready.test.ts`, `../github/pr_state.test.ts`), each
+saying "when observed on" or "re-observed on"; (b) this file's own `Update 3`
+paragraph (now dated, item 6 above) and this item's own prose, both of which
+quote the figures BY NAME to describe the correction, which is what a
+correction that quotes the wrong wording it replaces necessarily does; (c) two
+GENERIC pattern descriptions naming no specific PR at all (`../github/
+client.ts`'s and `../github/pr_state.ts`'s own "a single `first(100)` query
+silently drops threads 101+" header prose, describing the shape of the bug
+class, not `#927`'s own figure).
+
+**8. The `{"ok":true,"count":200}` probe result, reworded as the historical
+observation it is.** `../github/pr_state.ts`'s own comment, this file's
+`Update 4` section above, and this PR's body all stated "Proven live: an
+independent probe... returned `{"ok":true,"count":200}`" without saying that
+result describes the PRE-FIX code — worded so plainly that a reader could try
+to reproduce it by running the same probe against `fullCheckRollup()` at this
+HEAD and get a different answer (`ok:false`, unreadable-cursor) with no
+explanation why. Both this file's `Update 4` section and `../github/
+pr_state.ts`'s own comment now say explicitly that the quoted result is
+pre-fix, historical, and not re-derivable after the fix documented in the same
+paragraph.
+
+Local gate re-run clean after all of the above: `bun run typecheck && bun run
+lint && bun run test` — 116 test files, **1308 tests** (up from 1305 — net
++3, item 3 above), all green. No test deleted or weakened.
 
 ## Rollback position, unchanged
 

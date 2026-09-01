@@ -322,10 +322,15 @@ export async function fullCheckRollup(
     // one day answer (a stray string, a number): both silently ENDED THE WALK
     // and returned `ok:true` with whatever had been collected so far, which is
     // the identical false-green shape `Update 3`'s fix closed one layer down
-    // -- a truncated rollup presented as the whole one. Proven live: an
-    // independent probe against this exported function with a stubbed
-    // `hasNextPage: undefined` returned `{"ok":true,"count":200}` where a
-    // well-formed `hasNextPage: false` control returns the complete set.
+    // -- a truncated rollup presented as the whole one. Proven live, AGAINST
+    // THE PRE-FIX CODE -- a historical observation, not something a reader
+    // can re-derive by running this probe at this HEAD, because the fix right
+    // here is what changed the answer: an independent probe against the
+    // then-exported `fullCheckRollup()` with a stubbed `hasNextPage:
+    // undefined` returned `{"ok":true,"count":200}` where a well-formed
+    // `hasNextPage: false` control returned the complete set. The identical
+    // probe run against this function AFTER the fix below no longer returns
+    // that result -- it returns `ok:false` (unreadable-cursor) instead.
     // ../github/graphql.ts's own comment on `PullRequestSnapshot.
     // checkRollupPageInfo` already stated the invariant this enforces --
     // "an unreadable `hasNextPage` must not become `false` and end the walk

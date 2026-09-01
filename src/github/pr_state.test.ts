@@ -123,11 +123,12 @@ describe("fetchPrState -- divergence 2: an absent/null rollup is refused, not re
 //
 // `contexts(first:100)` alone never paginated: a rollup with more than 100
 // contexts had its 101st-and-beyond entries silently dropped, so a FAILING
-// context past the cap was invisible to checksAllGreen(). #927's rollup has
-// totalCount 114 with hasNextPage true, and the one failing entry
-// ('sasuke / audit') sits at position 101+ -- these tests pin the fix with a
-// SMALLER stubbed rollup spanning two pages, the failure on the second, and
-// prove the fail-closed behaviour on every way a page can go wrong.
+// context past the cap was invisible to checksAllGreen(). When observed on
+// 2026-08-31, #927's rollup had totalCount 114 with hasNextPage true, and the
+// one failing entry ('sasuke / audit') sat at position 101+ -- these tests
+// pin the fix with a SMALLER stubbed rollup spanning two pages, the failure
+// on the second, and prove the fail-closed behaviour on every way a page can
+// go wrong.
 
 function greenEntry(name: string): unknown {
   return { name, status: "COMPLETED", conclusion: "SUCCESS" };

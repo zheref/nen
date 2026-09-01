@@ -99,11 +99,16 @@ export function nextBlocker(
     };
   }
 
+  // snapshot.reviewThreads is now a full, paginated read (../pr/fetch.ts's
+  // fetchAllReviewThreads, zheref/nen#14's fact-check) -- a caveat about a
+  // partial page used to belong here and no longer does, because a fetch
+  // that could not confirm it read every thread throws before nextBlocker()
+  // is ever called, rather than reaching this branch with an incomplete list.
   const unresolved = snapshot.reviewThreads.filter((thread): boolean => !thread.isResolved);
   if (unresolved.length > 0) {
     return {
       kind: "unresolved-thread",
-      detail: `${unresolved.length} unresolved thread(s)${snapshot.threadsTruncated ? " (page was full -- more may exist beyond it)" : ""}`,
+      detail: `${unresolved.length} unresolved thread(s)`,
     };
   }
 
