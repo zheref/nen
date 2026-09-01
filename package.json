@@ -1,6 +1,7 @@
 {
   "name": "nen",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Nen -- the local dev CLI for repository-driven agentic delivery. Taxonomy is read from the target repo as data; nothing here hard-codes a persona, label, check name or colour.",
