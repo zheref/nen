@@ -9,14 +9,18 @@
 // whose output contract is tested by nobody, and the `--json` shape is the half
 // that other programs depend on.
 //
-// P1 SHIPS THE SUPPLY AND DEV VERBS ONLY. `nen --version` and `nen bootstrap`
-// are what zheref/hatsu#1's D10 minimum-version contract needs; `nen dev test`
-// is D16's one-command harness; `nen schema check` exists because "taxonomy
-// behavior demonstrably follows the target repo's schema files" has to be
-// demonstrable from the command line and not only from a test. The readiness,
-// backlog and wake verbs are #2/#3/#4 and are deliberately absent -- an empty
-// verb that printed "not implemented" would be a surface other repositories
-// could start depending on before it means anything.
+// WHAT IS SHIPPED IS EXACTLY THE REGISTRY BELOW, PLUS THE THREE PRE-REGISTRY
+// COMMANDS (bootstrap, schema check, --version) -- there is no separate
+// "P1 ships only X" scope claim to keep in sync with it, because that claim
+// rots the moment a later verb lands and nobody remembers to update the
+// paragraph that named the earlier boundary. `nen --version` and `nen
+// bootstrap` are what zheref/hatsu#1's D10 minimum-version contract needs;
+// `nen dev test` is D16's one-command harness; `nen schema check` exists
+// because "taxonomy behavior demonstrably follows the target repo's schema
+// files" has to be demonstrable from the command line and not only from a
+// test. A verb family not listed in VERBS below does not exist in this
+// checkout yet -- see the registry comment immediately below for why an
+// unimplemented verb is never pre-declared as a stub.
 //
 // EXIT CODES. 0 success, 1 a verb's own failure, 2 a usage error, and whatever
 // the bootstrap script returned for `nen bootstrap` (its codes are a published
