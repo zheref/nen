@@ -21,12 +21,13 @@
       "bounded_policy_exempt": true
     },
     {
-      "$comment": "The check IS the round: it posts a review only when it has findings. The enrolment pattern is ANCHORED and CASE-SENSITIVE on purpose -- a sibling probe job would otherwise enrol the reviewer on every PR.",
+      "$comment": "The check IS the round: it posts a review only when it has findings. The enrolment pattern is ANCHORED and CASE-SENSITIVE on purpose -- a sibling probe job would otherwise enrol the reviewer on every PR. It is not a DEFAULT approver, but it joins the approval set for a PR it has actually posted a review on at head -- the shell's `approvers=\"$approvers,bisky\"` arm.",
       "name": "bisky",
       "login_pattern": { "pattern": "bisky", "ignoreCase": true },
       "review_check_pattern": { "pattern": "^bisky / review$", "ignoreCase": true },
       "round_check_pattern": { "pattern": "^bisky / review$", "ignoreCase": true },
-      "enrolment_check_pattern": { "pattern": "^bisky / review$", "ignoreCase": false }
+      "enrolment_check_pattern": { "pattern": "^bisky / review$", "ignoreCase": false },
+      "approves_when_posted_at_head": true
     },
     {
       "$comment": "Posts under a login carrying either word depending on the installation, and its check name varies with the installation too -- hence an UNANCHORED, case-insensitive substring where bisky's is anchored.",

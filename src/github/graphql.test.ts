@@ -248,6 +248,50 @@ describe("COMPOSITION: a PULL_REQUEST_QUERY response driven to typed models", ()
   });
 });
 
+// --- defaultBranch ------------------------------------------------------------
+//
+// PORT ADDITION (zheref/nen#2's review record, finding 4): zero coverage
+// before this. `defaultBranch` is a SIBLING of `pullRequest` (see
+// PullRequestSnapshot's own doc comment), required non-empty by
+// ../gates/predicates.ts's `isDeliveryPr()`, so a silent regression here
+// disables the whole CON-40 delivery carve-out -- and, like `timeline()`,
+// fails in the direction a `ready`-side check can never catch (the carve-out
+// simply never fires, which only ever makes the gate MORE conservative).
+
+function repositoryWith(fields: Record<string, unknown>): unknown {
+  return { repository: { pullRequest: { number: 1 }, ...fields } };
+}
+
+describe("normalizePullRequestResponse -- defaultBranch", () => {
+  it("lifts repository.defaultBranchRef.name onto the snapshot", () => {
+    const snapshot = normalizePullRequestResponse(queryResponse());
+
+    expect(snapshot.defaultBranch).toBe("main");
+  });
+
+  it("yields undefined, never '', when defaultBranchRef is absent", () => {
+    const snapshot = normalizePullRequestResponse(repositoryWith({}));
+
+    expect(snapshot.defaultBranch).toBeUndefined();
+  });
+
+  it("yields undefined when defaultBranchRef is null", () => {
+    const snapshot = normalizePullRequestResponse(
+      repositoryWith({ defaultBranchRef: null }),
+    );
+
+    expect(snapshot.defaultBranch).toBeUndefined();
+  });
+
+  it("yields undefined when defaultBranchRef.name is present but non-string", () => {
+    const snapshot = normalizePullRequestResponse(
+      repositoryWith({ defaultBranchRef: { name: 42 } }),
+    );
+
+    expect(snapshot.defaultBranch).toBeUndefined();
+  });
+});
+
 // --- connection unwrapping ---------------------------------------------------
 
 function nodeWith(fields: Record<string, unknown>): unknown {

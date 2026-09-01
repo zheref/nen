@@ -253,7 +253,16 @@ export function rollupEntryDetailsUrl(entry: RollupEntry): string | null {
 // truth. So the delivery evidence gets its own narrow, tolerant reader
 // (`deliveryEvidence`) and the predicate its own input type
 // (`DeliveryEvidence`, in ../gates/predicates.ts); PullRequest is deliberately
-// LEFT ALONE and `defaultBranchRef` stays uncarried on the wire.
+// LEFT ALONE.
+//
+// CORRECTION (zheref/nen#2's review record): the sentence this replaced read
+// "`defaultBranchRef` stays uncarried on the wire", which was true when
+// written and is FALSE now. That was this obligation's item 1 (below),
+// answered separately and later than the is_delivery_pr question this note is
+// about -- see the "DISCHARGED" annotation on item 1 for where the field
+// actually travels. PullRequest itself is still untouched; the field was never
+// going to be a field OF it (item 1 says so), only a sibling carried
+// elsewhere.
 //
 // The original text is kept below verbatim, because a discharged obligation that
 // erases the question it answered leaves the next reader unable to check the
@@ -275,6 +284,13 @@ export function rollupEntryDetailsUrl(entry: RollupEntry): string | null {
 //      PullRequest has no `defaultBranch`. The normalizer therefore drops it on
 //      the floor today. #737 must carry it through and add the field; nothing
 //      else needs to change on the wire.
+//      DISCHARGED (../github/graphql.ts, zheref/nen#2). `defaultBranch` is
+//      carried on `PullRequestSnapshot` -- the sibling this paragraph asked
+//      for, never a field of `PullRequest` (that stays exactly as described
+//      two paragraphs up) -- populated by `normalizePullRequestResponse` from
+//      `repository.defaultBranchRef.name`, `undefined` rather than `""` when
+//      absent. ../gates/ready.ts's `deliveryEvidence()` reads it off the
+//      flattened state blob as `state.default_branch`.
 //   2. `headRef` IS REQUIRED HERE, OPTIONAL THERE. parsePullRequest() demands a
 //      non-empty `headRefName`/`head_ref`, whereas the shell documents
 //      `head_ref` as INDIVIDUALLY OPTIONAL and degrades one predicate rather
