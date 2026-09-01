@@ -25,11 +25,42 @@
 // not work" want different reactions from a caller.
 
 import { parseArgs, UsageError } from "./cli/args.js";
+import {
+  allValueFlags,
+  contextFrom,
+  mergeFlags,
+  peekCommand,
+  type Verb,
+} from "./cli/verb.js";
 import { runDevTest } from "./dev/test.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
+
+// --- the verb registry -------------------------------------------------------
+//
+// ONE LINE PER VERB FAMILY, ALPHABETICAL, and that is a merge-conflict
+// mitigation before it is a style rule: three branches add verbs to this file at
+// once, and a one-line insertion into a sorted list is the shape a three-way
+// merge resolves by itself. See ./cli/verb.ts's header.
+//
+// `bootstrap`, `schema`, `version` and `dev test` are deliberately NOT here:
+// they predate the registry, are exercised by tests that pin their exact
+// wording, and moving them would be churn in the one file every sibling branch
+// touches. `dev` itself joins the registry once `dev lint`/`dev replay` exist
+// alongside `dev test` (issue #4's last checkbox); until then the special case
+// below is the whole of `dev`.
+//
+// THIS LIST GROWS ONE LINE AT A TIME AS EACH VERB FAMILY LANDS. It is not
+// pre-declared for verbs that do not exist yet -- a registry entry for a module
+// nobody has written is a build the compiler cannot pass, which is worse than a
+// missing verb: a missing verb fails one invocation, a broken build fails all of
+// them.
+
+import { issueVerb } from "./issue/verb.js";
+
+export const VERBS: readonly Verb[] = [issueVerb];
 
 export interface Io {
   readonly out: (line: string) => void;
@@ -51,8 +82,11 @@ commands:
   schema check              Load and validate the target repository's taxonomy
                             files and report each one's verdict.
 
-  dev test [-- <args>]      Run this repository's own harness (bun + vitest).
-                            A checkout verb: a compiled binary has no harness.
+  <verb> --help             Every other verb documents itself. The registry is
+                            listed under 'verbs:' below.
+
+verbs:
+${VERBS.map((verb): string => `  ${verb.name.padEnd(24)}${verb.summary}`).join("\n")}
 
 global options:
   --repo <path>             The TARGET repository's working-tree root. A PATH,
@@ -70,9 +104,21 @@ const GLOBAL_FLAGS = {
 } as const;
 
 export function run(argv: readonly string[], io: Io): number {
+  // TWO PASSES, because the parser is strict and a verb owns its own flags. The
+  // peek finds the verb name without consuming or validating anything, so the
+  // real parse can be handed that verb's spec and still refuse an undeclared
+  // flag rather than dropping it (./cli/args.ts's whole reason for existing).
+  const peeked = peekCommand(
+    argv,
+    allValueFlags(GLOBAL_FLAGS, VERBS),
+    GLOBAL_FLAGS.aliases,
+  );
+  const verb = VERBS.find((candidate): boolean => candidate.name === peeked);
+  const spec = verb === undefined ? GLOBAL_FLAGS : mergeFlags(GLOBAL_FLAGS, verb.flags);
+
   let parsed;
   try {
-    parsed = parseArgs(argv, GLOBAL_FLAGS);
+    parsed = parseArgs(argv, spec);
   } catch (error) {
     if (error instanceof UsageError) {
       io.err(`${PROGRAM}: ${error.message}`);
@@ -96,7 +142,7 @@ export function run(argv: readonly string[], io: Io): number {
   // command must not leave a usage message sitting in a file the caller will
   // read as output. The exit code already distinguished them; the stream did
   // not.
-  if (parsed.booleans.has("help")) {
+  if (parsed.booleans.has("help") && verb === undefined) {
     io.out(USAGE);
     return 0;
   }
@@ -132,10 +178,21 @@ export function run(argv: readonly string[], io: Io): number {
         }
         return devTest(repoFlag, parsed.passthrough, io);
 
-      default:
+      default: {
+        if (verb !== undefined) {
+          // `nen <verb> --help` is the verb's own block, on stdout, exit 0 --
+          // the same stream/code split the top-level help makes, for the same
+          // reason.
+          if (parsed.booleans.has("help")) {
+            io.out(verb.usage);
+            return 0;
+          }
+          return verb.run(contextFrom(parsed, io));
+        }
         io.err(`${PROGRAM}: unknown command '${command}'.`);
         io.err(`Run '${PROGRAM} --help'.`);
         return 2;
+      }
     }
   } catch (error) {
     // The message is printed WHOLE, always. The schema loaders' messages are
