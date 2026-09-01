@@ -13,14 +13,17 @@ import {
   requireSubcommand,
   requireValue,
   splitIntegerList,
+  VerbUsageError,
   type Command,
   type CommandContext,
 } from "../cli/command.js";
 import { readJsonFile, readTextFile, splitList } from "../cli/inputs.js";
 import { extractChangelogRefs, extractFragmentRefs, extractMergedPrNumbers } from "../changelog/completeness.js";
-import { resolveRepoRoot } from "../repo/root.js";
+import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { GH, GIT, must, outputLines, type CommandResult } from "../seam/exec.js";
 import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflight.js";
+import { resolveReleaseTarget, ResolveTargetError } from "./target.js";
+import { checkSelfEnumeration, SelfCheckError } from "./selfcheck.js";
 
 /**
  * RELEASE_HOLD has THREE states, not two (review finding): `gh` failing to
@@ -64,9 +67,12 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
 }
 
 const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>]
+nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
+nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
 
-Every precondition of the release preflight table, checked and reported
-whole -- never the first failure (getsuga SKILL.md §2).
+preflight:
+  Every precondition of the release preflight table, checked and reported
+  whole -- never the first failure (getsuga SKILL.md §2).
 
   --hold-var <name>         'gh variable get <name>' at --repo-slug. Defaults
                             to RELEASE_HOLD. A gh that cannot be reached
@@ -88,14 +94,26 @@ whole -- never the first failure (getsuga SKILL.md §2).
   --fragment-dir <dir>      Defaults to changelog.d.
   --range, --changelog, --owner-repo  Same contract as
                             'nen changelog completeness'.
-  --tag <vX.Y.Z>            Checked against 'git ls-remote --tags origin'.`;
+  --tag <vX.Y.Z>            Checked against 'git ls-remote --tags origin'.
+
+resolve-target:
+  getsuga §1: resolves the token to a SHA (re-fetching origin/--trunk
+  first) and tests 'git merge-base --is-ancestor <sha> origin/<trunk>' --
+  the load-bearing check that a tag is only ever cut on the trunk. A dirty
+  'checkout' is refused outright: uncommitted work is not in any commit.
+  Exits 1 when the resolved commit is not yet an ancestor.
+
+self-check:
+  getsuga §3: whether a release PR should list itself -- true iff its own
+  merge commit is reachable from --cut-point and not already reachable
+  from --previous-tag. A git-mechanical fact, never a judgement.`;
 
 const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 const DEFAULT_FRAGMENT_DIR = "changelog.d";
 
 export const releaseCommand: Command = {
   name: "release",
-  summary: "Run the whole release preflight table, never stopping at the first failure.",
+  summary: "Preflight table, target resolution, and a release PR's self-enumeration check.",
   usage: USAGE,
   flags: {
     values: [
@@ -108,10 +126,17 @@ export const releaseCommand: Command = {
       "critical-issues",
       "live-chores-from",
       "fragment-dir",
+      "token",
+      "trunk",
+      "pr-merge-sha",
+      "previous-tag",
+      "cut-point",
     ],
   },
   run(context: CommandContext): number {
-    requireSubcommand("release", context.args, ["preflight"]);
+    const subcommand = requireSubcommand("release", context.args, ["preflight", "resolve-target", "self-check"]);
+    if (subcommand === "resolve-target") return resolveTarget(context);
+    if (subcommand === "self-check") return selfCheck(context);
 
     const repoSlug = requireValue(context.args, "repo-slug", "The owner/name to check RELEASE_HOLD and the tag against.");
     const tag = requireValue(context.args, "tag", "The tag being proposed for this cut.");
@@ -170,3 +195,60 @@ export const releaseCommand: Command = {
     return report.ok ? 0 : 1;
   },
 };
+
+function resolveTarget(context: CommandContext): number {
+  const token = context.args.values["token"];
+  if (token === undefined) throw new VerbUsageError("--token <main|last-commit|checkout|hash|branch> is required.");
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  let result;
+  try {
+    result = resolveReleaseTarget(context.seams, root, token, context.args.values["trunk"] ?? "main");
+  } catch (error) {
+    if (error instanceof ResolveTargetError) {
+      context.io.err(`nen: ${error.message}`);
+      return 1;
+    }
+    throw error;
+  }
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+    return result.isAncestorOfTrunk ? 0 : 1;
+  }
+  context.io.out(`${result.token} -> ${result.sha}`);
+  context.io.out(
+    result.isAncestorOfTrunk
+      ? "an ancestor of the trunk -- safe to cut"
+      : "NOT an ancestor of the trunk -- it has to reach the trunk first before it can be tagged",
+  );
+  return result.isAncestorOfTrunk ? 0 : 1;
+}
+
+function selfCheck(context: CommandContext): number {
+  const prMergeSha = context.args.values["pr-merge-sha"];
+  const previousTag = context.args.values["previous-tag"];
+  const cutPoint = context.args.values["cut-point"];
+  if (prMergeSha === undefined || previousTag === undefined || cutPoint === undefined) {
+    throw new VerbUsageError("release self-check takes --pr-merge-sha, --previous-tag and --cut-point.");
+  }
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  let result;
+  try {
+    result = checkSelfEnumeration(context.seams, root, prMergeSha, previousTag, cutPoint);
+  } catch (error) {
+    if (error instanceof SelfCheckError) {
+      context.io.err(`nen: ${error.message}`);
+      return 1;
+    }
+    throw error;
+  }
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+    return 0;
+  }
+  context.io.out(
+    result.shouldListItself
+      ? `#${result.prMergeSha} should list ITSELF -- it falls inside <${result.previousTag}>..<${result.cutPoint}>`
+      : `#${result.prMergeSha} should NOT list itself -- it is outside <${result.previousTag}>..<${result.cutPoint}>`,
+  );
+  return 0;
+}

@@ -1,0 +1,50 @@
+{
+  "script": "dedupe_handbook_questions.sh",
+  "id": "canonical-no-older-open-duplicate",
+  "note": "The no-op path: the only open issue carrying the label IS the new one, so nothing is closed. ONE gh call, and that is the honest whole ledger -- `main` reaches the listing unconditionally and returns before the two writes. Recorded against a synthetic gh stub (no live network, no side effects on a real repository); the shim captures whatever it forwards to, so the argv pinned here is the argv the shell really produced. THE REPO SLUG HERE IS SYNTHETIC (fake/repo) AND MUST STAY THAT WAY. Nothing in this case needs a real repository -- the shim answers every call -- and `bankai dual-run record` spawns the REAL gh with no dry run and no confirmation, so a fixture naming a live repo files real issues, posts real comments and starts real CI the moment someone re-records it (BC-PR-#886 review finding F2).",
+  "recordedAt": "2026-08-30T02:16:52.049Z",
+  "argv": [],
+  "env": {
+    "REPO": "fake/repo",
+    "NUMBER": "300",
+    "TITLE": "Gap: missing rule for X"
+  },
+  "stdin": "",
+  "recorded": {
+    "stdout": "#300 is canonical (no older open duplicate) — no-op.\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "subprocess": [
+    {
+      "bin": "gh",
+      "argv": [
+        "issue",
+        "list",
+        "--repo",
+        "fake/repo",
+        "--label",
+        "bankai:handbook-question",
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title",
+        "-q",
+        ".[] | [(.number|tostring), .title] | @tsv"
+      ],
+      "stdout": "300\tGap: missing rule for X\n",
+      "stderr": "",
+      "exitCode": 0
+    }
+  ],
+  "provenance": {
+    "sourceRepo": "zheref/bankai-core",
+    "sourceTag": "v0.11.3",
+    "sourceSha": "23d53c84a1e5d2f75ceb266f51c387c51ef128cb",
+    "sourcePath": "tests/fixtures/dualrun/dedupe_handbook_questions.sh/canonical-no-older-open-duplicate.json",
+    "importedAt": "2026-08-31",
+    "recordingHostCaveat": "recordedAt, comment URLs/IDs and issue numbers above are the ORIGINAL recording host's synthetic fixture values (a stubbed gh, per the fixture's own note) -- they are fixture-shaped, not reproducible facts, and must never be treated as real GitHub state or replayed against a live repository."
+  }
+}

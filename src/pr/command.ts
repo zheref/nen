@@ -1,4 +1,7 @@
-// src/pr/command.ts -- `nen pr ready`, `nen pr staleness` and `nen pr body-check`.
+// src/pr/command.ts -- `nen pr ready`, `nen pr staleness`, `nen pr body-check`
+// (main), and (verbs/4-remainders, zheref/nen#4) `nen pr fetch`,
+// `nen pr next-blocker`, `nen pr cascade-main`, `nen pr retarget`,
+// `nen pr request-reviews` -- one "pr" family, eight subcommands.
 //
 // THREE SUBCOMMANDS, ONE FAMILY. `nen pr ready` (the CON-32 readiness verdict,
 // zheref/nen#2) is the ELDER of the three: it landed on main first, as a direct
@@ -8,10 +11,14 @@
 // meaning one thing. Its implementation stays in ../verbs/pr_ready.ts unchanged
 // (network transport, gate evaluation, --json contract, review record and all);
 // this file only adapts the registry's CommandContext into the shape
-// prReady() already expects.
+// prReady() already expects. The five FETCH/NEXT-BLOCKER/CASCADE-MAIN/
+// RETARGET/REQUEST-REVIEWS subcommands arrived the same way a wave later
+// (verbs/4-remainders): a second "pr" family, independently registered, is
+// exactly the two-entry-points mistake the paragraph above already refused
+// once, so they join this same family instead of a second one.
 //
 // `run()` RETURNS `number | Promise<number>` (../cli/command.ts) because
-// `ready` reads GitHub over the network and `staleness`/`body-check` do not --
+// `ready` reads GitHub over the network and every other subcommand does not --
 // see ../verbs/pr_ready.ts for why there is no synchronous alternative.
 
 import {
@@ -23,14 +30,46 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { readJsonFile, readTextFile } from "../cli/inputs.js";
-import { resolveRepoRoot } from "../repo/root.js";
+import { commaList } from "../cli/comma.js";
+import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
+import { loadGateIdentities } from "../schema/gates.js";
+import { parseTarget, type Target } from "../github/target.js";
 import { PR_READY_FLAGS, prReady } from "../verbs/pr_ready.js";
 import { checkBody, type BodyRequirement } from "./bodycheck.js";
 import { computeStaleness, type VerifiedWake } from "./staleness.js";
+import { nextBlocker } from "./blocker.js";
+import { cascadeMain } from "./cascade.js";
+import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
+import { retarget } from "./retarget.js";
+import { requestReviews } from "./reviewers.js";
+
+function requireTarget(context: CommandContext): Target {
+  const raw = context.args.values["target"];
+  if (raw === undefined) {
+    throw new Error(
+      "--target owner/name is required. It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.",
+    );
+  }
+  return parseTarget(raw);
+}
+
+function requirePr(context: CommandContext): number {
+  const raw = context.args.values["pr"];
+  const number = Number(raw ?? "");
+  if (raw === undefined || !Number.isInteger(number) || number <= 0) {
+    throw new VerbUsageError("--pr <number> is required.");
+  }
+  return number;
+}
 
 const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--gates <path>] [--token-env <VAR>]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> --requirements-from <path>
+nen pr fetch --target <owner/name> --pr <n>
+nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr]
+nen pr cascade-main --repo <path> [--trunk main]
+nen pr retarget --target <owner/name> --pr <n> --base <branch>
+nen pr request-reviews --target <owner/name> --pr <n> --add-reviewers a,b
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict, the first
@@ -63,7 +102,32 @@ body-check:
   Every requirement is checked; never stops at the first miss.
   --requirements-from <path>  A JSON array of { name, pattern } -- this
                               repository's own template convention, never a
-                              literal shipped here.`;
+                              literal shipped here.
+
+fetch:
+  One typed snapshot: head SHA, mergeability, the check rollup, reviews
+  PER COMMIT, review threads with resolution state, pending review
+  requests.
+
+next-blocker:
+  The FIRST blocking condition, fixed order: conflict -> red required
+  check -> owed reviewer round -> unresolved thread -> missing body
+  requirement ('## How to verify', CON-17). Exits 1 when something blocks,
+  0 when this check finds nothing -- the adversarial confirmation pass
+  stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
+  diff-shaped and not checked here; see ../pr/blocker.ts's header.
+
+cascade-main:
+  Merges (never rebases) the trunk into the current branch and pushes on a
+  clean merge. Reports a conflict rather than resolving it.
+
+retarget:
+  gh pr edit --base, for a stacked PR after its predecessor merges.
+
+request-reviews:
+  gh pr edit --add-reviewer, once per name. Request on the MAINTAINER's
+  user token -- a bot token silently no-ops on this call (S6); this verb
+  cannot enforce which credential ran it, only warn.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -192,7 +256,7 @@ function ready(context: CommandContext): Promise<number> {
 
 export const prCommand: Command = {
   name: "pr",
-  summary: "CON-32 readiness (ready), PR staleness arithmetic, and PR-body requirement checks.",
+  summary: "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews.",
   usage: USAGE,
   flags: {
     values: [
@@ -204,12 +268,144 @@ export const prCommand: Command = {
       "body-from",
       "requirements-from",
       ...PR_READY_FLAGS.values,
+      "target",
+      "pr",
+      "policy",
+      "trunk",
+      "base",
+      "add-reviewers",
     ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans],
+    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr"],
   },
   run(context: CommandContext): number | Promise<number> {
-    const subcommand = requireSubcommand("pr", context.args, ["ready", "staleness", "body-check"]);
-    if (subcommand === "ready") return ready(context);
-    return subcommand === "staleness" ? staleness(context) : bodyCheck(context);
+    const subcommand = requireSubcommand("pr", context.args, [
+      "ready",
+      "staleness",
+      "body-check",
+      "fetch",
+      "next-blocker",
+      "cascade-main",
+      "retarget",
+      "request-reviews",
+    ]);
+    switch (subcommand) {
+      case "ready":
+        return ready(context);
+      case "staleness":
+        return staleness(context);
+      case "body-check":
+        return bodyCheck(context);
+      case "fetch":
+        return fetch(context);
+      case "next-blocker":
+        return blocker(context);
+      case "cascade-main":
+        return cascade(context);
+      case "retarget":
+        return doRetarget(context);
+      default:
+        return doRequestReviews(context);
+    }
   },
 };
+
+function printSnapshot(context: CommandContext, snapshot: PrSnapshot): void {
+  context.io.out(`#${snapshot.pr.number} ${snapshot.title}`);
+  context.io.out(`  ${snapshot.pr.headRef} -> ${snapshot.pr.baseRef}  ${snapshot.pr.headSha}`);
+  context.io.out(`  mergeable: ${snapshot.pr.mergeable}  mergeStateStatus: ${snapshot.mergeStateStatus}`);
+  context.io.out(`  checks: ${snapshot.checks.length}  reviews: ${snapshot.reviews.length}  review requests: ${snapshot.reviewRequests.length}`);
+  const unresolved = snapshot.reviewThreads.filter((thread): boolean => !thread.isResolved).length;
+  context.io.out(
+    `  review threads: ${snapshot.reviewThreads.length} (${unresolved} unresolved)${snapshot.threadsTruncated ? "  WARNING: page was full, more may exist" : ""}`,
+  );
+}
+
+function fetch(context: CommandContext): number {
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  const snapshot = fetchPullRequest(context.seams, target, prNumber);
+  if (context.json) {
+    context.io.out(JSON.stringify(snapshot, null, 2));
+    return 0;
+  }
+  printSnapshot(context, snapshot);
+  return 0;
+}
+
+function blocker(context: CommandContext): number {
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  const reviewersRaw = context.args.values["reviewers"];
+  const reviewers = reviewersRaw === undefined ? undefined : commaList(reviewersRaw);
+  if (reviewersRaw !== undefined && reviewers?.length === 0) {
+    // "" or "," or " , " all comma-split to an empty array. Treating that as
+    // an override (no reviewers, nothing owed) rather than a usage error
+    // would silently retire the owed-reviewer-round conjunct the moment a
+    // caller's script passes an unset variable through --reviewers "$VAR".
+    // Checked before the fetch below, so a bad flag is refused without a
+    // network round trip.
+    throw new VerbUsageError(
+      "--reviewers named no reviewers. Omit the flag to use the repository's declared set; an empty list would silently retire the owed-round check.",
+    );
+  }
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const identities = loadGateIdentities(root);
+  const snapshot = fetchPullRequest(context.seams, target, prNumber);
+  const result = nextBlocker(identities, snapshot, {
+    reviewers,
+    policy: context.args.values["policy"] === "strict" ? "strict" : context.args.values["policy"] === "bounded" ? "bounded" : undefined,
+    deliveryPr: context.args.booleans.has("delivery-pr"),
+  });
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+    return result.kind === "none" ? 0 : 1;
+  }
+  context.io.out(`#${prNumber}: ${result.kind}`);
+  context.io.out(`  ${result.detail}`);
+  return result.kind === "none" ? 0 : 1;
+}
+
+function cascade(context: CommandContext): number {
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main");
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+    return result.error !== null || result.conflicted ? 1 : 0;
+  }
+  for (const line of result.log) context.io.out(line);
+  if (result.error !== null) {
+    context.io.err(`nen: ${result.error}`);
+    return 1;
+  }
+  if (result.conflicted) return 1;
+  return 0;
+}
+
+function doRetarget(context: CommandContext): number {
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  const base = context.args.values["base"];
+  if (base === undefined || base.trim() === "") {
+    throw new VerbUsageError("--base <branch> is required.");
+  }
+  const result = retarget(context.seams, target, prNumber, base);
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+  context.io.out(result.message);
+  return result.ok ? 0 : 1;
+}
+
+function doRequestReviews(context: CommandContext): number {
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  const reviewers = commaList(context.args.values["add-reviewers"]);
+  const result = requestReviews(context.seams, target, prNumber, reviewers);
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+  context.io.out(result.message);
+  return result.ok ? 0 : 1;
+}

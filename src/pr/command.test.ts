@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runFamily, type Io } from "../index.js";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { prCommand } from "./command.js";
 
@@ -20,7 +22,11 @@ const STUB_SEAMS: Seams = {
 
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping (review finding).
-async function capture(argv: readonly string[], repoFlag: string | null): Promise<{ code: number; out: string[]; err: string[] }> {
+async function capture(
+  argv: readonly string[],
+  repoFlag: string | null,
+  seams: Seams = STUB_SEAMS,
+): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -31,7 +37,7 @@ async function capture(argv: readonly string[], repoFlag: string | null): Promis
       err.push(line);
     },
   };
-  const code = await runFamily(prCommand, argv, repoFlag, false, io, STUB_SEAMS);
+  const code = await runFamily(prCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -180,5 +186,88 @@ describe("nen pr body-check", () => {
     expect(result.code).not.toBe(0);
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toMatch(/empty/);
+  });
+});
+
+// --- verbs/4-remainders: fetch, next-blocker, cascade-main, retarget,
+// request-reviews, merged into this same "pr" family alongside main's
+// ready/staleness/body-check (zheref/nen#3, zheref/nen#4). ---
+
+describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI wiring", () => {
+  it("requires --target", async () => {
+    const result = await capture(["pr", "fetch", "--pr", "1"], null);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/--target/);
+  });
+
+  it("requires a valid --pr", async () => {
+    const result = await capture(["pr", "fetch", "--target", "o/n"], null);
+    expect(result.code).toBe(2);
+  });
+
+  // Review finding #7: --reviewers "" (an unset shell variable passed
+  // through) must be refused, not silently read as "no reviewers owed".
+  it("next-blocker refuses an explicitly-empty --reviewers rather than treating it as an override", async () => {
+    // No seams calls are scripted -- the guard must fire before any fetch is
+    // attempted (an unscripted call would throw first otherwise).
+    const result = await capture(
+      ["pr", "next-blocker", "--target", "o/n", "--pr", "1", "--reviewers", ""],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/named no reviewers/);
+  });
+
+  it("next-blocker refuses a --reviewers of only commas/whitespace the same way", async () => {
+    const result = await capture(
+      ["pr", "next-blocker", "--target", "o/n", "--pr", "1", "--reviewers", " , "],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+  });
+
+  it("retarget requires --base", async () => {
+    const result = await capture(["pr", "retarget", "--target", "o/n", "--pr", "1"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+  });
+
+  it("retarget exits 0 on success and calls gh with the right argv", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh pr edit 12 --repo zheref/nen --base release/1.0`, result: {} },
+    ];
+    const result = await capture(
+      ["pr", "retarget", "--target", "zheref/nen", "--pr", "12", "--base", "release/1.0"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/now targets/);
+  });
+
+  it("cascade-main resolves the repo root and reports a conflict as exit 1", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+    ];
+    const result = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(result.code).toBe(1);
+  });
+
+  it("request-reviews adds one --add-reviewer per name", async () => {
+    const script: readonly ScriptedCall[] = [
+      {
+        match: "gh pr edit 9 --repo zheref/nen --add-reviewer copilot --add-reviewer sasuke",
+        result: {},
+      },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "copilot,sasuke"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/requested copilot, sasuke/);
   });
 });

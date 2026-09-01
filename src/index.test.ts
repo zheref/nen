@@ -99,7 +99,12 @@ describe("usage errors are exit 2, distinct from failures", () => {
 
   it("refuses an unknown subcommand", async () => {
     expect((await capture(["schema", "list"])).code).toBe(2);
-    expect((await capture(["dev", "lint"])).code).toBe(2);
+    // NOT 'dev lint' here (main's own version of this test, before this
+    // merge): verbs/4-remainders' ../dev/command.ts registers 'lint' as a
+    // REAL, working subcommand (see ../cli/registry.ts's header), so it is no
+    // longer an example of an unknown one. 'dev bogus' is genuinely unknown
+    // under the union and exercises the same 'unknown subcommand' path.
+    expect((await capture(["dev", "bogus"])).code).toBe(2);
     expect((await capture(["schema"])).code).toBe(2);
   });
 });

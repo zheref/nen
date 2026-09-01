@@ -9,19 +9,19 @@
 // whose output contract is tested by nobody, and the `--json` shape is the half
 // that other programs depend on.
 //
-// THE SUPPLY AND DEV VERBS LIVE HERE; EVERY OTHER FAMILY LIVES IN ./cli/registry.ts.
-// `nen --version` and `nen bootstrap` are what zheref/hatsu#1's D10
-// minimum-version contract needs; `nen dev test` is D16's one-command harness;
-// `nen schema check` exists because "taxonomy behavior demonstrably follows the
-// target repo's schema files" has to be demonstrable from the command line and
-// not only from a test. Those four stay written out below because they predate
-// the registry and their exit codes are pinned by name in tests; everything
-// added since is a Command in the registry, which is what keeps two sessions
-// adding verbs in parallel from colliding on this file. `nen pr ready` (CON-32's
-// readiness verdict, zheref/nen#2) is one such family: it lives in
-// ./pr/command.ts alongside `nen pr staleness` / `nen pr body-check`, as one
-// more subcommand of the SAME registered "pr" family rather than a second
-// competing entry point.
+// THE SUPPLY VERBS LIVE HERE... AND, UNTIL THIS MERGE, SO DID DEV. Two of the
+// original three pre-registry commands stay written out below because they
+// predate ../cli/registry.ts and their exit codes are pinned by name in
+// tests: `nen --version` and `nen bootstrap` are what zheref/hatsu#1's D10
+// minimum-version contract needs; `nen schema check` exists because "taxonomy
+// behavior demonstrably follows the target repo's schema files" has to be
+// demonstrable from the command line and not only from a test. `nen dev test`
+// was the THIRD (D16's one-command harness) until this merge: verbs/4-
+// remainders' own ../dev/command.ts already covers 'test' plus 'lint' and
+// 'replay', so the narrower hard-coded case here was retired in favor of that
+// one registered family -- see ../cli/registry.ts's header for why keeping
+// both would have been the "two entry points for one name" mistake this file
+// otherwise refuses.
 //
 // AN EMPTY VERB IS STILL WORSE THAN A MISSING ONE. A family that printed "not
 // implemented" would be a surface other repositories could start depending on
@@ -53,7 +53,6 @@
 import { parseArgs, UsageError } from "./cli/args.js";
 import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
 import { COMMANDS, findCommand } from "./cli/registry.js";
-import { runDevTest } from "./dev/test.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
@@ -80,9 +79,6 @@ commands:
   schema check              Load and validate the target repository's taxonomy
                             files and report each one's verdict.
 
-  dev test [-- <args>]      Run this repository's own harness (bun + vitest).
-                            A checkout verb: a compiled binary has no harness.
-
 ${COMMANDS.map((command): string => `  ${command.name.padEnd(24)}${command.summary}`).join("\n")}
 
 Run '${PROGRAM} <command> --help' for a family's own verbs and flags.
@@ -96,9 +92,9 @@ global options:
   --version, -v             Print the version and exit.
   --help, -h                Print this and exit.`;
 
-// The flags the FOUR pre-registry commands share. Left as one spec because
-// those four are parsed together, exactly as they always were; a registry family
-// never sees it (see ./cli/command.ts's mergeFlags). A registry family --
+// The flags the TWO pre-registry commands share. Left as one spec because
+// those two are parsed together, exactly as they always were; a registry
+// family never sees it (see ./cli/command.ts's mergeFlags). A registry family --
 // including "pr", whose `ready` subcommand owns its own `--gh-repo` /
 // `--reviewers` / `--approvers` / `--round-policy` / `--exclude-run` / `--gates`
 // / `--token-env` / `--explain` flags -- declares its OWN flags in its own
@@ -214,13 +210,6 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
         }
         return schemaCheck(repoFlag, json, io);
 
-      case "dev":
-        if (subcommand !== "test") {
-          io.err(`${PROGRAM}: unknown 'dev' subcommand '${subcommand ?? "(none)"}'. Try 'dev test'.`);
-          return 2;
-        }
-        return devTest(repoFlag, parsed.passthrough, io);
-
       default:
         io.err(`${PROGRAM}: unknown command '${command}'.`);
         io.err(`Run '${PROGRAM} --help'.`);
@@ -247,8 +236,8 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
 // the globals, then run it.
 //
 // EVERY FAMILY GETS THE SAME ERROR CONTRACT, written once here rather than
-// fifteen times: a UsageError or a VerbUsageError is exit 2, anything else is
-// exit 1, and the message is printed whole because each verb's messages are
+// thirty-two times: a UsageError or a VerbUsageError is exit 2, anything else
+// is exit 1, and the message is printed whole because each verb's messages are
 // written to be actionable on their own.
 //
 // EXPORTED so a family's own test file drives THIS function rather than
@@ -350,12 +339,6 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     );
   }
   return report.ok ? 0 : 1;
-}
-
-function devTest(repoFlag: string | null, passthrough: readonly string[], io: Io): number {
-  const result = runDevTest({ repoFlag, passthrough });
-  if (result.message !== null) io.err(`${PROGRAM}: ${result.message}`);
-  return result.code;
 }
 
 // The one place `process` is touched, and it is three lines. Everything above is
