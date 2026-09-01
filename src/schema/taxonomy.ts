@@ -75,10 +75,12 @@ export interface SchemaCheck {
   /** A one-line summary when ok, the SchemaError's message when not. */
   readonly detail: string;
   /**
-   * Whether a verb that does not use this file can still run. The three
-   * taxonomy files are required for the taxonomy verbs; gates.json is required
-   * only by the readiness verbs, so its absence is reported without failing the
-   * overall check.
+   * Whether this check's failure fails the overall report. The three taxonomy
+   * files are always required. gates.json is required only by the readiness
+   * verbs, so its ABSENCE is reported without failing the report -- but a
+   * gates.json that is present and INVALID is required, because a malformed
+   * file is a defect in this repository's taxonomy rather than a feature it has
+   * not adopted.
    */
   readonly required: boolean;
 }
@@ -105,9 +107,32 @@ function run(
       path,
       ok: false,
       detail: error instanceof SchemaError ? error.message : String(error),
-      required,
+      // ABSENT AND CORRUPT ARE NOT THE SAME FINDING, and conflating them was a
+      // real hole. `required` is what decides whether the overall report fails,
+      // and gates.json is declared optional because only the readiness verbs
+      // need it -- but "optional" was applied to EVERY way it could fail, so a
+      // gates.json with a malformed regex, a missing login_pattern or an
+      // approver naming an undeclared reviewer reported `warn` and let the
+      // report pass. A file that IS there and is WRONG is a defect in this
+      // repository's own taxonomy; only its ABSENCE is the tolerable state the
+      // optional flag was written for.
+      //
+      // ENOENT is the one the loaders phrase as "no such file"; anything else
+      // reaching here got past the read and failed validation.
+      required: required || !isAbsentFileError(error),
     };
   }
+}
+
+// Whether a failure is "the file is not there" as opposed to "the file is
+// there and does not say what it must". `source.ts` turns ENOENT into a
+// SchemaError with a distinctive opening, which is the contract this reads --
+// and `source.test.ts` pins that wording so this cannot drift into treating a
+// corrupt file as an absent one.
+export const ABSENT_FILE_MARKER = "no such file.";
+
+function isAbsentFileError(error: unknown): boolean {
+  return error instanceof SchemaError && error.message.includes(ABSENT_FILE_MARKER);
 }
 
 // Load every schema file and report each one's verdict, never stopping at the
