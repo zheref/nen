@@ -9,16 +9,19 @@
 # commands is a CI job that will one day disagree with them about what passing
 # means.
 #
-# TWO OSes, DELIBERATELY. §10 requires identical behaviour on macOS and
+# THREE OSes, DELIBERATELY. §10 requires identical behaviour on macOS and
 # Windows/Git Bash, and this repository's supply layer is where that stops being
-# free: bootstrap/nen.sh is POSIX shell exercised from vitest through `bash`, and
-# the escaped-filename defect that fix commit records was a Windows-only
-# divergence that a Linux-only matrix would have shipped. ubuntu is the required
-# lane; windows runs the same harness on the host the maintainer actually works
-# on. macOS is deliberately NOT in the matrix yet -- it is the third D19 target
-# and it is worth adding, but a hosted macOS runner is ten times the minutes and
-# nothing in P1 is macOS-specific. Flagged for the reviewer rather than decided
-# silently.
+# free: bootstrap/nen.sh is bash exercised from vitest through `bash`, and the
+# escaped-filename defect an earlier commit records was a Windows-only divergence
+# that a Linux-only matrix would have shipped.
+#
+# macOS was omitted in the first cut on a minutes argument and that was overruled
+# in review, correctly: §10's parity claim is about macOS specifically, and the
+# supply layer is exactly where it can break there. `bootstrap/nen.sh` reaches
+# for `shasum` when `sha256sum` is absent -- which is the macOS case and no other
+# -- and it deliberately avoids bash-4 parameter expansion because macOS ships
+# /bin/bash 3.2. Both of those are claims about a platform nothing in the matrix
+# was running. A parity claim CI does not exercise is a parity claim.
 name: ci
 
 on:
@@ -49,21 +52,21 @@ env:
 jobs:
   check:
     strategy:
-      # A Windows failure and a Linux failure are different findings; running
-      # both to completion says which one it is in a single run.
+      # A Windows failure, a macOS failure and a Linux failure are different
+      # findings; running all three to completion says which it is in one run.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
 
       - name: Install bun (version-pinned)
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
@@ -71,7 +74,7 @@ jobs:
       # dependency tree differs from bun.lock is a pull request whose green
       # checks describe a tree nobody reviewed.
       - name: Install dependencies (frozen lockfile)
-        run: bun install --frozen-lockfile
+        run: bun install --ignore-scripts --frozen-lockfile
 
       - name: Typecheck
         run: bun run typecheck
@@ -86,24 +89,29 @@ jobs:
         run: bun run test
 
       # A skip is invisible in a summary, and the shell coverage is exactly the
-      # part that a Windows-vs-Linux difference lives in. On ubuntu, bash always
-      # exists, so its absence would mean the harness had stopped finding it --
+      # part a cross-platform difference lives in. On ubuntu and macOS, bash
+      # always exists, so a skip would mean the harness had stopped finding it --
       # which would take the whole supply-layer suite with it, quietly.
-      - name: Assert the shell suite actually ran (ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+      #
+      # BOTH POSIX LANES, not just ubuntu. macOS is the platform two of the
+      # script's branches exist FOR (`shasum` when `sha256sum` is absent; no
+      # bash-4 parameter expansion, because /bin/bash there is 3.2), so it is the
+      # lane where a silent skip would hide the most.
+      - name: Assert the shell suite actually ran
+        if: matrix.os != 'windows-latest'
         shell: bash
         run: |
           set -euo pipefail
-          command -v bash >/dev/null || { echo "::error::no bash on the ubuntu runner"; exit 1; }
+          command -v bash >/dev/null || { echo "::error::no bash on ${{ matrix.os }}"; exit 1; }
           # Only the supply suite is re-run, with a machine-readable reporter --
           # it is the one that skips itself, so it is the only one worth paying
           # a second run for.
           bunx vitest run src/supply/bootstrap.test.ts \
             --reporter=json --outputFile=vitest-supply.json >/dev/null
           skipped="$(bun -e 'const r = await Bun.file("vitest-supply.json").json(); console.log(r.numPendingTests ?? 0)')"
-          echo "skipped in the supply suite: ${skipped}"
+          echo "skipped in the supply suite on ${{ matrix.os }}: ${skipped}"
           if [ "${skipped}" != "0" ]; then
-            echo "::error::${skipped} supply test(s) skipped on ubuntu — the shell coverage must never skip here"
+            echo "::error::${skipped} supply test(s) skipped on ${{ matrix.os }} — the shell coverage must never skip here"
             exit 1
           fi
 
@@ -116,17 +124,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
 
       - name: Install bun (version-pinned)
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies (frozen lockfile)
-        run: bun install --frozen-lockfile
+        run: bun install --ignore-scripts --frozen-lockfile
 
       - name: Cross-compile the three release binaries
         run: |

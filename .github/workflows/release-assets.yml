@@ -105,7 +105,7 @@ jobs:
       BUN_VERSION: '1.4.0'
     steps:
       - name: Check out the tagged commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # The expression is spelled out again rather than referencing env.TAG:
           # `with:` is evaluated before the job's `env:` is guaranteed visible in

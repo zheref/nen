@@ -148,6 +148,62 @@ describe("the release pipeline never authors a release decision", () => {
     expect(source).toMatch(/diff -u/);
   });
 
+  it("UPLOADS the manifest, in the same invocation as the binaries", () => {
+    // Deleting `'SHA256SUMS'` from the upload list left every other test green:
+    // the manifest was still written, still checked for integrity and still
+    // checked for completeness -- and then simply not attached, so a consumer
+    // would find three binaries and nothing to verify them against. Every
+    // fail-closed property of bootstrap/nen.sh rests on that fourth asset
+    // existing; without it, "refuse an unverifiable download" becomes "refuse
+    // every download", for every consumer, silently at release time.
+    expect(source).toMatch(/gh release upload[\s\S]*?'SHA256SUMS'/);
+
+    // In ONE invocation, so a release can never advertise checksums for files
+    // that are not attached yet, or binaries with no manifest beside them.
+    const upload = /gh release upload "\$TAG" \\\n([\s\S]*?)--repo/.exec(source)?.[1] ?? "";
+    expect(upload).not.toBe("");
+    for (const artifact of ARTIFACTS) {
+      expect(upload, artifact).toContain(`'${artifact}'`);
+    }
+    expect(upload).toContain("'SHA256SUMS'");
+  });
+
+  it("installs bun from the VERSION-PINNED installer, not a floating one", () => {
+    // `curl … | bash -s "bun-v${BUN_VERSION}"` -> `… | bash` stays green
+    // everywhere else, and the pin is the whole reason the BUN_VERSION comment
+    // exists: `bun build --compile` embeds the runtime, so the compiler version
+    // is an INPUT to the published bytes. A floating installer makes a re-run of
+    // this workflow on the same tag produce different assets the day bun ships a
+    // release -- while the manifest, the integrity check and the completeness
+    // check all still agree with themselves.
+    expect(source).toMatch(/curl -fsSL https:\/\/bun\.sh\/install \| bash -s "bun-v\$\{BUN_VERSION\}"/);
+  });
+});
+
+describe("ci keeps the jobs the release lane depends on having been proved", () => {
+  const source = read(CI);
+
+  it("still cross-compiles all three targets", () => {
+    // The compile job is what makes a release-time build failure impossible to
+    // discover at release time. Deleting a build line, or the job, is otherwise
+    // invisible.
+    expect(source).toMatch(/^ {2}compile:$/m);
+    for (const target of ["build:linux-x64", "build:darwin-arm64", "build:windows-x64"]) {
+      expect(source, target).toContain(`bun run ${target}`);
+    }
+  });
+
+  it("still runs the compiled binary and compares its --version to package.json", () => {
+    expect(source).toMatch(/\.\/dist\/nen-linux-x64 --version/);
+    expect(source).toMatch(/\[ "\$\{printed\}" = "\$\{expected\}" \]/);
+  });
+
+  it("still asserts the shell suite did not skip on the POSIX lanes", () => {
+    expect(source).toMatch(/Assert the shell suite actually ran/);
+    expect(source).toMatch(/if: matrix\.os != 'windows-latest'/);
+    expect(source).toMatch(/must never skip here/);
+  });
+
   it("keeps the permission floor at contents: read with one elevation", () => {
     const release = yaml(RELEASE);
     expect(release["permissions"]).toEqual({ contents: "read" });
@@ -188,12 +244,48 @@ describe("ci runs the same three commands a developer runs", () => {
     expect((on["push"] as Record<string, YamlValue>)["branches"]).toEqual(["main"]);
   });
 
-  it("covers both a POSIX and a Windows host", () => {
+  it("covers all THREE D19 host families, macOS included", () => {
+    // §10's parity claim names macOS specifically, and the supply layer is where
+    // it can break there: bootstrap/nen.sh reaches for `shasum` only when
+    // `sha256sum` is absent (the macOS case and no other), and it avoids bash-4
+    // parameter expansion because /bin/bash on macOS is 3.2. A parity claim CI
+    // does not exercise is a parity claim.
     const jobs = ci["jobs"] as Record<string, YamlValue>;
     const check = jobs["check"] as Record<string, YamlValue>;
     const strategy = check["strategy"] as Record<string, YamlValue>;
     const matrix = strategy["matrix"] as Record<string, YamlValue>;
-    expect(matrix["os"]).toEqual(["ubuntu-latest", "windows-latest"]);
+    expect(matrix["os"]).toEqual(["ubuntu-latest", "macos-latest", "windows-latest"]);
+    // fail-fast off, so one platform's failure does not hide another's.
+    expect(strategy["fail-fast"]).toBe(false);
+  });
+
+  it("pins every third-party action to a commit SHA", () => {
+    // A moving tag is a moving dependency: `@v4` is a pointer somebody else can
+    // repoint, and in the release lane it points at a job holding
+    // `contents: write`. The trailing `# v4` comment is what keeps the pin
+    // legible; the SHA is what makes it a pin.
+    for (const file of [CI, RELEASE]) {
+      const uses = [...read(file).matchAll(/uses:\s*(\S+)/g)].map((m): string => m[1] ?? "");
+      expect(uses.length, file).toBeGreaterThan(0);
+      for (const ref of uses) {
+        expect(ref, `${file}: ${ref}`).toMatch(/@[0-9a-f]{40}$/);
+      }
+    }
+  });
+
+  it("installs dependencies with --ignore-scripts on every lane", () => {
+    // The release lane was hardened and CI was not, which is the wrong way
+    // round for a check that is supposed to PROVE what the release lane ships:
+    // a postinstall script running in CI but not at release time (or the
+    // reverse) means the two are not building the same tree.
+    for (const file of [CI, RELEASE]) {
+      const installs = [...read(file).matchAll(/bun install[^\n]*/g)].map((m): string => m[0]);
+      expect(installs.length, file).toBeGreaterThan(0);
+      for (const line of installs) {
+        expect(line, `${file}: ${line}`).toContain("--ignore-scripts");
+        expect(line, `${file}: ${line}`).toContain("--frozen-lockfile");
+      }
+    }
   });
 
   it("grants nothing above contents: read", () => {
@@ -212,6 +304,22 @@ describe("AK-11: the shell allowlist", () => {
     expect(files.length).toBeGreaterThan(10);
     const shell = files.filter((file): boolean => /\.(sh|bash|zsh)$/.test(file));
     expect(shell).toEqual(["bootstrap/nen.sh"]);
+  });
+
+  it("forces LF endings on the one shell file", () => {
+    // Git for Windows installs with `core.autocrlf=true` by DEFAULT, so without
+    // this rule a Windows clone checks the script out with CRLF and bash reads
+    // the shebang's trailing `\r` as part of the interpreter path:
+    // `/usr/bin/env: 'bash\r': No such file or directory`. That is a total
+    // failure of the ONE file whose job is to run on a machine that has nothing
+    // else, on a platform §10 makes first-class, and it looks like a corrupt
+    // download rather than a checkout setting.
+    const attributes = read(".gitattributes");
+    expect(attributes).toMatch(/^\*\.sh text eol=lf$/m);
+    expect(attributes).toMatch(/^\* text=auto$/m);
+
+    // And the checked-out bytes really are LF, which is what the rule is for.
+    expect(read("bootstrap", "nen.sh")).not.toContain("\r\n");
   });
 
   it("keeps the one shell file executable in the index", () => {
