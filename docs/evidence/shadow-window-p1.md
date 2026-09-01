@@ -272,6 +272,115 @@ the 8-candidate run recorded above (`zheref/nen#14`, `zheref/akatsuki-ai#33`,
 `zheref/bankai-core#923`, `zheref/bankai-core#919` — none of which existed as
 open PRs at the time of that earlier run).
 
+## Update 2: fresh 16-candidate re-run, committed as evidence (zheref/nen#14's finishing pass)
+
+The 12/12 table above (the "Update" section, immediately before this one) was
+itself never re-run after being written — the strongest parity claim in the
+PR (and in `docs/evidence/p1-evidence.md`) had, until this section, no
+committed evidence file behind it. This section closes that gap: a fresh,
+independent run of the exact same harness, committed in full rather than
+described secondhand.
+
+```
+bun src/shadow/run.ts --oracle-repo <bankai-core checkout on main> --repo <this checkout>
+```
+
+- **Run:** 2026-09-01T18:50Z (UTC).
+- **Oracle checkout:** `zheref/bankai-core` @ `main`,
+  `2269fe723e355dc69bf535ab40f22556e4fe4081` — the identical commit every
+  prior run in this file used; working tree clean, confirmed immediately
+  before this run.
+- **`gh`:** authenticated as `zheref`.
+- **Candidates: 16** — one more than the 15 an independent fact-check had
+  found, and four more than the 12/12 run above (`zheref/KroApple#504`,
+  `zheref/bankai-core#930`, `zheref/bankai-core#927`, `zheref/bankai-core#925`
+  are new opens; `src/shadow/run.ts` enumerates every `openPrRepos` target
+  live via `gh pr list --repo <repo> --state open` at run time rather than
+  against a fixed list or count, so the candidate set drifting between runs
+  is expected, not an error — this section reports the number actually
+  observed rather than forcing an earlier run's count).
+- **Result:** `shadow window: 16/16 agree, 0 ready-ness disagreement(s), 0
+  reason-text disagreement(s).` Both dimensions the harness checks — verdict
+  (ready/not-ready/unevaluated) and full reason text — agree on every row:
+  **16/16 on ready-ness, 16/16 on reason text.**
+
+| Repo | PR | Origin | Oracle | Nen | Ready agree | Reason agree |
+|---|---|---|---|---|---|---|
+| zheref/KroApple | #504 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/KroAndroid | #186 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #23 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-scaffold | #21 | open | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/nen | #14 | open | `not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head);tenma (no round at head)` | `not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head);tenma (no round at head)` | yes | yes |
+| zheref/akatsuki-ai | #33 | open | `not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either CI has not started yet, or its run concluded startup_failure and no check will ever attach (bankai-core#671). Tell them apart with: gh run list --branch <head-branch> --limit 5 --json conclusion,path,headSha` | `not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. Either CI has not started yet, or its run concluded startup_failure and no check will ever attach. Tell them apart with: gh run list --branch <head-branch> --limit 5 --json conclusion,path,headSha` | yes | yes |
+| zheref/bankai-core | #930 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/bankai-core | #927 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/bankai-core | #925 | open | `not-ready: required checks reported but are not all green (CON-32a)` | `not-ready: required checks reported but are not all green (CON-32a)` | yes | yes |
+| zheref/bankai-core | #923 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-core | #919 | open | `ready` | `ready` | yes | yes |
+| zheref/bankai-core | #907 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #909 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #911 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #913 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+| zheref/bankai-core | #916 | closed (seeded, issue #2's Scope) | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | `not-ready: mergeable=UNKNOWN (expected MERGEABLE — CON-42/1's added predicate)` | yes | yes |
+
+This is `--out`'s file, unedited, pasted in verbatim (the same
+non-truncating `renderReport` the 8/8 and 12/12 tables above already use).
+
+**The one pre-declared adoption divergence, named and normalized.** Row
+`zheref/akatsuki-ai#33` shows it directly: the oracle's cell carries the
+citation `(bankai-core#671)` at the end of its empty-rollup sentence; nen's
+cell does not. This is `../gates/ready.ts`'s header, ADOPTION DIVERGENCE (3)
+— nen's own `src/taxonomy-purity.test.ts` forbids any shipped `.ts` file from
+naming a system it serves as a code literal, and that citation names one, so
+`src/gates/ready.ts` cannot emit it. `reasonAgrees()` (`src/shadow/run.ts`)
+normalizes this ONE named substring away before comparing — reading
+`targets.json`'s `knownReasonDivergence` field (`" (bankai-core#671)"`)
+rather than hard-coding it — and only after that one, declared, byte-level
+strip does the rest of the two reason strings compare verbatim. The table
+above prints both cells' RAW, un-normalized text (the oracle's with the
+citation, nen's without), by design: the divergence is meant to be visible in
+the record, not hidden by pre-stripping it before the table is written. Every
+other row's reason text (all 15 of them) matches with zero normalization
+applied.
+
+**Reproducing this evidence: a caveat an independent reader will hit.** The
+bare form of the command this table's `akatsuki-ai#33` row exercises —
+
+```
+nen pr ready 33 --gh-repo zheref/akatsuki-ai
+```
+
+— exits 2 with `no reviewer identities` when run from a checkout that has no
+`schemas/gates.json` of its own (this repository's own root does not ship
+one; `src/schema/fixtures/bankai-repo/schemas/gates.json` does, which is why
+this harness's `runNen()` passes `--gates <that path>` explicitly rather than
+relying on the bare form). This is **deliberate design, not a parity
+defect**: `src/gates/ready.ts`'s reviewer-identity resolution never falls
+back to a built-in reviewer set — a binary that guessed the reviewers would
+be judging the target repository against another one's vocabulary and could
+report a false `ready`. The full refusal text, reproduced verbatim from a
+live run against this exact PR:
+
+```
+nen: no reviewer identities. This gate never falls back to a built-in
+reviewer set: a binary that guessed the reviewers would judge this
+repository against another one's and report success. Give it one of:
+--gates <path>, a 'schemas/gates.json' in the target repository (looked for
+at '<this checkout>\schemas\gates.json'), or --reviewers a,b,c.
+```
+
+An independent reader reproducing this table needs one of those three: point
+`--gates` at a reviewer-identity file (the shadow harness's own
+`identityFixture`, `src/schema/fixtures/bankai-repo/schemas/gates.json`,
+works), place a `schemas/gates.json` at the target repository's root, or pass
+`--reviewers a,b,c` directly.
+
+**Net effect on this record.** 16/16 on both dimensions, zero disagreements,
+against the same oracle commit every prior run in this file cites, committed
+here rather than left as an unrepeatable claim in a PR body. This does not
+supersede the 8/8 or 12/12 tables above — both stay, unedited, as the record
+of what each run actually found at the time it was run.
+
 ## Rollback position, unchanged
 
 Per zheref/nen#2's own rollback position: the shell gate (`scripts/pr_ready_gate.sh`) remains CON-32's sole

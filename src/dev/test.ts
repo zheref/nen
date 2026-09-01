@@ -61,7 +61,7 @@ export function runDevTest(options: DevTestOptions = {}): DevTestResult {
     return {
       code: 2,
       message: missing
-        ? "no 'bun' on PATH. The harness is bun + vitest (D16); install bun 1.4.0 or newer."
+        ? "no 'bun' on PATH. The harness is bun + vitest; install bun 1.4.0 or newer."
         : `could not run the harness (${result.error.message}).`,
     };
   }

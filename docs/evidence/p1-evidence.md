@@ -40,9 +40,10 @@ five named closed pull requests 907/909/911/913/916), same verdicts, same
 reason text, `yes`/`yes` on every row for both ready-ness and reason-text
 agreement. Re-running it now rather than re-quoting the table
 `shadow-window-p1.md` already recorded is the point: this confirms the
-equality still holds a few hours later the same day (about nine hours after
-that file's own run), not only at the earlier moment it was written. See
-that file for the full methodology,
+equality still holds a few hours later the same day (about three hours
+fifty-four minutes after that file's own 8/8 table — commit `df70042`,
+2026-09-01T13:33:50Z, to this run's 17:28Z), not only at the earlier moment
+it was written. See that file for the full methodology,
 the two corrections an independent review made to the comparison before this
 result was trustworthy, the depth analysis of what each candidate actually
 exercised, and the residual gap this repeat run inherits unchanged — none of

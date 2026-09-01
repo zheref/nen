@@ -125,7 +125,7 @@ export const stopCommand: Command = {
         : "rung 1 (push notification): NOT fired -- the caller's to have sent, before this renders.",
     );
     lines.push(
-      "rungs 2-3 (OS notification, audible cue): not fired by nen -- D16 permits only git/gh subprocesses.",
+      "rungs 2-3 (OS notification, audible cue): not fired by nen -- only git/gh subprocesses are ever shelled out to.",
     );
     lines.push("see the table below. No banner above => nothing needs you right now.");
 
