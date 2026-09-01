@@ -30,7 +30,7 @@ import {
   type FileRequest,
 } from "./file.js";
 import { consolidateClose, attachSub, planConsolidation } from "./subissue.js";
-import { chainPosition, terminus } from "./chain.js";
+import { chainPosition, parseRoleMap, terminus } from "./chain.js";
 
 export function commaList(value: string | undefined): readonly string[] {
   if (value === undefined) return [];
@@ -82,15 +82,27 @@ usage:
       an id, not a number) before writing.
 
   nen issue consolidate-close --target <owner/name> --parent <n>
-                              --children 1,2 --repo <path> [--dry-run]
+                              --children 1,2 --repo <path>
+                              [--dry-run] [--allow-open-pr]
       The whole choreography in its load-bearing order: file (already done by
       the caller) -> attach -> close, with the label union and severity maximum
-      computed and reported.
+      computed and reported. Runs the SAME open-PR guard 'open-pr-check' does
+      over every child that would be closed FIRST, and refuses the whole
+      close (listing the blocking PRs) when any of them has one -- an issue
+      with an open PR is never quietly closed, because closing it orphans
+      work already in flight. --allow-open-pr overrides the refusal.
 
   nen issue chain-position --target <owner/name> --issue <n> [--repo <path>]
+                           [--chain-labels role=label,...]
   nen issue terminus --target <owner/name> --issue <n>
+                     [--chain-labels role=label,...]
+                     [--integration-prefix <prefix>] [--trunk main]
       Where an issue sits on its delivery chain, and which object is the
-      terminus that ends the run.`;
+      terminus that ends the run. --chain-labels roles: idea, researched,
+      approved-team, approved-direct, building, in-review, epic, chore. An
+      unparseable --chain-labels entry (no '=', an unknown role, an empty
+      label) exits 2 rather than being silently dropped. Exits 1 when the
+      answer is 'undecidable' -- that is a refusal, not a result; 0 otherwise.`;
 
 export const issueVerb: Verb = {
   name: "issue",
@@ -117,7 +129,7 @@ export const issueVerb: Verb = {
       "integration-prefix",
       "trunk",
     ],
-    booleans: ["dry-run"],
+    booleans: ["dry-run", "allow-open-pr"],
   },
   run(context: VerbContext): number {
     return runIssue(context, defaultRunner);
@@ -347,9 +359,32 @@ function consolidate(context: VerbContext, runner: Runner): number {
   const taxonomy = loadLabelTaxonomy(root);
   const severityFamily = context.values["severity-family"] ?? "";
   const plan = planConsolidation(runner, target, parent, children, taxonomy, severityFamily);
+
+  // THE SAME GUARD 'open-pr-check' RUNS, applied to exactly the children this
+  // plan would close -- see ./file.ts's header: "an issue with an OPEN PR is
+  // never quietly closed, because closing it orphans work already in
+  // flight." Without this, consolidate-close's own close loop had no PR
+  // check at all, even though the guard already existed one verb over.
+  const allowOpenPr = context.booleans.has("allow-open-pr");
+  const openPrs = openPrCheck(runner, target, plan.toClose);
+  const blocked = openPrs.findings.filter((finding): boolean => finding.blocked);
+  if (blocked.length > 0 && !allowOpenPr) {
+    if (context.json) {
+      context.io.out(JSON.stringify({ plan, openPrs, refused: true }, null, 2));
+      return 1;
+    }
+    context.io.err("nen: refusing to close -- the following children have an open PR in flight (pass --allow-open-pr to override):");
+    for (const finding of blocked) {
+      for (const pr of finding.pullRequests) {
+        context.io.err(`  #${finding.issue}: blocked by #${pr.number} ${pr.title} (${pr.url})`);
+      }
+    }
+    return 1;
+  }
+
   const report = consolidateClose(runner, target, plan, context.booleans.has("dry-run"));
   if (context.json) {
-    context.io.out(JSON.stringify({ plan, report }, null, 2));
+    context.io.out(JSON.stringify({ plan, openPrs, report }, null, 2));
     return report.failed.length === 0 ? 0 : 1;
   }
   for (const line of report.log) context.io.out(line);
@@ -366,14 +401,22 @@ function position(context: VerbContext, runner: Runner): number {
   if (!Number.isInteger(issue) || issue <= 0) {
     return usage(context.io, "chain-position takes --issue <n>.");
   }
-  const result = chainPosition(runner, target, issue, commaList(context.values["chain-labels"]));
+  const parsed = parseRoleMap(commaList(context.values["chain-labels"]));
+  if (parsed.errors.length > 0) {
+    for (const message of parsed.errors) context.io.err(`nen: --chain-labels: ${message}`);
+    return 2;
+  }
+  const result = chainPosition(runner, target, issue, parsed.map);
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
-    return 0;
+    return result.position === "undecidable" ? 1 : 0;
   }
   context.io.out(`#${issue}: ${result.position}`);
   for (const reason of result.evidence) context.io.out(`  ${reason}`);
-  return 0;
+  // "undecidable" is a refusal, not an answer -- a shell caller (`if nen
+  // issue chain-position ...; then`) or a CI step must see that in the exit
+  // code, not just in the printed text.
+  return result.position === "undecidable" ? 1 : 0;
 }
 
 function chainTerminus(context: VerbContext, runner: Runner): number {
@@ -382,19 +425,25 @@ function chainTerminus(context: VerbContext, runner: Runner): number {
   if (!Number.isInteger(issue) || issue <= 0) {
     return usage(context.io, "terminus takes --issue <n>.");
   }
+  const parsed = parseRoleMap(commaList(context.values["chain-labels"]));
+  if (parsed.errors.length > 0) {
+    for (const message of parsed.errors) context.io.err(`nen: --chain-labels: ${message}`);
+    return 2;
+  }
   const result = terminus(
     runner,
     target,
     issue,
-    commaList(context.values["chain-labels"]),
+    parsed.map,
     context.values["integration-prefix"] ?? null,
     context.values["trunk"] ?? "main",
   );
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
-    return 0;
+    return result.kind === "undecidable" ? 1 : 0;
   }
   context.io.out(`terminus: ${result.kind}`);
   for (const reason of result.evidence) context.io.out(`  ${reason}`);
-  return 0;
+  // Same discipline as chain-position above: "undecidable" is a refusal.
+  return result.kind === "undecidable" ? 1 : 0;
 }

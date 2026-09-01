@@ -55,22 +55,46 @@ export const CHAIN_ROLES: readonly ChainRole[] = [
 
 export type RoleMap = ReadonlyMap<ChainRole, readonly string[]>;
 
+export interface RoleMapParseResult {
+  readonly map: RoleMap;
+  /**
+   * Every entry that could not be parsed: no '=', an unknown role name, or
+   * an empty label. `--chain-labels buildng=stage/building` (a typo) used to
+   * be silently dropped, indistinguishable from the flag never being passed
+   * at all -- this list is what makes it loud instead.
+   */
+  readonly errors: readonly string[];
+}
+
 // `role=label` pairs. A role may be given more than once -- two mode labels for
 // one role is a legitimate taxonomy -- so the values accumulate rather than
-// overwrite.
-export function parseRoleMap(entries: readonly string[]): RoleMap {
+// overwrite. TOTAL: every entry that does not parse is reported in `errors`
+// rather than silently dropped -- see RoleMapParseResult.
+export function parseRoleMap(entries: readonly string[]): RoleMapParseResult {
   const map = new Map<ChainRole, string[]>();
+  const errors: string[] = [];
   for (const entry of entries) {
     const index = entry.indexOf("=");
-    if (index === -1) continue;
-    const role = entry.slice(0, index).trim() as ChainRole;
+    if (index === -1) {
+      errors.push(`'${entry}' has no '=' -- expected 'role=label'.`);
+      continue;
+    }
+    const roleRaw = entry.slice(0, index).trim();
     const label = entry.slice(index + 1).trim();
-    if (!CHAIN_ROLES.includes(role) || label === "") continue;
+    if (!CHAIN_ROLES.includes(roleRaw as ChainRole)) {
+      errors.push(`'${entry}' names an unknown role '${roleRaw}' -- expected one of ${CHAIN_ROLES.join(", ")}.`);
+      continue;
+    }
+    if (label === "") {
+      errors.push(`'${entry}' has an empty label.`);
+      continue;
+    }
+    const role = roleRaw as ChainRole;
     const existing = map.get(role);
     if (existing === undefined) map.set(role, [label]);
     else existing.push(label);
   }
-  return map;
+  return { map, errors };
 }
 
 function carries(issue: IssueSummary, map: RoleMap, role: ChainRole): string | null {
@@ -132,9 +156,19 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
     return { issue: issue.number, position: "epic-awaiting-approval", evidence, unmappedRoles: unmapped };
   }
 
-  if (unmapped.length === CHAIN_ROLES.length) {
+  // Every OTHER position above returns as soon as a role it depends on is
+  // FOUND on the issue -- but falling through to here proves nothing on its
+  // own when the role that would have caught this issue earlier was never
+  // mapped at all. "carries no epic label" and "epic was never mapped, so
+  // this issue's epic label (if any) was never checked" read identically to
+  // `carries()`, and only one of them is actually "routable". A role left
+  // unmapped is reported as unmapped, never guessed past -- the module's own
+  // header rule, applied to the LAST branch as much as the first three.
+  const criticalForRoutable: readonly ChainRole[] = ["building", "in-review", "idea", "epic"];
+  const unmappedCritical = criticalForRoutable.filter((role): boolean => (map.get(role) ?? []).length === 0);
+  if (unmappedCritical.length > 0) {
     evidence.push(
-      "no chain roles were mapped, so no reading is available. Supply --chain-labels role=label; guessing which label means 'building' is how a run releases work twice.",
+      `role(s) ${unmappedCritical.join(", ")} were never mapped, so 'routable' cannot be told apart from 'building'/'in-review'/'idea'/'epic' for this issue -- a run that reads a building issue as routable releases it twice. Supply --chain-labels for each; guessing which label means 'building' is exactly what this check exists to refuse.`,
     );
     return { issue: issue.number, position: "undecidable", evidence, unmappedRoles: unmapped };
   }
@@ -143,13 +177,11 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
   return { issue: issue.number, position: "routable", evidence, unmappedRoles: unmapped };
 }
 
-export function chainPosition(
-  runner: Runner,
-  target: Target,
-  issue: number,
-  roleEntries: readonly string[],
-): ChainPositionResult {
-  return classifyChainPosition(readIssue(runner, target, issue), parseRoleMap(roleEntries));
+// Takes an already-parsed RoleMap, not raw --chain-labels entries -- parsing
+// is a CLI-boundary concern (parseRoleMap's `errors` need a place to be
+// reported and exited on, which is ../issue/verb.ts, not this wrapper).
+export function chainPosition(runner: Runner, target: Target, issue: number, map: RoleMap): ChainPositionResult {
+  return classifyChainPosition(readIssue(runner, target, issue), map);
 }
 
 // --- terminus ----------------------------------------------------------------
@@ -265,18 +297,14 @@ export function classifyTerminus(
   };
 }
 
+// Takes an already-parsed RoleMap -- see chainPosition's comment above.
 export function terminus(
   runner: Runner,
   target: Target,
   issue: number,
-  roleEntries: readonly string[],
+  map: RoleMap,
   integrationPrefix: string | null = null,
   trunk = "main",
 ): TerminusResult {
-  return classifyTerminus(
-    readIssue(runner, target, issue),
-    parseRoleMap(roleEntries),
-    integrationPrefix,
-    trunk,
-  );
+  return classifyTerminus(readIssue(runner, target, issue), map, integrationPrefix, trunk);
 }
