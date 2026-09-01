@@ -34,6 +34,21 @@ describe("nen dev replay -- CLI wiring", () => {
     expect(devVerb.run(context)).toBe(0);
     expect(out.join("\n")).toMatch(/replayed \d+ fixture/);
   });
+
+  // Review finding #9: an empty --slice-dir used to exit 0 with "0 passed, 0 failed".
+  it("exits 1 and refuses (never 0/0-pass) when --slice-dir is empty", () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), "nen-dev-replay-empty-"));
+    const { context, err } = makeContext({ args: ["replay"], values: { "slice-dir": emptyDir } });
+    expect(devVerb.run(context)).toBe(1);
+    expect(err.join("\n")).toMatch(/contains no fixtures/);
+  });
+
+  it("exits 2 with a located message (not a raw stack trace) when --slice-dir does not exist", () => {
+    const missing = join(tmpdir(), "nen-dev-replay-missing-" + Date.now());
+    const { context, err } = makeContext({ args: ["replay"], values: { "slice-dir": missing } });
+    expect(devVerb.run(context)).toBe(2);
+    expect(err.join("\n")).toMatch(/no such directory/);
+  });
 });
 
 describe("nen dev test/lint -- CLI wiring refuses a checkout-less directory", () => {

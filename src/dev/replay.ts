@@ -86,7 +86,22 @@ export function parseDedupeFixture(raw: unknown, id: string): DedupeFixture {
 }
 
 export function loadDedupeFixtures(sliceDir: string): readonly DedupeFixture[] {
-  return readdirSync(sliceDir)
+  let names: readonly string[];
+  try {
+    names = readdirSync(sliceDir);
+  } catch (error) {
+    // A MISSING DIRECTORY GETS A LOCATED, ACTIONABLE REFUSAL, not node's raw
+    // ENOENT -- the same discipline ../dev/test.ts applies to "no
+    // package.json here".
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new ReplayFixtureError(
+        `no such directory '${sliceDir}'. 'nen dev replay' replays the imported corpus slice against nen's own logic -- point --slice-dir at a real one (default: tests/fixtures/dualrun-slice/dedupe under the repo root).`,
+      );
+    }
+    throw error;
+  }
+  return names
     .filter((name): boolean => name.endsWith(".json"))
     .sort()
     .map((name): DedupeFixture => {
@@ -112,13 +127,29 @@ export interface ReplayReport {
   readonly total: number;
   readonly passed: readonly string[];
   readonly failed: readonly ReplayOutcome[];
+  /** Set when the slice itself is unusable (empty) -- see below. Never set alongside a non-empty total. */
+  readonly error: string | null;
 }
 
 export function replayDedupeSlice(sliceDir: string): ReplayReport {
-  const outcomes = loadDedupeFixtures(sliceDir).map(replayDedupeFixture);
+  const fixtures = loadDedupeFixtures(sliceDir);
+  if (fixtures.length === 0) {
+    // A ZERO-FIXTURE SLICE IS NOT A GREEN REGRESSION RUN. An empty directory
+    // (or one --slice-dir pointed at by mistake) reported "0 passed, 0
+    // failed" with exit 0 before this guard -- satisfiable by exactly the
+    // evidence this verb exists to produce, with none of it actually run.
+    return {
+      total: 0,
+      passed: [],
+      failed: [],
+      error: `${sliceDir} contains no fixtures. A replay of nothing is not a green regression run -- check --slice-dir.`,
+    };
+  }
+  const outcomes = fixtures.map(replayDedupeFixture);
   return {
     total: outcomes.length,
     passed: outcomes.filter((o): boolean => o.ok).map((o): string => o.id),
     failed: outcomes.filter((o): boolean => !o.ok),
+    error: null,
   };
 }

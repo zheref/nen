@@ -6,7 +6,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { usage, type Verb, type VerbContext } from "../cli/verb.js";
 import { runDevTest } from "./test.js";
 import { runDevLint } from "./lint.js";
-import { replayDedupeSlice } from "./replay.js";
+import { replayDedupeSlice, ReplayFixtureError } from "./replay.js";
 
 const USAGE = `nen dev -- this repository's own harness: test, lint, and the corpus-slice replay.
 
@@ -21,7 +21,9 @@ usage:
       dedupe_handbook_questions.sh. See tests/fixtures/dualrun-slice/
       MANIFEST.json for exactly which fixtures were imported and why every
       excluded one has no nen equivalent to replay against. Exits 1 on any
-      fixture whose verdict disagrees with nen's own.
+      fixture whose verdict disagrees with nen's own, and ALSO exits 1 (never
+      a silent 0/0 pass) when --slice-dir names an existing but empty
+      directory. Exits 2 when --slice-dir does not exist at all.
 
 Each of these is a DEV verb: it runs this checkout's own tooling and needs a
 checkout to run it in -- a compiled binary has no harness, no linter and no
@@ -56,11 +58,27 @@ export const devVerb: Verb = {
 function replay(context: VerbContext): number {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const sliceDir = context.values["slice-dir"] ?? join(root, "tests", "fixtures", "dualrun-slice", "dedupe");
-  const report = replayDedupeSlice(sliceDir);
+  let report;
+  try {
+    report = replayDedupeSlice(sliceDir);
+  } catch (error) {
+    // A missing --slice-dir is a checkout/usage problem, the same class dev
+    // test/lint report as code 2 for "no package.json here" -- not a failed
+    // regression run (which is code 1, below).
+    if (error instanceof ReplayFixtureError) {
+      context.io.err(`nen: ${error.message}`);
+      return 2;
+    }
+    throw error;
+  }
 
   if (context.json) {
     context.io.out(JSON.stringify(report, null, 2));
-    return report.failed.length === 0 ? 0 : 1;
+    return report.error !== null || report.failed.length > 0 ? 1 : 0;
+  }
+  if (report.error !== null) {
+    context.io.err(`nen: ${report.error}`);
+    return 1;
   }
   context.io.out(`replayed ${report.total} fixture(s): ${report.passed.length} passed, ${report.failed.length} failed`);
   for (const failure of report.failed) {

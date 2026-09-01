@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseDedupeFixture,
@@ -16,11 +18,28 @@ describe("replayDedupeSlice -- the imported corpus slice replays green", () => {
     expect(report.total).toBeGreaterThan(0);
     expect(report.failed).toEqual([]);
     expect(report.passed.length).toBe(report.total);
+    expect(report.error).toBeNull();
   });
 
   it("includes the ASCII-only-lowercase fixture that found the normalizeTitle divergence", () => {
     const report = replayDedupeSlice(SLICE_DIR);
     expect(report.passed).toContain("non-ascii-uppercase-survives-the-lowercaser");
+  });
+
+  // Review finding #9: a zero-fixture slice used to report "0 passed, 0
+  // failed" with an implicit pass -- satisfiable by an empty or
+  // wrongly-pointed directory.
+  it("refuses (error set, not a silent 0/0 pass) when --slice-dir is empty", () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), "nen-replay-empty-"));
+    const report = replayDedupeSlice(emptyDir);
+    expect(report.total).toBe(0);
+    expect(report.error).toMatch(/contains no fixtures/);
+  });
+
+  it("throws a located, actionable error (not a raw ENOENT) when --slice-dir does not exist", () => {
+    const missing = join(tmpdir(), "nen-replay-does-not-exist-" + Date.now());
+    expect(() => replayDedupeSlice(missing)).toThrow(ReplayFixtureError);
+    expect(() => replayDedupeSlice(missing)).toThrow(/no such directory/);
   });
 });
 
