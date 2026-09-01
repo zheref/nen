@@ -232,7 +232,15 @@ export function run(argv: readonly string[], io: Io, seams: Seams = defaultSeams
 // fifteen times: a UsageError or a VerbUsageError is exit 2, anything else is
 // exit 1, and the message is printed whole because each verb's messages are
 // written to be actionable on their own.
-function runFamily(
+//
+// EXPORTED so a family's own test file drives THIS function rather than
+// hand-copying its error-to-exit-code mapping into a local `capture()`
+// helper (review finding: several test files did exactly that, and a
+// hand-copy can drift from the real mapping silently). Calling this directly
+// also exercises the real two-stage re-parse (`mergeFlags`) and the real
+// `--repo`/`--json` merge across the two stages, neither of which a test that
+// only calls `family.run(...)` touches at all.
+export function runFamily(
   family: Command,
   argv: readonly string[],
   headRepo: string | null,

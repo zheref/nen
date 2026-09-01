@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Io } from "./index.js";
 import { ALT_REPO, BANKAI_REPO } from "./schema/fixtures/paths.js";
+import type { CommandResult, Seams } from "./seam/exec.js";
 import { VERSION } from "./version.js";
 
 function capture(argv: readonly string[]): { code: number; out: string[]; err: string[] } {
@@ -18,6 +19,24 @@ function capture(argv: readonly string[]): { code: number; out: string[]; err: s
     },
   };
   return { code: run(argv, io), out, err };
+}
+
+function captureWithSeams(
+  argv: readonly string[],
+  runFn: Seams["run"],
+): { code: number; out: string[]; err: string[] } {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: Io = {
+    out: (line): void => {
+      out.push(line);
+    },
+    err: (line): void => {
+      err.push(line);
+    },
+  };
+  const seams: Seams = { run: runFn, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
+  return { code: run(argv, io, seams), out, err };
 }
 
 describe("nen --version", () => {
@@ -179,5 +198,95 @@ describe("usage goes to the right stream (review finding)", () => {
     expect(result.code).toBe(2);
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toMatch(/usage: nen/);
+  });
+});
+
+// THE REGISTRY DISPATCH LAYER, DRIVEN END TO END (review finding, BLOCKER):
+// the commit that wired all fifteen verb families into the registry and
+// two-stage dispatch shipped with zero tests covering that wiring -- every
+// family test file called `family.run(...)` directly and hand-copied
+// `runFamily`'s error-to-exit-code mapping into its own local `capture()`
+// helper. These tests drive the REAL top-level `run()` -- findCommand, the
+// stage-one/stage-two re-parse (`mergeFlags`), a family's own `--help`, the
+// `--repo`/`--json` merge across both stages, and the
+// UsageError/VerbUsageError/RepoRootError/ToolError exit-code mapping -- for
+// one error class each, using the `label` family (it exercises a taxonomy
+// lookup, a `gh` mutation, and a ref parse in one small surface).
+describe("registry family dispatch, through the real run() (review finding)", () => {
+  const VALID_LABEL = "bankai:stage/idea"; // declared in the bankai-repo fixture's schemas/labels.json
+
+  function neverCalled(): CommandResult {
+    throw new Error("must not be called");
+  }
+
+  it("a successful verb: exit 0, with output, via findCommand -> mergeFlags re-parse -> family.run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-dispatch-"));
+    const ledger = join(dir, "l.jsonl");
+    const result = captureWithSeams(
+      ["label", "apply", "XX-PR-#12", "--label", VALID_LABEL, "--repo-slug", "o/r", "--repo", BANKAI_REPO, "--ledger", ledger],
+      neverCalled, // dry run (no --run): the gh seam must never be reached
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/dry run/);
+    expect(result.out.join("\n")).toMatch(/would apply/);
+  });
+
+  it("an unknown subcommand is a VerbUsageError -> exit 2, with 'Run --help' guidance", () => {
+    const result = captureWithSeams(["label", "frobnicate", "--repo", BANKAI_REPO], neverCalled);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/unknown 'label' subcommand 'frobnicate'/);
+    expect(result.err.join("\n")).toMatch(/Run 'nen label --help'/);
+  });
+
+  it("a ToolError from a failed gh call -> exit 1, not 2", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-dispatch-"));
+    const ledger = join(dir, "l.jsonl");
+    const result = captureWithSeams(
+      ["label", "apply", "XX-PR-#12", "--label", VALID_LABEL, "--repo-slug", "o/r", "--repo", BANKAI_REPO, "--ledger", ledger, "--run"],
+      (): CommandResult => ({ code: 1, stdout: "", stderr: "HTTP 404: not found", spawnFailed: false }),
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/HTTP 404/);
+  });
+
+  it("a malformed --repo (an owner/name slug, not a path) is a RepoRootError -> exit 2", () => {
+    const result = captureWithSeams(
+      ["label", "apply", "XX-PR-#12", "--label", VALID_LABEL, "--repo-slug", "o/r", "--repo", "zheref/bankai-core"],
+      neverCalled,
+    );
+    expect(result.code).toBe(2);
+  });
+
+  it("'nen <family> --help' answers from the family's own usage, on stdout, exit 0", () => {
+    const result = captureWithSeams(["label", "--help"], neverCalled);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/nen label apply/);
+    expect(result.err).toEqual([]);
+  });
+
+  it("--repo and --json are the SAME invocation whether given before or after the family name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-dispatch-"));
+    const ledgerBefore = join(dir, "before.jsonl");
+    const ledgerAfter = join(dir, "after.jsonl");
+
+    const before = captureWithSeams(
+      ["--repo", BANKAI_REPO, "--json", "label", "apply", "XX-PR-#12", "--label", VALID_LABEL, "--repo-slug", "o/r", "--ledger", ledgerBefore],
+      neverCalled,
+    );
+    const after = captureWithSeams(
+      ["label", "apply", "XX-PR-#12", "--label", VALID_LABEL, "--repo-slug", "o/r", "--ledger", ledgerAfter, "--repo", BANKAI_REPO, "--json"],
+      neverCalled,
+    );
+
+    expect(before.code).toBe(0);
+    expect(after.code).toBe(0);
+    const beforeParsed: unknown = JSON.parse(before.out.join("\n"));
+    const afterParsed: unknown = JSON.parse(after.out.join("\n"));
+    // Same shape from both orderings; the ledger PATH differs only because
+    // this test pointed each at a different temp file.
+    expect(beforeParsed).toMatchObject({ entry: { object: "XX-PR-#12", label: VALID_LABEL, outcome: "dry-run" } });
+    expect(afterParsed).toMatchObject({ entry: { object: "XX-PR-#12", label: VALID_LABEL, outcome: "dry-run" } });
+    expect(readFileSync(ledgerBefore, "utf8")).not.toEqual("");
+    expect(readFileSync(ledgerAfter, "utf8")).not.toEqual("");
   });
 });
