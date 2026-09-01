@@ -58,9 +58,10 @@ import { PROGRAM, VERSION } from "./version.js";
 // missing verb: a missing verb fails one invocation, a broken build fails all of
 // them.
 
+import { epicVerb } from "./epic/verb.js";
 import { issueVerb } from "./issue/verb.js";
 
-export const VERBS: readonly Verb[] = [issueVerb];
+export const VERBS: readonly Verb[] = [epicVerb, issueVerb];
 
 export interface Io {
   readonly out: (line: string) => void;
