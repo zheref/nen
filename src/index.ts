@@ -61,9 +61,10 @@ import { PROGRAM, VERSION } from "./version.js";
 import { epicVerb } from "./epic/verb.js";
 import { issueVerb } from "./issue/verb.js";
 import { loopVerb } from "./loop/verb.js";
+import { parseVerb } from "./parse/verb.js";
 import { prVerb } from "./pr/verb.js";
 
-export const VERBS: readonly Verb[] = [epicVerb, issueVerb, loopVerb, prVerb];
+export const VERBS: readonly Verb[] = [epicVerb, issueVerb, loopVerb, parseVerb, prVerb];
 
 export interface Io {
   readonly out: (line: string) => void;
