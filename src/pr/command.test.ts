@@ -75,6 +75,19 @@ describe("nen pr ready (registry wiring onto ../verbs/pr_ready.ts)", () => {
     expect(result.out.join("\n")).toMatch(/nen pr body-check/);
   });
 
+  // zheref/nen#26(a): the help never mentioned the no-# shorthand at all --
+  // the only place it surfaced was the refusal thrown at an unparseable ref.
+  it("'nen pr --help' documents the no-# shorthand and its longest-trailing-digits rule", async () => {
+    const result = await capture(["pr", "--help"], null);
+    expect(result.code).toBe(0);
+    const help = result.out.join("\n");
+    expect(help).toMatch(/The '#' may be\s+omitted/);
+    expect(help).toMatch(/LONGEST trailing digit run/);
+    // The precedence rule for digit-ending codes rides along: the '#'-present
+    // form is named as the unambiguous spelling.
+    expect(help).toMatch(/<CODE>#<N> is the unambiguous form/);
+  });
+
   // MUTATION-PROVEN CASE for ./command.ts's `ready()` fold of `context.json`
   // into the boolean set handed to prReady(): a `--json` typed BEFORE the
   // family name never reaches `context.args.booleans` (it is stage-one's

@@ -76,7 +76,11 @@ ready:
   failing conjunct, nothing else. Read-only -- it never labels, merges or
   comments.
   <ref>                       <CODE>#<N> via the target repo's product codes,
-                              or a bare <N> with --gh-repo.
+                              or a bare <N> with --gh-repo. The '#' may be
+                              omitted (AB123 = AB#123); the shorthand reads the
+                              LONGEST trailing digit run as the number, so a
+                              code that itself ends in a digit needs the '#' --
+                              <CODE>#<N> is the unambiguous form.
   --gh-repo <owner/name>      The repository, when the ref is a bare number.
   --explain                   The conjunct table, in evaluation order, plus
                               what the gate does NOT decide.
