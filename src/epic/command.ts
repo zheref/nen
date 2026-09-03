@@ -13,7 +13,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
-import { coordinate, DuplicateChildIdError } from "./waves.js";
+import { coordinate, DuplicateChildIdError, UnparsableChecklistError } from "./waves.js";
 
 const USAGE = `nen epic next-wave -- flip a completed child, redraw progress, compute the next wave.
 
@@ -31,12 +31,20 @@ usage:
   --cap         how many children may be in flight at once. Default 3.
   --out         write the rewritten body here. Omit to compute without writing.
 
-Prints {"total","done","release"} on stdout with --json, or a short report
-otherwise. A child is released only when EVERY declared blocker is a known,
-checked child of this parent -- an unknown id never clears the gate. Exits 1
-(never writing --out) when the same child id appears more than once in the
-checklist -- a duplicate is an authoring error this coordinator refuses to
-guess past rather than silently pick a tie-break for.`;
+A child line is any '- [ ]' / '- [x]' checkbox, at any indent, that references
+its issue ANYWHERE on the line: a bare '#123', a '[#123](url)' markdown link,
+or a link to an '/issues/123' URL under any link text. The FIRST reference on
+the line identifies the child ('blocked by #N' / 'blocks #N' clauses are
+edges, never identity). A checkbox with NO resolvable reference is counted
+into "unparsed" and reported loudly, never silently skipped.
+
+Prints {"total","done","release","unparsed"} on stdout with --json, or a short
+report otherwise. A child is released only when EVERY declared blocker is a
+known, checked child of this parent -- an unknown id never clears the gate.
+Exits 1 (never writing --out) when the same child id appears more than once in
+the checklist -- a duplicate is an authoring error this coordinator refuses to
+guess past -- or when the body has checkbox lines but NONE resolves to a
+child: an all-unreadable checklist must not report itself as an empty one.`;
 
 export const epicCommand: Command = {
   name: "epic",
@@ -88,7 +96,10 @@ export const epicCommand: Command = {
     try {
       result = coordinate(body, completed, inflight, cap, citation);
     } catch (error) {
-      if (error instanceof DuplicateChildIdError) {
+      // Both refusals are DATA errors, not usage errors (exit 1, not 2), and
+      // both happen before --out is written: a body the coordinator could not
+      // read unambiguously must never be rewritten by it.
+      if (error instanceof DuplicateChildIdError || error instanceof UnparsableChecklistError) {
         context.io.err(`nen: ${error.message}`);
         return 1;
       }
@@ -99,11 +110,26 @@ export const epicCommand: Command = {
       writeFileSync(out, result.body, "utf8");
     }
 
+    // Unresolvable checkboxes are warned about on stderr in BOTH modes -- in
+    // --json they are also machine-readable as the summary's "unparsed" array,
+    // but stderr is where a human watching a pipeline actually looks, and #51
+    // was precisely a correct-looking result whose caveat had no channel.
+    for (const skipped of result.summary.unparsed) {
+      context.io.err(
+        `nen: warning: line ${skipped.line} is a checkbox with no resolvable child reference -- NOT counted: ${skipped.text}`,
+      );
+    }
+
     if (context.json) {
       context.io.out(JSON.stringify(result.summary));
       return 0;
     }
     context.io.out(`children: ${result.summary.done}/${result.summary.total} done`);
+    if (result.summary.unparsed.length > 0) {
+      context.io.out(
+        `WARNING: ${result.summary.unparsed.length} checkbox line(s) had no resolvable child reference and were not counted (see stderr; a child names its issue as '#123', '[#123](url)', or an '/issues/123' link).`,
+      );
+    }
     if (result.summary.release.length === 0) {
       context.io.out("next wave: nothing releasable -- every unchecked child is blocked, in flight, or the cap is full");
     }
