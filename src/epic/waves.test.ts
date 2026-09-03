@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { coordinate, DuplicateChildIdError, parseChildren, renderProgress, roundHalfEven } from "./waves.js";
+import {
+  coordinate,
+  DuplicateChildIdError,
+  parseChildren,
+  renderProgress,
+  roundHalfEven,
+  UnparsableChecklistError,
+} from "./waves.js";
 
 describe("roundHalfEven -- banker's rounding, to match Python's round()", () => {
   it("rounds a half down to the even neighbour", () => {
@@ -20,7 +27,7 @@ describe("parseChildren -- checklist line parsing", () => {
   it("reads mark, number, blocked-by, blocks and owner", () => {
     const [child] = parseChildren([
       "- [x] #12 **[alice]** blocked by #1, #2 blocks #9",
-    ]);
+    ]).children;
     expect(child).toMatchObject({
       num: 12,
       checked: true,
@@ -30,13 +37,91 @@ describe("parseChildren -- checklist line parsing", () => {
     });
   });
 
-  it("ignores a non-checklist line", () => {
-    expect(parseChildren(["just some text", "- [ ] not a number"])).toEqual([]);
+  it("ignores a non-checklist line entirely, but SURFACES a checkbox with no reference", () => {
+    // #51: `- [ ] not a number` is checkbox-shaped, so it must not vanish --
+    // it lands in `unparsed` with a 1-based line number a human can open.
+    const result = parseChildren(["just some text", "- [ ] not a number"]);
+    expect(result.children).toEqual([]);
+    expect(result.unparsed).toEqual([{ line: 2, text: "- [ ] not a number" }]);
   });
 
   it("defaults an unowned, unblocked child", () => {
-    const [child] = parseChildren(["- [ ] #3 a plain child"]);
+    const [child] = parseChildren(["- [ ] #3 a plain child"]).children;
     expect(child).toMatchObject({ num: 3, checked: false, blockedBy: [], blocks: [], owner: null });
+  });
+
+  // ---- zheref/nen#51: real-world checklist shapes the literal parser missed.
+
+  it("parses the issue's trailing-reference form: '- [ ] Phase 0a — #101'", () => {
+    const { children, unparsed } = parseChildren([
+      "- [ ] Phase 0a — #101",
+      "- [x] Phase 0b — #102",
+    ]);
+    expect(unparsed).toEqual([]);
+    expect(children.map((c): [number, boolean] => [c.num, c.checked])).toEqual([
+      [101, false],
+      [102, true],
+    ]);
+  });
+
+  it("parses a markdown link whose TEXT names the issue: '- [ ] **Child 1** [#570](url)'", () => {
+    const { children, unparsed } = parseChildren([
+      "- [ ] **Child 1** [#570](https://github.com/o/r/issues/570)",
+    ]);
+    expect(unparsed).toEqual([]);
+    expect(children[0]).toMatchObject({ num: 570, checked: false });
+  });
+
+  it("parses a markdown link whose URL is an /issues/N path under unrelated link text", () => {
+    const { children } = parseChildren([
+      "- [x] **Child 2** [the auth leg](https://github.com/o/r/issues/571)",
+    ]);
+    expect(children[0]).toMatchObject({ num: 571, checked: true });
+  });
+
+  it("resolves an /issues/N URL even with a fragment or query after the number", () => {
+    const { children } = parseChildren([
+      "- [ ] [seed](https://github.com/o/r/issues/42#issuecomment-1)",
+    ]);
+    expect(children[0]).toMatchObject({ num: 42 });
+  });
+
+  it("still parses the original literal form, and still honours indentation", () => {
+    const { children, unparsed } = parseChildren([
+      "- [ ] #1 **[alice]**",
+      "  - [ ] #2 nested child",
+      "\t- [x] Phase — #3",
+    ]);
+    expect(unparsed).toEqual([]);
+    expect(children.map((c): number => c.num)).toEqual([1, 2, 3]);
+  });
+
+  it("takes the FIRST reference on the line when several appear", () => {
+    const { children } = parseChildren([
+      "- [ ] #5 supersedes #9",
+      "- [ ] [older](https://github.com/o/r/issues/570) then also #9",
+    ]);
+    expect(children.map((c): number => c.num)).toEqual([5, 570]);
+  });
+
+  it("never reads a 'blocked by'/'blocks' edge as the line's own identity", () => {
+    // A checkbox whose ONLY references are dependency edges has no identity of
+    // its own; claiming to BE #1 would shadow the real child #1.
+    const { children, unparsed } = parseChildren([
+      "- [ ] mystery work blocked by #1",
+      "- [ ] #2 blocked by #1",
+    ]);
+    expect(children.map((c): number => c.num)).toEqual([2]);
+    expect(unparsed).toEqual([{ line: 1, text: "- [ ] mystery work blocked by #1" }]);
+  });
+
+  it("does not read an HTML entity ('&#8212;') or a non-issue URL fragment as a reference", () => {
+    const { children, unparsed } = parseChildren([
+      "- [ ] Phase 0a &#8212; cleanup",
+      "- [ ] [note](https://example.com/page#123)",
+    ]);
+    expect(children).toEqual([]);
+    expect(unparsed.map((entry): number => entry.line)).toEqual([1, 2]);
   });
 });
 
@@ -138,5 +223,60 @@ describe("coordinate -- the full choreography", () => {
   it("does not refuse when every id is unique, even with several children", () => {
     const fine = ["- [ ] #1", "- [ ] #2", "- [ ] #3"].join("\n");
     expect(() => coordinate(fine, null, new Set(), 3, "UZF-1")).not.toThrow();
+  });
+
+  // ---- zheref/nen#51: the issue's own reproduction, end to end.
+
+  it("computes the wave for the trailing-reference body that used to read {total:0, done:0}", () => {
+    const trailing = ["## Children", "", "- [ ] Phase 0a — #101", "- [x] Phase 0b — #102"].join("\n");
+    const result = coordinate(trailing, null, new Set(), 3, "CON-9");
+    expect(result.summary).toMatchObject({ total: 2, done: 1 });
+    expect(result.summary.release.map((r): number => r.child)).toEqual([101]);
+    expect(result.summary.unparsed).toEqual([]);
+  });
+
+  it("flips a trailing-reference or markdown-link line by mark only, preserving the author's text verbatim", () => {
+    // The `## Children` heading matters: the progress rewriter replaces from
+    // `## Progress` to the NEXT `## ` heading, so a checklist that follows the
+    // prepended progress block needs one to survive a second pass.
+    const body51 = [
+      "## Children",
+      "",
+      "- [ ] Phase 0a — #101",
+      "- [ ] **Child 1** [#570](https://github.com/o/r/issues/570)",
+    ].join("\n");
+    const first = coordinate(body51, 101, new Set(), 3, "UZF-1");
+    expect(first.body).toContain("- [x] Phase 0a — #101");
+    const second = coordinate(first.body, 570, new Set(), 3, "UZF-1");
+    expect(second.body).toContain("- [x] **Child 1** [#570](https://github.com/o/r/issues/570)");
+    expect(second.summary).toMatchObject({ total: 2, done: 2 });
+  });
+
+  it("carries unresolvable checkboxes into the summary instead of dropping them", () => {
+    const mixed = ["- [ ] #1", "- [ ] write the docs"].join("\n");
+    const result = coordinate(mixed, null, new Set(), 3, "UZF-1");
+    expect(result.summary).toMatchObject({ total: 1, done: 0 });
+    expect(result.summary.unparsed).toEqual([{ line: 2, text: "- [ ] write the docs" }]);
+  });
+
+  it("refuses (UnparsableChecklistError) a body whose checkboxes are ALL unresolvable, naming the lines", () => {
+    // {total:0, done:0} from a body full of checkboxes would be the silent
+    // wrong result #51 is about -- indistinguishable from a truly empty epic.
+    const opaque = ["- [ ] first thing", "- [x] second thing"].join("\n");
+    try {
+      coordinate(opaque, null, new Set(), 3, "UZF-1");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnparsableChecklistError);
+      expect((error as UnparsableChecklistError).unparsed.map((entry): number => entry.line)).toEqual([1, 2]);
+      expect((error as Error).message).toMatch(/none carries a resolvable child reference/);
+      expect((error as Error).message).toMatch(/'#123'/);
+    }
+  });
+
+  it("does NOT refuse a body with no checkboxes at all -- genuinely empty stays {total:0, done:0, unparsed:[]}", () => {
+    const result = coordinate("just prose, no checklist", null, new Set(), 3, "UZF-1");
+    expect(result.summary).toMatchObject({ total: 0, done: 0 });
+    expect(result.summary.unparsed).toEqual([]);
   });
 });
