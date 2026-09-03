@@ -134,6 +134,99 @@ describe("nen issue -- CLI wiring", () => {
     expect(result.code).toBe(0);
   });
 
+  // Issue #22: omitting --severity-family made planConsolidation's reduction
+  // branch unreachable, so every child's severity label silently unioned onto
+  // the parent -- the exact multi-severity state the mechanism exists to
+  // prevent, on a mutating verb, with exit 0.
+  it("consolidate-close refuses (exit 1) when --severity-family is omitted and severity labels would union, and never reaches the PR guard, attach or close", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5,6"],
+      [
+        {
+          match: "gh api repos/o/n/issues/5",
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [{ name: "bankai:severity/high" }] }) },
+        },
+        {
+          match: "gh api repos/o/n/issues/6",
+          result: { stdout: JSON.stringify({ number: 6, id: 66, title: "b", state: "open", labels: [{ name: "bankai:severity/medium" }] }) },
+        },
+        // Deliberately NOT scripting the pr list, attach or close calls -- the
+        // refusal must fire before all of them, and ScriptedSeams throws on the
+        // first unscripted call if it does not.
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(1);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/--severity-family/);
+    expect(err).toMatch(/bankai:severity: bankai:severity\/high, bankai:severity\/medium/);
+  });
+
+  it("consolidate-close with an explicit --severity-family reduces to the single strongest label and proceeds", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5,6", "--severity-family", "bankai:severity"],
+      [
+        {
+          match: "gh api repos/o/n/issues/5",
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [{ name: "bankai:severity/high" }] }) },
+        },
+        {
+          match: "gh api repos/o/n/issues/6",
+          result: { stdout: JSON.stringify({ number: 6, id: 66, title: "b", state: "open", labels: [{ name: "bankai:severity/medium" }] }) },
+        },
+        {
+          match:
+            "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+          result: { stdout: "[]" },
+        },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=55", result: {} },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=66", result: {} },
+        { match: "gh issue close 5 --repo o/n --comment Consolidated into #1.", result: {} },
+        { match: "gh issue close 6 --repo o/n --comment Consolidated into #1.", result: {} },
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/severity: bankai:severity\/high \(set by #5\)/);
+    expect(out).not.toMatch(/label union:.*severity/);
+  });
+
+  it("consolidate-close still works without --severity-family when no family's labels would collide", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5,6"],
+      [
+        {
+          match: "gh api repos/o/n/issues/5",
+          // ONE severity-family label in total across the children: the union
+          // carries it once, which is what a reduction would produce anyway.
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [{ name: "bankai:severity/high" }] }) },
+        },
+        {
+          match: "gh api repos/o/n/issues/6",
+          result: { stdout: JSON.stringify({ number: 6, id: 66, title: "b", state: "open", labels: [{ name: "bankai:epic" }] }) },
+        },
+        {
+          match:
+            "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+          result: { stdout: "[]" },
+        },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=55", result: {} },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=66", result: {} },
+        { match: "gh issue close 5 --repo o/n --comment Consolidated into #1.", result: {} },
+        { match: "gh issue close 6 --repo o/n --comment Consolidated into #1.", result: {} },
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(0);
+  });
+
+  it("issue --help documents --severity-family on consolidate-close", async () => {
+    const result = await capture(["issue", "--help"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/--severity-family <ns>:<family>/);
+  });
+
   it("consolidate-close proceeds with no guard triggered when no child has an open PR", async () => {
     const result = await capture(
       ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5"],

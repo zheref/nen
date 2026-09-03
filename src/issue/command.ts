@@ -75,14 +75,22 @@ usage:
 
   nen issue consolidate-close --target <owner/name> --parent <n>
                               --children 1,2 --repo <path>
+                              [--severity-family <ns>:<family>]
                               [--dry-run] [--allow-open-pr]
       The whole choreography in its load-bearing order: file (already done by
       the caller) -> attach -> close, with the label union and severity maximum
-      computed and reported. Runs the SAME open-PR guard 'open-pr-check' does
-      over every child that would be closed FIRST, and refuses the whole
-      close (listing the blocking PRs) when any of them has one -- an issue
-      with an open PR is never quietly closed, because closing it orphans
-      work already in flight. --allow-open-pr overrides the refusal.
+      computed and reported. --severity-family names the ONE label family that
+      is reduced to its single strongest label instead of unioned (ordering:
+      the target repository's own taxonomy); exactly one severity belongs on
+      the consolidated issue, and unioning them would leave the parent carrying
+      several at once. Omitted, the verb REFUSES whenever the union would do
+      exactly that -- put two or more labels from one family on the parent --
+      rather than defeating the reduction silently. Runs the SAME open-PR
+      guard 'open-pr-check' does over every child that would be closed FIRST,
+      and refuses the whole close (listing the blocking PRs) when any of them
+      has one -- an issue with an open PR is never quietly closed, because
+      closing it orphans work already in flight. --allow-open-pr overrides
+      the refusal.
 
   nen issue chain-position --target <owner/name> --issue <n> [--repo <path>]
                            [--chain-labels role=label,...]
@@ -345,6 +353,31 @@ function consolidate(context: CommandContext): number {
   const taxonomy = loadLabelTaxonomy(root);
   const severityFamily = context.args.values["severity-family"] ?? "";
   const plan = planConsolidation(context.seams, target, parent, children, taxonomy, severityFamily);
+
+  // WITH NO --severity-family, planConsolidation's severity-max reduction is
+  // unreachable and every severity-shaped label falls into the union -- the
+  // exact several-severities-at-once state the reduction exists to prevent,
+  // produced SILENTLY on a mutating verb (issue #22). The plan reports which
+  // families would collide; a non-empty report is a refusal, not a warning,
+  // because the caller who omitted the flag is exactly the caller who does not
+  // know the flag exists. Children with no colliding family labels proceed
+  // without it, as they always did.
+  if (plan.unreducedFamilies.length > 0) {
+    if (context.json) {
+      context.io.out(JSON.stringify({ plan, refused: true }, null, 2));
+      return 1;
+    }
+    context.io.err(
+      "nen: refusing to consolidate -- no --severity-family was named, and the plain union would put SEVERAL labels from one family on the parent at once:",
+    );
+    for (const entry of plan.unreducedFamilies) {
+      context.io.err(`  ${entry.family}: ${entry.labels.join(", ")}`);
+    }
+    context.io.err(
+      `Exactly one label from an ordered family belongs on the consolidated issue; carrying several is a state-machine violation, not a merge. Name the family whose maximum should win -- e.g. --severity-family ${plan.unreducedFamilies[0]?.family ?? "<ns>:<family>"} -- and its labels reduce to the single strongest by the target repository's own taxonomy.`,
+    );
+    return 1;
+  }
 
   // THE SAME GUARD 'open-pr-check' RUNS, applied to exactly the children this
   // plan would close -- see ./file.ts's header: "an issue with an OPEN PR is
