@@ -365,7 +365,18 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       expect(help).toMatch(/nen pr next-blocker .*\[--gates <path>\]/);
       // The flag is documented in next-blocker's OWN section, not merely
       // present somewhere in the page (ready's section already had it).
-      const section = help.slice(help.indexOf("next-blocker:"), help.indexOf("cascade-main:"));
+      // Both delimiters are ASSERTED before slicing (review finding): a
+      // missing/renamed header would make indexOf return -1, and slice(-1)
+      // silently reshapes the range instead of failing -- a start of -1
+      // means "from the last char" (empty section, confusing failure) and
+      // an end of -1 means "to the end of the page", which would let a
+      // --gates line in ANY later section satisfy an assertion that is
+      // supposed to be scoped to next-blocker alone.
+      const sectionStart = help.indexOf("next-blocker:");
+      const sectionEnd = help.indexOf("cascade-main:");
+      expect(sectionStart).toBeGreaterThanOrEqual(0);
+      expect(sectionEnd).toBeGreaterThan(sectionStart);
+      const section = help.slice(sectionStart, sectionEnd);
       expect(section).toMatch(/--gates <path>/);
     });
   });
