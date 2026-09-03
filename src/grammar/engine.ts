@@ -382,8 +382,14 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
       const split = splitLastWord(remaining, clause.literal);
       if (split === null) continue; // literal clauses are optional by construction: absence parses
       if (split.tail.trim() !== "") {
+        // The message asserts only that the tail is UNCONSUMABLE, not that the
+        // grammar ends here: entries to the clause's right resolve first (the
+        // right-to-left rule above), so text still standing after the literal
+        // is text none of them accounted for -- but later optional entries may
+        // well exist ('<repo> [then sweep] [every <mode>]'), and claiming "the
+        // grammar defines nothing after it" would be flatly wrong there.
         problems.push(
-          `'[${clause.literal}]' is a literal clause and the grammar defines nothing after it, but the line continues with '${split.tail.trim()}'. Drop the trailing text, or move it before '${clause.literal}'.`,
+          `'[${clause.literal}]' is a literal clause, but the line continues past it with '${split.tail.trim()}', which nothing later in the grammar consumes. Drop the trailing text, or move it before '${clause.literal}'.`,
         );
       }
       clausePresent[entry.index] = true;

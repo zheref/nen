@@ -198,7 +198,23 @@ describe("parseInvocation -- single-slot templates with a bracketed clause (zher
     it("refuses trailing text after the clause instead of swallowing it", () => {
       const result = parseInvocation("futon", grammar, "BC then sweep twice");
       expect(result.ok).toBe(false);
-      expect(result.problems[0]).toMatch(/defines nothing after it/);
+      expect(result.problems[0]).toMatch(/nothing later in the grammar consumes/);
+    });
+
+    it("the refusal does not claim the grammar ends at the clause when it does not", () => {
+      // '<repo> [then sweep] [every <mode>]' DOES define an entry after the
+      // literal clause. The old wording ("the grammar defines nothing after
+      // it") was flatly wrong here; the refusal itself stays right -- 'nightly'
+      // is not consumable because no 'every' introduces it.
+      const multi = parseTemplate("<repo> [then sweep] [every <mode>]");
+      const result = parseInvocation("futon", multi, "BC then sweep nightly");
+      expect(result.ok).toBe(false);
+      expect(result.problems[0]).toMatch(/nothing later in the grammar consumes/);
+      expect(result.problems[0]).not.toMatch(/defines nothing after it/);
+      // The same template with the later clause actually used parses cleanly.
+      const used = parseInvocation("futon", multi, "BC then sweep every nightly");
+      expect(used.ok).toBe(true);
+      expect(slot(used, "mode")).toBe("nightly");
     });
   });
 

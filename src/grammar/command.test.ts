@@ -58,7 +58,11 @@ describe("nen parse <skill> -- the generic --grammar/--line engine (main's own f
       { json: true },
     );
     expect(result.code).toBe(0);
-    const parsed = JSON.parse(result.out.join("\n")) as { slots: { name: string; value: string }[] };
+    // The asserted type carries `suffix` because the --json contract does: every
+    // slot reports whether its `[+]` suffix was present, even when false.
+    const parsed = JSON.parse(result.out.join("\n")) as {
+      slots: { name: string; value: string; suffix: boolean }[];
+    };
     expect(parsed.slots).toEqual([
       { name: "repo", value: "BC", suffix: false },
       { name: "gate", value: "G2", suffix: false },
