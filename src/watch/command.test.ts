@@ -76,6 +76,64 @@ describe("nen watch until -- CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/classifies as mutating/);
   });
 
+  // zheref/nen#70: the pre-existing gh/git rows carried no metacharacter
+  // guard, so `git log > out.txt` classified read-only and this verb would
+  // have accepted it. In-binary the redirection was inert (the observation is
+  // spawned with NO shell, so `>` reached git as a literal argument), but the
+  // verdict is also consumed by the skill side -- and the verb must refuse the
+  // line before ever spawning either way.
+  it("refuses a redirection on a gh/git read before ever observing (#70)", async () => {
+    const result = await capture(["watch", "until", "--command", "git log > out.txt"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/classifies as unknown/);
+    expect(result.err.join("\n")).toMatch(/shell metacharacter/);
+  });
+
+  it("still accepts the bare gh/git read the redirection was hiding behind (#70)", async () => {
+    const result = await capture(
+      ["watch", "until", "--command", "git log -1", "--interval-ms", "0"],
+      new QueueSeams([OK()]),
+    );
+    expect(result.code).toBe(0);
+  });
+
+  // zheref/nen#70 ROUND TWO, and the only blocker of the three that this verb
+  // could execute WITHOUT a skill-side shell. `git branch nen70-probe`
+  // classified read-only, so this verb spawned it -- and git created the
+  // branch. Verified by running it against a throwaway repository before the
+  // fix: the watch printed "condition is true (exit 0)" and `git branch
+  // --list` showed nen70-probe. This is the assertion that says the watch
+  // never gets that far again.
+  it("refuses 'git branch <name>' before ever spawning -- it CREATED the branch in-binary (#70)", async () => {
+    const result = await capture(["watch", "until", "--command", "git branch nen70-probe"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/classifies as mutating/);
+    // No observation was ever queued, so a spawn would have thrown out of
+    // QueueSeams -- the refusal is proven to precede the first run, not merely
+    // to accompany it.
+  });
+
+  it("still accepts the listing forms the create was riding beside (#70)", async () => {
+    for (const command of ["git branch --list feature/x", "git branch --show-current", "git remote get-url origin"]) {
+      const result = await capture(
+        ["watch", "until", "--command", command, "--interval-ms", "0"],
+        new QueueSeams([OK()]),
+      );
+      expect(result.code, command).toBe(0);
+    }
+  });
+
+  // The gh api blockers reach this verb the same way, and gh parses its own
+  // argv identically with or without a shell -- so `-ftitle=pwned` was a live
+  // POST behind a [read-only] verdict on this path, not only on the skill's.
+  it("refuses gh api's attached-value write spellings before ever observing (#70)", async () => {
+    for (const command of ["gh api repos/o/r/issues -X=DELETE", "gh api repos/o/r/issues -ftitle=pwned"]) {
+      const result = await capture(["watch", "until", "--command", command]);
+      expect(result.code, command).toBe(2);
+      expect(result.err.join("\n"), command).toMatch(/classifies as mutating/);
+    }
+  });
+
   it("exits 0 the moment exit-code-0 is reached, with no --true-pattern given", async () => {
     const result = await capture(
       ["watch", "until", "--command", "gh pr checks 1", "--interval-ms", "0"],
