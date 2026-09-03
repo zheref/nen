@@ -123,12 +123,38 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
         continue;
       }
       const next = argv[index];
+      if (next === undefined) {
+        throw new UsageError(`--${name} requires a value.`);
+      }
       // A missing value must never be satisfied by the NEXT FLAG. `--repo
       // --json` would otherwise set repo to "--json", resolve a directory named
       // "--json", and fail three steps later with a filesystem error that says
       // nothing about the real mistake.
-      if (next === undefined || next.startsWith("-")) {
-        throw new UsageError(`--${name} requires a value.`);
+      //
+      // BUT THE SAME GUARD FIRES ON A LEGITIMATE VALUE THAT HAPPENS TO BEGIN
+      // WITH `-`, and there the bare "requires a value" is actively misleading:
+      // the caller DID give one. That was theoretical while every value flag
+      // here took a path, a slug or a label; `nen issue comment --body` takes
+      // free prose, and `--body '-1 on this approach.'` is the ordinary thing a
+      // human types. This parser cannot tell the two cases apart -- that is the
+      // point of being strict -- so it names the token it refused and, for the
+      // rarer reading, the ONE spelling that is unambiguous, rather than
+      // leaving the caller to guess that `--body=<text>` exists.
+      //
+      // THE COMMON READING LEADS, and the escape hatch follows (round-two
+      // review finding). Almost every invocation that lands here is `--repo
+      // --json` -- a caller who FORGOT the value, exactly what this guard was
+      // written to catch -- and telling them first how to spell a value that
+      // begins with `-` answers a question they did not ask, about a mistake
+      // they did not make. So the message states the likely cause, then the
+      // escape hatch for the case where the token really is the value. The
+      // suggestion carries the QUOTES because the values that reach that case
+      // are prose: `--body='-1 on this'` is the spelling that survives a shell,
+      // and one a caller can paste.
+      if (next.startsWith("-")) {
+        throw new UsageError(
+          `--${name} requires a value, and the next token '${next}' begins with '-' -- which is how a flag is spelled, so it is not read as this flag's value. Most often that means the value was simply left out: give one. If '${next}' really IS the value, spell it --${name}='${next}'.`,
+        );
       }
       values[name] = next;
       index += 1;

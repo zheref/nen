@@ -28,6 +28,31 @@
 // repository's vocabulary: the family is named by the caller and the ordering is
 // read from that repository's own colour precedence, falling back to the order
 // its taxonomy file declares them in. Nothing here knows a severity's name.
+//
+// THE CLOSE COMMENT IS A CHANNEL, AND ITS DEFAULT IS BYTE-FROZEN. The close
+// message used to be the fixed string `Consolidated into #N.` with no way past
+// it, so a caller whose choreography needs each absorbed member closed with a
+// comment naming WHICH section absorbed it had to follow every
+// `consolidate-close` with a hand-run `gh issue comment` per child
+// (zheref/nen#29). That text differs per child, so a single template is not
+// enough on its own -- ./command.ts therefore offers one template for the
+// uniform case and a per-child map for the case the issue actually describes,
+// and both arrive here as `CloseComments`. WITH NO CHANNEL SUPPLIED, THE
+// RENDERED TEXT IS THE OLD FIXED STRING, BYTE FOR BYTE: the default is written
+// below as the template `Consolidated into #{parent}.` precisely so that the
+// back-compatibility claim is a substitution this module performs rather than a
+// second code path that can drift from the first.
+//
+// `attach-sub` DELIBERATELY GETS NO SUCH CHANNEL. #29 asked for it on
+// consolidate-close "and/or" attach-sub, and attach is the wrong half of the
+// choreography to hang a comment on: the order rule at the top of this file
+// exists because a failed attach STOPS the run before the closes, so a comment
+// posted at attach time is a claim about a consolidation that may never
+// complete -- the "dead reference" failure in the other direction. Attachment
+// also already writes its own timeline event on both objects, so the comment
+// would be a second, weaker record of the same fact. A caller who genuinely
+// wants an attach-time comment now composes `nen issue comment` with
+// `nen issue attach-sub`, which is what a general primitive is for.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
@@ -318,11 +343,173 @@ export function planConsolidation(
   };
 }
 
+// --- the close comment ---------------------------------------------------------
+
+/**
+ * The close message this verb has always posted, now written as a TEMPLATE.
+ *
+ * `Consolidated into #{parent}.` renders to `Consolidated into #9.` -- the
+ * exact string the fixed implementation emitted -- so "omitting the flag
+ * changes nothing" is a property of one substitution rather than a promise two
+ * branches have to keep in step.
+ */
+export const DEFAULT_CLOSE_COMMENT = "Consolidated into #{parent}.";
+
+/**
+ * The whole placeholder vocabulary, and it is deliberately two words long.
+ *
+ * Both substitute the BARE NUMBER, not `#<n>`: the caller writes the `#`, which
+ * is what lets a cross-repository close comment spell the parent
+ * `owner/name#{parent}` instead of being stuck with this repository's local
+ * form. Anything else in braces is refused at the CLI (./command.ts) rather
+ * than passed through, because an unrecognised placeholder would otherwise be
+ * posted LITERALLY -- `{parnet}` on a public timeline, on a verb that closes
+ * issues, with exit 0. "Anything else in braces" means exactly that, down to
+ * `{{parent}}`, `{ parent }` and a brace with no partner at all (`#{parent`);
+ * see PLACEHOLDER and LONE_BRACE below for why the guard is shaped around
+ * brace RUNS rather than around word-shaped interiors, and why a run is not
+ * the only shape a stray brace comes in.
+ */
+export const CLOSE_COMMENT_PLACEHOLDERS: readonly string[] = ["parent", "child"];
+
+/**
+ * EVERY RUN OF BRACES, not only the well-formed `{word}` ones.
+ *
+ * The first version of this matched `\{([A-Za-z0-9_-]*)\}`, which made the
+ * guarantee above a half-guarantee: a brace run whose interior was not word
+ * characters was neither refused NOR substituted, so it went out literally with
+ * exit 0. The three shapes that reaches are exactly the three a human types by
+ * mistake -- `#{{parent}}` (the Handlebars/Jinja spelling, which posted the
+ * genuinely baffling `#{1}` because the INNER braces matched), `#{ parent }` and
+ * `#{parent }` (a space that reads as nothing to the eye). Refusing only the
+ * misspellings that happen to be alphanumeric is refusing the ones a caller is
+ * least likely to make.
+ *
+ * The cost is that a close comment cannot contain literal braces at all --
+ * `{"a": 1}` in a close comment is refused. That is the deliberate trade: this
+ * text is posted to a public timeline by a verb that closes issues, brace-laden
+ * prose in a one-line close comment is rare, and the refusal names the
+ * vocabulary so the next invocation is right. A pass-through that is wrong is
+ * not visible until someone reads the timeline.
+ */
+const PLACEHOLDER = /\{+[^{}]*\}+/g;
+
+/**
+ * A BRACE WITH NO PARTNER -- the half of the guard PLACEHOLDER structurally
+ * cannot see (round-two review finding).
+ *
+ * PLACEHOLDER requires braces on BOTH sides, so `#{parent` matches nothing at
+ * all: it was neither refused nor substituted, and went out literally on a REAL
+ * close -- `Consolidated into #{parent` posted to a public timeline at exit 0.
+ * That is the same defect the `{{parent}}` round fixed, one keystroke over: a
+ * dropped closing brace is at least as common a typo as an extra one, and the
+ * guard that refuses the extra one waved the dropped one straight through.
+ *
+ * Applied to the RESIDUE -- the template with every matched run blanked out --
+ * so a well-formed `{parent}` does not report its own braces as strays. Each
+ * offender is quoted with the non-brace, non-space run that follows it, because
+ * a refusal that says only `{` tells a caller which CHARACTER is wrong and not
+ * which WORD they meant to write.
+ */
+const LONE_BRACE = /[{}][^\s{}]*/g;
+
+/**
+ * The vocabulary word a brace run names, or null if it names none.
+ *
+ * Deliberately strict about the run itself: exactly one brace on each side, and
+ * an interior that IS a vocabulary word with nothing around it. Everything the
+ * regex above catches and this rejects is what `unknownPlaceholders` reports.
+ */
+function placeholderName(run: string): string | null {
+  const match = /^\{([A-Za-z0-9_-]+)\}$/.exec(run);
+  const name = match?.[1] ?? "";
+  return CLOSE_COMMENT_PLACEHOLDERS.includes(name) ? name : null;
+}
+
+/** Every brace run in the template that is not one of the two placeholders, deduplicated in first-appearance order. */
+export function unknownPlaceholders(template: string): readonly string[] {
+  const found = new Set<string>();
+  for (const match of template.matchAll(PLACEHOLDER)) {
+    if (placeholderName(match[0]) === null) found.add(match[0]);
+  }
+  return [...found];
+}
+
+/**
+ * Every UNMATCHED brace in the template, deduplicated in first-appearance
+ * order -- reported separately from `unknownPlaceholders` because the two are
+ * different mistakes with different fixes: an unknown placeholder is a word
+ * this vocabulary does not have, an unmatched brace is a brace the caller
+ * forgot to close (or to open).
+ *
+ * Both are refused at the CLI (./command.ts) for the SAME reason -- a verb that
+ * closes issues must never post a template fragment as prose -- and neither is
+ * substituted here, so a renderer reached directly still passes the offending
+ * bytes through untouched rather than half-rendering them.
+ */
+export function unmatchedBraces(template: string): readonly string[] {
+  // Blanked to spaces rather than deleted, so a stray brace's trailing word is
+  // still bounded by whatever really followed it in the template.
+  const residue = template.replace(PLACEHOLDER, (run: string): string => " ".repeat(run.length));
+  return [...new Set([...residue.matchAll(LONE_BRACE)].map((match): string => match[0]))];
+}
+
+/**
+ * `{parent}` and `{child}` substituted; every other character passes through
+ * untouched -- including a brace run this module does not recognise, which the
+ * CLI has already refused by the time a real invocation reaches here.
+ */
+export function renderCloseComment(template: string, parent: number, child: number): string {
+  return template.replace(PLACEHOLDER, (whole: string): string => {
+    const name = placeholderName(whole);
+    if (name === "parent") return String(parent);
+    if (name === "child") return String(child);
+    return whole;
+  });
+}
+
+/**
+ * The caller-supplied close text, in the two shapes ./command.ts accepts.
+ *
+ * `perChild` WINS over `template` for a child it names, so the two can be
+ * reasoned about independently; in practice ./command.ts refuses both flags at
+ * once, so exactly one of these is ever populated.
+ */
+export interface CloseComments {
+  /** One template for every child, or null when the caller supplied a map. */
+  readonly template: string | null;
+  /** Child number -> that child's own template. */
+  readonly perChild: ReadonlyMap<number, string>;
+}
+
+function templateFor(comments: CloseComments | null, child: number): string {
+  if (comments === null) return DEFAULT_CLOSE_COMMENT;
+  return comments.perChild.get(child) ?? comments.template ?? DEFAULT_CLOSE_COMMENT;
+}
+
 export interface ConsolidateReport {
   readonly log: readonly string[];
   readonly failed: readonly string[];
   readonly attached: readonly number[];
   readonly closed: readonly number[];
+  /**
+   * Each close comment this run REACHED, already rendered: the text posted, the
+   * text attempted where the close failed, or -- under `dryRun` -- the text that
+   * would have gone out. One entry per child in `toClose`, in that order, when
+   * the closes ran at all.
+   *
+   * EMPTY WHEN THE ATTACH STAGE FAILED, even though `toClose` is not: the run
+   * stops before the close loop (see below), so no comment was rendered, sent or
+   * attempted, and reporting the texts that WOULD have gone out would read as a
+   * list of things that did. `failed` is the field that says why the list is
+   * short.
+   *
+   * Reported rather than left implicit in the argv, because a `--json` caller
+   * that supplied a template has no other way to see the substitution its own
+   * children got -- and a close comment is the half of this choreography a
+   * human reads afterwards.
+   */
+  readonly closeComments: readonly { readonly child: number; readonly body: string }[];
 }
 
 // file -> attach -> close, and it stops at the first failing STAGE.
@@ -331,14 +518,19 @@ export interface ConsolidateReport {
 // separate call on purpose: the consolidated issue's title and body are written
 // by a human or an LLM, and a verb that generated them would be authoring the
 // judgment this whole surface refuses to author.
+//
+// `comments` DEFAULTS TO NULL, so every existing call site keeps posting the
+// fixed string it always posted -- see DEFAULT_CLOSE_COMMENT above.
 export function consolidateClose(
   seams: Seams,
   target: Target,
   plan: ConsolidationPlan,
   dryRun: boolean,
+  comments: CloseComments | null = null,
 ): ConsolidateReport {
   const log: string[] = [];
   const failed: string[] = [];
+  const closeComments: { child: number; body: string }[] = [];
 
   log.push(`parent: #${plan.parent}`);
   log.push(`label union: ${plan.labelUnion.join(", ") || "(none)"}`);
@@ -362,12 +554,14 @@ export function consolidateClose(
     log.push(
       "STOPPED before the closes. A close comment naming a parent whose sub-issue graph is incomplete is a claim the graph does not support; the closes are the last step for exactly this reason.",
     );
-    return { log, failed, attached: attachReport.attached, closed: [] };
+    return { log, failed, attached: attachReport.attached, closed: [], closeComments };
   }
 
   const closed: number[] = [];
   for (const child of plan.toClose) {
-    const comment = `Consolidated into #${plan.parent}.`;
+    const template = templateFor(comments, child);
+    const comment = renderCloseComment(template, plan.parent, child);
+    closeComments.push({ child, body: comment });
     const argv = [
       "issue",
       "close",
@@ -388,7 +582,16 @@ export function consolidateClose(
       continue;
     }
     closed.push(child);
-    log.push(`closed #${child} with a comment naming #${plan.parent}`);
+    // The old line CLAIMED the comment names the parent, which is only true of
+    // the default template -- a caller-supplied one may name a section, a
+    // decision, or nothing at all. So the claim is made only where it holds,
+    // and the default's line stays byte-identical for anyone reading a
+    // transcript diff against an older run.
+    log.push(
+      template === DEFAULT_CLOSE_COMMENT
+        ? `closed #${child} with a comment naming #${plan.parent}`
+        : `closed #${child} with the caller-supplied close comment`,
+    );
   }
-  return { log, failed, attached: attachReport.attached, closed };
+  return { log, failed, attached: attachReport.attached, closed, closeComments };
 }

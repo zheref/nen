@@ -14,8 +14,17 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
+import { readJsonFile, readTextFile } from "../cli/inputs.js";
 import { parseTarget, type Target } from "../github/target.js";
-import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import type { FlagSpec } from "../cli/args.js";
+import {
+  GLOBAL_FLAGS,
+  requireRepoFlag,
+  requireSubcommand,
+  VerbUsageError,
+  type Command,
+  type CommandContext,
+} from "../cli/command.js";
 import {
   closedSince,
   findCanonical,
@@ -29,13 +38,257 @@ import {
   validateFiling,
   type FileRequest,
 } from "./file.js";
-import { consolidateClose, attachSub, planConsolidation } from "./subissue.js";
+import {
+  consolidateClose,
+  attachSub,
+  planConsolidation,
+  unknownPlaceholders,
+  unmatchedBraces,
+  CLOSE_COMMENT_PLACEHOLDERS,
+  type CloseComments,
+} from "./subissue.js";
+import { commentArgv, postComment, type CommentRequest } from "./comment.js";
 import { chainPosition, NotAnIssueError, parseRoleMap, terminus } from "./chain.js";
 
 export function numberList(value: string | undefined): readonly number[] {
   return commaList(value)
     .map((item): number => Number(item.replace(/^#/, "")))
     .filter((item): boolean => Number.isInteger(item) && item > 0);
+}
+
+/**
+ * WHAT EACH SUBCOMMAND ACTUALLY CONSUMES -- the ONE declaration both the
+ * parser's flag spec and the foreign-flag refusal are derived from.
+ *
+ * WHY THE GUARD EXISTS AT ALL. A family shares one flag spec
+ * (../cli/command.ts), so every flag any subcommand declares parses cleanly for
+ * ALL of them -- which is exactly the silent-acceptance failure ../cli/args.ts's
+ * strictness prevents one level up. Before `comment` existed, `nen issue file
+ * --body x` was `unknown option` (exit 2); adding `--body` to the family
+ * downgrades that to "accepted and ignored", and the ignored thing is the text
+ * the caller wrote.
+ *
+ * WHY OWNERSHIP IS DERIVED AND NOT WRITTEN DOWN (the round-two review finding,
+ * and the second time this guard's SHAPE was the bug). Version one was a call
+ * per confusable pair; version two was a hand-maintained `flag -> one owner`
+ * table, which fixed the pairs a human had missed and then re-created the same
+ * hole one type-level up. `Record<string, string>` holds ONE owner per flag, so
+ * a flag with TWO owners could not be written down at all -- and `--body-file`
+ * has two (`file` and `comment`) while being foreign to the other five. It was
+ * therefore left out of the table entirely, under a docblock asserting that "a
+ * shared flag has no sibling to be foreign to", which is simply false:
+ * `consolidate-close --body-file <path>` parsed, was ignored, closed the
+ * children with the DEFAULT comment and exited 0 -- the exact hazard the table
+ * was added to refuse, wearing the one shape the table could not express. The
+ * same gap silently covered every flag nobody had thought to enumerate:
+ * `chain-position --title`, `file --severity-family`, `search --dry-run`.
+ *
+ * So the ownership is no longer STATED. Each subcommand declares the flags it
+ * reads, once, here; ISSUE_FLAGS below is the UNION of these (which is what the
+ * parser gets, so a flag cannot exist without an owner), and a flag parsed but
+ * absent from the executing subcommand's own spec is foreign BY CONSTRUCTION.
+ * Adding a flag to a subcommand adds it to the parser and to every sibling's
+ * refusal in one edit; adding a subcommand gets its refusals for free. The only
+ * per-pair judgement left is the WORDING (FOREIGN_FLAG_ADVICE below).
+ *
+ * THE GLOBAL FLAGS ARE NOT LISTED and are never foreign: `--repo`, `--json` and
+ * `--help` are ../cli/command.ts's, merged into every family's spec by
+ * mergeFlags, and answering "which issue subcommand owns --json" is a question
+ * about the wrong table.
+ */
+export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
+  search: { values: ["target", "subject", "files", "rule-ids", "lane-labels"] },
+  "open-pr-check": { values: ["target", "issues"] },
+  file: {
+    values: ["target", "title", "body-file", "label", "assignee", "forbid-family"],
+    booleans: ["dry-run"],
+  },
+  comment: { values: ["target", "issue", "body", "body-file"], booleans: ["dry-run"] },
+  "attach-sub": { values: ["target", "parent", "children"], booleans: ["dry-run"] },
+  "consolidate-close": {
+    values: ["target", "parent", "children", "severity-family", "close-comment", "close-comment-map"],
+    booleans: ["dry-run", "allow-open-pr"],
+  },
+  "chain-position": { values: ["target", "issue", "chain-labels"] },
+  terminus: { values: ["target", "issue", "chain-labels", "integration-prefix", "trunk"] },
+};
+
+/**
+ * The subcommand names, read off the table above rather than written twice --
+ * so `requireSubcommand`'s "Known: ..." list and the ownership derivation can
+ * never name different sets.
+ */
+export const ISSUE_SUBCOMMANDS: readonly string[] = Object.keys(ISSUE_SUBCOMMAND_FLAGS);
+
+/** Whether one subcommand's own spec declares this flag, in either half. */
+function declares(spec: FlagSpec, flag: string): boolean {
+  return (spec.values ?? []).includes(flag) || (spec.booleans ?? []).includes(flag);
+}
+
+/**
+ * The family's flag spec: the UNION of every subcommand's, sorted so the
+ * `unknown option` listing ../cli/args.ts prints stays stable across edits.
+ *
+ * Derived rather than typed out a second time, because a hand-kept union is
+ * precisely how a flag ends up parsed with no owner -- accepted by the parser,
+ * invisible to the guard, ignored by the verb.
+ */
+function unionFlags(specs: readonly FlagSpec[]): FlagSpec {
+  const values = new Set<string>();
+  const booleans = new Set<string>();
+  for (const spec of specs) {
+    for (const flag of spec.values ?? []) values.add(flag);
+    for (const flag of spec.booleans ?? []) booleans.add(flag);
+  }
+  return { values: [...values].sort(), booleans: [...booleans].sort() };
+}
+
+export const ISSUE_FLAGS: FlagSpec = unionFlags(Object.values(ISSUE_SUBCOMMAND_FLAGS));
+
+/** The globals every family also accepts -- never any subcommand's to own. */
+const GLOBAL_FLAG_NAMES: ReadonlySet<string> = new Set([
+  ...(GLOBAL_FLAGS.values ?? []),
+  ...(GLOBAL_FLAGS.booleans ?? []),
+]);
+
+/** Which subcommands declare this flag, in the table's own order. */
+function ownersOf(flag: string): readonly string[] {
+  return Object.entries(ISSUE_SUBCOMMAND_FLAGS)
+    .filter(([, spec]): boolean => declares(spec, flag))
+    .map(([name]): string => name);
+}
+
+/**
+ * `a`, `a and b`, `a, b and c` -- a real conjunction rather than a `join(" and
+ * ")`, because `--dry-run` has FOUR owners and "'issue file' and 'issue
+ * comment' and 'issue attach-sub' and 'issue consolidate-close'" reads as a
+ * machine that has never seen a sentence. The whole value of these refusals is
+ * that a caller believes and acts on them.
+ */
+function conjoin(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1] ?? ""}`;
+}
+
+const ATTACH_POSTS_NOTHING =
+  "'issue attach-sub' posts no comment: an attach-time comment is a claim about a consolidation that a failed attach stops before completing. Use 'issue consolidate-close' for the close comment, or 'issue comment' to post one yourself.";
+
+const CLOSE_COMMENT_IS_THE_CHANNEL =
+  "'issue consolidate-close' does post a comment, but it is the CLOSE comment, and its flags are --close-comment <template> for one text across every child or --close-comment-map <path> for one text per child.";
+
+// ROUND THREE, MINOR 4. Deriving ownership from the real per-subcommand specs
+// (ISSUE_SUBCOMMAND_FLAGS above) changed --dry-run's behaviour on the four
+// subcommands that never declared it: `search`, `open-pr-check`,
+// `chain-position` and `terminus` used to ACCEPT it and silently ignore it
+// (exit 0, nothing previewed, because there was never a write to preview), and
+// the derived guard now REFUSES it (exit 2) like any other foreign flag. The
+// direction is right -- a caller who types --dry-run at a read-only verb
+// believes it changed something, and it never did -- but the GENERIC advice
+// (`ownersOf` + `conjoin` below) only names --dry-run's four WRITING owners,
+// which reads as "you probably meant one of those", not as "this verb never
+// wrote anything, with or without the flag". So each read-only verb gets its
+// own line saying exactly that, in front of the same owners sentence the
+// generic arm would have printed -- naming what --dry-run DOES belong to is
+// still useful, it is just not the whole answer here.
+const DRY_RUN_OWNERS_SENTENCE = `It belongs to ${conjoin(
+  ownersOf("dry-run").map((owner): string => `'issue ${owner}'`),
+)}.`;
+
+function readOnlyDryRunAdvice(subcommand: string): string {
+  return `${DRY_RUN_OWNERS_SENTENCE} 'issue ${subcommand}' itself never writes anything -- it only reads and reports -- so --dry-run never changed what it ran here, accepted or refused. It used to be accepted and silently ignored (exit 0); it is refused now (exit 2) so a caller can see that immediately, and nothing about 'issue ${subcommand}' itself has changed.`;
+}
+
+/**
+ * What to type instead, where the generic answer is not the useful one.
+ *
+ * Keyed subcommand -> flag. A pair with no entry falls back to naming the
+ * flag's owners and nothing else, which is all a caller who typed `--title` at
+ * `issue terminus` needs; the entries below are the pairs where the caller
+ * plausibly meant something this family CAN do, and the refusal should say
+ * which spelling does it.
+ */
+const FOREIGN_FLAG_ADVICE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  search: { "dry-run": readOnlyDryRunAdvice("search") },
+  "open-pr-check": { "dry-run": readOnlyDryRunAdvice("open-pr-check") },
+  "chain-position": { "dry-run": readOnlyDryRunAdvice("chain-position") },
+  terminus: { "dry-run": readOnlyDryRunAdvice("terminus") },
+  file: {
+    body: "'issue file' takes --body-file <path>: a body typed on the command line is a body nobody reviewed. --body belongs to 'issue comment'.",
+  },
+  "attach-sub": {
+    "close-comment": ATTACH_POSTS_NOTHING,
+    "close-comment-map": ATTACH_POSTS_NOTHING,
+    body: ATTACH_POSTS_NOTHING,
+    "body-file": ATTACH_POSTS_NOTHING,
+  },
+  "consolidate-close": {
+    body: `${CLOSE_COMMENT_IS_THE_CHANNEL} --body belongs to 'issue comment'; accepted and ignored here it would have closed the children with the default text while the caller believed theirs went out.`,
+    // The pair the previous, hand-maintained ownership table could not express
+    // at all -- see ISSUE_SUBCOMMAND_FLAGS above. `--body-file` is real on two
+    // siblings, so it parsed here, was dropped, and the children were closed
+    // with the default comment at exit 0.
+    "body-file": `${CLOSE_COMMENT_IS_THE_CHANNEL} --body-file is the opening body of 'issue file' and the payload of 'issue comment'; accepted and ignored here it would have closed the children with the default text while the caller believed the file's contents went out.`,
+  },
+  comment: {
+    "close-comment":
+      "'issue comment' posts one comment and closes nothing; its text is --body <text> or --body-file <path>. --close-comment is the close text of 'issue consolidate-close'.",
+    "close-comment-map":
+      "'issue comment' posts ONE comment on ONE issue, so there is no per-child map to give it; its text is --body <text> or --body-file <path>. --close-comment-map is the close text of 'issue consolidate-close'.",
+  },
+};
+
+/**
+ * Refuse every flag of this invocation that the executing subcommand does not
+ * declare.
+ *
+ * Called once, for every subcommand, before the subcommand runs -- so a flag
+ * that names something this verb does not do is refused at exit 2 the way a
+ * misspelled flag always was, ahead of any read and any write.
+ *
+ * ALL of them are named at once, on the same "report the whole problem" idiom
+ * ../cli/command.ts's splitIntegerList and readCloseComments below follow: a
+ * caller fixing one flag per round trip is the cost this repository designs
+ * against everywhere else.
+ *
+ * THE FALLBACK ADVICE NAMES THE OWNERS AND NOTHING ELSE, as this docblock's
+ * previous version promised and its code did not: it used to end "'issue
+ * <sub>' posts no comment", a claim about COMMENTING baked into the generic
+ * arm, which was false the moment the guard covered a flag that has nothing to
+ * do with comments (`issue file --trunk main` is not about posting anything).
+ * A refusal that asserts something untrue about the verb is a refusal a caller
+ * stops believing.
+ */
+function refuseForeignFlags(context: CommandContext, subcommand: string): void {
+  const spec = ISSUE_SUBCOMMAND_FLAGS[subcommand];
+  // Unreachable: requireSubcommand has already refused anything not keyed
+  // here (both lists come from ISSUE_SUBCOMMAND_FLAGS). Stated rather than asserted
+  // so a future caller that skips that step fails closed-ish rather than
+  // reading `undefined` as "declares everything".
+  if (spec === undefined) {
+    throw new VerbUsageError(`'issue ${subcommand}' declares no flags of its own.`);
+  }
+  const given = [...Object.keys(context.args.values), ...context.args.booleans];
+  const foreign = [...new Set(given)]
+    .filter((flag): boolean => !GLOBAL_FLAG_NAMES.has(flag) && !declares(spec, flag))
+    .sort();
+  if (foreign.length === 0) return;
+  throw new VerbUsageError(
+    foreign
+      .map((flag): string => {
+        const owners = ownersOf(flag);
+        // Never empty while ISSUE_FLAGS is the union of these same specs -- a
+        // flag with no owner is not in the parser's spec, so args.ts refuses it
+        // as an `unknown option` and it never reaches here. The branch is kept
+        // because the derivation, not the type system, is what makes that true.
+        const generic =
+          owners.length === 0
+            ? "No 'issue' subcommand declares it."
+            : `It belongs to ${conjoin(owners.map((owner): string => `'issue ${owner}'`))}.`;
+        const advice = FOREIGN_FLAG_ADVICE[subcommand]?.[flag] ?? generic;
+        return `--${flag} is not a flag of this subcommand. ${advice}`;
+      })
+      .join(" "),
+  );
 }
 
 function requireTarget(context: CommandContext): Target {
@@ -68,14 +321,35 @@ usage:
       Creates the issue with its labels and assignee IN THE CREATE CALL. Every
       label must exist in the target repository's taxonomy.
 
+  nen issue comment --target <owner/name> --issue <n>
+                    (--body-file <path> | --body <text>) [--dry-run]
+      Posts ONE caller-supplied comment on ONE issue -- the general primitive
+      every other verb here lacked, so a mechanized choreography no longer has
+      to drop back to a hand-run 'gh issue comment' for the one step written in
+      a human's own words. Exactly one of --body-file/--body: two spellings of
+      one input, and the report names which carried it. An empty or
+      whitespace-only body is refused (exit 2), as is a --body-file that cannot
+      be read. A body that BEGINS WITH '-' must be spelled --body=<text>: a
+      following token starting with '-' is a flag to the parser, never a value,
+      so --body '-1 on this' is refused rather than silently swallowing the
+      next flag. --dry-run prints the exact 'gh' call AND the exact bytes it
+      would send, and writes nothing. A number that names a PULL REQUEST is
+      accepted, deliberately -- ./comment.ts records why, and why that is not
+      the same decision chain-position/terminus made.
+
   nen issue attach-sub --target <owner/name> --parent <n> --children 1,2
                        [--dry-run]
       Attaches children as sub-issues, resolving each child's ID (the API takes
-      an id, not a number) before writing.
+      an id, not a number) before writing. It posts NO comment, and takes no
+      close-comment channel: a comment at attach time is a claim about a
+      consolidation that a failed attach STOPS before completing. Compose
+      'nen issue comment' with it when one is wanted.
 
   nen issue consolidate-close --target <owner/name> --parent <n>
                               --children 1,2 --repo <path>
                               [--severity-family <ns>:<family>]
+                              [--close-comment <template>]
+                              [--close-comment-map <path>]
                               [--dry-run] [--allow-open-pr]
       The whole choreography in its load-bearing order: file (already done by
       the caller) -> attach -> close, with the label union and severity maximum
@@ -91,6 +365,24 @@ usage:
       has one -- an issue with an open PR is never quietly closed, because
       closing it orphans work already in flight. --allow-open-pr overrides
       the refusal.
+      THE CLOSE COMMENT. With neither flag below, every child is closed with
+      the fixed 'Consolidated into #<parent>.' this verb has always posted --
+      byte for byte, and pinned by test. --close-comment <template> replaces it
+      for EVERY child; --close-comment-map <path> takes a JSON object
+      '{"<child>": "<text>", ...}' and gives each child its OWN text, which is
+      what a caller closing each absorbed member with the name of the section
+      that absorbed it actually needs. The two are one input: give at most one.
+      Both are templates over two placeholders, ${CLOSE_COMMENT_PLACEHOLDERS.map((name): string => `{${name}}`).join(" and ")} -- and
+      nothing else. They substitute the BARE numbers: write the '#'
+      yourself, so a cross-repository form like 'owner/name#{parent}'
+      stays spellable. Any OTHER run of braces is a usage error, and so is
+      a brace with no partner, never passed through, because an
+      unrecognised placeholder would be posted literally onto a public
+      timeline by a verb that closes issues -- '#{{parent}}',
+      '{ parent }' and the dropped-brace '#{parent' included. A map whose keys are not
+      exactly --children is refused before any call: a missing key silently
+      falls back to the default for that child, and an extra key silently
+      drops text the caller wrote.
 
   nen issue chain-position --target <owner/name> --issue <n> [--repo <path>]
                            [--chain-labels role=label,...]
@@ -113,39 +405,17 @@ export const issueCommand: Command = {
   name: "issue",
   summary: "Search, guard, file, attach and classify issues.",
   usage: USAGE,
-  flags: {
-    values: [
-      "target",
-      "subject",
-      "files",
-      "rule-ids",
-      "lane-labels",
-      "title",
-      "body-file",
-      "label",
-      "assignee",
-      "forbid-family",
-      "issues",
-      "parent",
-      "children",
-      "issue",
-      "severity-family",
-      "chain-labels",
-      "integration-prefix",
-      "trunk",
-    ],
-    booleans: ["dry-run", "allow-open-pr"],
-  },
+  // The UNION of every subcommand's own spec (ISSUE_SUBCOMMAND_FLAGS above), never a
+  // second hand-kept list: a flag the parser accepts but no subcommand
+  // declares is a flag the foreign-flag guard cannot see and the verb ignores.
+  flags: ISSUE_FLAGS,
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("issue", context.args, [
-      "search",
-      "open-pr-check",
-      "file",
-      "attach-sub",
-      "consolidate-close",
-      "chain-position",
-      "terminus",
-    ]);
+    const subcommand = requireSubcommand("issue", context.args, ISSUE_SUBCOMMANDS);
+    // BEFORE the subcommand, so a flag this verb does not declare is refused at
+    // exit 2 ahead of any `gh` read and any write -- see ISSUE_SUBCOMMAND_FLAGS above
+    // for why ownership is derived from each subcommand's own spec rather than
+    // written down once and kept in step by hand.
+    refuseForeignFlags(context, subcommand);
     switch (subcommand) {
       case "search":
         return search(context);
@@ -153,6 +423,8 @@ export const issueCommand: Command = {
         return openPr(context);
       case "file":
         return file(context);
+      case "comment":
+        return comment(context);
       case "attach-sub":
         return attach(context);
       case "consolidate-close":
@@ -292,6 +564,11 @@ function openPr(context: CommandContext): number {
 
 function file(context: CommandContext): number {
   const target = requireTarget(context);
+  // `--body` is `comment`'s flag, and filing keeps its own rule (see the
+  // --body-file refusal below). The refusal itself falls out of ISSUE_SUBCOMMAND_FLAGS
+  // above -- `file` does not declare `--body` -- and fires with
+  // FOREIGN_FLAG_ADVICE's wording before this function is entered.
+  //
   // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
   // never silently read as "validate against whatever taxonomy the cwd
   // happens to hold" (zheref/nen#28).
@@ -332,8 +609,154 @@ function file(context: CommandContext): number {
   return 0;
 }
 
+// NOTE ON `--repo`: this subcommand's usage line above lists NO --repo, and
+// that is a decision rather than an omission. zheref/nen#28's rule is that a
+// verb whose usage promises the flag unbracketed must refuse its absence by
+// name -- `file` and `consolidate-close` do, because both validate against the
+// target checkout's schemas/labels.json. Commenting reads no taxonomy at all,
+// so requiring a checkout would be asking for a path this verb has nothing to
+// do with; --target alone addresses the API, exactly as its own help text says.
+function comment(context: CommandContext): number {
+  const target = requireTarget(context);
+  // `--issue`, READ WITH THE HOUSE `/^\d+$/` GUARD rather than this family's
+  // `Number(...)` idiom -- the rule ../cli/command.ts's readInteger and
+  // splitIntegerList exist to provide, and whose docblock names this exact
+  // finding. `Number("1e3")` is 1000 and `Number("0x0c")` is 12: both integers,
+  // both positive, so a lenient read accepts them and this verb posts the
+  // caller's text on a DIFFERENT, perfectly valid issue -- a mistyped flag
+  // silently retargeting a public write, with exit 0 and a URL that looks fine
+  // until someone reads which number it names.
+  //
+  // The sibling `Number(...)` reads (attach-sub/consolidate-close's --parent,
+  // chain-position/terminus's --issue) are left as they are ON PURPOSE: they
+  // predate this verb and changing their refusals is not this change. The
+  // inconsistency is recorded here rather than left to be inferred, because the
+  // one verb that had to be fixed first is the one that WRITES.
+  const rawIssue = context.args.values["issue"];
+  if (rawIssue === undefined) {
+    throw new VerbUsageError("comment takes --issue <n>.");
+  }
+  if (!/^\d+$/.test(rawIssue) || Number.parseInt(rawIssue, 10) <= 0) {
+    throw new VerbUsageError(
+      `comment takes --issue <n>: a positive whole number, digits only -- got '${rawIssue}'. A looser read would accept '1e3' as 1000 and '0x0c' as 12 and post this comment on an issue nobody named.`,
+    );
+  }
+  const issue = Number.parseInt(rawIssue, 10);
+
+  const inline = context.args.values["body"];
+  const bodyFile = context.args.values["body-file"];
+  // EXACTLY ONE SPELLING -- ../cli/inputs.ts's own rule for a multi-spelled
+  // input, applied here because the two disagree silently rather than loudly:
+  // with both given, whichever the code happened to read first would be posted
+  // and the other would vanish without a word.
+  if (inline !== undefined && bodyFile !== undefined) {
+    throw new VerbUsageError(
+      "--body and --body-file are two spellings of ONE input; give exactly one, so the report names where the posted text came from.",
+    );
+  }
+  if (inline === undefined && bodyFile === undefined) {
+    throw new VerbUsageError(
+      "the comment body is required: give --body-file <path> or --body <text>. A comment is the one thing this verb posts, so an absent body is never read as an empty one.",
+    );
+  }
+
+  // READ AND CHECKED BEFORE ANYTHING IS POSTED, whichever spelling carried it:
+  // --dry-run's promise is that the bytes it prints are the bytes that would be
+  // sent, which is only true if they have been read by the time it prints.
+  // readTextFile's refusal names the resolved path and the errno -- the
+  // actionable form a caller who mistyped a path needs (exit 2, like every
+  // other mistyped flag) -- but its DEFAULT rationale is written for the
+  // changed-file verbs it was built for ("would report a clean verdict for a
+  // check it never ran"), and this verb runs no check and renders no verdict.
+  // So it is handed its own why: the file here is not an input to a judgement,
+  // it is the payload.
+  //
+  // `raw: true` -- ROUND THREE, MINOR 2. `gh` is handed `--body-file bodyFile`
+  // below, the ORIGINAL path, untouched, so it reads whatever is on disk. If
+  // this read normalized `\r\n` to `\n` first (readTextFile's default, correct
+  // for the changed-file readers it exists for), the dry-run transcript and
+  // `--json`'s `body` field would show different bytes than a CRLF file's
+  // caller was ever going to have posted -- "the bytes it prints are the bytes
+  // that would be sent" would be a claim about a file this process rewrote in
+  // memory, not the one on disk. Reading it as-is keeps both sides looking at
+  // the same bytes without moving either one.
+  const body =
+    bodyFile === undefined
+      ? (inline ?? "")
+      : readTextFile(
+          bodyFile,
+          process.cwd(),
+          "--body-file names the bytes this verb posts, so an unreadable one is refused rather than sent as an empty comment.",
+          true,
+        );
+  if (body.trim() === "") {
+    throw new VerbUsageError(
+      bodyFile === undefined
+        ? "--body is empty. A comment with no text is a timeline event that says nothing, and is never what a caller meant to post."
+        : `--body-file '${bodyFile}' holds nothing but whitespace. A comment with no text is a timeline event that says nothing; posting it would be reported as success.`,
+    );
+  }
+
+  const request: CommentRequest =
+    bodyFile === undefined
+      ? { issue, body, source: "inline" }
+      : { issue, body, source: "file", bodyFile };
+  const argv = commentArgv(target, request);
+
+  if (context.args.booleans.has("dry-run")) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify({ dryRun: true, target: target.slug, issue, source: request.source, argv, body }, null, 2),
+      );
+      return 0;
+    }
+    context.io.out(`would run: gh ${argv.join(" ")}`);
+    // THE ARGV ALONE IS NOT THE DRY RUN when the body rode in a file: it names
+    // a path, and the path's contents are the thing that becomes public. So the
+    // bytes are printed too, fenced, exactly as they would be posted.
+    context.io.out("--- body as it would be posted ---");
+    for (const line of body.split("\n")) context.io.out(line);
+    // THE FINAL BYTE IS STATED RATHER THAN DRAWN. A line-oriented transcript can
+    // only show a trailing newline as a blank line before the closing fence --
+    // and a trailing blank line is exactly what a terminal's scrollback, a
+    // copy-paste, a chat client and most diff viewers silently eat, so the one
+    // byte a reader is least able to see is the one this rendering conveys most
+    // weakly. --dry-run's whole promise is that the bytes printed are the bytes
+    // sent, so the fence says outright which it is instead of asking the reader
+    // to notice something's absence. (--json needs no such note: it carries
+    // `body` verbatim, trailing newline and all.)
+    context.io.out(
+      body.endsWith("\n") ? "--- end of body ---" : "--- end of body (no trailing newline) ---",
+    );
+    return 0;
+  }
+
+  const result = postComment(context.seams, target, request);
+  if (context.json) {
+    context.io.out(
+      JSON.stringify({ dryRun: false, target: target.slug, issue, source: request.source, argv, body, url: result.url }, null, 2),
+    );
+    return 0;
+  }
+  // The URL is reported when `gh` printed one and its ABSENCE is stated rather
+  // than papered over -- see ./comment.ts: a posted comment whose URL could not
+  // be read is still posted, and a caller must not re-post it.
+  context.io.out(
+    result.url === null
+      ? `commented on ${target.slug}#${issue} (gh printed no comment URL, so there is none to report -- the comment was posted)`
+      : `commented on ${target.slug}#${issue} ${result.url}`,
+  );
+  return 0;
+}
+
 function attach(context: CommandContext): number {
   const target = requireTarget(context);
+  // zheref/nen#29 asked for the close-comment channel on consolidate-close
+  // "and/or" attach-sub, and ./subissue.ts's header records why attach is the
+  // wrong half to hang one on. A caller who tries anyway is TOLD that, rather
+  // than having the flag accepted and ignored -- which would read as "the
+  // comment was posted". The wording is ATTACH_POSTS_NOTHING above; the refusal
+  // fires before this function is entered.
   const parent = Number(context.args.values["parent"] ?? "");
   const children = numberList(context.args.values["children"]);
   if (!Number.isInteger(parent) || parent <= 0 || children.length === 0) {
@@ -400,6 +823,185 @@ function readSeverityFamily(context: CommandContext, taxonomy: LabelTaxonomy): s
   return value;
 }
 
+// `--close-comment` / `--close-comment-map`, VALIDATED WHOLE BEFORE THE FIRST
+// `gh` CALL.
+//
+// Every refusal below is a mistake that is invisible AFTERWARDS, on a verb that
+// closes issues and posts to public timelines: an unrecognised `{placeholder}`
+// is posted literally; a map key that no --children entry names is text the
+// caller wrote and nobody ever sees; a --children entry the map does not name
+// is silently closed with the default string while its siblings get bespoke
+// text -- the half-mechanized state this channel exists to remove. So the whole
+// shape is checked up front and the caller is told everything wrong with it at
+// once, rather than one round trip at a time.
+//
+// ROUND THREE, MINOR 1: "at once" used to stop being true the moment a map had
+// TWO bad entries. `reject()` used to THROW from inside the loop below, so
+// entry '13' was never even inspected once entry '5' failed the check -- the
+// caller fixed '5', re-ran, and only THEN heard about '13'. That directly
+// contradicted this docblock's own promise, so entry faults are now gathered
+// across the WHOLE map and thrown once, after every entry has been checked --
+// the same shape the missing/extra --children check two paragraphs down
+// already used.
+//
+// ROUND THREE, MAJOR: `root` is the checkout `consolidate()` already computed
+// with `assertRepoRoot()` before calling this. Every other file-reading flag in
+// this binary -- `pr body-check --body-from`, `backlog order --from`,
+// board/changelog/release/label/gate's own reads -- resolves a relative path
+// against that root with zero exceptions; this map path used to be the one
+// exception, resolved against `process.cwd()` instead, so `--close-comment-map
+// closes.json --repo ../other-checkout` read a file next to the SHELL rather
+// than next to the checkout the caller named.
+//
+// `null` means "no channel supplied", which is the ONLY value that reaches the
+// byte-frozen default in ./subissue.ts.
+function readCloseComments(
+  context: CommandContext,
+  children: readonly number[],
+  root: string,
+): CloseComments | null {
+  const template = context.args.values["close-comment"];
+  const mapPath = context.args.values["close-comment-map"];
+  if (template !== undefined && mapPath !== undefined) {
+    throw new VerbUsageError(
+      "--close-comment and --close-comment-map are two spellings of ONE input -- one text for every child, or one text per child. Give at most one.",
+    );
+  }
+
+  const vocabulary = CLOSE_COMMENT_PLACEHOLDERS.map((name): string => `{${name}}`).join(", ");
+  // The fault in ONE piece of template text, or `null` when it is clean --
+  // RETURNS rather than throws, so each caller below decides WHEN to report
+  // it. The single-template path (--close-comment) reports the fault the
+  // moment it is found, because there is only one string that can be wrong;
+  // the per-entry map loop further down instead collects one of these per
+  // entry and reports all of them together -- the round-three fix (MINOR 1)
+  // for the "first fault only" bug a throwing `reject()` used to have.
+  const describeFault = (text: string): string | null => {
+    if (text.trim() === "") {
+      return "is empty. Omit the flag to keep the default close comment; an empty one would close the child saying nothing.";
+    }
+    // BOTH BRACE FAULTS, IN ONE REFUSAL. An unknown placeholder and an
+    // unmatched brace are different mistakes -- a word the vocabulary does not
+    // have, versus a brace the caller forgot to close -- but they have the same
+    // consequence (template bytes posted as prose by a verb that closes issues)
+    // and the same fix round trip, so a template carrying one of each is told
+    // about both at once. The unmatched half was the round-two finding: the
+    // brace-run scan required braces on BOTH sides, so a dropped closing brace
+    // ('#{parent') matched nothing and went out literally on a REAL close.
+    const parts: string[] = [];
+    const unmatched = unmatchedBraces(text);
+    if (unmatched.length > 0) {
+      parts.push(
+        `${unmatched.length === 1 ? "an unmatched brace" : "unmatched braces"} ${unmatched.map((run): string => `'${run}'`).join(", ")} (a placeholder is substituted only when both of its braces are there, so this would be posted as typed)`,
+      );
+    }
+    const unknown = unknownPlaceholders(text);
+    if (unknown.length > 0) {
+      parts.push(
+        `${unknown.length === 1 ? "an unknown placeholder" : "unknown placeholders"} ${unknown.join(", ")}`,
+      );
+    }
+    if (parts.length === 0) return null;
+    return `carries ${parts.join(", and ")}. The vocabulary is ${vocabulary}; anything else would be posted literally onto a public timeline by a verb that closes issues.`;
+  };
+
+  if (template !== undefined) {
+    const fault = describeFault(template);
+    if (fault !== null) throw new VerbUsageError(`--close-comment ${fault}`);
+    return { template, perChild: new Map() };
+  }
+  // NOT `mapPath ?? ""` (ROUND THREE, MINOR 3 -- the exact anti-pattern
+  // ./comment.ts's CommentRequest docblock condemns in this very diff). The
+  // state "neither flag was given" is real, and it is handled here as
+  // `return null`, symmetrically with the `template !== undefined` branch
+  // above, rather than defaulted into an empty path that would be resolved,
+  // read, and reported as a missing file nobody named. TypeScript narrows
+  // `mapPath` to `string` for the rest of this function on its own past this
+  // check, so there is no unreachable state left to paper over with `??`.
+  if (mapPath === undefined) return null;
+
+  // Its own rationale, for the same reason comment()'s --body-file read has
+  // one: this map is the text that gets posted, not an input to a verdict.
+  // Resolved against `root`, not `process.cwd()` -- see the MAJOR finding in
+  // this function's header.
+  const raw = readJsonFile<unknown>(
+    mapPath,
+    root,
+    "--close-comment-map names the text each child is closed with, so an unreadable one is refused rather than silently falling back to the default comment.",
+  );
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new VerbUsageError(
+      `--close-comment-map '${mapPath}' must hold a JSON OBJECT mapping each child's number to its own comment text, e.g. {"12": "Absorbed by ...", "13": "..."}.`,
+    );
+  }
+
+  // EVERY ENTRY IS INSPECTED, AND EVERY FAULT IS KEPT. A bad key, a non-string
+  // value and a bad template are three different mistakes, but the ROUND-THREE
+  // FINDING (MINOR 1) is that a map carrying two of them only ever surfaced
+  // the first: this loop used to `throw` on the first non-string value or the
+  // first `reject()` failure, so an entry after it was never even read. Bad
+  // keys were already collected into `badKeys` and reported together below;
+  // the other two fault kinds now join them in `entryFaults`, collected the
+  // same way, so a caller sees the whole map's problems in one round trip.
+  const perChild = new Map<number, string>();
+  const badKeys: string[] = [];
+  const entryFaults: string[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^\d+$/.test(key) || Number.parseInt(key, 10) <= 0) {
+      badKeys.push(`'${key}'`);
+      continue;
+    }
+    if (typeof value !== "string") {
+      entryFaults.push(
+        `--close-comment-map entry '${key}' is not a string. Each value is the comment text posted when that child is closed.`,
+      );
+      continue;
+    }
+    const fault = describeFault(value);
+    if (fault !== null) {
+      entryFaults.push(`--close-comment-map entry '${key}' ${fault}`);
+      continue;
+    }
+    perChild.set(Number.parseInt(key, 10), value);
+  }
+  if (badKeys.length > 0 || entryFaults.length > 0) {
+    const messages: string[] = [];
+    if (badKeys.length > 0) {
+      messages.push(
+        `--close-comment-map keys are child issue NUMBERS; ${badKeys.join(", ")} ${badKeys.length === 1 ? "is not one" : "are not"}.`,
+      );
+    }
+    messages.push(...entryFaults);
+    throw new VerbUsageError(messages.join(" "));
+  }
+
+  // THE KEY SET MUST EQUAL --children, both directions -- see this function's
+  // header for why each direction is a silent loss rather than an
+  // inconvenience. Checked against the REQUESTED children rather than the ones
+  // the plan would close, so it fires before a single read.
+  const requested = new Set(children);
+  const missing = children.filter((child): boolean => !perChild.has(child));
+  const extra = [...perChild.keys()].filter((child): boolean => !requested.has(child));
+  if (missing.length > 0 || extra.length > 0) {
+    const parts: string[] = [];
+    if (missing.length > 0) {
+      parts.push(
+        `no entry for ${missing.map((child): string => `#${child}`).join(", ")} (which would be closed with the default text while their siblings get yours)`,
+      );
+    }
+    if (extra.length > 0) {
+      parts.push(
+        `an entry for ${extra.map((child): string => `#${child}`).join(", ")}, which --children does not name (that text would never be posted)`,
+      );
+    }
+    throw new VerbUsageError(
+      `--close-comment-map must name exactly the --children of this run; it has ${parts.join(", and ")}.`,
+    );
+  }
+
+  return { template: null, perChild };
+}
+
 function consolidate(context: CommandContext): number {
   const target = requireTarget(context);
   const parent = Number(context.args.values["parent"] ?? "");
@@ -414,6 +1016,10 @@ function consolidate(context: CommandContext): number {
   });
   const taxonomy = loadLabelTaxonomy(root);
   const severityFamily = readSeverityFamily(context, taxonomy);
+  // Read BEFORE the plan, so a malformed close-comment channel is refused
+  // without a single `gh` call -- the same discipline readSeverityFamily's
+  // shape check follows one line up.
+  const closeComments = readCloseComments(context, children, root);
   const plan = planConsolidation(context.seams, target, parent, children, taxonomy, severityFamily);
 
   // WITH NO --severity-family, planConsolidation's severity-max reduction is
@@ -468,7 +1074,13 @@ function consolidate(context: CommandContext): number {
     return 1;
   }
 
-  const report = consolidateClose(context.seams, target, plan, context.args.booleans.has("dry-run"));
+  const report = consolidateClose(
+    context.seams,
+    target,
+    plan,
+    context.args.booleans.has("dry-run"),
+    closeComments,
+  );
   if (context.json) {
     context.io.out(JSON.stringify({ plan, openPrs, report }, null, 2));
     return report.failed.length === 0 ? 0 : 1;

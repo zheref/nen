@@ -22,15 +22,67 @@ import { isAbsolute, resolve as resolvePath } from "node:path";
 import { VerbUsageError, type CommandContext } from "./command.js";
 import { GIT, must, normalizeEol, outputLines } from "../seam/exec.js";
 
-/** Read a file with its line endings normalized. `-` reads stdin. */
-export function readTextFile(path: string, cwd: string): string {
+/**
+ * The rationale half of the refusal below, for the verbs this module was written
+ * for: the ones that read a CHANGED-FILE SET and answer a question about it.
+ *
+ * It is the default rather than the only text because the sentence is a claim
+ * about the caller's verb, not about the filesystem. A verb that reads no set
+ * and renders no verdict -- `nen issue comment --body-file`, whose file IS the
+ * payload -- would be told that its empty fallback "would report a clean verdict
+ * for a check it never ran", which describes nothing it does. The actionable
+ * half (the RESOLVED path and the errno) is the same for everyone and is never
+ * overridable; only the why is.
+ */
+const CHANGED_SET_RATIONALE =
+  "A verb that fell back to an empty input here would report a clean verdict for a check it never ran.";
+
+/**
+ * Read a file with its line endings normalized.
+ *
+ * `-` IS NOT STDIN HERE, and never was: it resolves as a path literally named
+ * `-` and refuses like any other missing file. This docblock used to end "`-`
+ * reads stdin", which was a claim about behaviour this function has no code
+ * for, and rewriting the docblock is not the place to delete a false sentence
+ * in silence -- the family-visible consequence outlives the wording. It is why
+ * changedFilesUsage() below tells callers of --files-from that `-` is not
+ * accepted, and the reason it gives is the real one: a verb reading a set from
+ * stdin cannot also report which set it read.
+ *
+ * `why` replaces the rationale clause of the refusal for a caller whose input is
+ * not a changed-file set -- see CHANGED_SET_RATIONALE above.
+ *
+ * `raw`, WHEN TRUE, SKIPS THE NORMALIZATION -- ROUND THREE, MINOR 2. The
+ * normalization exists for the CHANGED-FILE-SET readers this module was built
+ * for (see the file header): a `\r` left on a path matches no pattern, so
+ * stripping it is correct there. `nen issue comment --body-file` is not one of
+ * those readers -- the file IS the payload, not a list to match patterns
+ * against -- and it has its OWN reason to skip this: `--dry-run`'s whole
+ * promise is "the bytes printed are the bytes that would be sent", and `gh` is
+ * always handed the ORIGINAL path, never a copy this process rewrote. A CRLF
+ * `--body-file` used to break that promise in one specific way -- the
+ * transcript and `--json`'s `body` field showed `\n`-normalized bytes while
+ * `gh` read the untouched `\r\n` file from disk, so what the caller approved
+ * and what got posted were never quite the same bytes. Rather than make `gh`
+ * read normalized bytes too (which would mean writing the caller's file back
+ * out through this process, a second write this verb has no other reason to
+ * perform), the read here is left exactly as it is on disk, so both sides
+ * already agree without either one moving.
+ */
+export function readTextFile(
+  path: string,
+  cwd: string,
+  why: string = CHANGED_SET_RATIONALE,
+  raw: boolean = false,
+): string {
   const full = isAbsolute(path) ? path : resolvePath(cwd, path);
   try {
-    return normalizeEol(readFileSync(full, "utf8"));
+    const text = readFileSync(full, "utf8");
+    return raw ? text : normalizeEol(text);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     throw new VerbUsageError(
-      `could not read '${full}'${code === undefined ? "" : ` (${code})`}. A verb that fell back to an empty input here would report a clean verdict for a check it never ran.`,
+      `could not read '${full}'${code === undefined ? "" : ` (${code})`}. ${why}`,
     );
   }
 }
@@ -100,9 +152,14 @@ export function changedFiles(context: CommandContext, gitCwd: string): readonly 
   return outputLines(result.stdout);
 }
 
-/** Parse a JSON document from a file, with a message that names the file. */
-export function readJsonFile<T>(path: string, cwd: string): T {
-  const text = readTextFile(path, cwd);
+/**
+ * Parse a JSON document from a file, with a message that names the file.
+ *
+ * `why` is handed straight to readTextFile above, so a caller whose JSON is not
+ * a changed-file set gets its own rationale on the unreadable-file refusal too.
+ */
+export function readJsonFile<T>(path: string, cwd: string, why?: string): T {
+  const text = readTextFile(path, cwd, why);
   try {
     return JSON.parse(text) as T;
   } catch (error) {
