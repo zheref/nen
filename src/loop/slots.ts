@@ -106,9 +106,11 @@ export function occupancy(effort: Effort): { occupied: boolean; why: string } {
   return { occupied: false, why: "ready and prompted -- handed over" };
 }
 
-// `caps` is required -- no default parameter. A library caller who omitted it
-// would inherit exactly the silent local budget the DEFAULT_CI_CAP note above
-// removes; the requirement holds at every layer, not just the CLI's.
+// `caps` is required -- no default parameter. A defaulted `caps` here would
+// quietly resurrect the removed local default cap (see THE LOCAL PLANE HAS NO
+// DEFAULT CAP above): a library caller who omitted it would inherit a local
+// budget nobody chose; the requirement holds at every layer, not just the
+// CLI's.
 export function computeSlots(
   efforts: readonly Effort[],
   caps: Caps,
