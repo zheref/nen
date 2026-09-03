@@ -123,10 +123,16 @@ describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged 
     expect(result.err.join("\n")).toMatch(/only a consumers\[\] entry carries a 'scenario'/);
   });
 
-  it("scenario names the product code recording the registry's OWN repo, not 'unknown'", async () => {
+  // zheref/nen#28's second finding: this is a NAME-HALF match against a bare
+  // product-code value (no owner recorded anywhere), not a registry hit on
+  // the full 'zheref/bankai-core' slug -- so the refusal must not claim the
+  // slug itself "is recorded".
+  it("scenario names the product code recording the registry's OWN repo, not 'unknown' -- and does not overclaim the slug is recorded", async () => {
     const result = await capture(["repo", "scenario", "--target", "zheref/bankai-core"]);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/as product code 'BC' \('bankai-core'\)/);
+    expect(result.err.join("\n")).toMatch(/bare product code 'BC' \('bankai-core'\), which names no owner/);
+    expect(result.err.join("\n")).toMatch(/is not itself recorded in/);
+    expect(result.err.join("\n")).not.toMatch(/'zheref\/bankai-core' is recorded in/);
   });
 
   it("refuses an unknown subcommand", async () => {

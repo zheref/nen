@@ -4,8 +4,10 @@ import { parseRepoRegistry } from "../schema/repos.js";
 
 // One registry that records repositories in every place the file can: a
 // consumer with a scenario, a consumer without one, a maintained tool, a
-// pending onboarding, and the registry's own repo as a bare product-code
-// value -- so each of the three refusal causes (zheref/nen#28) has a subject.
+// pending onboarding, the registry's own repo as a bare product-code value,
+// and a product code whose value is a FULL owner/name slug -- so each of the
+// three refusal causes (zheref/nen#28), plus both recordedWhere() outcomes
+// (zheref/nen#28's second finding), has a subject.
 const REGISTRY = parseRepoRegistry("/x/schemas/repos.json", {
   latest: "v1.0.0",
   consumers: [
@@ -14,7 +16,7 @@ const REGISTRY = parseRepoRegistry("/x/schemas/repos.json", {
   ],
   maintained_tools: [{ repo: "zheref/tooling" }],
   pending_onboarding: [{ repo: "zheref/KroCloud" }],
-  product_codes: { BC: "bankai-core" },
+  product_codes: { BC: "bankai-core", RG: "zheref/registry-tool" },
 });
 
 describe("resolveScenario -- a lookup, with the three gaps told apart (zheref/nen#28)", () => {
@@ -57,9 +59,31 @@ describe("resolveScenario -- a lookup, with the three gaps told apart (zheref/ne
     if (!tool.ok) expect(tool.reason).toMatch(/under 'maintained_tools'/);
   });
 
-  it("the registry's own repo -- a bare product-code value -- names the code that records it", () => {
+  // zheref/nen#28's second finding: a bare product_codes value (no owner
+  // anywhere in the file) matched only by NAME HALF (resolveToken()'s rule
+  // 3.5c) is NOT the same claim as the registry recording 'zheref/bankai-core'
+  // -- the owner half came from the caller's own token. The wording must say
+  // so, while still naming the code so the caller can find it.
+  it("the registry's own repo -- a bare product-code value matched by name half -- is named WITHOUT claiming the slug itself is recorded", () => {
     const own = resolveScenario(REGISTRY, "zheref/bankai-core");
     expect(own.ok).toBe(false);
-    if (!own.ok) expect(own.reason).toMatch(/as product code 'BC' \('bankai-core'\)/);
+    if (!own.ok) {
+      expect(own.reason).toMatch(/is not itself recorded in/);
+      expect(own.reason).toMatch(/bare product code 'BC' \('bankai-core'\), which names no owner/);
+      expect(own.reason).not.toMatch(/'zheref\/bankai-core' is recorded in/);
+    }
+  });
+
+  // The other side of the same distinction: a product_codes value that IS the
+  // full owner/name slug, matched EXACTLY (rule 3.5a) rather than by name
+  // half -- the registry genuinely does record this slug, so "is recorded"
+  // stays the accurate claim.
+  it("a product code recording the FULL owner/name slug exactly is reported as genuinely recorded", () => {
+    const exact = resolveScenario(REGISTRY, "zheref/registry-tool");
+    expect(exact.ok).toBe(false);
+    if (!exact.ok) {
+      expect(exact.reason).toMatch(/'zheref\/registry-tool' is recorded in .*as product code 'RG' \('zheref\/registry-tool'\)/);
+      expect(exact.reason).not.toMatch(/is not itself recorded/);
+    }
   });
 });

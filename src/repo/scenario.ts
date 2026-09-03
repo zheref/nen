@@ -34,27 +34,55 @@ export type ScenarioResult =
   | { readonly ok: true; readonly scenario: string }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * Where recordedWhere() found `repoSlug`, and whether that find NAMES it --
+ * as opposed to merely matching its bare name half against a value that
+ * names no owner at all (resolveToken()'s rule 3.5c). The distinction exists
+ * because resolveScenario()'s gap-2 message says "'repoSlug' IS recorded in
+ * FILE"; that claim is true for every case below except the 3.5c one, where
+ * the file never recorded `repoSlug` -- only its name half, under a bare
+ * `product_codes` value that states no owner. Saying "is recorded" there
+ * overstates what a caller re-reading the file would actually find (#28).
+ */
+interface RecordedLocation {
+  readonly clause: string;
+  readonly exact: boolean;
+}
+
 // Where the registry records a repo that resolveToken() matched OUTSIDE
 // `consumers[]` -- named in the refusal so the caller opens the right section.
 // The comparisons mirror ./resolve.ts's (exact slug for the listings, exact
-// value or bare-name-half for a product code); the fallthrough exists so a
-// future widening of resolveToken() degrades to a vaguer-but-true message
-// here rather than to a lie about which section to edit.
-function recordedWhere(registry: RepoRegistry, repoSlug: string): string {
+// value for a product code, or -- separately, and marked inexact -- a bare
+// value's name half); the fallthrough exists so a future widening of
+// resolveToken() degrades to a vaguer-but-true message here rather than to a
+// lie about which section to edit.
+function recordedWhere(registry: RepoRegistry, repoSlug: string): RecordedLocation {
   const wanted = repoSlug.toLowerCase();
   const short = nameHalf(repoSlug).toLowerCase();
   if (registry.maintainedTools.some((repo): boolean => repo.toLowerCase() === wanted)) {
-    return "under 'maintained_tools'";
+    return { clause: "under 'maintained_tools'", exact: true };
   }
   if (registry.pendingOnboarding.some((repo): boolean => repo.toLowerCase() === wanted)) {
-    return "under 'pending_onboarding'";
+    return { clause: "under 'pending_onboarding'", exact: true };
   }
   for (const [code, name] of Object.entries(registry.productCodes)) {
-    if (name.toLowerCase() === wanted || (!name.includes("/") && name.toLowerCase() === short)) {
-      return `as product code '${code}' ('${name}')`;
+    if (name.toLowerCase() === wanted) {
+      return { clause: `as product code '${code}' ('${name}')`, exact: true };
     }
   }
-  return "outside its consumers[] list";
+  // 3.5c: a BARE product-code value (no owner recorded for it anywhere in the
+  // file) matched by NAME HALF only. `repoSlug`'s owner half came from the
+  // caller's own token, never from a lookup, so the registry does not record
+  // `repoSlug` -- only the name resolveToken() matched it against.
+  for (const [code, name] of Object.entries(registry.productCodes)) {
+    if (!name.includes("/") && name.toLowerCase() === short) {
+      return {
+        clause: `bare product code '${code}' ('${name}'), which names no owner`,
+        exact: false,
+      };
+    }
+  }
+  return { clause: "outside its consumers[] list", exact: true };
 }
 
 export function resolveScenario(registry: RepoRegistry, repoSlug: string): ScenarioResult {
@@ -76,9 +104,17 @@ export function resolveScenario(registry: RepoRegistry, repoSlug: string): Scena
     // "not a consumer" wording reported IDENTICALLY to gap 1, which told a
     // caller staring at the repo's own listing that the registry "does not
     // know it".
+    const where = recordedWhere(registry, repoSlug);
     return {
       ok: false,
-      reason: `'${repoSlug}' is recorded in ${registry.path} (${recordedWhere(registry, repoSlug)}), but only a consumers[] entry carries a 'scenario' field. To give it one, record it under consumers[] with a 'scenario'.`,
+      // The 3.5c/bare-value case (where.exact === false) gets its OWN
+      // sentence rather than reusing "'repoSlug' is recorded in FILE (...)":
+      // the file never recorded repoSlug there, only the name half it
+      // matched against -- saying "is recorded" would overstate the lookup
+      // (#28's second finding).
+      reason: where.exact
+        ? `'${repoSlug}' is recorded in ${registry.path} (${where.clause}), but only a consumers[] entry carries a 'scenario' field. To give it one, record it under consumers[] with a 'scenario'.`
+        : `'${repoSlug}' is not itself recorded in ${registry.path} -- only its name half matches ${where.clause}. To give it a scenario, record '${repoSlug}' under consumers[] there.`,
     };
   }
   if (entry.scenario === null) {
