@@ -57,6 +57,27 @@ export interface RepoRegistry {
   readonly consumers: readonly ConsumerEntry[];
   /** `code -> full name`, exactly as the file states it. */
   readonly productCodes: Readonly<Record<string, string>>;
+  /**
+   * `owner/name` slugs listed under `maintained_tools`, in file order.
+   *
+   * REPOSITORIES THE REGISTRY RECORDS WITHOUT LISTING AS CONSUMERS. A live
+   * registry names repositories in two more places than `consumers[]`: its own
+   * maintained tooling repos (`maintained_tools`) and repos slated to adopt
+   * the machinery that have not yet (`pending_onboarding`). Both exist
+   * precisely BECAUSE those repos are not consumers -- so a token resolution
+   * that stops at `consumers[]` refuses a repository the file plainly records,
+   * which is how five independent skill ports each rediscovered that the
+   * registry's own source repo "is not in this registry" (zheref/nen#27).
+   *
+   * ONLY THE SLUG IS MODELLED. Each entry carries more (`role`, `status`,
+   * `reason`, ...), and that prose is the target repository's business, on the
+   * same discipline that keeps `callerPins` raw: the slug is the one fact
+   * token resolution needs, and modelling the rest would be this binary
+   * learning another repository's onboarding vocabulary.
+   */
+  readonly maintainedTools: readonly string[];
+  /** `owner/name` slugs listed under `pending_onboarding`, in file order. See `maintainedTools`. */
+  readonly pendingOnboarding: readonly string[];
   byRepo(repo: string): ConsumerEntry | undefined;
   byCode(code: string): ConsumerEntry | undefined;
   /** Consumers whose `consumes` intersects `changed`. Order is the file's. */
@@ -64,6 +85,30 @@ export interface RepoRegistry {
 }
 
 const CALLER_PIN_SUFFIX = "_pinned";
+
+// One of the non-consumer repository lists (`maintained_tools`,
+// `pending_onboarding`). ABSENT IS FINE -- both sections are newer than many
+// registries and a loader that required them would refuse a perfectly valid
+// file -- but an entry that IS present must name an `owner/name` repo, for the
+// same reason a consumer must: an entry without one records nothing a
+// resolution (or a reader) can act on, and these lists exist to record exactly
+// the owner that `product_codes`' bare values omit.
+function parseListedRepos(path: string, field: string, raw: unknown): readonly string[] {
+  if (raw === undefined || raw === null) return [];
+  return requireArray(path, field, raw).map((entry, index): string => {
+    const pointer = `${field}[${index}]`;
+    const record = requireRecord(path, pointer, entry);
+    const repo = requireString(path, `${pointer}.repo`, record["repo"]);
+    if (!repo.includes("/")) {
+      throw new SchemaError(
+        path,
+        `${pointer}.repo`,
+        `expected an 'owner/name' slug, got '${repo}'`,
+      );
+    }
+    return repo;
+  });
+}
 
 export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
   const root = requireRecord(path, "$", value);
@@ -159,6 +204,8 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     latest,
     consumers,
     productCodes,
+    maintainedTools: parseListedRepos(path, "maintained_tools", root["maintained_tools"]),
+    pendingOnboarding: parseListedRepos(path, "pending_onboarding", root["pending_onboarding"]),
     byRepo: (repo): ConsumerEntry | undefined => byRepoIndex.get(repo),
     byCode: (code): ConsumerEntry | undefined => byCodeIndex.get(code),
     affectedBy: (changed): readonly ConsumerEntry[] => {

@@ -16,7 +16,8 @@ function requireTarget(context: CommandContext): Target {
   return parseTarget(raw);
 }
 
-const USAGE = `nen repo resolve [<token>] [--from <dir>]
+const USAGE = `nen repo resolve [<token>] [--repo <path>]
+nen repo resolve [--from <dir>] [--repo <path>]
 nen repo inventory --target <owner/name> --epic-label <label> --integration-prefix <prefix> [--trunk main]
 nen repo scenario --repo <path> --target <owner/name>
 
@@ -25,10 +26,19 @@ resolve:
 
   <token>          A product code (BC), an owner/name slug (owner/name), a
                    repository's short name, or 'all'. Matched EXACTLY and
-                   case-insensitively -- never as a prefix.
+                   case-insensitively -- never as a prefix. A token resolves
+                   from EVERYTHING the registry records: consumers,
+                   product_codes (keys and values), maintained_tools and
+                   pending_onboarding.
   (no token)       Resolve the working directory's 'origin' remote instead.
-  --from <dir>     The directory whose 'origin' the no-token form reads.
-                   Defaults to the current directory.
+  --repo <path>    The checkout whose schemas/repos.json is the registry
+                   resolved against -- the same flag its siblings (repo
+                   scenario, canon resolve) take, valid with and without a
+                   token. Defaults to the current directory.
+  --from <dir>     NO-TOKEN FORM ONLY: the directory whose 'origin' is read.
+                   Defaults to the current directory. With a token there is no
+                   origin to read, so the flag is refused rather than silently
+                   ignored; to read another checkout's registry, use --repo.
 
 An unknown token is an error that lists the registry's codes. It is never a
 guess and never a widening to every repository.
@@ -69,9 +79,25 @@ export const repoCommand: Command = {
     if (subcommand === "inventory") return inventory(context);
     if (subcommand === "scenario") return scenario(context);
 
+    const token = context.args.positionals[2] ?? null;
+    // `--from` FEEDS THE NO-TOKEN FORM ONLY: it names the directory whose
+    // `origin` becomes the token, and a token given explicitly means no origin
+    // is read at all. It used to be silently IGNORED next to a token, which
+    // read as "resolve against that checkout's registry" and then resolved
+    // against the wrong one (the cwd's) -- the exact failure ../cli/args.ts's
+    // strictness exists to prevent, one flag deep (zheref/nen#27). Refused
+    // loudly, naming the flag the caller actually wanted -- and refused BEFORE
+    // the registry is opened, because a misuse of the flags must not be
+    // reported as "the cwd has no schemas/repos.json" when the cwd was never
+    // the checkout the caller meant.
+    if (token !== null && context.args.values["from"] !== undefined) {
+      throw new VerbUsageError(
+        `--from applies only to the no-token form: it names the directory whose 'origin' is read, and the token '${token}' already names the subject. To resolve '${token}' against another checkout's registry, use --repo <path>.`,
+      );
+    }
+
     const taxonomy = openTaxonomy({ repoFlag: context.repoFlag });
     const registry = taxonomy.repos();
-    const token = context.args.positionals[2] ?? null;
     // `--from` defaults to the CALL SITE's cwd, not to the target repository:
     // "which repository am I standing in" and "whose taxonomy am I reading" are
     // different questions, and a verb that answered the first with the second

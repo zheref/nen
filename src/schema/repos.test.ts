@@ -62,6 +62,18 @@ describe("loadRepoRegistry -- reads the TARGET repository", () => {
   it("errors loudly when the file is absent", () => {
     expect(() => loadRepoRegistry("/definitely/not/a/repo")).toThrow(/no such file/);
   });
+
+  it("reads the maintained_tools/pending_onboarding slugs, and tolerates their absence (zheref/nen#27)", () => {
+    // The bankai fixture carries both sections (the live registry does); the
+    // alt fixture carries neither. Absence is an empty list, never an error --
+    // both sections are newer than many registries.
+    const bankai = loadRepoRegistry(BANKAI_REPO);
+    expect(bankai.maintainedTools).toEqual(["zheref/bankai-scaffold"]);
+    expect(bankai.pendingOnboarding).toEqual(["zheref/KroCloud"]);
+    const alt = loadRepoRegistry(ALT_REPO);
+    expect(alt.maintainedTools).toEqual([]);
+    expect(alt.pendingOnboarding).toEqual([]);
+  });
 });
 
 describe("parseRepoRegistry -- validation", () => {
@@ -109,5 +121,16 @@ describe("parseRepoRegistry -- validation", () => {
     const registry = parseRepoRegistry(at, { consumers: [{ repo: "a/b", consumes: [] }] });
     expect(registry.productCodes).toEqual({});
     expect(registry.latest).toBeNull();
+  });
+
+  it("requires a maintained_tools/pending_onboarding entry to name an owner/name repo", () => {
+    // These lists exist to record exactly the owner a bare product_codes value
+    // omits, so an entry without one records nothing a resolution can use.
+    expect(() =>
+      parseRepoRegistry(at, { consumers: [], pending_onboarding: [{ repo: "bare" }] }),
+    ).toThrow(/pending_onboarding\[0\]\.repo/);
+    expect(() =>
+      parseRepoRegistry(at, { consumers: [], maintained_tools: [{ role: "tool" }] }),
+    ).toThrow(/maintained_tools\[0\]\.repo/);
   });
 });

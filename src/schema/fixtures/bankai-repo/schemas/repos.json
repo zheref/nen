@@ -30,6 +30,19 @@
       "code": "BS"
     }
   ],
+  "maintained_tools": [
+    {
+      "repo": "zheref/bankai-scaffold",
+      "role": "scaffolder (Stack Matrix generator)"
+    }
+  ],
+  "pending_onboarding": [
+    {
+      "repo": "zheref/KroCloud",
+      "status": "not-a-consumer",
+      "reason": "No bankai.yml yet; recorded for onboarding visibility only."
+    }
+  ],
   "product_codes": {
     "BC": "bankai-core",
     "BS": "bankai-scaffold",
