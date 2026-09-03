@@ -81,9 +81,13 @@ export function parseDiff(text: string): readonly FileDiff[] {
       // hunk stops; anything after them belongs to the next section, not here.
       const counts = HUNK_COUNTS.exec(hunkLine);
       // A header HUNK_HEADER accepted but whose ranges are unreadable gets
-      // the old boundary-based capture (Infinity never exhausts) rather than
-      // an empty body -- degrading to greedy is strictly safer than dropping
-      // lines from a hunk whose identity IS its full text.
+      // Infinity counts: the exhaustion break below then never fires, and
+      // the body is bounded only by the loop's other stops -- the next
+      // hunk/file header, or the first non-marker line ('' included, via the
+      // else-break). That still collects every well-formed marker line
+      // rather than an empty body: for a hunk whose identity IS its full
+      // text, stopping at a structural boundary is strictly safer than
+      // dropping lines.
       let oldRemaining = counts === null ? Infinity : Number(counts[1] ?? "1");
       let newRemaining = counts === null ? Infinity : Number(counts[2] ?? "1");
       const body: string[] = [hunkLine];
