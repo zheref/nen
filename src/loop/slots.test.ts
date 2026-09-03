@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeSlots, DEFAULT_CAPS, occupancy, parseEfforts, type Effort } from "./slots.js";
+import { computeSlots, DEFAULT_CI_CAP, occupancy, parseEfforts, type Effort } from "./slots.js";
 
 describe("occupancy -- the two planes free their slot at different moments", () => {
   it("a CI effort frees at PR-open, regardless of readiness", () => {
@@ -34,22 +34,22 @@ describe("occupancy -- the two planes free their slot at different moments", () 
 });
 
 describe("computeSlots -- the two budgets, counted and never traded", () => {
-  it("counts ci and local independently against DEFAULT_CAPS", () => {
+  it("counts ci and local independently against caller-chosen caps", () => {
     const efforts: Effort[] = [
       { id: "ci-1", plane: "ci", prOpen: false, ready: false, prompted: false },
       { id: "ci-2", plane: "ci", prOpen: false, ready: false, prompted: false },
       { id: "local-1", plane: "local", prOpen: false, ready: false, prompted: false },
     ];
-    const report = computeSlots(efforts, DEFAULT_CAPS);
+    const report = computeSlots(efforts, { ci: DEFAULT_CI_CAP, local: 2 });
     expect(report.ci).toMatchObject({ cap: 2, occupied: 2, free: 0, binding: true });
-    expect(report.local).toMatchObject({ cap: 7, occupied: 1, free: 6, binding: false });
+    expect(report.local).toMatchObject({ cap: 2, occupied: 1, free: 1, binding: false });
   });
 
   it("lists a freed effort under done, on its own plane's rule", () => {
     const efforts: Effort[] = [
       { id: "ci-1", plane: "ci", prOpen: true, ready: false, prompted: false },
     ];
-    const report = computeSlots(efforts);
+    const report = computeSlots(efforts, { ci: DEFAULT_CI_CAP, local: 2 });
     expect(report.done).toEqual(["ci-1"]);
   });
 

@@ -43,8 +43,23 @@ export interface Caps {
   readonly local: number;
 }
 
-/** The documented defaults, and the reason each is what it is. */
-export const DEFAULT_CAPS: Caps = { ci: 2, local: 7 };
+// THE LOCAL PLANE HAS NO DEFAULT CAP, ON PURPOSE. There used to be one -- 7 --
+// and it was a footgun (issue #52): every real caller's own stated policy was
+// 2, so forgetting one flag silently granted more than three times the intended
+// concurrency. A safety cap that WIDENS when omitted fails in the dangerous
+// direction; a guard must be chosen by the caller, not inherited from a default
+// nobody's policy actually states. So `computeSlots` requires caps outright,
+// and the CLI refuses when `--local-cap` is omitted.
+//
+// THE CI PLANE KEEPS ITS DEFAULT, and the asymmetry is deliberate. 2 is not a
+// guess this module made -- it is the ported band-scoped loop's own CI budget,
+// the exact value every known caller runs under (none has ever overridden it).
+// Forgetting `--ci-cap` therefore lands on the strictest known policy: the
+// omission errs TIGHT, the safe direction, which is precisely what the local
+// default failed to do. And the exposure differs in kind -- a CI slot frees at
+// PR-open (see the header), so its budget bounds only the short pre-PR window,
+// where a local slot is held all the way to ready-and-prompted.
+export const DEFAULT_CI_CAP = 2;
 
 export interface PlaneReport {
   readonly plane: Plane;
@@ -91,9 +106,12 @@ export function occupancy(effort: Effort): { occupied: boolean; why: string } {
   return { occupied: false, why: "ready and prompted -- handed over" };
 }
 
+// `caps` is required -- no default parameter. A library caller who omitted it
+// would inherit exactly the silent local budget the DEFAULT_CI_CAP note above
+// removes; the requirement holds at every layer, not just the CLI's.
 export function computeSlots(
   efforts: readonly Effort[],
-  caps: Caps = DEFAULT_CAPS,
+  caps: Caps,
 ): SlotsReport {
   const done: string[] = [];
   const build = (plane: Plane, cap: number): PlaneReport => {
