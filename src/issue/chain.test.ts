@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { ScriptedSeams } from "../seam/scripted.js";
+import type { Target } from "../github/target.js";
 import type { IssueSummary } from "./subissue.js";
-import { classifyChainPosition, classifyTerminus, parseRoleMap } from "./chain.js";
+import { chainPosition, classifyChainPosition, classifyTerminus, parseRoleMap, terminus } from "./chain.js";
 
 function issue(overrides: Partial<IssueSummary> = {}): IssueSummary {
-  return { number: 1, id: 1, title: "t", state: "open", labels: [], ...overrides };
+  return { number: 1, id: 1, title: "t", state: "open", labels: [], isPullRequest: false, ...overrides };
 }
 
 describe("parseRoleMap", () => {
@@ -167,5 +169,76 @@ describe("classifyTerminus", () => {
 
   it("no epic or chore label -- own-pr into trunk", () => {
     expect(classifyTerminus(issue({ labels: [] }), map, null, "main").kind).toBe("own-pr");
+  });
+});
+
+// Issue #25: GitHub numbers issues and PRs in one sequence and issues/{n}
+// serves both, so `--issue 925` naming a PR used to answer a plausible,
+// silently wrong classification ('routable' / 'own-pr', exit 0). The guard
+// lives at the fetch, in BOTH verb wrappers, keyed on the payload's non-null
+// `pull_request` -- the one discriminator that exists (`gh issue view --json
+// pull_request` errors on every object).
+describe("chainPosition / terminus -- refuse a pull request outright (issue #25)", () => {
+  const TARGET: Target = { owner: "o", repo: "n", slug: "o/n" };
+  const { map } = parseRoleMap([
+    "building=mode:build",
+    "in-review=mode:review",
+    "idea=mode:idea",
+    "epic=type:epic",
+  ]);
+
+  function prPayload(): { stdout: string } {
+    return {
+      stdout: JSON.stringify({
+        number: 925,
+        id: 90925,
+        title: "some pull request",
+        state: "open",
+        labels: [],
+        pull_request: { url: "https://api.github.com/repos/o/n/pulls/925" },
+      }),
+    };
+  }
+
+  it("chain-position refuses a PR-shaped payload with the actionable message, never a classification", () => {
+    const seams = new ScriptedSeams([{ match: "gh api repos/o/n/issues/925", result: prPayload() }]);
+    expect((): unknown => chainPosition(seams, TARGET, 925, map)).toThrow(
+      /#925 names a pull request, not an issue; a delivery-chain position is defined only for issues/,
+    );
+  });
+
+  it("terminus refuses the same PR-shaped payload -- both verbs carry the guard", () => {
+    const seams = new ScriptedSeams([{ match: "gh api repos/o/n/issues/925", result: prPayload() }]);
+    expect((): unknown => terminus(seams, TARGET, 925, map)).toThrow(/names a pull request, not an issue/);
+  });
+
+  it("the refusal points at the right family for a PR", () => {
+    const seams = new ScriptedSeams([{ match: "gh api repos/o/n/issues/925", result: prPayload() }]);
+    expect((): unknown => chainPosition(seams, TARGET, 925, map)).toThrow(/'nen pr' family/);
+  });
+
+  it("a genuine issue payload (no pull_request key) classifies exactly as before", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api repos/o/n/issues/17",
+        result: {
+          stdout: JSON.stringify({ number: 17, id: 90017, title: "a real issue", state: "open", labels: [] }),
+        },
+      },
+    ]);
+    expect(chainPosition(seams, TARGET, 17, map).position).toBe("routable");
+  });
+
+  it("a genuine issue payload's terminus is likewise unchanged", () => {
+    const { map: terminusMap } = parseRoleMap(["chore=type:chore", "epic=type:epic"]);
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api repos/o/n/issues/17",
+        result: {
+          stdout: JSON.stringify({ number: 17, id: 90017, title: "a real issue", state: "open", labels: [] }),
+        },
+      },
+    ]);
+    expect(terminus(seams, TARGET, 17, terminusMap).kind).toBe("own-pr");
   });
 });

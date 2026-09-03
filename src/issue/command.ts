@@ -30,7 +30,7 @@ import {
   type FileRequest,
 } from "./file.js";
 import { consolidateClose, attachSub, planConsolidation } from "./subissue.js";
-import { chainPosition, parseRoleMap, terminus } from "./chain.js";
+import { chainPosition, NotAnIssueError, parseRoleMap, terminus } from "./chain.js";
 
 export function numberList(value: string | undefined): readonly number[] {
   return commaList(value)
@@ -102,7 +102,12 @@ usage:
       approved-team, approved-direct, building, in-review, epic, chore. An
       unparseable --chain-labels entry (no '=', an unknown role, an empty
       label) exits 2 rather than being silently dropped. Exits 1 when the
-      answer is 'undecidable' -- that is a refusal, not a result; 0 otherwise.`;
+      answer is 'undecidable' -- that is a refusal, not a result; 0 otherwise.
+      Both verbs also REFUSE (exit 1) when --issue <n> turns out to name a
+      pull request: GitHub numbers issues and PRs in one sequence and serves
+      both from issues/{n}, and a delivery-chain position is defined only for
+      issues -- classifying a PR's labels answers something plausible and
+      silently wrong. Ask the 'nen pr' family about a pull request.`;
 
 export const issueCommand: Command = {
   name: "issue",
@@ -467,6 +472,20 @@ function consolidate(context: CommandContext): number {
   return 0;
 }
 
+// The chain verbs' object-class refusal (issue #25), rendered once for both:
+// exit 1 like every other refusal in this family, with the same stable
+// `refused: true` --json shape consolidate-close's refusals use -- a caller
+// that machine-reads these verbs must be able to tell "refused to classify"
+// from "classified", not just from the exit code.
+function refuseNotAnIssue(context: CommandContext, issue: number, error: NotAnIssueError): number {
+  if (context.json) {
+    context.io.out(JSON.stringify({ issue, refused: true, reason: error.message }, null, 2));
+    return 1;
+  }
+  context.io.err(`nen: ${error.message}`);
+  return 1;
+}
+
 function position(context: CommandContext): number {
   const target = requireTarget(context);
   const issue = Number(context.args.values["issue"] ?? "");
@@ -478,7 +497,13 @@ function position(context: CommandContext): number {
     for (const message of parsed.errors) context.io.err(`nen: --chain-labels: ${message}`);
     return 2;
   }
-  const result = chainPosition(context.seams, target, issue, parsed.map);
+  let result;
+  try {
+    result = chainPosition(context.seams, target, issue, parsed.map);
+  } catch (error) {
+    if (error instanceof NotAnIssueError) return refuseNotAnIssue(context, issue, error);
+    throw error;
+  }
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.position === "undecidable" ? 1 : 0;
@@ -502,14 +527,20 @@ function chainTerminus(context: CommandContext): number {
     for (const message of parsed.errors) context.io.err(`nen: --chain-labels: ${message}`);
     return 2;
   }
-  const result = terminus(
-    context.seams,
-    target,
-    issue,
-    parsed.map,
-    context.args.values["integration-prefix"] ?? null,
-    context.args.values["trunk"] ?? "main",
-  );
+  let result;
+  try {
+    result = terminus(
+      context.seams,
+      target,
+      issue,
+      parsed.map,
+      context.args.values["integration-prefix"] ?? null,
+      context.args.values["trunk"] ?? "main",
+    );
+  } catch (error) {
+    if (error instanceof NotAnIssueError) return refuseNotAnIssue(context, issue, error);
+    throw error;
+  }
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.kind === "undecidable" ? 1 : 0;

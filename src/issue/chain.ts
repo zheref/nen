@@ -97,6 +97,43 @@ export function parseRoleMap(entries: readonly string[]): RoleMapParseResult {
   return { map, errors };
 }
 
+// --- the object-class guard --------------------------------------------------
+//
+// A PULL REQUEST IS NOT ON THE CHAIN. GitHub numbers issues and PRs in one
+// sequence and serves both from `issues/{n}`, so `--issue 925` can name a PR
+// and every classification below would still run: the labels read cleanly, the
+// state reads cleanly, and the verb answers something plausible ('#925:
+// routable', exit 0 -- issue #25's live transcript) for an object class it was
+// never meant to classify. That is the expensive failure again, in a new
+// shape: a caller (hatsu:build) routes work off the answer, and a silently
+// wrong classification releases a PR into an issue's choreography.
+//
+// So the guard runs at the FETCH, before any classification, in BOTH verbs --
+// the readings are refused wholesale, not answered wrongly. The signal is the
+// payload's non-null `pull_request` (readIssue carries it as
+// `isPullRequest`); there is no other pre-check, because `gh issue view
+// --json pull_request` does not exist -- it errors on every object.
+
+/**
+ * Thrown when `--issue <n>` turns out to name a pull request. A distinct class
+ * so the CLI layer can keep its stable `--json` refusal shape (`refused:
+ * true`) instead of letting the message fall through as a bare failure.
+ */
+export class NotAnIssueError extends Error {
+  constructor(number: number) {
+    super(
+      `#${number} names a pull request, not an issue; a delivery-chain position is defined only for issues. ` +
+        `For the pull request's own state, ask the 'nen pr' family instead (e.g. 'nen pr ready', 'nen pr next-blocker').`,
+    );
+    this.name = "NotAnIssueError";
+  }
+}
+
+function requireIssue(summary: IssueSummary): IssueSummary {
+  if (summary.isPullRequest) throw new NotAnIssueError(summary.number);
+  return summary;
+}
+
 function carries(issue: IssueSummary, map: RoleMap, role: ChainRole): string | null {
   for (const label of map.get(role) ?? []) {
     if (issue.labels.includes(label)) return label;
@@ -181,7 +218,7 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
 // is a CLI-boundary concern (parseRoleMap's `errors` need a place to be
 // reported and exited on, which is ../issue/verb.ts, not this wrapper).
 export function chainPosition(seams: Seams, target: Target, issue: number, map: RoleMap): ChainPositionResult {
-  return classifyChainPosition(readIssue(seams, target, issue), map);
+  return classifyChainPosition(requireIssue(readIssue(seams, target, issue)), map);
 }
 
 // --- terminus ----------------------------------------------------------------
@@ -306,5 +343,5 @@ export function terminus(
   integrationPrefix: string | null = null,
   trunk = "main",
 ): TerminusResult {
-  return classifyTerminus(readIssue(seams, target, issue), map, integrationPrefix, trunk);
+  return classifyTerminus(requireIssue(readIssue(seams, target, issue)), map, integrationPrefix, trunk);
 }
