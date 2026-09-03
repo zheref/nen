@@ -39,25 +39,56 @@
 // are typed, so the RIGHTMOST separator is resolved first against the whole
 // line and each earlier one against what is left. Left-to-right would let an
 // earlier slot swallow a later separator -- exactly the "wrong split" rule 1 is
-// about, reintroduced by the traversal order.
+// about, reintroduced by the traversal order. Literal-only optional clauses
+// (`[then sweep]`) take part in the SAME right-to-left resolution: they are what
+// stops an earlier slot's capture, so dropping them (as this engine did before
+// zheref/nen#30) let the first slot swallow the caller's clause verbatim and
+// report the swallow as a successful parse.
+//
+// A TEMPLATE THE ENGINE CANNOT PARSE UNAMBIGUOUSLY IS REFUSED, LOUDLY, AT
+// parseTemplate TIME (zheref/nen#30). The alternative -- accepting the template
+// and mis-splitting the line -- is the silent-`ok:true` failure mode that issue
+// documents, and a silent mis-parse is strictly worse than a refusal that names
+// the unsupported shape and the rewrite that avoids it.
 
 export interface Slot {
   readonly name: string;
   /** Allowed values, case-insensitively, when the template enumerates them. */
   readonly values: readonly string[];
-  /** The separator that introduces this slot, or null for the leading slot. */
+  /** The separator that introduces this slot, or null for an unintroduced leading slot. */
   readonly separator: string | null;
   /** `word` separators match on a whole-word boundary; `symbol` ones do not. */
   readonly separatorKind: "word" | "symbol" | null;
+  /**
+   * True when the separator itself sits inside `[ ... ]` (`[@<gate>]`), so a
+   * line may omit separator and slot together. False for a separator written
+   * OUTSIDE the brackets (`onto [<target-branch>]`): there the literal is
+   * required even when the bracketed slot after it is omitted.
+   */
+  readonly separatorOptional: boolean;
   readonly optional: boolean;
   /** A literal suffix the slot may carry, e.g. futon's `[+]`. */
   readonly suffix: string | null;
+}
+
+/**
+ * A `[ ... ]` clause holding literal words and no slot at all, e.g. futon's
+ * `[then sweep]`. It captures nothing; its whole meaning is whether the line
+ * carries it. It exists as its own kind (zheref/nen#30) because it also bounds
+ * the slot to its left -- without it the leading slot has nothing to stop at.
+ */
+export interface OptionalClause {
+  /** The literal words, exactly as the template writes them inside `[ ... ]`. */
+  readonly literal: string;
+  /** How many slots are declared to its left; fixes its place in the right-to-left resolution. */
+  readonly slotsBefore: number;
 }
 
 export interface Grammar {
   /** The template exactly as written. */
   readonly template: string;
   readonly slots: readonly Slot[];
+  readonly clauses: readonly OptionalClause[];
 }
 
 export class GrammarError extends Error {
@@ -74,15 +105,31 @@ export class GrammarError extends Error {
 //   <a|b|c>             the same, named after its first value
 //   word(s) <slot>      the words are the separator that introduces the slot
 //   @ or # before <slot>  a SYMBOL separator: no whitespace or word boundary needed
-//   [ ... ]             an optional trailing clause
-//   [+]                 an optional literal suffix on the slot just declared
+//   [ ... ]             an optional trailing clause -- a separator plus its slot
+//                       (`[@<gate>]`, `[every <mode>]`), a slot behind a literal
+//                       written outside the brackets (`onto [<target-branch>]`),
+//                       or literal words alone (`[then sweep]`)
+//   [+]                 an optional literal suffix on the slot just declared,
+//                       recognised by its bracket group holding NOTHING ELSE
 
 const TOKEN = /<([^<>]+)>|\[|\]|[^\s<>[\]]+/g;
 
+/**
+ * A literal word waiting for the slot it will introduce, TAGGED WITH THE BRACKET
+ * DEPTH IT WAS TYPED AT. The depth is what tells `onto [<target-branch>]` (the
+ * literal is required, only the slot is optional) apart from `[then sweep]`
+ * (the literal IS the optional clause) when a `]` closes -- zheref/nen#30.
+ */
+interface PendingWord {
+  readonly word: string;
+  readonly depth: number;
+}
+
 export function parseTemplate(template: string): Grammar {
   const slots: Slot[] = [];
-  let pendingWords: string[] = [];
-  let pendingSymbol: string | null = null;
+  const clauses: OptionalClause[] = [];
+  let pendingWords: PendingWord[] = [];
+  let pendingSymbol: { readonly symbol: string; readonly depth: number } | null = null;
   let depth = 0;
 
   TOKEN.lastIndex = 0;
@@ -94,28 +141,59 @@ export function parseTemplate(template: string): Grammar {
       continue;
     }
     if (raw === "]") {
+      if (depth === 0) throw new GrammarError(`template '${template}' closes a '[' that was never opened`);
+      if (pendingSymbol !== null && pendingSymbol.depth >= depth) {
+        // `[@]`-shapes reach the suffix rule below; this is `[x @<eof-of-group>`:
+        // a symbol that introduces nothing. Refuse the TEMPLATE rather than
+        // guess which neighbour the symbol belonged to.
+        throw new GrammarError(
+          `template '${template}' is refused: its '[ ... ]' clause ends with the separator '${pendingSymbol.symbol}' introducing no <slot>. Put a <slot> after the separator, or drop it.`,
+        );
+      }
+      // Words still pending when their bracket group closes are a LITERAL-ONLY
+      // optional clause, e.g. `[then sweep]`. Before zheref/nen#30 they were
+      // silently dropped, which left the leading slot nothing to stop its
+      // capture at -- `<repo> [then sweep]` + 'BC then sweep' reported
+      // repo='BC then sweep', ok:true. Words from OUTSIDE this group (a lower
+      // depth) are someone else's separator and stay pending.
+      const inside = pendingWords.filter((pending): boolean => pending.depth >= depth);
+      if (inside.length > 0) {
+        const literal = inside.map((pending): string => pending.word).join(" ");
+        if (slots.length === 0) {
+          throw new GrammarError(
+            `template '${template}' is refused: the literal clause '[${literal}]' appears before any <slot>, and a clause with nothing to its left bounds nothing. Declare a <slot> first, or drop the brackets.`,
+          );
+        }
+        clauses.push({ literal, slotsBefore: slots.length });
+        pendingWords = pendingWords.filter((pending): boolean => pending.depth < depth);
+      }
       depth -= 1;
-      if (depth < 0) throw new GrammarError(`template '${template}' closes a '[' that was never opened`);
       continue;
     }
 
     const inner = match[1];
     if (inner === undefined) {
-      // A literal. `[+]` (a suffix on the slot just declared) is the one literal
-      // that is not a separator, and it is recognised by being bracketed and
-      // non-alphanumeric.
-      if (depth > 0 && slots.length > 0 && /^[^A-Za-z0-9]+$/.test(raw) && pendingWords.length === 0) {
-        const last = slots[slots.length - 1];
-        if (last !== undefined) slots[slots.length - 1] = { ...last, suffix: raw };
-        continue;
-      }
-      // A trailing symbol like `@` or `#` glued to the next slot arrives as its
-      // own token because TOKEN stops at `<`.
+      // A literal.
       if (/^[^A-Za-z0-9]+$/.test(raw)) {
-        pendingSymbol = raw;
+        // `[+]` -- an optional literal suffix on the slot just declared -- is
+        // recognised by its bracket group holding NOTHING ELSE: the next thing
+        // after the literal must be the closing ']'. Requiring that lookahead is
+        // zheref/nen#30's fix. The old test ("bracketed and non-alphanumeric")
+        // also matched the '@' of `[@<gate>]`, consumed it as a suffix on the
+        // PREVIOUS slot, and left <gate> with no separator at all -- which is
+        // exactly how the whole line ended up inside the first slot.
+        const closesImmediately = depth > 0 && /^\s*\]/.test(template.slice(TOKEN.lastIndex));
+        if (closesImmediately && slots.length > 0 && pendingWords.length === 0 && pendingSymbol === null) {
+          const last = slots[slots.length - 1];
+          if (last !== undefined) slots[slots.length - 1] = { ...last, suffix: raw };
+          continue;
+        }
+        // A symbol like `@` or `#` glued to the next slot arrives as its own
+        // token because TOKEN stops at `<`.
+        pendingSymbol = { symbol: raw, depth };
         continue;
       }
-      pendingWords.push(raw);
+      pendingWords.push({ word: raw, depth });
       continue;
     }
 
@@ -128,16 +206,39 @@ export function parseTemplate(template: string): Grammar {
       .map((value): string => value.trim())
       .filter((value): boolean => value !== "");
 
-    const separator = pendingSymbol ?? (pendingWords.length > 0 ? pendingWords.join(" ") : null);
+    if (pendingSymbol === null && new Set(pendingWords.map((pending): number => pending.depth)).size > 1) {
+      // `foo [bar <slot>]`: are the introducing words 'foo bar' (with 'bar'
+      // omissible) or is 'foo' required and 'bar <slot>' the optional part?
+      // The engine cannot know, and a guess is a mis-parse -- refuse the
+      // template with the rewrite that resolves it (zheref/nen#30).
+      throw new GrammarError(
+        `template '${template}' is refused: the words introducing <${name}> cross a '[' boundary, so the engine cannot tell which of them the line may omit. Keep a slot's introducing words on ONE side of the bracket, e.g. 'foo [bar <${name}>]' -> 'foo bar [<${name}>]' or '[foo bar <${name}>]'.`,
+      );
+    }
+
+    const separator =
+      pendingSymbol?.symbol ?? (pendingWords.length > 0 ? pendingWords.map((pending): string => pending.word).join(" ") : null);
+    const separatorDepth = pendingSymbol !== null ? pendingSymbol.depth : pendingWords[0]?.depth ?? null;
+    // A bracketed slot is optional -- INCLUDING a leading one, so long as a
+    // literal anchors it (`onto [<target-branch>]`: 'onto' alone is a valid
+    // line, zheref/nen#30). A leading slot that is bracketed AND unintroduced
+    // (`[<repo>]...`) is refused instead: an omitted value and a mistyped one
+    // would read identically, and every skill that omits its subject resolves
+    // it from the working directory, not from an optional slot
+    // (see ../repo/resolve.ts).
+    const optional = depth > 0;
+    if (optional && slots.length === 0 && separator === null) {
+      throw new GrammarError(
+        `template '${template}' is refused: its leading slot <${name}> is bracketed but nothing introduces it, so an omitted value cannot be told apart from a mistyped one. Anchor it behind a literal ('word [<${name}>]') or drop the brackets.`,
+      );
+    }
     slots.push({
       name,
       values,
       separator,
       separatorKind: separator === null ? null : pendingSymbol !== null ? "symbol" : "word",
-      // The FIRST slot is never optional even inside brackets: a template whose
-      // subject is optional has no subject, and every skill that omits one
-      // resolves it from the working directory instead (see ../repo/resolve.ts).
-      optional: depth > 0 && slots.length > 0,
+      separatorOptional: separatorDepth !== null && separatorDepth > 0,
+      optional,
       suffix: null,
     });
     pendingWords = [];
@@ -146,7 +247,7 @@ export function parseTemplate(template: string): Grammar {
 
   if (depth !== 0) throw new GrammarError(`template '${template}' has an unclosed '['`);
   if (slots.length === 0) throw new GrammarError(`template '${template}' declares no <slot>`);
-  return { template, slots };
+  return { template, slots, clauses };
 }
 
 // --- the split ---------------------------------------------------------------
@@ -188,6 +289,23 @@ function lastSplit(text: string, pattern: RegExp): { head: string; tail: string 
   };
 }
 
+/**
+ * Strip `separator` from the FRONT of `text`, or return null when it is not
+ * there. The leading slot's separator anchors at the start -- unlike every
+ * later separator, which is the LAST occurrence -- because everything to its
+ * left has, by construction, already been resolved away.
+ */
+function stripLeading(text: string, separator: string, kind: "word" | "symbol" | null): string | null {
+  if (kind === "symbol") {
+    return text.startsWith(separator) ? text.slice(separator.length) : null;
+  }
+  const words = separator.trim().split(/\s+/).map(escapeRegex);
+  const pattern = new RegExp(`^${words.join("\\s+")}(?![A-Za-z0-9])`, "i");
+  const hit = pattern.exec(text);
+  if (hit === null) return null;
+  return text.slice(hit[0].length);
+}
+
 // --- the parse ---------------------------------------------------------------
 
 export interface SlotValue {
@@ -197,12 +315,20 @@ export interface SlotValue {
   readonly suffix: boolean;
 }
 
+/** One literal-only `[ ... ]` clause and whether the line carried it. */
+export interface ClauseValue {
+  readonly literal: string;
+  readonly present: boolean;
+}
+
 export interface ParseResult {
   readonly skill: string;
   readonly template: string;
   readonly line: string;
   readonly ok: boolean;
   readonly slots: readonly SlotValue[];
+  /** Every literal-only clause the template declares, present or not. */
+  readonly clauses: readonly ClauseValue[];
   /** Required slots the line did not supply. */
   readonly missing: readonly string[];
   /** One line per problem, in the order they were found. */
@@ -213,16 +339,66 @@ export interface ParseResult {
   readonly echo: readonly string[];
 }
 
+/**
+ * Slots and literal clauses interleaved back into TEMPLATE order, so the
+ * right-to-left resolution (and the corrected line, and the echo) walk one
+ * sequence instead of two arrays whose relative order was lost.
+ */
+type TemplateEntry =
+  | { readonly kind: "slot"; readonly index: number }
+  | { readonly kind: "clause"; readonly index: number };
+
+function templateOrder(grammar: Grammar): TemplateEntry[] {
+  const entries: TemplateEntry[] = [];
+  let clause = 0;
+  for (let index = 0; index <= grammar.slots.length; index += 1) {
+    while (clause < grammar.clauses.length && grammar.clauses[clause]?.slotsBefore === index) {
+      entries.push({ kind: "clause", index: clause });
+      clause += 1;
+    }
+    if (index < grammar.slots.length) entries.push({ kind: "slot", index });
+  }
+  return entries;
+}
+
 export function parseInvocation(skill: string, grammar: Grammar, line: string): ParseResult {
   const found = new Map<string, SlotValue>();
   const missing: string[] = [];
   const problems: string[] = [];
+  const clausePresent: boolean[] = grammar.clauses.map((): boolean => false);
 
-  // RIGHT TO LEFT (see the header). Each separator is resolved against what the
-  // separators to its right have not already taken.
+  // RIGHT TO LEFT (see the header). Each separator -- and each literal-only
+  // clause, which is resolved exactly like a separator that captures nothing --
+  // is resolved against what the entries to its right have not already taken.
   let remaining = line.trim();
-  for (let index = grammar.slots.length - 1; index >= 1; index -= 1) {
-    const slot = grammar.slots[index];
+  const order = templateOrder(grammar);
+  for (let at = order.length - 1; at >= 0; at -= 1) {
+    const entry = order[at];
+    if (entry === undefined) continue;
+
+    if (entry.kind === "clause") {
+      const clause = grammar.clauses[entry.index];
+      if (clause === undefined) continue;
+      const split = splitLastWord(remaining, clause.literal);
+      if (split === null) continue; // literal clauses are optional by construction: absence parses
+      if (split.tail.trim() !== "") {
+        // The message asserts only that the tail is UNCONSUMABLE, not that the
+        // grammar ends here: entries to the clause's right resolve first (the
+        // right-to-left rule above), so text still standing after the literal
+        // is text none of them accounted for -- but later optional entries may
+        // well exist ('<repo> [then sweep] [every <mode>]'), and claiming "the
+        // grammar defines nothing after it" would be flatly wrong there.
+        problems.push(
+          `'[${clause.literal}]' is a literal clause, but the line continues past it with '${split.tail.trim()}', which nothing later in the grammar consumes. Drop the trailing text, or move it before '${clause.literal}'.`,
+        );
+      }
+      clausePresent[entry.index] = true;
+      remaining = split.head;
+      continue;
+    }
+
+    if (entry.index === 0) continue; // the leading slot takes what is left, below
+    const slot = grammar.slots[entry.index];
     if (slot === undefined || slot.separator === null) continue;
     const split =
       slot.separatorKind === "symbol"
@@ -236,9 +412,39 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
     found.set(slot.name, { name: slot.name, value: split.tail.trim(), suffix: false });
   }
 
+  // THE LEADING SLOT. Whatever the later entries left behind is its region --
+  // which, before zheref/nen#30, included its own introducing literal, so
+  // `onto [<target-branch>]` + 'onto' reported target-branch: onto. The literal
+  // is stripped (or its absence ruled on) FIRST, so the separator can never be
+  // read as the value.
   const first = grammar.slots[0];
   if (first !== undefined) {
-    found.set(first.name, { name: first.name, value: remaining.trim(), suffix: false });
+    let text: string | null = remaining.trim();
+    if (first.separator !== null) {
+      const stripped = stripLeading(text, first.separator, first.separatorKind);
+      if (stripped !== null) {
+        text = stripped.trim();
+      } else if (first.separatorOptional && first.optional) {
+        // The whole `[word <slot>]` clause is optional; its absence parses.
+        // Text that is neither the clause nor nothing belongs to no slot.
+        if (text !== "") {
+          problems.push(
+            `the line must open with '${first.separator}' to supply <${first.name}>, or omit that clause entirely -- '${text}' is neither.`,
+          );
+        }
+        text = null;
+      } else {
+        problems.push(
+          `the line must open with the literal '${first.separator}' -- it is what introduces <${first.name}>${text === "" ? "" : `, and '${text}' does not carry it`}.`,
+        );
+        text = null;
+      }
+    }
+    // An optional leading slot whose region is empty was simply omitted; a
+    // required one records the empty capture so the pass below reports it.
+    if (text !== null && (text !== "" || !first.optional)) {
+      found.set(first.name, { name: first.name, value: text, suffix: false });
+    }
   }
 
   // Suffixes and enumerations, in template order, so problems read in the order
@@ -279,10 +485,30 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   }
 
   const byName = new Map(slots.map((slot): [string, SlotValue] => [slot.name, slot]));
-  const corrected = correctedLine(skill, grammar, byName);
-  const echo = slots.map(
-    (slot): string => `${slot.name}: ${slot.value}${slot.suffix ? " (+)" : ""}`,
+  // ATTEMPTED = the line supplied SOMETHING for the slot, valid or not. It is
+  // what keeps a refused optional slot in the corrected line: a caller who
+  // typed 'BC@G9' against `<repo>[@<gate:...>]` is corrected to
+  // 'BC@<gate: ...>', not to a line that pretends they never typed a gate.
+  const attempted = new Set<string>();
+  for (const [name, value] of found) {
+    if (value.value.trim() !== "") attempted.add(name);
+  }
+  const corrected = correctedLine(skill, grammar, byName, attempted, clausePresent);
+
+  const clauses = grammar.clauses.map(
+    (clause, index): ClauseValue => ({ literal: clause.literal, present: clausePresent[index] === true }),
   );
+  const echo: string[] = [];
+  for (const entry of templateOrder(grammar)) {
+    if (entry.kind === "clause") {
+      const clause = grammar.clauses[entry.index];
+      if (clause !== undefined && clausePresent[entry.index] === true) echo.push(`[${clause.literal}]: present`);
+      continue;
+    }
+    const slot = grammar.slots[entry.index];
+    const value = slot === undefined ? undefined : byName.get(slot.name);
+    if (value !== undefined) echo.push(`${value.name}: ${value.value}${value.suffix ? " (+)" : ""}`);
+  }
 
   return {
     skill,
@@ -290,6 +516,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
     line,
     ok: problems.length === 0,
     slots,
+    clauses,
     missing,
     problems,
     corrected,
@@ -307,11 +534,29 @@ function correctedLine(
   skill: string,
   grammar: Grammar,
   values: ReadonlyMap<string, SlotValue>,
+  attempted: ReadonlySet<string>,
+  clausePresent: readonly boolean[],
 ): string {
   let out = skill;
-  for (const slot of grammar.slots) {
+  for (const entry of templateOrder(grammar)) {
+    if (entry.kind === "clause") {
+      const clause = grammar.clauses[entry.index];
+      if (clause !== undefined && clausePresent[entry.index] === true) out += ` ${clause.literal}`;
+      continue;
+    }
+    const slot = grammar.slots[entry.index];
+    if (slot === undefined) continue;
     const value = values.get(slot.name);
-    if (value === undefined && slot.optional) continue;
+    if (value === undefined && slot.optional && !attempted.has(slot.name)) {
+      // An untouched optional slot renders nothing -- EXCEPT its introducing
+      // literal when the template writes that literal OUTSIDE the brackets
+      // (`onto [<target-branch>]`): 'onto' alone is a complete valid line,
+      // and a corrected line that dropped the literal would not be.
+      if (slot.separator !== null && !slot.separatorOptional) {
+        out += slot.separatorKind === "symbol" ? slot.separator : ` ${slot.separator}`;
+      }
+      continue;
+    }
     const rendered =
       value === undefined
         ? `<${slot.name}${slot.values.length > 0 ? `: ${slot.values.join(" | ")}` : ""}>`
