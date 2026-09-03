@@ -48,6 +48,41 @@ describe("nen parse <skill> -- the generic --grammar/--line engine (main's own f
   it("requires --grammar and --line for a skill that is not futon/izanagi/izanami", async () => {
     expect((await capture(["parse", "my-skill"])).code).toBe(2);
   });
+
+  // zheref/nen#30: a single-slot template's `[ ... ]` clause used to collapse
+  // into the first slot and exit 0 -- 'BC@G9' came back as repo='BC@G9', ok:true.
+  it("splits a bracketed clause after the template's only leading slot (zheref/nen#30)", async () => {
+    const result = await capture(
+      ["parse", "backlog-state", "--grammar", "<repo>[@<gate:G1|G2|all>]", "--line", "BC@G2"],
+      [],
+      { json: true },
+    );
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { slots: { name: string; value: string }[] };
+    expect(parsed.slots).toEqual([
+      { name: "repo", value: "BC", suffix: false },
+      { name: "gate", value: "G2", suffix: false },
+    ]);
+  });
+
+  it("exits 2 on an out-of-set bracketed enum instead of swallowing it (zheref/nen#30)", async () => {
+    const result = await capture([
+      "parse",
+      "backlog-state",
+      "--grammar",
+      "<repo>[@<gate:G1|G2|all>]",
+      "--line",
+      "BC@G9",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/G1 \| G2 \| all/);
+    expect(result.err.join("\n")).toMatch(/BC@<gate:/);
+  });
+
+  it("exits 2 on an unsupported template shape instead of mis-parsing the line (zheref/nen#30)", async () => {
+    const result = await capture(["parse", "my-skill", "--grammar", "[<repo>]", "--line", "BC"]);
+    expect(result.code).toBe(2);
+  });
 });
 
 describe("nen parse futon -- CLI wiring (verbs/4-remainders, merged into this family)", () => {

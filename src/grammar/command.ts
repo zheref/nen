@@ -29,7 +29,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { parseInvocation, parseTemplate } from "./engine.js";
+import { GrammarError, parseInvocation, parseTemplate } from "./engine.js";
 import { FutonResolveError, parseFutonInvocation, resolveFutonRepo } from "../parse/futon.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { classifyInvocation, parseIzanamiInvocation } from "../parse/izanami.js";
@@ -115,7 +115,17 @@ export const parseCommand: Command = {
       throw new VerbUsageError("--line is required. It is the invocation to parse.");
     }
 
-    const grammar = parseTemplate(template);
+    // A REFUSED TEMPLATE IS A USAGE ERROR (2), not a failure (1): `--grammar`
+    // is caller-typed input, and a template the engine cannot split
+    // unambiguously is refused loudly (zheref/nen#30) with the rewrite in the
+    // message -- the same contract a refused --line already has.
+    let grammar;
+    try {
+      grammar = parseTemplate(template);
+    } catch (error) {
+      if (error instanceof GrammarError) throw new VerbUsageError(error.message);
+      throw error;
+    }
     const result = parseInvocation(skill, grammar, line);
 
     if (context.json) {
