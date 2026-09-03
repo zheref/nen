@@ -162,7 +162,24 @@ function fetch(context: CommandContext): number {
 // legitimately what a caller has in hand: `backlog fetch` output carries the
 // formatted id, while the skill and the help text speak in issue numbers.
 function rowMatches(tokens: ReadonlySet<string>, row: { readonly id: string; readonly number: number }): boolean {
-  return tokens.has(row.id) || tokens.has(String(row.number));
+  const numberToken = bareNumberToken(row);
+  return tokens.has(row.id) || (numberToken !== null && tokens.has(numberToken));
+}
+
+// The number-match path is live for a row ONLY when its `number` stringifies
+// to a digit-only token -- the only shape a real issue number ever takes.
+// `readJsonFile` validates no schema, so `number` can arrive missing or
+// malformed (undefined, null, a string, an object), and String(undefined) is
+// the perfectly matchable string "undefined": without this gate a --blocks
+// token of 'undefined' would sail through requireTokensMatch's refusal AND
+// mark every number-less row as blocking (review finding on #64). The
+// id-string path is untouched -- it is exact equality against an opaque value
+// the caller copied verbatim, so it needs no shape gate. Returning the token
+// (not a boolean) keeps the matcher, the refusal's known-set, and the roster
+// agreeing on ONE stringification by construction.
+function bareNumberToken(row: { readonly number: number }): string | null {
+  const token = String(row.number);
+  return /^\d+$/.test(token) ? token : null;
 }
 
 // The refusal for a token that names NO row. Refusing loudly is the actual
@@ -180,7 +197,13 @@ function requireTokensMatch(
   const known = new Set<string>();
   for (const row of rows) {
     known.add(row.id);
-    known.add(String(row.number));
+    // Same digit-only gate as rowMatches: a malformed row must not donate
+    // "undefined"/"null" as a token that passes this refusal, because
+    // rowMatches would then match it against every equally-malformed row.
+    const numberToken = bareNumberToken(row);
+    if (numberToken !== null) {
+      known.add(numberToken);
+    }
   }
   const complaints: string[] = [];
   for (const [flag, tokens] of [["blocks", blocks], ["affects-consumers", affects]] as const) {
@@ -190,7 +213,15 @@ function requireTokensMatch(
     }
   }
   if (complaints.length > 0) {
-    const roster = rows.map((row): string => `${row.id} (${row.number})`).join(", ");
+    // The roster offers only tokens that WOULD actually match: a row whose
+    // `number` failed the digit-only gate is listed by id alone, so the
+    // refusal never advertises "(undefined)" as if it were typable.
+    const roster = rows
+      .map((row): string => {
+        const numberToken = bareNumberToken(row);
+        return numberToken === null ? row.id : `${row.id} (${numberToken})`;
+      })
+      .join(", ");
     throw new VerbUsageError(
       `${complaints.join("; ")}. Each token must be a row's id or its bare issue number; the rows given are: ${roster.length > 0 ? roster : "(none -- the --rows-from file is empty)"}. A token that silently matched nothing would order the backlog as if the flag were never passed (the #24 failure).`,
     );

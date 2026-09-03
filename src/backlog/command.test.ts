@@ -215,4 +215,54 @@ describe("nen backlog order", () => {
     expect(message).toMatch(/--blocks names no row with: '940', 'XY-IS-#999'/);
     expect(message).toMatch(/--affects-consumers names no row with: '941'/);
   });
+
+  it("does NOT let a row with a missing `number` make 'undefined' a matchable token (review finding on #64)", async () => {
+    // --rows-from is unvalidated JSON (readJsonFile is a bare JSON.parse
+    // cast), so a malformed row can arrive with no `number` at all --
+    // String(undefined) is the perfectly matchable string "undefined", which
+    // would both pass the refusal's known-set AND mark every number-less row.
+    // Only digit-only stringifications may join the number-match path.
+    const dir = mkdtempSync(join(tmpdir(), "nen-backlog-"));
+    const file = join(dir, "rows.json");
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { id: "XY-IS-#937", severity: "high", createdAt: "2026-09-01T22:55:36Z", number: 937 },
+        { id: "XY-IS-#938", severity: "medium", createdAt: "2026-09-01T23:19:42Z" },
+      ]),
+    );
+    const result = await capture([
+      "backlog", "order", "--rows-from", file,
+      "--severity-order", "critical,high,medium,low",
+      "--blocks", "undefined",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    const message = result.err.join("\n");
+    expect(message).toMatch(/--blocks names no row with: 'undefined'/);
+    // The roster advertises only tokens that WOULD match: the number-less row
+    // is listed by id alone, never as "XY-IS-#938 (undefined)".
+    expect(message).toMatch(/XY-IS-#937 \(937\), XY-IS-#938\./);
+    expect(message).not.toMatch(/\(undefined\)/);
+  });
+
+  it("REFUSES a token against an EMPTY --rows-from file, naming the emptiness -- never fails open (review finding on #64)", async () => {
+    // Pins the empty-roster branch of the refusal so a future early return on
+    // rows.length === 0 (a plausible "nothing to order" shortcut) cannot
+    // silently reintroduce #24's fail-open: a token the caller believed was
+    // marking a row would once again order nothing and exit 0.
+    const dir = mkdtempSync(join(tmpdir(), "nen-backlog-"));
+    const file = join(dir, "rows.json");
+    writeFileSync(file, "[]");
+    const result = await capture([
+      "backlog", "order", "--rows-from", file,
+      "--severity-order", "critical,high,medium,low",
+      "--blocks", "938",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    const message = result.err.join("\n");
+    expect(message).toMatch(/--blocks names no row with: '938'/);
+    expect(message).toMatch(/\(none -- the --rows-from file is empty\)/);
+  });
 });
