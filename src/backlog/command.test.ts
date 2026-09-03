@@ -131,4 +131,88 @@ describe("nen backlog order", () => {
     expect(result.out[0]).toMatch(/1\. critical/);
     expect(result.out[1]).toMatch(/2\. low/);
   });
+
+  // Issue #24's exact fixture: formatted-object-reference ids alongside bare
+  // `number` fields. `--help` always documented `--blocks <n,n>` -- bare
+  // numbers -- but the matching compared tokens against `row.id` verbatim, so
+  // the documented form silently no-opped (exit 0, no `blocks` mark, no error).
+  const issue24Rows = JSON.stringify([
+    { id: "XY-IS-#937", severity: "high", createdAt: "2026-09-01T22:55:36Z", number: 937 },
+    { id: "XY-IS-#938", severity: "medium", createdAt: "2026-09-01T23:19:42Z", number: 938 },
+    { id: "XY-IS-#939", severity: "medium", createdAt: "2026-09-01T23:47:08Z", number: 939 },
+  ]);
+
+  function writeIssue24Rows(): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-backlog-"));
+    const file = join(dir, "rows.json");
+    writeFileSync(file, issue24Rows);
+    return file;
+  }
+
+  it("marks blocks from BARE ISSUE NUMBERS, the form --help's <n,n> notation documents (issue #24)", async () => {
+    const file = writeIssue24Rows();
+    const result = await capture([
+      "backlog", "order", "--rows-from", file,
+      "--severity-order", "critical,high,medium,low",
+      "--blocks", "938,939",
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out[0]).toMatch(/1\. XY-IS-#937 {2}severity=high/);
+    expect(result.out[1]).toMatch(/2\. XY-IS-#938 {2}severity=medium blocks/);
+    expect(result.out[2]).toMatch(/3\. XY-IS-#939 {2}severity=medium blocks/);
+  });
+
+  it("still accepts the row's own id-string form, which was the only working workaround pre-fix", async () => {
+    const file = writeIssue24Rows();
+    const result = await capture([
+      "backlog", "order", "--rows-from", file,
+      "--severity-order", "critical,high,medium,low",
+      "--blocks", "XY-IS-#938,XY-IS-#939",
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out[1]).toMatch(/2\. XY-IS-#938 {2}severity=medium blocks/);
+    expect(result.out[2]).toMatch(/3\. XY-IS-#939 {2}severity=medium blocks/);
+  });
+
+  it("matches bare numbers for --affects-consumers the same way as --blocks", async () => {
+    const file = writeIssue24Rows();
+    const result = await capture([
+      "backlog", "order", "--rows-from", file,
+      "--severity-order", "critical,high,medium,low",
+      "--affects-consumers", "937",
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out[0]).toMatch(/1\. XY-IS-#937 {2}severity=high affects-consumers/);
+  });
+
+  it("REFUSES (exit 2) a token that names no row, instead of the silent no-op that was #24's core defect", async () => {
+    const file = writeIssue24Rows();
+    const result = await capture([
+      "backlog", "order", "--rows-from", file,
+      "--severity-order", "critical,high,medium,low",
+      "--blocks", "940",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    const message = result.err.join("\n");
+    // The refusal is actionable on its own: it names the bad token, the flag
+    // it arrived on, and the full roster of ids/numbers that WOULD match.
+    expect(message).toMatch(/--blocks names no row with: '940'/);
+    expect(message).toMatch(/id or its bare issue number/);
+    expect(message).toMatch(/XY-IS-#937 \(937\), XY-IS-#938 \(938\), XY-IS-#939 \(939\)/);
+  });
+
+  it("names EVERY unmatched token across BOTH flags in one refusal, not one per round trip", async () => {
+    const file = writeIssue24Rows();
+    const result = await capture([
+      "backlog", "order", "--rows-from", file,
+      "--severity-order", "critical,high,medium,low",
+      "--blocks", "938,940,XY-IS-#999",
+      "--affects-consumers", "941",
+    ]);
+    expect(result.code).toBe(2);
+    const message = result.err.join("\n");
+    expect(message).toMatch(/--blocks names no row with: '940', 'XY-IS-#999'/);
+    expect(message).toMatch(/--affects-consumers names no row with: '941'/);
+  });
 });

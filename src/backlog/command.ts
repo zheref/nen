@@ -15,7 +15,7 @@ import { assembleRows, type RawIssue, type RawPr } from "./fetch.js";
 import { orderBacklog, type OrderableRow } from "./order.js";
 
 const USAGE = `nen backlog fetch --repo-slug <owner/name> [--limit <n>]
-nen backlog order --rows-from <path> --severity-order <a,b,c,d> [--blocks <n,n>] [--affects-consumers <n,n>]
+nen backlog order --rows-from <path> --severity-order <a,b,c,d> [--blocks <id|n,...>] [--affects-consumers <id|n,...>]
 
 fetch:
   Fetches open issues and open pull requests fresh over 'gh api' (NEVER
@@ -41,8 +41,13 @@ order:
   --severity-order <a,b,..> This repository's own severity vocabulary, in
                             priority order. A row whose severity is not in
                             this list ranks LAST.
-  --blocks <n,n>            Row ids that block another issue.
-  --affects-consumers <n,n> Row ids that affect consumer behaviour/DX.`;
+  --blocks <id|n,...>       Rows that block another issue, each named by its
+                            row id (e.g. 'XY-IS-#938') OR its bare issue
+                            number (e.g. '938'). A token that names no row is
+                            REFUSED, never silently ignored.
+  --affects-consumers <id|n,...>
+                            Rows that affect consumer behaviour/DX. Same
+                            token forms as --blocks, same refusal.`;
 
 interface RawGhIssue {
   readonly number: number;
@@ -147,6 +152,51 @@ function fetch(context: CommandContext): number {
   return 0;
 }
 
+// A --blocks/--affects-consumers token names a row by its `id` string OR its
+// bare issue number -- `--help`'s `<n,n>` notation always promised the bare
+// number, but the matching compared tokens against the opaque `id` field
+// verbatim, so a caller following the printed notation literally got a backlog
+// ordered as if the flag were never passed: no error, exit 0, and the
+// blocking/consumer-impact signal silently dropped (issue #24, reproduced from
+// zheref/hatsu's backlog-loop). Both forms are accepted because both are
+// legitimately what a caller has in hand: `backlog fetch` output carries the
+// formatted id, while the skill and the help text speak in issue numbers.
+function rowMatches(tokens: ReadonlySet<string>, row: { readonly id: string; readonly number: number }): boolean {
+  return tokens.has(row.id) || tokens.has(String(row.number));
+}
+
+// The refusal for a token that names NO row. Refusing loudly is the actual
+// fix for #24 -- the accepted-forms widening alone would leave the next shape
+// mismatch (a typo, a stale id, a row filtered out upstream) silently
+// reordering the backlog again. Every unmatched token across BOTH flags is
+// named in one message, plus the full roster of what WOULD match, on the same
+// "report the whole problem" idiom as splitIntegerList: a caller fixing one
+// token per round trip is the cost this CLI designs against elsewhere.
+function requireTokensMatch(
+  blocks: ReadonlySet<string>,
+  affects: ReadonlySet<string>,
+  rows: readonly { readonly id: string; readonly number: number }[],
+): void {
+  const known = new Set<string>();
+  for (const row of rows) {
+    known.add(row.id);
+    known.add(String(row.number));
+  }
+  const complaints: string[] = [];
+  for (const [flag, tokens] of [["blocks", blocks], ["affects-consumers", affects]] as const) {
+    const unmatched = [...tokens].filter((token): boolean => !known.has(token));
+    if (unmatched.length > 0) {
+      complaints.push(`--${flag} names no row with: ${unmatched.map((token): string => `'${token}'`).join(", ")}`);
+    }
+  }
+  if (complaints.length > 0) {
+    const roster = rows.map((row): string => `${row.id} (${row.number})`).join(", ");
+    throw new VerbUsageError(
+      `${complaints.join("; ")}. Each token must be a row's id or its bare issue number; the rows given are: ${roster.length > 0 ? roster : "(none -- the --rows-from file is empty)"}. A token that silently matched nothing would order the backlog as if the flag were never passed (the #24 failure).`,
+    );
+  }
+}
+
 function order(context: CommandContext): number {
   const path = requireValue(context.args, "rows-from", "The JSON row array to order.");
   const orderRaw = requireValue(context.args, "severity-order", "This repository's own severity vocabulary, in priority order.");
@@ -162,11 +212,12 @@ function order(context: CommandContext): number {
     readonly number: number;
   }
   const input = readJsonFile<readonly InRow[]>(path, cwd);
+  requireTokensMatch(blocks, affects, input);
   const rows: OrderableRow[] = input.map((row): OrderableRow => ({
     id: row.id,
     severity: row.severity,
-    blocksOther: blocks.has(row.id),
-    affectsConsumers: affects.has(row.id),
+    blocksOther: rowMatches(blocks, row),
+    affectsConsumers: rowMatches(affects, row),
     createdAt: row.createdAt,
     number: row.number,
   }));
