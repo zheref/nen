@@ -51,6 +51,19 @@ function isVariableNotFoundMessage(stderr: string, holdVar: string): boolean {
   return pattern.test(stderr.trim());
 }
 
+/**
+ * The hold value is PARSED for truthiness, never merely length-checked
+ * (zheref/nen#23). The shell `hold_active()` this row replaced read only
+ * case-insensitive `true`/`1`/`yes` as an active hold and EVERYTHING else --
+ * unset or `"false"` alike -- as inactive; the port's `value === ""` check
+ * inverted that for the falsy half of the vocabulary, so a variable someone
+ * set to `"false"` (instead of deleting) read as permanently HELD, and
+ * setting it to `"false"` again did nothing. Only these two vocabularies are
+ * recognized; matching is against the trimmed, lowercased value.
+ */
+const HOLD_TRUTHY = new Set(["true", "1", "yes"]);
+const HOLD_FALSY = new Set(["false", "0", "no"]);
+
 function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
   if (result.spawnFailed) {
     return { kind: "unreadable", detail: result.stderr.trim() || "gh could not be started" };
@@ -63,7 +76,24 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
     return { kind: "unreadable", detail: stderr || `gh exited ${result.code}` };
   }
   const value = result.stdout.trim();
-  return value === "" ? { kind: "unset" } : { kind: "held", value };
+  if (value === "") return { kind: "unset" };
+  const lowered = value.toLowerCase();
+  // An explicit falsy value releases the hold -- but as `clear`, not `unset`,
+  // so the row can still tell the operator the variable is lingering and that
+  // deleting it outright is the tidier repository state.
+  if (HOLD_FALSY.has(lowered)) return { kind: "clear", value };
+  // A DELIBERATE deviation from the pure shell convention (zheref/nen#23):
+  // `hold_active()` read any value outside `true`/`1`/`yes` as inactive,
+  // which means a hold set to the message that explains it -- `gh variable
+  // set RELEASE_HOLD -b 'freeze until Monday'` -- would silently release
+  // itself. An operator who typed a hold message intended a hold, and the
+  // one row whose whole job is to stop a release must not fail open on a
+  // spelling. So only the explicit falsy vocabulary above releases; every
+  // other non-empty value stays HELD, with `recognizedTruthy` recording
+  // whether it was the shared boolean vocabulary or a fail-closed arbitrary
+  // string so the report can print WHY (../release/preflight.ts renders the
+  // difference).
+  return { kind: "held", value, recognizedTruthy: HOLD_TRUTHY.has(lowered) };
 }
 
 const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>]
@@ -75,9 +105,14 @@ preflight:
   whole -- never the first failure (getsuga SKILL.md §2).
 
   --hold-var <name>         'gh variable get <name>' at --repo-slug. Defaults
-                            to RELEASE_HOLD. A gh that cannot be reached
-                            (missing, unauthenticated, no variable-read scope)
-                            fails this check rather than reading as "not set".
+                            to RELEASE_HOLD. Case-insensitive true/1/yes
+                            reads as a recognized active hold; false/0/no (or
+                            an unset variable) reads as not held; any OTHER
+                            non-empty value (an arbitrary hold message) is
+                            not recognized and fails closed as an active
+                            hold. A gh that cannot be reached (missing,
+                            unauthenticated, no variable-read scope) fails
+                            this check rather than reading as "not set".
   --critical-issues <n,n>   Open critical-severity issue numbers, gathered by
                             the caller (this repository's own severity label
                             is not this binary's to know). REQUIRED to pass
@@ -182,6 +217,9 @@ export const releaseCommand: Command = {
 
     const report = runPreflight({
       hold,
+      // The table names the variable this run actually queried (review
+      // finding): a --hold-var run must never render its row as RELEASE_HOLD.
+      holdVarName: holdVar,
       openCriticalIssueNumbers: criticalIssues,
       liveChores,
       fragmentFilesAtCutPoint: fragmentFiles,

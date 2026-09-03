@@ -6,6 +6,7 @@ const UNSET: HoldState = { kind: "unset" };
 function inputs(overrides: Partial<PreflightInputs> = {}): PreflightInputs {
   return {
     hold: UNSET,
+    holdVarName: "RELEASE_HOLD",
     openCriticalIssueNumbers: [],
     liveChores: [],
     fragmentFilesAtCutPoint: [],
@@ -37,7 +38,7 @@ describe("runPreflight", () => {
   it("reports EVERY failing precondition, never stopping at the first", () => {
     const report = runPreflight(
       inputs({
-        hold: { kind: "held", value: "waiting on legal" },
+        hold: { kind: "held", value: "waiting on legal", recognizedTruthy: false },
         openCriticalIssueNumbers: [7],
         tagAlreadyExists: true,
         tag: "v1.1.0",
@@ -80,6 +81,59 @@ describe("runPreflight", () => {
       const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
       expect(row?.ok).toBe(false);
       expect(row?.detail).toContain("could not be read");
+    });
+  });
+
+  describe("RELEASE_HOLD's value is parsed, not length-checked (zheref/nen#23)", () => {
+    it("a 'clear' hold (explicit falsy value) passes -- but still names the lingering variable", () => {
+      const report = runPreflight(inputs({ hold: { kind: "clear", value: "false" } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(true);
+      // Deliberately NOT the bare "not set" of a genuinely absent variable:
+      // the operator should see the variable exists and what its value was.
+      expect(row?.detail).toContain("not held");
+      expect(row?.detail).toContain("'false'");
+    });
+
+    it("a recognized-truthy hold prints the plain HELD row", () => {
+      const report = runPreflight(inputs({ hold: { kind: "held", value: "true", recognizedTruthy: true } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toBe("HELD: RELEASE_HOLD = 'true'");
+    });
+
+    it("an unrecognized value prints the raw value AND the fail-closed reason", () => {
+      const report = runPreflight(inputs({ hold: { kind: "held", value: "freeze until Monday", recognizedTruthy: false } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toContain("'freeze until Monday'");
+      expect(row?.detail).toContain("fails closed");
+    });
+  });
+
+  describe("the hold row names the variable actually queried, never a hard-coded RELEASE_HOLD (review finding)", () => {
+    it("a custom hold-var name flows into the held row's name and detail", () => {
+      const report = runPreflight(inputs({ holdVarName: "FREEZE", hold: { kind: "held", value: "true", recognizedTruthy: true } }));
+      const row = report.checks.find((c): boolean => c.name === "FREEZE");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toBe("HELD: FREEZE = 'true'");
+    });
+
+    it("a custom hold-var name flows into the clear row -- the occurrence this fix added", () => {
+      const report = runPreflight(inputs({ holdVarName: "FREEZE", hold: { kind: "clear", value: "no" } }));
+      const row = report.checks.find((c): boolean => c.name === "FREEZE");
+      expect(row?.ok).toBe(true);
+      expect(row?.detail).toContain("not held: FREEZE = 'no'");
+      // The variable this run never queried must appear nowhere in the row.
+      expect(row?.detail).not.toContain("RELEASE_HOLD");
+    });
+
+    it("a custom hold-var name flows into the fail-closed row", () => {
+      const report = runPreflight(inputs({ holdVarName: "FREEZE", hold: { kind: "held", value: "freeze until Monday", recognizedTruthy: false } }));
+      const row = report.checks.find((c): boolean => c.name === "FREEZE");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toContain("HELD: FREEZE = 'freeze until Monday'");
+      expect(row?.detail).not.toContain("RELEASE_HOLD");
     });
   });
 

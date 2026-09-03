@@ -63,15 +63,30 @@ export function evaluateLiveChores(candidates: readonly LiveChoreCandidate[]): L
 }
 
 /**
- * The RELEASE_HOLD row's three states -- not two. `gh variable get` failing
+ * The RELEASE_HOLD row's FOUR states -- not two. `gh variable get` failing
  * open into "not set" (review finding, BLOCKER-adjacent: a `gh` that is not
  * installed, unauthenticated, or scoped without variable-read access must
  * never read the same as a repository that genuinely has no hold set) is
  * exactly what this type exists to make impossible to construct by accident.
+ *
+ * `clear` is the fourth state (zheref/nen#23): the variable EXISTS but its
+ * value parses as an explicit "not held" (`false`/`0`/`no`, case-insensitive).
+ * It is deliberately distinct from `unset` so the row can tell the operator
+ * the variable is still sitting there -- deleting it outright is the tidier
+ * repository state -- while still passing the check, matching the shell
+ * `hold_active()` convention this row replaced.
+ *
+ * `held.recognizedTruthy` records WHY the hold read as active: `true` for the
+ * shared boolean vocabulary (`true`/`1`/`yes`, case-insensitive), `false` for
+ * any other non-empty value ("freeze until Monday"), which fails CLOSED --
+ * see resolveHoldState in ./command.ts for why that deviates from the pure
+ * shell convention -- so the row can explain the fail-closed reading instead
+ * of leaving the operator to guess why a non-boolean string blocked the cut.
  */
 export type HoldState =
   | { readonly kind: "unset" }
-  | { readonly kind: "held"; readonly value: string }
+  | { readonly kind: "clear"; readonly value: string }
+  | { readonly kind: "held"; readonly value: string; readonly recognizedTruthy: boolean }
   | { readonly kind: "unreadable"; readonly detail: string };
 
 /**
@@ -85,6 +100,15 @@ export type Supplied<T> = readonly T[] | null;
 
 export interface PreflightInputs {
   readonly hold: HoldState;
+  /**
+   * The variable `--hold-var` actually queried -- RELEASE_HOLD unless the
+   * operator chose another (review finding on zheref/nen#23's fix): the hold
+   * row's name and value-bearing details print THIS name, never a hard-coded
+   * RELEASE_HOLD, because a table that says "RELEASE_HOLD = 'true'" while
+   * `gh variable get FREEZE` is what actually ran is reporting on a variable
+   * it never read. The default invocation's output is byte-identical.
+   */
+  readonly holdVarName: string;
   readonly openCriticalIssueNumbers: Supplied<number>;
   readonly liveChores: Supplied<LiveChoreCandidate>;
   readonly fragmentFilesAtCutPoint: readonly string[];
@@ -111,19 +135,38 @@ export function runPreflight(inputs: PreflightInputs): PreflightReport {
 
   const checks: PreflightCheck[] = [
     {
-      name: "RELEASE_HOLD",
-      ok: inputs.hold.kind === "unset",
+      // The row is named after -- and its details cite -- the variable the
+      // caller ACTUALLY queried (review finding): hard-coding RELEASE_HOLD
+      // here mislabelled every `--hold-var <name>` run, blaming a variable
+      // this table never read. The default stays RELEASE_HOLD, so an
+      // invocation that never passes --hold-var renders byte-for-byte the
+      // same rows it always has.
+      name: inputs.holdVarName,
+      ok: inputs.hold.kind === "unset" || inputs.hold.kind === "clear",
       detail:
         inputs.hold.kind === "unset"
           ? "not set"
-          : inputs.hold.kind === "held"
-            ? `HELD: RELEASE_HOLD = '${inputs.hold.value}'`
-            // A `gh` that could not be reached, is unauthenticated, or lacks
-            // variable-read scope is NOT the same as a repository that
-            // genuinely has no hold -- collapsing them (review finding) made
-            // the single most safety-critical row of this table assert
-            // "not set" for a check that never actually ran.
-            : `could not be read: ${inputs.hold.detail}`,
+          : inputs.hold.kind === "clear"
+            // Passing, but NOT silent about the leftover variable
+            // (zheref/nen#23): an explicit falsy value releases the hold, and
+            // the operator still deserves to see that the variable itself is
+            // lingering -- deleting it is the state every other tool reads
+            // unambiguously.
+            ? `not held: ${inputs.holdVarName} = '${inputs.hold.value}' reads as falsy (deleting the variable outright is tidier)`
+            : inputs.hold.kind === "held"
+              ? inputs.hold.recognizedTruthy
+                ? `HELD: ${inputs.holdVarName} = '${inputs.hold.value}'`
+                // The raw value is printed so the operator sees exactly WHY a
+                // non-boolean string blocked the cut, and what releases it --
+                // without this, "freeze until Monday" reading as HELD looks
+                // like a parser bug rather than the fail-closed choice it is.
+                : `HELD: ${inputs.holdVarName} = '${inputs.hold.value}' -- not a recognized boolean, so it fails closed as an active hold (set it to 'false' or delete the variable to release)`
+              // A `gh` that could not be reached, is unauthenticated, or lacks
+              // variable-read scope is NOT the same as a repository that
+              // genuinely has no hold -- collapsing them (review finding) made
+              // the single most safety-critical row of this table assert
+              // "not set" for a check that never actually ran.
+              : `could not be read: ${inputs.hold.detail}`,
     },
     {
       name: "open critical issues",
