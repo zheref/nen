@@ -101,6 +101,32 @@ describe("verifySplit -- union of branches equals the original, hunk for hunk", 
     expect(result.altered).toEqual([]);
   });
 
+  // Issue #21 (hunk-boundary shape): with trailing-newline diff texts, a
+  // branch genuinely short one hunk made its SURVIVING hunk the last in its
+  // own text -- the parser's phantom trailing '' landed on it alone, and a
+  // false ALTERED fired alongside the true MISSING. Only MISSING may fire.
+  it("reports only the truly-missing hunk, no false ALTERED on the survivor, when a trailing-newline branch drops one", () => {
+    const original = `${fileDiff("a.ts", [HUNK_A1, HUNK_A2])}\n`;
+    const branchA = `${fileDiff("a.ts", [HUNK_A1])}\n`;
+    const result = verifySplit(original, [branchA]);
+    expect(result.ok).toBe(false);
+    expect(result.missing).toEqual([{ path: "a.ts", header: "@@ -10,1 +10,1 @@" }]);
+    expect(result.altered).toEqual([]);
+    expect(result.duplicated).toEqual([]);
+    expect(result.extra).toEqual([]);
+  });
+
+  // Issue #21 (file-boundary shape): every diff text a caller feeds this
+  // proof ends in a newline (they are files); a byte-identical split must
+  // pass with the files in ANY order on either side.
+  it("passes a byte-identical two-file split with trailing newlines, in either branch order", () => {
+    const original = `${[fileDiff("a.ts", [HUNK_A1]), fileDiff("b.ts", [HUNK_B1])].join("\n")}\n`;
+    const branchA = `${fileDiff("a.ts", [HUNK_A1])}\n`;
+    const branchB = `${fileDiff("b.ts", [HUNK_B1])}\n`;
+    expect(verifySplit(original, [branchA, branchB]).ok).toBe(true);
+    expect(verifySplit(original, [branchB, branchA]).ok).toBe(true);
+  });
+
   it("counts files in original and across branches", () => {
     const original = [fileDiff("a.ts", [HUNK_A1]), fileDiff("b.ts", [HUNK_B1])].join("\n");
     const result = verifySplit(original, [fileDiff("a.ts", [HUNK_A1]), fileDiff("b.ts", [HUNK_B1])]);
