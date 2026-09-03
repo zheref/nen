@@ -15,7 +15,10 @@ function threadsPageResult(nodes: unknown[], pageInfo: { hasNextPage?: unknown; 
 
 function scriptedFetch(overrides: {
   view?: Record<string, unknown>;
-  reviews?: unknown[];
+  // `unknown`, not `unknown[]`: zheref/nen#19's second defect is GitHub
+  // answering a LONE pending review as a bare object rather than an array,
+  // and the fixture type must be able to say so.
+  reviews?: unknown;
   threadsNodes?: unknown[];
   hasNextPage?: unknown;
   endCursor?: unknown;
@@ -137,5 +140,102 @@ describe("fetchPullRequest -- one typed snapshot from three gh calls", () => {
       { match: `gh ${viewArgv(TARGET, 9).join(" ")}`, result: { code: 1, stderr: "not found" } },
     ]);
     expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(/not found/);
+  });
+
+  // zheref/nen#19's second defect: a PR whose ONLY review is a still-PENDING
+  // draft has been observed arriving from the reviews endpoint as the bare
+  // review OBJECT, not a one-element array, and the snapshot then died with
+  // "$.reviews -- expected an array, got object". The coercion is shape-only:
+  // the wrapped object still validates field-by-field.
+  it("accepts a lone PENDING review answered as a bare object -- coerced to a one-element array before validation", () => {
+    const seams = scriptedFetch({
+      reviews: { user: { login: "sasuke" }, state: "PENDING", commit_id: null, submitted_at: null },
+    });
+    const snapshot = fetchPullRequest(seams, TARGET, 9);
+    expect(snapshot.reviews).toEqual([{ author: "sasuke", state: "PENDING", commitId: null, submittedAt: null }]);
+  });
+
+  it("still fails closed on a bare object that is NOT a review -- the coercion widens one spelling, not the validation", () => {
+    // An error-ish body that somehow arrived at exit 0 must refuse by name at
+    // the wrapped element, never parse as an empty or one-review snapshot.
+    const seams = scriptedFetch({ reviews: { message: "Server Error" } });
+    expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(FetchError);
+    expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(/\$\.reviews\[0\]/);
+  });
+
+  it("throws a named FetchError, not a raw SyntaxError, when the reviews body is not JSON", () => {
+    // A truncated reviews body: the view call answers normally, the reviews
+    // call answers half a JSON document. The failure must be this module's
+    // named contract (FetchError, repo#pr context attached), never a raw
+    // SyntaxError escaping to the operator.
+    const broken = new ScriptedSeams([
+      { match: `gh ${viewArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify({
+        number: 9, headRefOid: "abc123", baseRefName: "main", headRefName: "feature/x",
+        author: { login: "alice" }, labels: [], mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+        isDraft: false, body: "b", url: "https://x/9", title: "a PR", state: "OPEN",
+        statusCheckRollup: [], reviewRequests: [],
+      }) } },
+      { match: `gh ${reviewsArgv(TARGET, 9).join(" ")}`, result: { stdout: "[{\"user\":" } },
+    ]);
+    expect(() => fetchPullRequest(broken, TARGET, 9)).toThrow(FetchError);
+    expect(() => fetchPullRequest(broken, TARGET, 9)).toThrow(/did not return JSON/);
+  });
+});
+
+// zheref/nen#19's FIRST defect, pinned as an invariant over the WHOLE module:
+// gh api's documented rule is that supplying any `-f`/`-F` parameter flips the
+// inferred method from GET to POST (https://cli.github.com/manual/gh_api --
+// the rule ../parse/izanami.ts also encodes). reviewsArgv() carried
+// `-F per_page=100` with no method, so the reviews READ became a POST to
+// pulls/{n}/reviews -- the CREATE-review endpoint: an empty PENDING draft
+// review written under the caller's identity on the first call, HTTP 422 on
+// every call after. This sweep makes the fix structural rather than local: NO
+// gh-api argv this module builds may carry a parameter without an explicitly
+// spelled method, so the next builder someone adds fails this test the moment
+// it repeats the shape.
+describe("fetch argv builders -- no gh api call may leave its method to parameter inference (zheref/nen#19)", () => {
+  const BUILT: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ["viewArgv", viewArgv(TARGET, 9)],
+    ["reviewsArgv", reviewsArgv(TARGET, 9)],
+    ["reviewThreadsArgv", reviewThreadsArgv(TARGET, 9)],
+    ["reviewThreadsPageArgv", reviewThreadsPageArgv(TARGET, 9, "cursor-1")],
+  ];
+
+  it("every gh-api argv carrying -F/-f params names an explicit method", () => {
+    for (const [name, argv] of BUILT) {
+      if (argv[0] !== "api") continue; // `gh pr view` has no method concept.
+      const hasParams = argv.some((arg): boolean => arg === "-F" || arg === "-f" || arg === "--field" || arg === "--raw-field");
+      if (!hasParams) continue;
+      const methodFlagAt = argv.findIndex((arg): boolean => arg === "--method" || arg === "-X");
+      // The method must be PRESENT and must NAME a verb in the next slot --
+      // a dangling `--method` would make gh read the endpoint as the method.
+      expect(methodFlagAt, `${name} carries -F/-f params but no explicit --method/-X -- gh api would infer POST and a read would write (zheref/nen#19)`).toBeGreaterThanOrEqual(0);
+      expect(argv[methodFlagAt + 1], `${name}'s --method flag names no verb`).toMatch(/^(GET|POST)$/);
+    }
+  });
+
+  it("the reviews read is explicitly GET -- the exact argv that used to POST to the create-review endpoint", () => {
+    const argv = reviewsArgv(TARGET, 9);
+    const methodFlagAt = argv.findIndex((arg): boolean => arg === "--method" || arg === "-X");
+    expect(methodFlagAt).toBeGreaterThanOrEqual(0);
+    expect(argv[methodFlagAt + 1]).toBe("GET");
+    // And it still addresses the reviews collection with the page-size param
+    // -- the fix changed the method, not the read.
+    expect(argv).toContain("repos/zheref/nen/pulls/9/reviews");
+    expect(argv).toContain("per_page=100");
+  });
+
+  it("the GraphQL calls are POST by transport, and their query text is a pure read -- no mutation operation", () => {
+    for (const [name, argv] of [
+      ["reviewThreadsArgv", reviewThreadsArgv(TARGET, 9)],
+      ["reviewThreadsPageArgv", reviewThreadsPageArgv(TARGET, 9, "cursor-1")],
+    ] as const) {
+      // GitHub's GraphQL endpoint accepts only POST; the explicit method is a
+      // decision on the record, not a write. What makes it safe is the query.
+      expect(argv).toContain("graphql");
+      const queryField = argv.find((arg): boolean => arg.startsWith("query="));
+      expect(queryField, `${name} carries no query= field`).toBeDefined();
+      expect(queryField, `${name}'s GraphQL document must stay a query -- a mutation here would be zheref/nen#19 all over again`).not.toMatch(/\bmutation\b/);
+    }
   });
 });

@@ -42,6 +42,26 @@
 // process could not finish reading is never returned as though it were
 // complete, so `nextBlocker()` never answers `none` (or any other verdict)
 // from a review-thread set it did not read in full.
+//
+// EVERY `gh api` ARGV NAMES ITS METHOD EXPLICITLY (zheref/nen#19). gh's own
+// documented rule -- https://cli.github.com/manual/gh_api, already cited by
+// ../parse/izanami.ts for the identical reason -- is that the HTTP method
+// flips from GET to POST the moment ANY `-f`/`-F` parameter is supplied.
+// This module's reviews READ passed `-F per_page=100` with no method, so
+// `gh api` POSTed to `pulls/{n}/reviews` -- the CREATE-review endpoint. The
+// first call on a fresh PR silently left an empty PENDING draft review under
+// the caller's identity, and every later call 422'd ("one pending review per
+// user"), which is why the failure looked intermittent. A read verb that
+// writes is the single worst defect class this CLI can have: under a frozen
+// or third-party repository it is a policy violation the caller never
+// intended, and every verb that composes this fetch (`pr next-blocker`)
+// inherits the write. So the rule here is total, not minimal: no argv this
+// module builds leaves the method to gh's parameter-driven inference --
+// REST reads say `--method GET`, and the GraphQL calls say `--method POST`
+// because GitHub's GraphQL transport accepts nothing else (the queries
+// themselves are pure `query` operations; see REVIEW_THREADS_QUERY). The
+// sweep test in ./fetch.test.ts holds this invariant over every exported
+// argv builder with zero exceptions.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
@@ -89,12 +109,22 @@ export function viewArgv(target: Target, prNumber: number): readonly string[] {
 }
 
 export function reviewsArgv(target: Target, prNumber: number): readonly string[] {
+  // `--method GET`, EXPLICITLY, AND LOAD-BEARING (zheref/nen#19): without it,
+  // the `-F per_page=100` below flips gh's inferred method to POST -- and
+  // POST `pulls/{n}/reviews` is GitHub's CREATE-review endpoint. That turned
+  // this read into a write: one empty PENDING draft review created under the
+  // caller's identity on the first call, HTTP 422 ("one pending review per
+  // user") on every call after it. Never remove the method to "simplify" the
+  // argv; the parameter is exactly what makes it unsafe to omit. See the
+  // module header for the whole incident, and ./fetch.test.ts's sweep test
+  // for the invariant that pins it.
+  //
   // Unpaginated on purpose, for a first cut: a review ROUND count over 100 on
   // one PR is itself the finding. A caller that hits this ceiling sees it in
   // `reviews.length === 100` and can say so; --paginate output is line-delimited
   // JSON pages rather than one array, which this module's single-parse shape
   // does not want to grow a second code path for yet.
-  return ["api", `repos/${target.slug}/pulls/${prNumber}/reviews`, "-F", "per_page=100"];
+  return ["api", "--method", "GET", `repos/${target.slug}/pulls/${prNumber}/reviews`, "-F", "per_page=100"];
 }
 
 const REVIEW_THREADS_QUERY =
@@ -113,9 +143,20 @@ const REVIEW_THREADS_PAGE_QUERY =
 // `hasNextPage:false` cannot spin this walk forever.
 const MAX_REVIEW_THREAD_PAGES = 50;
 
+// `--method POST` on the two GraphQL argvs below is NOT a write declaration
+// -- GitHub's GraphQL endpoint transports every operation, reads included,
+// over POST and accepts nothing else, and both query strings above are pure
+// `query` operations (no `mutation` token; the sweep test pins that too).
+// The method is spelled out anyway so that NO argv this module builds relies
+// on gh's "parameters present, therefore POST" inference -- the exact
+// inference that turned reviewsArgv() into a write (zheref/nen#19, module
+// header). An explicit method is a statement someone made a decision; an
+// inferred one is a decision nobody made.
 export function reviewThreadsArgv(target: Target, prNumber: number): readonly string[] {
   return [
     "api",
+    "--method",
+    "POST",
     "graphql",
     "-f",
     `query=${REVIEW_THREADS_QUERY}`,
@@ -131,6 +172,8 @@ export function reviewThreadsArgv(target: Target, prNumber: number): readonly st
 export function reviewThreadsPageArgv(target: Target, prNumber: number, cursor: string): readonly string[] {
   return [
     "api",
+    "--method",
+    "POST",
     "graphql",
     "-f",
     `query=${REVIEW_THREADS_PAGE_QUERY}`,
@@ -249,7 +292,32 @@ export function fetchPullRequest(
   }
 
   const reviewsRaw = runOrThrow(seams, reviewsArgv(target, prNumber), `${target.slug}#${prNumber} reviews`);
-  const reviews = parseReviews(JSON.parse(reviewsRaw === "" ? "[]" : reviewsRaw));
+  let reviewsJson: unknown;
+  try {
+    reviewsJson = JSON.parse(reviewsRaw === "" ? "[]" : reviewsRaw);
+  } catch (error) {
+    // Mirrors the `gh pr view` guard above: a truncated or non-JSON reviews
+    // body is this module's named failure, never a raw SyntaxError escaping
+    // to the operator with no repo/PR context attached.
+    throw new FetchError(`${target.slug}#${prNumber} reviews: gh api did not return JSON (${String(error)})`);
+  }
+  // A LONE PENDING REVIEW ARRIVES AS A BARE OBJECT, NOT A ONE-ELEMENT ARRAY
+  // (zheref/nen#19, observed in the field): when the only review on a PR is a
+  // still-PENDING draft, GitHub's reviews endpoint has been seen answering
+  // the single review object itself rather than `[review]`, and the schema
+  // boundary then refused the whole snapshot with "$.reviews -- expected an
+  // array, got object". The unusual SHAPE is real data about a real state, so
+  // it is coerced -- object becomes [object] -- BEFORE validation, and only
+  // the shape: every field of the wrapped review still goes through
+  // parseReviews() unrelaxed, so a bare object that is NOT a review still
+  // fails by name (at `$.reviews[0]...`) instead of slipping through. An
+  // array (including []) passes untouched; this widens one documented
+  // spelling, not the validation.
+  const reviewsPayload =
+    typeof reviewsJson === "object" && reviewsJson !== null && !Array.isArray(reviewsJson)
+      ? [reviewsJson]
+      : reviewsJson;
+  const reviews = parseReviews(reviewsPayload);
   if (!reviews.ok) throw new FetchError(`${target.slug}#${prNumber}: ${reviews.error.path} -- ${reviews.error.message}`);
 
   const reviewThreads = fetchAllReviewThreads(
