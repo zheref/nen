@@ -44,6 +44,22 @@ describe("nen issue -- CLI wiring", () => {
     expect((await capture(["issue", "bogus"])).code).toBe(2);
   });
 
+  // zheref/nen#28: file's and consolidate-close's usage lines list --repo
+  // unbracketed, so omitting it is refused by name -- never silently read as
+  // "validate against whatever taxonomy the cwd happens to hold". This
+  // helper's default repoFlag is already null, i.e. the flag was never typed.
+  it("file refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["issue", "file", "--target", "o/n"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
+  it("consolidate-close refuses an OMITTED --repo the same way", async () => {
+    const result = await capture(["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
   it("open-pr-check requires --issues", async () => {
     expect((await capture(["issue", "open-pr-check", "--target", "o/n"])).code).toBe(2);
   });

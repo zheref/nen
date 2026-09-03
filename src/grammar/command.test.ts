@@ -24,7 +24,10 @@ async function capture(
   const code = await runFamily(
     parseCommand,
     argv,
-    options.repoFlag ?? BANKAI_REPO,
+    // `=== undefined`, not `??`: `repoFlag: null` is a REAL case (the
+    // invocation that never typed --repo, zheref/nen#28) and must not be
+    // coalesced back into the fixture default.
+    options.repoFlag === undefined ? BANKAI_REPO : options.repoFlag,
     options.json ?? false,
     io,
     seams,
@@ -119,6 +122,14 @@ describe("nen parse futon -- CLI wiring (verbs/4-remainders, merged into this fa
     const result = await capture(["parse", "futon", "not an invocation"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/no '@<severity>'/);
+  });
+
+  // zheref/nen#28: the futon usage line lists --repo unbracketed, so omitting
+  // it is refused by name -- never silently resolved against the cwd's registry.
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["parse", "futon", "KP@high"], [], { repoFlag: null });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
   it("requires an invocation string", async () => {

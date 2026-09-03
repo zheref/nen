@@ -383,6 +383,15 @@ describe("nen release resolve-target -- CLI wiring", () => {
     const result = await capture(["release", "resolve-target"], BANKAI_REPO, new ScriptedSeams([]).run);
     expect(result.code).toBe(2);
   });
+
+  // zheref/nen#28: the usage line lists --repo unbracketed, so omitting it is
+  // refused by name -- resolving a release target in whatever repository the
+  // process is standing in answers the ancestor check against the wrong trunk.
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["release", "resolve-target", "--token", "main"], null, new ScriptedSeams([]).run);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
 });
 
 describe("nen release self-check -- CLI wiring", () => {
@@ -403,6 +412,17 @@ describe("nen release self-check -- CLI wiring", () => {
   it("requires all three flags", async () => {
     const result = await capture(["release", "self-check"], BANKAI_REPO, new ScriptedSeams([]).run);
     expect(result.code).toBe(2);
+  });
+
+  // zheref/nen#28: same unbracketed promise as resolve-target's usage line.
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(
+      ["release", "self-check", "--pr-merge-sha", "pr-sha", "--previous-tag", "v1.0.0", "--cut-point", "cut-point"],
+      null,
+      new ScriptedSeams([]).run,
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 });
 

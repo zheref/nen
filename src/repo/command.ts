@@ -1,7 +1,7 @@
 // src/repo/command.ts -- `nen repo resolve`, `nen repo inventory`, `nen repo
 // scenario`.
 
-import { emit, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { parseTarget, type Target } from "../github/target.js";
@@ -53,8 +53,12 @@ inventory:
 
 scenario:
   The scenario recorded for --target in --repo's schemas/repos.json --
-  the value canon-resolve/quality-tooling lookups read. Exits 1 when the
-  repo is not a recorded consumer, or carries no scenario.`;
+  the value canon-resolve/quality-tooling lookups read. --repo is
+  REQUIRED (exit 2), never defaulted to the current directory: a cwd
+  default surfaced as whatever registry happened to be there, not as the
+  forgotten flag (zheref/nen#28). Exits 1 with a DISTINCT reason when
+  --repo carries no schemas/repos.json, when --target is not recorded in
+  it at all, or when it is recorded but carries no scenario.`;
 
 function render(resolution: Resolution): string[] {
   const lines: string[] = [];
@@ -146,8 +150,15 @@ function inventory(context: CommandContext): number {
 }
 
 function scenario(context: CommandContext): number {
+  // BEFORE anything is read: this verb's usage line lists --repo unbracketed,
+  // and honoring that promise at the parser is the whole fix for the
+  // silently-defaulted-to-cwd failure (zheref/nen#28).
+  const repoFlag = requireRepoFlag(
+    context,
+    "It is the checkout whose schemas/repos.json records --target's scenario; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
+  );
   const target = requireTarget(context);
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const root = assertRepoRoot({ repoFlag });
   const registry = loadRepoRegistry(root);
   const result = resolveScenario(registry, target.slug);
   if (context.json) {

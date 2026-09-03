@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
@@ -9,6 +12,9 @@ async function capture(
   run: Seams["run"] = (): CommandResult => {
     throw new Error("this test's invocation should make no subprocess call");
   },
+  // `null` is a real case here, not a default-filler: it is the invocation
+  // that never typed --repo at all (zheref/nen#28's subject).
+  repoFlag: string | null = BANKAI_REPO,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -21,7 +27,7 @@ async function capture(
     },
   };
   const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
-  const code = await runFamily(repoCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(repoCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -83,10 +89,44 @@ describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged 
     expect(result.out).toEqual(["swiftui-tca-uzf-v2"]);
   });
 
-  it("scenario exits 1 with a reason when the repo is unrecorded", async () => {
+  // zheref/nen#28: the usage line lists --repo unbracketed, and honoring that
+  // at the parser is the fix -- omission used to default silently to the cwd
+  // and surface as that directory's missing-or-unrelated registry.
+  it("scenario refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
+  // The three downstream causes the one old refusal conflated (zheref/nen#28),
+  // one test each. Cause 1: the --repo path carries no schemas/repos.json.
+  it("scenario names a --repo path with no schemas/repos.json as exactly that (exit 1)", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "nen-no-registry-"));
+    const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, empty);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/schemas[/\\]repos\.json: no such file/);
+  });
+
+  // Cause 2: the registry knows nothing about the target, anywhere.
+  it("scenario exits 1 with a 'not recorded anywhere' reason when the repo is unrecorded", async () => {
     const result = await capture(["repo", "scenario", "--target", "zheref/nonexistent"]);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/is not a consumer/);
+    expect(result.err.join("\n")).toMatch(/is not recorded anywhere/);
+  });
+
+  // Cause 3: the registry plainly records the repo (here under
+  // pending_onboarding -- #27's widened resolution), just not with a scenario.
+  it("scenario tells a recorded non-consumer apart from an unknown repo (exit 1)", async () => {
+    const result = await capture(["repo", "scenario", "--target", "zheref/KroCloud"]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/is recorded in .*under 'pending_onboarding'/);
+    expect(result.err.join("\n")).toMatch(/only a consumers\[\] entry carries a 'scenario'/);
+  });
+
+  it("scenario names the product code recording the registry's OWN repo, not 'unknown'", async () => {
+    const result = await capture(["repo", "scenario", "--target", "zheref/bankai-core"]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/as product code 'BC' \('bankai-core'\)/);
   });
 
   it("refuses an unknown subcommand", async () => {

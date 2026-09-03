@@ -15,7 +15,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { parseTarget, type Target } from "../github/target.js";
-import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import {
   closedSince,
   findCanonical,
@@ -287,7 +287,12 @@ function openPr(context: CommandContext): number {
 
 function file(context: CommandContext): number {
   const target = requireTarget(context);
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
+  // never silently read as "validate against whatever taxonomy the cwd
+  // happens to hold" (zheref/nen#28).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/labels.json validates every label in the filing."),
+  });
   const taxonomy = loadLabelTaxonomy(root);
   const request: FileRequest = {
     title: context.args.values["title"] ?? "",
@@ -397,7 +402,11 @@ function consolidate(context: CommandContext): number {
   if (!Number.isInteger(parent) || parent <= 0 || children.length === 0) {
     throw new VerbUsageError("consolidate-close takes --parent <n> and --children <n,n>.");
   }
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // Same requiredness as file() above: this subcommand's usage line also lists
+  // --repo unbracketed (zheref/nen#28).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/labels.json computes the label union and severity maximum."),
+  });
   const taxonomy = loadLabelTaxonomy(root);
   const severityFamily = readSeverityFamily(context, taxonomy);
   const plan = planConsolidation(context.seams, target, parent, children, taxonomy, severityFamily);

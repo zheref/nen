@@ -7,7 +7,12 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { canonCommand } from "./command.js";
 
-async function capture(argv: readonly string[]): Promise<{ code: number; out: string[]; err: string[] }> {
+async function capture(
+  argv: readonly string[],
+  // `null` is a real case, not a default-filler: the invocation that never
+  // typed --repo at all (zheref/nen#28's subject).
+  repoFlag: string | null = BANKAI_REPO,
+): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -25,7 +30,7 @@ async function capture(argv: readonly string[]): Promise<{ code: number; out: st
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
   };
-  const code = await runFamily(canonCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(canonCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -51,7 +56,7 @@ describe("nen canon resolve -- CLI wiring", () => {
     expect(text).toMatch(/stack handbook: handbooks\/stacks\/swiftui-tca-uzf-v2\/architecture\.md/);
   });
 
-  it("exits 1 when the target repo has no recorded scenario", async () => {
+  it("exits 1 with a 'not recorded anywhere' reason when the target repo is unrecorded", async () => {
     const result = await capture(
       resolveArgs({
         target: "zheref/nonexistent",
@@ -60,7 +65,39 @@ describe("nen canon resolve -- CLI wiring", () => {
       }),
     );
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/is not a consumer/);
+    expect(result.err.join("\n")).toMatch(/is not recorded anywhere/);
+  });
+
+  // zheref/nen#28: the same three-way cause split repo scenario got, seen
+  // through this verb. A repo the registry records WITHOUT a consumers[]
+  // scenario used to produce the byte-identical "not a consumer" refusal an
+  // unknown repo gets.
+  it("exits 1 telling a recorded non-consumer apart from an unknown repo", async () => {
+    const result = await capture(
+      resolveArgs({
+        target: "zheref/KroCloud",
+        "always-load": "handbooks/uzf-core.md",
+        "stack-dir": "handbooks/stacks",
+      }),
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/is recorded in .*under 'pending_onboarding'/);
+  });
+
+  // zheref/nen#28: --repo is listed unbracketed on the usage line, so omitting
+  // it is refused at the parser like --target/--stack-dir/--always-load --
+  // never silently defaulted to the cwd to fail later as "no such file".
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(
+      resolveArgs({
+        target: "zheref/KroApple",
+        "always-load": "handbooks/uzf-core.md",
+        "stack-dir": "handbooks/stacks",
+      }),
+      null,
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
   it("requires --target and --stack-dir", async () => {

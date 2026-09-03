@@ -5,7 +5,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { parseTarget, type Target } from "../github/target.js";
-import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { FileRequest } from "../issue/file.js";
 import { fileIdea } from "./file.js";
 
@@ -42,6 +42,15 @@ export const ideaCommand: Command = {
       return 1;
     }
 
+    // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
+    // never silently read as "validate against whatever taxonomy the cwd
+    // happens to hold" (zheref/nen#28). Checked with the other required flags,
+    // BEFORE the body file is read -- a flag refusal must not wait on I/O.
+    const repoFlag = requireRepoFlag(
+      context,
+      "It is the checkout whose schemas/labels.json validates every label in the filing.",
+    );
+
     const bodyFile = context.args.values["body-file"];
     if (bodyFile === undefined) {
       throw new VerbUsageError("--body-file <path> is required; a body typed on the command line is a body nobody reviewed.");
@@ -62,7 +71,7 @@ export const ideaCommand: Command = {
       forbiddenFamilies: commaList(context.args.values["forbid-family"]),
     };
 
-    const root = assertRepoRoot({ repoFlag: context.repoFlag });
+    const root = assertRepoRoot({ repoFlag });
     const taxonomy = loadLabelTaxonomy(root);
     const result = fileIdea(context.seams, target, request, submittedBody, taxonomy);
 

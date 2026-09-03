@@ -107,6 +107,32 @@ export function requireValue(args: ParsedArgs, flag: string, why: string): strin
   return value;
 }
 
+/**
+ * The `--repo <path>` a verb REQUIRES, refused by name when the invocation
+ * carried none (zheref/nen#28).
+ *
+ * `--repo` is a GLOBAL value flag, so it can never be missing at the parse the
+ * way an undeclared flag is -- ../repo/root.ts's cwd default is the right
+ * meaning for the verbs that list it bracketed (`[--repo <path>]`). But a verb
+ * whose own usage line lists `--repo <path>` WITHOUT brackets has promised
+ * requiredness, and must say so HERE, the way requireValue() does for its own
+ * flags: silently falling back to the call site's cwd surfaced later as a
+ * generic "no such file" (exit 1) or -- worse -- as a refusal computed against
+ * whatever unrelated registry the cwd happened to hold, byte-identical to the
+ * refusal a correctly-pointed invocation gets. A caller who forgot a flag must
+ * be told the flag's name, immediately, at exit 2.
+ *
+ * `--repo ''` deliberately falls THROUGH to resolveRepoRoot(), whose
+ * empty-value refusal already names the expected shape -- "is required" would
+ * be the wrong diagnosis for a flag that was typed.
+ */
+export function requireRepoFlag(context: CommandContext, why: string): string {
+  if (context.repoFlag === null) {
+    throw new VerbUsageError(`--repo <path> is required. ${why}`);
+  }
+  return context.repoFlag;
+}
+
 /** A `--flag <n>` read as a non-negative integer. */
 export function readInteger(
   args: ParsedArgs,

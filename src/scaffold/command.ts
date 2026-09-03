@@ -4,7 +4,7 @@
 
 import { assertRepoRoot } from "../repo/root.js";
 import { commaList } from "../cli/comma.js";
-import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { scaffoldInit } from "./init.js";
 
 // A trailer key is interpolated into the hook both as an ERE inside a
@@ -79,7 +79,13 @@ export const scaffoldCommand: Command = {
     if (!MARKER_ENV_VAR.test(markerEnv)) {
       throw new VerbUsageError(`--marker-env '${markerEnv}' is not a legal shell identifier ([A-Za-z_][A-Za-z0-9_]*).`);
     }
-    const root = assertRepoRoot({ repoFlag: context.repoFlag });
+    // Usage lists --repo unbracketed: omitting it is refused by name at exit 2
+    // -- a scaffold that defaulted to the cwd would write directories and a
+    // commit-msg hook into whatever repository the process was standing in
+    // (zheref/nen#28).
+    const root = assertRepoRoot({
+      repoFlag: requireRepoFlag(context, "It is the repository being scaffolded."),
+    });
 
     const result = scaffoldInit({
       root,

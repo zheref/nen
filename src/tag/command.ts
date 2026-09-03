@@ -1,7 +1,7 @@
 // src/tag/command.ts -- `nen tag cut --at <sha>`.
 
 import { assertRepoRoot } from "../repo/root.js";
-import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { cutTag } from "./cut.js";
 
 const USAGE = `nen tag cut -- cut a tag pinned at a given SHA, getsuga §4.
@@ -35,7 +35,13 @@ export const tagCommand: Command = {
     if (name === undefined || at === undefined) {
       throw new VerbUsageError("tag cut takes --name <vX.Y.Z> and --at <sha>.");
     }
-    const root = assertRepoRoot({ repoFlag: context.repoFlag });
+    // Usage lists --repo unbracketed: omitting it is refused by name at exit 2
+    // -- a tag verb that defaulted to the cwd would run its existence checks
+    // (and, with --push, the push) against whatever repository the process was
+    // standing in (zheref/nen#28).
+    const root = assertRepoRoot({
+      repoFlag: requireRepoFlag(context, "It is the repository the tag is cut in."),
+    });
     const result = cutTag(context.seams, root, {
       name,
       at,

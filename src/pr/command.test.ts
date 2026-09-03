@@ -230,6 +230,26 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.code).toBe(2);
   });
 
+  // zheref/nen#28: next-blocker's and cascade-main's usage lines list --repo
+  // unbracketed, so omitting it is refused by name at exit 2 -- never silently
+  // resolved to whatever repository the process is standing in. No seams calls
+  // are scripted: the refusal must fire before any fetch or git call.
+  it("next-blocker refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(
+      ["pr", "next-blocker", "--target", "o/n", "--pr", "1"],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
+  it("cascade-main refuses an OMITTED --repo the same way -- it MUTATES what it is pointed at", async () => {
+    const result = await capture(["pr", "cascade-main"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
   it("retarget requires --base", async () => {
     const result = await capture(["pr", "retarget", "--target", "o/n", "--pr", "1"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
