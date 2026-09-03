@@ -22,7 +22,11 @@ usage:
   --command       the observation to repeat, e.g. "gh pr checks 42 --json state".
                   Classified against izanami's read-only table before the FIRST
                   run; a mutating command is refused with 'nen parse izanagi'
-                  named instead.
+                  named instead. The observation is spawned DIRECTLY -- no
+                  shell -- so <bin> must be a real executable on PATH: a
+                  shell builtin ('type', or 'cat'/'test' outside Git Bash's
+                  own bin directory) fails at spawn on every observation and
+                  the watch stops on the error streak instead of watching.
   --true-pattern  a regex tested against the command's stdout. Omit to treat
                   exit code 0 as true (the default a check-style command uses).
                   WHEN GIVEN, a non-zero exit is treated as an OBSERVATION

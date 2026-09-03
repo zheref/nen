@@ -47,6 +47,35 @@ describe("nen watch until -- CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/classifies as mutating/);
   });
 
+  // zheref/nen#31: a file-read watch and a nen-verb watch were both refused
+  // as unknown; the classifier now admits them, and the verb wiring must too.
+  it("accepts a plain file read as the observation (#31)", async () => {
+    const result = await capture(
+      ["watch", "until", "--command", "cat somefile.txt", "--true-pattern", "ok", "--interval-ms", "0"],
+      new QueueSeams([OK("not yet"), OK("ok")]),
+    );
+    expect(result.code).toBe(0);
+  });
+
+  it("accepts a read-only nen verb as the observation (#31)", async () => {
+    const result = await capture(
+      ["watch", "until", "--command", "nen pr ready 925 --gh-repo owner/repo", "--interval-ms", "0"],
+      new QueueSeams([OK("Ready")]),
+    );
+    expect(result.code).toBe(0);
+  });
+
+  it("still refuses a mutating nen verb before ever observing (#31)", async () => {
+    const result = await capture([
+      "watch",
+      "until",
+      "--command",
+      "nen label apply XX-PR-#1 --label wake --repo-slug o/r --run",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/classifies as mutating/);
+  });
+
   it("exits 0 the moment exit-code-0 is reached, with no --true-pattern given", async () => {
     const result = await capture(
       ["watch", "until", "--command", "gh pr checks 1", "--interval-ms", "0"],

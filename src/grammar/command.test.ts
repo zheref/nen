@@ -156,6 +156,32 @@ describe("nen parse izanagi/izanami -- dispatch through the merged family", () =
     const result = await capture(["parse", "izanami", "gh pr checks 42 until it is green"]);
     expect(result.code).toBe(0);
   });
+
+  // zheref/nen#31's exact transcripts: a plain file read and a read-only nen
+  // verb came back [unknown] and refused the whole run; both must accept now,
+  // and a genuinely mutating nen verb must STILL refuse whole.
+  it("izanami accepts a plain file read (#31)", async () => {
+    const result = await capture(["parse", "izanami", "until it says ok\ncat somefile.txt"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/\[read-only\] cat somefile\.txt/);
+  });
+
+  it("izanami accepts a read-only nen verb invocation (#31)", async () => {
+    const result = await capture(["parse", "izanami", "until it says ready\nnen pr ready 925 --gh-repo owner/repo"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/\[read-only\] nen pr ready 925/);
+  });
+
+  it("izanami still refuses a mutating nen verb, whole (#31)", async () => {
+    const result = await capture([
+      "parse",
+      "izanami",
+      "until applied\nnen label apply XX-PR-#1 --label wake --repo-slug o/r --run",
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/\[mutating\] nen label apply/);
+    expect(result.err.join("\n")).toMatch(/WHOLE run is refused/);
+  });
 });
 
 describe("nen parse -- refuses an invocation with no skill named", () => {
