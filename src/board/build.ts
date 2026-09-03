@@ -17,11 +17,18 @@
 // would be a second, divergent implementation of a rule this repository
 // already has one implementation of.
 
+// THIS SHAPE IS ENFORCED AT THE JSON BOUNDARY, in ./command.ts's
+// validateBoardRows (#32) -- not here. This module composes rows a TypeScript
+// caller already typed; the boundary is where a `--rows-from` document, cast
+// rather than checked, once let a string `refs` reach ./render.ts's
+// `row.refs.join` as a raw TypeError instead of a refusal that names the row,
+// the field and the expected shape. A second check here would be the same
+// divergence risk this file's header refuses for gates and colours.
 export interface BoardRow {
   /** The subject: an issue number, a PR-only effort's PR number, or a caller-chosen id. */
   readonly id: string;
   readonly title: string;
-  /** Object-notation refs (../ref/notation.ts), e.g. ["XX-IS-#12", "XX-PR-#34"]. */
+  /** Object-notation refs (../ref/notation.ts), ONE STRING PER REFERENCE, e.g. ["XX-IS-#12", "XX-PR-#34"] -- never a single pre-joined string. */
   readonly refs: readonly string[];
   /** null when this row carries no gate (in progress, owned by its author). */
   readonly gate: string | null;
