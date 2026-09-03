@@ -98,6 +98,17 @@ describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged 
     expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
+  // An EMPTY/whitespace --repo is the same mistake as omission, and must hit
+  // the same refusal -- not fall through to resolveRepoRoot(), whose
+  // empty-value message advises omitting the flag this verb just refused to
+  // let the caller omit (review thread on zheref/nen#73).
+  it("scenario refuses an EMPTY --repo the same way as an omitted one (exit 2)", async () => {
+    const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, "   ");
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+    expect(result.err.join("\n")).not.toMatch(/omit it entirely/);
+  });
+
   // The three downstream causes the one old refusal conflated (zheref/nen#28),
   // one test each. Cause 1: the --repo path carries no schemas/repos.json.
   it("scenario names a --repo path with no schemas/repos.json as exactly that (exit 1)", async () => {
