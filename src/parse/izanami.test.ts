@@ -426,9 +426,15 @@ describe("classifyCommand -- the scan-faithfulness invariant (#31 round three)",
     expect(classifyCommand("nen dev test -- -u").classification).toBe("unknown");
   });
 
-  // MINOR. JS's \s+ splits on U+00A0 where a real shell does not, so an
-  // nbsp-glued --dry-run donated a token the shell never produces.
-  it("refuses exotic whitespace that JS splits on and a shell does not", () => {
+  // MINOR, with its REASON corrected in #70 round two (the behaviour stands).
+  // Round one wrote "JS's \s+ splits on U+00A0 where a real shell does not",
+  // and that is true of bash and FALSE of PowerShell: verified here with a
+  // program that prints its own argv, `A<U+00A0>--run` arrives as ONE argument
+  // under bash and as TWO under PowerShell. So the refusal rests on the
+  // READERS DISAGREEING, not on "no shell can run this" -- under bash the scan
+  // is donated a --dry-run token the shell never produces, under PowerShell
+  // that token is real, and neither reading is provable from here.
+  it("refuses exotic whitespace the readers tokenize differently from each other", () => {
     expect(
       classifyCommand(`nen issue file --target o/r --title x${NBSP}--dry-run --body-file b.md`).classification,
     ).toBe("mutating");
@@ -823,6 +829,466 @@ describe("classifyCommand -- PowerShell word-boundary characters inside the safe
   });
 });
 
+// zheref/nen#70. #31 bolted its metacharacter guard onto the two row families
+// IT added and left the pre-existing gh/git rows as they were -- so `git log >
+// out.txt` classified [read-only], and handed to a skill-side shell that
+// verdict CERTIFIES a write. The guard now runs ONCE at classifyCommand's
+// seam, ahead of every branch that can answer read-only, so a row cannot be
+// added without it.
+//
+// Every line in this block was verified live against this binary BEFORE the
+// fix. All of them printed `[read-only]`, and `nen parse izanami` exited 0 on
+// the whole set.
+describe("classifyCommand -- the metacharacter seam binds every read-only row (#70)", () => {
+  it("refuses the issue's exact repro: git log > out.txt", () => {
+    const result = classifyCommand("git log > out.txt");
+    expect(result.classification).toBe("unknown");
+    expect(result.classification).not.toBe("read-only");
+    // ...and the WHOLE run goes with it, not just the offending step.
+    expect(classifyInvocation({ commands: ["git log > out.txt"], condition: "it settles" }).ok).toBe(false);
+  });
+
+  // ONE LINE PER METACHARACTER CLASS the issue names, on a git row AND on a gh
+  // row -- the two families that carried no guard -- plus the `<` that #31's
+  // rounds had already widened the set by. A table rather than prose so a
+  // class added to SHELL_METACHARS has one obvious place to be pinned.
+  const METACHAR_ROWS: readonly { readonly klass: string; readonly git: string; readonly gh: string }[] = [
+    { klass: ">", git: "git log > out.txt", gh: "gh pr view 42 > out.txt" },
+    { klass: ">>", git: "git log >> out.txt", gh: "gh issue list >> out.txt" },
+    { klass: "|", git: "git status | tee leak.txt", gh: "gh pr view 42 | tee leak.txt" },
+    { klass: ";", git: "git status; git push", gh: "gh pr checks 42; git push" },
+    { klass: "&", git: "git diff && git push", gh: "gh issue list && git push" },
+    { klass: "backtick", git: "git diff `git push`", gh: "gh run list `git push`" },
+    { klass: "$(", git: "git log $(git push)", gh: "gh run list $(git push)" },
+    { klass: "newline", git: "git log\ngit push", gh: "gh pr view 42\ngit push" },
+    { klass: "CR", git: "git log\rgit push", gh: "gh pr view 42\rgit push" },
+    { klass: "<", git: "git log < in.txt", gh: "gh repo view < in.txt" },
+  ];
+
+  it("refuses every metacharacter class on a git row and on a gh row", () => {
+    for (const row of METACHAR_ROWS) {
+      expect(classifyCommand(row.git).classification, `git row, ${row.klass}`).toBe("unknown");
+      expect(classifyCommand(row.gh).classification, `gh row, ${row.klass}`).toBe("unknown");
+    }
+  });
+
+  // THE MUTATION-WORTHY ASSERTION, and the one that says "one mechanism, not
+  // six". The mutant this kills is precisely the state the issue found the
+  // module in: the guard present on SOME read-only path and absent from
+  // another. Moving it out of classifyCommand's seam and back beside any
+  // single row family -- gh/git, gh api, the plain reads, the nen verbs --
+  // turns this red for the families left behind.
+  it("no row family certifies a metacharacter line, whichever family it is", () => {
+    const READS: readonly string[] = [
+      "git log -1", // gh/git row, identity hinge
+      "git branch --show-current", // gh/git row, line-scan hinge
+      "git remote get-url origin", // gh/git row, line-scan hinge
+      "gh pr checks 42", // gh row, identity hinge
+      "gh issue list", // gh row, identity hinge
+      "gh api repos/o/r/pulls/1", // the verified-GET gh api row
+      "cat somefile.txt", // #31's plain-read row
+      "nen pr ready 925 --gh-repo o/r", // #31's nen-verb row
+    ];
+    const METACHARS: readonly string[] = [">", ">>", "|", ";", "&", "`", "$(", "\n", "\r", "<"];
+    for (const read of READS) {
+      // The control first: clean, each of these is exactly what izanami is
+      // for, so a guard that simply refused more would go red here too.
+      expect(classifyCommand(read).classification, read).toBe("read-only");
+      for (const meta of METACHARS) {
+        const line = `${read} ${meta} git push`;
+        expect(classifyCommand(line).classification, line).not.toBe("read-only");
+      }
+    }
+  });
+
+  it("leaves the genuinely clean gh/git reads exactly where they were", () => {
+    const clean: readonly string[] = [
+      "git log -1",
+      "git fetch origin",
+      "git status",
+      "gh pr checks 42",
+      "gh pr view 42 --json state",
+      "gh issue list --state open",
+      "gh api repos/o/r/pulls/1",
+      "gh api -X GET repos/o/r",
+    ];
+    for (const line of clean) {
+      expect(classifyCommand(line).classification, line).toBe("read-only");
+    }
+    expect(classifyInvocation({ commands: clean, condition: "it settles" }).ok).toBe(true);
+  });
+
+  it("keeps the NAMED mutating refusals named -- the seam sits after them", () => {
+    // The seam intercepts read-only CERTIFICATIONS, not the head-anchored
+    // refusals: when a line STARTS with a write, that rule holds whatever else
+    // rides along, and naming the rule is the more actionable answer than a
+    // generic "there is a metacharacter here". Nothing that was refused before
+    // is refused less firmly now.
+    expect(classifyCommand("git push origin main > out.txt").classification).toBe("mutating");
+    expect(classifyCommand("gh pr create --title x | tee log").classification).toBe("mutating");
+    expect(classifyCommand("git branch -D victim; echo done").classification).toBe("mutating");
+  });
+
+  it("names the rule and what to do instead -- an actionable refusal", () => {
+    const reason = classifyCommand("git log > out.txt").reason;
+    expect(reason).toMatch(/metacharacter/);
+    expect(reason).toMatch(/git log > out\.txt/);
+    expect(reason).toMatch(/yourself/);
+  });
+});
+
+// zheref/nen#70, the half the issue did not ask for and #31's invariant did:
+// a verdict that HINGES on a token scan is only worth anything on a line whose
+// tokens are provably the ones its readers build. Two gh/git rows and the gh
+// api row rest on exactly such a scan, and all three were live fail-opens --
+// each line below printed `[read-only]` against this binary before the fix.
+describe("classifyCommand -- the gh/git rows' own scan-dependence (#70)", () => {
+  it("refuses a laundered flag on the $-anchored git rows", () => {
+    // `git branch '-D'`: a real shell unquotes it and DELETES the branch.
+    // MUTATING_PATTERNS misses it (it wants `(?:\s|^)-d`, and the quote is
+    // neither), and the allowlist row's trailing `(\s+[^-\s]\S*)?$` then took
+    // `'-D'` for an ordinary branch NAME.
+    expect(classifyCommand("git branch '-D'").classification).toBe("unknown");
+    expect(classifyCommand("git branch \\-D").classification).toBe("unknown");
+    // `git remote 'prune'`: a real shell prunes the remote-tracking refs.
+    expect(classifyCommand("git remote 'prune'").classification).toBe("unknown");
+    expect(classifyCommand("git remote \\prune").classification).toBe("unknown");
+  });
+
+  it("refuses a laundered method on gh api -- a DELETE was certified as a GET", () => {
+    // Round one's `([A-Za-z]+)` method capture could not match past the quote
+    // a real shell strips, so the scan found NO method at all and fell through
+    // to "GET by default". These stay "unknown" rather than "mutating" under
+    // round two's walk too, and deliberately: `'DELETE'` is not a bare method
+    // the walk can RESOLVE, and a refusal that named a method it did not read
+    // would be a guess dressed as a fact.
+    expect(classifyCommand("gh api repos/o/r/issues -X 'DELETE'").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r --method 'POST'").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r -X \\DELETE").classification).toBe("unknown");
+    // The MUTATING answers stay ahead of the gate and unconditional -- that
+    // direction only ever over-refuses.
+    expect(classifyCommand("gh api -X POST repos/o/r/issues").classification).toBe("mutating");
+    expect(classifyCommand("gh api graphql -f query=mutation").classification).toBe("mutating");
+  });
+
+  it("leaves the IDENTITY rows free to carry a quoted argument", () => {
+    // These rows pin their subcommand with LITERAL words at LITERAL positions
+    // AND the subcommand has no writing argument form at all (swept against gh
+    // 2.92.0: no flag on any of them writes a file), so the verdict is the
+    // subcommand's identity and no argument spelling can flip it. Gating them
+    // would refuse plain reads for nothing -- the same reasoning that keeps
+    // `nen watch until --command "gh pr checks 1"` read-only, and the
+    // assertion that says this fix widened the refusal precisely, not bluntly.
+    expect(classifyCommand('gh pr list --search "is:open"').classification).toBe("read-only");
+    expect(classifyCommand("gh pr view 42 --jq '.state'").classification).toBe("read-only");
+    expect(classifyCommand('gh issue list --search "is:open label:wake"').classification).toBe("read-only");
+    expect(classifyCommand('git status --porcelain "C:/Program Files/x"').classification).toBe("read-only");
+  });
+
+  // ROUND TWO CORRECTED THIS TEST'S SUBJECT, not just its expectations. Round
+  // one filed `git log`/`diff`/`show` under the identity hinge on the strength
+  // of "no argument spelling changes WHICH subcommand runs" -- true, and
+  // beside the point: all three WRITE on `--output`, verified against git
+  // 2.53.0 (`git log --output=f` created f), and through a real shell the
+  // LAUNDERED spelling writes too (`git log '--output' f` created f). So the
+  // three rows are line-scan now, and the quoted forms round one pinned as
+  // read-only are the deliberate cost of that -- pinned here so a future
+  // widening argues with a test rather than with a comment.
+  it("charges the quoted-argument cost on git log/diff/show, and admits the unquoted forms", () => {
+    expect(classifyCommand('git log --grep "fix: thing"').classification).toBe("unknown");
+    expect(classifyCommand('git diff --stat "C:/Program Files/x"').classification).toBe("unknown");
+    // The caller's way out, and the control that says the refusal is about the
+    // quote and not about the flag.
+    expect(classifyCommand("git log --grep fix").classification).toBe("read-only");
+    expect(classifyCommand("git diff --stat HEAD~1").classification).toBe("read-only");
+    expect(classifyCommand("git show --stat HEAD").classification).toBe("read-only");
+  });
+
+  it("leaves the line-scan rows' clean listing forms untouched", () => {
+    const listings: readonly string[] = [
+      "git branch",
+      "git branch -a",
+      "git branch -l",
+      "git branch --list",
+      "git branch --show-current",
+      "git branch --contains HEAD~1",
+      // The two forms round one's trailing optional positional was actually
+      // FOR -- a pattern for --list, a ref for --contains. They stay read-only;
+      // the bare positional that rode in beside them does not (below).
+      "git branch --list feature/x",
+      "git branch -l feat",
+      "git remote",
+      "git remote -v",
+      "git remote show origin",
+      "git remote get-url origin",
+      "git fetch",
+      "git fetch origin",
+      "git fetch --all",
+    ];
+    for (const line of listings) {
+      expect(classifyCommand(line).classification, line).toBe("read-only");
+    }
+  });
+
+  // A DELIBERATE COST, stated rather than discovered later: gating gh api on
+  // scan-faithfulness refuses a --jq/--template read whose expression is
+  // quoted, which IS a plain GET. That is the refusing direction, it is the
+  // same trade #31 made for every flag-dependent nen verb, and the caller's
+  // way out is the unquoted form below -- pinned so the cost stays visible and
+  // a future widening has to argue with a test rather than with a comment.
+  it("over-refuses a quoted gh api --jq, and admits the unquoted form", () => {
+    expect(classifyCommand("gh api repos/o/r --jq '.name'").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r --jq .name").classification).toBe("read-only");
+  });
+});
+
+// zheref/nen#70, ROUND TWO. Round one's three new guards each held in the
+// spelling they were written against and failed one spelling over, and the
+// review verified every line below against the real binaries -- gh 2.92.0 with
+// GH_DEBUG=api printing the request gh actually built, git 2.53.0 in a
+// throwaway repository, and PowerShell/cmd.exe/bash in this environment. Each
+// `EXPECTED` line here classified [read-only] before this commit.
+describe("classifyCommand -- #70 round two: the spellings the round-one guards missed", () => {
+  // BLOCKER 1. `-X=DELETE` sent `DELETE /repos/o/r/issues` (verified), and
+  // round one's method regex had an `=` arm for `--method` and none for `-X`
+  // -- so it found NO method and fell through to "GET by default". The repair
+  // is not the missing arm: pflag also takes the ATTACHED value (`-XDELETE`)
+  // and GROUPS shorthands (`-iX DELETE`, also verified as a DELETE), so the
+  // row walks the argv under pflag's rules and refuses anything it cannot
+  // positively resolve to GET.
+  const NON_GET_SPELLINGS: readonly string[] = [
+    "gh api repos/o/r/issues -X=DELETE",
+    "gh api repos/o/r/issues -XDELETE",
+    "gh api repos/o/r/issues -X DELETE",
+    "gh api repos/o/r/issues --method=DELETE",
+    "gh api repos/o/r/issues --method DELETE",
+    "gh api repos/o/r/issues -iX DELETE",
+    "gh api repos/o/r/issues -iXDELETE",
+    "gh api repos/o/r/issues -iX=DELETE",
+    "gh api repos/o/r -H x:y -X DELETE",
+  ];
+
+  it("refuses every -X/--method spelling pflag accepts, not just the two round one knew", () => {
+    for (const line of NON_GET_SPELLINGS) {
+      const result = classifyCommand(line);
+      expect(result.classification, line).toBe("mutating");
+      expect(result.reason, line).toMatch(/non-GET method/);
+    }
+  });
+
+  it("still admits every spelling that positively resolves to GET", () => {
+    const gets: readonly string[] = [
+      "gh api repos/o/r/issues",
+      "gh api repos/o/r/issues -X GET",
+      "gh api repos/o/r/issues -XGET",
+      "gh api repos/o/r/issues -X=GET",
+      "gh api repos/o/r/issues --method GET",
+      "gh api repos/o/r/issues --method=GET",
+      "gh api repos/o/r/issues -H Accept:application/json",
+      "gh api repos/o/r/issues -i --paginate",
+    ];
+    for (const line of gets) {
+      expect(classifyCommand(line).classification, line).toBe("read-only");
+    }
+  });
+
+  // "GET by default" is the one answer this table may never reach by NOT
+  // finding something. A method value the walk cannot resolve refuses rather
+  // than falling through -- which is also what keeps the quote-laundering
+  // repro above ("-X 'DELETE'") an "unknown" instead of a guess.
+  it("refuses a method value it cannot positively resolve, rather than defaulting to GET", () => {
+    for (const line of ["gh api repos/o/r -X", "gh api repos/o/r --method", "gh api repos/o/r --method="]) {
+      expect(classifyCommand(line).classification, line).not.toBe("read-only");
+    }
+  });
+
+  // BLOCKER 2. `-ftitle=pwned` sent `POST /repos/o/r/issues` (verified -- gh's
+  // own 404 body names the create-an-issue endpoint), because round one's
+  // field-flag regex demanded a word boundary after `-f` and pflag's attached
+  // spelling gives it none. Reachable IN-BINARY through `watch until`'s direct
+  // spawn, since gh parses the argv the same way with or without a shell.
+  it("refuses every -f/-F/--field/--raw-field/--input spelling, attached ones included", () => {
+    const posts: readonly string[] = [
+      "gh api repos/o/r/issues -ftitle=pwned",
+      "gh api repos/o/r/issues -Ftitle=pwned",
+      "gh api repos/o/r/issues -f title=pwned",
+      "gh api repos/o/r/issues -F title=pwned",
+      "gh api repos/o/r/issues -if title=pwned",
+      "gh api repos/o/r/issues --field title=pwned",
+      "gh api repos/o/r/issues --field=title=pwned",
+      "gh api repos/o/r/issues --raw-field=title=pwned",
+      "gh api repos/o/r/issues --input=body.json",
+    ];
+    for (const line of posts) {
+      const result = classifyCommand(line);
+      expect(result.classification, line).toBe("mutating");
+      expect(result.reason, line).toMatch(/POST once any parameter is given/);
+    }
+  });
+
+  // The walk is an ALLOWLIST, which is what makes it survive gh's next
+  // release: a flag that is not in the table is not assumed inert.
+  it("refuses a gh api flag the table does not classify, rather than ignoring it", () => {
+    expect(classifyCommand("gh api repos/o/r --frobnicate").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r -Z").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r -- extra").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r extra-endpoint").classification).toBe("unknown");
+  });
+
+  // BLOCKER 3, and the one the reviewer proved by running it: `nen watch
+  // until --command "git branch nen70-probe"` classified read-only and
+  // ACTUALLY CREATED the branch, in-binary, with no shell anywhere. Round
+  // one's trailing optional positional was added for `--list <pat>` and
+  // `--contains <ref>` and admitted the bare CREATE form with them -- and its
+  // own test pinned `git branch feature/x` as correctly read-only.
+  it("refuses the bare create forms of git branch, which round one pinned as read-only", () => {
+    for (const line of ["git branch nen70-probe", "git branch feature/x", "git branch topic main"]) {
+      const result = classifyCommand(line);
+      expect(result.classification, line).toBe("mutating");
+      expect(result.classification, line).not.toBe("read-only");
+      expect(classifyInvocation({ commands: [line], condition: "it settles" }).ok, line).toBe(false);
+    }
+  });
+
+  // Verified against git 2.53.0, and it decides which listing flags may carry
+  // a positional at all: `-l zzz` and `--list zzz` LIST by pattern, `-a zzz`
+  // is a usage error git refuses outright -- and `git branch -v zzz-v`
+  // CREATED the branch zzz-v. That last one matched round one's row too.
+  it("refuses a positional beside a listing flag that does not take one", () => {
+    for (const line of ["git branch -v zzz-v", "git branch -a zzz", "git branch -r zzz", "git branch --show-current zzz"]) {
+      expect(classifyCommand(line).classification, line).not.toBe("read-only");
+    }
+  });
+
+  // THE SIBLING SWEEP the blocker asked for, each verified: `git remote
+  // update` fetched and created refs/remotes/origin/late; `git fetch --prune`
+  // deleted refs/remotes/origin/doomed; `git fetch origin main:local` created
+  // the LOCAL branch refs/heads/local; `git log|diff|show --output f` created
+  // f in both spellings.
+  it("refuses the write-capable forms of the sibling git rows", () => {
+    const writes: readonly string[] = [
+      "git remote update",
+      "git remote set-branches origin main",
+      "git fetch --prune",
+      "git fetch -p",
+      "git fetch --prune-tags",
+      "git fetch --force origin main",
+      "git fetch origin main:local",
+      "git fetch origin +refs/heads/main:refs/heads/main",
+      "git log --output=out.txt",
+      "git log --output out.txt",
+      "git diff --output=out.txt HEAD",
+      "git show --output=out.txt",
+    ];
+    for (const line of writes) {
+      expect(classifyCommand(line).classification, line).not.toBe("read-only");
+      expect(classifyInvocation({ commands: [line], condition: "it settles" }).ok, line).toBe(false);
+    }
+  });
+
+  // THE ROWS, NOT THE NAMED LIST, ARE THE GUARD -- and this is the assertion
+  // that says so. Every line above is ALSO caught by a MUTATING_PATTERNS arm,
+  // so reverting `git remote`'s or `git fetch`'s row to round one's
+  // free-positional shape left the suite green: the named list was carrying
+  // them, and a named list has to win every round. A word or a flag NOBODY has
+  // enumerated must refuse on the row's own terms, which is what makes the
+  // next `git remote <verb>` fail closed instead of waiting for a review.
+  it("refuses an UNNAMED word or flag on the git remote and git fetch rows", () => {
+    for (const line of [
+      "git remote gc",
+      "git remote nosuchsubcommand",
+      "git remote nosuchsubcommand origin",
+      "git fetch --recurse-submodules",
+      "git fetch --unshallow",
+      "git fetch --depth 1 origin",
+      "git fetch --nosuchflag origin",
+    ]) {
+      expect(classifyCommand(line).classification, line).not.toBe("read-only");
+    }
+  });
+
+  // A named refusal is not load-bearing for SAFETY, but the laundered spelling
+  // must still refuse -- which is the whole reason log/diff/show became
+  // line-scan rows instead of merely acquiring a `--output` refusal. Through a
+  // real shell, `git log '--output' f` created f.
+  it("refuses a laundered --output that the named refusal alone would miss", () => {
+    expect(classifyCommand("git log '--output' out.txt").classification).toBe("unknown");
+    expect(classifyCommand("git log \\--output out.txt").classification).toBe("unknown");
+    expect(classifyCommand("git show '--output' out.txt").classification).toBe("unknown");
+  });
+
+  // MAJOR. Round one's SHELL_METACHARS comment claimed every second-command
+  // construct in bash, PowerShell OR cmd.exe passed through the guarded set.
+  // False twice, both verified in this environment: `cmd /c echo (whoami)`
+  // printed this machine's user name (PowerShell runs a parenthesised
+  // subexpression in ARGUMENT position), and `cmd /c "echo start %X%"` with X
+  // set to `&& whoami` printed `start` and then RAN whoami (cmd expands %VAR%
+  // BEFORE it parses for special characters). Both classified [read-only].
+  it("refuses PowerShell's parenthesised subexpression and cmd.exe's %VAR% expansion", () => {
+    const lines: readonly string[] = [
+      "git log (git push)",
+      "gh pr view 42 (git push)",
+      "cat (git push)",
+      "git diff %X%",
+      "git log %CD%",
+      "gh issue list %X%",
+      "nen pr ready 925 --gh-repo o/r %X%",
+    ];
+    for (const line of lines) {
+      const result = classifyCommand(line);
+      expect(result.classification, line).not.toBe("read-only");
+      expect(result.reason, line).toMatch(/metacharacter/);
+    }
+  });
+
+  // MINOR. Round one hard-coded `git log > out.txt` as the example in every
+  // metacharacter refusal, so a caller who typed something else was answered
+  // about a line they never wrote -- and a refusal a caller does not believe
+  // is a refusal they route around.
+  it("quotes the caller's OWN line in the metacharacter refusal", () => {
+    expect(classifyCommand("git diff %X%").reason).toMatch(/'git diff %X%'/);
+    expect(classifyCommand("gh pr view 42 | tee leak.txt").reason).toMatch(/'gh pr view 42 \| tee leak\.txt'/);
+    // The CR and LF that are themselves in the set are rendered, not pasted,
+    // so the reason stays one readable line.
+    expect(classifyCommand("git log\ngit push").reason).toMatch(/'git log\\ngit push'/);
+  });
+
+  // MINOR, and the mutant that survived round one's whole suite. The seam
+  // tests SHELL_METACHARS against the RAW command rather than `trimmed`,
+  // because String.trim() strips the newline and CR that are themselves in the
+  // set -- a guard whose own input can be laundered by the call in front of it
+  // is not a guard. Round one argued that in prose and pinned nothing, so
+  // swapping `command` for `trimmed` at the seam stayed green. It does not
+  // now: a trailing separator is the only shape where the two differ.
+  it("kills the trimmed-seam mutant: a TRAILING newline or CR still refuses", () => {
+    for (const line of ["git log\n", "git log\r", "git log \n", "gh pr checks 42\r\n", "\ncat somefile.txt"]) {
+      const result = classifyCommand(line);
+      expect(result.classification, JSON.stringify(line)).toBe("unknown");
+      expect(result.reason, JSON.stringify(line)).toMatch(/metacharacter/);
+    }
+    // The control the mutant hid behind: without the separator these are the
+    // reads the seam must not touch.
+    expect(classifyCommand("git log").classification).toBe("read-only");
+    expect(classifyCommand("  git log  ").classification).toBe("read-only");
+  });
+
+  // MINOR. The seam sits after MUTATING_PATTERNS so a head-anchored refusal
+  // keeps its name -- and round one left gh api's THREE named refusals on the
+  // far side of it, so `gh api ... -X POST | tee x` came back as a generic
+  // "there is a metacharacter here". gh api's mutating half is read before the
+  // seam now; its read-only half still is not, which is the ordering that
+  // matters.
+  it("keeps gh api's named mutating refusals named behind a metacharacter", () => {
+    expect(classifyCommand("gh api repos/o/r -X POST | tee x").reason).toMatch(/non-GET method \(POST\)/);
+    expect(classifyCommand("gh api repos/o/r -f title=pwned > out.txt").reason).toMatch(/POST once any parameter/);
+    expect(classifyCommand("gh api graphql; git push").reason).toMatch(/graphql/);
+    // ...and the read-only half stays BEHIND the seam, which is the half the
+    // seam exists for: a metacharacter line is never certified.
+    expect(classifyCommand("gh api repos/o/r/pulls/1 | tee leak.txt").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r/pulls/1 | tee leak.txt").reason).toMatch(/metacharacter/);
+  });
+});
+
 // THE FORWARDING ROWS ARE COUPLED TO REALITY (#31 round three), the same way
 // the pr-fetch rows are coupled to reviewsArgv's pinned method below: the
 // table's claim is "these two subcommands, and only these two, hand post-`--`
@@ -904,7 +1370,7 @@ describe("NEN_VERB_TABLE -- exhaustive over the real verb registry", () => {
 // the table's read-only rows for `pr fetch`/`pr next-blocker` certify
 // ../pr/fetch.ts's REST reviews call, and that call is a GET only while
 // reviewsArgv pins `--method GET` -- gh's documented default flips to POST
-// the moment any -f/-F parameter is given (the exact rule GH_API_FIELD_FLAG
+// the moment any -f/-F parameter is given (the exact rule the gh api walk
 // encodes), and a POST to /pulls/<n>/reviews CREATES a pending review.
 // fetch.test.ts's #19 sweep holds the method invariant over every argv
 // builder in that module; this test pins the COUPLING from the classifier's
