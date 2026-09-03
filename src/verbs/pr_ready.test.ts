@@ -58,6 +58,9 @@ describe("resolveRef", () => {
     consumers: [
       { repo: "zheref/KroApple", code: "KP" },
       { repo: "zheref/KroAndroid", code: "KA" },
+      // zheref/nen#26's own repro code, so the regression cases below read
+      // exactly as the issue states them.
+      { repo: "zheref/bankai-core", code: "BC" },
     ],
   });
 
@@ -82,13 +85,73 @@ describe("resolveRef", () => {
     expect(resolveRef("KP7", undefined, registry)).toMatchObject({ repo: "KroApple", number: 7 });
   });
 
+  // ── zheref/nen#26: the no-# shorthand for MULTI-digit numbers ──────────────
+  //
+  // One greedy regex with an optional '#' used to hand the digit group exactly
+  // ONE trailing digit, so 'BC925' read as code 'BC92' + number '5' and the
+  // shorthand only worked below PR #10. The rule now is: the number is the
+  // LONGEST trailing run of digits, always.
+
+  it("no-# shorthand, single digit: BC9 splits as code BC + number 9 (the case that always worked)", () => {
+    expect(resolveRef("BC9", undefined, registry)).toMatchObject({
+      owner: "zheref",
+      repo: "bankai-core",
+      number: 9,
+    });
+  });
+
+  it("no-# shorthand, multi-digit: BC925 splits as code BC + number 925, never BC92 + 5 (zheref/nen#26's exact repro)", () => {
+    expect(resolveRef("BC925", undefined, registry)).toMatchObject({
+      owner: "zheref",
+      repo: "bankai-core",
+      number: 925,
+    });
+  });
+
+  it("the '#'-present form BC#925 is unchanged -- it stays the unambiguous spelling", () => {
+    expect(resolveRef("BC#925", undefined, registry)).toMatchObject({
+      owner: "zheref",
+      repo: "bankai-core",
+      number: 925,
+    });
+  });
+
+  it("an unresolvable no-# token's refusal states the split it applied and points at the '#' form", () => {
+    try {
+      resolveRef("ZZ925", undefined, registry);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(RefError);
+      const message = (error as RefError).message;
+      // Still the honest registry half...
+      expect(message).toMatch(/'ZZ' is not a product code/);
+      // ...plus the half that stops the misdirection: how the token was split,
+      // and the unambiguous spelling to reach for.
+      expect(message).toMatch(/longest trailing digit run/);
+      expect(message).toMatch(/code 'ZZ' \+ number 925/);
+      expect(message).toMatch(/<CODE>#<N> is the unambiguous form/);
+    }
+  });
+
+  it("an unresolvable '#'-present token's refusal carries NO shorthand hint -- no split was guessed", () => {
+    try {
+      resolveRef("ZZ#925", undefined, registry);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(RefError);
+      const message = (error as RefError).message;
+      expect(message).toMatch(/'ZZ' is not a product code/);
+      expect(message).not.toMatch(/longest trailing digit run/);
+    }
+  });
+
   it("an explicit --gh-repo WINS over the code and need not agree with it", () => {
     const ref = resolveRef("KP#7", "someone/else", registry);
     expect(ref).toMatchObject({ owner: "someone", repo: "else", number: 7 });
   });
 
   it("an unknown code is an error that NAMES the known ones", () => {
-    expect(() => resolveRef("ZZ#1", undefined, registry)).toThrow(/Known codes: KA, KP/);
+    expect(() => resolveRef("ZZ#1", undefined, registry)).toThrow(/Known codes: BC, KA, KP/);
   });
 
   it("a malformed --gh-repo is refused, not silently split", () => {

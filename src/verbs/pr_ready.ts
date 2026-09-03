@@ -94,7 +94,11 @@ export const PR_READY_USAGE = `  pr ready <ref>            Report a pull request
                             verdict, the first failing conjunct, nothing else.
                             Read-only -- it never labels, merges or comments.
       <ref>                   <CODE>#<N> via the target repo's product codes,
-                              or a bare <N> with --gh-repo.
+                              or a bare <N> with --gh-repo. The '#' may be
+                              omitted (AB123 = AB#123); the shorthand reads
+                              the LONGEST trailing digit run as the number,
+                              so a code that itself ends in a digit needs
+                              the '#' -- <CODE>#<N> is the unambiguous form.
       --gh-repo <owner/name>  The repository, when the ref is a bare number.
       --explain               The conjunct table, in evaluation order, plus
                               what the gate does NOT decide.
@@ -239,7 +243,31 @@ export interface ResolvedRef extends PrRef {
   readonly typed: string;
 }
 
-const CODED_REF = /^([A-Za-z][A-Za-z0-9]*)#?([0-9]+)$/;
+// ── the coded-ref split, and why there are TWO regexes ──────────────────────
+//
+// `<CODE>#<N>` is the UNAMBIGUOUS spelling: the '#' says exactly where the
+// code ends, so the code group can stay greedy and no split is ever guessed.
+const HASH_REF = /^([A-Za-z][A-Za-z0-9]*)#([0-9]+)$/;
+// The no-# shorthand has no delimiter, so the split is a stated RULE, never a
+// guess: the number is the LONGEST trailing run of digits, and the code is
+// whatever precedes it. The lazy `*?` implements exactly that -- the digit
+// group, anchored at `$`, swallows the whole trailing run instead of the one
+// digit backtracking would concede it.
+//
+// zheref/nen#26: these were one regex, /^([A-Za-z][A-Za-z0-9]*)#?([0-9]+)$/,
+// whose GREEDY first group plus optional '#' meant backtracking handed the
+// digit group exactly ONE trailing digit -- 'BC925' read as code 'BC92' +
+// number '5' -- so the shorthand only ever worked for single-digit numbers.
+//
+// PRECEDENCE, for a code that itself ends in a digit (codes are registry
+// data and may carry digits after the first letter -- this binary has no
+// opinion): the shorthand ALWAYS takes the longest trailing digit run, so
+// 'A2925' splits as code 'A' + number 2925 even when the registry lists an
+// 'A2'. A repository whose code ends in a digit can only be addressed with
+// the '#' present -- the shorthand never consults the registry to out-guess
+// its own rule, because a split that changed meaning when a registry gained
+// a code would make the same typed ref name two different pull requests.
+const SHORTHAND_REF = /^([A-Za-z][A-Za-z0-9]*?)([0-9]+)$/;
 const BARE_REF = /^([0-9]+)$/;
 const OWNER_SLUG = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
@@ -253,11 +281,16 @@ function splitSlug(slug: string): PrRef | null {
  * `<CODE>#<N>`, `<CODE><N>` or a bare `<N>` with `--gh-repo`.
  *
  * The `#` is optional and the code is CASE-INSENSITIVE, both carried from the
- * pr-state skill's own grammar. An unknown code is an ERROR THAT NAMES THE VALID
- * ONES rather than a guess, and a bare number with no `--gh-repo` is an error
- * rather than an assumption about the current directory -- this verb is invoked
- * across repositories, and guessing which one is exactly the shortcut the skill
- * exists to prevent.
+ * pr-state skill's own grammar. The no-# shorthand splits at the LONGEST
+ * trailing run of digits (see SHORTHAND_REF above for the rule and its
+ * precedence over digit-ending codes). An unknown code is an ERROR THAT NAMES
+ * THE VALID ONES rather than a guess -- and when the token came through the
+ * shorthand split, the error also states the split it applied and points at
+ * the '#'-present form, because "'BC92' is not a product code" alone reads as
+ * a registry problem when the actual problem is a missing '#'. A bare number
+ * with no `--gh-repo` is an error rather than an assumption about the current
+ * directory -- this verb is invoked across repositories, and guessing which
+ * one is exactly the shortcut the skill exists to prevent.
  */
 export function resolveRef(
   typed: string,
@@ -279,7 +312,11 @@ export function resolveRef(
     return { ...explicit, number: Number.parseInt(typed, 10), typed };
   }
 
-  const coded = CODED_REF.exec(typed);
+  const hash = HASH_REF.exec(typed);
+  // The shorthand is tried only when the '#' form did not match, so a typed
+  // '#' always decides the split and the rule below never competes with it.
+  const shorthand = hash === null ? SHORTHAND_REF.exec(typed) : null;
+  const coded = hash ?? shorthand;
   if (coded === null) {
     throw new RefError(
       `'${typed}' is not a pull-request reference. Write <CODE>#<N> (the '#' is optional) or a bare <N> together with --gh-repo owner/name.`,
@@ -329,8 +366,15 @@ export function resolveRef(
       ...loaded.consumers.map((consumer): string => consumer.code ?? "").filter((c): boolean => c !== ""),
     ]),
   ].sort();
+  // A no-# token that fails code resolution must say HOW it was split, or the
+  // refusal misdirects (zheref/nen#26): 'BC92' failing lookup reads as a
+  // registry problem, when the caller's actual problem may be the split itself.
+  const shorthandHint =
+    shorthand === null
+      ? ""
+      : ` The ref '${typed}' carries no '#', so it was split by the shorthand's rule -- the number is the longest trailing digit run -- as code '${code}' + number ${number}. If that is not the split you meant, put a '#' between code and number: <CODE>#<N> is the unambiguous form.`;
   throw new RefError(
-    `'${code}' is not a product code in the target repository's registry. Known codes: ${known.join(", ") || "(none)"}. Codes are resolved from the file at run time, never from memory -- they change.`,
+    `'${code}' is not a product code in the target repository's registry. Known codes: ${known.join(", ") || "(none)"}. Codes are resolved from the file at run time, never from memory -- they change.${shorthandHint}`,
   );
 }
 
