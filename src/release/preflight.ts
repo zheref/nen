@@ -100,6 +100,15 @@ export type Supplied<T> = readonly T[] | null;
 
 export interface PreflightInputs {
   readonly hold: HoldState;
+  /**
+   * The variable `--hold-var` actually queried -- RELEASE_HOLD unless the
+   * operator chose another (review finding on zheref/nen#23's fix): the hold
+   * row's name and value-bearing details print THIS name, never a hard-coded
+   * RELEASE_HOLD, because a table that says "RELEASE_HOLD = 'true'" while
+   * `gh variable get FREEZE` is what actually ran is reporting on a variable
+   * it never read. The default invocation's output is byte-identical.
+   */
+  readonly holdVarName: string;
   readonly openCriticalIssueNumbers: Supplied<number>;
   readonly liveChores: Supplied<LiveChoreCandidate>;
   readonly fragmentFilesAtCutPoint: readonly string[];
@@ -126,7 +135,13 @@ export function runPreflight(inputs: PreflightInputs): PreflightReport {
 
   const checks: PreflightCheck[] = [
     {
-      name: "RELEASE_HOLD",
+      // The row is named after -- and its details cite -- the variable the
+      // caller ACTUALLY queried (review finding): hard-coding RELEASE_HOLD
+      // here mislabelled every `--hold-var <name>` run, blaming a variable
+      // this table never read. The default stays RELEASE_HOLD, so an
+      // invocation that never passes --hold-var renders byte-for-byte the
+      // same rows it always has.
+      name: inputs.holdVarName,
       ok: inputs.hold.kind === "unset" || inputs.hold.kind === "clear",
       detail:
         inputs.hold.kind === "unset"
@@ -137,15 +152,15 @@ export function runPreflight(inputs: PreflightInputs): PreflightReport {
             // the operator still deserves to see that the variable itself is
             // lingering -- deleting it is the state every other tool reads
             // unambiguously.
-            ? `not held: RELEASE_HOLD = '${inputs.hold.value}' reads as falsy (deleting the variable outright is tidier)`
+            ? `not held: ${inputs.holdVarName} = '${inputs.hold.value}' reads as falsy (deleting the variable outright is tidier)`
             : inputs.hold.kind === "held"
               ? inputs.hold.recognizedTruthy
-                ? `HELD: RELEASE_HOLD = '${inputs.hold.value}'`
+                ? `HELD: ${inputs.holdVarName} = '${inputs.hold.value}'`
                 // The raw value is printed so the operator sees exactly WHY a
                 // non-boolean string blocked the cut, and what releases it --
                 // without this, "freeze until Monday" reading as HELD looks
                 // like a parser bug rather than the fail-closed choice it is.
-                : `HELD: RELEASE_HOLD = '${inputs.hold.value}' -- not a recognized boolean, so it fails closed as an active hold (set it to 'false' or delete the variable to release)`
+                : `HELD: ${inputs.holdVarName} = '${inputs.hold.value}' -- not a recognized boolean, so it fails closed as an active hold (set it to 'false' or delete the variable to release)`
               // A `gh` that could not be reached, is unauthenticated, or lacks
               // variable-read scope is NOT the same as a repository that
               // genuinely has no hold -- collapsing them (review finding) made

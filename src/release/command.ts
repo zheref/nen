@@ -105,11 +105,12 @@ preflight:
   whole -- never the first failure (getsuga SKILL.md §2).
 
   --hold-var <name>         'gh variable get <name>' at --repo-slug. Defaults
-                            to RELEASE_HOLD. Case-insensitive false/0/no (or
-                            an unset variable) reads as not held; any other
-                            non-empty value -- true/1/yes, or an arbitrary
-                            hold message -- fails closed as an active hold.
-                            A gh that cannot be reached (missing,
+                            to RELEASE_HOLD. Case-insensitive true/1/yes
+                            reads as a recognized active hold; false/0/no (or
+                            an unset variable) reads as not held; any OTHER
+                            non-empty value (an arbitrary hold message) is
+                            not recognized and fails closed as an active
+                            hold. A gh that cannot be reached (missing,
                             unauthenticated, no variable-read scope) fails
                             this check rather than reading as "not set".
   --critical-issues <n,n>   Open critical-severity issue numbers, gathered by
@@ -216,6 +217,9 @@ export const releaseCommand: Command = {
 
     const report = runPreflight({
       hold,
+      // The table names the variable this run actually queried (review
+      // finding): a --hold-var run must never render its row as RELEASE_HOLD.
+      holdVarName: holdVar,
       openCriticalIssueNumbers: criticalIssues,
       liveChores,
       fragmentFilesAtCutPoint: fragmentFiles,
