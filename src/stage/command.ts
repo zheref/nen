@@ -4,7 +4,7 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { GIT, outputLines } from "../seam/exec.js";
 import { commaList } from "../cli/comma.js";
-import { requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
 import { parseStatusPorcelain, triageStage } from "./triage.js";
 
 const USAGE = `nen stage triage -- flag what should never be staged blind, tensho §3.
@@ -31,7 +31,12 @@ export const stageCommand: Command = {
   flags: { values: ["scope", "mentions"], booleans: [] },
   run(context: CommandContext): number {
     requireSubcommand("stage", context.args, ["triage"]);
-    const root = assertRepoRoot({ repoFlag: context.repoFlag });
+    // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
+    // never silently pointed at whatever working copy the process is standing
+    // in (zheref/nen#28).
+    const root = assertRepoRoot({
+      repoFlag: requireRepoFlag(context, "It names the working tree whose unstaged files are triaged."),
+    });
     const result = context.seams.run(
       GIT,
       ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--ignored", "-uall"],

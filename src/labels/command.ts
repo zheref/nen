@@ -3,7 +3,7 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
 import { parseTarget, type Target } from "../github/target.js";
-import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { syncLabels } from "./sync.js";
 import { parseRenameMap, renameLabels } from "./rename.js";
 
@@ -45,7 +45,12 @@ export const labelsCommand: Command = {
 
 function sync(context: CommandContext): number {
   const target = requireTarget(context);
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // Usage lists --repo unbracketed: omitting it is refused by name at exit 2 --
+  // a sync that read whatever taxonomy the cwd held would push THAT repo's
+  // labels at --target (zheref/nen#28).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/labels.json is the taxonomy being synced."),
+  });
   const taxonomy = loadLabelTaxonomy(root);
   const report = syncLabels(context.seams, target, taxonomy, context.args.booleans.has("dry-run"));
 

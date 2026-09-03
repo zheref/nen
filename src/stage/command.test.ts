@@ -8,6 +8,8 @@ import { stageCommand } from "./command.js";
 async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
+  // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
+  repoFlag: string | null = BANKAI_REPO,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -20,11 +22,19 @@ async function capture(
     },
   };
   const seams: Seams = new ScriptedSeams(script);
-  const code = await runFamily(stageCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(stageCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
 describe("nen stage triage -- CLI wiring", () => {
+  // zheref/nen#28: the usage line lists --repo unbracketed, so omitting it is
+  // refused by name -- never silently pointed at the process's own cwd.
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["stage", "triage"], [], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
   it("exits 0 when nothing is flagged", async () => {
     const result = await capture(["stage", "triage"], [
       { match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall", result: { stdout: " M src/a.ts\0" } },

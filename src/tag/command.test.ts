@@ -8,6 +8,8 @@ import { tagCommand } from "./command.js";
 async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
+  // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
+  repoFlag: string | null = BANKAI_REPO,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -20,7 +22,7 @@ async function capture(
     },
   };
   const seams: Seams = new ScriptedSeams(script);
-  const code = await runFamily(tagCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(tagCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -45,6 +47,15 @@ describe("nen tag cut -- CLI wiring", () => {
       { match: "git push origin v1.0.0", result: {} },
     ]);
     expect(result.code).toBe(0);
+  });
+
+  // zheref/nen#28: the usage line lists --repo unbracketed, so omitting it is
+  // refused by name -- a tag verb must never default to whatever repository
+  // the process happens to be standing in.
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["tag", "cut", "--name", "v1.0.0", "--at", "abc"], [], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
   it("requires --name and --at", async () => {

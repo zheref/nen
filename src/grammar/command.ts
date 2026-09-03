@@ -24,6 +24,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import {
   emit,
+  requireRepoFlag,
   requireValue,
   VerbUsageError,
   type Command,
@@ -220,9 +221,17 @@ function futon(context: CommandContext, raw: string): number {
     return 2;
   }
 
+  // This verb's usage line lists --repo unbracketed, so omitting it is refused
+  // by name at exit 2 rather than silently defaulting to the call site's cwd
+  // (zheref/nen#28) -- and BEFORE the try below, so the refusal goes out with
+  // runFamily's standard usage-error trailer rather than this catch's bare one.
+  const repoFlag = requireRepoFlag(
+    context,
+    "It is the checkout whose schemas/repos.json the invocation's repo token resolves against.",
+  );
   let root: string;
   try {
-    root = assertRepoRoot({ repoFlag: context.repoFlag });
+    root = assertRepoRoot({ repoFlag });
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 2;

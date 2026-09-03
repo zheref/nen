@@ -10,6 +10,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import {
   emit,
+  requireRepoFlag,
   requireSubcommand,
   requireValue,
   splitIntegerList,
@@ -237,7 +238,13 @@ export const releaseCommand: Command = {
 function resolveTarget(context: CommandContext): number {
   const token = context.args.values["token"];
   if (token === undefined) throw new VerbUsageError("--token <main|last-commit|checkout|hash|branch> is required.");
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // Usage lists --repo unbracketed: omitting it is refused by name at exit 2
+  // -- resolving a release target inside whatever repository the process
+  // happens to be standing in answers getsuga's load-bearing ancestor check
+  // against the wrong trunk (zheref/nen#28).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the repository whose origin/--trunk the token resolves against."),
+  });
   let result;
   try {
     result = resolveReleaseTarget(context.seams, root, token, context.args.values["trunk"] ?? "main");
@@ -268,7 +275,11 @@ function selfCheck(context: CommandContext): number {
   if (prMergeSha === undefined || previousTag === undefined || cutPoint === undefined) {
     throw new VerbUsageError("release self-check takes --pr-merge-sha, --previous-tag and --cut-point.");
   }
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // Same requiredness as resolve-target above: this subcommand's usage line
+  // also lists --repo unbracketed (zheref/nen#28).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the repository whose history answers the reachability question."),
+  });
   let result;
   try {
     result = checkSelfEnumeration(context.seams, root, prMergeSha, previousTag, cutPoint);

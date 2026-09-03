@@ -8,6 +8,8 @@ import { wcCommand } from "./command.js";
 async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
+  // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
+  repoFlag: string | null = BANKAI_REPO,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -21,7 +23,7 @@ async function capture(
   };
   const scripted = new ScriptedSeams(script);
   const seams: Seams = scripted;
-  const code = await runFamily(wcCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(wcCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -41,6 +43,14 @@ describe("nen wc classify -- CLI wiring", () => {
       { match: "git status --porcelain=v1 -uall", result: { stdout: " M x.ts\n" } },
     ]);
     expect(result.code).toBe(0);
+  });
+
+  // zheref/nen#28: the usage line lists --repo unbracketed, so omitting it is
+  // refused by name -- never silently read as "classify the process's cwd".
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["wc", "classify"], [], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
   it("refuses an unknown subcommand", async () => {

@@ -11,6 +11,8 @@ import { ideaCommand } from "./command.js";
 async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
+  // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
+  repoFlag: string | null = BANKAI_REPO,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -23,7 +25,7 @@ async function capture(
     },
   };
   const seams: Seams = new ScriptedSeams(script);
-  const code = await runFamily(ideaCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(ideaCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -36,6 +38,14 @@ describe("nen idea file -- CLI wiring", () => {
 
   it("requires --body-file", async () => {
     expect((await capture(["idea", "file", "--target", "o/n"])).code).toBe(2);
+  });
+
+  // zheref/nen#28: the usage line lists --repo unbracketed, so omitting it is
+  // refused by name, before any file is read.
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["idea", "file", "--target", "o/n"], [], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
   it("exits 0 and reports OK on a clean read-back round trip", async () => {

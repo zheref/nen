@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { assertRepoRoot } from "../repo/root.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { commaList } from "../cli/comma.js";
-import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { parseTarget } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
 import { resolveCanon } from "./resolve.js";
@@ -32,6 +32,11 @@ usage:
       never read as "this repository loads nothing unconditionally". A
       resolved scenario that is empty or path-shaped ('.', '..', contains
       '/') is refused too, since the stack path is built directly from it.
+      --repo is REQUIRED the same way (exit 2), never defaulted to the
+      current directory: it names the checkout whose schemas/repos.json
+      maps --target to its scenario, and a cwd default surfaced as that
+      directory's missing-or-unrelated registry instead of the forgotten
+      flag (zheref/nen#28).
 
   nen canon mirror generate --rules-dir <dir> --canon-values <path>
                             --out-dir <dir> --ref <ref>
@@ -92,6 +97,13 @@ export const canonCommand: Command = {
 };
 
 function resolve(context: CommandContext): number {
+  // FIRST, in usage-line order: --repo is listed unbracketed, so its absence
+  // is refused at the parser exactly like --target/--stack-dir/--always-load
+  // below, never patched over with the call site's cwd (zheref/nen#28).
+  const repoFlag = requireRepoFlag(
+    context,
+    "It is the checkout whose schemas/repos.json maps --target to the scenario this handbook set derives from; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
+  );
   const targetRaw = context.args.values["target"];
   if (targetRaw === undefined) throw new VerbUsageError("--target owner/name is required.");
   const stackDir = context.args.values["stack-dir"];
@@ -104,7 +116,7 @@ function resolve(context: CommandContext): number {
   let root: string;
   let target;
   try {
-    root = assertRepoRoot({ repoFlag: context.repoFlag });
+    root = assertRepoRoot({ repoFlag });
     target = parseTarget(targetRaw);
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);

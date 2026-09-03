@@ -1,7 +1,7 @@
 // src/wc/command.ts -- `nen wc classify`: tensho §2's working-copy table.
 
 import { assertRepoRoot } from "../repo/root.js";
-import { requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
+import { requireRepoFlag, requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 
 const USAGE = `nen wc classify -- where the current working copy sits, tensho's own table.
@@ -28,7 +28,12 @@ export const wcCommand: Command = {
   flags: { values: ["base"], booleans: [] },
   run(context: CommandContext): number {
     requireSubcommand("wc", context.args, ["classify"]);
-    const root = assertRepoRoot({ repoFlag: context.repoFlag });
+    // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
+    // never silently read as "classify wherever this process happens to be
+    // standing" (zheref/nen#28).
+    const root = assertRepoRoot({
+      repoFlag: requireRepoFlag(context, "It names the working tree being classified."),
+    });
     const base = context.args.values["base"] ?? "main";
     const state = readWorkingCopyState(context.seams, root, base);
     const result = classifyWorkingCopy(state);

@@ -23,6 +23,7 @@
 
 import {
   emit,
+  requireRepoFlag,
   requireSubcommand,
   requireValue,
   VerbUsageError,
@@ -357,7 +358,14 @@ function blocker(context: CommandContext): number {
       "--reviewers named no reviewers. Omit the flag to use the repository's declared set; an empty list would silently retire the owed-round check.",
     );
   }
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
+  // never silently read as "take the reviewer identities from whatever
+  // gates file the cwd happens to hold" (zheref/nen#28). AFTER the
+  // --reviewers guard above, which is checked first precisely so a bad flag
+  // is refused without any filesystem or network work.
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/gates.json supplies the reviewer identities."),
+  });
   // `--gates <path>` goes through ../verbs/pr_ready.ts's resolveIdentities --
   // THE SAME resolver `pr ready` uses, never a re-spelled copy -- because
   // zheref/nen#20's defect was exactly the two siblings drifting apart:
@@ -394,7 +402,13 @@ function blocker(context: CommandContext): number {
 }
 
 function cascade(context: CommandContext): number {
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // Usage lists --repo unbracketed: omitting it is refused by name at exit 2
+  // -- this verb MUTATES (merges and pushes) whatever repository it is pointed
+  // at, so a silent cwd default is exactly the retargeting root.ts's header
+  // warns about (zheref/nen#28).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the repository whose current branch the trunk is merged into."),
+  });
   const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main");
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));

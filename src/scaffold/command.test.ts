@@ -50,6 +50,18 @@ describe("nen scaffold init -- CLI wiring", () => {
     expect((await capture(["scaffold", "bogus"], null)).code).toBe(2);
   });
 
+  // zheref/nen#28: the usage line lists --repo unbracketed, so omitting it is
+  // refused by name -- a scaffold that defaulted to the cwd would write
+  // directories and a hook into whatever repository the process stood in.
+  it("refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(
+      ["scaffold", "init", "--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"],
+      null,
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
   // Review finding #5: the verb must surface and exit non-zero on a refused hook install.
   it("exits 1 and never clobbers a pre-existing, different commit-msg hook", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-scaffold-verb-"));

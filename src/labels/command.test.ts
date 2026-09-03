@@ -9,6 +9,8 @@ import { listLabelNamesArgv, renameArgv } from "./rename.js";
 async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
+  // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
+  repoFlag: string | null = BANKAI_REPO,
 ): Promise<{ code: number; out: string[]; err: string[]; seams: ScriptedSeams }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -22,7 +24,7 @@ async function capture(
   };
   const scripted = new ScriptedSeams(script);
   const seams: Seams = scripted;
-  const code = await runFamily(labelsCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(labelsCommand, argv, repoFlag, false, io, seams);
   return { code, out, err, seams: scripted };
 }
 
@@ -36,6 +38,15 @@ describe("nen labels sync -- CLI wiring", () => {
 
   it("requires --target", async () => {
     expect((await capture(["labels", "sync"])).code).toBe(1);
+  });
+
+  // zheref/nen#28: sync's usage line lists --repo unbracketed, so omitting it
+  // is refused by name -- a sync that read the cwd's taxonomy would push THAT
+  // repository's labels at --target.
+  it("sync refuses an OMITTED --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen"], [], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 });
 
