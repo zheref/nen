@@ -3,9 +3,11 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runFamily, type Io } from "../index.js";
-import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
+import type { Target } from "../github/target.js";
+import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
 import { prCommand } from "./command.js";
 
 // NEVER `defaultSeams()` HERE (review finding) -- see board/command.test.ts's
@@ -253,6 +255,119 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     ];
     const result = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(script));
     expect(result.code).toBe(1);
+  });
+
+  // zheref/nen#20: `--gates` PARSED cleanly on next-blocker (the name sits in
+  // this family's declared value flags via the PR_READY_FLAGS spread, for
+  // `ready`'s sake) but ./command.ts's blocker() never read it -- silently
+  // accepted, zero effect, and the verb still demanded --repo's own
+  // schemas/gates.json. The three tests below pin both halves of the fix and
+  // the direction that matters: the flag does not merely silence the missing-
+  // file refusal, it is the file whose identities DECIDE.
+  describe("next-blocker --gates (zheref/nen#20)", () => {
+    const TARGET: Target = { owner: "o", repo: "n", slug: "o/n" };
+
+    // One green-check, approvals-at-head, no-thread snapshot for PR o/n#9 --
+    // the same three-call script shape ../pr/fetch.test.ts drives
+    // fetchPullRequest with. The approvals are ALT_REPO's reviewers (itachi,
+    // kisame), so the verdict flips with the taxonomy: alt gates read "none",
+    // bankai gates read "owed-round" for their own sasuke/tenma -- which is
+    // the proof the --gates file, not some other source, decided.
+    function greenAltApprovedScript(): readonly ScriptedCall[] {
+      const view = {
+        number: 9,
+        headRefOid: "abc123",
+        baseRefName: "main",
+        headRefName: "feature/x",
+        author: { login: "alice" },
+        labels: [],
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+        isDraft: false,
+        body: "## How to verify\n\nrun it",
+        url: "https://x/9",
+        title: "a PR",
+        state: "OPEN",
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+        reviewRequests: [],
+      };
+      const reviews = [
+        { user: { login: "itachi" }, state: "APPROVED", commit_id: "abc123", submitted_at: "2026-01-01T00:00:00Z" },
+        { user: { login: "kisame" }, state: "APPROVED", commit_id: "abc123", submitted_at: "2026-01-01T00:00:00Z" },
+      ];
+      const threads = {
+        data: {
+          repository: {
+            pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+          },
+        },
+      };
+      return [
+        { match: `gh ${viewArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(view) } },
+        { match: `gh ${reviewsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(reviews) } },
+        { match: `gh ${reviewThreadsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(threads) } },
+      ];
+    }
+
+    it("without --gates, a checkout shipping no schemas/gates.json is still refused before any gh call", async () => {
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      // No seams calls are scripted: the refusal must land before the fetch,
+      // so an unscripted call would throw first and fail this loudly.
+      const result = await capture(
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9"],
+        checkout,
+        new ScriptedSeams([]),
+      );
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).toMatch(/no such file/);
+      expect(result.err.join("\n")).toMatch(/schemas\/gates\.json/);
+    });
+
+    it("--gates redirects the taxonomy read: the alternate file's identities clear a PR the checkout alone could not even evaluate", async () => {
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      const result = await capture(
+        [
+          "pr", "next-blocker", "--target", "o/n", "--pr", "9",
+          "--gates", join(ALT_REPO, "schemas", "gates.json"),
+        ],
+        checkout,
+        new ScriptedSeams(greenAltApprovedScript()),
+      );
+      expect(result.err).toEqual([]);
+      expect(result.code).toBe(0);
+      expect(result.out[0]).toBe("#9: none");
+    });
+
+    it("the --gates file's OWN reviewer set decides -- the SAME snapshot reads owed-round under the other taxonomy", async () => {
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      const result = await capture(
+        [
+          "pr", "next-blocker", "--target", "o/n", "--pr", "9",
+          "--gates", join(BANKAI_REPO, "schemas", "gates.json"),
+        ],
+        checkout,
+        new ScriptedSeams(greenAltApprovedScript()),
+      );
+      expect(result.code).toBe(1);
+      expect(result.out[0]).toBe("#9: owed-round");
+      // itachi/kisame's approvals mean nothing to bankai's identities: their
+      // own sasuke is still owed a round, which is only reachable if the
+      // gates FILE was what parameterised the verdict.
+      expect(result.out.join("\n")).toMatch(/sasuke/);
+    });
+
+    it("'nen pr --help' documents --gates on next-blocker", async () => {
+      const result = await capture(["pr", "--help"], null);
+      expect(result.code).toBe(0);
+      const help = result.out.join("\n");
+      expect(help).toMatch(/nen pr next-blocker .*\[--gates <path>\]/);
+      // The flag is documented in next-blocker's OWN section, not merely
+      // present somewhere in the page (ready's section already had it).
+      const section = help.slice(help.indexOf("next-blocker:"), help.indexOf("cascade-main:"));
+      expect(section).toMatch(/--gates <path>/);
+    });
   });
 
   it("request-reviews adds one --add-reviewer per name", async () => {

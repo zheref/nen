@@ -34,7 +34,7 @@ import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
 import { parseTarget, type Target } from "../github/target.js";
-import { PR_READY_FLAGS, prReady } from "../verbs/pr_ready.js";
+import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import { checkBody, type BodyRequirement } from "./bodycheck.js";
 import { computeStaleness, type VerifiedWake } from "./staleness.js";
 import { nextBlocker } from "./blocker.js";
@@ -66,7 +66,7 @@ const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--review
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> --requirements-from <path>
 nen pr fetch --target <owner/name> --pr <n>
-nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr]
+nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
 nen pr cascade-main --repo <path> [--trunk main]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> --add-reviewers a,b
@@ -116,6 +116,10 @@ next-blocker:
   0 when this check finds nothing -- the adversarial confirmation pass
   stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
   diff-shaped and not checked here; see ../pr/blocker.ts's header.
+  --gates <path>              Read reviewer identities from this gates file
+                              instead of the target repo's schemas/gates.json
+                              -- the same flag 'ready' takes, so a checkout
+                              that ships no gates file can still be evaluated.
 
 cascade-main:
   Merges (never rebases) the trunk into the current branch and pushes on a
@@ -350,7 +354,26 @@ function blocker(context: CommandContext): number {
     );
   }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
-  const identities = loadGateIdentities(root);
+  // `--gates <path>` goes through ../verbs/pr_ready.ts's resolveIdentities --
+  // THE SAME resolver `pr ready` uses, never a re-spelled copy -- because
+  // zheref/nen#20's defect was exactly the two siblings drifting apart:
+  // `gates` already sat in this family's declared value flags (spread in from
+  // PR_READY_FLAGS for `ready`'s sake), so `next-blocker --gates <path>`
+  // PARSED cleanly and was then never read. Silently accepted, zero effect --
+  // a caller pointing the flag at a real file to evaluate a checkout that
+  // ships no schemas/gates.json still got that checkout's own "no such file"
+  // refusal, which reads as "the flag didn't help" rather than "the flag
+  // doesn't exist". The empty reviewer/approver lists below are unreachable
+  // padding, not a semantic choice: resolveIdentities consults its
+  // flags-identity fallback only when the gates flag is undefined, and this
+  // branch runs only when it is not. next-blocker's own --reviewers stays
+  // what it always was -- an override handed to nextBlocker() below, never an
+  // identity SOURCE.
+  const gatesFlag = context.args.values["gates"];
+  const identities =
+    gatesFlag === undefined
+      ? loadGateIdentities(root)
+      : resolveIdentities(root, gatesFlag, [], []).identities;
   const snapshot = fetchPullRequest(context.seams, target, prNumber);
   const result = nextBlocker(identities, snapshot, {
     reviewers,
