@@ -172,6 +172,15 @@ describe("nen board build row-shape validation (#32)", () => {
     expect(message).toMatch(/one line as a string, or null when nothing is owed/);
   });
 
+  it("describes a plain-object field as 'an object', never the ungrammatical 'a object'", async () => {
+    // A plain object is the one typeof in JSON's vocabulary that starts with
+    // a vowel; the bare `a ${typeof value}` fallback rendered it "a object".
+    const { code, message } = await refuse({ ...STRING_REFS_ROW, refs: { ref: "AB-IS-#877" } });
+    expect(code).toBe(2);
+    expect(message).toMatch(/got an object/);
+    expect(message).not.toMatch(/\ba object\b/);
+  });
+
   it("still accepts null gate and null needs -- the declared no-gate/nothing-owed statements", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
     const rows = join(dir, "rows.json");

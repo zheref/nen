@@ -71,6 +71,12 @@ function describeValue(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "an array";
   if (typeof value === "string") return `the string '${value}'`;
+  // "an object", never "a object". A plain object DOES reach this fallback
+  // (e.g. `refs` sent as `{ ... }` -- neither array, null, nor string), and
+  // it is the one typeof in JSON's vocabulary that starts with a vowel; the
+  // bare template below would hand back exactly the grammatically hostile
+  // output this helper exists to avoid.
+  if (typeof value === "object") return "an object";
   return `a ${typeof value}`;
 }
 
