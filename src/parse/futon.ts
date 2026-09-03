@@ -179,10 +179,22 @@ function listedRepoByTail(registry: RepoResolver, bareName: string): string | un
 
 // The product code whose value names `slug`, when the registry assigns one --
 // compared as recorded for a slug value, by tail for a bare one.
+//
+// TWO PASSES, exact before tail, so file order cannot decide the answer: a
+// single pass returned the FIRST entry that matched EITHER way, letting an
+// earlier bare value's tail match ({A: "KroCloud"}) shadow a later value that
+// records this very slug in full ({B: "zheref/KroCloud"}). A value that
+// matches as recorded is the file's own complete spelling of this repository;
+// a tail comparison is a derived reading of a value that stated no owner, and
+// it may honestly belong to a DIFFERENT owner's repo of the same name -- so
+// exactness outranks it regardless of where each entry sits in the file.
 function codeRecordedFor(registry: RepoResolver, slug: string): string | null {
+  const wanted = slug.toLowerCase();
+  for (const [code, name] of Object.entries(registry.productCodes)) {
+    if (name.toLowerCase() === wanted) return code;
+  }
   const tail = repoTail(slug);
   for (const [code, name] of Object.entries(registry.productCodes)) {
-    if (name.toLowerCase() === slug.toLowerCase()) return code;
     if (!name.includes("/") && name.toLowerCase() === tail) return code;
   }
   return null;

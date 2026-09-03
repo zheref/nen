@@ -170,6 +170,23 @@ describe("resolveFutonRepo -- product_codes values and the onboarding lists (zhe
     });
   });
 
+  it("a listed slug takes the code whose value records it EXACTLY, not an earlier bare value's tail", () => {
+    // Both a bare 'KroCloud' and a full 'zheref/KroCloud' are recorded, bare
+    // first. The bare value states no owner -- it may name a different
+    // owner's KroCloud entirely -- so the value that spells this slug out in
+    // full is the file's own answer, and file order must not overrule it.
+    const reg: RepoResolver = {
+      ...REGISTRY,
+      productCodes: { ...REGISTRY.productCodes, KC: "KroCloud", KX: "zheref/KroCloud" },
+      pendingOnboarding: ["zheref/KroCloud"],
+    };
+    expect(resolveFutonRepo(reg, "zheref/KroCloud", "zheref/bankai-core")).toEqual({
+      slug: "zheref/KroCloud",
+      code: "KX",
+      isSelf: false,
+    });
+  });
+
   it("STILL refuses a bare-valued code with no recorded owner from a different checkout -- error, not fallback", () => {
     const reg: RepoResolver = {
       ...REGISTRY,
