@@ -37,7 +37,7 @@ describe("runPreflight", () => {
   it("reports EVERY failing precondition, never stopping at the first", () => {
     const report = runPreflight(
       inputs({
-        hold: { kind: "held", value: "waiting on legal" },
+        hold: { kind: "held", value: "waiting on legal", recognizedTruthy: false },
         openCriticalIssueNumbers: [7],
         tagAlreadyExists: true,
         tag: "v1.1.0",
@@ -80,6 +80,33 @@ describe("runPreflight", () => {
       const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
       expect(row?.ok).toBe(false);
       expect(row?.detail).toContain("could not be read");
+    });
+  });
+
+  describe("RELEASE_HOLD's value is parsed, not length-checked (zheref/nen#23)", () => {
+    it("a 'clear' hold (explicit falsy value) passes -- but still names the lingering variable", () => {
+      const report = runPreflight(inputs({ hold: { kind: "clear", value: "false" } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(true);
+      // Deliberately NOT the bare "not set" of a genuinely absent variable:
+      // the operator should see the variable exists and what its value was.
+      expect(row?.detail).toContain("not held");
+      expect(row?.detail).toContain("'false'");
+    });
+
+    it("a recognized-truthy hold prints the plain HELD row", () => {
+      const report = runPreflight(inputs({ hold: { kind: "held", value: "true", recognizedTruthy: true } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toBe("HELD: RELEASE_HOLD = 'true'");
+    });
+
+    it("an unrecognized value prints the raw value AND the fail-closed reason", () => {
+      const report = runPreflight(inputs({ hold: { kind: "held", value: "freeze until Monday", recognizedTruthy: false } }));
+      const row = report.checks.find((c): boolean => c.name === "RELEASE_HOLD");
+      expect(row?.ok).toBe(false);
+      expect(row?.detail).toContain("'freeze until Monday'");
+      expect(row?.detail).toContain("fails closed");
     });
   });
 

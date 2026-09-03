@@ -206,6 +206,50 @@ describe("nen release preflight", () => {
       expect(result.code).toBe(1);
       expect(result.out.join("\n")).toMatch(/FAIL {2}RELEASE_HOLD -- HELD/);
     });
+
+    // zheref/nen#23: the value is PARSED for truthiness, never merely
+    // length-checked. The `value === ""` check this replaces read a variable
+    // set to the literal string "false" as the same HELD verdict as "true" --
+    // one regression test per value class, per the issue.
+    describe("the value is parsed for truthiness (zheref/nen#23)", () => {
+      it("'true', 'TRUE', '1' and 'yes' each read as an active hold", async () => {
+        for (const value of ["true", "TRUE", "1", "yes"]) {
+          const result = await runWithHold({ code: 0, stdout: `${value}\n`, stderr: "", spawnFailed: false });
+          expect(result.code).toBe(1);
+          expect(result.out.join("\n")).toContain(`HELD: RELEASE_HOLD = '${value}'`);
+        }
+      });
+
+      it("'false', 'FALSE', '0' and 'no' each read as NOT held and pass the table (was: HELD)", async () => {
+        for (const value of ["false", "FALSE", "0", "no"]) {
+          const result = await runWithHold({ code: 0, stdout: `${value}\n`, stderr: "", spawnFailed: false });
+          expect(result.code).toBe(0);
+          const joined = result.out.join("\n");
+          // Passing, but distinguishable from a genuinely absent variable:
+          // the row names the lingering value so the operator can tidy it.
+          expect(joined).toMatch(/ok\s+RELEASE_HOLD -- not held/);
+          expect(joined).toContain(`'${value}'`);
+        }
+      });
+
+      it("a whitespace-only value still reads as the genuine 'not set'", async () => {
+        const result = await runWithHold({ code: 0, stdout: "\n", stderr: "", spawnFailed: false });
+        expect(result.code).toBe(0);
+        expect(result.out.join("\n")).toMatch(/ok\s+RELEASE_HOLD -- not set/);
+      });
+
+      it("an arbitrary hold message fails CLOSED as held, printing the raw value and why", async () => {
+        // The deliberate deviation from the shell hold_active() convention:
+        // 'freeze until Monday' is not a recognized boolean, and the one row
+        // whose job is to stop a release must not fail open on a spelling.
+        const result = await runWithHold({ code: 0, stdout: "freeze until Monday\n", stderr: "", spawnFailed: false });
+        expect(result.code).toBe(1);
+        const joined = result.out.join("\n");
+        expect(joined).toMatch(/FAIL {2}RELEASE_HOLD -- HELD/);
+        expect(joined).toContain("'freeze until Monday'");
+        expect(joined).toContain("fails closed");
+      });
+    });
   });
 
   it("omitting --critical-issues and --live-chores-from fails the table rather than reading 'none' (review finding)", async () => {
