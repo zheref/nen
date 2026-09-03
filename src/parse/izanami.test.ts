@@ -257,6 +257,28 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen issue attach-sub --target o/r --parent 1 --children 2 --dry-run").classification).toBe("read-only");
   });
 
+  // zheref/nen#29's new verb. It POSTS to a public timeline, so it is gated
+  // exactly like its issue-family siblings -- read-only only in the explicit
+  // --dry-run form, never inferred from "it only comments".
+  it("issue comment is dry-run-gated, like every other writing verb in its family", () => {
+    expect(classifyCommand("nen issue comment --target o/r --issue 1 --body x").classification).toBe(
+      "mutating",
+    );
+    expect(
+      classifyCommand("nen issue comment --target o/r --issue 1 --body x --dry-run").classification,
+    ).toBe("read-only");
+    expect(
+      classifyCommand("nen issue comment --target o/r --issue 1 --body-file b.md --dry-run").classification,
+    ).toBe("read-only");
+    // And the gate is no weaker than the family's: a --dry-run the scan cannot
+    // prove is an argument of its own does not open it. `--body` takes free
+    // prose, which makes this verb the likeliest place in the binary for a
+    // quoted --dry-run to appear inside a value.
+    expect(
+      classifyCommand('nen issue comment --target o/r --issue 1 --body "ship it --dry-run"').classification,
+    ).toBe("mutating");
+  });
+
   // Verbs that READ BY DEFAULT flip to mutating the moment their write flag
   // appears -- --flag=value forms included.
   it("write-flag-gated verbs: mutating the moment the write flag appears", () => {

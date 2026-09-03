@@ -493,6 +493,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       search: RO("the four duplicate searches -- gh reads only"),
       "open-pr-check": RO("checks for open PRs referencing an issue -- gh reads only"),
       file: DRY("creates a GitHub issue unless --dry-run is given"),
+      // Dry-run-gated like its issue-family siblings, and NOT "read-only
+      // because it only comments": posting a comment is a public write on
+      // someone else's timeline, and the verb's own --dry-run is the only form
+      // that provably sends nothing (../issue/command.ts prints the argv and
+      // the exact bytes and returns before postComment).
+      comment: DRY("posts a caller-supplied comment on GitHub unless --dry-run is given"),
       "attach-sub": DRY("attaches sub-issues unless --dry-run is given"),
       "consolidate-close": DRY("attaches and closes issues unless --dry-run is given"),
       "chain-position": RO("computes a chain position -- pure computation"),

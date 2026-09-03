@@ -8,6 +8,10 @@ import {
   orderingFromTaxonomy,
   planConsolidation,
   readIssue,
+  renderCloseComment,
+  unknownPlaceholders,
+  unmatchedBraces,
+  DEFAULT_CLOSE_COMMENT,
   type ConsolidationPlan,
 } from "./subissue.js";
 
@@ -247,6 +251,35 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
     expect(report.log.some((l): boolean => l.includes("STOPPED"))).toBe(true);
   });
 
+  // ROUND-TWO REVIEW: `closeComments` is DOCUMENTED as empty when the attach
+  // stage fails -- "reporting the texts that WOULD have gone out would read as
+  // a list of things that did" -- and nothing pinned it. A one-line mutation
+  // (rendering the templates before the stage check, or returning them in the
+  // early-return branch) silently turns a --json caller's evidence of what was
+  // posted into a list of what was not. Asserted with a caller-supplied
+  // template, because the default's rendering is the one a reader would most
+  // readily mistake for a record of a real close.
+  it("reports NO close comments when the attach stage failed -- not the ones it would have posted", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: { code: 1, stderr: "boom" } },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, []) },
+      { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=20", result: {} },
+    ]);
+    const report = consolidateClose(seams, TARGET, plan([1, 2]), false, {
+      template: "Absorbed by section A of #{parent}.",
+      perChild: new Map(),
+    });
+    // #2 DID attach -- so this is the partial case, where a report that listed
+    // the would-be texts would be at its most convincing and most wrong.
+    expect(report.attached).toEqual([2]);
+    expect(report.failed.length).toBe(1);
+    expect(report.closeComments).toEqual([]);
+    expect(report.closed).toEqual([]);
+    // The three attach-stage calls and no fourth: a close whose comment was
+    // rendered AND sent would be red here rather than only in the field above.
+    expect(seams.calls.length).toBe(3);
+  });
+
   it("dry-run never calls close", () => {
     const seams = new ScriptedSeams([
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
@@ -254,5 +287,200 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
     const report = consolidateClose(seams, TARGET, plan([1]), true);
     expect(report.closed).toEqual([1]);
     expect(seams.calls.length).toBe(1);
+  });
+
+  // --- the caller-supplied close comment (zheref/nen#29) ----------------------
+
+  // BACK-COMPAT, PINNED AT THE ARGV. Omitting the channel must post the exact
+  // bytes the fixed implementation posted -- and the assertion is on the argv
+  // the Runner saw, not on a report field, because the argv is what GitHub gets.
+  it("with NO close-comment supplied, posts the historical fixed string byte for byte", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
+      { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
+      { match: "gh issue close 1 --repo zheref/nen --comment Consolidated into #9.", result: {} },
+    ]);
+    const report = consolidateClose(seams, TARGET, plan([1]), false);
+    expect(report.closed).toEqual([1]);
+    expect(seams.calls[2]?.args).toEqual([
+      "issue",
+      "close",
+      "1",
+      "--repo",
+      "zheref/nen",
+      "--comment",
+      "Consolidated into #9.",
+    ]);
+    expect(report.closeComments).toEqual([{ child: 1, body: "Consolidated into #9." }]);
+    // The old log line CLAIMED the comment names the parent; with the default
+    // it still does, byte-identically, so a transcript diff against an older
+    // run is empty.
+    expect(report.log).toContain("closed #1 with a comment naming #9");
+  });
+
+  it("a template equal to the default renders the same bytes -- the default IS a template", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
+      { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
+      { match: "gh issue close 1 --repo zheref/nen --comment Consolidated into #9.", result: {} },
+    ]);
+    const report = consolidateClose(seams, TARGET, plan([1]), false, {
+      template: DEFAULT_CLOSE_COMMENT,
+      perChild: new Map(),
+    });
+    expect(report.closeComments).toEqual([{ child: 1, body: "Consolidated into #9." }]);
+  });
+
+  it("a supplied template substitutes {parent} and {child} for EVERY child", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, []) },
+      { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
+      { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=20", result: {} },
+      { match: "gh issue close 1 --repo zheref/nen --comment #1 folded into #9.", result: {} },
+      { match: "gh issue close 2 --repo zheref/nen --comment #2 folded into #9.", result: {} },
+    ]);
+    const report = consolidateClose(seams, TARGET, plan([1, 2]), false, {
+      template: "#{child} folded into #{parent}.",
+      perChild: new Map(),
+    });
+    expect(report.closed).toEqual([1, 2]);
+    expect(report.closeComments).toEqual([
+      { child: 1, body: "#1 folded into #9." },
+      { child: 2, body: "#2 folded into #9." },
+    ]);
+    // The parent-naming claim is dropped where it is no longer guaranteed.
+    expect(report.log).toContain("closed #1 with the caller-supplied close comment");
+  });
+
+  // THE CASE THE ISSUE ACTUALLY DESCRIBES: each absorbed member closed with a
+  // comment naming WHICH section absorbed it -- text that differs per child, so
+  // one template cannot express it.
+  it("a per-child map gives each child its own text, and each may still use the placeholders", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, []) },
+      { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
+      { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=20", result: {} },
+      { match: "gh issue close 1 --repo zheref/nen --comment Absorbed by section A of #9.", result: {} },
+      { match: "gh issue close 2 --repo zheref/nen --comment Absorbed by section B of #9.", result: {} },
+    ]);
+    const report = consolidateClose(seams, TARGET, plan([1, 2]), false, {
+      template: null,
+      perChild: new Map([
+        [1, "Absorbed by section A of #{parent}."],
+        [2, "Absorbed by section B of #{parent}."],
+      ]),
+    });
+    expect(report.closeComments).toEqual([
+      { child: 1, body: "Absorbed by section A of #9." },
+      { child: 2, body: "Absorbed by section B of #9." },
+    ]);
+  });
+
+  it("dry-run prints the RENDERED close comment and still posts nothing", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
+    ]);
+    const report = consolidateClose(seams, TARGET, plan([1]), true, {
+      template: "Absorbed by section A of #{parent}.",
+      perChild: new Map(),
+    });
+    expect(report.log).toContain(
+      "would run: gh issue close 1 --repo zheref/nen --comment Absorbed by section A of #9.",
+    );
+    expect(seams.calls.length).toBe(1); // only the id read, never a close
+  });
+});
+
+describe("the close-comment template vocabulary", () => {
+  it("substitutes the BARE numbers, so the caller writes the '#' and can spell a cross-repo form", () => {
+    expect(renderCloseComment("owner/name#{parent} absorbed {child}", 9, 1)).toBe(
+      "owner/name#9 absorbed 1",
+    );
+  });
+
+  it("renders the frozen default to the string the fixed implementation posted", () => {
+    expect(renderCloseComment(DEFAULT_CLOSE_COMMENT, 9, 1)).toBe("Consolidated into #9.");
+  });
+
+  it("accepts the two words of the vocabulary and substitutes nothing else", () => {
+    expect(unknownPlaceholders("see {parent} and {child}")).toEqual([]);
+    expect(renderCloseComment("a { b } c", 9, 1)).toBe("a { b } c");
+  });
+
+  // An unrecognised placeholder would otherwise be POSTED LITERALLY onto a
+  // public timeline by a verb that closes issues, with exit 0.
+  it("names every unknown placeholder, deduplicated, so one round trip fixes them all", () => {
+    expect(unknownPlaceholders("{parnet} and {section} and {parnet}")).toEqual([
+      "{parnet}",
+      "{section}",
+    ]);
+    expect(unknownPlaceholders("{}")).toEqual(["{}"]);
+  });
+
+  // REVIEW FINDING: the guard used to match only brace runs whose interior was
+  // word characters, so these three -- the three shapes a human actually
+  // mistypes -- were neither refused NOR substituted, and went out literally at
+  // exit 0. `{{parent}}` was the worst: the INNER braces matched, so it posted
+  // the genuinely baffling `#{1}`.
+  it.each([
+    ["{{parent}}", "the Handlebars/Jinja spelling"],
+    ["{ parent }", "a space inside the braces"],
+    ["{parent }", "a trailing space"],
+    ["{ parent}", "a leading space"],
+    ['{"a": 1}', "JSON, which is refused rather than passed through"],
+  ])("refuses the brace run %s (%s) instead of posting it as typed", (run) => {
+    expect(unknownPlaceholders(`Absorbed into #${run}.`)).toEqual([run]);
+  });
+
+  // The pass-through half of the same finding: even reached directly, render
+  // must not turn `#{{parent}}` into `#{1}`. The CLI refuses it first, but a
+  // renderer that substitutes what the guard rejects is one refactor away from
+  // being the whole bug again.
+  it("substitutes nothing inside a brace run the guard rejects", () => {
+    expect(renderCloseComment("#{{parent}}", 9, 1)).toBe("#{{parent}}");
+    expect(renderCloseComment("#{ parent }", 9, 1)).toBe("#{ parent }");
+    expect(renderCloseComment("#{parent }", 9, 1)).toBe("#{parent }");
+  });
+});
+
+// ROUND-TWO REVIEW FINDING. The brace-RUN guard above requires braces on BOTH
+// sides, which is a shape a dropped closing brace does not have: `#{parent`
+// matched nothing, so it was neither refused nor substituted and went out
+// literally on a REAL close, at exit 0, onto a public timeline. That is the
+// same defect the `{{parent}}` round fixed, one keystroke over -- and a
+// dropped brace is at least as common a typo as an extra one.
+describe("unmatched braces -- the half a brace-run scan structurally cannot see", () => {
+  it.each([
+    ["#{parent", "{parent"],
+    ["{child absorbed", "{child"],
+    ["parent} of #9", "}"],
+    ["{", "{"],
+  ])("reports the stray brace in '%s'", (template, offender) => {
+    expect(unmatchedBraces(template)).toEqual([offender]);
+  });
+
+  it("says nothing about a WELL-FORMED run -- its braces are not strays", () => {
+    expect(unmatchedBraces("Consolidated into #{parent}.")).toEqual([]);
+    expect(unmatchedBraces("#{{parent}} and { parent } and {}")).toEqual([]);
+  });
+
+  it("reports each stray once, in first-appearance order", () => {
+    expect(unmatchedBraces("{parent and {child and {parent")).toEqual(["{parent", "{child"]);
+  });
+
+  // The two faults are reported by two functions because they are two
+  // mistakes: an unknown WORD versus a missing BRACE. A template with one of
+  // each must be fully described by the pair -- neither may swallow the other.
+  it("splits the two brace faults cleanly between the two reports", () => {
+    expect(unknownPlaceholders("{section} absorbed #{parent")).toEqual(["{section}"]);
+    expect(unmatchedBraces("{section} absorbed #{parent")).toEqual(["{parent"]);
+  });
+
+  // The renderer's half: even reached directly, an unmatched brace passes
+  // through byte for byte rather than being half-substituted.
+  it("substitutes nothing around an unmatched brace", () => {
+    expect(renderCloseComment("Consolidated into #{parent", 9, 1)).toBe("Consolidated into #{parent");
   });
 });
