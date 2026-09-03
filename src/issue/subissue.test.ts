@@ -128,6 +128,9 @@ describe("planConsolidation -- label union minus severity, severity MAX only", (
     expect(plan.severity).toBe("ns:sev/critical");
     expect(plan.severitySetBy).toBe(2);
     expect(plan.toClose).toEqual([1, 2]);
+    // With the family NAMED, the reduction is reachable and nothing is left
+    // unreduced -- the refusal below is only for the omitted-flag case.
+    expect(plan.unreducedFamilies).toEqual([]);
   });
 
   it("does not close an already-closed child, and notes it", () => {
@@ -137,6 +140,44 @@ describe("planConsolidation -- label union minus severity, severity MAX only", (
     const plan = planConsolidation(seams, TARGET, 99, [1], taxonomy(), "");
     expect(plan.toClose).toEqual([]);
     expect(plan.notes.some((n): boolean => n.includes("already closed"))).toBe(true);
+  });
+
+  // Issue #22: with severityFamily === "" the reduction branch is unreachable
+  // (no real label's family string equals ""), so every severity label used to
+  // union silently. The plan must now SAY which families would collide.
+  it("reports a family whose labels would union several-at-once when no severity family is named", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, ["ns:sev/high", "area:cli"]) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, ["ns:sev/low", "area:docs"]) },
+    ]);
+    const plan = planConsolidation(seams, TARGET, 99, [1, 2], taxonomy(), "");
+    expect(plan.unreducedFamilies).toEqual([
+      { family: "ns:sev", labels: ["ns:sev/high", "ns:sev/low"] },
+    ]);
+  });
+
+  it("reports nothing unreduced when no child carries two labels of one family", () => {
+    const seams = new ScriptedSeams([
+      // One slash-family label in total, plus leafless labels that have no
+      // family members to collide with: nothing the reduction would have
+      // caught, so the omitted flag stays legitimate.
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, ["ns:sev/high", "area:cli"]) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, ["area:docs"]) },
+    ]);
+    const plan = planConsolidation(seams, TARGET, 99, [1, 2], taxonomy(), "");
+    expect(plan.unreducedFamilies).toEqual([]);
+    expect(plan.labelUnion).toEqual(["area:cli", "area:docs", "ns:sev/high"]);
+  });
+
+  it("does not report a collision when two children carry the SAME family label", () => {
+    // The union dedupes, the parent ends with ONE label from the family --
+    // which is exactly what a reduction would have produced. Not a violation.
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, ["ns:sev/high"]) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, ["ns:sev/high"]) },
+    ]);
+    const plan = planConsolidation(seams, TARGET, 99, [1, 2], taxonomy(), "");
+    expect(plan.unreducedFamilies).toEqual([]);
   });
 });
 
@@ -155,6 +196,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
       severity: null,
       severitySetBy: null,
       toClose: children,
+      unreducedFamilies: [],
       notes: [],
     };
   }

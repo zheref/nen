@@ -161,7 +161,23 @@ export interface ConsolidationPlan {
   readonly severitySetBy: number | null;
   /** Children that already carry an open state and would be closed. */
   readonly toClose: readonly number[];
+  /**
+   * Populated ONLY when no severity family was named: every `<ns>:<family>`
+   * prefix whose union above would put SEVERAL of its labels on the parent at
+   * once. With no family named, the severity-max reduction below is
+   * unreachable -- no real label's family string equals `""` -- so this is the
+   * plan reporting "the guarantee that reduction exists for would be defeated
+   * here", and the CLI refuses on it rather than proceeding silently.
+   */
+  readonly unreducedFamilies: readonly UnreducedFamily[];
   readonly notes: readonly string[];
+}
+
+export interface UnreducedFamily {
+  /** `<namespace>:<family>`, spelled the way `--severity-family` takes it. */
+  readonly family: string;
+  /** The two-or-more distinct labels that would all land on the parent. */
+  readonly labels: readonly string[];
 }
 
 export interface SeverityOrdering {
@@ -238,6 +254,32 @@ export function planConsolidation(
     }
   }
 
+  // WHEN NO FAMILY WAS NAMED, DETECT WHAT THE REDUCTION WOULD HAVE CAUGHT.
+  // The taxonomy declares its families STRUCTURALLY -- orderingFromTaxonomy
+  // above reads whichever family the caller names; nothing in schemas/ marks
+  // one family as "the severities" (that is §3: nen knows no severity's name).
+  // So the detection is structural too: group the union's `<ns>:<family>/<leaf>`
+  // labels by their family prefix, and any prefix contributing two or more
+  // DISTINCT labels is a family the union is about to put on the parent
+  // several-at-once -- the exact state the comment above calls a state-machine
+  // violation. One label per family is fine (that is what a reduction would
+  // have produced anyway); leafless labels (`ns:name`) have no family members
+  // to collide with and never trip this.
+  const unreducedFamilies: UnreducedFamily[] = [];
+  if (severityFamily === "") {
+    const byFamily = new Map<string, string[]>();
+    for (const label of union) {
+      const parts = decomposeLabelName(label);
+      if (parts.namespace === null || parts.family === null || parts.leaf === null) continue;
+      const key = `${parts.namespace}:${parts.family}`;
+      byFamily.set(key, [...(byFamily.get(key) ?? []), label]);
+    }
+    for (const family of [...byFamily.keys()].sort()) {
+      const labels = byFamily.get(family) ?? [];
+      if (labels.length > 1) unreducedFamilies.push({ family, labels: [...labels].sort() });
+    }
+  }
+
   const toClose = summaries
     .filter((child): boolean => child.state.toLowerCase() === "open")
     .map((child): number => child.number);
@@ -255,6 +297,7 @@ export function planConsolidation(
     severity,
     severitySetBy,
     toClose,
+    unreducedFamilies,
     notes,
   };
 }

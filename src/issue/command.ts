@@ -12,7 +12,7 @@
 // caller approves is the thing that runs.
 
 import { assertRepoRoot } from "../repo/root.js";
-import { loadLabelTaxonomy } from "../schema/labels.js";
+import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { parseTarget, type Target } from "../github/target.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
@@ -75,14 +75,22 @@ usage:
 
   nen issue consolidate-close --target <owner/name> --parent <n>
                               --children 1,2 --repo <path>
+                              [--severity-family <ns>:<family>]
                               [--dry-run] [--allow-open-pr]
       The whole choreography in its load-bearing order: file (already done by
       the caller) -> attach -> close, with the label union and severity maximum
-      computed and reported. Runs the SAME open-PR guard 'open-pr-check' does
-      over every child that would be closed FIRST, and refuses the whole
-      close (listing the blocking PRs) when any of them has one -- an issue
-      with an open PR is never quietly closed, because closing it orphans
-      work already in flight. --allow-open-pr overrides the refusal.
+      computed and reported. --severity-family names the ONE label family that
+      is reduced to its single strongest label instead of unioned (ordering:
+      the target repository's own taxonomy); exactly one severity belongs on
+      the consolidated issue, and unioning them would leave the parent carrying
+      several at once. Omitted, the verb REFUSES whenever the union would do
+      exactly that -- put two or more labels from one family on the parent --
+      rather than defeating the reduction silently. Runs the SAME open-PR
+      guard 'open-pr-check' does over every child that would be closed FIRST,
+      and refuses the whole close (listing the blocking PRs) when any of them
+      has one -- an issue with an open PR is never quietly closed, because
+      closing it orphans work already in flight. --allow-open-pr overrides
+      the refusal.
 
   nen issue chain-position --target <owner/name> --issue <n> [--repo <path>]
                            [--chain-labels role=label,...]
@@ -334,6 +342,54 @@ function attach(context: CommandContext): number {
   return 0;
 }
 
+// `--severity-family`, TRIMMED AND VALIDATED before it reaches the planner.
+// planConsolidation treats `""` as "no family named" and matches everything
+// else by EXACT string comparison against each label's `<ns>:<family>` prefix.
+// So a value that is padded with whitespace, missing its colon, carrying a
+// `/<leaf>`, or a typo the taxonomy does not declare would match NOTHING: it
+// skips the omitted-flag refusal (the flag WAS given) and then reduces nothing,
+// silently unioning the very labels the caller asked to reduce -- issue #22
+// back through a side door. A malformed shape is a usage error (exit 2, like
+// every other mistyped flag); a well-formed family the target taxonomy does not
+// declare is a refusal (exit 1, the same discipline as 'file' refusing a label
+// the taxonomy does not know) that lists the families the taxonomy DOES
+// declare, so the caller's next invocation can be right.
+function readSeverityFamily(context: CommandContext, taxonomy: LabelTaxonomy): string {
+  const raw = context.args.values["severity-family"];
+  if (raw === undefined) return "";
+  const value = raw.trim();
+  const parts = decomposeLabelName(value);
+  if (value === "" || parts.namespace === null || parts.namespace === "" || parts.family === null) {
+    throw new VerbUsageError(
+      `--severity-family takes '<ns>:<family>' -- the family whose labels reduce to their single strongest -- got '${raw}'.`,
+    );
+  }
+  if (parts.leaf !== null) {
+    throw new VerbUsageError(
+      `--severity-family takes the FAMILY '${parts.namespace}:${parts.family}', not one of its labels -- got '${raw}'. Drop the '/${parts.leaf}'; the reduction picks the leaf itself.`,
+    );
+  }
+  if (taxonomy.inFamily(parts.namespace, parts.family).length === 0) {
+    // Structural, like everything else here: the families ARE the distinct
+    // `<ns>:<family>` prefixes of the taxonomy's `<ns>:<family>/<leaf>` names.
+    const declared = [
+      ...new Set(
+        taxonomy
+          .names()
+          .map((name): ReturnType<typeof decomposeLabelName> => decomposeLabelName(name))
+          .filter(
+            (name): boolean => name.namespace !== null && name.family !== null && name.leaf !== null,
+          )
+          .map((name): string => `${name.namespace}:${name.family}`),
+      ),
+    ].sort();
+    throw new Error(
+      `--severity-family '${value}' names no '<ns>:<family>/<leaf>' label in ${taxonomy.path}. The reduction matches that string exactly, so an unknown family would reduce nothing and silently union the labels it was named to reduce. Families the taxonomy declares: ${declared.join(", ") || "(none)"}.`,
+    );
+  }
+  return value;
+}
+
 function consolidate(context: CommandContext): number {
   const target = requireTarget(context);
   const parent = Number(context.args.values["parent"] ?? "");
@@ -343,8 +399,38 @@ function consolidate(context: CommandContext): number {
   }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const taxonomy = loadLabelTaxonomy(root);
-  const severityFamily = context.args.values["severity-family"] ?? "";
+  const severityFamily = readSeverityFamily(context, taxonomy);
   const plan = planConsolidation(context.seams, target, parent, children, taxonomy, severityFamily);
+
+  // WITH NO --severity-family, planConsolidation's severity-max reduction is
+  // unreachable and every severity-shaped label falls into the union -- the
+  // exact several-severities-at-once state the reduction exists to prevent,
+  // produced SILENTLY on a mutating verb (issue #22). The plan reports which
+  // families would collide; a non-empty report is a refusal, not a warning,
+  // because the caller who omitted the flag is exactly the caller who does not
+  // know the flag exists. Children with no colliding family labels proceed
+  // without it, as they always did.
+  if (plan.unreducedFamilies.length > 0) {
+    if (context.json) {
+      context.io.out(JSON.stringify({ plan, refused: true }, null, 2));
+      return 1;
+    }
+    context.io.err(
+      "nen: refusing to consolidate -- no --severity-family was named, and the plain union would put SEVERAL labels from one family on the parent at once:",
+    );
+    for (const entry of plan.unreducedFamilies) {
+      context.io.err(`  ${entry.family}: ${entry.labels.join(", ")}`);
+    }
+    // The detection above is STRUCTURAL -- any `<ns>:<family>/<leaf>` prefix
+    // contributing two-plus labels -- and whether such a family is single-select
+    // is the TARGET repository's convention, which nen does not know (§3). So
+    // this message must not assert "exactly one always belongs": it says only
+    // that the reduction the flag exists for did not run, and how to run it.
+    context.io.err(
+      `Whether a family is single-select (the way a severity family is) is the target repository's own convention -- nen reads families only structurally and cannot rule that carrying several is wrong, only that no reduction ran. If one of these is such a family, name it -- e.g. --severity-family ${plan.unreducedFamilies[0]?.family ?? "<ns>:<family>"} -- and its labels reduce to the single strongest by the target repository's own taxonomy, while every other family unions as before.`,
+    );
+    return 1;
+  }
 
   // THE SAME GUARD 'open-pr-check' RUNS, applied to exactly the children this
   // plan would close -- see ./file.ts's header: "an issue with an OPEN PR is
