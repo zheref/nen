@@ -39,6 +39,16 @@ export interface IssueSummary {
   readonly title: string;
   readonly state: string;
   readonly labels: readonly string[];
+  /**
+   * True when the number actually names a PULL REQUEST. GitHub numbers issues
+   * and PRs in one sequence and `issues/{n}` happily serves both, so every
+   * caller that means "an issue" must be able to see which class it was
+   * handed -- the payload's non-null `pull_request` is the one reliable
+   * discriminator (issue #25: `gh issue view --json pull_request` does not
+   * exist; it errors on every object, so there is no pre-check outside this
+   * fetch).
+   */
+  readonly isPullRequest: boolean;
 }
 
 // One `gh api` read per issue. REST rather than `gh issue view`, because `id`
@@ -61,12 +71,18 @@ export function readIssue(seams: Seams, target: Target, number: number): IssueSu
         .filter((name): boolean => name !== "")
     : [];
   const rawId = parsed["id"];
+  // The REST payload carries `pull_request` (an object) ONLY when the number
+  // names a PR; on a genuine issue the key is absent. Read it here, at the one
+  // fetch, so no caller has to make a second request just to learn which
+  // object class it was answered with.
+  const rawPullRequest = parsed["pull_request"];
   return {
     number: Number(parsed["number"] ?? number),
     id: typeof rawId === "number" ? rawId : null,
     title: String(parsed["title"] ?? ""),
     state: String(parsed["state"] ?? ""),
     labels,
+    isPullRequest: rawPullRequest !== undefined && rawPullRequest !== null,
   };
 }
 

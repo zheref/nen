@@ -42,7 +42,31 @@ describe("readIssue -- REST, because 'id' is not in gh issue view --json", () =>
       title: "issue 12",
       state: "open",
       labels: ["area:cli"],
+      isPullRequest: false,
     });
+  });
+
+  // Issue #25: GitHub serves PRs from the same issues/{n} endpoint, and the
+  // non-null `pull_request` key is the ONE discriminator -- `gh issue view
+  // --json pull_request` does not exist, so this fetch is where the object
+  // class must be read.
+  it("reads a non-null pull_request as isPullRequest -- issues/{n} serves PRs too", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api repos/zheref/nen/issues/925",
+        result: {
+          stdout: JSON.stringify({
+            number: 925,
+            id: 90925,
+            title: "some pull request",
+            state: "open",
+            labels: [],
+            pull_request: { url: "https://api.github.com/repos/zheref/nen/pulls/925" },
+          }),
+        },
+      },
+    ]);
+    expect(readIssue(seams, TARGET, 925).isPullRequest).toBe(true);
   });
 
   it("throws naming the issue when the read fails", () => {
@@ -185,12 +209,13 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
   function plan(children: number[]): ConsolidationPlan {
     return {
       parent: 9,
-      children: children.map((n): { number: number; id: number | null; title: string; state: string; labels: string[] } => ({
+      children: children.map((n): { number: number; id: number | null; title: string; state: string; labels: string[]; isPullRequest: boolean } => ({
         number: n,
         id: n * 10,
         title: `#${n}`,
         state: "open",
         labels: [],
+        isPullRequest: false,
       })),
       labelUnion: [],
       severity: null,

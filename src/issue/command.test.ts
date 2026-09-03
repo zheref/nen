@@ -408,4 +408,75 @@ describe("nen issue -- CLI wiring", () => {
     const result = await capture(["issue", "terminus", "--target", "o/n", "--issue", "5", "--chain-labels", "nonsense"]);
     expect(result.code).toBe(2);
   });
+
+  // Issue #25: fed a PR number, both chain verbs used to answer a plausible,
+  // silently wrong classification ('#925: routable', exit 0 -- the issue's own
+  // live transcript). The REST issues/{n} payload carries a non-null
+  // `pull_request` exactly when the number names a PR, and that is the ONE
+  // discriminator (`gh issue view --json pull_request` errors on every
+  // object), so the verbs read it at the fetch and refuse.
+  const PR_SHAPED = JSON.stringify({
+    number: 925,
+    id: 90925,
+    title: "some pull request",
+    state: "open",
+    labels: [],
+    pull_request: { url: "https://api.github.com/repos/o/n/pulls/925" },
+  });
+
+  it("chain-position refuses (exit 1) when --issue names a pull request, with the actionable message", async () => {
+    const result = await capture(
+      ["issue", "chain-position", "--target", "o/n", "--issue", "925", "--chain-labels", "idea=mode:idea,epic=type:epic,in-review=mode:review,building=mode:build"],
+      [{ match: "gh api repos/o/n/issues/925", result: { stdout: PR_SHAPED } }],
+    );
+    expect(result.code).toBe(1);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/#925 names a pull request, not an issue; a delivery-chain position is defined only for issues/);
+    expect(err).toMatch(/'nen pr' family/);
+    // Never the plausible wrong answer the defect produced.
+    expect(result.out.join("\n")).not.toMatch(/routable/);
+  });
+
+  it("terminus refuses the same PR number -- both verbs carry the guard", async () => {
+    const result = await capture(
+      ["issue", "terminus", "--target", "o/n", "--issue", "925", "--chain-labels", "epic=type:epic,chore=type:chore"],
+      [{ match: "gh api repos/o/n/issues/925", result: { stdout: PR_SHAPED } }],
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/names a pull request, not an issue/);
+    expect(result.out.join("\n")).not.toMatch(/own-pr/);
+  });
+
+  it("the PR refusal keeps the stable --json shape: refused true, reason, exit 1", async () => {
+    const result = await capture(
+      ["issue", "terminus", "--target", "o/n", "--issue", "925", "--chain-labels", "epic=type:epic"],
+      [{ match: "gh api repos/o/n/issues/925", result: { stdout: PR_SHAPED } }],
+      { json: true },
+    );
+    expect(result.code).toBe(1);
+    const parsed = JSON.parse(result.out.join("\n")) as { issue: number; refused: boolean; reason: string };
+    expect(parsed.issue).toBe(925);
+    expect(parsed.refused).toBe(true);
+    expect(parsed.reason).toMatch(/names a pull request, not an issue/);
+  });
+
+  it("a genuine issue payload (no pull_request key) still classifies via terminus exactly as before", async () => {
+    const result = await capture(
+      ["issue", "terminus", "--target", "o/n", "--issue", "17", "--chain-labels", "epic=type:epic,chore=type:chore"],
+      [
+        {
+          match: "gh api repos/o/n/issues/17",
+          result: { stdout: JSON.stringify({ number: 17, id: 90017, title: "a real issue", state: "open", labels: [] }) },
+        },
+      ],
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/own-pr/);
+  });
+
+  it("issue --help documents the pull-request refusal on the chain verbs", async () => {
+    const result = await capture(["issue", "--help"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/REFUSE \(exit 1\) when --issue <n> turns out to name a\s+pull request/);
+  });
 });
