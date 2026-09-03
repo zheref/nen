@@ -8,6 +8,8 @@ function registryOf(consumers: RepoRegistry["consumers"]): RepoRegistry {
     latest: null,
     consumers,
     productCodes: {},
+    maintainedTools: [],
+    pendingOnboarding: [],
     byRepo: (): undefined => undefined,
     byCode: (): undefined => undefined,
     affectedBy: (): readonly [] => [],

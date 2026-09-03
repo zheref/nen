@@ -138,8 +138,17 @@ export interface FutonResolvedRepo {
 }
 
 export interface RepoResolver {
-  /** `code -> owner/name`, exactly as the registry's `product_codes` states it. */
+  /** `code -> full name`, exactly as the registry's `product_codes` states it -- `owner/name` in some registries, a bare name in others. */
   readonly productCodes: Readonly<Record<string, string>>;
+  /**
+   * `owner/name` slugs the registry lists under `maintained_tools` and
+   * `pending_onboarding` -- the repositories it records WITHOUT listing them
+   * as consumers. They are consulted (zheref/nen#27) because a code like the
+   * registry's not-yet-onboarded consumer resolves to a bare name whose owner
+   * is recorded exactly here and nowhere else.
+   */
+  readonly maintainedTools: readonly string[];
+  readonly pendingOnboarding: readonly string[];
   byCode(code: string): { readonly repo: string; readonly code: string | null } | undefined;
   byRepo(repo: string): { readonly repo: string; readonly code: string | null } | undefined;
 }
@@ -154,6 +163,41 @@ export class FutonResolveError extends Error {
 function repoTail(slug: string): string {
   const at = slug.lastIndexOf("/");
   return (at === -1 ? slug : slug.slice(at + 1)).toLowerCase();
+}
+
+// `maintained_tools` then `pending_onboarding`, in file order.
+function listedRepos(registry: RepoResolver): readonly string[] {
+  return [...registry.maintainedTools, ...registry.pendingOnboarding];
+}
+
+// The listed repo whose TAIL a bare `product_codes` value names, if any. The
+// lists record full slugs and the value records only a name, so the tail is
+// the one comparison both sides actually state.
+function listedRepoByTail(registry: RepoResolver, bareName: string): string | undefined {
+  return listedRepos(registry).find((slug): boolean => repoTail(slug) === bareName.toLowerCase());
+}
+
+// The product code whose value names `slug`, when the registry assigns one --
+// compared as recorded for a slug value, by tail for a bare one.
+//
+// TWO PASSES, exact before tail, so file order cannot decide the answer: a
+// single pass returned the FIRST entry that matched EITHER way, letting an
+// earlier bare value's tail match ({A: "KroCloud"}) shadow a later value that
+// records this very slug in full ({B: "zheref/KroCloud"}). A value that
+// matches as recorded is the file's own complete spelling of this repository;
+// a tail comparison is a derived reading of a value that stated no owner, and
+// it may honestly belong to a DIFFERENT owner's repo of the same name -- so
+// exactness outranks it regardless of where each entry sits in the file.
+function codeRecordedFor(registry: RepoResolver, slug: string): string | null {
+  const wanted = slug.toLowerCase();
+  for (const [code, name] of Object.entries(registry.productCodes)) {
+    if (name.toLowerCase() === wanted) return code;
+  }
+  const tail = repoTail(slug);
+  for (const [code, name] of Object.entries(registry.productCodes)) {
+    if (!name.includes("/") && name.toLowerCase() === tail) return code;
+  }
+  return null;
 }
 
 // Resolves the invocation's repo token against the registry, or the current
@@ -177,18 +221,34 @@ export function resolveFutonRepo(
   }
 
   // A code the file's `product_codes` names but which no CONSUMER entry
-  // claims: this is the registry's OWN repository -- the code the whole file
-  // exists to describe (bankai-core's own "BC"). `product_codes` records only
-  // a bare name, never an owner/name slug, so the only honest way to compare
-  // it against a real repository is by TAIL against the checkout `nen` is
-  // actually standing in.
-  const bareName = registry.productCodes[upper];
-  if (bareName !== undefined) {
-    if (repoTail(currentRepoSlug) === bareName.toLowerCase()) {
+  // claims: the registry's OWN repository (the code the whole file exists to
+  // describe), or a repo it lists only under `maintained_tools`/
+  // `pending_onboarding` (zheref/nen#27). What the VALUE records decides how
+  // far resolution honestly reaches:
+  //
+  //   * an `owner/name` value is a complete answer -- some registries record
+  //     their codes as full slugs, and this code path once assumed they never
+  //     did, which refused the registry's own code FROM ITS OWN CHECKOUT;
+  //   * a bare value states no owner, so the only honest comparisons are by
+  //     TAIL: against the checkout `nen` is standing in, then against the
+  //     slugs the maintained_tools/pending_onboarding lists record -- reading
+  //     the owner out of the same file is not a guess;
+  //   * a bare value matching neither stays an ERROR. The widening is in WHERE
+  //     a code resolves from, never in what counts as a match.
+  const recorded = registry.productCodes[upper];
+  if (recorded !== undefined) {
+    if (recorded.includes("/")) {
+      return { slug: recorded, code: upper, isSelf: recorded.toLowerCase() === currentRepoSlug.toLowerCase() };
+    }
+    if (repoTail(currentRepoSlug) === recorded.toLowerCase()) {
       return { slug: currentRepoSlug, code: upper, isSelf: true };
     }
+    const listed = listedRepoByTail(registry, recorded);
+    if (listed !== undefined) {
+      return { slug: listed, code: upper, isSelf: listed.toLowerCase() === currentRepoSlug.toLowerCase() };
+    }
     throw new FutonResolveError(
-      `'${repoToken}' resolves to '${bareName}' in this registry's own product_codes, but no owner is recorded for it (it names no consumer) and the checkout you are standing in ('${currentRepoSlug}') is not it. Run this from '${bareName}''s own checkout, or name a consumer this registry actually lists.`,
+      `'${repoToken}' resolves to '${recorded}' in this registry's own product_codes, but no owner is recorded for it (it names no consumer, maintained_tools or pending_onboarding entry) and the checkout you are standing in ('${currentRepoSlug}') is not it. Run this from '${recorded}''s own checkout, or name a repository this registry actually records.`,
     );
   }
 
@@ -197,11 +257,27 @@ export function resolveFutonRepo(
     return { slug: byRepo.repo, code: byRepo.code, isSelf: byRepo.repo.toLowerCase() === currentRepoSlug.toLowerCase() };
   }
 
+  // An `owner/name` token the registry lists under `maintained_tools` or
+  // `pending_onboarding` -- recorded in the file, just not as a consumer, so
+  // `byRepo` alone would refuse it (zheref/nen#27). Exact slug match only:
+  // these lists carry full slugs, and a token disagreeing on the owner is a
+  // different repository, not a near miss.
+  const listedBySlug = listedRepos(registry).find(
+    (slug): boolean => slug.toLowerCase() === repoToken.toLowerCase(),
+  );
+  if (listedBySlug !== undefined) {
+    return {
+      slug: listedBySlug,
+      code: codeRecordedFor(registry, listedBySlug),
+      isSelf: listedBySlug.toLowerCase() === currentRepoSlug.toLowerCase(),
+    };
+  }
+
   if (repoToken.toLowerCase() === currentRepoSlug.toLowerCase() || repoTail(repoToken) === repoTail(currentRepoSlug)) {
     return { slug: currentRepoSlug, code: registry.byRepo(currentRepoSlug)?.code ?? null, isSelf: true };
   }
 
   throw new FutonResolveError(
-    `'${repoToken}' does not resolve against this registry's product_codes (${Object.keys(registry.productCodes).join(", ") || "(none)"}) or its consumers. Resolving it to a near match would point a mutating run at the wrong backlog.`,
+    `'${repoToken}' does not resolve against this registry's product_codes (${Object.keys(registry.productCodes).join(", ") || "(none)"}), its consumers, or its maintained_tools/pending_onboarding listings. Resolving it to a near match would point a mutating run at the wrong backlog.`,
   );
 }

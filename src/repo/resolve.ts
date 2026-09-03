@@ -33,6 +33,17 @@
 //      names `all` still resolves to itself. Keyword-first would make the
 //      registry's contents change the meaning of a keyword.
 //
+//   5. A TOKEN RESOLVES FROM EVERYTHING THE FILE RECORDS, not just
+//      `consumers[]` (zheref/nen#27). A registry names repositories in more
+//      places than its consumer list: its OWN source repository appears only
+//      as a `product_codes` value, its tooling repos only under
+//      `maintained_tools`, and a not-yet-onboarded consumer only under
+//      `pending_onboarding`. A lookup that stopped at the consumer entries
+//      refused the registry's own origin FROM ITS OWN CHECKOUT -- five
+//      independent skill ports tripped on exactly that. The widening is in
+//      WHERE a token resolves from, never in what counts as a match: every
+//      comparison below is still exact, and a genuine miss is still an error.
+//
 // NOTHING HERE KNOWS A CODE OR A REPOSITORY NAME. `BC`, `KP` and the rest are
 // keys of the target repository's own file; this module has no opinion about
 // which exist, which is the §3 discipline applied to the one place a two-letter
@@ -85,8 +96,19 @@ function known(registry: RepoRegistry): string {
   const codes = Object.entries(registry.productCodes)
     .map(([code, name]): string => `${code} (${name})`)
     .join(", ");
-  const consumers = registry.consumers.map((entry): string => entry.repo).join(", ");
-  return `Codes: ${codes === "" ? "(none recorded)" : codes}. Repositories: ${consumers === "" ? "(none recorded)" : consumers}.`;
+  // Consumers AND the maintained_tools/pending_onboarding listings, deduped: a
+  // refusal that omitted the listed repos would tell the caller to re-type
+  // from an incomplete menu -- the very gap rule 5 closes (zheref/nen#27). A
+  // repo can appear in both (a maintained tool that is also a consumer).
+  const repos: string[] = [];
+  const seen = new Set<string>();
+  for (const repo of [...registry.consumers.map((entry): string => entry.repo), ...listedRepos(registry)]) {
+    if (seen.has(lower(repo))) continue;
+    seen.add(lower(repo));
+    repos.push(repo);
+  }
+  const listed = repos.join(", ");
+  return `Codes: ${codes === "" ? "(none recorded)" : codes}. Repositories: ${listed === "" ? "(none recorded)" : listed}.`;
 }
 
 function entryFor(registry: RepoRegistry, repo: string): ConsumerEntry | null {
@@ -96,6 +118,45 @@ function entryFor(registry: RepoRegistry, repo: string): ConsumerEntry | null {
     registry.consumers.find((entry): boolean => lower(nameHalf(entry.repo)) === wanted) ??
     null
   );
+}
+
+// `maintained_tools` then `pending_onboarding`, in file order -- the
+// repositories the registry records WITHOUT listing them as consumers (its own
+// tooling, and consumers that have not onboarded yet). See rule 5.
+function listedRepos(registry: RepoRegistry): readonly string[] {
+  return [...registry.maintainedTools, ...registry.pendingOnboarding];
+}
+
+// The `owner/name` the registry records for a `product_codes` VALUE: the
+// consumer entry when one claims it, else a maintained_tools/pending_onboarding
+// listing -- matched exactly, or by name half when the value is bare, because a
+// bare value cannot disagree about an owner it never states. Null when the file
+// records only the bare name; the value is then carried through as recorded,
+// since inventing an owner is a guess.
+function recordedRepoFor(registry: RepoRegistry, name: string): string | null {
+  const entry = entryFor(registry, name);
+  if (entry !== null) return entry.repo;
+  const wanted = lower(name);
+  return (
+    listedRepos(registry).find((repo): boolean => lower(repo) === wanted) ??
+    (name.includes("/")
+      ? undefined
+      : listedRepos(registry).find((repo): boolean => lower(nameHalf(repo)) === wanted)) ??
+    null
+  );
+}
+
+// The product code whose value names `slug`, when the registry assigns one.
+// The same comparison discipline as recordedRepoFor, from the other side: a
+// slug value must match as recorded, a bare value matches the name half.
+function codeFor(registry: RepoRegistry, slug: string): string | null {
+  const wanted = lower(slug);
+  const shortName = lower(nameHalf(slug));
+  for (const [code, name] of Object.entries(registry.productCodes)) {
+    if (lower(name) === wanted) return code;
+    if (!name.includes("/") && lower(name) === shortName) return code;
+  }
+  return null;
 }
 
 /**
@@ -117,7 +178,10 @@ export function allRepos(registry: RepoRegistry): readonly ResolvedRepo[] {
   const seen = new Set(out.map((item): string => lower(item.repo)));
   for (const [code, name] of Object.entries(registry.productCodes)) {
     const entry = entryFor(registry, name);
-    const repo = entry?.repo ?? name;
+    // A bare value whose owner IS recorded elsewhere in the file (a
+    // maintained_tools/pending_onboarding listing) reports the recorded
+    // `owner/name`, not the bare half -- same rule as resolveToken's step 2.
+    const repo = recordedRepoFor(registry, name) ?? name;
     if (seen.has(lower(repo))) continue;
     seen.add(lower(repo));
     out.push({ repo, code, kind: "code", entry });
@@ -139,10 +203,13 @@ export function resolveToken(registry: RepoRegistry, token: string): readonly Re
   //    authority on what a code names, and they are `owner/name` in some
   //    registries and a bare name in others -- both are carried through as
   //    recorded rather than normalized, because inventing an owner is a guess.
+  //    A bare value whose owner the file DOES record elsewhere (a consumer, or
+  //    a maintained_tools/pending_onboarding listing) reports that recorded
+  //    `owner/name` -- reading the owner out of the same file is not a guess.
   for (const [code, name] of Object.entries(registry.productCodes)) {
     if (lower(code) !== wanted) continue;
     const entry = entryFor(registry, name);
-    return [{ repo: entry?.repo ?? name, code, kind: "code", entry }];
+    return [{ repo: recordedRepoFor(registry, name) ?? name, code, kind: "code", entry }];
   }
   const byEntryCode = registry.consumers.find(
     (entry): boolean => entry.code !== null && lower(entry.code) === wanted,
@@ -161,7 +228,54 @@ export function resolveToken(registry: RepoRegistry, token: string): readonly Re
   for (const [code, name] of Object.entries(registry.productCodes)) {
     if (lower(nameHalf(name)) !== wanted) continue;
     const entry = entryFor(registry, name);
-    return [{ repo: entry?.repo ?? name, code, kind: "name", entry }];
+    return [{ repo: recordedRepoFor(registry, name) ?? name, code, kind: "name", entry }];
+  }
+
+  // 3.5 THE REST OF WHAT THE FILE RECORDS (rule 5, zheref/nen#27). Steps 1-3
+  //     read `consumers[]` first and `product_codes` only through its KEYS and
+  //     short names, which left three exact spellings unresolvable -- each one
+  //     something the registry itself wrote down:
+
+  // 3.5a A `product_codes` VALUE, exactly. Registries that record their codes
+  //      as `owner/name` slugs make a value the ONLY full spelling of the
+  //      registry's own repository -- and an origin is always slug-shaped, so
+  //      this is precisely the lookup the no-token form was missing.
+  for (const [code, name] of Object.entries(registry.productCodes)) {
+    if (lower(name) !== wanted) continue;
+    const entry = entryFor(registry, name);
+    return [{ repo: entry?.repo ?? name, code, kind: "slug", entry }];
+  }
+
+  // 3.5b A repository listed under `maintained_tools` or `pending_onboarding`,
+  //      by exact slug then exact short name. These lists exist precisely to
+  //      record repositories that are NOT consumers yet; refusing them is
+  //      refusing the file's own contents. `entry` stays null -- being listed
+  //      is not the same claim as being a consumer.
+  const listedBySlug = listedRepos(registry).find((repo): boolean => lower(repo) === wanted);
+  if (listedBySlug !== undefined) {
+    return [{ repo: listedBySlug, code: codeFor(registry, listedBySlug), kind: "slug", entry: null }];
+  }
+  const listedByName = listedRepos(registry).find(
+    (repo): boolean => lower(nameHalf(repo)) === wanted,
+  );
+  if (listedByName !== undefined) {
+    return [{ repo: listedByName, code: codeFor(registry, listedByName), kind: "name", entry: null }];
+  }
+
+  // 3.5c An `owner/name` token whose NAME HALF a bare `product_codes` value
+  //      records, when nothing in the file claims that name under ANY owner. A
+  //      bare value states no owner, so the token's own owner is the only one
+  //      on offer and nothing is guessed -- the same tail comparison
+  //      ../parse/futon.ts has always used for the registry's own code. When
+  //      the file DOES record an owner for the name (a consumer or a listed
+  //      repo -- necessarily a different owner, or an earlier exact step would
+  //      have matched), the token contradicts the file and stays an error.
+  if (wanted.includes("/")) {
+    for (const [code, name] of Object.entries(registry.productCodes)) {
+      if (name.includes("/") || lower(name) !== lower(nameHalf(wanted))) continue;
+      if (recordedRepoFor(registry, name) !== null) continue;
+      return [{ repo: token, code, kind: "name", entry: null }];
+    }
   }
 
   // 4. `all`, LAST -- see the header. A registry that names a repository `all`

@@ -30,6 +30,36 @@ describe("nen repo resolve -- dispatches through the union registry", () => {
     const result = await capture(["repo", "resolve", "KP"]);
     expect(result.code).toBe(0);
   });
+
+  it("resolves a code to the pending_onboarding slug the registry records (zheref/nen#27)", async () => {
+    // The bankai fixture's KC names 'KroCloud', a bare value whose owner is
+    // recorded only under pending_onboarding -- the exact case the issue's
+    // live reproduction hit.
+    const result = await capture(["repo", "resolve", "KC"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["zheref/KroCloud  (KC)  via code"]);
+  });
+
+  it("no-token form resolves the registry's OWN origin via product_codes (zheref/nen#27)", async () => {
+    const result = await capture(["repo", "resolve"], (): CommandResult => ({
+      code: 0,
+      stdout: "https://github.com/zheref/bankai-core.git\n",
+      stderr: "",
+      spawnFailed: false,
+    }));
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      "origin: https://github.com/zheref/bankai-core.git",
+      "zheref/bankai-core  (BC)  via origin",
+    ]);
+  });
+
+  it("refuses --from next to a token, naming --repo, instead of silently ignoring it (zheref/nen#27)", async () => {
+    const result = await capture(["repo", "resolve", "KP", "--from", "/somewhere"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--from applies only to the no-token form/);
+    expect(result.err.join("\n")).toMatch(/--repo <path>/);
+  });
 });
 
 describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged into this family)", () => {
