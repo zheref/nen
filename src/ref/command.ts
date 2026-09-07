@@ -51,7 +51,10 @@ export const refCommand: Command = {
         throw new VerbUsageError("'ref parse' needs a token, e.g. 'ref parse XX-PR-#12'.");
       }
       // Same boundary rule as ../label/command.ts: a token that is not object
-      // notation is a typo, exit 2, not a run that failed.
+      // notation is a typo, exit 2, not a run that failed. The `RefError` is
+      // ./notation.ts's, NOT the unrelated class of the same name in
+      // ../verbs/pr_ready.ts -- a wrong import type-checks and merely stops
+      // the predicate ever matching, which puts this verb back at exit 1.
       const parsed = parseCallerToken(
         (): ReturnType<typeof parseRef> => parseRef(token),
         (error): boolean => error instanceof RefError,

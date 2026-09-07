@@ -73,6 +73,13 @@ export const labelCommand: Command = {
     }
     // A MALFORMED REF IS A TYPO (exit 2), not a failure (exit 1). See
     // ../cli/command.ts's parseCallerToken.
+    //
+    // THE `RefError` HERE IS ../ref/notation.ts's -- the object-notation
+    // parser's own, imported above. There is a SECOND, unrelated class of that
+    // name in ../verbs/pr_ready.ts, and because parseCallerToken's whole
+    // contract is "the predicate is the caller's", importing the wrong one
+    // would not fail to compile: the predicate would simply never match and
+    // this verb would go back to exiting 1 on a typo, silently.
     const ref = parseCallerToken(
       (): ReturnType<typeof parseRef> => parseRef(refToken),
       (error): boolean => error instanceof RefError,
