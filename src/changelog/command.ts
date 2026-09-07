@@ -11,7 +11,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, readTextFile, splitList } from "../cli/inputs.js";
+import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, optionalDirectoryFlag, readTextFile, splitList } from "../cli/inputs.js";
 import { collateIntoChangelog, sortFragments, type Fragment } from "./collate.js";
 import {
   checkCompleteness,
@@ -49,7 +49,9 @@ completeness:
   repository, so a foreign-repo link sharing a PR number never counts.
   --fragment-dir defaults to '${DEFAULT_FRAGMENT_DIR}', matching 'nen release
   preflight' -- the two verbs reconcile the same range against the same
-  evidence, so they must not disagree about where fragments live. A directory
+  evidence, so they must not disagree about where fragments live. Omit the
+  flag to use the default; an EMPTY value is refused (it would resolve to the
+  repository root), and so is a path that is not a directory. A directory
   that does not exist contributes no fragments rather than refusing: a
   repository that has collated everything has none at the cut point.`;
 
@@ -157,8 +159,6 @@ function completenessCmd(context: CommandContext): number {
   // has -- while `nen release preflight`, reconciling the same range against
   // the same evidence, counted it. The porting source's own CLI defaults the
   // same directory (changelog_release_completeness_check.sh:117).
-  const fragmentDir = context.args.values["fragment-dir"] ?? DEFAULT_FRAGMENT_DIR;
-
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const changelog = readTextFile(changelogPath, root);
 
@@ -167,13 +167,13 @@ function completenessCmd(context: CommandContext): number {
   const mergedPrNumbers = extractMergedPrNumbers(subjects);
   const changelogRefs = extractChangelogRefs(changelog, ownerRepo);
 
-  // A DIRECTORY THAT IS NOT THERE IS "no fragments", NOT a refusal -- the same
-  // `existsSync` guard ../release/command.ts uses for the same default. A
-  // repository that has collated every fragment legitimately has no
-  // changelog.d/ at the cut point, and refusing the whole check for that would
-  // fail a release for being tidy.
-  const fragmentDirFull = isAbsolute(fragmentDir) ? fragmentDir : resolvePath(root, fragmentDir);
-  const names = existsSync(fragmentDirFull) ? readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md")) : [];
+  // THE SAME SEAM ../release/command.ts USES, not a second hand-spelling of
+  // it: a directory that is not there is "no fragments" rather than a
+  // refusal, an explicitly empty `--fragment-dir` is a usage error rather
+  // than the repository root, and a path that is a FILE is refused by name
+  // rather than surfacing as a raw ENOTDIR. See ../cli/inputs.ts.
+  const fragmentDirFull = optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root);
+  const names = fragmentDirFull === null ? [] : readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md"));
   const fragmentRefs = extractFragmentRefs(names);
 
   const report = checkCompleteness({ mergedPrNumbers, changelogRefs, fragmentRefs });

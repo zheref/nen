@@ -149,6 +149,43 @@ describe("nen changelog completeness", () => {
       expect(result.err.join("\n")).not.toMatch(/ENOENT/);
     });
 
+    it("refuses an EXPLICITLY EMPTY --fragment-dir at exit 2 rather than reading the repository root", async () => {
+      // `?? DEFAULT_FRAGMENT_DIR` does not catch `""`, so `--fragment-dir ''`
+      // used to resolve to the repo root and count every top-level *.md as a
+      // fragment -- the loosest possible reading of "no fragment directory".
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      writeFileSync(join(dir, "5-stray.md"), "not a fragment\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", ""],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--fragment-dir was given an empty value/);
+      expect(result.err.join("\n")).toMatch(/Omit the flag to use the default/);
+    });
+
+    it("refuses a --fragment-dir that is a FILE at exit 2, naming the path", async () => {
+      // Was a raw ENOTDIR out of readdirSync at exit 1, several frames from
+      // the flag that caused it.
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      writeFileSync(join(dir, "notadir"), "x\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", "notadir"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--fragment-dir points at .*notadir', which is not a directory/);
+      expect(result.err.join("\n")).not.toMatch(/ENOTDIR/);
+    });
+
     it("still honours an EXPLICIT --fragment-dir elsewhere", async () => {
       const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
       const changelog = join(dir, "CHANGELOG.md");
