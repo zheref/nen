@@ -196,6 +196,112 @@ describe("resolveIdentities", () => {
     expect(() => resolveIdentities(empty, undefined, [], [])).toThrow(IdentityError);
   });
 
+  // ── zheref/nen#8 item 4: WHICH FILE a relative `--gates` names ─────────────
+  //
+  // `readFileSync(gatesFlag)` inherits `process.cwd()`, so
+  // `--repo ../other --gates schemas/gates.json` read the CURRENT directory's
+  // file, judged the OTHER repository's pull request against those reviewers,
+  // and reported a verdict -- with `meta.identities.path` printing the bare
+  // relative string, so nothing on screen said which file had been read. The
+  // rule is now stated: relative resolves against the --repo ROOT, absolute is
+  // used as-is, and the RESOLVED path is what gets reported.
+  //
+  // Every case below is OS-neutral: the paths are built with join()/resolve()
+  // and never spelled with a literal separator.
+
+  it("resolves a RELATIVE --gates against the --repo root, never against the cwd", () => {
+    // The exact shape of the defect: two directories that each carry a
+    // schemas/gates.json, with the process standing in the wrong one.
+    const decoy = mkdtempSync(join(tmpdir(), "nen-gates-decoy-"));
+    mkdirSync(join(decoy, "schemas"));
+    writeFileSync(
+      join(decoy, "schemas", "gates.json"),
+      JSON.stringify({
+        version: 1,
+        reviewers: [{ name: "decoy", login_pattern: { pattern: "decoy", ignoreCase: true } }],
+        default_approvers: ["decoy"],
+        base_reviewers: ["decoy"],
+        delivery: {
+          author_pattern: { pattern: "decoy-bot", ignoreCase: true },
+          head_ref_prefixes: ["decoy/"],
+        },
+      }),
+    );
+    const previous = process.cwd();
+    try {
+      process.chdir(decoy);
+      const resolved = resolveIdentities(BANKAI_REPO, join("schemas", "gates.json"), [], []);
+      // The TARGET repository's reviewers, not the decoy's -- this is the whole
+      // finding. Before the fix this read ["decoy"].
+      expect(resolved.identities.defaultApprovers).toEqual(["sasuke", "tenma"]);
+      // ...and the reported path is the RESOLVED one, so --explain and --json
+      // can show a reader which file the verdict came from.
+      expect(resolved.path).toBe(schemaPath(BANKAI_REPO, GATES_FILE));
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
+  it("uses an ABSOLUTE --gates as-is, so a file in neither repository still works", () => {
+    // `--gates` exists so the shadow window can point at a gates file that
+    // lives outside the target repo; anchoring an absolute path to --repo would
+    // be a different defect.
+    const previous = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      const gatesPath = schemaPath(BANKAI_REPO, GATES_FILE);
+      const resolved = resolveIdentities(ALT_REPO, gatesPath, [], []);
+      expect(resolved.path).toBe(gatesPath);
+      expect(resolved.identities.defaultApprovers).toEqual(["sasuke", "tenma"]);
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
+  it("refuses a --gates that does not exist with THIS codebase's own message, not a raw ENOENT", () => {
+    try {
+      resolveIdentities(BANKAI_REPO, join("schemas", "typo.json"), [], []);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchemaError);
+      const schemaError = error as SchemaError;
+      // The RESOLVED path, the root it was resolved against, and the two ways
+      // out -- everything needed to fix it without reading the source.
+      expect(schemaError.path).toBe(schemaPath(BANKAI_REPO, "schemas/typo.json"));
+      expect(schemaError.message).toContain(BANKAI_REPO);
+      expect(schemaError.message).toMatch(/no such file/);
+      expect(schemaError.message).toMatch(/RELATIVE/);
+      expect(schemaError.message).toMatch(/absolute path/);
+      expect(schemaError.message).toMatch(/relative to the repository root/);
+      // The raw Node string is what this replaces.
+      expect(schemaError.message).not.toMatch(/ENOENT/);
+    }
+  });
+
+  it("an absent ABSOLUTE --gates is refused too, without claiming a resolution it did not do", () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "nen-gates-missing-")), "nowhere.json");
+    try {
+      resolveIdentities(BANKAI_REPO, missing, [], []);
+      expect.unreachable();
+    } catch (error) {
+      const schemaError = error as SchemaError;
+      expect(schemaError.message).toMatch(/no such file/);
+      // It was absolute, so the message must NOT tell the caller it anchored
+      // the path to the repo root -- that would be a false explanation.
+      expect(schemaError.message).not.toMatch(/RELATIVE/);
+    }
+  });
+
+  it("refuses a --gates that resolves to a DIRECTORY rather than reading it as a file", () => {
+    try {
+      resolveIdentities(BANKAI_REPO, "schemas", [], []);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchemaError);
+      expect((error as SchemaError).message).toMatch(/found a directory/);
+    }
+  });
+
   it("a malformed in-repo schemas/gates.json fails as a path-bearing SchemaError, not a bare SyntaxError", () => {
     // Mirrors ../schema/source.test.ts's "reports malformed JSON as itself"
     // case, but through the --gates-less fallback branch this same function
@@ -235,6 +341,34 @@ describe("identitiesFromFlags -- the reduced, conservative identity set", () => 
     const identities = identitiesFromFlags(["alice"], []);
     expect(identities.delivery.authorPattern.test("")).toBe(false);
     expect(identities.delivery.authorPattern.test("roy-bankai[bot]")).toBe(false);
+  });
+
+  // zheref/nen#8 item 3: `safePattern` compiles an operator-typed `--reviewers`
+  // entry and the result is then run against review AUTHOR LOGINS off the
+  // network -- the identical exposure ../schema/gates.ts's five pattern fields
+  // have. It does not throw (its whole contract is that a name it cannot use
+  // matches NOTHING, which is the conservative direction: an unrecognised
+  // reviewer OWES a round rather than being excused), so the guard has to show
+  // up as a pattern that matches nothing rather than as an error.
+  it("a catastrophic --reviewers entry matches NOTHING instead of being handed a login", () => {
+    const identities = identitiesFromFlags(["(a+)+$"], []);
+    const pattern = identities.reviewer("(a+)+$")?.loginPattern;
+    // The subject the issue measured at ~300ms against the unguarded pattern.
+    const started = performance.now();
+    expect(pattern?.test(`${"a".repeat(40)}!`)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+  });
+
+  it("still compiles the ordinary reviewer names anyone would actually type", () => {
+    // The guard's cost on real input has to be zero, or it has broken the
+    // shell-faithful reading this function exists to preserve.
+    const identities = identitiesFromFlags(["alice", "some-bot"], []);
+    expect(identities.reviewer("alice")?.loginPattern.test("ALICE")).toBe(true);
+    expect(identities.reviewer("some-bot")?.loginPattern.test("Some-Bot")).toBe(true);
+    // ...including the escaped spelling of a bracketed bot login, which is a
+    // REGEX here and not a literal (unchanged by this guard, asserted so the
+    // guard is not later blamed for it).
+    expect(identitiesFromFlags(["x\\[bot\\]"], []).reviewer("x\\[bot\\]")?.loginPattern.test("x[bot]")).toBe(true);
   });
 
   it("an explicitly empty approver set is honoured as vacuous, not refused", () => {
@@ -833,5 +967,69 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     expect(report.verdict).toBe("not-ready");
     expect(report.firstFailing).toBe("mergeable");
     expect(report.gateLine).toContain("mergeable=CONFLICTING");
+  });
+});
+
+// ── zheref/nen#8 item 4, at the VERB level ──────────────────────────────────
+//
+// The unit cases above pin `resolveIdentities`. These pin what a caller of the
+// verb actually SEES: which file the verdict was computed from, printed in both
+// machine and human modes, and the exit code a bad `--gates` lands on.
+describe("prReady -- a relative --gates is the target repository's file, and the report says which", () => {
+  it("--json reports the RESOLVED absolute path, never the bare relative string", async () => {
+    const previous = process.cwd();
+    try {
+      // Standing anywhere at all: the answer must not depend on it.
+      process.chdir(tmpdir());
+      const { io, out } = capture();
+      const code = await prReady(
+        input({
+          values: { "gh-repo": "zheref/example", gates: join("schemas", "gates.json") },
+          repoFlag: BANKAI_REPO,
+        }),
+        io,
+        stubDeps(stubSource()),
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(out.join("\n")) as ReadyReport;
+      expect(report.meta.identities.path).toBe(schemaPath(BANKAI_REPO, GATES_FILE));
+      expect(report.meta.identities.source).toBe("schema");
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
+  it("--explain prints the resolved path on the identities line", async () => {
+    const { io, out } = capture();
+    await prReady(
+      input({
+        values: { "gh-repo": "zheref/example", gates: join("schemas", "gates.json") },
+        booleans: new Set(["explain"]),
+        repoFlag: BANKAI_REPO,
+      }),
+      io,
+      stubDeps(stubSource()),
+    );
+    expect(out.join("\n")).toContain(`identities ${schemaPath(BANKAI_REPO, GATES_FILE)}`);
+  });
+
+  it("a --gates that does not exist is exit 2 with an actionable refusal, not a raw ENOENT", async () => {
+    const { io, err } = capture();
+    const code = await prReady(
+      input({
+        values: { "gh-repo": "zheref/example", gates: join("schemas", "typo.json") },
+        repoFlag: BANKAI_REPO,
+      }),
+      io,
+      stubDeps(stubSource()),
+    );
+    // 2, the same code every other "you asked the wrong question" from this
+    // verb lands on -- a bad flag is never reported as a verdict.
+    expect(code).toBe(2);
+    const text = err.join("\n");
+    expect(text).toMatch(/no such file/);
+    expect(text).toContain(BANKAI_REPO);
+    expect(text).toMatch(/absolute path/);
+    expect(text).not.toMatch(/ENOENT/);
   });
 });

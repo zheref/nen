@@ -94,6 +94,11 @@ ready:
                               3; pass it only from inside that run's own job).
   --gates <path>              Read reviewer identities from this gates file
                               instead of the target repo's schemas/gates.json.
+                              A RELATIVE path is resolved against the --repo
+                              root, NOT the current directory; pass an
+                              absolute path for a file outside the target
+                              repository. The resolved path is what --explain
+                              and --json report.
   --token-env <VAR>           Environment variable holding the token. Default
                               GH_TOKEN; never picked up ambiently.
 
@@ -123,8 +128,11 @@ next-blocker:
   diff-shaped and not checked here; see ../pr/blocker.ts's header.
   --gates <path>              Read reviewer identities from this gates file
                               instead of the target repo's schemas/gates.json
-                              -- the same flag 'ready' takes, so a checkout
-                              that ships no gates file can still be evaluated.
+                              -- the same flag 'ready' takes, through the same
+                              resolver, so a checkout that ships no gates file
+                              can still be evaluated. A RELATIVE path is
+                              resolved against --repo, NOT the current
+                              directory, exactly as it is for 'ready'.
 
 cascade-main:
   Merges (never rebases) the trunk into the current branch and pushes on a

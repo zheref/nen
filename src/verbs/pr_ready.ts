@@ -35,6 +35,10 @@
 //                            `schemas/gates.json` yet, and the shadow window has
 //                            to be able to state the identities the shell gate
 //                            decides with in order to compare verdicts at all.
+//                            A RELATIVE path is resolved against the `--repo`
+//                            ROOT, not the current directory -- see
+//                            `resolveIdentities` for the rule and why it is that
+//                            way round (zheref/nen#8 item 4).
 //   2. `schemas/gates.json`  under the target repo root (`--repo`, else cwd).
 //                            The steady state.
 //   3. `--reviewers a,b,c`   the shell gate's own flag, mirrored. The named
@@ -62,13 +66,15 @@
 // internal and simple so that it can be REPLACED by that engine rather than
 // competed with.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { evaluateReady, CAVEATS, type Conjunct, type ReadyEvaluation } from "../gates/ready.js";
 import type { RoundPolicy } from "../gates/predicates.js";
 import { createClient, tokenFromEnv } from "../github/client.js";
 import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { SchemaError } from "../schema/errors.js";
+import { catastrophicShape } from "../schema/pattern.js";
 import {
   parseGateIdentities,
   type GateIdentities,
@@ -111,6 +117,13 @@ export const PR_READY_USAGE = `  pr ready <ref>            Report a pull request
                               pass it only from inside that run's own job).
       --gates <path>          Read reviewer identities from this gates file
                               instead of the target repo's schemas/gates.json.
+                              A RELATIVE path is resolved against the --repo
+                              root, NOT the current directory -- every other
+                              path this verb reads is anchored there, and a
+                              cwd-relative one would judge the target repo
+                              against whatever gates file the caller happens
+                              to be standing in. Pass an absolute path to
+                              name a file outside the target repo.
       --token-env <VAR>       Environment variable holding the token.
                               Default GH_TOKEN; never picked up ambiently.`;
 
@@ -120,6 +133,24 @@ const DEFAULT_TOKEN_ENV = "GH_TOKEN";
 
 // `${COPILOT_STALL_MINUTES:-30}` and `${MAX_THREAD_PAGES:-50}` -- the shell's
 // two numeric knobs, at the shell's values. Operator settings, not PR data.
+//
+// A STATED DIVERGENCE, NOT AN OVERSIGHT (zheref/nen#8 item 1). The shell oracle
+// reads TWO ENVIRONMENT OVERRIDES -- one for the stall bound above, one for the
+// round policy `prReady` defaults to `bounded` below -- and nen reads NEITHER,
+// deliberately and permanently. Both are named after a persona, and §3's
+// names-are-data rule makes a persona-named environment variable data this
+// binary must not know: teaching it those two names would put a reviewer's name
+// into shipped code through the one door a value-level sweep waves through.
+//
+// The COST IS REAL and is stated here rather than discovered later: an operator
+// with the shell oracle's policy override exported gets that policy from the
+// shell and `bounded` from nen on the same invocation, and `bounded` is the more
+// permissive of the two for a bounded-exempt reviewer. So the two
+// implementations are only guaranteed comparable under a DEFAULT environment,
+// which is the environment the shadow window ran both sides in
+// (docs/evidence/shadow-window-p1.md). `--round-policy` and this fixed stall
+// bound are the only knobs nen has, and a caller that needs the other policy
+// passes `--round-policy strict` explicitly.
 const STALL_MINUTES = 30;
 const MAX_THREAD_PAGES = 50;
 // The check-rollup pagination cap (../github/pr_state.ts's `fullCheckRollup`,
@@ -451,14 +482,62 @@ export function identitiesFromFlags(
 // The same "an unparseable name matches NOTHING" reading every other layer
 // takes: a malformed reviewer name can never SATISFY something, only fail to
 // match it.
+//
+// A CATASTROPHIC name matches nothing for the same reason (zheref/nen#8 item 3).
+// This function compiles an operator-typed `--reviewers` entry and the result is
+// then run against review AUTHOR LOGINS that came off the network, which is the
+// identical exposure ../schema/gates.ts's five pattern fields have -- so it goes
+// through the same shape guard. It does NOT throw: this function's whole
+// contract is that a name it cannot use matches nothing, and `/(?!)/` is the
+// conservative direction here exactly as it is for an unparseable name (an
+// unrecognised reviewer OWES a round rather than being excused). That keeps the
+// behaviour faithful to the shell's own `test($name; "i")` for every name a
+// person would actually type, while refusing to hand an exponential matcher a
+// stranger's login.
 function safePattern(source: string): RegExp {
+  let compiled: RegExp;
   try {
-    return new RegExp(source, "i");
+    compiled = new RegExp(source, "i");
   } catch {
     return /(?!)/;
   }
+  return catastrophicShape(source) === null ? compiled : /(?!)/;
 }
 
+/**
+ * Where the reviewer identities come from, and -- for `--gates` -- WHICH FILE.
+ *
+ * A RELATIVE `--gates` IS RESOLVED AGAINST THE `--repo` ROOT (zheref/nen#8 item
+ * 4). That is a decision, so here is the reasoning rather than the rule alone:
+ *
+ *   * Every other path this verb reads is anchored to the target repository --
+ *     `schemas/repos.json` for the ref, `schemas/gates.json` two branches below,
+ *     both through `schemaPath(repoRoot, ...)`. `--gates` was the one exception,
+ *     and it was an exception nobody chose: `readFileSync(gatesFlag)` simply
+ *     inherits `process.cwd()`.
+ *   * The failure that exception produces is SILENT and WRONG, which is the
+ *     worst pair available to a gate. `--repo ../other --gates schemas/gates.json`
+ *     from a checkout that also has a `schemas/gates.json` read the CURRENT
+ *     directory's reviewers, judged the OTHER repository's pull request against
+ *     them, and reported a verdict -- with `meta.identities.path` printing the
+ *     bare relative string, so nothing on screen said which file had been read.
+ *   * An ABSOLUTE path is used as-is. `--gates` exists so the shadow window can
+ *     point at a gates file that lives in neither repository, and taking that
+ *     away would be a different defect.
+ *
+ * The path reported in `--explain` and `--json` is the RESOLVED, absolute one,
+ * so a reader can always see which file the verdict was computed from.
+ *
+ * A `--gates` that does not resolve to a readable file is refused HERE, by this
+ * codebase's own path-bearing SchemaError, rather than being left to surface as
+ * a raw Node `ENOENT` string relayed through a catch. Both callers map it to
+ * their own refusal code: `prReady`'s catch below returns 2 for everything this
+ * function throws (a missing identity source is "you asked the wrong question",
+ * never a verdict), and `nen pr next-blocker` -- which shares this resolver
+ * rather than re-spelling it, so the rule above is the same rule there -- maps it
+ * through ../index.ts's family contract like every other schema-read failure of
+ * that verb.
+ */
 export function resolveIdentities(
   repoRoot: string,
   gatesFlag: string | undefined,
@@ -466,18 +545,39 @@ export function resolveIdentities(
   approvers: readonly string[],
 ): ResolvedIdentities {
   if (gatesFlag !== undefined) {
-    const text = readFileSync(gatesFlag, "utf8");
+    // `resolve` is what makes this work on Windows too: an absolute path is
+    // normalized and kept, a relative one is joined to the repo root, and
+    // neither branch assumes a POSIX separator.
+    const gatesPath = isAbsolute(gatesFlag) ? resolve(gatesFlag) : resolve(repoRoot, gatesFlag);
+    // The existence guard, with the resolution it applied SPELLED OUT: a caller
+    // who typed a relative path and got a refusal naming a directory they were
+    // not standing in has to be told why, or the message reads as a bug.
+    if (!existsSync(gatesPath)) {
+      throw new SchemaError(
+        gatesPath,
+        null,
+        `no such file. --gates was given '${gatesFlag}'${
+          isAbsolute(gatesFlag)
+            ? ""
+            : `, which is RELATIVE, so it was resolved against the target repository root '${repoRoot}' -- not the current directory. Every other path this verb reads is anchored to that root, and resolving this one anywhere else would judge that repository against another one's reviewers`
+        }. Either pass an absolute path, or pass a path relative to the repository root.`,
+      );
+    }
+    if (statSync(gatesPath).isDirectory()) {
+      throw new SchemaError(gatesPath, null, "expected a file, found a directory");
+    }
+    const text = readFileSync(gatesPath, "utf8");
     let value: unknown;
     try {
       value = JSON.parse(text);
     } catch (error) {
       throw new SchemaError(
-        gatesFlag,
+        gatesPath,
         null,
         `is not valid JSON (${error instanceof Error ? error.message : String(error)})`,
       );
     }
-    return { identities: parseGateIdentities(gatesFlag, value), source: "schema", path: gatesFlag };
+    return { identities: parseGateIdentities(gatesPath, value), source: "schema", path: gatesPath };
   }
   const inRepo = schemaPath(repoRoot, GATES_FILE);
   if (existsSync(inRepo)) {
