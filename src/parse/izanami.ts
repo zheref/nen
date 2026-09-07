@@ -675,9 +675,16 @@ const SHELL_METACHARS = /[|;&<>()%`\n\r]/;
  * command -- and a refusal a caller does not believe is a refusal they route
  * around. The CR and LF that are themselves in the set are rendered as `\r`
  * and `\n` rather than pasted, so the reason stays one readable line.
+ *
+ * A LITERAL SINGLE QUOTE in the line gets the same treatment (zheref/nen#76
+ * review), for the same reason: rendered unescaped, it closes this message's
+ * OWN wrapping quote early -- `cat 'a.txt' | tee b.txt` produced `...so 'cat
+ * 'a.txt' | tee b.txt' is no longer...`, which reads as three quoted spans
+ * rather than one line. Escaped to `\'`, alongside `\r`/`\n` above, so a quote
+ * in the caller's own line can never be mistaken for this message's wrapping.
  */
 function shellMetacharRefusal(command: string): string {
-  const shown = command.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  const shown = command.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/'/g, "\\'");
   return `a shell metacharacter (>, >>, |, ;, &, <, (, ), %, a backtick, a newline or a CR) hands part of this line to the SHELL rather than to the command it starts with, so '${shown}' is no longer the single command any row could vouch for. Watch the bare read, and run the redirection or the second command yourself.`;
 }
 

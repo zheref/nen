@@ -174,6 +174,23 @@ describe("classifyCommand -- plain file reads (#31)", () => {
     expect(classifyCommand("test -f a && git push").classification).toBe("unknown");
   });
 
+  // zheref/nen#76's review: shellMetacharRefusal wraps the caller's own line
+  // in single quotes to quote it back in the reason, but rendered a literal
+  // single quote already in that line unescaped -- so it closed the
+  // refusal's OWN wrapping quote early, e.g. "...so 'cat 'a.txt' | tee
+  // b.txt' is no longer..." reads as three quoted spans, not the caller's
+  // one line. Escaped to \' now, the same way \r and \n already are.
+  it("escapes a single quote already in the line, so the metacharacter refusal's own quoting stays unambiguous", () => {
+    const result = classifyCommand("cat 'a.txt' | tee b.txt");
+    expect(result.classification).toBe("unknown");
+    // The escaped, unambiguous form: one wrapping quote, and the caller's own
+    // quotes escaped inside it.
+    expect(result.reason).toContain("'cat \\'a.txt\\' | tee b.txt'");
+    // NOT the malformed form the defect produced, where the caller's own
+    // quotes read as closing the wrapper.
+    expect(result.reason).not.toContain("'cat 'a.txt' | tee b.txt'");
+  });
+
   // #31 review: an embedded newline or CR is the shell's own command
   // separator -- "cat a.txt\ngit push" is TWO commands, and the head-token
   // match would only ever see the first. Unreachable as an execution vector
