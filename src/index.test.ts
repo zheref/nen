@@ -124,6 +124,18 @@ describe("nen schema check", () => {
     expect(alt.out.join("\n")).toMatch(/schemas\/repos\.json\s+2 consumers/);
   });
 
+  // zheref/nen#17: the bankai fixture's product_codes nests a `$comment` the
+  // same way the live bankai-core file does. This verb's row count is
+  // `Object.keys(repos.productCodes).length` (../schema/taxonomy.ts) -- if the
+  // loader ever counted the nested comment as a code, this line would read "7
+  // product codes" for a registry that names exactly six.
+  it("counts only real product codes, never a nested $comment (zheref/nen#17)", async () => {
+    const result = await capture(["schema", "check", "--repo", BANKAI_REPO]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/schemas\/repos\.json\s+3 consumers, 6 product codes/);
+    expect(result.out.join("\n")).not.toContain("$comment");
+  });
+
   it("fails, loudly, when the taxonomy is unreadable -- and offers no fallback", async () => {
     const empty = mkdtempSync(join(tmpdir(), "nen-cli-"));
     const result = await capture(["schema", "check", "--repo", empty]);

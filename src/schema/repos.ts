@@ -175,6 +175,13 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
   if (rawCodes !== undefined && rawCodes !== null) {
     const codes = requireRecord(path, "product_codes", rawCodes);
     for (const [code, name] of Object.entries(codes)) {
+      // `$`-prefixed keys are metadata, not data -- a nested `$comment` is a
+      // shape real registries carry (bankai-core's own schemas/repos.json
+      // documents the object-reference notation from INSIDE product_codes,
+      // not beside it), and walking it as a product code manufactures a
+      // bogus entry whose "repository" is the comment's own prose
+      // (zheref/nen#17).
+      if (code.startsWith("$")) continue;
       productCodes[code] = requireString(path, `product_codes.${code}`, name);
     }
   }

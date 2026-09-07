@@ -32,6 +32,7 @@ import {
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { SchemaError } from "../schema/errors.js";
 import { GATES_FILE, schemaPath } from "../schema/source.js";
+import { loadRepoRegistry } from "../schema/repos.js";
 
 function capture(): { io: Io; out: string[]; err: string[] } {
   const out: string[] = [];
@@ -152,6 +153,23 @@ describe("resolveRef", () => {
 
   it("an unknown code is an error that NAMES the known ones", () => {
     expect(() => resolveRef("ZZ#1", undefined, registry)).toThrow(/Known codes: BC, KA, KP/);
+  });
+
+  // zheref/nen#17: against a REAL loaded registry -- the bankai fixture's
+  // product_codes nests a `$comment`, the same shape the live bankai-core file
+  // carries -- the "Known codes:" roster this refusal builds from
+  // `Object.keys(loaded.productCodes)` must list only the real codes.
+  it("'Known codes:' never lists a nested $comment, against a REAL loaded registry (zheref/nen#17)", () => {
+    const loaded = loadRepoRegistry(BANKAI_REPO);
+    try {
+      resolveRef("ZZ#1", undefined, () => loaded);
+      expect.unreachable("ZZ is not a code in the bankai fixture");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RefError);
+      const message = (error as RefError).message;
+      expect(message).toMatch(/Known codes: BC, BS, KC, KN, KP, KW\./);
+      expect(message).not.toContain("$comment");
+    }
   });
 
   it("a malformed --gh-repo is refused, not silently split", () => {

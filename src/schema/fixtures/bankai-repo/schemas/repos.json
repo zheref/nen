@@ -44,6 +44,7 @@
     }
   ],
   "product_codes": {
+    "$comment": "Object-reference notation: each key is a two-or-three-letter product code, each value the repository it names -- REALISTIC SHAPE, zheref/nen#17: the live bankai-core schemas/repos.json nests this comment INSIDE product_codes rather than beside it, which is exactly the shape a loader that walks the object key-by-key must skip rather than treat as a code.",
     "BC": "bankai-core",
     "BS": "bankai-scaffold",
     "KP": "KroApple",

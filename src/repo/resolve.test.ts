@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { allRepos, ownerNameFromRemote, RepoResolutionError, resolve, resolveToken } from "./resolve.js";
-import type { RepoRegistry } from "../schema/repos.js";
+import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 function registry(overrides: Partial<RepoRegistry> = {}): RepoRegistry {
   const consumers = overrides.consumers ?? [
@@ -228,5 +229,46 @@ describe("resolve", () => {
         cwd: "/somewhere",
       }),
     ).toThrow(RepoResolutionError);
+  });
+});
+
+// zheref/nen#17: against a REAL loaded registry -- the bankai fixture's
+// product_codes nests a `$comment`, the same shape the live bankai-core file
+// carries. `known()` (the "Codes:"/"Repositories:" roster every refusal
+// above names) and `allRepos()` (the sweep `repo resolve all` renders) both
+// walk `registry.productCodes`; a loader that did not skip `$`-prefixed keys
+// would leak the comment into both.
+describe("resolveToken / allRepos -- a nested $comment never surfaces, against a REAL loaded registry (zheref/nen#17)", () => {
+  const bankai = loadRepoRegistry(BANKAI_REPO);
+
+  it("resolveToken never matches '$comment' as if it were a code", () => {
+    expect(() => resolveToken(bankai, "$comment")).toThrow(RepoResolutionError);
+  });
+
+  it("an unknown token's 'Codes:' roster lists only the six real codes", () => {
+    try {
+      resolveToken(bankai, "notarealtoken");
+      expect.unreachable("'notarealtoken' is not in the bankai fixture");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RepoResolutionError);
+      const message = (error as RepoResolutionError).message;
+      expect(message).toMatch(
+        /Codes: BC \(bankai-core\), BS \(bankai-scaffold\), KP \(KroApple\), KN \(KroAndroid\), KW \(KroWeb\), KC \(KroCloud\)\./,
+      );
+      expect(message).not.toContain("$comment");
+    }
+  });
+
+  it("'all' sweeps six real repositories, never a seventh row for the comment", () => {
+    const repos = allRepos(bankai);
+    expect(repos.map((item): string => item.repo)).toEqual([
+      "zheref/KroApple",
+      "zheref/KroAndroid",
+      "zheref/bankai-scaffold",
+      "bankai-core",
+      "KroWeb",
+      "zheref/KroCloud",
+    ]);
+    expect(repos.some((item): boolean => item.code === "$comment")).toBe(false);
   });
 });
