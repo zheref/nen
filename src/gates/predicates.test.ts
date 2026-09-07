@@ -615,6 +615,31 @@ describe("reviewerLoginPattern", () => {
   it("ADDED: a name that is not a valid regex matches NOTHING -- conservative, so it can only fail to satisfy a round, never satisfy one", () => {
     expect(reviewerLoginPattern(BANKAI, "sasuke[").test("sasuke-bankai[bot]")).toBe(false);
   });
+
+  it("ADDED (zheref/nen#8 item 3): a CATASTROPHIC name matches nothing too, on THIS path -- the steady-state one", () => {
+    // THE PATH THIS PINS, because it is the one production takes. When the
+    // target repository ships a `schemas/gates.json` -- the steady state --
+    // `../verbs/pr_ready.ts`'s `identitiesFromFlags` is never called at all,
+    // and every `--reviewers` name the FILE does not declare falls through
+    // here, is compiled here, and is `.test`-ed against logins that came off
+    // the network. `safePattern` was duplicated, and only the other copy was
+    // guarded; measured before the fix, `(a+)+$` cost ~305ms per `.test`
+    // through this one and 0ms through the guarded twin.
+    const pattern = reviewerLoginPattern(BANKAI, "(a+)+$");
+    // The compiled SOURCE, not the timing, is the real assertion: a timing
+    // bound alone would pass on a machine fast enough to hide the bug.
+    expect(pattern.source).toBe("(?!)");
+
+    // And the property that assertion stands for, measured. A 38-character
+    // subject is inside GitHub's 39-character login limit, so this is the size
+    // of a real input rather than a contrived one.
+    const subject = `${"a".repeat(38)}!`;
+    const started = performance.now();
+    expect(pattern.test(subject)).toBe(false);
+    // Generous by two orders of magnitude against the ~305ms measurement: the
+    // claim is "this does not backtrack", not a benchmark.
+    expect(performance.now() - started).toBeLessThan(100);
+  });
 });
 
 // --- reviewerReviewCheckPattern ----------------------------------------------
