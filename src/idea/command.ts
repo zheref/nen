@@ -19,7 +19,15 @@ Reuses 'nen issue file's own choreography (labels and assignee IN the create
 call), then reads the created issue back over the API and compares title,
 body and label set against what was submitted. Exits 1 and names every
 mismatch on a read-back disagreement -- the create call's own exit code only
-confirms the REQUEST succeeded, not that the STORED record matches it.`;
+confirms the REQUEST succeeded, not that the STORED record matches it.
+
+The read-back also checks WHICH CLASS OF OBJECT answered. Issues and pull
+requests share one number sequence and one issues/{n} endpoint, so a
+read-back that comes back as a pull request has reached a different object
+than the one just filed -- and a comparison against it would report either a
+mismatch about a record nobody filed or a false 'read-back OK'. That fails
+loudly (exit 1, the issue named), like any other read-back that could not
+confirm what it read.`;
 
 export const ideaCommand: Command = {
   name: "idea",

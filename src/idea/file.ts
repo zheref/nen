@@ -46,8 +46,32 @@ export class FileIdeaError extends Error {
   }
 }
 
+// THE READ-BACK IS A REST READ, AND THAT IS WHAT MAKES THE OBJECT CLASS
+// VISIBLE (zheref/nen#77).
+//
+// It used to be `gh issue view <n> --json title,body,labels`, which answers
+// with the three fields compared below and NOTHING that says which class of
+// object answered -- `--json pull_request` does not exist on that command; it
+// errors on every object (zheref/nen#25). Issues and pull requests share one
+// number sequence and one `issues/{n}` endpoint, so `gh api` returns the same
+// three fields AND the `pull_request` discriminator in the same single call,
+// which is the same reason ../issue/subissue.ts's `readIssue` is a REST read.
+// No extra round trip was added to gain the check.
+//
+// AND A PULL REQUEST HERE IS NOT A CALLER'S MISTAKE -- IT IS A BROKEN PROOF.
+// This verb has just CREATED an issue and is reading back the number that
+// creation returned, so there is no number for a caller to have mistyped: if
+// that number answers as a pull request, the verification fetch reached a
+// DIFFERENT object than the one filed, and every field compared below is being
+// compared against the wrong record. Both outcomes of that comparison are
+// worthless and one of them is dangerous -- a mismatch report that describes
+// an object nobody filed, or, if the fields happen to agree, a confident
+// "read-back OK" certifying a record this run never saw. The whole value of
+// this module is the read-back proof (see the header), so it fails LOUDLY, in
+// the same channel the unreadable-response failure already uses, rather than
+// rendering a verdict it cannot support.
 function readIssueForVerification(seams: Seams, target: Target, number: number): ReadBack {
-  const result = seams.run(GH, ["issue", "view", String(number), "--repo", target.slug, "--json", "title,body,labels"]);
+  const result = seams.run(GH, ["api", `repos/${target.slug}/issues/${number}`]);
   if (result.code !== 0) {
     throw new FileIdeaError(
       `idea filed as #${number}, but the read-back could not confirm it: ${
@@ -56,6 +80,16 @@ function readIssueForVerification(seams: Seams, target: Target, number: number):
     );
   }
   const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+  const rawPullRequest = parsed["pull_request"];
+  if (rawPullRequest !== undefined && rawPullRequest !== null) {
+    throw new FileIdeaError(
+      `idea filed as #${number}, but the read-back answered with a PULL REQUEST, not an issue -- so it confirms ` +
+        "nothing about the issue that was just filed. Issues and pull requests share one number sequence and one " +
+        "issues/{n} endpoint, and this verb never asks for a number, so this read reached a different object than " +
+        "the one it created: comparing title, body and labels against it would report either a mismatch about a " +
+        "record nobody filed, or -- worse -- a match. The issue exists; verify it by hand.",
+    );
+  }
   const rawLabels = parsed["labels"];
   const labelList = Array.isArray(rawLabels)
     ? rawLabels
