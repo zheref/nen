@@ -6,7 +6,11 @@
 // (`callerPins`, e.g. `db_migrate_pinned`) -- the issue's own "incl.
 // per-caller fields" clause. A consumer can be current on its DEFAULT pin and
 // still stale on one caller's override; reporting only the default field
-// would miss exactly that. A plugin-shipped `latest` read at warm-up is what
+// would miss exactly that. A consumer with NO pin recorded -- a missing key or
+// an empty string, the two spellings of the same absence -- is its own finding
+// kind rather than a skip; see PinFinding below.
+//
+// A plugin-shipped `latest` read at warm-up is what
 // flags a cached plugin reporting consumers current while they sit a tag
 // behind (getsuga SKILL.md §3's own reason to bump it) -- so `current` is
 // always the caller's own parameter, never inferred from the registry it is
@@ -21,13 +25,52 @@
 
 import type { ConsumerEntry } from "../schema/repos.js";
 
-export interface PinFinding {
+/**
+ * A finding carries its KIND (zheref/nen#10 item 4). Two different facts were
+ * previously reported as one absence: a consumer whose pin is behind `current`
+ * was a finding, and a consumer with NO pin recorded was skipped entirely --
+ * so a registry gap rendered byte-identically to a consumer confirmed current.
+ * That is the vacuous truth this module's own header warns about one paragraph
+ * up: `current` is always the caller's parameter precisely so a stale answer
+ * cannot be inferred from the file being checked, and reading a missing field
+ * as agreement inferred exactly that.
+ *
+ * The discriminator lives in the SAME array rather than a second one so a
+ * `--json` caller that already fails on `pinFindings.length > 0` starts failing
+ * on a registry gap too -- the fail-closed direction. A second key would have
+ * left that caller reading "clean" for a check that was never performed.
+ *
+ * A DISCRIMINATED UNION, not `pinned: string | null` on one shape (PR #83
+ * review). Before, nothing stopped a construction site from pairing `kind:
+ * "stale"` with a null `pinned` or `kind: "unpinned"` with a real tag -- both
+ * of those bugs would have type-checked. Tying `pinned`'s type to `kind`
+ * turns "a stale finding always carries the tag it is stale AGAINST, an
+ * unpinned finding never carries one" from a comment into something
+ * `detectStalePins` below and every reader of this array (../warmup/command.ts)
+ * cannot get past the compiler without contradicting.
+ */
+export interface PinFindingCommon {
   readonly repo: string;
   /** 'pinned', or a caller-pin field name (e.g. 'db_migrate_pinned'). */
   readonly field: string;
-  readonly pinned: string;
   readonly current: string;
 }
+
+export type PinFinding =
+  | (PinFindingCommon & {
+      /** A recorded pin behind `current`. */
+      readonly kind: "stale";
+      readonly pinned: string;
+    })
+  | (PinFindingCommon & {
+      /**
+       * No pin recorded at all -- a missing/null field OR an empty string,
+       * which record the same absence.
+       */
+      readonly kind: "unpinned";
+      /** There was nothing to record. */
+      readonly pinned: null;
+    });
 
 export function detectStalePins(
   consumers: readonly ConsumerEntry[],
@@ -35,12 +78,29 @@ export function detectStalePins(
 ): PinFinding[] {
   const findings: PinFinding[] = [];
   for (const consumer of consumers) {
-    if (consumer.pinned !== null && consumer.pinned !== current) {
-      findings.push({ repo: consumer.repo, field: "pinned", pinned: consumer.pinned, current });
+    if (consumer.pinned === null || consumer.pinned === "") {
+      // NOT SKIPPED. "The registry records no pin" is a finding about the
+      // registry, not evidence the consumer is current.
+      //
+      // `""` COUNTS AS NO PIN, not as a pin that happens to be stale. A
+      // registry written as `"pinned": ""` records the same absence as a
+      // missing key -- both are "nobody has said which tag this consumer is
+      // on" -- and the two spellings are indistinguishable to anyone reading
+      // the file. Falling through to the stale branch made them differ
+      // anyway: the finding rendered with a blank left-hand side (`pinned:
+      // -- behind v1.1.0`) and told the operator to bump a pin from nothing,
+      // which is not the fix. The `pinned` field is normalized to `null` in
+      // the finding for the same reason -- one shape for one fact.
+      findings.push({ kind: "unpinned", repo: consumer.repo, field: "pinned", pinned: null, current });
+    } else if (consumer.pinned !== current) {
+      findings.push({ kind: "stale", repo: consumer.repo, field: "pinned", pinned: consumer.pinned, current });
     }
+    // A per-caller override is only ever PRESENT (../schema/repos.ts keeps the
+    // raw fields), so an absent one is not a gap the way a missing default pin
+    // is -- there is no field to have been left blank.
     for (const [field, value] of Object.entries(consumer.callerPins)) {
       if (value !== current) {
-        findings.push({ repo: consumer.repo, field, pinned: value, current });
+        findings.push({ kind: "stale", repo: consumer.repo, field, pinned: value, current });
       }
     }
   }

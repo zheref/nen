@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -361,6 +361,146 @@ describe("nen release preflight", () => {
       const result = await runWithCriticalIssues("3,7");
       expect(result.code).toBe(1); // fails the "open critical issues" row itself, not a usage error
       expect(result.out.join("\n")).toMatch(/FAIL {2}open critical issues -- 2 open: #3, #7/);
+    });
+  });
+
+  // zheref/nen#10 item 5. `--fragment-dir` is now DEFAULTED from ONE shared
+  // constant (../changelog/completeness.ts's DEFAULT_FRAGMENT_DIR) and read
+  // through ONE shared seam (../cli/inputs.ts's optionalDirectoryFlag), so
+  // this verb and `nen changelog completeness` cannot drift about where
+  // fragments live. Covered on THIS side too, deliberately: the sibling
+  // verb's tests alone left renaming the constant green here.
+  describe("--fragment-dir: the SAME default and the SAME refusals as 'nen changelog completeness'", () => {
+    async function runWithFragmentDir(
+      prepare: (dir: string) => void,
+      extraArgs: readonly string[] = [],
+    ): Promise<{ code: number; out: string[]; err: string[] }> {
+      const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here\n"); // the CHANGELOG references NOTHING
+      const liveChoresFrom = join(dir, "live-chores.json");
+      writeFileSync(liveChoresFrom, "[]");
+      prepare(dir);
+      return await capture(
+        [
+          "release",
+          "preflight",
+          "--repo-slug",
+          "o/r",
+          "--tag",
+          "v1.1.0",
+          "--range",
+          "v1.0.0..v1.1.0",
+          "--changelog",
+          changelog,
+          "--owner-repo",
+          "o/r",
+          "--critical-issues",
+          "",
+          "--live-chores-from",
+          liveChoresFrom,
+          ...extraArgs,
+        ],
+        dir,
+        (command, args): CommandResult => {
+          const joined = args.join(" ");
+          if (joined.includes("variable get")) return { code: 1, stdout: "", stderr: "variable RELEASE_HOLD was not found", spawnFailed: false };
+          if (joined.includes("log ") && joined.includes("--merges")) {
+            return { code: 0, stdout: "Merge pull request #5 from x/y\n", stderr: "", spawnFailed: false };
+          }
+          if (joined.includes("ls-remote")) return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+          return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+        },
+      );
+    }
+
+    it("counts an UNCOLLATED fragment's PR as present with the flag OMITTED", async () => {
+      // The mirror of ../changelog/command.test.ts's own default test: #5 is
+      // referenced NOWHERE in the CHANGELOG, and the only thing that can make
+      // CON-33(c) reconcile is the changelog.d/ fragment found by default.
+      const result = await runWithFragmentDir((dir): void => {
+        mkdirSync(join(dir, "changelog.d"), { recursive: true });
+        writeFileSync(join(dir, "changelog.d", "5-a-thing.md"), "- did a thing\n");
+      });
+      expect(result.out.join("\n")).toMatch(/ok\s+CON-33\(c\) reconciled -- every merged PR has a CHANGELOG entry or fragment/);
+      // The fragment is also SEEN by the "changelog.d/ empty" row, which is
+      // the second reader of the same default: it fails, by name.
+      expect(result.out.join("\n")).toMatch(/FAIL {2}changelog\.d\/ empty at cut point -- 1 fragment\(s\) uncollated: 5-a-thing\.md/);
+    });
+
+    it("is the SAME answer as passing the default directory explicitly", async () => {
+      const prepare = (dir: string): void => {
+        mkdirSync(join(dir, "changelog.d"), { recursive: true });
+        writeFileSync(join(dir, "changelog.d", "5-a-thing.md"), "- did a thing\n");
+      };
+      const omitted = await runWithFragmentDir(prepare);
+      const explicit = await runWithFragmentDir(prepare, ["--fragment-dir", "changelog.d"]);
+      expect(omitted.code).toBe(explicit.code);
+      expect(omitted.out).toEqual(explicit.out);
+    });
+
+    it("treats a MISSING default directory as 'no fragments', never a crash", async () => {
+      const result = await runWithFragmentDir((): void => {}); // no changelog.d/ anywhere
+      expect(result.code).toBe(1); // #5 really is unreferenced -- reported, not crashed
+      expect(result.out.join("\n")).toMatch(/FAIL {2}CON-33\(c\) reconciled -- missing: #5/);
+      expect(result.out.join("\n")).toMatch(/ok\s+changelog\.d\/ empty at cut point -- empty/);
+      expect(result.err.join("\n")).not.toMatch(/ENOENT/);
+    });
+
+    it("refuses an EXPLICITLY EMPTY --fragment-dir at exit 2 rather than reading the repository root", async () => {
+      // `?? DEFAULT_FRAGMENT_DIR` does not catch `""`, so this used to resolve
+      // to the repo root and count every top-level *.md as a fragment.
+      const result = await runWithFragmentDir((dir): void => {
+        writeFileSync(join(dir, "5-stray.md"), "not a fragment\n");
+      }, ["--fragment-dir", ""]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--fragment-dir was given an empty value/);
+      expect(result.err.join("\n")).toMatch(/Omit the flag to use the default/);
+    });
+
+    it("refuses a --fragment-dir that is a FILE at exit 2, naming the path", async () => {
+      // Was a raw ENOTDIR out of readdirSync at exit 1, several frames from
+      // the flag that caused it.
+      const result = await runWithFragmentDir((dir): void => {
+        writeFileSync(join(dir, "notadir"), "x\n");
+      }, ["--fragment-dir", "notadir"]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--fragment-dir points at .*notadir', which is not a directory/);
+      expect(result.err.join("\n")).not.toMatch(/ENOTDIR/);
+    });
+
+    it("refuses an UNREADABLE --fragment-dir at exit 2, naming the errno, rather than reporting 'no fragments' (PR #83 review)", async () => {
+      // Mirrors ../changelog/command.test.ts's own case for the same shared
+      // seam (../cli/inputs.ts's optionalDirectoryFlag): an EACCES from a
+      // locked PARENT directory must not be folded into the same null return
+      // as an absent directory -- a caller told "no fragments" in that case
+      // would never learn the check did not run at all. chmod is skipped
+      // where the bit is not enforced (root, or a filesystem that ignores it)
+      // rather than asserted into a platform-dependent failure -- see
+      // ../verbs/pr_ready.test.ts (zheref/nen#8) for the same guard on a
+      // file-level EACCES.
+      let blocked = true;
+      let locked = "";
+      const result = await runWithFragmentDir((dir): void => {
+        locked = join(dir, "locked");
+        const fragmentDir = join(locked, "changelog.d");
+        mkdirSync(fragmentDir, { recursive: true });
+        chmodSync(locked, 0o000);
+        try {
+          statSync(fragmentDir);
+          blocked = false; // permission bit not enforced on this host -- skip below
+        } catch {
+          // still blocked, as expected
+        }
+      }, ["--fragment-dir", join("locked", "changelog.d")]);
+
+      if (blocked) {
+        expect(result.code).toBe(2);
+        expect(result.err.join("\n")).toMatch(/--fragment-dir points at .*changelog\.d', which could not be checked/);
+        expect(result.err.join("\n")).toMatch(/EACCES/);
+      }
+
+      if (locked !== "") chmodSync(locked, 0o700); // restore so the temp-dir cleanup can traverse it
     });
   });
 });

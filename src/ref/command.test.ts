@@ -60,8 +60,32 @@ describe("nen ref parse", () => {
     expect(result.out).toContain("code:   KP");
   });
 
+  it("parses a well-formed token, exit 0", async () => {
+    const result = await capture(["ref", "parse", "KP-PR-#42"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/ref:\s+KP-PR-#42/);
+    expect(result.out.join("\n")).toMatch(/number: 42/);
+  });
+
   it("refuses a token with no positional argument", async () => {
     const result = await capture(["ref", "parse"]);
     expect(result.code).toBe(2);
+  });
+
+  it("still refuses a MISSING token at exit 2, as it always did", async () => {
+    const result = await capture(["ref", "parse"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/needs a token/);
+  });
+
+  it("refuses a malformed token at exit 2, the SAME code as 'label apply' (zheref/nen#10 item 3)", async () => {
+    // The two verbs both take a caller-typed object ref as a positional, so a
+    // typo must cost the same in both -- exit 2, "you typed it wrong". They
+    // used to disagree: this one and `label apply` both let RefError escape to
+    // exit 1, the code a retry wrapper reads as "worth retrying".
+    const result = await capture(["ref", "parse", "not-a-ref"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is not object notation/);
+    expect(result.err.join("\n")).toMatch(/Run 'nen ref --help'/);
   });
 });

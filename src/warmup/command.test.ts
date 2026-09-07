@@ -40,15 +40,16 @@ async function capture(argv: readonly string[], repoFlag: string = BANKAI_REPO):
  * pin check alone never fails, isolating the question-sweep contribution to
  * the exit code in the tests below. */
 function cleanRegistryRepo(current: string): string {
+  return registryRepo([{ repo: "o/r", pinned: current, consumes: ["build.yml"], code: "OR" }], current);
+}
+
+/** A fresh registry with exactly the consumer entries given. */
+function registryRepo(consumers: readonly unknown[], latest: string): string {
   const dir = mkdtempSync(join(tmpdir(), "nen-warmup-"));
   mkdirSync(join(dir, "schemas"), { recursive: true });
   writeFileSync(
     join(dir, "schemas", "repos.json"),
-    JSON.stringify({
-      latest: current,
-      consumers: [{ repo: "o/r", pinned: current, consumes: ["build.yml"], code: "OR" }],
-      product_codes: { OR: "r" },
-    }),
+    JSON.stringify({ latest, consumers, product_codes: { OR: "r" } }),
   );
   return dir;
 }
@@ -95,6 +96,85 @@ describe("nen warmup", () => {
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/no stale pins/);
     expect(result.out.join("\n")).not.toContain("$comment_pinned");
+  });
+
+  describe("an unpinned consumer is a finding, not a clean read (zheref/nen#10 item 4)", () => {
+    const UNPINNED = [
+      { repo: "o/pinned", pinned: "v1.0.0", consumes: ["build.yml"], code: "OR" },
+      { repo: "o/gap", consumes: ["build.yml"] }, // no `pinned` field at all
+    ];
+
+    it("names the gap in the human rendering, and FAILS the run", async () => {
+      // Before: this printed "no stale pins" and exited 0 -- the registry gap
+      // was indistinguishable from a consumer confirmed current.
+      const result = await capture(["warmup", "--current", "v1.0.0"], registryRepo(UNPINNED, "v1.0.0"));
+      const out = result.out.join("\n");
+      expect(out).toMatch(/no stale pins/); // o/pinned genuinely is current
+      expect(out).toMatch(/1 unpinned consumer\(s\)/);
+      expect(out).toMatch(/o\/gap pinned: NOT PINNED/);
+      expect(out).toMatch(/could not be checked against v1\.0\.0/);
+      // FAIL-CLOSED: the check could not be performed, so it did not pass.
+      expect(result.code).toBe(1);
+    });
+
+    it("carries the finding in --json with kind:'unpinned' and pinned:null", async () => {
+      const result = await capture(["warmup", "--current", "v1.0.0", "--json"], registryRepo(UNPINNED, "v1.0.0"));
+      const parsed = JSON.parse(result.out.join("\n")) as { pinFindings: unknown };
+      // The SAME array a caller already fails on, so a caller checking
+      // `pinFindings.length > 0` starts refusing a registry gap for free.
+      expect(parsed.pinFindings).toEqual([
+        { kind: "unpinned", repo: "o/gap", field: "pinned", pinned: null, current: "v1.0.0" },
+      ]);
+    });
+
+    it("pins the --json BYTES for a PinFinding, key order included (PR #83 review)", async () => {
+      // `.toEqual()` above is order-insensitive, so it would stay green even
+      // if turning PinFinding into a discriminated union reordered the fields
+      // TypeScript emits. This asserts the literal output text -- kind, repo,
+      // field, pinned, current, in that order -- so the union's arms must
+      // still construct their object literals in the same field order the
+      // pre-union shape did.
+      const result = await capture(["warmup", "--current", "v1.0.0", "--json"], registryRepo(UNPINNED, "v1.0.0"));
+      expect(result.out.join("\n")).toBe(
+        [
+          "{",
+          '  "current": "v1.0.0",',
+          '  "pinFindings": [',
+          "    {",
+          '      "kind": "unpinned",',
+          '      "repo": "o/gap",',
+          '      "field": "pinned",',
+          '      "pinned": null,',
+          '      "current": "v1.0.0"',
+          "    }",
+          "  ],",
+          '  "questionSweep": {',
+          '    "checked": false',
+          "  }",
+          "}",
+        ].join("\n"),
+      );
+    });
+
+    it("says 'no unpinned consumers' when every consumer records one -- an unrun check never renders as a clean one", async () => {
+      const result = await capture(["warmup", "--current", "v1.0.0"], cleanRegistryRepo("v1.0.0"));
+      expect(result.out.join("\n")).toMatch(/no unpinned consumers/);
+      expect(result.code).toBe(0);
+    });
+
+    it("leaves the stale case untouched: kind:'stale', the same line, the same exit 1", async () => {
+      const dir = registryRepo([{ repo: "o/r", pinned: "v0.9.0", consumes: ["build.yml"], code: "OR" }], "v1.0.0");
+      const result = await capture(["warmup", "--current", "v1.0.0"], dir);
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toMatch(/1 stale pin\(s\)/);
+      expect(result.out.join("\n")).toMatch(/o\/r pinned: v0\.9\.0 -> v1\.0\.0/);
+
+      const jsonResult = await capture(["warmup", "--current", "v1.0.0", "--json"], dir);
+      const parsed = JSON.parse(jsonResult.out.join("\n")) as { pinFindings: unknown };
+      expect(parsed.pinFindings).toEqual([
+        { kind: "stale", repo: "o/r", field: "pinned", pinned: "v0.9.0", current: "v1.0.0" },
+      ]);
+    });
   });
 
   describe("the handbook-question sweep's skip is explicit, never silent-clean (review finding)", () => {

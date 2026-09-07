@@ -7,6 +7,7 @@
 
 import {
   emit,
+  parseCallerToken,
   requireSubcommand,
   requireValue,
   VerbUsageError,
@@ -14,7 +15,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
-import { formatRef, KNOWN_STATES, parseRef, type ObjectKind } from "./notation.js";
+import { formatRef, KNOWN_STATES, parseRef, RefError, type ObjectKind } from "./notation.js";
 
 const USAGE = `nen ref format --code <CODE> --kind <IS|PR> --number <N> [--state <s>] [--url <u>] [--no-glyphs]
 nen ref parse <token>
@@ -49,7 +50,15 @@ export const refCommand: Command = {
       if (token === undefined) {
         throw new VerbUsageError("'ref parse' needs a token, e.g. 'ref parse XX-PR-#12'.");
       }
-      const parsed = parseRef(token);
+      // Same boundary rule as ../label/command.ts: a token that is not object
+      // notation is a typo, exit 2, not a run that failed. The `RefError` is
+      // ./notation.ts's, NOT the unrelated class of the same name in
+      // ../verbs/pr_ready.ts -- a wrong import type-checks and merely stops
+      // the predicate ever matching, which puts this verb back at exit 1.
+      const parsed = parseCallerToken(
+        (): ReturnType<typeof parseRef> => parseRef(token),
+        (error): boolean => error instanceof RefError,
+      );
       emit(context.io, context.json, parsed, [
         `ref:    ${parsed.ref}`,
         `code:   ${parsed.code}`,

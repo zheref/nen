@@ -17,9 +17,10 @@
 // repository already -- src/taxonomy-purity.test.ts's own header records it --
 // and it is why the seam normalizes and why this does too.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { VerbUsageError, type CommandContext } from "./command.js";
+import type { ParsedArgs } from "./args.js";
 import { GIT, must, normalizeEol, outputLines } from "../seam/exec.js";
 
 /**
@@ -85,6 +86,81 @@ export function readTextFile(
       `could not read '${full}'${code === undefined ? "" : ` (${code})`}. ${why}`,
     );
   }
+}
+
+/**
+ * A `--flag <dir>` read as a DIRECTORY that may legitimately not exist yet,
+ * defaulted when the flag is omitted. Returns the resolved absolute path, or
+ * `null` when nothing is there.
+ *
+ * WRITTEN ONCE BECAUSE TWO VERBS SHARE THE FLAG (zheref/nen#10 item 5, minors
+ * 5 and 6). `nen changelog completeness` and `nen release preflight`
+ * reconcile the same merge range against the same evidence, so they must not
+ * disagree about where fragments live -- and a shared DEFAULT alone was not
+ * enough, because each verb still spelled the resolve/exists/read dance by
+ * hand and the two hand-spellings had already drifted apart once.
+ *
+ * ABSENT IS `null`, NOT A REFUSAL. A repository that has collated every
+ * fragment legitimately has no changelog.d/ at the cut point, and refusing the
+ * whole check for that would fail a release for being tidy.
+ *
+ * AN EXPLICITLY EMPTY VALUE IS REFUSED, exit 2. `?? fallback` does not catch
+ * `""`, so `--fragment-dir ''` used to resolve to the REPOSITORY ROOT and
+ * quietly count every `*.md` at the top level as a fragment -- a caller who
+ * meant "no fragment directory" got the loosest possible reading of the
+ * opposite. requireValue() already folds `""` into "required" for the flags
+ * that must be given; this folds it into "say what you meant" for a flag that
+ * has a default. Omitting the flag remains the way to ask for the default.
+ *
+ * A PATH THAT IS NOT A DIRECTORY IS REFUSED BY NAME, exit 2, rather than left
+ * to surface as a raw `ENOTDIR` at exit 1 from a readdir several frames later:
+ * pointing the flag at `CHANGELOG.md` is a typo, and the refusal names the
+ * resolved path so the caller can see what it actually pointed at.
+ *
+ * ONLY "NOT THERE" MEANS ABSENT (zheref/nen#10 item 6, PR #83 review). The
+ * stat call is made with `throwIfNoEntry: false`, which is Node's own way of
+ * saying "these two failure modes are the same case": it returns `undefined`,
+ * rather than throwing, for BOTH `ENOENT` (nothing at this path) and
+ * `ENOTDIR` (a PARENT component of the path is a file, so nothing could ever
+ * exist under it either -- a repo with a stray `changelog.d` FILE two
+ * directories up is, from this function's caller's point of view, exactly as
+ * "no fragments here" as one with no `changelog.d` at all). Every OTHER stat
+ * failure -- `EACCES`, `EPERM`, `ELOOP`, `EIO`, and anything else the
+ * filesystem can raise -- still throws, and is turned into this codebase's
+ * actionable refusal below, naming the resolved path and the errno. The
+ * distinction matters: an unreadable directory is NOT an absent one, and a
+ * caller told "no fragments" when the real answer is "could not check" would
+ * have `changelog completeness` or `release preflight` pass a cut point the
+ * check never actually ran against.
+ */
+export function optionalDirectoryFlag(
+  args: ParsedArgs,
+  flag: string,
+  fallback: string,
+  root: string,
+): string | null {
+  const raw = args.values[flag];
+  if (raw !== undefined && raw.trim() === "") {
+    throw new VerbUsageError(
+      `--${flag} was given an empty value. Omit the flag to use the default ('${fallback}'); an empty value is refused because it would resolve to the repository root.`,
+    );
+  }
+  const dir = raw ?? fallback;
+  const full = isAbsolute(dir) ? dir : resolvePath(root, dir);
+  let stats;
+  try {
+    stats = statSync(full, { throwIfNoEntry: false });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new VerbUsageError(
+      `--${flag} points at '${full}', which could not be checked${code === undefined ? "" : ` (${code})`}.`,
+    );
+  }
+  if (stats === undefined) return null; // not there at all -- "no entries", never a refusal
+  if (!stats.isDirectory()) {
+    throw new VerbUsageError(`--${flag} points at '${full}', which is not a directory.`);
+  }
+  return full;
 }
 
 /** `a,b,c` -> `["a","b","c"]`, dropping empties. */

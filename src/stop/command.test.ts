@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { renderBoard } from "../board/render.js";
 import { runFamily, type Io } from "../index.js";
 import type { Seams } from "../seam/exec.js";
 import { stopCommand } from "./command.js";
@@ -81,6 +82,47 @@ describe("nen stop", () => {
     const result = await capture(["stop", file], dir);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/\| a\s+\| bb\s+\|/);
+  });
+
+  it("parses a piped cell out of a board `nen board render` produced (zheref/nen#10 item 2)", async () => {
+    // The exact producer/consumer pair the issue names: `nen board render`'s
+    // output, fed back to `nen stop`. Before the escape, `rows[1]` came back
+    // as five cells with every column past the title shifted one left.
+    const dir = mkdtempSync(join(tmpdir(), "nen-stop-"));
+    const file = join(dir, "efforts.md");
+    const board = { repo: "o/r", generatedAt: "2026-01-01T00:00:00Z", rows: [{ id: "1", title: "feat: a | b", refs: ["XX-PR-#7"], gate: "G2", status: "ready", needs: null }] };
+    writeFileSync(file, renderBoard(board).slice(2).join("\n") + "\n");
+
+    const result = await capture(["stop", file, "--json"], dir);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { rows: string[][] };
+    expect(parsed.rows).toEqual([
+      ["Effort", "Refs", "Status (gate)", "Needs"],
+      ["feat: a | b", "XX-PR-#7", "ready (G2)", ""],
+    ]);
+  });
+
+  it("keeps a NEWLINE-carrying title in ONE row, flattened to a space (zheref/nen#10 item 2)", async () => {
+    // The other half of the round trip, and the only LOSSY one. A raw `\n` in
+    // a title used to end the row mid-table, so this parsed as a four-column
+    // header followed by two junk rows and `nen stop --json` handed a caller
+    // three blank fields with no error anywhere. The flattened title is
+    // recoverable text in the right column; the line break is not recoverable
+    // at all, because a markdown table row is one line by definition.
+    const dir = mkdtempSync(join(tmpdir(), "nen-stop-"));
+    const file = join(dir, "efforts.md");
+    const board = { repo: "o/r", generatedAt: "2026-01-01T00:00:00Z", rows: [{ id: "1", title: "feat: a\nb", refs: ["XX-PR-#7"], gate: "G2", status: "ready", needs: null }] };
+    writeFileSync(file, renderBoard(board).slice(2).join("\n") + "\n");
+
+    const result = await capture(["stop", file, "--json"], dir);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { rows: string[][] };
+    expect(parsed.rows).toHaveLength(2); // header + ONE data row, not three
+    expect(parsed.rows[1]).toHaveLength(4); // FOUR cells, none of them blank filler
+    expect(parsed.rows).toEqual([
+      ["Effort", "Refs", "Status (gate)", "Needs"],
+      ["feat: a b", "XX-PR-#7", "ready (G2)", ""],
+    ]);
   });
 
   it("emits a stable --json contract", async () => {

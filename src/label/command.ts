@@ -25,6 +25,7 @@ import { appendFileSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import {
   emit,
+  parseCallerToken,
   requireSubcommand,
   requireValue,
   VerbUsageError,
@@ -32,7 +33,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { ledgerLine, type LedgerEntry } from "./ledger.js";
-import { parseRef } from "../ref/notation.js";
+import { parseRef, RefError } from "../ref/notation.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { GH, ToolError } from "../seam/exec.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
@@ -70,7 +71,19 @@ export const labelCommand: Command = {
     if (refToken === undefined) {
       throw new VerbUsageError("'label apply' needs an object ref, e.g. 'label apply XX-PR-#12 --label wake'.");
     }
-    const ref = parseRef(refToken);
+    // A MALFORMED REF IS A TYPO (exit 2), not a failure (exit 1). See
+    // ../cli/command.ts's parseCallerToken.
+    //
+    // THE `RefError` HERE IS ../ref/notation.ts's -- the object-notation
+    // parser's own, imported above. There is a SECOND, unrelated class of that
+    // name in ../verbs/pr_ready.ts, and because parseCallerToken's whole
+    // contract is "the predicate is the caller's", importing the wrong one
+    // would not fail to compile: the predicate would simply never match and
+    // this verb would go back to exiting 1 on a typo, silently.
+    const ref = parseCallerToken(
+      (): ReturnType<typeof parseRef> => parseRef(refToken),
+      (error): boolean => error instanceof RefError,
+    );
 
     const labelName = requireValue(context.args, "label", "The label to apply.");
     const repoSlug = requireValue(context.args, "repo-slug", "The owner/name the mutation runs against.");

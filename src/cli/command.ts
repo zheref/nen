@@ -139,6 +139,44 @@ export function requireRepoFlag(context: CommandContext, why: string): string {
   return flag;
 }
 
+/**
+ * A CALLER-TYPED TOKEN parsed at the command boundary: the domain parser's own
+ * refusal is re-raised as a VerbUsageError, message intact, so it exits 2
+ * (zheref/nen#10 item 3).
+ *
+ * WHY IT IS A SHARED SEAM RATHER THAN A TRY/CATCH PER VERB. `nen label apply
+ * not-a-ref` and `nen ref parse not-a-ref` are the same mistake -- a typo in a
+ * positional -- and ../index.ts's own header is explicit about what the codes
+ * mean: exit 1 tells a caller "the thing you asked for did not work" when the
+ * truth is "you typed it wrong", and a retry wrapper honouring that
+ * distinction would retry a typo forever. Two hand-written catch blocks are
+ * two chances for the verbs to disagree about that; this is one.
+ *
+ * THE PREDICATE IS THE CALLER'S so this stays ignorant of the domains it
+ * serves -- ./command.ts must not learn about object refs to convert a
+ * RefError -- and so an error the parser did NOT mean as a refusal (a bug, an
+ * out-of-memory) still propagates as the failure it is instead of being
+ * relabelled a typo.
+ *
+ * THE MESSAGE IS CARRIED WHOLE, never re-worded: a domain parser's refusal is
+ * written to be actionable on its own (parseRef's names the whole notation and
+ * why guessing is refused), and prefixing or truncating it here would throw
+ * away the half that makes it useful.
+ */
+export function parseCallerToken<T>(
+  parse: () => T,
+  isMalformed: (error: unknown) => boolean,
+): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (isMalformed(error)) {
+      throw new VerbUsageError(error instanceof Error ? error.message : String(error));
+    }
+    throw error;
+  }
+}
+
 /** A `--flag <n>` read as a non-negative integer. */
 export function readInteger(
   args: ParsedArgs,

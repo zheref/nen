@@ -6,8 +6,7 @@
 // ../release/preflight.ts's pure table, which reports every one, never
 // stopping at the first failure.
 
-import { existsSync, readdirSync } from "node:fs";
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { readdirSync } from "node:fs";
 import {
   emit,
   requireRepoFlag,
@@ -18,8 +17,13 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { readJsonFile, readTextFile, splitList } from "../cli/inputs.js";
-import { extractChangelogRefs, extractFragmentRefs, extractMergedPrNumbers } from "../changelog/completeness.js";
+import { optionalDirectoryFlag, readJsonFile, readTextFile, splitList } from "../cli/inputs.js";
+import {
+  DEFAULT_FRAGMENT_DIR,
+  extractChangelogRefs,
+  extractFragmentRefs,
+  extractMergedPrNumbers,
+} from "../changelog/completeness.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { GH, GIT, must, outputLines, type CommandResult } from "../seam/exec.js";
 import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflight.js";
@@ -127,7 +131,12 @@ preflight:
                             the caller. REQUIRED to pass this row -- omitting
                             it reports "not supplied -- not checked"; point it
                             at a file containing '[]' to assert none are live.
-  --fragment-dir <dir>      Defaults to changelog.d.
+  --fragment-dir <dir>      Defaults to changelog.d, the same default 'nen
+                            changelog completeness' uses. Omit the flag to
+                            use it; an EMPTY value is refused (it would
+                            resolve to the repository root), and so is a path
+                            that is not a directory. A directory that is not
+                            there contributes no fragments.
   --range, --changelog, --owner-repo  Same contract as
                             'nen changelog completeness'.
   --tag <vX.Y.Z>            Checked against 'git ls-remote --tags origin'.
@@ -145,7 +154,9 @@ self-check:
   from --previous-tag. A git-mechanical fact, never a judgement.`;
 
 const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
-const DEFAULT_FRAGMENT_DIR = "changelog.d";
+// DEFAULT_FRAGMENT_DIR now lives in ../changelog/completeness.ts, shared with
+// `nen changelog completeness` -- the two verbs reconcile the same range
+// against the same evidence and must not disagree about where fragments live.
 
 export const releaseCommand: Command = {
   name: "release",
@@ -180,7 +191,6 @@ export const releaseCommand: Command = {
     const changelogPath = requireValue(context.args, "changelog", "The CHANGELOG.md at the cut point.");
     const ownerRepo = requireValue(context.args, "owner-repo", "Scopes changelog link matching to this repository.");
     const holdVar = context.args.values["hold-var"] ?? DEFAULT_HOLD_VAR;
-    const fragmentDir = context.args.values["fragment-dir"] ?? DEFAULT_FRAGMENT_DIR;
     // `undefined` (the flag was never given) and `""` (the caller explicitly
     // asserted "none") are DIFFERENT inputs (review finding): omitting
     // --critical-issues must not read the same as passing --critical-issues
@@ -200,10 +210,14 @@ export const releaseCommand: Command = {
     const liveChores: LiveChoreCandidate[] | null =
       liveChoresPath === undefined ? null : readJsonFile(liveChoresPath, root);
 
-    const fragmentDirFull = isAbsolute(fragmentDir) ? fragmentDir : resolvePath(root, fragmentDir);
-    const fragmentFiles = existsSync(fragmentDirFull)
-      ? readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md"))
-      : [];
+    // THE SAME SEAM ../changelog/command.ts USES for the same flag, so the two
+    // verbs cannot drift again: absent directory -> no fragments, `''` and a
+    // non-directory path -> exit 2 naming the flag. See ../cli/inputs.ts.
+    const fragmentDirFull = optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root);
+    const fragmentFiles =
+      fragmentDirFull === null
+        ? []
+        : readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md"));
 
     const changelog = readTextFile(changelogPath, root);
     const mergeLog = must(context.seams, GIT, ["log", range, "--merges", "--format=%s"], { cwd: root });

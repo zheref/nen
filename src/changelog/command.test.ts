@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -93,5 +93,161 @@ describe("nen changelog completeness", () => {
     );
     expect(result.code).toBe(1);
     expect(result.out.join("\n")).toMatch(/#5/);
+  });
+
+  // zheref/nen#10 item 5. Omitting --fragment-dir used to contribute NO
+  // fragment references, so an uncollated fragment's PR was reported as
+  // missing an entry it demonstrably has -- while `nen release preflight`,
+  // reconciling the same range against the same evidence, counted it.
+  describe("--fragment-dir defaults to changelog.d, like 'nen release preflight'", () => {
+    const mergedFive = (): CommandResult => ({ code: 0, stdout: "Merge pull request #5 from x/y\n", stderr: "", spawnFailed: false });
+
+    it("counts an UNCOLLATED fragment's PR as present with the flag omitted", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      mkdirSync(join(dir, "changelog.d"), { recursive: true });
+      writeFileSync(join(dir, "changelog.d", "5-a-thing.md"), "- did a thing\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(0);
+      expect(result.out.join("\n")).toMatch(/every PR merged in v1\.\.v2/);
+    });
+
+    it("is the SAME answer as passing the directory explicitly", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      mkdirSync(join(dir, "changelog.d"), { recursive: true });
+      writeFileSync(join(dir, "changelog.d", "5-a-thing.md"), "- did a thing\n");
+
+      const omitted = await capture(["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r"], dir, mergedFive);
+      const explicit = await capture(["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", "changelog.d"], dir, mergedFive);
+      expect(omitted.code).toBe(explicit.code);
+      expect(omitted.out).toEqual(explicit.out);
+    });
+
+    it("treats a MISSING default directory as 'no fragments', never a crash or a refusal", async () => {
+      // Matches `nen release preflight`'s own existsSync guard: a repository
+      // that has collated every fragment legitimately has no changelog.d/ at
+      // the cut point, and refusing there would fail a release for being tidy.
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here"); // no changelog.d/ anywhere
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(1); // #5 really is unreferenced -- reported, not crashed
+      expect(result.out.join("\n")).toMatch(/#5/);
+      expect(result.err.join("\n")).not.toMatch(/ENOENT/);
+    });
+
+    it("refuses an EXPLICITLY EMPTY --fragment-dir at exit 2 rather than reading the repository root", async () => {
+      // `?? DEFAULT_FRAGMENT_DIR` does not catch `""`, so `--fragment-dir ''`
+      // used to resolve to the repo root and count every top-level *.md as a
+      // fragment -- the loosest possible reading of "no fragment directory".
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      writeFileSync(join(dir, "5-stray.md"), "not a fragment\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", ""],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--fragment-dir was given an empty value/);
+      expect(result.err.join("\n")).toMatch(/Omit the flag to use the default/);
+    });
+
+    it("refuses a --fragment-dir that is a FILE at exit 2, naming the path", async () => {
+      // Was a raw ENOTDIR out of readdirSync at exit 1, several frames from
+      // the flag that caused it.
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      writeFileSync(join(dir, "notadir"), "x\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", "notadir"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--fragment-dir points at .*notadir', which is not a directory/);
+      expect(result.err.join("\n")).not.toMatch(/ENOTDIR/);
+    });
+
+    it("refuses an UNREADABLE --fragment-dir at exit 2, naming the errno, rather than reporting 'no fragments' (PR #83 review)", async () => {
+      // A stat failure that is NOT "not there" -- EACCES here, from a locked
+      // PARENT directory -- must not be folded into the same null-return as an
+      // absent directory: a caller told "no fragments" in that case would never
+      // learn the check did not run at all. chmod is skipped where the bit is
+      // not enforced (root, or a filesystem that ignores it) rather than
+      // asserted into a platform-dependent failure -- see ../verbs/pr_ready.test.ts
+      // (zheref/nen#8) for the same guard on a file-level EACCES.
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      const locked = join(dir, "locked");
+      const fragmentDir = join(locked, "changelog.d");
+      mkdirSync(fragmentDir, { recursive: true });
+      chmodSync(locked, 0o000);
+
+      let blocked = true;
+      try {
+        statSync(fragmentDir);
+        blocked = false; // permission bit not enforced on this host -- skip below
+      } catch {
+        // still blocked, as expected
+      }
+
+      if (blocked) {
+        const result = await capture(
+          [
+            "changelog",
+            "completeness",
+            "--range",
+            "v1..v2",
+            "--changelog",
+            changelog,
+            "--owner-repo",
+            "o/r",
+            "--fragment-dir",
+            join("locked", "changelog.d"),
+          ],
+          dir,
+          mergedFive,
+        );
+        expect(result.code).toBe(2);
+        expect(result.err.join("\n")).toMatch(/--fragment-dir points at .*changelog\.d', which could not be checked/);
+        expect(result.err.join("\n")).toMatch(/EACCES/);
+      }
+
+      chmodSync(locked, 0o700); // restore so the temp-dir cleanup can traverse it
+    });
+
+    it("still honours an EXPLICIT --fragment-dir elsewhere", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      mkdirSync(join(dir, "fragments"), { recursive: true });
+      writeFileSync(join(dir, "fragments", "5-a-thing.md"), "- did a thing\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", "fragments"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(0);
+    });
   });
 });

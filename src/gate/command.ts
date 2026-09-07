@@ -83,6 +83,16 @@ export const gateCommand: Command = {
       throw new VerbUsageError(`--asserted takes G2 or G4, got '${asserted}'.`);
     }
 
+    // GateError IS LEFT AT EXIT 1, deliberately, unlike RefError next door
+    // (zheref/nen#10 item 3 asks the question explicitly). The malformed
+    // `--asserted` case the issue names is ALREADY exit 2 -- it is the
+    // VerbUsageError six lines above. The only refusal ./derive.ts can still
+    // raise is "both path sets are empty", and reaching it takes a caller who
+    // typed BOTH flags correctly and explicitly asserted `''` for each: the
+    // invocation is well-formed and understood, and what failed is the
+    // derivation itself, which is what exit 1 means. Relabelling it a typo
+    // would tell a retry wrapper to stop retrying a run that a corrected
+    // repository canon would make succeed.
     const derivation = derive(changed, { policy, process }, asserted);
     const lines = [derivation.gate, derivation.basis];
     if (derivation.corrected) {

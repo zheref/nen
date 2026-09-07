@@ -11,9 +11,15 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, readTextFile, splitList } from "../cli/inputs.js";
+import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, optionalDirectoryFlag, readTextFile, splitList } from "../cli/inputs.js";
 import { collateIntoChangelog, sortFragments, type Fragment } from "./collate.js";
-import { checkCompleteness, extractChangelogRefs, extractFragmentRefs, extractMergedPrNumbers } from "./completeness.js";
+import {
+  checkCompleteness,
+  DEFAULT_FRAGMENT_DIR,
+  extractChangelogRefs,
+  extractFragmentRefs,
+  extractMergedPrNumbers,
+} from "./completeness.js";
 import {
   fragmentRequired,
   firstDatedEntryCount,
@@ -40,7 +46,14 @@ collate:
 completeness:
   CON-33(c): every PR merged in --range has a CHANGELOG entry or an
   (un)collated fragment. --owner-repo scopes changelog link matching to THIS
-  repository, so a foreign-repo link sharing a PR number never counts.`;
+  repository, so a foreign-repo link sharing a PR number never counts.
+  --fragment-dir defaults to '${DEFAULT_FRAGMENT_DIR}', matching 'nen release
+  preflight' -- the two verbs reconcile the same range against the same
+  evidence, so they must not disagree about where fragments live. Omit the
+  flag to use the default; an EMPTY value is refused (it would resolve to the
+  repository root), and so is a path that is not a directory. A directory
+  that does not exist contributes no fragments rather than refusing: a
+  repository that has collated everything has none at the cut point.`;
 
 function readIfGiven(path: string | undefined, cwd: string): string {
   return path === undefined ? "" : readTextFile(path, cwd);
@@ -140,8 +153,12 @@ function completenessCmd(context: CommandContext): number {
   const range = requireValue(context.args, "range", "The <vPrev>..<vNew> range, as 'git log --merges' understands it.");
   const changelogPath = requireValue(context.args, "changelog", "The CHANGELOG.md to reconcile against.");
   const ownerRepo = requireValue(context.args, "owner-repo", "Scopes changelog link matching to THIS repository.");
-  const fragmentDir = context.args.values["fragment-dir"];
-
+  // DEFAULTED, not left undefined (zheref/nen#10 item 5). Omitting the flag
+  // used to contribute NO fragment references at all, so an uncollated
+  // fragment's PR was reported as missing a changelog entry it demonstrably
+  // has -- while `nen release preflight`, reconciling the same range against
+  // the same evidence, counted it. The porting source's own CLI defaults the
+  // same directory (changelog_release_completeness_check.sh:117).
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const changelog = readTextFile(changelogPath, root);
 
@@ -150,12 +167,14 @@ function completenessCmd(context: CommandContext): number {
   const mergedPrNumbers = extractMergedPrNumbers(subjects);
   const changelogRefs = extractChangelogRefs(changelog, ownerRepo);
 
-  let fragmentRefs: number[] = [];
-  if (fragmentDir !== undefined) {
-    const fragmentDirFull = isAbsolute(fragmentDir) ? fragmentDir : resolvePath(root, fragmentDir);
-    const names = existsSync(fragmentDirFull) ? readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md")) : [];
-    fragmentRefs = extractFragmentRefs(names);
-  }
+  // THE SAME SEAM ../release/command.ts USES, not a second hand-spelling of
+  // it: a directory that is not there is "no fragments" rather than a
+  // refusal, an explicitly empty `--fragment-dir` is a usage error rather
+  // than the repository root, and a path that is a FILE is refused by name
+  // rather than surfacing as a raw ENOTDIR. See ../cli/inputs.ts.
+  const fragmentDirFull = optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root);
+  const names = fragmentDirFull === null ? [] : readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md"));
+  const fragmentRefs = extractFragmentRefs(names);
 
   const report = checkCompleteness({ mergedPrNumbers, changelogRefs, fragmentRefs });
   const lines = report.ok
