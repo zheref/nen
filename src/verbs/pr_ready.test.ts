@@ -302,6 +302,28 @@ describe("resolveIdentities", () => {
     }
   });
 
+  it("refuses an EMPTY --gates by naming the flag, not the directory the empty string resolves to", () => {
+    // zheref/nen#8 review, minor 5. `--gates ""` resolves to the repository
+    // ROOT, so the directory guard above caught it -- and answered "expected a
+    // file, found a directory" about a path the operator never typed. A true
+    // sentence about a path this function invented, saying nothing about what
+    // actually went wrong. The flag is the thing they can see in their own
+    // command line, so the flag is what the message names.
+    for (const empty of ["", "   "]) {
+      try {
+        resolveIdentities(BANKAI_REPO, empty, [], []);
+        expect.unreachable();
+      } catch (error) {
+        expect(error, JSON.stringify(empty)).toBeInstanceOf(IdentityError);
+        const message = (error as IdentityError).message;
+        expect(message).toMatch(/--gates was given an empty path/);
+        // The refusal that used to happen, and must not any more.
+        expect(message).not.toMatch(/found a directory/);
+        expect(message).not.toContain(BANKAI_REPO);
+      }
+    }
+  });
+
   it("a file that exists but cannot be OPENED is still a path-bearing error, not a raw errno", () => {
     // The residue the existence and directory guards cannot cover: a permission
     // failure, a dangling symlink, a file that vanished between check and read.

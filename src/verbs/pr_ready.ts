@@ -74,7 +74,7 @@ import { createClient, tokenFromEnv } from "../github/client.js";
 import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { SchemaError } from "../schema/errors.js";
-import { catastrophicShape } from "../schema/pattern.js";
+import { safePattern } from "../schema/pattern.js";
 import {
   parseGateIdentities,
   type GateIdentities,
@@ -96,36 +96,16 @@ export const PR_READY_FLAGS = {
   booleans: ["explain"],
 } as const;
 
-export const PR_READY_USAGE = `  pr ready <ref>            Report a pull request's CON-32 readiness: the gate's
-                            verdict, the first failing conjunct, nothing else.
-                            Read-only -- it never labels, merges or comments.
-      <ref>                   <CODE>#<N> via the target repo's product codes,
-                              or a bare <N> with --gh-repo. The '#' may be
-                              omitted (AB123 = AB#123); the shorthand reads
-                              the LONGEST trailing digit run as the number,
-                              so a code that itself ends in a digit needs
-                              the '#' -- <CODE>#<N> is the unambiguous form.
-      --gh-repo <owner/name>  The repository, when the ref is a bare number.
-      --explain               The conjunct table, in evaluation order, plus
-                              what the gate does NOT decide.
-      --reviewers <a,b,c>     The configured reviewer set (mirrors the shell
-                              gate's flag). Also the identity source of last
-                              resort -- see --gates.
-      --approvers <a,b>       The approval set, when identities come from flags.
-      --round-policy <p>      strict | bounded. Default bounded.
-      --exclude-run <id>      Drop one Actions run's own checks (CON-36 clause 3;
-                              pass it only from inside that run's own job).
-      --gates <path>          Read reviewer identities from this gates file
-                              instead of the target repo's schemas/gates.json.
-                              A RELATIVE path is resolved against the --repo
-                              root, NOT the current directory -- every other
-                              path this verb reads is anchored there, and a
-                              cwd-relative one would judge the target repo
-                              against whatever gates file the caller happens
-                              to be standing in. Pass an absolute path to
-                              name a file outside the target repo.
-      --token-env <VAR>       Environment variable holding the token.
-                              Default GH_TOKEN; never picked up ambiently.`;
+// `PR_READY_USAGE` USED TO LIVE HERE, and it is deliberately gone (zheref/nen#8,
+// review minor 4). This verb's help text moved into ../pr/command.ts's `USAGE`
+// when `pr ready` was converged into the one "pr" family -- see that file's
+// header for why there is exactly one "pr" entry point -- and the constant here
+// was left behind, exported and referenced by nothing. It went on being edited
+// anyway: this branch added seven lines of `--gates` documentation to it before
+// anybody noticed that no caller renders it. A second copy of the help that
+// nothing prints is worse than no copy, because it is the one a maintainer
+// updates and then wonders why `nen pr ready --help` did not change. The live
+// text is in ../pr/command.ts, and it carries the `--gates` resolution rule.
 
 // A token is never read ambiently the way `gh` reads one; the caller names the
 // variable, and this is only the DEFAULT NAME, not a fallback chain.
@@ -479,30 +459,14 @@ export function identitiesFromFlags(
   };
 }
 
-// The same "an unparseable name matches NOTHING" reading every other layer
-// takes: a malformed reviewer name can never SATISFY something, only fail to
-// match it.
-//
-// A CATASTROPHIC name matches nothing for the same reason (zheref/nen#8 item 3).
-// This function compiles an operator-typed `--reviewers` entry and the result is
-// then run against review AUTHOR LOGINS that came off the network, which is the
-// identical exposure ../schema/gates.ts's five pattern fields have -- so it goes
-// through the same shape guard. It does NOT throw: this function's whole
-// contract is that a name it cannot use matches nothing, and `/(?!)/` is the
-// conservative direction here exactly as it is for an unparseable name (an
-// unrecognised reviewer OWES a round rather than being excused). That keeps the
-// behaviour faithful to the shell's own `test($name; "i")` for every name a
-// person would actually type, while refusing to hand an exponential matcher a
-// stranger's login.
-function safePattern(source: string): RegExp {
-  let compiled: RegExp;
-  try {
-    compiled = new RegExp(source, "i");
-  } catch {
-    return /(?!)/;
-  }
-  return catastrophicShape(source) === null ? compiled : /(?!)/;
-}
+// `safePattern` -- "an unparseable or catastrophic reviewer name matches
+// NOTHING" -- now lives in ../schema/pattern.js and is IMPORTED rather than
+// spelled here (zheref/nen#8, review MAJOR 1). It had a second, byte-identical
+// body in ../gates/predicates.ts, and only this one was ever given the shape
+// guard -- which left the UNGUARDED copy on the path production actually takes,
+// since `identitiesFromFlags` above is never called once the target repository
+// ships a `schemas/gates.json`. One implementation, one guard, two importers;
+// the contract and the reasoning are in that file's header.
 
 /**
  * Where the reviewer identities come from, and -- for `--gates` -- WHICH FILE.
@@ -538,6 +502,26 @@ function safePattern(source: string): RegExp {
  * through ../index.ts's family contract like every other schema-read failure of
  * that verb.
  */
+/**
+ * ONE refusal for every way the filesystem can decline to hand over a `--gates`
+ * file that exists and is not a directory: an EACCES on the file or a parent, a
+ * symlink cycle, a file that vanished between the guard and the read.
+ *
+ * Shared by the `statSync` and the `readFileSync` below rather than written
+ * twice, so the two cannot drift into two different messages for the same
+ * errno -- and so the property the guards exist for ("no raw Node errno string
+ * ever leaves this branch") is one function to check rather than two call sites
+ * to keep in step.
+ */
+function gatesReadFailure(gatesPath: string, gatesFlag: string, error: unknown): SchemaError {
+  const code = (error as NodeJS.ErrnoException).code;
+  return new SchemaError(
+    gatesPath,
+    null,
+    `could not be read (${code ?? String(error)}). --gates was given '${gatesFlag}'; check the file's permissions, or point the flag at one this process can read.`,
+  );
+}
+
 export function resolveIdentities(
   repoRoot: string,
   gatesFlag: string | undefined,
@@ -545,6 +529,17 @@ export function resolveIdentities(
   approvers: readonly string[],
 ): ResolvedIdentities {
   if (gatesFlag !== undefined) {
+    // `--gates ""` FIRST, before any resolution. An empty string resolves to
+    // the repository root, so without this the operator got "expected a file,
+    // found a directory" naming a directory they never typed -- a true sentence
+    // about a path this function invented, and one that says nothing about the
+    // flag that actually went wrong. The empty flag is a thing the operator can
+    // see in their own command line, so it is named there.
+    if (gatesFlag.trim() === "") {
+      throw new IdentityError(
+        `--gates was given an empty path. It names the gates file to read reviewer identities from, so there is nothing to resolve; pass a path, or omit --gates to use the target repository's '${GATES_FILE}'.`,
+      );
+    }
     // `resolve` is what makes this work on Windows too: an absolute path is
     // normalized and kept, a relative one is joined to the repo root, and
     // neither branch assumes a POSIX separator.
@@ -563,7 +558,30 @@ export function resolveIdentities(
         }. Either pass an absolute path, or pass a path relative to the repository root.`,
       );
     }
-    if (statSync(gatesPath).isDirectory()) {
+    // The DIRECTORY guard, and the one filesystem call in this branch that used
+    // to be able to throw a raw Node errno of its own. `existsSync` above
+    // answered about a moment that has already passed, so a plain
+    // `statSync(gatesPath)` on a file deleted between the two calls throws
+    // ENOENT -- which prReady's catch relays verbatim, which is exactly the raw
+    // errno string this whole branch exists to stop. `throwIfNoEntry: false`
+    // turns that race into `undefined` and lets the read below produce this
+    // file's own path-bearing message instead; the try/catch covers the errnos
+    // that option does NOT suppress (EACCES on a parent directory, ELOOP on a
+    // symlink cycle), routing them to the same refusal the read failure uses.
+    //
+    // NOT DIRECTLY TESTED, and the reason is worth stating rather than leaving
+    // as a gap somebody assumes was laziness: every failure this covers needs
+    // the filesystem to change BETWEEN two calls in the same expression, or a
+    // permission state that `existsSync` one line above would already have
+    // failed on. There is no seam to inject at without making the resolver take
+    // a filesystem parameter, which is a larger change than the hazard.
+    let stats: ReturnType<typeof statSync>;
+    try {
+      stats = statSync(gatesPath, { throwIfNoEntry: false });
+    } catch (error) {
+      throw gatesReadFailure(gatesPath, gatesFlag, error);
+    }
+    if (stats?.isDirectory() === true) {
       throw new SchemaError(gatesPath, null, "expected a file, found a directory");
     }
     // The BACKSTOP the two guards above cannot cover: a file that exists and is
@@ -577,12 +595,7 @@ export function resolveIdentities(
     try {
       text = readFileSync(gatesPath, "utf8");
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      throw new SchemaError(
-        gatesPath,
-        null,
-        `could not be read (${code ?? String(error)}). --gates was given '${gatesFlag}'; check the file's permissions, or point the flag at one this process can read.`,
-      );
+      throw gatesReadFailure(gatesPath, gatesFlag, error);
     }
     let value: unknown;
     try {
