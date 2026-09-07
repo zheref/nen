@@ -34,13 +34,27 @@
 // A PIPE INSIDE A CELL IS ESCAPED, AND THE PAIR ROUND-TRIPS (zheref/nen#10,
 // item 2 -- a defect PRESERVED from the porting source, scripts/
 // ichigo_prompt.sh:261, rather than introduced here). These two functions are
-// each other's inverse in practice: `nen board render` PRODUCES the table that
+// each other's inverse FOR PIPES, and lossy for exactly one other character --
+// see the newline paragraph below. `nen board render` PRODUCES the table that
 // `nen stop` RE-PARSES, and a PR title like `feat: a | b` used to split into an
 // extra cell that shifted every later column -- so the rendered board claimed
 // `Refs: b`, `Status: XX-PR-#7`, and `nen stop --json` handed an automated
 // caller those wrong values with no error anywhere. `renderPipeTable` now
 // writes a literal `|` as markdown's own `\|`, and `parsePipeTable` splits only
 // on UNESCAPED pipes and folds `\|` back to `|`.
+//
+// A NEWLINE INSIDE A CELL IS FLATTENED TO A SPACE, AND THAT IS LOSSY -- the one
+// place the pair is NOT an inverse. A markdown table row IS one line by
+// definition (this file's own header, two paragraphs up), so there is no
+// rendering of a line break that survives the round trip: a raw `\n` written
+// into a cell ends the row mid-table, and everything after it parses as
+// whatever the leftover text looks like -- for a four-column board row, three
+// blank fields out of `nen stop --json` with no error anywhere. Flattening is
+// therefore not a choice between lossless and lossy but between LOSSY AND
+// VISIBLE (`a b` in one cell) and CORRUPT AND SILENT. The precedent is
+// ../shadow/run.ts:328, whose own table emitter has flattened newlines
+// alongside its pipe escape from the start. A caller that needs the exact
+// original bytes back must not put them through a markdown table.
 //
 // THE SPACE BEFORE EVERY DELIMITER IS WHAT MAKES THE ESCAPE UNAMBIGUOUS on the
 // way back: `emit` always writes `| cell | cell |`, so a cell ENDING in a
@@ -96,16 +110,21 @@ function pad(cell: string, width: number): string {
   return cell + " ".repeat(gap);
 }
 
-/** A literal `|` written as markdown's `\|`, so it stays INSIDE its cell. */
+/**
+ * A literal `|` written as markdown's `\|`, and any newline flattened to a
+ * single space, so the cell's content stays INSIDE its cell.
+ *
+ * THE PAIR WITH parsePipeTable IS AN INVERSE FOR PIPES AND LOSSY FOR NEWLINES:
+ * `\|` folds back to `|` exactly, while a `\n` (or `\r\n`) is GONE -- a
+ * rendered markdown table row cannot carry a line break, so there is nothing
+ * for the parse to fold it back from. See the file header.
+ */
 export function escapeCell(cell: string): string {
-  return cell.replace(/\|/g, "\\|");
+  return cell.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 // Split one already-leading-pipe-stripped row on its UNESCAPED delimiters,
-// unescaping `\|` back to `|` in the SAME left-to-right pass. One pass rather
-// than split-then-unescape on purpose: a separate `replace(/\\\|/g, "|")`
-// afterwards would also rewrite a `\|` that the split had already decided was
-// content, which is how a two-step version loses the distinction it just made.
+// unescaping `\|` back to `|` in the SAME left-to-right pass.
 function splitEscapedCells(row: string): string[] {
   const cells: string[] = [];
   let cell = "";
@@ -134,11 +153,18 @@ export function parsePipeTable(text: string): string[][] {
     if (!line.startsWith("|")) continue;
     // The leading `|` is punctuation, never an escape (nothing precedes it).
     const raw = splitEscapedCells(line.slice(1));
-    // A row's CLOSING delimiter leaves one empty trailing element behind. It
-    // is dropped only when it is empty BEFORE trimming -- a genuinely empty
-    // last COLUMN (`| a |   |`) carries the padding spaces and survives, and a
-    // row written without a closing pipe (`| a | b`) keeps its last cell.
-    // `length > 1` keeps a lone `|` parsing exactly as it always did.
+    // A row's CLOSING delimiter leaves one empty trailing element behind, and
+    // EXACTLY ONE is dropped -- never a loop. That is what keeps a genuinely
+    // empty last COLUMN (`| a |   |` -> two cells, the second empty): the
+    // closing delimiter's element is the one that goes, and the empty column's
+    // own element stays. A row written without a closing pipe (`| a | b`)
+    // keeps its last cell for the same reason. `length > 1` keeps a lone `|`
+    // parsing exactly as it always did.
+    //
+    // ONLY OBSERVABLE ON A ROW AT LEAST AS LONG AS THE HEADER, which is why
+    // the test for it uses a LONGER one: the short-row padding below would
+    // otherwise re-add a cell a greedier pop had eaten, and the two spellings
+    // would be indistinguishable from outside.
     if (raw.length > 1 && raw[raw.length - 1] === "") raw.pop();
     const cells = raw.map((cell): string => cell.trim());
     if (cells.every((cell): boolean => /^:?-{3,}:?$/.test(cell))) continue; // the separator row
@@ -166,7 +192,9 @@ export function renderPipeTable(rows: readonly (readonly string[])[]): string[] 
   const columnCount = Math.max(...rows.map((row): number => row.length));
   // ESCAPED BEFORE THE WIDTHS ARE MEASURED, because the escape is what gets
   // emitted: measuring the raw cell would under-pad every column holding a
-  // pipe by exactly the backslashes it grew.
+  // pipe by exactly the backslashes it grew, and would measure a newline --
+  // which visibleWidth counts as one column and a terminal renders as a line
+  // break -- instead of the space it is emitted as.
   const evened = rows.map((row): string[] => {
     const out = row.map((cell): string => escapeCell(cell));
     while (out.length < columnCount) out.push("");

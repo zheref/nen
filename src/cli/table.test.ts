@@ -94,6 +94,44 @@ describe("parsePipeTable / renderPipeTable round-trip an escaped pipe (zheref/ne
     expect(parsePipeTable("| a | b |\n| 1 | 2\n")).toEqual([["a", "b"], ["1", "2"]]);
   });
 
+  it("keeps an empty last column on a row LONGER than the header, where padding cannot mask it", () => {
+    // The two assertions above pass whether the closing delimiter's element is
+    // dropped ONCE or in a loop -- a short row's missing cell is put back by
+    // the padding, so both spellings agree from outside. A row longer than the
+    // header is never padded, so this is the case that actually pins the rule:
+    // three cells, the third empty, not two.
+    expect(parsePipeTable("| a | b |\n| --- | --- |\n| 1 | 2 |   |\n")).toEqual([
+      ["a", "b"],
+      ["1", "2", ""],
+    ]);
+  });
+
+  it("flattens a newline in a cell to a space -- LOSSY, and the only lossy case", () => {
+    // A markdown table row is one line by definition, so a raw `\n` in a cell
+    // used to end the row mid-table: `nen stop --json` came back with three
+    // blank fields for a four-column board row and no error anywhere. The
+    // round trip returns the title with the break replaced by a space, which
+    // is the honest answer rather than the silent one.
+    const rendered = renderPipeTable([["Effort", "Refs"], ["feat: a\nb", "XX-PR-#7"]]);
+    expect(rendered).toHaveLength(3); // header, separator, ONE data row
+    expect(rendered[2]).toContain("feat: a b");
+    expect(rendered.every((line): boolean => !line.includes("\n"))).toBe(true);
+    expect(parsePipeTable(rendered.join("\n"))).toEqual([
+      ["Effort", "Refs"],
+      ["feat: a b", "XX-PR-#7"],
+    ]);
+  });
+
+  it("flattens a CRLF the same way, and measures the flattened width", () => {
+    const rendered = renderPipeTable([["h1", "h2"], ["a\r\nb", "x"]]);
+    expect(parsePipeTable(rendered.join("\n"))).toEqual([["h1", "h2"], ["a b", "x"]]);
+    // The first column is measured on the FLATTENED cell (`a b`, 3 wide, the
+    // markdown floor) rather than on the raw `a\r\nb`, which visibleWidth
+    // would have counted as 4 -- so the row is not over-padded by the
+    // characters that never reach the output.
+    expect(rendered[0]).toBe("| h1  | h2  |");
+  });
+
   it("is byte-identical to the unescaped rendering when no cell holds a pipe", () => {
     // The parity guarantee for every existing caller: escaping is the
     // identity on a table that never needed it.
