@@ -1806,6 +1806,12 @@ describe("nen issue attach-sub / consolidate-close -- a pull request is refused 
     );
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/#925 \(--parent\)/);
+    expect(writes(result.calls)).toEqual([]);
+    // The parent is certified by the HOISTED check, not only by the write-stage
+    // pre-flight underneath it: NO_OPEN_PRS is scripted, so reaching the
+    // open-PR guard would succeed quietly -- this is what says the refusal came
+    // first (zheref/nen#77 review, minor).
+    expect(result.calls.filter((line): boolean => line.startsWith("gh pr list"))).toEqual([]);
   });
 
   it("consolidate-close closes NOTHING when only one child of several is a pull request", async () => {
