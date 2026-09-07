@@ -160,7 +160,9 @@ machine-readable form.
 ## Working on Nen
 
 Requires [bun](https://bun.sh) 1.4.0 or newer, and nothing else. Identical
-on macOS and Windows/Git Bash.
+on macOS and Windows/Git Bash. See [CHANGELOG.md](CHANGELOG.md) for what
+changed release to release, including any behaviour a caller pinned to an
+older tag needs to account for.
 
 ```
 bun install --frozen-lockfile
