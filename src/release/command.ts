@@ -19,7 +19,12 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { readJsonFile, readTextFile, splitList } from "../cli/inputs.js";
-import { extractChangelogRefs, extractFragmentRefs, extractMergedPrNumbers } from "../changelog/completeness.js";
+import {
+  DEFAULT_FRAGMENT_DIR,
+  extractChangelogRefs,
+  extractFragmentRefs,
+  extractMergedPrNumbers,
+} from "../changelog/completeness.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { GH, GIT, must, outputLines, type CommandResult } from "../seam/exec.js";
 import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflight.js";
@@ -145,7 +150,9 @@ self-check:
   from --previous-tag. A git-mechanical fact, never a judgement.`;
 
 const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
-const DEFAULT_FRAGMENT_DIR = "changelog.d";
+// DEFAULT_FRAGMENT_DIR now lives in ../changelog/completeness.ts, shared with
+// `nen changelog completeness` -- the two verbs reconcile the same range
+// against the same evidence and must not disagree about where fragments live.
 
 export const releaseCommand: Command = {
   name: "release",

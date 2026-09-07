@@ -20,6 +20,21 @@
 // parameter (the repository's own `github.com/<owner>/<repo>` prefix), never
 // a literal.
 
+/**
+ * The fragment directory both CON-33(c) readers default to, defined ONCE here
+ * because both of them import this module already (zheref/nen#10 item 5).
+ *
+ * `nen release preflight` and `nen changelog completeness` reconcile the same
+ * merge range against the same evidence, and `--fragment-dir` used to default
+ * in one and be optional-with-no-default in the other -- so omitting it from
+ * `changelog completeness` reported an uncollated fragment's PR as missing
+ * while the sibling verb (and the porting source's own CLI,
+ * changelog_release_completeness_check.sh:117) counted it. Two verbs
+ * disagreeing about the same repository's layout is the kind of drift a shared
+ * constant makes impossible rather than merely unlikely.
+ */
+export const DEFAULT_FRAGMENT_DIR = "changelog.d";
+
 export interface CompletenessInput {
   /** Merged PR numbers in the range, from `git log --merges` subjects. */
   readonly mergedPrNumbers: readonly number[];

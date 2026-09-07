@@ -94,4 +94,74 @@ describe("nen changelog completeness", () => {
     expect(result.code).toBe(1);
     expect(result.out.join("\n")).toMatch(/#5/);
   });
+
+  // zheref/nen#10 item 5. Omitting --fragment-dir used to contribute NO
+  // fragment references, so an uncollated fragment's PR was reported as
+  // missing an entry it demonstrably has -- while `nen release preflight`,
+  // reconciling the same range against the same evidence, counted it.
+  describe("--fragment-dir defaults to changelog.d, like 'nen release preflight'", () => {
+    const mergedFive = (): CommandResult => ({ code: 0, stdout: "Merge pull request #5 from x/y\n", stderr: "", spawnFailed: false });
+
+    it("counts an UNCOLLATED fragment's PR as present with the flag omitted", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      mkdirSync(join(dir, "changelog.d"), { recursive: true });
+      writeFileSync(join(dir, "changelog.d", "5-a-thing.md"), "- did a thing\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(0);
+      expect(result.out.join("\n")).toMatch(/every PR merged in v1\.\.v2/);
+    });
+
+    it("is the SAME answer as passing the directory explicitly", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      mkdirSync(join(dir, "changelog.d"), { recursive: true });
+      writeFileSync(join(dir, "changelog.d", "5-a-thing.md"), "- did a thing\n");
+
+      const omitted = await capture(["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r"], dir, mergedFive);
+      const explicit = await capture(["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", "changelog.d"], dir, mergedFive);
+      expect(omitted.code).toBe(explicit.code);
+      expect(omitted.out).toEqual(explicit.out);
+    });
+
+    it("treats a MISSING default directory as 'no fragments', never a crash or a refusal", async () => {
+      // Matches `nen release preflight`'s own existsSync guard: a repository
+      // that has collated every fragment legitimately has no changelog.d/ at
+      // the cut point, and refusing there would fail a release for being tidy.
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here"); // no changelog.d/ anywhere
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(1); // #5 really is unreferenced -- reported, not crashed
+      expect(result.out.join("\n")).toMatch(/#5/);
+      expect(result.err.join("\n")).not.toMatch(/ENOENT/);
+    });
+
+    it("still honours an EXPLICIT --fragment-dir elsewhere", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+      const changelog = join(dir, "CHANGELOG.md");
+      writeFileSync(changelog, "no refs here");
+      mkdirSync(join(dir, "fragments"), { recursive: true });
+      writeFileSync(join(dir, "fragments", "5-a-thing.md"), "- did a thing\n");
+
+      const result = await capture(
+        ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--fragment-dir", "fragments"],
+        dir,
+        mergedFive,
+      );
+      expect(result.code).toBe(0);
+    });
+  });
 });
