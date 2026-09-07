@@ -1017,6 +1017,20 @@ describe("classifyCommand -- the gh/git rows' own scan-dependence (#70)", () => 
     expect(classifyCommand("git show --stat HEAD").classification).toBe("read-only");
   });
 
+  // zheref/nen#76's own review: this is the load-bearing hinge for GIT_FETCH_PLAIN
+  // that had no direct pin. The allowlist regex itself, read on its own, would
+  // admit `git fetch '--prune'` -- a quoted flag's leading '-' is hidden behind
+  // the quote, so GIT_FETCH_PLAIN's `[^-+\s:][^\s:]*` positional arm matches the
+  // WHOLE token `'--prune'` as if it were a bare ref. Only the "line-scan" hinge
+  // (which re-checks isScanFaithfulLine and refuses on any quote) stops that from
+  // reading read-only, exactly as it does for git log/diff/show and git branch
+  // above. A real shell unquotes '--prune' into the bare flag that deletes a
+  // remote-tracking ref, so this must NEVER classify read-only.
+  it("GIT_FETCH_PLAIN stays gated by the line-scan hinge: a quoted '--prune' never classifies read-only", () => {
+    expect(classifyCommand("git fetch '--prune'").classification).not.toBe("read-only");
+    expect(classifyCommand("git fetch '--prune'").classification).toBe("unknown");
+  });
+
   it("leaves the line-scan rows' clean listing forms untouched", () => {
     const listings: readonly string[] = [
       "git branch",
