@@ -81,6 +81,13 @@ function readIssueForVerification(seams: Seams, target: Target, number: number):
   }
   const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
   const rawPullRequest = parsed["pull_request"];
+  // An explicit `null` counts as ABSENT, i.e. as an issue -- the same
+  // predicate ../issue/subissue.ts's `readIssue` uses, and its note records
+  // why: real GitHub sends the key absent on an issue and as an OBJECT on a
+  // pull request, never as null, while `pull_request: {}` and a payload with
+  // no usable fields already fail closed. The two sites are kept identical on
+  // purpose; a divergence here would mean the same payload is one class in
+  // this verb and another one verb over.
   if (rawPullRequest !== undefined && rawPullRequest !== null) {
     throw new FileIdeaError(
       `idea filed as #${number}, but the read-back answered with a PULL REQUEST, not an issue -- so it confirms ` +

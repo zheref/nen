@@ -41,7 +41,10 @@ import {
 import {
   consolidateClose,
   attachSub,
+  consolidationInputs,
   planConsolidation,
+  readIssue,
+  requireIssues,
   unknownPlaceholders,
   unmatchedBraces,
   CLOSE_COMMENT_PLACEHOLDERS,
@@ -372,12 +375,15 @@ usage:
       --parent and each --children entry are certified before the first write,
       and a number that turns out to name a pull request REFUSES the whole run
       (exit 1) with nothing attached, nothing closed and no close comment
-      posted. Closing a pull request with a consolidation comment is a state
-      change and a public timeline event that no later sweep will question, so
-      it is refused rather than performed. Ask the 'nen pr' family about a
-      pull request. ('nen issue comment' is the deliberate exception in this
-      family: it ACCEPTS a pull request's number, and says why in its own
-      entry above.)
+      posted. That certification runs BEFORE the two refusals above, so a pull
+      request is answered by the refusal that names it -- never by advice that
+      cannot apply to it ('pass --allow-open-pr', 'name --severity-family'),
+      and never with a published plan computed over it. Closing a pull request
+      with a consolidation comment is a state change and a public timeline
+      event that no later sweep will question, so it is refused rather than
+      performed. Ask the 'nen pr' family about a pull request. ('nen issue
+      comment' is the deliberate exception in this family: it ACCEPTS a pull
+      request's number, and says why in its own entry above.)
       THE CLOSE COMMENT. With neither flag below, every child is closed with
       the fixed 'Consolidated into #<parent>.' this verb has always posted --
       byte for byte, and pinned by test. --close-comment <template> replaces it
@@ -1047,7 +1053,44 @@ function consolidate(context: CommandContext): number {
   // without a single `gh` call -- the same discipline readSeverityFamily's
   // shape check follows one line up.
   const closeComments = readCloseComments(context, children, root);
+  // THE PARENT IS READ HERE, AND IT IS READ FIRST. Nothing in this verb had
+  // ever looked at `--parent` before its first write, and the certification
+  // below cannot certify a number nobody read. Reading it before the children
+  // also means an unreadable parent fails once, by name, instead of after N
+  // child reads that were never going to be used.
+  const parentSummary = readIssue(context.seams, target, parent);
   const plan = planConsolidation(context.seams, target, parent, children, taxonomy, severityFamily);
+
+  // THE OBJECT-CLASS REFUSAL RUNS BEFORE EVERY OTHER REFUSAL IN THIS VERB
+  // (issue #77, and the ORDERING is the review finding this position answers).
+  //
+  // It used to sit at the bottom, inherited from ./subissue.ts's write-stage
+  // pre-flight, which was safe -- nothing was ever written -- but answered the
+  // wrong question first. The two refusals below run on a plan computed over
+  // an object class this run refuses to reason about, so a pull request in
+  // --children was met with "pass --allow-open-pr" (the wrong remedy, on a
+  // number no flag can make attachable) or with the unreduced-families refusal
+  // whose --json body PUBLISHES the plan -- `isPullRequest: true` and all --
+  // directly contradicting the withholding this refusal promises. Certifying
+  // first makes the first thing a caller is told the thing they have to fix.
+  //
+  // THE PLAN IS NOT REPORTED WITH THIS REFUSAL, unlike the two below. It was
+  // computed over that same void object class, so publishing it would hand a
+  // --json caller exactly the artifact the refusal says is worthless -- and
+  // `pullRequests` already names the numbers that have to change before a plan
+  // means anything at all.
+  //
+  // ZERO WRITES EITHER WAY: the reads above are the only `gh` calls this path
+  // makes, and ./subissue.ts still certifies again at the write stage, so a
+  // caller reaching `consolidateClose` directly is guarded too.
+  try {
+    requireIssues(consolidationInputs(plan, parentSummary));
+  } catch (error) {
+    if (error instanceof NotAnIssueError) {
+      return refuseNotAnIssue(context, { parent, children, pullRequests: error.numbers }, error);
+    }
+    throw error;
+  }
 
   // WITH NO --severity-family, planConsolidation's severity-max reduction is
   // unreachable and every severity-shaped label falls into the union -- the
@@ -1101,17 +1144,15 @@ function consolidate(context: CommandContext): number {
     return 1;
   }
 
-  // THE OBJECT-CLASS REFUSAL (issue #77), inherited rather than repeated: the
-  // attach stage is this choreography's FIRST write, ./subissue.ts certifies
-  // the parent and every child before it, and a failed stage stops the run
-  // before any close -- so a refusal here means nothing was attached, nothing
-  // was closed and no close comment was rendered or posted.
-  //
-  // THE PLAN IS NOT REPORTED WITH THIS REFUSAL, unlike the two above. It was
-  // computed over a label set belonging to an object class this run refuses to
-  // reason about, so publishing it would hand a --json caller exactly the
-  // artifact the refusal says is void -- and `pullRequests` already names the
-  // numbers that have to change before a plan means anything.
+  // THE SECOND HALF OF THE OBJECT-CLASS REFUSAL, and it is deliberately still
+  // here after the hoisted check above. ./subissue.ts certifies the parent and
+  // every child again at the write stage -- that pre-flight is the module's
+  // own guarantee, owed to any caller that reaches `consolidateClose`
+  // directly -- and this catch is what turns that throw into this family's
+  // exit code and `refused: true` shape rather than a bare failure. In an
+  // ordinary run the hoisted check has already refused and nothing reaches
+  // here; what does reach here is an object whose class CHANGED between the
+  // two reads, which is exactly the case that must not be written through.
   let report;
   try {
     report = consolidateClose(

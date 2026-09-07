@@ -20,7 +20,7 @@ async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
   options: { repoFlag?: string | null; json?: boolean; now?: Date } = {},
-): Promise<{ code: number; out: string[]; err: string[] }> {
+): Promise<{ code: number; out: string[]; err: string[]; calls: readonly string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -41,7 +41,30 @@ async function capture(
     io,
     seams,
   );
-  return { code, out, err };
+  return {
+    code,
+    out,
+    err,
+    // The shim log, so a refusal test can assert "and it wrote NOTHING"
+    // positively rather than only by the absence of a scripted write.
+    calls: scripted.calls.map((call): string => [call.command, ...call.args].join(" ")),
+  };
+}
+
+/**
+ * Every call a run made that is NOT a plain read -- the CLI-layer twin of
+ * ./subissue.test.ts's `writes()`, and an allowlist for the same reason: a
+ * "refused before any write" claim must be about EVERY write, not about the
+ * two argv shapes this family happens to use today. A read is `gh api <path>`
+ * or one of the read-only `gh` queries these verbs make; everything else --
+ * a POST/PATCH/PUT/DELETE, `gh issue close`, `gh issue comment`, `gh issue
+ * edit`, `gh label ...` -- counts.
+ */
+function writes(calls: readonly string[]): readonly string[] {
+  return calls.filter(
+    (line): boolean =>
+      !/^gh api [^ -][^ ]*$/.test(line) && !/^gh (pr|issue|search) (list|view) /.test(line),
+  );
 }
 
 /**
@@ -129,6 +152,10 @@ describe("nen issue -- CLI wiring", () => {
     const result = await capture(
       ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5"],
       [
+        // The parent read is the object-class certification's, which now runs
+        // BEFORE this guard (zheref/nen#77 review) -- so every consolidate
+        // script that gets as far as a plan carries it.
+        PARENT_1,
         {
           match: "gh api repos/o/n/issues/5",
           result: { stdout: JSON.stringify({ number: 5, id: 55, title: "child", state: "open", labels: [] }) },
@@ -187,6 +214,7 @@ describe("nen issue -- CLI wiring", () => {
     const result = await capture(
       ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5,6"],
       [
+        PARENT_1,
         {
           match: "gh api repos/o/n/issues/5",
           result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [{ name: "bankai:severity/high" }] }) },
@@ -214,6 +242,7 @@ describe("nen issue -- CLI wiring", () => {
     const result = await capture(
       ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5,6"],
       [
+        PARENT_1,
         {
           match: "gh api repos/o/n/issues/5",
           result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [{ name: "bankai:severity/high" }] }) },
@@ -1813,6 +1842,169 @@ describe("nen issue attach-sub / consolidate-close -- a pull request is refused 
     );
     expect(result.code).toBe(1);
     expect(result.out.join("\n")).not.toMatch(/would run/);
+  });
+
+  // THE ORDER OF THE REFUSALS IS ITSELF THE CONTRACT (zheref/nen#77 review,
+  // minor). consolidate-close had two refusals older than this one -- the
+  // unreduced-families check and the open-PR guard -- and both used to fire
+  // FIRST, so a pull request in --children was answered with a remedy that
+  // does not apply to it. Certification now runs before either.
+  it("consolidate-close answers a PR child with the OBJECT-CLASS refusal, not the omitted-severity-family one", async () => {
+    const result = await capture(
+      // Two children carrying two labels of one family: without
+      // --severity-family this is exactly the unreduced-families refusal's
+      // trigger, and #925 is a pull request.
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5,925"],
+      [
+        PARENT_1,
+        {
+          match: "gh api repos/o/n/issues/5",
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [{ name: "bankai:severity/high" }] }) },
+        },
+        {
+          match: "gh api repos/o/n/issues/925",
+          result: {
+            stdout: JSON.stringify({
+              number: 925,
+              id: 90925,
+              title: "some pull request",
+              state: "open",
+              labels: [{ name: "bankai:severity/medium" }],
+              pull_request: { url: "https://api.github.com/repos/o/n/pulls/925" },
+            }),
+          },
+        },
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(1);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/#925 \(--children\) names a pull request, not an issue/);
+    expect(err).not.toMatch(/--severity-family/);
+    expect(writes(result.calls)).toEqual([]);
+  });
+
+  // The --json half of the same finding, and the sharper one: the
+  // unreduced-families refusal PUBLISHES the plan, so answering it first put
+  // the pull request itself -- `isPullRequest: true`, `toClose: [925]` -- into
+  // the body of a refusal whose own comment says the plan is withheld.
+  it("consolidate-close --json publishes NO plan when a child is a pull request", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5,925"],
+      [
+        PARENT_1,
+        {
+          match: "gh api repos/o/n/issues/5",
+          result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [{ name: "bankai:severity/high" }] }) },
+        },
+        {
+          match: "gh api repos/o/n/issues/925",
+          result: {
+            stdout: JSON.stringify({
+              number: 925,
+              id: 90925,
+              title: "some pull request",
+              state: "open",
+              labels: [{ name: "bankai:severity/medium" }],
+              pull_request: { url: "https://api.github.com/repos/o/n/pulls/925" },
+            }),
+          },
+        },
+      ],
+      { repoFlag: BANKAI_REPO, json: true },
+    );
+    expect(result.code).toBe(1);
+    const body = result.out.join("\n");
+    expect(JSON.parse(body)).toEqual({
+      parent: 1,
+      children: [5, 925],
+      pullRequests: [925],
+      refused: true,
+      reason: expect.stringContaining("#925 (--children) names a pull request, not an issue"),
+    });
+    expect(body).not.toMatch(/"plan"/);
+    expect(body).not.toMatch(/isPullRequest/);
+    expect(writes(result.calls)).toEqual([]);
+  });
+
+  // The other pre-existing refusal, same finding: "pass --allow-open-pr" is
+  // advice a caller can follow, and following it on a pull request would have
+  // been following it into the choreography this verb must refuse outright.
+  it("consolidate-close answers a PR child with the object-class refusal, not the --allow-open-pr advice", async () => {
+    const result = await capture(
+      ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "925"],
+      [
+        PARENT_1,
+        pr(925),
+        // The open-PR guard's own read is scripted so that reaching it is a
+        // WRONG ANSWER rather than a crash: this test has to fail on the
+        // message, not on the fixture running out.
+        {
+          match:
+            "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+          result: {
+            stdout: JSON.stringify([
+              { number: 99, title: "wip", url: "https://x/pull/99", isDraft: true, body: "", closingIssuesReferences: [{ number: 925 }] },
+            ]),
+          },
+        },
+      ],
+      { repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(1);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/#925 \(--children\) names a pull request, not an issue/);
+    expect(err).not.toMatch(/--allow-open-pr/);
+    expect(writes(result.calls)).toEqual([]);
+  });
+
+  // KEY ORDER IS PART OF THE --json CONTRACT and nothing pinned it: `toEqual`
+  // compares objects, so a refactor that reordered the fields would keep every
+  // shape assertion in this file green while changing the bytes a caller
+  // diffing or golden-testing this output reads (zheref/nen#77 review, minor).
+  // One classifier verb and one choreography verb, since those are the two
+  // shapes `refuseNotAnIssue` renders.
+  it("pins the classifier refusal's --json KEY ORDER: issue, refused, reason", async () => {
+    const result = await capture(
+      ["issue", "chain-position", "--target", "o/n", "--issue", "925"],
+      [pr(925)],
+      { json: true },
+    );
+    expect(result.code).toBe(1);
+    expect(Object.keys(JSON.parse(result.out.join("\n")) as object)).toEqual([
+      "issue",
+      "refused",
+      "reason",
+    ]);
+  });
+
+  it("pins the choreography refusal's --json KEY ORDER: parent, children, pullRequests, refused, reason", async () => {
+    const result = await capture(
+      ["issue", "attach-sub", "--target", "o/n", "--parent", "1", "--children", "5,925"],
+      [PARENT_1, issue(5, 55), pr(925)],
+      { json: true },
+    );
+    expect(result.code).toBe(1);
+    expect(Object.keys(JSON.parse(result.out.join("\n")) as object)).toEqual([
+      "parent",
+      "children",
+      "pullRequests",
+      "refused",
+      "reason",
+    ]);
+  });
+
+  // Minor 4's CLI half: `--children 12,12` is one wrong number typed twice.
+  it("names a repeated --children number once, and returns it once", async () => {
+    const result = await capture(
+      ["issue", "attach-sub", "--target", "o/n", "--parent", "1", "--children", "925,925"],
+      [PARENT_1, pr(925)],
+      { json: true },
+    );
+    expect(result.code).toBe(1);
+    const parsed = JSON.parse(result.out.join("\n")) as { pullRequests: number[]; reason: string };
+    expect(parsed.pullRequests).toEqual([925]);
+    expect(parsed.reason).toMatch(/^#925 \(--children\) names a pull request, not an issue;/);
   });
 
   it("issue --help documents the refusal on both choreography verbs", async () => {

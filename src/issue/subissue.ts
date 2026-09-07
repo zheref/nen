@@ -137,6 +137,16 @@ export function readIssue(seams: Seams, target: Target, number: number): IssueSu
     title: String(parsed["title"] ?? ""),
     state: String(parsed["state"] ?? ""),
     labels,
+    // AN EXPLICIT `null` IS TREATED AS ABSENT, i.e. as an issue, and that is
+    // deliberate rather than an oversight the reviewer caught (zheref/nen#77
+    // review, minor): real GitHub never sends the key as null -- it is absent
+    // on an issue and an OBJECT on a pull request -- so the only payload that
+    // reaches this branch is one no GitHub produced. The shapes that DO occur
+    // and could hide a pull request already fail closed: `pull_request: {}` is
+    // non-null and refuses, and a payload carrying no `number` fails the id
+    // resolution before any write. Refusing null instead would refuse a
+    // hand-written fixture rather than a real object, and would silently
+    // diverge from the predicate zheref/nen#25 shipped in ./chain.ts.
     isPullRequest: rawPullRequest !== undefined && rawPullRequest !== null,
   };
 }
@@ -196,19 +206,43 @@ export interface NumberedInput {
  * ../issue/command.ts's flag and close-comment guards follow: a caller fixing
  * one number per round trip is the cost this repository designs against
  * everywhere else -- and here each round trip is a set of `gh` reads.
+ *
+ * EACH OF THEM ONCE, THOUGH -- deduplicated BY NUMBER before anything is
+ * rendered (zheref/nen#77 review, minor). `--children 12,12` is one wrong
+ * number typed twice, not two wrong numbers, and a refusal that said
+ * `#12 (--children) and #12 (--children) name pull requests` alongside
+ * `pullRequests: [12, 12]` would tell a caller its list has two problems to
+ * fix and hand a machine-reader a multiset where a set was meant. A number
+ * that arrived under SEVERAL flags is still ONE number and is named once,
+ * carrying every flag it came in under -- `#12 (--parent, --children)` --
+ * because both places have to change and the refusal is the only thing that
+ * says so. First-appearance order throughout, so the sentence follows the
+ * caller's own list.
  */
 export function requireIssues(inputs: readonly NumberedInput[]): void {
-  const pulls = inputs.filter((entry): boolean => entry.summary.isPullRequest);
-  if (pulls.length === 0) return;
-  const one = pulls.length === 1;
+  const offenders = new Map<number, string[]>();
+  for (const entry of inputs) {
+    if (!entry.summary.isPullRequest) continue;
+    const roles = offenders.get(entry.number);
+    if (roles === undefined) {
+      offenders.set(entry.number, [entry.role]);
+      continue;
+    }
+    if (!roles.includes(entry.role)) roles.push(entry.role);
+  }
+  if (offenders.size === 0) return;
+  const numbers = [...offenders.keys()];
+  const one = numbers.length === 1;
   throw new NotAnIssueError(
-    `${conjoin(pulls.map((entry): string => `#${entry.number} (${entry.role})`))} ` +
+    `${conjoin(
+      numbers.map((number): string => `#${number} (${(offenders.get(number) ?? []).join(", ")})`),
+    )} ` +
       `${one ? "names a pull request, not an issue" : "name pull requests, not issues"}; ` +
       "sub-issue attachment and the consolidation close it drives are defined only for issues, and both WRITE. " +
       "Nothing was attached, closed or commented on: every number is certified before the first write, so a list " +
       "that mixes issues with a pull request refuses whole rather than attaching the issues in it and stopping " +
       `halfway. ${ASK_THE_PR_FAMILY}`,
-    pulls.map((entry): number => entry.number),
+    numbers,
   );
 }
 
@@ -332,6 +366,21 @@ export function attachSub(
 export interface ConsolidationPlan {
   readonly parent: number;
   readonly children: readonly IssueSummary[];
+  /**
+   * The child numbers AS THE CALLER SPELLED THEM, index-for-index with
+   * `children` above -- which carries the numbers the PAYLOADS came back with.
+   *
+   * The two are the same number in every ordinary run and differ only where
+   * GitHub redirects a transferred object, which is exactly why this field
+   * exists (zheref/nen#77 review, minor): `consolidateClose` used to hand
+   * `children.map(c => c.number)` to `attachSub`, so the certification below
+   * reported PAYLOAD numbers on the consolidate path while `NotAnIssueError`'s
+   * docblock promises everything it reports comes from the caller's argument.
+   * A refusal naming a number the caller never typed is a refusal they cannot
+   * act on. So the requested list is carried through and it is the one both
+   * verbs certify and report.
+   */
+  readonly requested: readonly number[];
   /** The union of every child's labels, minus the severity family. */
   readonly labelUnion: readonly string[];
   /** The highest severity among the children, or null when none carries one. */
@@ -472,6 +521,7 @@ export function planConsolidation(
   return {
     parent,
     children: summaries,
+    requested: [...children],
     labelUnion: [...union].sort(),
     severity,
     severitySetBy,
@@ -479,6 +529,35 @@ export function planConsolidation(
     unreducedFamilies,
     notes,
   };
+}
+
+/**
+ * The plan's own numbers as certification inputs, CALLER-SPELLED.
+ *
+ * Exported so ./command.ts can run `requireIssues` on a plan BEFORE its other
+ * refusals fire, rather than inheriting the certification from `attachSub` at
+ * the bottom of the run (zheref/nen#77 review, minor). Ordering the guards
+ * that way was the whole finding: `consolidate-close`'s unreduced-families and
+ * open-PR refusals ran first, so a pull request in `--children` was answered
+ * with "pass --allow-open-pr" or with a published plan that contained the pull
+ * request -- the wrong remedy for the wrong object class, and, in `--json`,
+ * the very artifact the object-class refusal exists to withhold.
+ *
+ * The parent summary is passed in because a plan does not read the parent: the
+ * caller that hoists this check reads it, and `attachSub` reads it again at
+ * the write stage, where the certification must hold regardless of who called.
+ */
+export function consolidationInputs(
+  plan: ConsolidationPlan,
+  parent: IssueSummary,
+): readonly NumberedInput[] {
+  return [
+    { number: plan.parent, role: "--parent", summary: parent },
+    ...plan.children.flatMap((summary, index): readonly NumberedInput[] => {
+      const number = plan.requested[index];
+      return number === undefined ? [] : [{ number, role: "--children", summary }];
+    }),
+  ];
 }
 
 // --- the close comment ---------------------------------------------------------
@@ -677,13 +756,12 @@ export function consolidateClose(
   );
   for (const note of plan.notes) log.push(`note: ${note}`);
 
-  const attachReport = attachSub(
-    seams,
-    target,
-    plan.parent,
-    plan.children.map((child): number => child.number),
-    dryRun,
-  );
+  // THE REQUESTED NUMBERS, NOT THE PAYLOADS' -- see ConsolidationPlan.requested
+  // for the whole argument. This line used to read
+  // `plan.children.map(child => child.number)`, which made the inherited
+  // certification report numbers GitHub chose rather than numbers the caller
+  // typed the moment the two disagreed.
+  const attachReport = attachSub(seams, target, plan.parent, plan.requested, dryRun);
   log.push(...attachReport.log);
   if (attachReport.failed.length > 0) {
     for (const failure of attachReport.failed) {

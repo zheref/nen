@@ -60,18 +60,30 @@ const PARENT_1 = { match: "gh api repos/zheref/nen/issues/1", result: apiResult(
 const PARENT_9 = { match: "gh api repos/zheref/nen/issues/9", result: apiResult(9, 900, []) };
 
 /**
- * Every call this run made that WRITES -- the sub-issue POST and the close.
+ * Every call this run made that is NOT A PLAIN READ.
  *
  * The object-class refusal's whole claim is "nothing was attached, closed or
  * commented on", and a test that only asserted the throw would leave that half
  * unproved: a guard placed one line too late would still throw, after the
  * first child was already a sub-issue. So the refusal tests assert on THIS,
  * not only on the message.
+ *
+ * AN ALLOWLIST, NOT A BLOCKLIST (zheref/nen#77 review, minor). The first
+ * version matched `--method POST` and `issue close`, which is a list of the
+ * two writes this module happens to make TODAY: `gh issue comment`, `gh issue
+ * edit`, `gh label create`, and a `--method PATCH`, `PUT` or `DELETE` all slid
+ * past it, so an assertion reading "posts nothing" would have stayed green
+ * through a guard that posted a comment. The claim these tests make is about
+ * every write, not about two of them, so the filter now says what a READ looks
+ * like -- `gh api <path>` and nothing else, no method flag and no `-F` field
+ * payload -- and counts everything else. Fail-closed on purpose: a new read
+ * shape has to be admitted here deliberately, which is the direction an
+ * "it wrote nothing" assertion should be wrong in.
  */
 function writes(seams: ScriptedSeams): readonly string[] {
   return seams.calls
     .map((call): string => [call.command, ...call.args].join(" "))
-    .filter((line): boolean => line.includes("--method POST") || line.includes("issue close"));
+    .filter((line): boolean => !/^gh api [^ -][^ ]*$/.test(line));
 }
 
 describe("readIssue -- REST, because 'id' is not in gh issue view --json", () => {
@@ -287,10 +299,16 @@ describe("attachSub -- refuses a pull request BEFORE the first write (issue #77)
 });
 
 describe("consolidateClose -- inherits the refusal, so no child is closed (issue #77)", () => {
-  function plan(children: number[]): ConsolidationPlan {
+  /**
+   * `payloadNumbers` are what the READ-BACK said; `requested` is what the
+   * caller typed. They are the same list in every ordinary run and are
+   * separable here so the one case that tells them apart -- a redirect -- can
+   * be tested.
+   */
+  function plan(payloadNumbers: number[], requested: number[] = payloadNumbers): ConsolidationPlan {
     return {
       parent: 9,
-      children: children.map((n): {
+      children: payloadNumbers.map((n): {
         number: number;
         id: number | null;
         title: string;
@@ -298,10 +316,11 @@ describe("consolidateClose -- inherits the refusal, so no child is closed (issue
         labels: string[];
         isPullRequest: boolean;
       } => ({ number: n, id: n * 10, title: `#${n}`, state: "open", labels: [], isPullRequest: false })),
+      requested,
       labelUnion: [],
       severity: null,
       severitySetBy: null,
-      toClose: children,
+      toClose: payloadNumbers,
       unreducedFamilies: [],
       notes: [],
     };
@@ -334,6 +353,36 @@ describe("consolidateClose -- inherits the refusal, so no child is closed (issue
     expect((): unknown => consolidateClose(seams, TARGET, plan([1, 2]), false)).toThrow(NotAnIssueError);
     expect(writes(seams)).toEqual([]);
   });
+
+  // THE NUMBER THE CALLER TYPED, ON THIS PATH TOO (zheref/nen#77 review,
+  // minor). `consolidateClose` used to hand `attachSub` the numbers the
+  // PAYLOADS came back with, so on the one occasion the two disagree -- a
+  // transferred object GitHub redirects -- `consolidate-close` refused with a
+  // number the caller never typed, breaking the promise NotAnIssueError's
+  // docblock makes for the whole family. The plan below is the shape a
+  // redirect produces: `--children 925` was asked for, `925` answered as
+  // `926`.
+  it("refuses with the REQUESTED child number, not the number the payload came back with", () => {
+    const seams = new ScriptedSeams([
+      PARENT_9,
+      { match: "gh api repos/zheref/nen/issues/925", result: prResult(926, 90926) },
+      // Scripted so that reading the PAYLOAD's number instead is a wrong
+      // ANSWER rather than an unscripted-call crash: the old code refused
+      // naming #926, and this test has to fail on the message, not on the
+      // fixture running out.
+      { match: "gh api repos/zheref/nen/issues/926", result: prResult(926, 90926) },
+    ]);
+    let caught: NotAnIssueError | null = null;
+    try {
+      consolidateClose(seams, TARGET, plan([926], [925]), false);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/#925 \(--children\)/);
+    expect(caught?.message).not.toMatch(/#926/);
+    expect(caught?.numbers).toEqual([925]);
+    expect(writes(seams)).toEqual([]);
+  });
 });
 
 describe("requireIssues -- the certification itself", () => {
@@ -362,6 +411,95 @@ describe("requireIssues -- the certification itself", () => {
     expect(caught?.message).toMatch(/#925 \(--parent\)/);
     expect(caught?.message).not.toMatch(/#926/);
     expect(caught?.numbers).toEqual([925]);
+  });
+
+  // ONE WRONG NUMBER TYPED TWICE IS ONE PROBLEM (zheref/nen#77 review, minor).
+  // `--children 12,12` used to be named twice in the prose and returned twice
+  // in `pullRequests`, which reads as a list with two things to fix and hands
+  // a machine-reader a multiset where a set was meant.
+  it("names a repeated number once, and returns it once", () => {
+    let caught: NotAnIssueError | null = null;
+    try {
+      requireIssues([
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+      ]);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/^#12 \(--children\) names a pull request, not an issue;/);
+    expect(caught?.numbers).toEqual([12]);
+  });
+
+  // THE CHOICE, RECORDED: a number that arrived under SEVERAL flags is named
+  // ONCE, carrying every flag it came in under. Both places have to change and
+  // the refusal is the only thing that says so -- but it is still one number,
+  // so `numbers` holds it once, exactly as above.
+  it("names a number that arrived under two flags once, with both flags", () => {
+    let caught: NotAnIssueError | null = null;
+    try {
+      requireIssues([
+        { number: 12, role: "--parent", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+      ]);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/^#12 \(--parent, --children\) names a pull request, not an issue;/);
+    expect(caught?.numbers).toEqual([12]);
+  });
+
+  // Deduplication must not collapse DISTINCT numbers, which is the failure
+  // mode a "just uniq the strings" fix would introduce.
+  it("still names every distinct offender", () => {
+    let caught: NotAnIssueError | null = null;
+    try {
+      requireIssues([
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 13, role: "--children", summary: { ...issue, number: 13, isPullRequest: true } },
+      ]);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/^#12 \(--children\) and #13 \(--children\) name pull requests, not issues;/);
+    expect(caught?.numbers).toEqual([12, 13]);
+  });
+});
+
+// THE ASSERTION THE OTHER SUITES LEAN ON, ASSERTED ITSELF (zheref/nen#77
+// review, minor). Every "posts nothing" test above is only as strong as
+// `writes()`: while it matched two argv shapes by name, a guard that posted a
+// COMMENT, edited a body, created a label or sent a PATCH would have left
+// those tests green. This suite pins that it counts them.
+describe("the writes() helper -- what counts as not-a-read", () => {
+  function ran(argv: readonly string[][]): ScriptedSeams {
+    const seams = new ScriptedSeams(
+      argv.map((args): { match: string; result: Record<string, never> } => ({
+        match: ["gh", ...args].join(" "),
+        result: {},
+      })),
+    );
+    for (const args of argv) seams.run("gh", args);
+    return seams;
+  }
+
+  it("counts every mutating shape, not just the POST and the close", () => {
+    const seams = ran([
+      ["api", "--method", "POST", "repos/zheref/nen/issues/1/sub_issues", "-F", "sub_issue_id=2"],
+      ["issue", "close", "2", "--repo", "zheref/nen", "--comment", "Consolidated into #1."],
+      ["issue", "comment", "2", "--repo", "zheref/nen", "--body", "x"],
+      ["issue", "edit", "2", "--repo", "zheref/nen", "--body", "x"],
+      ["label", "create", "ns:sev/high", "--repo", "zheref/nen"],
+      ["api", "--method", "PATCH", "repos/zheref/nen/issues/2"],
+      ["api", "--method", "PUT", "repos/zheref/nen/issues/2/lock"],
+      ["api", "--method", "DELETE", "repos/zheref/nen/issues/2/labels"],
+    ]);
+    expect(writes(seams)).toHaveLength(8);
+  });
+
+  it("counts a plain read as a read", () => {
+    expect(writes(ran([["api", "repos/zheref/nen/issues/1"]]))).toEqual([]);
   });
 });
 
@@ -447,6 +585,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
         labels: [],
         isPullRequest: false,
       })),
+      requested: children,
       labelUnion: [],
       severity: null,
       severitySetBy: null,
