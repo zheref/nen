@@ -119,7 +119,19 @@ describe("nen board build row-shape validation (#32)", () => {
     writeFileSync(rows, JSON.stringify(STRING_REFS_ROW));
     const result = await capture(["board", "build", "--repo-slug", "o/r", "--rows-from", rows, "--json"], dir);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/must be a JSON ARRAY of BoardRow/);
+    // Pinned to the EXACT prefix `'<path>' must be a JSON ARRAY`, not a loose
+    // substring match: `build` hands validateBoardRows() the WHOLE
+    // --rows-from document, so its refusal must name the whole file with
+    // nothing between the quoted path and "must be" -- never a nested field
+    // like `render`/`diff`'s own validateBoard() (#92), which names a nested
+    // 'rows' field (`'<path>': 'rows' must be...`) on a DIFFERENT call with
+    // an explicit subject. A bare `/must be a JSON ARRAY/` substring match
+    // would pass unchanged even if `validateBoardRows`'s `subject` default
+    // were corrupted to always read like the nested-field form -- this exact
+    // literal fails to appear in that mutated string, since a `: 'rows'`
+    // would sit between the quoted path and "must be".
+    const escapedPath = rows.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(result.err.join("\n")).toMatch(new RegExp(`'${escapedPath}' must be a JSON ARRAY of BoardRow`));
     expect(result.err.join("\n")).toMatch(/one-element array, never a bare object/);
   });
 
@@ -187,5 +199,162 @@ describe("nen board build row-shape validation (#32)", () => {
     writeFileSync(rows, JSON.stringify([{ ...STRING_REFS_ROW, refs: ["AB-IS-#877"], gate: null, needs: null }]));
     const result = await capture(["board", "build", "--repo-slug", "o/r", "--rows-from", rows, "--json"], dir);
     expect(result.code).toBe(0);
+  });
+});
+
+// #92: `board build`'s validation covered only `--rows-from`. `board render
+// --board-from` and `board diff --before/--after` each read a WHOLE Board
+// document the same cast-not-checked way, so the identical malformed shapes
+// still crashed one verb over -- a raw TypeError (exit 1) where `build` gave
+// an actionable refusal (exit 2). These tests pin the read seam for all three
+// of the issue's malformed shapes (a string `refs`, a missing `rows`, a row
+// missing `title`) plus a not-JSON file, for BOTH remaining verbs, and pin
+// the unchanged happy path byte-for-byte so the fix cannot silently change a
+// genuine board's output.
+const GOOD_ROW = { id: "1", title: "Effort one", refs: ["XX-IS-#1"], gate: "G2", status: "🟢 ready", needs: null };
+const GOOD_BOARD = { repo: "o/r", generatedAt: "2026-01-01T00:00:00Z", rows: [GOOD_ROW] };
+const ROW_WITHOUT_TITLE = { id: GOOD_ROW.id, refs: GOOD_ROW.refs, gate: GOOD_ROW.gate, status: GOOD_ROW.status, needs: GOOD_ROW.needs };
+
+function malformedBoardFixtures(): ReadonlyArray<{ readonly label: string; readonly write: (path: string) => void }> {
+  return [
+    {
+      label: "a row's refs given as a pre-joined string",
+      write: (path): void =>
+        writeFileSync(
+          path,
+          JSON.stringify({
+            ...GOOD_BOARD,
+            rows: [{ ...GOOD_ROW, refs: "XX-IS-#1" }],
+          }),
+        ),
+    },
+    {
+      label: "rows missing entirely",
+      write: (path): void => writeFileSync(path, JSON.stringify({ repo: "o/r", generatedAt: "t" })),
+    },
+    {
+      label: "a row missing title",
+      write: (path): void => writeFileSync(path, JSON.stringify({ ...GOOD_BOARD, rows: [ROW_WITHOUT_TITLE] })),
+    },
+  ];
+}
+
+describe("nen board render board-shape validation (#92)", () => {
+  it("renders a genuine board byte-identically to before this fix (byte-parity pin)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+    const boardPath = join(dir, "board.json");
+    writeFileSync(boardPath, JSON.stringify(GOOD_BOARD));
+    const result = await capture(["board", "render", "--board-from", boardPath], dir);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toBe(
+      [
+        "o/r -- generated 2026-01-01T00:00:00Z",
+        "",
+        "| Effort     | Refs     | Status (gate) | Needs |",
+        "| ---------- | -------- | ------------- | ----- |",
+        "| Effort one | XX-IS-#1 | 🟢 ready (G2) |       |",
+      ].join("\n"),
+    );
+  });
+
+  for (const fixture of malformedBoardFixtures()) {
+    it(`refuses ${fixture.label} with an exit-2 refusal, never a TypeError`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+      const boardPath = join(dir, "board.json");
+      fixture.write(boardPath);
+      const result = await capture(["board", "render", "--board-from", boardPath], dir);
+      expect(result.code).toBe(2);
+      const message = result.err.join("\n");
+      expect(message).toMatch(new RegExp(boardPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      expect(message).not.toMatch(/is not a function/);
+      expect(message).not.toMatch(/TypeError/);
+      expect(message).not.toMatch(/evaluating/);
+    });
+  }
+
+  it("refuses a not-JSON file actionably, never a TypeError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+    const boardPath = join(dir, "board.json");
+    writeFileSync(boardPath, "this is not json at all {{{");
+    const result = await capture(["board", "render", "--board-from", boardPath], dir);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is not valid JSON/);
+  });
+
+  it("refuses an unreadable file actionably, never a TypeError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+    const missing = join(dir, "does-not-exist.json");
+    const result = await capture(["board", "render", "--board-from", missing], dir);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not read/);
+  });
+});
+
+describe("nen board diff board-shape validation (#92)", () => {
+  it("diffs two genuine boards unchanged (happy path)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+    const before = join(dir, "before.json");
+    const after = join(dir, "after.json");
+    writeFileSync(before, JSON.stringify(GOOD_BOARD));
+    writeFileSync(
+      after,
+      JSON.stringify({ ...GOOD_BOARD, rows: [{ ...GOOD_BOARD.rows[0], status: "🔴 blocked" }] }),
+    );
+    const result = await capture(["board", "diff", "--before", before, "--after", after], dir);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/changed\s+1: status '🟢 ready' -> '🔴 blocked'/);
+  });
+
+  for (const fixture of malformedBoardFixtures()) {
+    it(`refuses ${fixture.label} in --before with an exit-2 refusal, never a TypeError`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+      const before = join(dir, "before.json");
+      const after = join(dir, "after.json");
+      fixture.write(before);
+      writeFileSync(after, JSON.stringify(GOOD_BOARD));
+      const result = await capture(["board", "diff", "--before", before, "--after", after], dir);
+      expect(result.code).toBe(2);
+      const message = result.err.join("\n");
+      expect(message).toMatch(new RegExp(before.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      expect(message).not.toMatch(/is not a function/);
+      expect(message).not.toMatch(/TypeError/);
+      expect(message).not.toMatch(/evaluating/);
+    });
+
+    it(`refuses ${fixture.label} in --after with an exit-2 refusal, never a TypeError`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+      const before = join(dir, "before.json");
+      const after = join(dir, "after.json");
+      writeFileSync(before, JSON.stringify(GOOD_BOARD));
+      fixture.write(after);
+      const result = await capture(["board", "diff", "--before", before, "--after", after], dir);
+      expect(result.code).toBe(2);
+      const message = result.err.join("\n");
+      expect(message).toMatch(new RegExp(after.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      expect(message).not.toMatch(/is not a function/);
+      expect(message).not.toMatch(/TypeError/);
+      expect(message).not.toMatch(/evaluating/);
+    });
+  }
+
+  it("refuses a not-JSON file actionably, never a TypeError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+    const before = join(dir, "before.json");
+    const after = join(dir, "after.json");
+    writeFileSync(before, "this is not json at all {{{");
+    writeFileSync(after, JSON.stringify(GOOD_BOARD));
+    const result = await capture(["board", "diff", "--before", before, "--after", after], dir);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is not valid JSON/);
+  });
+
+  it("refuses an unreadable file actionably, never a TypeError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-board-"));
+    const missing = join(dir, "does-not-exist.json");
+    const after = join(dir, "after.json");
+    writeFileSync(after, JSON.stringify(GOOD_BOARD));
+    const result = await capture(["board", "diff", "--before", missing, "--after", after], dir);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not read/);
   });
 });
