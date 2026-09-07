@@ -4,7 +4,7 @@
 // network -- `deps.openSource` is the one seam this file drives).
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -300,6 +300,39 @@ describe("resolveIdentities", () => {
       expect(error).toBeInstanceOf(SchemaError);
       expect((error as SchemaError).message).toMatch(/found a directory/);
     }
+  });
+
+  it("a file that exists but cannot be OPENED is still a path-bearing error, not a raw errno", () => {
+    // The residue the existence and directory guards cannot cover: a permission
+    // failure, a dangling symlink, a file that vanished between check and read.
+    // Every one of those used to leave as the same bare Node string the
+    // existence guard exists to stop, so they all leave through one error now.
+    // chmod is skipped where it is not meaningful (a root test runner, or a
+    // filesystem that does not enforce the bit) rather than asserted into a
+    // platform-dependent failure.
+    const root = mkdtempSync(join(tmpdir(), "nen-gates-unreadable-"));
+    const gatesPath = join(root, "locked.json");
+    writeFileSync(gatesPath, "{}");
+    chmodSync(gatesPath, 0o000);
+    let readable = true;
+    try {
+      readFileSync(gatesPath, "utf8");
+    } catch {
+      readable = false;
+    }
+    if (!readable) {
+      try {
+        resolveIdentities(root, "locked.json", [], []);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(SchemaError);
+        const message = (error as SchemaError).message;
+        expect(message).toContain(gatesPath);
+        expect(message).toMatch(/could not be read/);
+        expect(message).toMatch(/permissions/);
+      }
+    }
+    chmodSync(gatesPath, 0o600);
   });
 
   it("a malformed in-repo schemas/gates.json fails as a path-bearing SchemaError, not a bare SyntaxError", () => {

@@ -566,7 +566,24 @@ export function resolveIdentities(
     if (statSync(gatesPath).isDirectory()) {
       throw new SchemaError(gatesPath, null, "expected a file, found a directory");
     }
-    const text = readFileSync(gatesPath, "utf8");
+    // The BACKSTOP the two guards above cannot cover: a file that exists and is
+    // not a directory can still fail to open (EACCES on the file or a parent, a
+    // dangling symlink, a vanished file between the check and the read). Left
+    // unwrapped, each of those is the same raw Node errno string relayed through
+    // prReady's catch that the existence guard exists to stop -- so every way
+    // this read can fail leaves through ONE path-bearing error, the shape
+    // ../schema/source.ts's readSchemaFile already uses for the in-repo files.
+    let text: string;
+    try {
+      text = readFileSync(gatesPath, "utf8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      throw new SchemaError(
+        gatesPath,
+        null,
+        `could not be read (${code ?? String(error)}). --gates was given '${gatesFlag}'; check the file's permissions, or point the flag at one this process can read.`,
+      );
+    }
     let value: unknown;
     try {
       value = JSON.parse(text);
