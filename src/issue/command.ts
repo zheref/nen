@@ -52,7 +52,7 @@ import {
   type CloseComments,
 } from "./subissue.js";
 import { commentArgv, postComment, type CommentRequest } from "./comment.js";
-import { chainPosition, parseRoleMap, terminus } from "./chain.js";
+import { chainPosition, parseRoleMap, terminus, type ChainPositionResult, type TerminusResult } from "./chain.js";
 import { conjoin } from "../cli/prose.js";
 
 export function numberList(value: string | undefined): readonly number[] {
@@ -1216,7 +1216,7 @@ function position(context: CommandContext): number {
     for (const message of parsed.errors) context.io.err(`nen: --chain-labels: ${message}`);
     return 2;
   }
-  let result;
+  let result: ChainPositionResult;
   try {
     result = chainPosition(context.seams, target, issue, parsed.map);
   } catch (error) {
@@ -1246,7 +1246,7 @@ function chainTerminus(context: CommandContext): number {
     for (const message of parsed.errors) context.io.err(`nen: --chain-labels: ${message}`);
     return 2;
   }
-  let result;
+  let result: TerminusResult;
   try {
     result = terminus(
       context.seams,
