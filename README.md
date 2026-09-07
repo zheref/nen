@@ -37,15 +37,15 @@ on any integrity gap (unfetchable manifest, missing entry, digest mismatch)
 rather than falling back to an unverified download:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.1.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.1.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.2.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.2.0
 ```
 
 It prints the path to a verified, executable binary on stdout and nothing
 else, so it composes directly:
 
 ```
-nen="$(bash nen-bootstrap.sh --ref v0.1.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.2.0)"
 "$nen" --version
 ```
 
