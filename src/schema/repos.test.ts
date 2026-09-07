@@ -23,6 +23,21 @@ describe("loadRepoRegistry -- reads the TARGET repository", () => {
     expect(alt.byCode("AL")?.repo).toBe("example/alpha");
   });
 
+  // zheref/nen#17: the bankai fixture's product_codes nests a `$comment` INSIDE
+  // the object this loader walks key-by-key -- the same shape the live
+  // bankai-core schemas/repos.json carries. A loader that iterated every key
+  // as a code would manufacture a bogus product code named '$comment' whose
+  // "repository" is the comment's own prose.
+  it("skips a $-prefixed key nested inside product_codes, rather than treating it as a code (zheref/nen#17)", () => {
+    const bankai = loadRepoRegistry(BANKAI_REPO);
+    expect(bankai.productCodes["$comment"]).toBeUndefined();
+    expect(Object.keys(bankai.productCodes)).not.toContain("$comment");
+    // The real codes are unaffected -- the skip removes exactly the metadata
+    // key and nothing else.
+    expect(Object.keys(bankai.productCodes).sort()).toEqual(["BC", "BS", "KC", "KN", "KP", "KW"]);
+    expect(bankai.byCode("$comment")).toBeUndefined();
+  });
+
   it("computes the affected set by intersecting `consumes`", () => {
     const bankai = loadRepoRegistry(BANKAI_REPO);
     expect(bankai.affectedBy(["db-migrate.yml"]).map((c): string => c.repo)).toEqual([
@@ -121,6 +136,41 @@ describe("parseRepoRegistry -- validation", () => {
     const registry = parseRepoRegistry(at, { consumers: [{ repo: "a/b", consumes: [] }] });
     expect(registry.productCodes).toEqual({});
     expect(registry.latest).toBeNull();
+  });
+
+  // zheref/nen#17: a `$`-prefixed key inside `product_codes` is metadata, not
+  // a code -- the same convention every `$comment` elsewhere in this schema
+  // family already gets, just never applied to a key `product_codes` walks
+  // one-by-one. The skip is by PREFIX, not a `$comment` special case: any
+  // `$`-prefixed key nested here is metadata.
+  it("skips every $-prefixed key inside product_codes, keeping only the real codes", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [],
+      product_codes: { $comment: "not a code", $schema: "also not a code", XX: "owner/repo" },
+    });
+    expect(registry.productCodes).toEqual({ XX: "owner/repo" });
+  });
+
+  // zheref/nen#17 (review minor): the caller-pin walk applies the SAME
+  // `$`-prefix-is-metadata convention product_codes now gets -- a consumer
+  // carrying `"$comment_pinned": "..."` would otherwise pass the
+  // `_pinned`-suffix check and become a phantom per-caller pin, which
+  // `nen warmup` would then report as a stale pin for a caller that does not
+  // exist.
+  it("skips a $-prefixed key inside a consumer even when it also ends in _pinned", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [
+        {
+          repo: "a/b",
+          consumes: [],
+          pinned: "v1.0.0",
+          $comment_pinned: "v0.1.0",
+          db_migrate_pinned: "v0.9.0",
+        },
+      ],
+    });
+    expect(registry.byRepo("a/b")?.callerPins).toEqual({ db_migrate_pinned: "v0.9.0" });
+    expect(Object.keys(registry.byRepo("a/b")?.callerPins ?? {})).not.toContain("$comment_pinned");
   });
 
   it("requires a maintained_tools/pending_onboarding entry to name an owner/name repo", () => {

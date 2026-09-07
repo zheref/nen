@@ -60,6 +60,32 @@ describe("nen repo resolve -- dispatches through the union registry", () => {
     ]);
   });
 
+  // zheref/nen#17: the bankai fixture's product_codes nests a `$comment`, the
+  // same shape the live bankai-core file carries. Before the loader fix, this
+  // sweep printed a SEVENTH row -- "Object-reference notation (...)  ($comment)
+  // via all" -- inside an otherwise successful result, for a registry that
+  // names exactly six repositories.
+  it("'all' prints one row per real repository, never one for a nested $comment (zheref/nen#17)", async () => {
+    const result = await capture(["repo", "resolve", "all"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      "zheref/KroApple  (KP)  via all",
+      "zheref/KroAndroid  (KN)  via all",
+      "zheref/bankai-scaffold  (BS)  via all",
+      "bankai-core  (BC)  via all",
+      "KroWeb  (KW)  via all",
+      "zheref/KroCloud  (KC)  via all",
+    ]);
+    expect(result.out.join("\n")).not.toContain("$comment");
+  });
+
+  it("an unknown token's refusal lists the registry's codes, never a nested $comment (zheref/nen#17)", async () => {
+    const result = await capture(["repo", "resolve", "notarealtoken"]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/Codes: BC \(bankai-core\), BS \(bankai-scaffold\), KP \(KroApple\), KN \(KroAndroid\), KW \(KroWeb\), KC \(KroCloud\)\./);
+    expect(result.err.join("\n")).not.toContain("$comment");
+  });
+
   it("refuses --from next to a token, naming --repo, instead of silently ignoring it (zheref/nen#27)", async () => {
     const result = await capture(["repo", "resolve", "KP", "--from", "/somewhere"]);
     expect(result.code).toBe(2);

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FutonResolveError, parseFutonInvocation, resolveFutonRepo, type RepoResolver } from "./futon.js";
+import { loadRepoRegistry } from "../schema/repos.js";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
   it("parses a bare severity, case-insensitively", () => {
@@ -195,5 +197,31 @@ describe("resolveFutonRepo -- product_codes values and the onboarding lists (zhe
     };
     expect(() => resolveFutonRepo(reg, "BC", "zheref/KroApple")).toThrow(FutonResolveError);
     expect(() => resolveFutonRepo(reg, "BC", "zheref/KroApple")).toThrow(/no owner is recorded/);
+  });
+});
+
+// zheref/nen#17: against a REAL loaded registry -- the bankai fixture's
+// product_codes nests a `$comment`, the same shape the live bankai-core file
+// carries. A code-token resolution that walked product_codes without skipping
+// it would both (a) list '$comment' among the codes an unresolved token's
+// refusal names, and (b) let the comment's own prose participate in the
+// bare-value matching resolveFutonRepo and codeRecordedFor perform.
+describe("resolveFutonRepo -- a nested $comment never surfaces, against a REAL loaded registry (zheref/nen#17)", () => {
+  it("an unresolved token's refusal lists only the real codes", () => {
+    const registry = loadRepoRegistry(BANKAI_REPO);
+    try {
+      resolveFutonRepo(registry, "nope", "zheref/bankai-core");
+      expect.unreachable("'nope' is not a code, slug or name in the bankai fixture");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FutonResolveError);
+      const message = (error as FutonResolveError).message;
+      expect(message).toMatch(/product_codes \(BC, BS, KP, KN, KW, KC\)/);
+      expect(message).not.toContain("$comment");
+    }
+  });
+
+  it("the loaded registry's productCodes carries none of the file's $comment", () => {
+    const registry = loadRepoRegistry(BANKAI_REPO);
+    expect(registry.productCodes["$comment"]).toBeUndefined();
   });
 });

@@ -153,7 +153,10 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
 
     const callerPins: Record<string, string> = {};
     for (const [key, raw] of Object.entries(record)) {
-      if (key === "pinned" || !key.endsWith(CALLER_PIN_SUFFIX)) continue;
+      // Same `$`-prefix-is-metadata convention as `product_codes` below
+      // (zheref/nen#17): a `$comment_pinned` key would otherwise pass the
+      // `_pinned`-suffix check and become a phantom per-caller pin.
+      if (key === "pinned" || key.startsWith("$") || !key.endsWith(CALLER_PIN_SUFFIX)) continue;
       callerPins[key] = requireString(path, `${pointer}.${key}`, raw);
     }
 
@@ -175,6 +178,13 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
   if (rawCodes !== undefined && rawCodes !== null) {
     const codes = requireRecord(path, "product_codes", rawCodes);
     for (const [code, name] of Object.entries(codes)) {
+      // `$`-prefixed keys are metadata, not data -- a nested `$comment` is a
+      // shape real registries carry (bankai-core's own schemas/repos.json
+      // documents the object-reference notation from INSIDE product_codes,
+      // not beside it), and walking it as a product code manufactures a
+      // bogus entry whose "repository" is the comment's own prose
+      // (zheref/nen#17).
+      if (code.startsWith("$")) continue;
       productCodes[code] = requireString(path, `product_codes.${code}`, name);
     }
   }

@@ -11,6 +11,19 @@
 // NAMES inside it are the data. A future repo that keeps its taxonomy somewhere
 // else changes one constant here (or, better, gets a `--schemas` flag) -- and
 // that is a different kind of change from teaching the binary a label name.
+//
+// A `$`-PREFIXED KEY IS METADATA, NOT DATA -- CONVENTION FOR EVERY LOADER READING
+// THESE FILES. Most structural comments in this schema family sit BESIDE the
+// collection they annotate (`schemas/labels.json`'s own `$comment` beside
+// `labels`), which every loader here already skips just by naming the fields it
+// reads. The one shape that bites is a `$`-prefixed key nested INSIDE an object a
+// loader walks key-by-key as data (`product_codes` is exactly that: bankai-core's
+// own `schemas/repos.json` documents the object-reference notation from a
+// `$comment` key living inside `product_codes`, not beside it -- zheref/nen#17).
+// A loader that iterates such an object must skip every key starting with `$`
+// before treating the rest as real entries; the next loader that key-walks a
+// data map inherits this same obligation, not just `../repos.ts`'s two call
+// sites (`product_codes`, and the per-caller pin fields on a consumer entry).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
