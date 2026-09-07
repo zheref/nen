@@ -119,7 +119,19 @@ describe("nen board build row-shape validation (#32)", () => {
     writeFileSync(rows, JSON.stringify(STRING_REFS_ROW));
     const result = await capture(["board", "build", "--repo-slug", "o/r", "--rows-from", rows, "--json"], dir);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/must be a JSON ARRAY of BoardRow/);
+    // Pinned to the EXACT prefix `'<path>' must be a JSON ARRAY`, not a loose
+    // substring match: `build` hands validateBoardRows() the WHOLE
+    // --rows-from document, so its refusal must name the whole file with
+    // nothing between the quoted path and "must be" -- never a nested field
+    // like `render`/`diff`'s own validateBoard() (#92), which names a nested
+    // 'rows' field (`'<path>': 'rows' must be...`) on a DIFFERENT call with
+    // an explicit subject. A bare `/must be a JSON ARRAY/` substring match
+    // would pass unchanged even if `validateBoardRows`'s `subject` default
+    // were corrupted to always read like the nested-field form -- this exact
+    // literal fails to appear in that mutated string, since a `: 'rows'`
+    // would sit between the quoted path and "must be".
+    const escapedPath = rows.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(result.err.join("\n")).toMatch(new RegExp(`'${escapedPath}' must be a JSON ARRAY of BoardRow`));
     expect(result.err.join("\n")).toMatch(/one-element array, never a bare object/);
   });
 
