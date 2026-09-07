@@ -391,6 +391,52 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       expect(result.out.join("\n")).toMatch(/sasuke/);
     });
 
+    // zheref/nen#8 item 4, on THIS verb: next-blocker shares `ready`'s
+    // resolveIdentities rather than re-spelling it, so the relative-path rule
+    // is one rule for both -- and this case proves it is, rather than asserting
+    // it. The process stands in a directory that HAS a schemas/gates.json while
+    // --repo points somewhere else that also has one; only one of the two
+    // answers is right, and the two taxonomies give different verdicts on the
+    // identical snapshot.
+    it("a RELATIVE --gates resolves against --repo, not the cwd -- the same rule 'ready' applies", async () => {
+      const previous = process.cwd();
+      try {
+        process.chdir(BANKAI_REPO);
+        const result = await capture(
+          [
+            "pr", "next-blocker", "--target", "o/n", "--pr", "9",
+            "--gates", join("schemas", "gates.json"),
+          ],
+          ALT_REPO,
+          new ScriptedSeams(greenAltApprovedScript()),
+        );
+        // ALT_REPO's itachi/kisame approved at head, so under ALT's identities
+        // nothing blocks. Under the cwd's identities it would read owed-round
+        // for sasuke -- which is exactly what this used to return.
+        expect(result.err).toEqual([]);
+        expect(result.code).toBe(0);
+        expect(result.out[0]).toBe("#9: none");
+      } finally {
+        process.chdir(previous);
+      }
+    });
+
+    it("a --gates that resolves to nothing is refused by name, before any gh call", async () => {
+      const result = await capture(
+        [
+          "pr", "next-blocker", "--target", "o/n", "--pr", "9",
+          "--gates", join("schemas", "nowhere.json"),
+        ],
+        ALT_REPO,
+        // Nothing scripted: the refusal must land before the fetch.
+        new ScriptedSeams([]),
+      );
+      const text = result.err.join("\n");
+      expect(text).toMatch(/no such file/);
+      expect(text).toContain(ALT_REPO);
+      expect(text).not.toMatch(/ENOENT/);
+    });
+
     it("'nen pr --help' documents --gates on next-blocker", async () => {
       const result = await capture(["pr", "--help"], null);
       expect(result.code).toBe(0);

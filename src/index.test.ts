@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { run, type Io } from "./index.js";
+import { exitCodeFor, reportUnhandled, run, runFamily, type Io } from "./index.js";
+import { VerbUsageError, type Command } from "./cli/command.js";
+import { RepoRootError } from "./repo/root.js";
 import { ALT_REPO, BANKAI_REPO } from "./schema/fixtures/paths.js";
-import type { CommandResult, Seams } from "./seam/exec.js";
+import { defaultSeams, type CommandResult, type Seams } from "./seam/exec.js";
 import { VERSION } from "./version.js";
 
 // `capture` is ASYNC because ./index.ts's `run()` is (../verbs/pr_ready.ts
@@ -335,5 +337,165 @@ describe("registry family dispatch, through the real run() (review finding)", ()
     expect(afterParsed).toMatchObject({ entry: { object: "XX-PR-#12", label: VALID_LABEL, outcome: "dry-run" } });
     expect(readFileSync(ledgerBefore, "utf8")).not.toEqual("");
     expect(readFileSync(ledgerAfter, "utf8")).not.toEqual("");
+  });
+});
+
+// ── zheref/nen#10's comment, closed here: runFamily's `await` is the line ────
+//
+// `return await family.run({...})` -- the single line the async conversion of
+// this dispatcher exists for -- had no coverage. Removing the `await` left the
+// whole suite green, because the ONE async family that exists today
+// (`pr ready`) catches everything internally and so never returns a rejected
+// promise. Without the `await`, a rejection is returned rather than thrown, the
+// try/catch around it never sees it, and the family bypasses the exit-code
+// contract this file's header says is written ONCE here rather than thirty-two
+// times.
+//
+// MUTATION-CHECKED: deleting the `await` in ../index.ts's
+// `return await family.run(...)` turns all three cases below red (the promise
+// escapes runFamily and the awaiting test rejects), and restores them green.
+// That is the whole point of the block -- it is a test OF the keyword.
+describe("runFamily maps a family whose run() REJECTS through the same exit-code contract", () => {
+  function rejectingFamily(error: Error): Command {
+    return {
+      name: "explode",
+      summary: "test double: a family whose run() returns a rejected promise",
+      usage: "nen explode",
+      flags: { values: [], booleans: [] },
+      // An ASYNC family that fails after its first await -- the shape a future
+      // network-reading family has and today's `pr ready` does not, because it
+      // catches its own transport failures and returns a verdict instead.
+      run: async (): Promise<number> => {
+        await Promise.resolve();
+        throw error;
+      },
+    };
+  }
+
+  async function drive(error: Error): Promise<{ code: number; err: string[] }> {
+    const err: string[] = [];
+    const io: Io = {
+      out: (): void => {},
+      err: (line): void => {
+        err.push(line);
+      },
+    };
+    const code = await runFamily(
+      rejectingFamily(error),
+      ["explode", "go"],
+      null,
+      false,
+      io,
+      defaultSeams(),
+    );
+    return { code, err };
+  }
+
+  it("a rejected VerbUsageError is exit 2, with the message and the --help pointer", async () => {
+    const result = await drive(new VerbUsageError("you typed it wrong"));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("nen explode: you typed it wrong");
+    expect(result.err.join("\n")).toContain("Run 'nen explode --help'");
+  });
+
+  it("a rejected RepoRootError is exit 2 -- a malformed --repo stays a typo, not a failure", async () => {
+    const result = await drive(new RepoRootError("--repo takes a path"));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--repo takes a path");
+  });
+
+  it("anything else is exit 1, and the message is printed WHOLE", async () => {
+    const result = await drive(new Error("the thing you asked for did not work"));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toBe("nen explode: the thing you asked for did not work");
+  });
+
+  it("a family that RESOLVES is still just its own number", async () => {
+    // The control: the await must not change the successful path.
+    const err: string[] = [];
+    const io: Io = { out: (): void => {}, err: (line): void => void err.push(line) };
+    const code = await runFamily(
+      {
+        name: "quiet",
+        summary: "test double",
+        usage: "nen quiet",
+        flags: { values: [], booleans: [] },
+        run: async (): Promise<number> => Promise.resolve(3),
+      },
+      ["quiet"],
+      null,
+      false,
+      io,
+      defaultSeams(),
+    );
+    expect(code).toBe(3);
+    expect(err).toEqual([]);
+  });
+});
+
+// ── zheref/nen#8 item 2: the entry point's last resort ──────────────────────
+//
+// `run(...).then(code => ...)` had no `.catch`, so anything that escaped all
+// three of run()'s own try/catches became an unhandled rejection: exitCode never
+// assigned, and the status a property of the hosting runtime rather than of this
+// program, whose exit codes are a published contract. The handler is a named
+// export precisely so it has a test rather than being a closure inside an
+// `import.meta.main` block no harness can reach.
+describe("reportUnhandled -- the exit code on that path is this file's, not the runtime's", () => {
+  it("prints the message with the program prefix and returns 1", () => {
+    const lines: string[] = [];
+    const code = reportUnhandled(new Error("escaped"), (line): void => void lines.push(line));
+    // 1, not 2: an error nobody classified is a failure. Calling it a usage
+    // error would tell a caller "you typed it wrong" about something no one
+    // established was theirs.
+    expect(code).toBe(1);
+    expect(lines).toEqual(["nen: escaped"]);
+  });
+
+  it("survives a thrown non-Error without printing '[object Object]'", () => {
+    const lines: string[] = [];
+    expect(reportUnhandled("a bare string", (line): void => void lines.push(line))).toBe(1);
+    expect(lines).toEqual(["nen: a bare string"]);
+  });
+});
+
+// THE WIRING, not just the handler (zheref/nen#8 item 2, review MAJOR 2).
+//
+// `reportUnhandled` above was tested from the day it landed -- but the thing
+// that decides whether anything ever CALLS it was a `.catch` chained onto
+// `run()`'s promise inside `import.meta.main`, which no harness can reach.
+// Deleting that whole `.catch` left the suite green and the typecheck clean:
+// the guard against an unhandled rejection was itself unguarded. `exitCodeFor`
+// is that composition as a function, so it has a test.
+describe("exitCodeFor -- the composition that decides whether the handler is reached", () => {
+  it("turns a REJECTION into 1 and one prefixed line", async () => {
+    const lines: string[] = [];
+    const code = await exitCodeFor(
+      Promise.reject(new Error("escaped")),
+      (line): void => void lines.push(line),
+    );
+    expect(code).toBe(1);
+    // ONE line, and the sink is the one that appends the newline -- so this is
+    // also the assertion that nothing here writes a second trailing newline of
+    // its own on the way out.
+    expect(lines).toEqual(["nen: escaped"]);
+  });
+
+  it("passes a RESOLVED code straight through and prints nothing", async () => {
+    const lines: string[] = [];
+    // 0 specifically: the success path is the one a mutation that swallowed
+    // every code and returned 1 would still have to get right.
+    expect(await exitCodeFor(Promise.resolve(0), (line): void => void lines.push(line))).toBe(0);
+    expect(lines).toEqual([]);
+    expect(await exitCodeFor(Promise.resolve(2), (line): void => void lines.push(line))).toBe(2);
+    expect(lines).toEqual([]);
+  });
+
+  it("handles a rejection with a non-Error the same way the handler does", async () => {
+    const lines: string[] = [];
+    // A reject() with something that is NOT an Error, which is exactly what an
+    // escaped throw from third-party code can be.
+    expect(await exitCodeFor(Promise.reject("a bare string"), (line): void => void lines.push(line))).toBe(1);
+    expect(lines).toEqual(["nen: a bare string"]);
   });
 });

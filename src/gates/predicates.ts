@@ -87,6 +87,18 @@ import {
 // read a file; the CALLER loads the target repository's `schemas/gates.json`
 // and hands the result in.
 import type { GateIdentities, ReviewerIdentity } from "../schema/gates.js";
+// PORT ADDITION (zheref/nen#8 item 3, review MAJOR 1): `safePattern` was a
+// private function in THIS file and a byte-identical private function in
+// ../verbs/pr_ready.ts. When the ReDoS guard landed it was added to that copy
+// only -- and this is the copy on the steady-state path, because once a target
+// repository ships a `schemas/gates.json`, `identitiesFromFlags` is never
+// called and every `--reviewers` name the file does not declare is compiled
+// HERE and tested against logins that came off the network. Measured: 305ms per
+// `.test` through this copy for `(a+)+$` at login length, 0ms through the
+// guarded twin. One implementation now, in ../schema/pattern.ts, with the
+// contract and its reasoning in that file's header. PURE still: a source scan
+// and a compile, no file read, no clock, no network.
+import { safePattern } from "../schema/pattern.js";
 
 // --- shared helpers ----------------------------------------------------------
 
@@ -100,22 +112,15 @@ function compareStrings(a: string, b: string): number {
   return 0;
 }
 
-// A case-insensitive regex built from a caller-supplied reviewer name, exactly
-// as jq's `test($name; "i")` builds one.
-//
-// An INVALID pattern (a name carrying unbalanced regex metacharacters) yields a
-// regex that matches NOTHING, which reproduces the shell's behaviour rather than
-// diverging from it: there, `jq -e` errors, the `if` reads the non-zero exit as
-// "no match", and the reviewer is therefore still owed a round. Conservative in
-// the same direction -- a malformed reviewer name can never SATISFY a round, only
-// fail to match one.
-function safePattern(source: string): RegExp {
-  try {
-    return new RegExp(source, "i");
-  } catch {
-    return /(?!)/;
-  }
-}
+// `safePattern` -- the case-insensitive regex built from a caller-supplied
+// reviewer name, exactly as jq's `test($name; "i")` builds one -- is IMPORTED
+// (see the note at the import above). Its behaviour on a name this file cannot
+// use is unchanged and is the original's: a regex that matches NOTHING, which
+// reproduces the shell's own reading (there, `jq -e` errors, the `if` takes the
+// non-zero exit as "no match", and the reviewer is therefore still owed a
+// round). Conservative in the same direction -- a malformed reviewer name can
+// never SATISFY a round, only fail to match one -- and a CATASTROPHIC name is
+// now treated the same way for the same reason.
 
 // Literal-escape, for the one pattern assembled from an id rather than a name.
 function escapeRegExp(literal: string): string {

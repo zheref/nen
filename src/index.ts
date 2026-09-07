@@ -386,22 +386,87 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
   return report.ok ? 0 : 1;
 }
 
-// The one place `process` is touched, and it is three lines. Everything above is
-// a pure function of argv and two sinks.
+/**
+ * The entry point's LAST RESORT, and the reason it is a named function.
+ *
+ * `run()` is written not to throw -- `parseArgs`'s UsageError is caught in both
+ * stages, the dispatch has its own try/catch, and `runFamily` has another -- and
+ * no input has been found that escapes all three. But `run(...).then(...)` with
+ * no `.catch` means that if one ever does, the failure becomes an unhandled
+ * rejection: `process.exitCode` is never assigned, the diagnostic is the
+ * runtime's own rather than this program's, and the exit status becomes a
+ * property of whichever runtime is hosting the binary instead of a property of
+ * this file. This CLI publishes its exit codes as a contract (see the EXIT CODES
+ * paragraph in this file's header), so the code on that path is stated here
+ * (zheref/nen#8 item 2).
+ *
+ * 1, not 2: an error nobody classified is a failure, and calling it a usage
+ * error would tell a caller "you typed it wrong" about something no one has
+ * established was the caller's doing.
+ *
+ * Exported so it is a function with a test rather than a closure inside an
+ * `import.meta.main` block that no harness can reach.
+ */
+export function reportUnhandled(error: unknown, err: (line: string) => void): number {
+  // The message WHOLE, like every other error sink in this file: a message
+  // truncated on the way out is a message that arrives useless.
+  err(`${PROGRAM}: ${error instanceof Error ? error.message : String(error)}`);
+  return 1;
+}
+
+/**
+ * The entry point's exit code, as a FUNCTION rather than as a promise chain.
+ *
+ * `reportUnhandled` above was already exported and already tested -- but the
+ * thing that decides whether a caller ever REACHES it is the `.catch` wired to
+ * `run()`'s promise, and a `.then(...).catch(...)` inside an `import.meta.main`
+ * block is unreachable from any harness. Deleting that whole `.catch` left the
+ * suite green and the typecheck clean, which is a defect's worth of untested
+ * wiring guarding against a defect (zheref/nen#8 item 2, and the one mutant the
+ * adversarial review of this branch left alive).
+ *
+ * So the COMPOSITION is the exported unit: pending promise in, exit code out,
+ * `reportUnhandled` on the rejecting path. `import.meta.main` below then holds
+ * one call and one assignment, and there is nothing left in it that a test
+ * cannot reach.
+ *
+ * `await` in a try/catch rather than `.catch(...)` for the same reason it is
+ * written this way everywhere else in this file: a rejection AND a synchronous
+ * throw from awaiting arrive at the same handler, and there is one place to
+ * read to know what the exit code will be.
+ */
+export async function exitCodeFor(
+  pending: Promise<number>,
+  err: (line: string) => void,
+): Promise<number> {
+  try {
+    return await pending;
+  } catch (error) {
+    return reportUnhandled(error, err);
+  }
+}
+
+// The one place `process` is touched, and it is a handful of lines. Everything
+// above is a pure function of argv and two sinks.
 //
 // `import.meta.main` rather than a `BASH_SOURCE`-style guard: it is bun's own
 // answer to "was this file the entry point", and it is TRUE in a compiled binary
 // -- unlike `import.meta.url`, which resolves to a `/$bunfs/` path and is why
 // this repository derives no root from it (§3).
 if (import.meta.main) {
-  run(process.argv.slice(2), {
+  const stderr = (line: string): void => {
+    process.stderr.write(`${line}\n`);
+  };
+  const pending = run(process.argv.slice(2), {
     out: (line): void => {
       process.stdout.write(`${line}\n`);
     },
-    err: (line): void => {
-      process.stderr.write(`${line}\n`);
-    },
-  }).then((code): void => {
+    err: stderr,
+  });
+  // Both halves -- the ordinary code and the last-resort one -- come out of
+  // `exitCodeFor`, which is a function with tests. Nothing in this block
+  // decides anything.
+  void exitCodeFor(pending, stderr).then((code): void => {
     process.exitCode = code;
   });
 }

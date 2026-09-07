@@ -78,6 +78,54 @@
 // installation). "Tidying" either into the other's shape changes which reviewers
 // a pull request is gated by -- so `ignoreCase` is per pattern, stated by the
 // file, and never inferred.
+//
+// ── THE `.*` HAZARD, FOR ALL FIVE PATTERN FIELDS ────────────────────────────
+//
+// (zheref/nen#6 item 2, restated for every field rather than for
+// `delivery.author_pattern` alone -- the narrow version of this note was the
+// finding.) EVERY pattern here is applied with an UNANCHORED `.test(...)`, so it
+// is a SUBSTRING test unless the file anchors it with `^`/`$`. An over-broad
+// pattern therefore does not fail loudly; it silently WIDENS the gate, and each
+// field widens it differently:
+//
+//   login_pattern            a login that should belong to one reviewer instead
+//                            matches several, so a review by anyone whose login
+//                            contains the fragment satisfies that reviewer's
+//                            round and can join the approval set.
+//   review_check_pattern     the reviewer's REVIEW job stops being the check a
+//                            delivery-PR abstain reports through -- a green
+//                            runner-probe job with a matching name stands in for
+//                            a review that never ran.
+//   round_check_pattern      an unrelated green check CLEARS a round nobody
+//                            posted, which is the entire owed-round conjunct.
+//   enrolment_check_pattern  the reviewer is enrolled on pull requests it was
+//                            never configured for. This one narrows rather than
+//                            widens -- more reviewers gate more PRs -- and it is
+//                            listed all the same, because a gate that holds shut
+//                            for a reason nobody configured is a gate people
+//                            learn to route around.
+//   delivery.author_pattern  every pull request reads as a delivery PR, so the
+//                            CON-40 carve-out (which WIDENS by design) is
+//                            available on pull requests it was never meant for.
+//
+// So: anchor patterns. `^name$` where a whole value is meant, `^prefix / job$`
+// for a check name. The loader cannot decide this for a file -- an unanchored
+// substring is exactly what one of the fixture reviewers' installation-varying
+// check name requires -- so the file states it and this note says what is at
+// stake. What the loader DOES refuse is the degenerate end of the same axis: a
+// pattern that matches the empty string matches EVERYTHING, and ./pattern.ts
+// carries that decision and its reasoning.
+//
+// ── AND THE PATTERNS ARE RUN AGAINST NETWORK-SOURCED STRINGS ────────────────
+//
+// Every one of the five is tested against a value GitHub hands back -- a PR
+// author's login, a reviewer's login, a check-run name -- so a pattern that
+// backtracks exponentially is a HANG in a readiness gate, not a slow read.
+// ./pattern.ts is the guard, applied in `readPattern` below at the one seam
+// where a gates-file pattern is compiled; its header carries the choice, the
+// arithmetic that rules a length cap out, and what the guard does not claim.
+// zheref/nen#8 item 3 and zheref/nen#6 item 2 are the same code path, filed
+// twice from two different reviews, and both are answered there.
 
 import {
   describeValue,
@@ -87,6 +135,7 @@ import {
   requireString,
   SchemaError,
 } from "./errors.js";
+import { patternHazard } from "./pattern.js";
 import { GATES_FILE, readSchemaJson } from "./source.js";
 
 export interface ReviewerIdentity {
@@ -172,8 +221,9 @@ function readPattern(
       `is required and must be a boolean. Case-sensitivity decides which checks match, so it is stated by the file rather than assumed; got ${describeValue(ignoreCase)}`,
     );
   }
+  let compiled: RegExp;
   try {
-    return new RegExp(source, ignoreCase ? "i" : "");
+    compiled = new RegExp(source, ignoreCase ? "i" : "");
   } catch (error) {
     throw new SchemaError(
       path,
@@ -181,6 +231,21 @@ function readPattern(
       `is not a valid regular expression (${error instanceof Error ? error.message : String(error)}). An unparseable pattern would match nothing, which silently excuses a reviewer from every round.`,
     );
   }
+  // THE ONE SEAM every gates-file pattern is compiled at, which is why the
+  // guard lives here rather than at the five call sites that later RUN these
+  // patterns against logins and check names (./pattern.ts's header says why a
+  // per-call-site length cap was rejected). A refusal here happens before any
+  // pull request is judged, so it can never change a verdict -- only stop one
+  // being computed from a file that would hang or that means "everyone".
+  const hazard = patternHazard(source, compiled);
+  if (hazard !== null) {
+    throw new SchemaError(
+      path,
+      `${pointer}.pattern`,
+      `is refused: '${hazard.fragment}' is ${hazard.why}. These patterns are run against strings GitHub supplies -- a PR author's login, a reviewer's login, a check-run name -- so a pattern with a potentially exponential-backtracking shape risks hanging the gate and a pattern that matches everything opens it. Rewrite it to say what it means (a character class rather than a quantified alternation, one quantifier rather than a nested pair, and an anchored '^...$' where a whole value is meant).`,
+    );
+  }
+  return compiled;
 }
 
 function readFlag(path: string, pointer: string, raw: unknown): boolean {
