@@ -43,7 +43,11 @@ render:
 diff:
   Field-level diff of two Board snapshots, by row id -- for a caller
   re-rendering the board on every state change and wanting to say what
-  changed, not re-announce the whole board.`;
+  changed, not re-announce the whole board.
+
+All three verbs validate the board shape at the read seam before using it: a
+malformed --rows-from, --board-from, --before or --after refuses by file, row
+and field (exit 2) rather than crashing.`;
 
 // EVERY ROW IS VALIDATED AT THE JSON BOUNDARY, NOT CAST PAST IT (#32).
 // `readJsonFile<readonly BoardRow[]>` was a compile-time assertion about
@@ -59,6 +63,22 @@ diff:
 // the others read off unvalidated JSON also reaches a consumer that calls
 // string methods on it (render's padding, diff's comparisons) and would
 // throw the same undesigned TypeError one field over.
+//
+// #92: `board build`'s own `--rows-from` was never the only unguarded read.
+// `board render --board-from` and `board diff --before/--after` each read a
+// WHOLE Board document (`{ repo, generatedAt, rows }`, #32's own header
+// calls it "a 'board build --json' result") the same cast-not-checked way,
+// so the identical malformed-row shapes #32 fixed for `build` still crashed
+// one verb over: a string `refs` reached ../board/render.ts's `row.refs.join`
+// or ../board/diff.ts's `row.refs.join` as the same raw TypeError, a missing
+// `rows` array crashed `board.rows.map`/`before.rows.map`, and a row missing
+// `title` did not even crash `diff` -- it silently diffed the string
+// `"undefined"` in as the "before" value. validateBoard() below is the ONE
+// read seam every one of the three verbs now goes through: it checks the
+// Board envelope itself (`repo`, `generatedAt` as strings) and then hands
+// `rows` to THE SAME validateBoardRows() `build` already used, so the
+// per-row/per-field rules -- and their wording -- are asserted in exactly
+// one place, never duplicated.
 
 const ROW_SHAPE = "{ id, title, refs, gate, status, needs }";
 
@@ -88,10 +108,20 @@ function rowLabel(row: Readonly<Record<string, unknown>>, index: number): string
   return typeof id === "string" && id !== "" ? `row '${id}'` : `row at index ${index}`;
 }
 
-function validateBoardRows(raw: unknown, path: string): readonly BoardRow[] {
+// `subject` names WHAT must be the array, in the refusal's own voice: `build`
+// hands this the whole `--rows-from` document, so the default (`'<path>'`)
+// is correct as-is; validateBoard() below hands this a NESTED `rows` field of
+// a larger document, and passes its own subject (`'<path>': 'rows'`) so the
+// refusal still names the right thing instead of implying the whole file
+// must be an array when only one field of it must be.
+function validateBoardRows(
+  raw: unknown,
+  path: string,
+  subject: string = `'${path}'`,
+): readonly BoardRow[] {
   if (!Array.isArray(raw)) {
     throw new VerbUsageError(
-      `'${path}' must be a JSON ARRAY of BoardRow ${ROW_SHAPE}, got ${describeValue(raw)}. A single row is a one-element array, never a bare object.`,
+      `${subject} must be a JSON ARRAY of BoardRow ${ROW_SHAPE}, got ${describeValue(raw)}. A single row is a one-element array, never a bare object.`,
     );
   }
   return raw.map((item: unknown, index: number): BoardRow => {
@@ -164,6 +194,36 @@ function validateBoardRows(raw: unknown, path: string): readonly BoardRow[] {
   });
 }
 
+const BOARD_SHAPE = "{ repo, generatedAt, rows }";
+
+// THE SHARED READ SEAM (#92): `render` and `diff` each read a WHOLE Board
+// document -- not a bare rows array like `build`'s `--rows-from` -- so this
+// checks the envelope (`repo`, `generatedAt`) itself and then hands `rows` to
+// validateBoardRows() above, the SAME function `build` uses, rather than
+// re-writing its per-row rules here. One set of row rules, three verbs.
+function validateBoard(raw: unknown, path: string): Board {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new VerbUsageError(
+      `'${path}' must be a JSON OBJECT ${BOARD_SHAPE} (a 'board build --json' result), got ${describeValue(raw)}.`,
+    );
+  }
+  const board = raw as Record<string, unknown>;
+  const repo = board["repo"];
+  if (typeof repo !== "string") {
+    throw new VerbUsageError(
+      `'${path}': board needs a string 'repo', got ${describeValue(repo)}.`,
+    );
+  }
+  const generatedAt = board["generatedAt"];
+  if (typeof generatedAt !== "string") {
+    throw new VerbUsageError(
+      `'${path}': board needs a string 'generatedAt', got ${describeValue(generatedAt)}.`,
+    );
+  }
+  const rows = validateBoardRows(board["rows"], path, `'${path}': 'rows'`);
+  return { repo, generatedAt, rows };
+}
+
 function build(context: CommandContext): number {
   const repo = requireValue(context.args, "repo-slug", "The repository this board is for.");
   const rowsPath = requireValue(context.args, "rows-from", "The already-computed rows to assemble.");
@@ -177,7 +237,7 @@ function build(context: CommandContext): number {
 function render(context: CommandContext): number {
   const boardPath = requireValue(context.args, "board-from", "The board JSON to render.");
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const board = readJsonFile<Board>(boardPath, root);
+  const board = validateBoard(readJsonFile<unknown>(boardPath, root), boardPath);
   const lines = renderBoard(board);
   emit(context.io, context.json, board, lines);
   return 0;
@@ -187,8 +247,8 @@ function diff(context: CommandContext): number {
   const beforePath = requireValue(context.args, "before", "The earlier board snapshot.");
   const afterPath = requireValue(context.args, "after", "The later board snapshot.");
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const before = readJsonFile<Board>(beforePath, root);
-  const after = readJsonFile<Board>(afterPath, root);
+  const before = validateBoard(readJsonFile<unknown>(beforePath, root), beforePath);
+  const after = validateBoard(readJsonFile<unknown>(afterPath, root), afterPath);
   const result = diffBoards(before, after);
 
   const lines = result.changed
