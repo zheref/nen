@@ -116,6 +116,22 @@ export function readTextFile(
  * to surface as a raw `ENOTDIR` at exit 1 from a readdir several frames later:
  * pointing the flag at `CHANGELOG.md` is a typo, and the refusal names the
  * resolved path so the caller can see what it actually pointed at.
+ *
+ * ONLY "NOT THERE" MEANS ABSENT (zheref/nen#10 item 6, PR #83 review). The
+ * stat call is made with `throwIfNoEntry: false`, which is Node's own way of
+ * saying "these two failure modes are the same case": it returns `undefined`,
+ * rather than throwing, for BOTH `ENOENT` (nothing at this path) and
+ * `ENOTDIR` (a PARENT component of the path is a file, so nothing could ever
+ * exist under it either -- a repo with a stray `changelog.d` FILE two
+ * directories up is, from this function's caller's point of view, exactly as
+ * "no fragments here" as one with no `changelog.d` at all). Every OTHER stat
+ * failure -- `EACCES`, `EPERM`, `ELOOP`, `EIO`, and anything else the
+ * filesystem can raise -- still throws, and is turned into this codebase's
+ * actionable refusal below, naming the resolved path and the errno. The
+ * distinction matters: an unreadable directory is NOT an absent one, and a
+ * caller told "no fragments" when the real answer is "could not check" would
+ * have `changelog completeness` or `release preflight` pass a cut point the
+ * check never actually ran against.
  */
 export function optionalDirectoryFlag(
   args: ParsedArgs,
@@ -133,10 +149,14 @@ export function optionalDirectoryFlag(
   const full = isAbsolute(dir) ? dir : resolvePath(root, dir);
   let stats;
   try {
-    stats = statSync(full);
-  } catch {
-    return null; // not there at all -- "no entries", never a refusal
+    stats = statSync(full, { throwIfNoEntry: false });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new VerbUsageError(
+      `--${flag} points at '${full}', which could not be checked${code === undefined ? "" : ` (${code})`}.`,
+    );
   }
+  if (stats === undefined) return null; // not there at all -- "no entries", never a refusal
   if (!stats.isDirectory()) {
     throw new VerbUsageError(`--${flag} points at '${full}', which is not a directory.`);
   }

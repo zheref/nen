@@ -39,21 +39,38 @@ import type { ConsumerEntry } from "../schema/repos.js";
  * `--json` caller that already fails on `pinFindings.length > 0` starts failing
  * on a registry gap too -- the fail-closed direction. A second key would have
  * left that caller reading "clean" for a check that was never performed.
+ *
+ * A DISCRIMINATED UNION, not `pinned: string | null` on one shape (PR #83
+ * review). Before, nothing stopped a construction site from pairing `kind:
+ * "stale"` with a null `pinned` or `kind: "unpinned"` with a real tag -- both
+ * of those bugs would have type-checked. Tying `pinned`'s type to `kind`
+ * turns "a stale finding always carries the tag it is stale AGAINST, an
+ * unpinned finding never carries one" from a comment into something
+ * `detectStalePins` below and every reader of this array (../warmup/command.ts)
+ * cannot get past the compiler without contradicting.
  */
-export interface PinFinding {
-  /**
-   * 'stale': a recorded pin behind `current`. 'unpinned': no pin recorded at
-   * all -- a missing/null field OR an empty string, which record the same
-   * absence.
-   */
-  readonly kind: "stale" | "unpinned";
+export interface PinFindingCommon {
   readonly repo: string;
   /** 'pinned', or a caller-pin field name (e.g. 'db_migrate_pinned'). */
   readonly field: string;
-  /** The recorded pin, or null for 'unpinned' -- there was nothing to record. */
-  readonly pinned: string | null;
   readonly current: string;
 }
+
+export type PinFinding =
+  | (PinFindingCommon & {
+      /** A recorded pin behind `current`. */
+      readonly kind: "stale";
+      readonly pinned: string;
+    })
+  | (PinFindingCommon & {
+      /**
+       * No pin recorded at all -- a missing/null field OR an empty string,
+       * which record the same absence.
+       */
+      readonly kind: "unpinned";
+      /** There was nothing to record. */
+      readonly pinned: null;
+    });
 
 export function detectStalePins(
   consumers: readonly ConsumerEntry[],

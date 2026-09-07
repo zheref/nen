@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -467,6 +467,40 @@ describe("nen release preflight", () => {
       expect(result.code).toBe(2);
       expect(result.err.join("\n")).toMatch(/--fragment-dir points at .*notadir', which is not a directory/);
       expect(result.err.join("\n")).not.toMatch(/ENOTDIR/);
+    });
+
+    it("refuses an UNREADABLE --fragment-dir at exit 2, naming the errno, rather than reporting 'no fragments' (PR #83 review)", async () => {
+      // Mirrors ../changelog/command.test.ts's own case for the same shared
+      // seam (../cli/inputs.ts's optionalDirectoryFlag): an EACCES from a
+      // locked PARENT directory must not be folded into the same null return
+      // as an absent directory -- a caller told "no fragments" in that case
+      // would never learn the check did not run at all. chmod is skipped
+      // where the bit is not enforced (root, or a filesystem that ignores it)
+      // rather than asserted into a platform-dependent failure -- see
+      // ../verbs/pr_ready.test.ts (zheref/nen#8) for the same guard on a
+      // file-level EACCES.
+      let blocked = true;
+      let locked = "";
+      const result = await runWithFragmentDir((dir): void => {
+        locked = join(dir, "locked");
+        const fragmentDir = join(locked, "changelog.d");
+        mkdirSync(fragmentDir, { recursive: true });
+        chmodSync(locked, 0o000);
+        try {
+          statSync(fragmentDir);
+          blocked = false; // permission bit not enforced on this host -- skip below
+        } catch {
+          // still blocked, as expected
+        }
+      }, ["--fragment-dir", join("locked", "changelog.d")]);
+
+      if (blocked) {
+        expect(result.code).toBe(2);
+        expect(result.err.join("\n")).toMatch(/--fragment-dir points at .*changelog\.d', which could not be checked/);
+        expect(result.err.join("\n")).toMatch(/EACCES/);
+      }
+
+      if (locked !== "") chmodSync(locked, 0o700); // restore so the temp-dir cleanup can traverse it
     });
   });
 });

@@ -10,7 +10,7 @@ import {
 import { readJsonFile } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
-import { detectStalePins, sweepHandbookQuestions, type Question, type QuestionGap } from "./sweep.js";
+import { detectStalePins, sweepHandbookQuestions, type PinFinding, type Question, type QuestionGap } from "./sweep.js";
 
 const USAGE = `nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
 
@@ -61,8 +61,19 @@ export const warmupCommand: Command = {
     // gap and a consumer confirmed current rendered as the same "no stale
     // pins" line. Splitting the two counts also keeps the stale half's wording
     // byte-identical for every registry that has no gap.
-    const stale = pinFindings.filter((finding): boolean => finding.kind === "stale");
-    const unpinned = pinFindings.filter((finding): boolean => finding.kind === "unpinned");
+    // TYPE PREDICATES, not `boolean` (PR #83 review): PinFinding is now a
+    // discriminated union keyed on `kind`, and a plain `boolean` return would
+    // filter the ARRAY at runtime without narrowing its ELEMENT type, leaving
+    // `finding.pinned` below typed `string | null` on the stale branch --
+    // true only because a template literal happens to accept `null`, not
+    // because the compiler had proven it can't be. `Extract<PinFinding, ...>`
+    // makes the narrowing something a cast would only have papered over.
+    const stale = pinFindings.filter(
+      (finding): finding is Extract<PinFinding, { kind: "stale" }> => finding.kind === "stale",
+    );
+    const unpinned = pinFindings.filter(
+      (finding): finding is Extract<PinFinding, { kind: "unpinned" }> => finding.kind === "unpinned",
+    );
 
     const lines: string[] = [];
     lines.push(stale.length === 0 ? "no stale pins" : `${stale.length} stale pin(s):`);

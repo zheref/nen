@@ -127,6 +127,35 @@ describe("nen warmup", () => {
       ]);
     });
 
+    it("pins the --json BYTES for a PinFinding, key order included (PR #83 review)", async () => {
+      // `.toEqual()` above is order-insensitive, so it would stay green even
+      // if turning PinFinding into a discriminated union reordered the fields
+      // TypeScript emits. This asserts the literal output text -- kind, repo,
+      // field, pinned, current, in that order -- so the union's arms must
+      // still construct their object literals in the same field order the
+      // pre-union shape did.
+      const result = await capture(["warmup", "--current", "v1.0.0", "--json"], registryRepo(UNPINNED, "v1.0.0"));
+      expect(result.out.join("\n")).toBe(
+        [
+          "{",
+          '  "current": "v1.0.0",',
+          '  "pinFindings": [',
+          "    {",
+          '      "kind": "unpinned",',
+          '      "repo": "o/gap",',
+          '      "field": "pinned",',
+          '      "pinned": null,',
+          '      "current": "v1.0.0"',
+          "    }",
+          "  ],",
+          '  "questionSweep": {',
+          '    "checked": false',
+          "  }",
+          "}",
+        ].join("\n"),
+      );
+    });
+
     it("says 'no unpinned consumers' when every consumer records one -- an unrun check never renders as a clean one", async () => {
       const result = await capture(["warmup", "--current", "v1.0.0"], cleanRegistryRepo("v1.0.0"));
       expect(result.out.join("\n")).toMatch(/no unpinned consumers/);
