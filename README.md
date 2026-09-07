@@ -54,6 +54,11 @@ else, including the CLI itself, is TypeScript. See the script's own header
 for the full fail-closed contract (which exit code means what, and which
 ones are safe to retry).
 
+Pinning `--ref` to a tag keeps that tag's behaviour until you choose to move;
+see [CHANGELOG.md](CHANGELOG.md) for what changed release to release,
+including every deliberate behaviour change (under each version's "Behaviour
+changes") a caller needs to account for before repinning to a newer tag.
+
 ## Try it
 
 Two commands that need nothing but a clone — no target repository, no
@@ -160,9 +165,7 @@ machine-readable form.
 ## Working on Nen
 
 Requires [bun](https://bun.sh) 1.4.0 or newer, and nothing else. Identical
-on macOS and Windows/Git Bash. See [CHANGELOG.md](CHANGELOG.md) for what
-changed release to release, including any behaviour a caller pinned to an
-older tag needs to account for.
+on macOS and Windows/Git Bash.
 
 ```
 bun install --frozen-lockfile
