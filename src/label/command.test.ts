@@ -102,10 +102,19 @@ describe("nen label apply", () => {
     expect(result.err.join("\n")).toMatch(/is not in/);
   });
 
-  it("refuses a malformed object ref", async () => {
-    // RefError is not a VerbUsageError -- like GateError/ColorError elsewhere
-    // in this codebase, a malformed-input domain error exits 1, not 2.
+  it("refuses a malformed object ref at exit 2, and keeps parseRef's message whole", async () => {
+    // EXIT 2, NOT 1 (zheref/nen#10 item 3). `label apply not-a-ref` is a typo
+    // in a positional, and ../index.ts's header is explicit about the split:
+    // exit 1 says "the thing you asked for did not work" when the truth is
+    // "you typed it wrong", and a retry wrapper honouring the distinction
+    // would retry a typo forever. RefError is converted at the command
+    // boundary by ../cli/command.ts's parseCallerToken; the message it carries
+    // is parseRef's own, because that text is what tells the caller the form.
     const result = await capture(["label", "apply", "not-a-ref", "--label", "bankai:stage/idea", "--repo-slug", "o/r"]);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is not object notation/);
+    expect(result.err.join("\n")).toMatch(/<CODE>-<IS\|PR>-#<N>/);
+    // The exit-2 path also earns the "Run --help" line a usage error gets.
+    expect(result.err.join("\n")).toMatch(/Run 'nen label --help'/);
   });
 });
