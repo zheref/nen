@@ -244,6 +244,19 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen bootstrap --ref v0.1.0").classification).toBe("mutating");
   });
 
+  // zheref/nen#74's review: the passthrough `--` guard used to run BEFORE the
+  // policy switch, so a verb that is mutating in every form lost its own
+  // classification and reason to the guard's generic "unknown" the moment a
+  // `--` appeared on the line -- even though nothing behind a `--` could ever
+  // make an already-mutating verb less mutating. `evaluateNenPolicy` now
+  // answers "mutating" for these verbs before it ever looks at `--`. The
+  // refusal is identical either way (neither is "read-only"); only the label
+  // and reason improve.
+  it("an always-mutating verb answers 'mutating', not 'unknown', even with a passthrough '--' on the line", () => {
+    expect(classifyCommand("nen tag cut --name x --at y -- z").classification).toBe("mutating");
+    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md -- z").classification).toBe("mutating");
+  });
+
   // Verbs that WRITE BY DEFAULT are read-only only in their explicit
   // --dry-run form -- absence of the write is never inferred.
   it("dry-run-gated verbs: read-only ONLY with an explicit --dry-run", () => {

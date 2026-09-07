@@ -1339,12 +1339,27 @@ function evaluateNenPolicy(
   tokens: readonly string[],
   lineFaithful: boolean,
 ): ClassifyResult {
+  // A verb that is MUTATING IN EVERY FORM answers before the passthrough `--`
+  // guard below (zheref/nen#74's review): nothing a `--` could forward to
+  // another tool changes an already-mutating verdict -- this arm's answer
+  // never depended on `tokens` or `lineFaithful` in the first place, only on
+  // `policy.why` -- so letting the guard's generic "unknown" pre-empt it lost
+  // a more specific classification and reason for no safety benefit. The
+  // refusal is identical either way (neither is "read-only"); only the label
+  // and the reason text improve, e.g. `nen tag cut --name x --at y -- z` now
+  // answers "mutating" instead of "unknown".
+  if (policy.kind === "mutating") {
+    return { classification: "mutating", reason: `${label} -- ${policy.why}` };
+  }
+
   // A passthrough `--` hands everything after it to an underlying tool
   // (../cli/args.ts), and what THAT tool does with it is not provable from
   // here -- `nen dev test -- -u` would have vitest rewriting snapshot files
   // under a verb this table calls a checker. Refused as unknown for every
-  // policy, including "read-only": the table vouches for nen's verbs, not
-  // for arbitrary arguments forwarded through them.
+  // OTHER policy, including "read-only": the table vouches for nen's verbs,
+  // not for arbitrary arguments forwarded through them. ("mutating" is
+  // handled above, unconditionally, because forwarding cannot make an
+  // already-mutating verb any less mutating.)
   //
   // THIS CHECK IS ITSELF A SCAN, and its negative result is only worth
   // anything on a scan-faithful line -- which is why the two policies whose
@@ -1381,8 +1396,7 @@ function evaluateNenPolicy(
       }
       return { classification: "read-only", reason: `${label} -- ${policy.why}` };
     }
-    case "mutating":
-      return { classification: "mutating", reason: `${label} -- ${policy.why}` };
+    // "mutating" is handled above, before the `--` guard -- see that comment.
     case "dry-run-gated": {
       // The verb WRITES by default; only an explicit `--dry-run` argument
       // makes it a read. Both halves must hold: the exact token is present,
