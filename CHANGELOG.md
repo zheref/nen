@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see README "Install".
+All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
 ## v0.2.0 — 2026-09-07
 
@@ -18,10 +18,10 @@ These are deliberate contract changes, not bugs — a caller pinned to v0.1.0 be
 - A gates file, a `--reviewers` name, or `wake --author-pattern` can now be refused at load time for a pattern with a potentially exponential-backtracking shape (`(a+)+`, `(a|a)+`, a large finite repeat over an ambiguous body) or one that matches the empty string (`.*`, `a*`, `x?`). The refusal quotes the offending fragment and names a rewrite; `.+` still loads, and both shipped fixtures and every product-codes registry checked against this pass load unchanged. ([#86](https://github.com/zheref/nen/pull/86))
 - A relative `--gates` now resolves against `--repo`, not the current working directory, and the resolved absolute path is printed in `--explain` and in `--json`'s `meta.identities.path`. A caller relying on the old cwd-relative behaviour should pass an absolute path instead, which is used as-is and is unchanged. `nen pr next-blocker --gates` shares the same resolver. ([#86](https://github.com/zheref/nen/pull/86))
 - An error escaping the entry point (`import.meta.main`) now exits 1 with a single `nen: `-prefixed message, instead of an unhandled-rejection stack dump and whatever exit status the host runtime happened to choose. ([#86](https://github.com/zheref/nen/pull/86))
-- `nen issue attach-sub` and `consolidate-close` now refuse — before any write — when a number in `--parent`/`--children` names a pull request rather than an issue, and `nen idea file` fails loudly (exit 1) when its read-back verification lands on a pull request instead of an issue. The way out: pass an issue number, or verify the object by hand when `idea file`'s refusal says the issue was filed anyway. ([#82](https://github.com/zheref/nen/pull/82), [#84](https://github.com/zheref/nen/pull/84))
+- `nen issue attach-sub` and `nen issue consolidate-close` now refuse — before any write — when a number in `--parent`/`--children` names a pull request rather than an issue, and `nen idea file` fails loudly (exit 1) when its read-back verification lands on a pull request instead of an issue. The way out: pass an issue number, or verify the object by hand when `nen idea file`'s refusal says the issue was filed anyway. ([#82](https://github.com/zheref/nen/pull/82), [#84](https://github.com/zheref/nen/pull/84))
 - `nen issue consolidate-close` without `--severity-family <ns>:<family>` used to silently union every child's severity label onto the parent at exit 0 whenever the children carried more than one label of the same family. It now refuses at exit 1, before any write, naming the colliding family and its labels. The way out: pass `--severity-family <ns>:<family>` naming the family whose strongest label should win. ([#62](https://github.com/zheref/nen/pull/62))
-- `nen issue chain-position` and `terminus` now refuse when `--issue` names a pull request, for the same reason. ([#71](https://github.com/zheref/nen/pull/71))
-- Two of the refusals above are pinned to a machine-readable `--json` shape rather than left to text-matching: `attach-sub`/`consolidate-close`'s pull-request refusal is `{parent, children, pullRequests, refused: true, reason}`, and `chain-position`/`terminus`'s classifier refusal is `{issue, refused: true, reason}` — both in that key order. ([#82](https://github.com/zheref/nen/pull/82), [#84](https://github.com/zheref/nen/pull/84), [#71](https://github.com/zheref/nen/pull/71)) `nen pr ready --explain`'s identities line is the same kind of fact for a caller that only reads text output: it now prints the resolved absolute gates path rather than a bare relative one, matching what `--json`'s `meta.identities.path` reports. ([#86](https://github.com/zheref/nen/pull/86))
+- `nen issue chain-position` and `nen issue terminus` now refuse when `--issue` names a pull request, for the same reason. ([#71](https://github.com/zheref/nen/pull/71))
+- Two of the refusals above are pinned to a machine-readable `--json` shape rather than left to text-matching: `nen issue attach-sub`/`nen issue consolidate-close`'s pull-request refusal is `{parent, children, pullRequests, refused: true, reason}`, and `nen issue chain-position`/`nen issue terminus`'s classifier refusal is `{issue, refused: true, reason}` — both in that key order. ([#82](https://github.com/zheref/nen/pull/82), [#84](https://github.com/zheref/nen/pull/84), [#71](https://github.com/zheref/nen/pull/71)) `nen pr ready --explain`'s identities line is the same kind of fact for a caller that only reads text output: it now prints the resolved absolute gates path rather than a bare relative one, matching what `--json`'s `meta.identities.path` reports. ([#86](https://github.com/zheref/nen/pull/86))
 - `nen issue comment` is a new verb — a general comment plus a per-child close-comment channel for consolidation. ([#75](https://github.com/zheref/nen/pull/75))
 - `nen repo scenario`, `nen canon resolve`, `nen parse futon`, `nen wc classify`, `nen stage triage`, `nen idea file`, `nen labels sync`, `nen scaffold init`, `nen issue file`, `nen issue consolidate-close`, `nen tag cut`, `nen pr next-blocker`, `nen pr cascade-main`, `nen release resolve-target`, and `nen release self-check` — 15 verbs in all — now require `--repo`, matching what each one's own usage line already promised. Omitting it used to fall through to a silent cwd default (reading the wrong repository, or surfacing a raw "no such file" from an unrelated directory); it now refuses at exit 2 naming the flag. ([#73](https://github.com/zheref/nen/pull/73))
 - `nen pr fetch` never issues a write call — every `gh api` argv it builds now names its HTTP method explicitly, closing a path where an unnamed method could resolve to something other than a read. ([#59](https://github.com/zheref/nen/pull/59))
@@ -31,10 +31,10 @@ These are deliberate contract changes, not bugs — a caller pinned to v0.1.0 be
 
 ### Fixed
 
-- **issue** — refuse `attach-sub`/`consolidate-close` when a number names a pull request ([#82](https://github.com/zheref/nen/pull/82), closes #77)
+- **issue** — refuse `nen issue attach-sub`/`nen issue consolidate-close` when a number names a pull request ([#82](https://github.com/zheref/nen/pull/82), closes #77)
 - **issue** — report the caller's own number from the classifier guard so `NotAnIssueError`'s contract holds ([#84](https://github.com/zheref/nen/pull/84))
-- **issue** — refuse `chain-position`/`terminus` when `--issue` names a pull request ([#71](https://github.com/zheref/nen/pull/71), closes #25)
-- **issue** — refuse `consolidate-close` when omitting `--severity-family` would silently union a family's labels ([#62](https://github.com/zheref/nen/pull/62), closes #22)
+- **issue** — refuse `nen issue chain-position`/`nen issue terminus` when `--issue` names a pull request ([#71](https://github.com/zheref/nen/pull/71), closes #25)
+- **issue** — refuse `nen issue consolidate-close` when omitting `--severity-family` would silently union a family's labels ([#62](https://github.com/zheref/nen/pull/62), closes #22)
 - **schema** — skip `$`-prefixed metadata keys when loading `product_codes` ([#81](https://github.com/zheref/nen/pull/81), closes #17)
 - **parse / watch** — guard every read-only certification at the classification seam ([#76](https://github.com/zheref/nen/pull/76), closes #70)
 - **parse / watch** — admit plain file reads and nen's own verbs in izanami's allowlist ([#74](https://github.com/zheref/nen/pull/74), closes #31)
@@ -55,7 +55,7 @@ These are deliberate contract changes, not bugs — a caller pinned to v0.1.0 be
 
 ### Added
 
-- **issue** — add a general `comment` verb and a per-child close-comment channel ([#75](https://github.com/zheref/nen/pull/75), closes #29)
+- **issue** — add a general `nen issue comment` verb and a per-child close-comment channel ([#75](https://github.com/zheref/nen/pull/75), closes #29)
 
 ### Consumer note
 
