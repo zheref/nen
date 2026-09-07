@@ -159,6 +159,100 @@ describe("parseGateIdentities -- validation", () => {
     ).toThrow(/silently excuses a reviewer from every round/);
   });
 
+  // ── the ReDoS / `.*` guard, at the one seam a pattern is compiled ──────────
+  //
+  // zheref/nen#8 item 3 and zheref/nen#6 item 2 are the same code path. The
+  // reasoning lives in ./pattern.ts's header; these cases pin that it is
+  // actually WIRED, for every one of the five pattern fields, and that the
+  // refusal is path- and pointer-bearing like every other refusal in this
+  // loader.
+
+  const reviewerWith = (field: string, pattern: string): unknown => ({
+    ...minimal,
+    reviewers: [
+      {
+        name: "a",
+        login_pattern: { pattern: "a", ignoreCase: true },
+        [field]: { pattern, ignoreCase: true },
+      },
+    ],
+  });
+
+  it("refuses a catastrophic login_pattern at LOAD, before any pull request is judged", () => {
+    // The issue's own example. `new RegExp("(a+)+$","i").test("a".repeat(30)+"!")`
+    // was measured at ~300ms in this runtime -- exponential, so a 39-character
+    // login (GitHub's documented maximum) is 2**39 steps. It never runs.
+    const started = performance.now();
+    expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        reviewers: [{ name: "a", login_pattern: { pattern: "(a+)+$", ignoreCase: true } }],
+      }),
+    ).toThrow(/exponential-backtracking/);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it("refuses a catastrophic pattern in EVERY one of the five fields, not just the login", () => {
+    for (const field of [
+      "review_check_pattern",
+      "round_check_pattern",
+      "enrolment_check_pattern",
+    ]) {
+      expect(() => parseGateIdentities(at, reviewerWith(field, "(a|a)+$")), field).toThrow(
+        /exponential-backtracking/,
+      );
+    }
+    expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        delivery: { ...minimal.delivery, author_pattern: { pattern: "(x+)+", ignoreCase: true } },
+      }),
+    ).toThrow(/exponential-backtracking/);
+  });
+
+  it("names the file, the pointer and the offending fragment", () => {
+    try {
+      parseGateIdentities(at, {
+        ...minimal,
+        reviewers: [{ name: "a", login_pattern: { pattern: "^z(a+)+$", ignoreCase: true } }],
+      });
+      expect.unreachable();
+    } catch (error) {
+      const schemaError = error as { path: string; pointer: string | null; message: string };
+      expect(schemaError.path).toBe(at);
+      expect(schemaError.pointer).toBe("reviewers[0].login_pattern.pattern");
+      // The FRAGMENT, so the author can find it inside a long pattern.
+      expect(schemaError.message).toContain("'(a+)+'");
+    }
+  });
+
+  it("refuses a pattern that matches the EMPTY string -- unanchored, it matches everything", () => {
+    // Not a broad pattern: the constant `true`. On login_pattern every login on
+    // earth satisfies the reviewer's round and joins the approval set; on
+    // round_check_pattern every green check clears a round nobody posted.
+    expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        reviewers: [{ name: "a", login_pattern: { pattern: ".*", ignoreCase: true } }],
+      }),
+    ).toThrow(/EMPTY string/);
+    expect(() => parseGateIdentities(at, reviewerWith("round_check_pattern", "x?"))).toThrow(
+      /EMPTY string/,
+    );
+  });
+
+  it("still accepts the ordinary, anchored and unanchored patterns both fixtures ship", () => {
+    // The guard's cost has to be zero on real reviewer identities, or it is a
+    // worse defect than the one it closes. Both shipped fixtures load unchanged
+    // -- asserted here as well as in loadGateIdentities' own cases above,
+    // because THIS is the assertion that goes red if the guard tightens.
+    expect(() => loadGateIdentities(BANKAI_REPO)).not.toThrow();
+    expect(() => loadGateIdentities(ALT_REPO)).not.toThrow();
+    expect(() =>
+      parseGateIdentities(at, reviewerWith("review_check_pattern", "^a / audit$")),
+    ).not.toThrow();
+  });
+
   it("refuses a duplicate reviewer name", () => {
     expect(() =>
       parseGateIdentities(at, {

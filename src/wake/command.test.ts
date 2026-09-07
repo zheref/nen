@@ -177,4 +177,37 @@ describe("nen wake verify", () => {
     );
     expect(result.code).toBe(2);
   });
+
+  // zheref/nen#8 item 3, second exposed site: this pattern is compiled from a
+  // flag and then run against `pr.user.login` -- a string GitHub supplies -- so
+  // it carries the identical ReDoS exposure ../schema/gates.ts's five pattern
+  // fields do, and goes through the same guard. Refused AT THE FLAG, before a
+  // single gh call: the alternative is a sweep that hangs partway through with
+  // workflows already redriven.
+  it("refuses a catastrophic --author-pattern before any gh call", async () => {
+    const result = await capture(
+      [
+        "wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z",
+        "--author-pattern", "(a+)+$",
+      ],
+      // Throws if reached: the refusal must precede the first fetch.
+      (): CommandResult => {
+        throw new Error("must not be called");
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/exponential-backtracking/);
+    expect(result.err.join("\n")).toContain("'(a+)+'");
+  });
+
+  it("still accepts an ordinary anchored bot-login pattern", async () => {
+    const result = await capture(
+      [
+        "wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z",
+        "--author-pattern", "(^|/)some-bot(\\[bot\\])?$",
+      ],
+      (): CommandResult => ok("[]"),
+    );
+    expect(result.code).toBe(0);
+  });
 });
