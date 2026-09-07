@@ -1,0 +1,73 @@
+# Changelog
+
+All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
+
+## v0.2.0 — 2026-09-07
+
+nen's second release, and the first minor bump on its independent 0.x line. While nen sits at 0.x, a minor is where a breaking change ships — semver only promises no breaking changes between minors once a project reaches 1.0, and every one of the behaviour changes below is exactly that kind of change, not a bug reclassified as a feature. This release closes every p1/p2 issue filed against v0.1.0, across the 22 PRs below, cut via the release PR [#88](https://github.com/zheref/nen/pull/88).
+
+### Behaviour changes a caller must know
+
+These are deliberate contract changes, not bugs — a caller pinned to v0.1.0 behaviour needs to account for every one of them before repinning.
+
+- `nen loop slots` now requires `--local-cap`; it no longer defaults the local concurrency plane to 7. The way out: pass `--local-cap <n>` explicitly. ([#69](https://github.com/zheref/nen/pull/69))
+- `nen label apply`, `nen ref parse`, and `nen color status` now exit 2, not 1, on a typo'd token — matching this CLI's own contract that exit 2 means "you typed it wrong". The message text is unchanged, only the code; a retry wrapper or script branching on exit 1 for a bad ref or a bad `--category` must switch to 2. ([#83](https://github.com/zheref/nen/pull/83))
+- `nen warmup` now fails (exit 1) on a consumer with no recorded pin, and gains an `unpinned` finding `kind` carrying `"pinned": null` in `--json` (widened from `string` to `string | null`). This is fail-closed on purpose: a check that could not be performed must never render as one that came back clean. The way out: record the pin, or update a caller reading `finding.pinned` as always a string. ([#83](https://github.com/zheref/nen/pull/83))
+- `nen changelog completeness` and `nen release preflight` now both default `--fragment-dir` to `changelog.d`, and both refuse an empty value, a value naming a file, or a value that cannot be read — instead of the two verbs silently disagreeing about where fragments live, or one of them resolving an empty flag to the repository root. Omit the flag to get the default; pass an existing directory otherwise. ([#83](https://github.com/zheref/nen/pull/83))
+- `nen board render` and `nen stop` now escape `|` as `\|` and flatten embedded newlines to a single space in table cells, so a title carrying either no longer shifts every later column. A consumer doing its own naive `split("|")` over these tables must switch to splitting on `(?<!\\)\|`, or use the exported `parsePipeTable`. ([#83](https://github.com/zheref/nen/pull/83))
+- A gates file, a `--reviewers` name, or `wake --author-pattern` can now be refused at load time for a pattern with a potentially exponential-backtracking shape (`(a+)+`, `(a|a)+`, a large finite repeat over an ambiguous body) or one that matches the empty string (`.*`, `a*`, `x?`). The refusal quotes the offending fragment and names a rewrite; `.+` still loads, and both shipped fixtures and every product-codes registry checked against this pass load unchanged. ([#86](https://github.com/zheref/nen/pull/86))
+- A relative `--gates` now resolves against `--repo`, not the current working directory, and the resolved absolute path is printed in `--explain` and in `--json`'s `meta.identities.path`. A caller relying on the old cwd-relative behaviour should pass an absolute path instead, which is used as-is and is unchanged. `nen pr next-blocker --gates` shares the same resolver. ([#86](https://github.com/zheref/nen/pull/86))
+- An error escaping the entry point (`import.meta.main`) now exits 1 with a single `nen: `-prefixed message, instead of an unhandled-rejection stack dump and whatever exit status the host runtime happened to choose. ([#86](https://github.com/zheref/nen/pull/86))
+- `nen issue attach-sub` and `nen issue consolidate-close` now refuse — before any write — when a number in `--parent`/`--children` names a pull request rather than an issue, and `nen idea file` fails loudly (exit 1) when its read-back verification lands on a pull request instead of an issue. The way out: pass an issue number, or verify the object by hand when `nen idea file`'s refusal says the issue was filed anyway. ([#82](https://github.com/zheref/nen/pull/82), [#84](https://github.com/zheref/nen/pull/84))
+- `nen issue consolidate-close` without `--severity-family <ns>:<family>` used to silently union every child's severity label onto the parent at exit 0 whenever the children carried more than one label of the same family. It now refuses at exit 1, before any write, naming the colliding family and its labels. The way out: pass `--severity-family <ns>:<family>` naming the family whose strongest label should win. ([#62](https://github.com/zheref/nen/pull/62))
+- `nen issue chain-position` and `nen issue terminus` now refuse when `--issue` names a pull request, for the same reason. ([#71](https://github.com/zheref/nen/pull/71))
+- Two of the refusals above are pinned to a machine-readable `--json` shape rather than left to text-matching: `nen issue attach-sub`/`nen issue consolidate-close`'s pull-request refusal is `{parent, children, pullRequests, refused: true, reason}`, and `nen issue chain-position`/`nen issue terminus`'s classifier refusal is `{issue, refused: true, reason}` — both in that key order. ([#82](https://github.com/zheref/nen/pull/82), [#84](https://github.com/zheref/nen/pull/84), [#71](https://github.com/zheref/nen/pull/71)) `nen pr ready --explain`'s identities line is the same kind of fact for a caller that only reads text output: it now prints the resolved absolute gates path rather than a bare relative one, matching what `--json`'s `meta.identities.path` reports. ([#86](https://github.com/zheref/nen/pull/86))
+- `nen issue comment` is a new verb — a general comment plus a per-child close-comment channel for consolidation. ([#75](https://github.com/zheref/nen/pull/75))
+- `nen repo scenario`, `nen canon resolve`, `nen parse futon`, `nen wc classify`, `nen stage triage`, `nen idea file`, `nen labels sync`, `nen scaffold init`, `nen issue file`, `nen issue consolidate-close`, `nen tag cut`, `nen pr next-blocker`, `nen pr cascade-main`, `nen release resolve-target`, and `nen release self-check` — 15 verbs in all — now require `--repo`, matching what each one's own usage line already promised. Omitting it used to fall through to a silent cwd default (reading the wrong repository, or surfacing a raw "no such file" from an unrelated directory); it now refuses at exit 2 naming the flag. ([#73](https://github.com/zheref/nen/pull/73))
+- `nen pr fetch` never issues a write call — every `gh api` argv it builds now names its HTTP method explicitly, closing a path where an unnamed method could resolve to something other than a read. ([#59](https://github.com/zheref/nen/pull/59))
+- `nen release preflight` now parses `RELEASE_HOLD` for truthiness instead of merely non-emptiness, so `RELEASE_HOLD=false` and `RELEASE_HOLD=0` no longer hold a release the variable's own value says should proceed. ([#63](https://github.com/zheref/nen/pull/63))
+- `nen parse izanami` and `nen watch until`'s read-only certification is tightened at the classification seam: a command that used to certify as `[read-only]` — including some quoted or metacharacter-bearing forms — can now refuse instead. A watcher relying on the looser certification should re-verify its commands still classify as expected. ([#74](https://github.com/zheref/nen/pull/74), [#76](https://github.com/zheref/nen/pull/76))
+- A malformed `$`-prefixed key inside `schemas/repos.json`'s `product_codes` (e.g. `$comment`) now loads silently, skipped as metadata, instead of being read as a real product code and refusing or mis-reporting downstream. No action needed unless a caller depended on the old refusal. ([#81](https://github.com/zheref/nen/pull/81))
+
+### Fixed
+
+- **issue** — refuse `nen issue attach-sub`/`nen issue consolidate-close` when a number names a pull request ([#82](https://github.com/zheref/nen/pull/82), closes #77)
+- **issue** — report the caller's own number from the classifier guard so `NotAnIssueError`'s contract holds ([#84](https://github.com/zheref/nen/pull/84))
+- **issue** — refuse `nen issue chain-position`/`nen issue terminus` when `--issue` names a pull request ([#71](https://github.com/zheref/nen/pull/71), closes #25)
+- **issue** — refuse `nen issue consolidate-close` when omitting `--severity-family` would silently union a family's labels ([#62](https://github.com/zheref/nen/pull/62), closes #22)
+- **schema** — skip `$`-prefixed metadata keys when loading `product_codes` ([#81](https://github.com/zheref/nen/pull/81), closes #17)
+- **parse / watch** — guard every read-only certification at the classification seam ([#76](https://github.com/zheref/nen/pull/76), closes #70)
+- **parse / watch** — admit plain file reads and nen's own verbs in izanami's allowlist ([#74](https://github.com/zheref/nen/pull/74), closes #31)
+- **parse** — stop a lone leading slot from swallowing a template's `[ ... ]` clause ([#67](https://github.com/zheref/nen/pull/67), closes #30)
+- **repo** — require `--repo` where a usage line promises it, and split the scenario refusal by cause ([#73](https://github.com/zheref/nen/pull/73), closes #28)
+- **repo** — resolve tokens from everything the registry records, not just `consumers[]` ([#66](https://github.com/zheref/nen/pull/66), closes #27)
+- **loop** — require `--local-cap` instead of defaulting the local plane to 7 ([#69](https://github.com/zheref/nen/pull/69), closes #52)
+- **board** — refuse malformed `--rows-from` rows instead of crashing in render ([#68](https://github.com/zheref/nen/pull/68), closes #32)
+- **epic** — widen checklist parsing beyond the literal `- [ ] #N` line and surface unreadable checkboxes ([#65](https://github.com/zheref/nen/pull/65), closes #51)
+- **backlog** — accept bare issue numbers in `order`'s `--blocks`/`--affects-consumers` and refuse unmatched tokens ([#64](https://github.com/zheref/nen/pull/64), closes #24)
+- **release** — parse `RELEASE_HOLD` for truthiness instead of non-emptiness ([#63](https://github.com/zheref/nen/pull/63), closes #23)
+- **split** — terminate hunk bodies per the `@@` counts, not at the next header ([#61](https://github.com/zheref/nen/pull/61), closes #21)
+- **pr** — `pr ready`'s no-`#` shorthand (`BC925` → code `BC`, number `925`) now splits at the longest trailing digit run instead of conceding just one digit, so multi-digit PR numbers resolve correctly ([#72](https://github.com/zheref/nen/pull/72), closes #26)
+- **pr** — honor `--gates` on `next-blocker` instead of silently ignoring it ([#60](https://github.com/zheref/nen/pull/60), closes #20)
+- **pr** — make every `gh api` argv in the PR fetch name its method explicitly ([#59](https://github.com/zheref/nen/pull/59), closes #19)
+- **pr** — resolve `--gates` against the repo root, catch the entry point, and refuse catastrophic gates patterns at load ([#86](https://github.com/zheref/nen/pull/86), closes #8)
+- **cli-wide** — close the deferred verbs/3-shared findings: pipe-safe tables, usage exit codes, unpinned consumers, a shared fragment dir ([#83](https://github.com/zheref/nen/pull/83), closes #10)
+
+### Added
+
+- **issue** — add a general `nen issue comment` verb and a per-child close-comment channel ([#75](https://github.com/zheref/nen/pull/75), closes #29)
+
+### Consumer note
+
+nen is still on a 0.x line, so a minor bump is the vehicle for a breaking change, not just features — every item under "Behaviour changes" above is exactly that kind of change. Two known consumers pin to nen and need an explicit repin PR, not an automatic pickup:
+
+- hatsu's `nen.contract.json` declares `minimum "0.1"`, which resolves to `>=0.1.0 <0.2.0` — v0.2.0 falls outside that range by design. Its repin PR needs a contract bump to `"0.2"` plus an updated `pinned_ref`, reviewed against the behaviour changes above.
+- akatsuki-ai's vendored `bootstrap/nen.sh` carries a `DEFAULT_REF` pinned to `v0.1.0` and needs the same explicit repin.
+
+nen's own `bootstrap/nen.sh` is byte-unchanged since v0.1.0 — the bootstrap itself carries no breaking change; only the binary it fetches does.
+
+## v0.1.0 — 2026-09-01
+
+nen's first release. nen is a CLI that turns a repository's own schemas, labels, and PR/issue graph into deterministic verbs an agent or a human can call instead of re-deriving the same judgment calls by hand — pull-request readiness, changelog completeness, backlog ordering, and the rest of the verb surface README documents.
+
+See the [release page](https://github.com/zheref/nen/releases/tag/v0.1.0) and [#15](https://github.com/zheref/nen/pull/15).
