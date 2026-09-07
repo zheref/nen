@@ -10,7 +10,7 @@
 // and the readiness gate then runs them against strings GitHub hands back:
 // a pull request author's login, a reviewer's login, a check-run name. The
 // loader validated that a pattern COMPILES. It never validated that it
-// TERMINATES. Measured in this runtime before the guard landed:
+// TERMINATES. Measured before the guard landed:
 //
 //   new RegExp("(a+)+$", "i").test("a".repeat(38) + "!")   ~305ms
 //
@@ -28,8 +28,15 @@
 //   29 characters             --               4,318ms
 //   31 characters           314ms            10,259ms
 //   33 characters             --              41,906ms
-//   39 characters           306ms          (hours: it doubles per character)
+//   39 characters           306ms        ~45 min, EXTRAPOLATED (see below)
 //   46 characters           305ms                 --
+//
+// Every figure above was measured except the last, which is 41.9s doubled the
+// six times the six extra characters call for. It is marked because this file
+// spent a round being wrong about an unmeasured extrapolation and is not going
+// to do it twice: the measured points stop at 33 characters because 39 is the
+// length at which waiting for the answer stops being practical, which is
+// itself the finding.
 //
 // bun's JSC CAPS its own backtracking: the call ANSWERS -- `false` -- in about
 // 305ms and PLATEAUS there, however long the subject gets. V8 does not cap it,
