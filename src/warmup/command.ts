@@ -18,6 +18,10 @@ Stale-pin detection over the target repository's schemas/repos.json (every
 consumer's default pin AND every per-caller pin override), plus an optional
 handbook-question sweep.
 
+A consumer with NO pin recorded is reported as an 'unpinned' finding and
+FAILS the run, exactly as a stale pin does: the check could not be performed,
+and an unperformed check must never render as a clean one.
+
   --current <vX.Y.Z>       This repository's actual latest -- a plugin-shipped
                            registry.latest can itself be stale, so it is
                            stated explicitly rather than read from the file
@@ -51,10 +55,27 @@ export const warmupCommand: Command = {
     const registry = openTaxonomy({ repoFlag: context.repoFlag }).repos();
     const pinFindings = detectStalePins(registry.consumers, current);
 
+    // TWO VERDICTS, EACH ALWAYS PRINTED (zheref/nen#10 item 4), on the same
+    // "silence is not a verdict" rule the question sweep below already
+    // follows. An unpinned consumer used to be skipped outright, so a registry
+    // gap and a consumer confirmed current rendered as the same "no stale
+    // pins" line. Splitting the two counts also keeps the stale half's wording
+    // byte-identical for every registry that has no gap.
+    const stale = pinFindings.filter((finding): boolean => finding.kind === "stale");
+    const unpinned = pinFindings.filter((finding): boolean => finding.kind === "unpinned");
+
     const lines: string[] = [];
-    lines.push(pinFindings.length === 0 ? "no stale pins" : `${pinFindings.length} stale pin(s):`);
-    for (const finding of pinFindings) {
+    lines.push(stale.length === 0 ? "no stale pins" : `${stale.length} stale pin(s):`);
+    for (const finding of stale) {
       lines.push(`  ${finding.repo} ${finding.field}: ${finding.pinned} -> ${current}`);
+    }
+    lines.push(
+      unpinned.length === 0 ? "no unpinned consumers" : `${unpinned.length} unpinned consumer(s):`,
+    );
+    for (const finding of unpinned) {
+      lines.push(
+        `  ${finding.repo} ${finding.field}: NOT PINNED -- the registry records no pin, so it could not be checked against ${current}`,
+      );
     }
 
     let questionSweep: QuestionSweepResult = { checked: false };
@@ -87,6 +108,12 @@ export const warmupCommand: Command = {
 
     emit(context.io, context.json, { current, pinFindings, questionSweep }, lines);
     const questionsFailed = questionSweep.checked && questionSweep.gaps.length > 0;
+    // AN UNPINNED CONSUMER FAILS THE RUN, the same as a stale one, because
+    // `pinFindings` carries both kinds. The fail-closed reading: the pin check
+    // could not be performed for that consumer, and exiting 0 would assert it
+    // passed. Unlike the question sweep -- whose NOT CHECKED is the caller's
+    // own choice not to supply the input, and so is not a failure -- this gap
+    // is in the registry the caller pointed nen at.
     return pinFindings.length === 0 && !questionsFailed ? 0 : 1;
   },
 };
