@@ -353,7 +353,7 @@ export function catastrophicShape(source: string): PatternHazard | null {
       if (quantifier !== null && quantifier.unbounded && frame.ambiguous) {
         return {
           fragment: source.slice(frame.start, quantifier.end),
-          why: "a quantifier applied to a group whose body can match one string in more than one way, repeating either without limit or up to a bound higher than the longest subject it will ever see, which is the classic exponential-backtracking shape",
+          why: "a quantifier applied to a group whose body can match one string in more than one way, repeating either without limit or up to a bound higher than the longest subject it will ever see, which is a potentially exponential-backtracking shape",
         };
       }
       // A quantified group is itself a variable repetition as far as its PARENT

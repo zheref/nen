@@ -4,7 +4,7 @@
 // network -- `deps.openSource` is the one seam this file drives).
 
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -355,6 +355,44 @@ describe("resolveIdentities", () => {
       }
     }
     chmodSync(gatesPath, 0o600);
+  });
+
+  it("a --gates whose PARENT directory cannot be traversed is 'could not be read', not 'no such file'", () => {
+    // zheref/nen#86 review: `existsSync` returns `false` for ANY access
+    // failure, not just ENOENT -- so an EACCES on a parent directory used to
+    // read as absence here, before the read below ever got a chance to say
+    // "could not be read" and name the errno. This is the case the fix moved
+    // onto the single `statSync(gatesPath, { throwIfNoEntry: false })` probe:
+    // an EACCES thrown by THAT call must route through gatesReadFailure, not
+    // the missing-file refusal. chmod is skipped where it is not meaningful (a
+    // root test runner, or a filesystem that does not enforce the bit) rather
+    // than asserted into a platform-dependent failure -- same guard pattern as
+    // the unreadable-file case above.
+    const root = mkdtempSync(join(tmpdir(), "nen-gates-locked-parent-"));
+    const lockedDir = join(root, "locked");
+    mkdirSync(lockedDir);
+    const gatesPath = join(lockedDir, "gates.json");
+    writeFileSync(gatesPath, "{}");
+    chmodSync(lockedDir, 0o000);
+    let traversable = true;
+    try {
+      statSync(gatesPath);
+    } catch {
+      traversable = false;
+    }
+    if (!traversable) {
+      try {
+        resolveIdentities(root, join("locked", "gates.json"), [], []);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(SchemaError);
+        const message = (error as SchemaError).message;
+        expect(message).toMatch(/could not be read/);
+        expect(message).toMatch(/EACCES/);
+        expect(message).not.toMatch(/no such file/);
+      }
+    }
+    chmodSync(lockedDir, 0o700);
   });
 
   it("a malformed in-repo schemas/gates.json fails as a path-bearing SchemaError, not a bare SyntaxError", () => {

@@ -68,11 +68,12 @@ verify:
   --author-pattern <regex>  Which PR authors are in scope. Nen carries no
                             repository's agent-login list; this is a required
                             flag rather than a default. It is run against
-                            logins GitHub supplies, so a pattern whose shape
-                            backtracks exponentially -- an unbounded
-                            quantifier over a group that can match one string
-                            two ways, e.g. (a+)+ -- is refused at the flag
-                            rather than hanging the sweep.
+                            logins GitHub supplies, so a pattern with a
+                            potentially exponential-backtracking shape -- an
+                            unbounded quantifier over a group that can match
+                            one string two ways, e.g. (a+)+ -- is refused at
+                            the flag rather than risking a hang partway
+                            through the sweep.
   --flag-marker <text>      The full idempotency-stamp phrase a detect-only
                             flag comment is recognised by (default
                             nen-wake-guard). NOT interoperable at its default
@@ -157,11 +158,11 @@ function verify(context: CommandContext): number {
   // supplies, which a stranger chose -- so it goes through the same shape guard
   // ../schema/gates.ts's five pattern fields do (zheref/nen#8 item 3). Refused
   // at the FLAG, before a single `gh api` call, because the alternative is a
-  // sweep that hangs partway through with workflows already redriven.
+  // sweep that risks hanging partway through with workflows already redriven.
   const hazard = catastrophicShape(authorPatternRaw);
   if (hazard !== null) {
     throw new VerbUsageError(
-      `--author-pattern '${authorPatternRaw}' is refused: '${hazard.fragment}' is ${hazard.why}. It is run against pull-request author logins, so an exponential pattern hangs this sweep rather than slowing it. Rewrite it -- a character class rather than a quantified alternation, one quantifier rather than a nested pair.`,
+      `--author-pattern '${authorPatternRaw}' is refused: '${hazard.fragment}' is ${hazard.why}. It is run against pull-request author logins, so a pattern with a potentially exponential-backtracking shape risks hanging this sweep rather than slowing it. Rewrite it -- a character class rather than a quantified alternation, one quantifier rather than a nested pair.`,
     );
   }
   // TWO FULL MARKER PHRASES, not one marker with a kind word appended: the

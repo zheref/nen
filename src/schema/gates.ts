@@ -242,7 +242,7 @@ function readPattern(
     throw new SchemaError(
       path,
       `${pointer}.pattern`,
-      `is refused: '${hazard.fragment}' is ${hazard.why}. These patterns are run against strings GitHub supplies -- a PR author's login, a reviewer's login, a check-run name -- so a pattern that backtracks exponentially hangs the gate and a pattern that matches everything opens it. Rewrite it to say what it means (a character class rather than a quantified alternation, one quantifier rather than a nested pair, and an anchored '^...$' where a whole value is meant).`,
+      `is refused: '${hazard.fragment}' is ${hazard.why}. These patterns are run against strings GitHub supplies -- a PR author's login, a reviewer's login, a check-run name -- so a pattern with a potentially exponential-backtracking shape risks hanging the gate and a pattern that matches everything opens it. Rewrite it to say what it means (a character class rather than a quantified alternation, one quantifier rather than a nested pair, and an anchored '^...$' where a whole value is meant).`,
     );
   }
   return compiled;

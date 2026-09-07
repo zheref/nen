@@ -544,10 +544,30 @@ export function resolveIdentities(
     // normalized and kept, a relative one is joined to the repo root, and
     // neither branch assumes a POSIX separator.
     const gatesPath = isAbsolute(gatesFlag) ? resolve(gatesFlag) : resolve(repoRoot, gatesFlag);
-    // The existence guard, with the resolution it applied SPELLED OUT: a caller
-    // who typed a relative path and got a refusal naming a directory they were
-    // not standing in has to be told why, or the message reads as a bug.
-    if (!existsSync(gatesPath)) {
+    // The RESOLUTION guard: ONE `statSync(gatesPath, { throwIfNoEntry: false
+    // })` answers "does it exist", "is it a directory", and "can it even be
+    // read", where this used to be an `existsSync` gate deciding "no such
+    // file" ahead of a second, separate `statSync`. `existsSync` is the wrong
+    // probe for that question: it returns `false` for ANY access failure, not
+    // just ENOENT -- so an EACCES on a parent directory or an ELOOP symlink
+    // cycle was misreported as absence here, before this branch ever got a
+    // chance to say "could not be read" and name the errno. `throwIfNoEntry:
+    // false` turns a genuine ENOENT into `undefined` without throwing, so
+    // `undefined` is the ONLY outcome treated as "no such file" below; every
+    // error this statSync instead THROWS (EACCES, ELOOP, ...) routes through
+    // gatesReadFailure and names its errno, the same refusal the read failure
+    // below uses.
+    let stats: ReturnType<typeof statSync>;
+    try {
+      stats = statSync(gatesPath, { throwIfNoEntry: false });
+    } catch (error) {
+      throw gatesReadFailure(gatesPath, gatesFlag, error);
+    }
+    // The MISSING-FILE refusal, with the resolution it applied SPELLED OUT: a
+    // caller who typed a relative path and got a refusal naming a directory
+    // they were not standing in has to be told why, or the message reads as a
+    // bug.
+    if (stats === undefined) {
       throw new SchemaError(
         gatesPath,
         null,
@@ -558,39 +578,19 @@ export function resolveIdentities(
         }. Either pass an absolute path, or pass a path relative to the repository root.`,
       );
     }
-    // The DIRECTORY guard, and the one filesystem call in this branch that used
-    // to be able to throw a raw Node errno of its own. `existsSync` above
-    // answered about a moment that has already passed, so a plain
-    // `statSync(gatesPath)` on a file deleted between the two calls throws
-    // ENOENT -- which prReady's catch relays verbatim, which is exactly the raw
-    // errno string this whole branch exists to stop. `throwIfNoEntry: false`
-    // turns that race into `undefined` and lets the read below produce this
-    // file's own path-bearing message instead; the try/catch covers the errnos
-    // that option does NOT suppress (EACCES on a parent directory, ELOOP on a
-    // symlink cycle), routing them to the same refusal the read failure uses.
-    //
-    // NOT DIRECTLY TESTED, and the reason is worth stating rather than leaving
-    // as a gap somebody assumes was laziness: every failure this covers needs
-    // the filesystem to change BETWEEN two calls in the same expression, or a
-    // permission state that `existsSync` one line above would already have
-    // failed on. There is no seam to inject at without making the resolver take
-    // a filesystem parameter, which is a larger change than the hazard.
-    let stats: ReturnType<typeof statSync>;
-    try {
-      stats = statSync(gatesPath, { throwIfNoEntry: false });
-    } catch (error) {
-      throw gatesReadFailure(gatesPath, gatesFlag, error);
-    }
-    if (stats?.isDirectory() === true) {
+    // The DIRECTORY guard.
+    if (stats.isDirectory()) {
       throw new SchemaError(gatesPath, null, "expected a file, found a directory");
     }
     // The BACKSTOP the two guards above cannot cover: a file that exists and is
-    // not a directory can still fail to open (EACCES on the file or a parent, a
-    // dangling symlink, a vanished file between the check and the read). Left
-    // unwrapped, each of those is the same raw Node errno string relayed through
-    // prReady's catch that the existence guard exists to stop -- so every way
-    // this read can fail leaves through ONE path-bearing error, the shape
-    // ../schema/source.ts's readSchemaFile already uses for the in-repo files.
+    // not a directory can still fail to open on the READ below -- a vanished
+    // file between this statSync and the read, a permission change in that
+    // same window, a dangling symlink `open()` resolves differently than
+    // `stat()` did. Left unwrapped, that would be the same raw Node errno
+    // string relayed through prReady's catch that this whole function exists
+    // to stop -- so every way this read can fail leaves through ONE
+    // path-bearing error, the shape ../schema/source.ts's readSchemaFile
+    // already uses for the in-repo files.
     let text: string;
     try {
       text = readFileSync(gatesPath, "utf8");

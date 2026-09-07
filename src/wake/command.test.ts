@@ -182,8 +182,8 @@ describe("nen wake verify", () => {
   // flag and then run against `pr.user.login` -- a string GitHub supplies -- so
   // it carries the identical ReDoS exposure ../schema/gates.ts's five pattern
   // fields do, and goes through the same guard. Refused AT THE FLAG, before a
-  // single gh call: the alternative is a sweep that hangs partway through with
-  // workflows already redriven.
+  // single gh call: the alternative is a sweep that risks hanging partway
+  // through with workflows already redriven.
   it("refuses a catastrophic --author-pattern before any gh call", async () => {
     const result = await capture(
       [
