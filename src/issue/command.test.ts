@@ -570,6 +570,39 @@ describe("nen issue -- CLI wiring", () => {
     });
   });
 
+  // zheref/nen#82 review: the `--json` shape's `issue` field has always come
+  // from the CLI-typed argument, but `reason` (NotAnIssueError's message) used
+  // to come from the PAYLOAD's number -- so a caller reading both fields could
+  // catch them disagreeing on the one case that tells the two apart, a GitHub
+  // redirect. `--issue 925` is requested; the payload answers as `926`. Both
+  // fields must now name #925, never #926.
+  it("on a redirect, the --json refusal's 'issue' and 'reason' agree on the REQUESTED number, not the payload's", async () => {
+    const result = await capture(
+      ["issue", "chain-position", "--target", "o/n", "--issue", "925", "--chain-labels", "epic=type:epic"],
+      [
+        {
+          match: "gh api repos/o/n/issues/925",
+          result: {
+            stdout: JSON.stringify({
+              number: 926,
+              id: 90926,
+              title: "some pull request",
+              state: "open",
+              labels: [],
+              pull_request: { url: "https://api.github.com/repos/o/n/pulls/926" },
+            }),
+          },
+        },
+      ],
+      { json: true },
+    );
+    expect(result.code).toBe(1);
+    const parsed = JSON.parse(result.out.join("\n")) as { issue: number; refused: boolean; reason: string };
+    expect(parsed.issue).toBe(925);
+    expect(parsed.reason).toMatch(/#925 names a pull request/);
+    expect(parsed.reason).not.toMatch(/#926/);
+  });
+
   it("issue --help documents the pull-request refusal on the chain verbs", async () => {
     const result = await capture(["issue", "--help"]);
     expect(result.code).toBe(0);

@@ -175,9 +175,17 @@ export const ASK_THE_PR_FAMILY =
  * `numbers` carries the offending numbers AS THE CALLER SPELLED THEM, not as
  * the payload numbered itself. zheref/nen#25's review recorded the mismatch it
  * left behind -- a message interpolating the payload's number beside a `--json`
- * field carrying the argument -- and the fix for new code is simply never to
- * mix the two: everything reported here comes from the argument the caller
- * typed, so the message and the machine-readable field can never disagree.
+ * field carrying the argument -- and the discipline for every constructor call
+ * is simply never to mix the two: everything reported here comes from the
+ * argument the caller typed, so the message and the machine-readable field can
+ * never disagree. That discipline is NOT enforced by this class -- it takes
+ * whatever `numbers` a caller hands it -- so it is on every call site to keep
+ * it. zheref/nen#82's review found the one place that still didn't:
+ * ../issue/chain.ts's classifier guard was constructing this error from
+ * `summary.number` (the payload's) instead of the `--issue` argument, which is
+ * exactly the mismatch above happening again on a path this docblock's own
+ * claim had missed. Fixed in the same change that added this sentence -- see
+ * ./chain.ts's `requireIssue` for the caller-typed number threaded through.
  */
 export class NotAnIssueError extends Error {
   readonly numbers: readonly number[];
