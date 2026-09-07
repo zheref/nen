@@ -23,6 +23,29 @@ repository configures), the same default round policy (`bounded`), and no
 `--reviewers` override on either side, so both derive their reviewer set from
 the same check rollup when one is not named.
 
+**Comparability is guaranteed only under a DEFAULT ENVIRONMENT** (zheref/nen#8
+item 1, recorded here so the limit of this evidence is stated where the
+evidence is). `scripts/pr_ready_gate.sh` honours two environment overrides —
+`COPILOT_STALL_MINUTES` for the stall bound and `COPILOT_POLICY` for the round
+policy (`${COPILOT_POLICY:-bounded}`) — and `nen` reads **neither**,
+deliberately and permanently: both are named after a persona, and the
+migration's §3 names-are-data rule means a persona-named environment variable
+is data this binary must not know. `src/verbs/pr_ready.ts` hard-codes the stall
+bound at the shell's own default (30) and defaults `--round-policy` to
+`bounded`, and `--round-policy` plus that fixed bound are the only knobs it
+has.
+
+The consequence for **this table**: every row was produced with neither
+variable exported, so both sides used `bounded` and a 30-minute bound, and the
+8/8 agreement is an agreement about the implementations rather than about the
+environment. An operator running the shell with `COPILOT_POLICY=strict`
+exported would get `strict` from the shell and `bounded` from `nen` on the same
+invocation, and `bounded` is the more permissive of the two for a
+bounded-exempt reviewer — so that pairing is a **known, stated divergence and
+not a finding this window failed to catch**. A future window that wants to
+close it compares `nen pr ready --round-policy strict` against the shell run
+with the variable exported, which is the explicit form of the same question.
+
 **Corrected after an independent adversarial review (zheref/nen#2's review
 record).** The review found the comparison weaker than it claimed to be, in
 two ways, both fixed in `src/shadow/run.ts` before this run:
