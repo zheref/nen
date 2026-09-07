@@ -54,6 +54,11 @@ else, including the CLI itself, is TypeScript. See the script's own header
 for the full fail-closed contract (which exit code means what, and which
 ones are safe to retry).
 
+Pinning `--ref` to a tag keeps that tag's behaviour until you choose to move;
+see [CHANGELOG.md](CHANGELOG.md) for what changed release to release,
+including every deliberate behaviour change (under each version's "Behaviour
+changes") a caller needs to account for before repinning to a newer tag.
+
 ## Try it
 
 Two commands that need nothing but a clone — no target repository, no
