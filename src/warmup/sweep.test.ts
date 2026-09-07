@@ -64,6 +64,18 @@ describe("detectStalePins", () => {
     const findings = detectStalePins([consumer({ pinned: null })], "v1.1.0");
     expect(findings).toHaveLength(1);
   });
+
+  it("reads an EMPTY-STRING pin as unpinned, byte-identically to a missing one", () => {
+    // `"pinned": ""` records the same absence as a missing key. Read as a
+    // stale pin it rendered with a blank left-hand side and told the operator
+    // to bump a pin from nothing.
+    expect(detectStalePins([consumer({ pinned: "" })], "v1.1.0")).toEqual(
+      detectStalePins([consumer({ pinned: null })], "v1.1.0"),
+    );
+    expect(detectStalePins([consumer({ pinned: "" })], "v1.1.0")).toEqual([
+      { kind: "unpinned", repo: "o/r", field: "pinned", pinned: null, current: "v1.1.0" },
+    ]);
+  });
 });
 
 describe("sweepHandbookQuestions", () => {

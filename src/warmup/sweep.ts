@@ -6,8 +6,9 @@
 // (`callerPins`, e.g. `db_migrate_pinned`) -- the issue's own "incl.
 // per-caller fields" clause. A consumer can be current on its DEFAULT pin and
 // still stale on one caller's override; reporting only the default field
-// would miss exactly that. A consumer with NO pin recorded is its own finding
-// kind rather than a skip -- see PinFinding below.
+// would miss exactly that. A consumer with NO pin recorded -- a missing key or
+// an empty string, the two spellings of the same absence -- is its own finding
+// kind rather than a skip; see PinFinding below.
 //
 // A plugin-shipped `latest` read at warm-up is what
 // flags a cached plugin reporting consumers current while they sit a tag
@@ -40,7 +41,11 @@ import type { ConsumerEntry } from "../schema/repos.js";
  * left that caller reading "clean" for a check that was never performed.
  */
 export interface PinFinding {
-  /** 'stale': a recorded pin behind `current`. 'unpinned': no pin recorded at all. */
+  /**
+   * 'stale': a recorded pin behind `current`. 'unpinned': no pin recorded at
+   * all -- a missing/null field OR an empty string, which record the same
+   * absence.
+   */
   readonly kind: "stale" | "unpinned";
   readonly repo: string;
   /** 'pinned', or a caller-pin field name (e.g. 'db_migrate_pinned'). */
@@ -56,9 +61,19 @@ export function detectStalePins(
 ): PinFinding[] {
   const findings: PinFinding[] = [];
   for (const consumer of consumers) {
-    if (consumer.pinned === null) {
+    if (consumer.pinned === null || consumer.pinned === "") {
       // NOT SKIPPED. "The registry records no pin" is a finding about the
       // registry, not evidence the consumer is current.
+      //
+      // `""` COUNTS AS NO PIN, not as a pin that happens to be stale. A
+      // registry written as `"pinned": ""` records the same absence as a
+      // missing key -- both are "nobody has said which tag this consumer is
+      // on" -- and the two spellings are indistinguishable to anyone reading
+      // the file. Falling through to the stale branch made them differ
+      // anyway: the finding rendered with a blank left-hand side (`pinned:
+      // -- behind v1.1.0`) and told the operator to bump a pin from nothing,
+      // which is not the fix. The `pinned` field is normalized to `null` in
+      // the finding for the same reason -- one shape for one fact.
       findings.push({ kind: "unpinned", repo: consumer.repo, field: "pinned", pinned: null, current });
     } else if (consumer.pinned !== current) {
       findings.push({ kind: "stale", repo: consumer.repo, field: "pinned", pinned: consumer.pinned, current });
