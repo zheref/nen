@@ -414,6 +414,38 @@ export function reportUnhandled(error: unknown, err: (line: string) => void): nu
   return 1;
 }
 
+/**
+ * The entry point's exit code, as a FUNCTION rather than as a promise chain.
+ *
+ * `reportUnhandled` above was already exported and already tested -- but the
+ * thing that decides whether a caller ever REACHES it is the `.catch` wired to
+ * `run()`'s promise, and a `.then(...).catch(...)` inside an `import.meta.main`
+ * block is unreachable from any harness. Deleting that whole `.catch` left the
+ * suite green and the typecheck clean, which is a defect's worth of untested
+ * wiring guarding against a defect (zheref/nen#8 item 2, and the one mutant the
+ * adversarial review of this branch left alive).
+ *
+ * So the COMPOSITION is the exported unit: pending promise in, exit code out,
+ * `reportUnhandled` on the rejecting path. `import.meta.main` below then holds
+ * one call and one assignment, and there is nothing left in it that a test
+ * cannot reach.
+ *
+ * `await` in a try/catch rather than `.catch(...)` for the same reason it is
+ * written this way everywhere else in this file: a rejection AND a synchronous
+ * throw from awaiting arrive at the same handler, and there is one place to
+ * read to know what the exit code will be.
+ */
+export async function exitCodeFor(
+  pending: Promise<number>,
+  err: (line: string) => void,
+): Promise<number> {
+  try {
+    return await pending;
+  } catch (error) {
+    return reportUnhandled(error, err);
+  }
+}
+
 // The one place `process` is touched, and it is a handful of lines. Everything
 // above is a pure function of argv and two sinks.
 //
@@ -425,16 +457,16 @@ if (import.meta.main) {
   const stderr = (line: string): void => {
     process.stderr.write(`${line}\n`);
   };
-  run(process.argv.slice(2), {
+  const pending = run(process.argv.slice(2), {
     out: (line): void => {
       process.stdout.write(`${line}\n`);
     },
     err: stderr,
-  })
-    .then((code): void => {
-      process.exitCode = code;
-    })
-    .catch((error: unknown): void => {
-      process.exitCode = reportUnhandled(error, stderr);
-    });
+  });
+  // Both halves -- the ordinary code and the last-resort one -- come out of
+  // `exitCodeFor`, which is a function with tests. Nothing in this block
+  // decides anything.
+  void exitCodeFor(pending, stderr).then((code): void => {
+    process.exitCode = code;
+  });
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reportUnhandled, run, runFamily, type Io } from "./index.js";
+import { exitCodeFor, reportUnhandled, run, runFamily, type Io } from "./index.js";
 import { VerbUsageError, type Command } from "./cli/command.js";
 import { RepoRootError } from "./repo/root.js";
 import { ALT_REPO, BANKAI_REPO } from "./schema/fixtures/paths.js";
@@ -443,6 +443,47 @@ describe("reportUnhandled -- the exit code on that path is this file's, not the 
   it("survives a thrown non-Error without printing '[object Object]'", () => {
     const lines: string[] = [];
     expect(reportUnhandled("a bare string", (line): void => void lines.push(line))).toBe(1);
+    expect(lines).toEqual(["nen: a bare string"]);
+  });
+});
+
+// THE WIRING, not just the handler (zheref/nen#8 item 2, review MAJOR 2).
+//
+// `reportUnhandled` above was tested from the day it landed -- but the thing
+// that decides whether anything ever CALLS it was a `.catch` chained onto
+// `run()`'s promise inside `import.meta.main`, which no harness can reach.
+// Deleting that whole `.catch` left the suite green and the typecheck clean:
+// the guard against an unhandled rejection was itself unguarded. `exitCodeFor`
+// is that composition as a function, so it has a test.
+describe("exitCodeFor -- the composition that decides whether the handler is reached", () => {
+  it("turns a REJECTION into 1 and one prefixed line", async () => {
+    const lines: string[] = [];
+    const code = await exitCodeFor(
+      Promise.reject(new Error("escaped")),
+      (line): void => void lines.push(line),
+    );
+    expect(code).toBe(1);
+    // ONE line, and the sink is the one that appends the newline -- so this is
+    // also the assertion that nothing here writes a second trailing newline of
+    // its own on the way out.
+    expect(lines).toEqual(["nen: escaped"]);
+  });
+
+  it("passes a RESOLVED code straight through and prints nothing", async () => {
+    const lines: string[] = [];
+    // 0 specifically: the success path is the one a mutation that swallowed
+    // every code and returned 1 would still have to get right.
+    expect(await exitCodeFor(Promise.resolve(0), (line): void => void lines.push(line))).toBe(0);
+    expect(lines).toEqual([]);
+    expect(await exitCodeFor(Promise.resolve(2), (line): void => void lines.push(line))).toBe(2);
+    expect(lines).toEqual([]);
+  });
+
+  it("handles a rejection with a non-Error the same way the handler does", async () => {
+    const lines: string[] = [];
+    // A reject() with something that is NOT an Error, which is exactly what an
+    // escaped throw from third-party code can be.
+    expect(await exitCodeFor(Promise.reject("a bare string"), (line): void => void lines.push(line))).toBe(1);
     expect(lines).toEqual(["nen: a bare string"]);
   });
 });
