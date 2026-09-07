@@ -30,7 +30,7 @@
 
 import type { Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
-import { readIssue, type IssueSummary } from "./subissue.js";
+import { ASK_THE_PR_FAMILY, NotAnIssueError, readIssue, type IssueSummary } from "./subissue.js";
 
 export type ChainRole =
   | "idea"
@@ -114,23 +114,25 @@ export function parseRoleMap(entries: readonly string[]): RoleMapParseResult {
 // `isPullRequest`); there is no other pre-check, because `gh issue view
 // --json pull_request` does not exist -- it errors on every object.
 
-/**
- * Thrown when `--issue <n>` turns out to name a pull request. A distinct class
- * so the CLI layer can keep its stable `--json` refusal shape (`refused:
- * true`) instead of letting the message fall through as a bare failure.
- */
-export class NotAnIssueError extends Error {
-  constructor(number: number) {
-    super(
-      `#${number} names a pull request, not an issue; a delivery-chain position is defined only for issues. ` +
-        `For the pull request's own state, ask the 'nen pr' family instead (e.g. 'nen pr ready', 'nen pr next-blocker').`,
-    );
-    this.name = "NotAnIssueError";
-  }
-}
-
+// THE ERROR CLASS ITSELF NOW LIVES BESIDE THE DISCRIMINATOR (./subissue.ts),
+// where `readIssue` parses `isPullRequest` -- moved there by zheref/nen#77,
+// which had to refuse the same object class on the MUTATING verbs in that same
+// file and would otherwise have needed either a second class with the same
+// name or an import cycle (./subissue.ts is what this module imports FROM).
+// Only the class moved: the message below is composed here, byte for byte as
+// #25 shipped it, because the clause that makes a refusal actionable is the
+// one about THIS verb -- "a delivery-chain position is defined only for
+// issues" is not a thing the sub-issue module could say. Only the shared
+// closing sentence is imported, so the two families point a caller at the same
+// place in the same words.
 function requireIssue(summary: IssueSummary): IssueSummary {
-  if (summary.isPullRequest) throw new NotAnIssueError(summary.number);
+  if (summary.isPullRequest) {
+    throw new NotAnIssueError(
+      `#${summary.number} names a pull request, not an issue; a delivery-chain position is defined only for issues. ` +
+        ASK_THE_PR_FAMILY,
+      [summary.number],
+    );
+  }
   return summary;
 }
 

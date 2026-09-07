@@ -98,7 +98,7 @@ describe("fileIdea -- file, then read back, then compare", () => {
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       {
-        match: "gh issue view 9 --repo zheref/nen --json title,body,labels",
+        match: "gh api repos/zheref/nen/issues/9",
         result: { stdout: JSON.stringify({ title: "an idea", body: "the body", labels: [{ name: "stage:idea" }] }) },
       },
     ]);
@@ -113,12 +113,81 @@ describe("fileIdea -- file, then read back, then compare", () => {
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       {
-        match: "gh issue view 9 --repo zheref/nen --json title,body,labels",
+        match: "gh api repos/zheref/nen/issues/9",
         result: { stdout: JSON.stringify({ title: "SOMETHING ELSE", body: "the body", labels: [{ name: "stage:idea" }] }) },
       },
     ]);
     const result = fileIdea(seams, TARGET, request(), "the body", taxonomy());
     expect("mismatches" in result && result.mismatches.length).toBe(1);
+  });
+
+  // zheref/nen#77. The read-back had no object-class check, and the read it
+  // used (`gh issue view --json title,body,labels`) could not have made one:
+  // `--json pull_request` does not exist on that command. It is a REST read
+  // now, so the discriminator arrives with the three compared fields in the
+  // SAME call -- no extra round trip was spent to gain the check.
+  //
+  // A pull request here is not a mistyped flag: this verb just CREATED an
+  // issue and is reading back the number that creation returned, so there is
+  // no number for a caller to have got wrong. It means the verification fetch
+  // reached a different object, and comparing title/body/labels against it
+  // would report either a mismatch about a record nobody filed or -- if they
+  // happen to agree -- a confident, false "read-back OK".
+  it("fails loudly when the read-back answers with a PULL REQUEST, rather than comparing against it", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
+        result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
+      },
+      {
+        match: "gh api repos/zheref/nen/issues/9",
+        result: {
+          stdout: JSON.stringify({
+            number: 9,
+            title: "an idea",
+            body: "the body",
+            labels: [{ name: "stage:idea" }],
+            pull_request: { url: "https://api.github.com/repos/zheref/nen/pulls/9" },
+          }),
+        },
+      },
+    ]);
+    expect(() => fileIdea(seams, TARGET, request(), "the body", taxonomy())).toThrow(FileIdeaError);
+  });
+
+  // THE FIELDS AGREEING IS THE DANGEROUS CASE, and the one a naive fix would
+  // wave through: every compared field matches, so a verb without the class
+  // check prints "read-back OK" for a record it never saw.
+  it("fails even when the pull request's title, body and labels all match what was submitted", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
+        result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
+      },
+      {
+        match: "gh api repos/zheref/nen/issues/9",
+        result: {
+          stdout: JSON.stringify({
+            number: 9,
+            title: "an idea",
+            body: "the body",
+            labels: [{ name: "stage:idea" }],
+            pull_request: { url: "https://api.github.com/repos/zheref/nen/pulls/9" },
+          }),
+        },
+      },
+    ]);
+    let message = "";
+    try {
+      fileIdea(seams, TARGET, request(), "the body", taxonomy());
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    // Actionable, and honest about what DID happen: the issue is filed, so a
+    // caller must not re-file it, and the number is named so it can be checked.
+    expect(message).toMatch(/idea filed as #9/);
+    expect(message).toMatch(/PULL REQUEST, not an issue/);
+    expect(message).toMatch(/verify it by hand/);
   });
 
   it("throws a named error when the read-back call itself fails -- the issue still exists", () => {
@@ -127,7 +196,7 @@ describe("fileIdea -- file, then read back, then compare", () => {
         match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
-      { match: "gh issue view 9 --repo zheref/nen --json title,body,labels", result: { code: 1, stderr: "down" } },
+      { match: "gh api repos/zheref/nen/issues/9", result: { code: 1, stderr: "down" } },
     ]);
     expect(() => fileIdea(seams, TARGET, request(), "the body", taxonomy())).toThrow(FileIdeaError);
   });

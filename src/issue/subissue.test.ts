@@ -9,9 +9,11 @@ import {
   planConsolidation,
   readIssue,
   renderCloseComment,
+  requireIssues,
   unknownPlaceholders,
   unmatchedBraces,
   DEFAULT_CLOSE_COMMENT,
+  NotAnIssueError,
   type ConsolidationPlan,
 } from "./subissue.js";
 
@@ -33,6 +35,55 @@ function apiResult(number: number, id: number, labels: string[], state = "open")
   return {
     stdout: JSON.stringify({ number, id, title: `issue ${number}`, state, labels: labels.map((name): unknown => ({ name })) }),
   };
+}
+
+/** A PR-shaped `issues/{n}` payload -- the non-null `pull_request` is the whole point. */
+function prResult(number: number, id: number): { stdout: string } {
+  return {
+    stdout: JSON.stringify({
+      number,
+      id,
+      title: `pull request ${number}`,
+      state: "open",
+      labels: [],
+      pull_request: { url: `https://api.github.com/repos/zheref/nen/pulls/${number}` },
+    }),
+  };
+}
+
+// THE PARENT IS READ NOW, WHICH IT NEVER USED TO BE (zheref/nen#77). Every
+// attach posts into `issues/{parent}/sub_issues` and nothing had ever looked at
+// that number, so a pull request in --parent collected sub-issues at exit 0.
+// Certifying it costs this one read per run, which every script below has to
+// carry -- the two parents these suites use.
+const PARENT_1 = { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 100, []) };
+const PARENT_9 = { match: "gh api repos/zheref/nen/issues/9", result: apiResult(9, 900, []) };
+
+/**
+ * Every call this run made that is NOT A PLAIN READ.
+ *
+ * The object-class refusal's whole claim is "nothing was attached, closed or
+ * commented on", and a test that only asserted the throw would leave that half
+ * unproved: a guard placed one line too late would still throw, after the
+ * first child was already a sub-issue. So the refusal tests assert on THIS,
+ * not only on the message.
+ *
+ * AN ALLOWLIST, NOT A BLOCKLIST (zheref/nen#77 review, minor). The first
+ * version matched `--method POST` and `issue close`, which is a list of the
+ * two writes this module happens to make TODAY: `gh issue comment`, `gh issue
+ * edit`, `gh label create`, and a `--method PATCH`, `PUT` or `DELETE` all slid
+ * past it, so an assertion reading "posts nothing" would have stayed green
+ * through a guard that posted a comment. The claim these tests make is about
+ * every write, not about two of them, so the filter now says what a READ looks
+ * like -- `gh api <path>` and nothing else, no method flag and no `-F` field
+ * payload -- and counts everything else. Fail-closed on purpose: a new read
+ * shape has to be admitted here deliberately, which is the direction an
+ * "it wrote nothing" assertion should be wrong in.
+ */
+function writes(seams: ScriptedSeams): readonly string[] {
+  return seams.calls
+    .map((call): string => [call.command, ...call.args].join(" "))
+    .filter((line): boolean => !/^gh api [^ -][^ ]*$/.test(line));
 }
 
 describe("readIssue -- REST, because 'id' is not in gh issue view --json", () => {
@@ -84,6 +135,7 @@ describe("readIssue -- REST, because 'id' is not in gh issue view --json", () =>
 describe("attachSub -- resolves id before writing, stops on failure, detects the 404/410 fallback", () => {
   it("resolves each child's id then posts sub_issue_id, not the number", () => {
     const seams = new ScriptedSeams([
+      PARENT_1,
       { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
       {
         match: "gh api --method POST repos/zheref/nen/issues/1/sub_issues -F sub_issue_id=200",
@@ -97,6 +149,7 @@ describe("attachSub -- resolves id before writing, stops on failure, detects the
 
   it("fails a child whose response carries no id, rather than guessing the number", () => {
     const seams = new ScriptedSeams([
+      PARENT_1,
       { match: "gh api repos/zheref/nen/issues/2", result: { stdout: JSON.stringify({ number: 2, title: "x", state: "open", labels: [] }) } },
     ]);
     const report = attachSub(seams, TARGET, 1, [2], false);
@@ -105,16 +158,18 @@ describe("attachSub -- resolves id before writing, stops on failure, detects the
 
   it("dry-run logs the call and does not post", () => {
     const seams = new ScriptedSeams([
+      PARENT_1,
       { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
     ]);
     const report = attachSub(seams, TARGET, 1, [2], true);
     expect(report.attached).toEqual([2]);
     expect(report.log[0]).toMatch(/would run/);
-    expect(seams.calls.length).toBe(1); // only the read, never the write
+    expect(seams.calls.length).toBe(2); // the parent read and the id read, never the write
   });
 
   it("detects a 404/410 as 'endpoint unavailable' and hands back a fallback task list", () => {
     const seams = new ScriptedSeams([
+      PARENT_1,
       { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
       {
         match: "gh api --method POST repos/zheref/nen/issues/1/sub_issues -F sub_issue_id=200",
@@ -127,6 +182,7 @@ describe("attachSub -- resolves id before writing, stops on failure, detects the
 
   it("does NOT treat a 422 as an unavailable endpoint", () => {
     const seams = new ScriptedSeams([
+      PARENT_1,
       { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
       {
         match: "gh api --method POST repos/zheref/nen/issues/1/sub_issues -F sub_issue_id=200",
@@ -136,6 +192,314 @@ describe("attachSub -- resolves id before writing, stops on failure, detects the
     const report = attachSub(seams, TARGET, 1, [2], false);
     expect(report.fallbackTaskList).toBeNull();
     expect(report.failed[0]?.reason).toMatch(/422/);
+  });
+});
+
+// zheref/nen#77. Issues and pull requests share one number sequence and one
+// `issues/{n}` endpoint, so a pull request number in --parent or --children ran
+// this whole choreography cleanly: attached as a sub-issue, or CLOSED with a
+// consolidation comment, at exit 0. #25 fixed the same class for the
+// CLASSIFYING verbs and left these -- the MUTATING ones -- unguarded.
+describe("attachSub -- refuses a pull request BEFORE the first write (issue #77)", () => {
+  it("refuses when --parent names a pull request, and posts nothing", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: prResult(1, 901) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
+    ]);
+    expect((): unknown => attachSub(seams, TARGET, 1, [2], false)).toThrow(NotAnIssueError);
+    expect(writes(seams)).toEqual([]);
+  });
+
+  it("names the offending number, the flag it arrived under, and where to ask instead", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: prResult(1, 901) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
+    ]);
+    expect((): unknown => attachSub(seams, TARGET, 1, [2], false)).toThrow(
+      /#1 \(--parent\) names a pull request, not an issue/,
+    );
+    expect((): unknown => attachSub(seams, TARGET, 1, [2], false)).toThrow(/'nen pr' family/);
+  });
+
+  it("refuses when a --children entry names a pull request", () => {
+    const seams = new ScriptedSeams([
+      PARENT_1,
+      { match: "gh api repos/zheref/nen/issues/2", result: prResult(2, 902) },
+    ]);
+    expect((): unknown => attachSub(seams, TARGET, 1, [2], false)).toThrow(/#2 \(--children\)/);
+    expect(writes(seams)).toEqual([]);
+  });
+
+  // THE MIXED LIST IS THE WHOLE REASON THE CHECK IS A PRE-FLIGHT. A per-child
+  // test inside the write loop would refuse #3 correctly and leave #2 already
+  // attached -- the half-finished graph the module's order rule exists to
+  // prevent, produced by the guard meant to prevent it.
+  it("attaches NOTHING when one of several children is a pull request", () => {
+    const seams = new ScriptedSeams([
+      PARENT_1,
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
+      { match: "gh api repos/zheref/nen/issues/3", result: prResult(3, 903) },
+      // The POST for the GENUINE child #2 is deliberately unscripted: if the
+      // refusal ever moves into the loop, ScriptedSeams throws on it and this
+      // test goes red for the right reason.
+    ]);
+    expect((): unknown => attachSub(seams, TARGET, 1, [2, 3], false)).toThrow(NotAnIssueError);
+    expect(writes(seams)).toEqual([]);
+  });
+
+  it("names EVERY offender in one refusal, parent and children together", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: prResult(1, 901) },
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
+      { match: "gh api repos/zheref/nen/issues/3", result: prResult(3, 903) },
+    ]);
+    let caught: NotAnIssueError | null = null;
+    try {
+      attachSub(seams, TARGET, 1, [2, 3], false);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/#1 \(--parent\) and #3 \(--children\) name pull requests, not issues/);
+    // The machine-readable half, so a caller does not have to parse the prose
+    // to learn which of its numbers has to change.
+    expect(caught?.numbers).toEqual([1, 3]);
+  });
+
+  // A dry run that PREVIEWED attaching a pull request would be a wrong preview,
+  // and this family's whole dry-run promise is that the thing the caller
+  // approves is the thing that runs.
+  it("refuses under --dry-run too, rather than previewing the attach", () => {
+    const seams = new ScriptedSeams([
+      PARENT_1,
+      { match: "gh api repos/zheref/nen/issues/2", result: prResult(2, 902) },
+    ]);
+    expect((): unknown => attachSub(seams, TARGET, 1, [2], true)).toThrow(NotAnIssueError);
+  });
+
+  it("attaches genuine issues exactly as before -- the guard costs one parent read", () => {
+    const seams = new ScriptedSeams([
+      PARENT_1,
+      { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 200, []) },
+      { match: "gh api --method POST repos/zheref/nen/issues/1/sub_issues -F sub_issue_id=200", result: {} },
+    ]);
+    const report = attachSub(seams, TARGET, 1, [2], false);
+    expect(report.attached).toEqual([2]);
+    expect(report.failed).toEqual([]);
+  });
+
+  // The parent is the target of EVERY write here, so "could not read it" and
+  // "read it and it is fine" must not lead to the same POST.
+  it("refuses outright when the parent cannot be read at all", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/1", result: { code: 1, stderr: "not found" } },
+    ]);
+    expect((): unknown => attachSub(seams, TARGET, 1, [2], false)).toThrow(/zheref\/nen#1/);
+    expect(writes(seams)).toEqual([]);
+  });
+});
+
+describe("consolidateClose -- inherits the refusal, so no child is closed (issue #77)", () => {
+  /**
+   * `payloadNumbers` are what the READ-BACK said; `requested` is what the
+   * caller typed. They are the same list in every ordinary run and are
+   * separable here so the one case that tells them apart -- a redirect -- can
+   * be tested.
+   */
+  function plan(payloadNumbers: number[], requested: number[] = payloadNumbers): ConsolidationPlan {
+    return {
+      parent: 9,
+      children: payloadNumbers.map((n): {
+        number: number;
+        id: number | null;
+        title: string;
+        state: string;
+        labels: string[];
+        isPullRequest: boolean;
+      } => ({ number: n, id: n * 10, title: `#${n}`, state: "open", labels: [], isPullRequest: false })),
+      requested,
+      labelUnion: [],
+      severity: null,
+      severitySetBy: null,
+      toClose: payloadNumbers,
+      unreducedFamilies: [],
+      notes: [],
+    };
+  }
+
+  it("closes nothing and posts no close comment when a child is a pull request", () => {
+    const seams = new ScriptedSeams([
+      PARENT_9,
+      { match: "gh api repos/zheref/nen/issues/1", result: prResult(1, 901) },
+    ]);
+    expect((): unknown => consolidateClose(seams, TARGET, plan([1]), false)).toThrow(NotAnIssueError);
+    expect(writes(seams)).toEqual([]);
+  });
+
+  it("closes nothing when the PARENT is a pull request", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/9", result: prResult(9, 909) },
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
+    ]);
+    expect((): unknown => consolidateClose(seams, TARGET, plan([1]), false)).toThrow(/#9 \(--parent\)/);
+    expect(writes(seams)).toEqual([]);
+  });
+
+  it("closes NOTHING when only one of several children is a pull request", () => {
+    const seams = new ScriptedSeams([
+      PARENT_9,
+      { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
+      { match: "gh api repos/zheref/nen/issues/2", result: prResult(2, 902) },
+    ]);
+    expect((): unknown => consolidateClose(seams, TARGET, plan([1, 2]), false)).toThrow(NotAnIssueError);
+    expect(writes(seams)).toEqual([]);
+  });
+
+  // THE NUMBER THE CALLER TYPED, ON THIS PATH TOO (zheref/nen#77 review,
+  // minor). `consolidateClose` used to hand `attachSub` the numbers the
+  // PAYLOADS came back with, so on the one occasion the two disagree -- a
+  // transferred object GitHub redirects -- `consolidate-close` refused with a
+  // number the caller never typed, breaking the promise NotAnIssueError's
+  // docblock makes for the whole family. The plan below is the shape a
+  // redirect produces: `--children 925` was asked for, `925` answered as
+  // `926`.
+  it("refuses with the REQUESTED child number, not the number the payload came back with", () => {
+    const seams = new ScriptedSeams([
+      PARENT_9,
+      { match: "gh api repos/zheref/nen/issues/925", result: prResult(926, 90926) },
+      // Scripted so that reading the PAYLOAD's number instead is a wrong
+      // ANSWER rather than an unscripted-call crash: the old code refused
+      // naming #926, and this test has to fail on the message, not on the
+      // fixture running out.
+      { match: "gh api repos/zheref/nen/issues/926", result: prResult(926, 90926) },
+    ]);
+    let caught: NotAnIssueError | null = null;
+    try {
+      consolidateClose(seams, TARGET, plan([926], [925]), false);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/#925 \(--children\)/);
+    expect(caught?.message).not.toMatch(/#926/);
+    expect(caught?.numbers).toEqual([925]);
+    expect(writes(seams)).toEqual([]);
+  });
+});
+
+describe("requireIssues -- the certification itself", () => {
+  const issue = { number: 5, id: 55, title: "t", state: "open", labels: [], isPullRequest: false };
+
+  it("says nothing when every input is an issue", () => {
+    expect((): void =>
+      requireIssues([
+        { number: 5, role: "--parent", summary: issue },
+        { number: 6, role: "--children", summary: { ...issue, number: 6 } },
+      ]),
+    ).not.toThrow();
+  });
+
+  // The number REPORTED is the one the caller typed, never the payload's.
+  // zheref/nen#25's review recorded the mismatch it left behind (a message
+  // interpolating the payload's number beside a --json field carrying the
+  // argument); nothing in this refusal may reintroduce it.
+  it("reports the number the caller gave, not the one the payload came back with", () => {
+    let caught: NotAnIssueError | null = null;
+    try {
+      requireIssues([{ number: 925, role: "--parent", summary: { ...issue, number: 926, isPullRequest: true } }]);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/#925 \(--parent\)/);
+    expect(caught?.message).not.toMatch(/#926/);
+    expect(caught?.numbers).toEqual([925]);
+  });
+
+  // ONE WRONG NUMBER TYPED TWICE IS ONE PROBLEM (zheref/nen#77 review, minor).
+  // `--children 12,12` used to be named twice in the prose and returned twice
+  // in `pullRequests`, which reads as a list with two things to fix and hands
+  // a machine-reader a multiset where a set was meant.
+  it("names a repeated number once, and returns it once", () => {
+    let caught: NotAnIssueError | null = null;
+    try {
+      requireIssues([
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+      ]);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/^#12 \(--children\) names a pull request, not an issue;/);
+    expect(caught?.numbers).toEqual([12]);
+  });
+
+  // THE CHOICE, RECORDED: a number that arrived under SEVERAL flags is named
+  // ONCE, carrying every flag it came in under. Both places have to change and
+  // the refusal is the only thing that says so -- but it is still one number,
+  // so `numbers` holds it once, exactly as above.
+  it("names a number that arrived under two flags once, with both flags", () => {
+    let caught: NotAnIssueError | null = null;
+    try {
+      requireIssues([
+        { number: 12, role: "--parent", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+      ]);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/^#12 \(--parent, --children\) names a pull request, not an issue;/);
+    expect(caught?.numbers).toEqual([12]);
+  });
+
+  // Deduplication must not collapse DISTINCT numbers, which is the failure
+  // mode a "just uniq the strings" fix would introduce.
+  it("still names every distinct offender", () => {
+    let caught: NotAnIssueError | null = null;
+    try {
+      requireIssues([
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 12, role: "--children", summary: { ...issue, number: 12, isPullRequest: true } },
+        { number: 13, role: "--children", summary: { ...issue, number: 13, isPullRequest: true } },
+      ]);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/^#12 \(--children\) and #13 \(--children\) name pull requests, not issues;/);
+    expect(caught?.numbers).toEqual([12, 13]);
+  });
+});
+
+// THE ASSERTION THE OTHER SUITES LEAN ON, ASSERTED ITSELF (zheref/nen#77
+// review, minor). Every "posts nothing" test above is only as strong as
+// `writes()`: while it matched two argv shapes by name, a guard that posted a
+// COMMENT, edited a body, created a label or sent a PATCH would have left
+// those tests green. This suite pins that it counts them.
+describe("the writes() helper -- what counts as not-a-read", () => {
+  function ran(argv: readonly string[][]): ScriptedSeams {
+    const seams = new ScriptedSeams(
+      argv.map((args): { match: string; result: Record<string, never> } => ({
+        match: ["gh", ...args].join(" "),
+        result: {},
+      })),
+    );
+    for (const args of argv) seams.run("gh", args);
+    return seams;
+  }
+
+  it("counts every mutating shape, not just the POST and the close", () => {
+    const seams = ran([
+      ["api", "--method", "POST", "repos/zheref/nen/issues/1/sub_issues", "-F", "sub_issue_id=2"],
+      ["issue", "close", "2", "--repo", "zheref/nen", "--comment", "Consolidated into #1."],
+      ["issue", "comment", "2", "--repo", "zheref/nen", "--body", "x"],
+      ["issue", "edit", "2", "--repo", "zheref/nen", "--body", "x"],
+      ["label", "create", "ns:sev/high", "--repo", "zheref/nen"],
+      ["api", "--method", "PATCH", "repos/zheref/nen/issues/2"],
+      ["api", "--method", "PUT", "repos/zheref/nen/issues/2/lock"],
+      ["api", "--method", "DELETE", "repos/zheref/nen/issues/2/labels"],
+    ]);
+    expect(writes(seams)).toHaveLength(8);
+  });
+
+  it("counts a plain read as a read", () => {
+    expect(writes(ran([["api", "repos/zheref/nen/issues/1"]]))).toEqual([]);
   });
 });
 
@@ -221,6 +585,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
         labels: [],
         isPullRequest: false,
       })),
+      requested: children,
       labelUnion: [],
       severity: null,
       severitySetBy: null,
@@ -232,6 +597,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
 
   it("closes every child with a comment naming the parent, after attaching all", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
       { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
       { match: "gh issue close 1 --repo zheref/nen --comment Consolidated into #9.", result: {} },
@@ -243,6 +609,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
 
   it("stops before any close when an attach fails", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: { code: 1, stderr: "boom" } },
     ]);
     const report = consolidateClose(seams, TARGET, plan([1]), false);
@@ -261,6 +628,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
   // readily mistake for a record of a real close.
   it("reports NO close comments when the attach stage failed -- not the ones it would have posted", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: { code: 1, stderr: "boom" } },
       { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, []) },
       { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=20", result: {} },
@@ -275,18 +643,20 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
     expect(report.failed.length).toBe(1);
     expect(report.closeComments).toEqual([]);
     expect(report.closed).toEqual([]);
-    // The three attach-stage calls and no fourth: a close whose comment was
-    // rendered AND sent would be red here rather than only in the field above.
-    expect(seams.calls.length).toBe(3);
+    // The four attach-stage calls (parent read, two child reads, one POST) and
+    // no fifth: a close whose comment was rendered AND sent would be red here
+    // rather than only in the field above.
+    expect(seams.calls.length).toBe(4);
   });
 
   it("dry-run never calls close", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
     ]);
     const report = consolidateClose(seams, TARGET, plan([1]), true);
     expect(report.closed).toEqual([1]);
-    expect(seams.calls.length).toBe(1);
+    expect(seams.calls.length).toBe(2); // the parent read and the id read
   });
 
   // --- the caller-supplied close comment (zheref/nen#29) ----------------------
@@ -296,13 +666,14 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
   // the Runner saw, not on a report field, because the argv is what GitHub gets.
   it("with NO close-comment supplied, posts the historical fixed string byte for byte", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
       { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
       { match: "gh issue close 1 --repo zheref/nen --comment Consolidated into #9.", result: {} },
     ]);
     const report = consolidateClose(seams, TARGET, plan([1]), false);
     expect(report.closed).toEqual([1]);
-    expect(seams.calls[2]?.args).toEqual([
+    expect(seams.calls[3]?.args).toEqual([
       "issue",
       "close",
       "1",
@@ -320,6 +691,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
 
   it("a template equal to the default renders the same bytes -- the default IS a template", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
       { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
       { match: "gh issue close 1 --repo zheref/nen --comment Consolidated into #9.", result: {} },
@@ -333,6 +705,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
 
   it("a supplied template substitutes {parent} and {child} for EVERY child", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
       { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, []) },
       { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
@@ -358,6 +731,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
   // one template cannot express it.
   it("a per-child map gives each child its own text, and each may still use the placeholders", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
       { match: "gh api repos/zheref/nen/issues/2", result: apiResult(2, 20, []) },
       { match: "gh api --method POST repos/zheref/nen/issues/9/sub_issues -F sub_issue_id=10", result: {} },
@@ -380,6 +754,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
 
   it("dry-run prints the RENDERED close comment and still posts nothing", () => {
     const seams = new ScriptedSeams([
+      PARENT_9,
       { match: "gh api repos/zheref/nen/issues/1", result: apiResult(1, 10, []) },
     ]);
     const report = consolidateClose(seams, TARGET, plan([1]), true, {
@@ -389,7 +764,7 @@ describe("consolidateClose -- file -> attach -> close, stops before closes on at
     expect(report.log).toContain(
       "would run: gh issue close 1 --repo zheref/nen --comment Absorbed by section A of #9.",
     );
-    expect(seams.calls.length).toBe(1); // only the id read, never a close
+    expect(seams.calls.length).toBe(2); // only the parent and id reads, never a close
   });
 });
 

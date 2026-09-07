@@ -41,14 +41,19 @@ import {
 import {
   consolidateClose,
   attachSub,
+  consolidationInputs,
   planConsolidation,
+  readIssue,
+  requireIssues,
   unknownPlaceholders,
   unmatchedBraces,
   CLOSE_COMMENT_PLACEHOLDERS,
+  NotAnIssueError,
   type CloseComments,
 } from "./subissue.js";
 import { commentArgv, postComment, type CommentRequest } from "./comment.js";
-import { chainPosition, NotAnIssueError, parseRoleMap, terminus } from "./chain.js";
+import { chainPosition, parseRoleMap, terminus } from "./chain.js";
+import { conjoin } from "../cli/prose.js";
 
 export function numberList(value: string | undefined): readonly number[] {
   return commaList(value)
@@ -158,17 +163,11 @@ function ownersOf(flag: string): readonly string[] {
     .map(([name]): string => name);
 }
 
-/**
- * `a`, `a and b`, `a, b and c` -- a real conjunction rather than a `join(" and
- * ")`, because `--dry-run` has FOUR owners and "'issue file' and 'issue
- * comment' and 'issue attach-sub' and 'issue consolidate-close'" reads as a
- * machine that has never seen a sentence. The whole value of these refusals is
- * that a caller believes and acts on them.
- */
-function conjoin(items: readonly string[]): string {
-  if (items.length <= 1) return items[0] ?? "";
-  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1] ?? ""}`;
-}
+// `conjoin` -- `a`, `a and b`, `a, b and c` -- MOVED TO ../cli/prose.ts by
+// zheref/nen#77, when ./subissue.ts's object-class refusal needed the same
+// sentence shaping. Its rationale (a `join(" and ")` over --dry-run's four
+// owners "reads as a machine that has never seen a sentence") is recorded
+// there, unchanged.
 
 const ATTACH_POSTS_NOTHING =
   "'issue attach-sub' posts no comment: an attach-time comment is a claim about a consolidation that a failed attach stops before completing. Use 'issue consolidate-close' for the close comment, or 'issue comment' to post one yourself.";
@@ -344,6 +343,13 @@ usage:
       close-comment channel: a comment at attach time is a claim about a
       consolidation that a failed attach STOPS before completing. Compose
       'nen issue comment' with it when one is wanted.
+      Every number must name an ISSUE. --parent and each --children entry are
+      read and checked BEFORE the first write, and the whole run REFUSES (exit
+      1) when any of them turns out to name a pull request: issues and pull
+      requests share one number sequence and one issues/{n} endpoint, so
+      attaching a pull request as a sub-issue succeeds and is invisible
+      afterwards. A mixed list attaches nothing at all, rather than the issues
+      in it. Ask the 'nen pr' family about a pull request.
 
   nen issue consolidate-close --target <owner/name> --parent <n>
                               --children 1,2 --repo <path>
@@ -365,6 +371,19 @@ usage:
       has one -- an issue with an open PR is never quietly closed, because
       closing it orphans work already in flight. --allow-open-pr overrides
       the refusal.
+      Every number must name an ISSUE, exactly as 'attach-sub' requires:
+      --parent and each --children entry are certified before the first write,
+      and a number that turns out to name a pull request REFUSES the whole run
+      (exit 1) with nothing attached, nothing closed and no close comment
+      posted. That certification runs BEFORE the two refusals above, so a pull
+      request is answered by the refusal that names it -- never by advice that
+      cannot apply to it ('pass --allow-open-pr', 'name --severity-family'),
+      and never with a published plan computed over it. Closing a pull request
+      with a consolidation comment is a state change and a public timeline
+      event that no later sweep will question, so it is refused rather than
+      performed. Ask the 'nen pr' family about a pull request. ('nen issue
+      comment' is the deliberate exception in this family: it ACCEPTS a pull
+      request's number, and says why in its own entry above.)
       THE CLOSE COMMENT. With neither flag below, every child is closed with
       the fixed 'Consolidated into #<parent>.' this verb has always posted --
       byte for byte, and pinned by test. --close-comment <template> replaces it
@@ -762,7 +781,21 @@ function attach(context: CommandContext): number {
   if (!Number.isInteger(parent) || parent <= 0 || children.length === 0) {
     throw new VerbUsageError("attach-sub takes --parent <n> and --children <n,n>.");
   }
-  const report = attachSub(context.seams, target, parent, children, context.args.booleans.has("dry-run"));
+  // THE OBJECT-CLASS REFUSAL (issue #77). ./subissue.ts certifies the parent
+  // and every child as ISSUES before its first POST and throws when any of
+  // them names a pull request; this is where that becomes an exit code and the
+  // family's `refused: true` --json shape, exactly as the chain verbs' refusal
+  // does below. Anything else thrown is somebody else's failure and keeps
+  // falling through to ../index.ts.
+  let report;
+  try {
+    report = attachSub(context.seams, target, parent, children, context.args.booleans.has("dry-run"));
+  } catch (error) {
+    if (error instanceof NotAnIssueError) {
+      return refuseNotAnIssue(context, { parent, children, pullRequests: error.numbers }, error);
+    }
+    throw error;
+  }
   if (context.json) {
     context.io.out(JSON.stringify(report, null, 2));
     return report.failed.length === 0 ? 0 : 1;
@@ -1020,7 +1053,44 @@ function consolidate(context: CommandContext): number {
   // without a single `gh` call -- the same discipline readSeverityFamily's
   // shape check follows one line up.
   const closeComments = readCloseComments(context, children, root);
+  // THE PARENT IS READ HERE, AND IT IS READ FIRST. Nothing in this verb had
+  // ever looked at `--parent` before its first write, and the certification
+  // below cannot certify a number nobody read. Reading it before the children
+  // also means an unreadable parent fails once, by name, instead of after N
+  // child reads that were never going to be used.
+  const parentSummary = readIssue(context.seams, target, parent);
   const plan = planConsolidation(context.seams, target, parent, children, taxonomy, severityFamily);
+
+  // THE OBJECT-CLASS REFUSAL RUNS BEFORE EVERY OTHER REFUSAL IN THIS VERB
+  // (issue #77, and the ORDERING is the review finding this position answers).
+  //
+  // It used to sit at the bottom, inherited from ./subissue.ts's write-stage
+  // pre-flight, which was safe -- nothing was ever written -- but answered the
+  // wrong question first. The two refusals below run on a plan computed over
+  // an object class this run refuses to reason about, so a pull request in
+  // --children was met with "pass --allow-open-pr" (the wrong remedy, on a
+  // number no flag can make attachable) or with the unreduced-families refusal
+  // whose --json body PUBLISHES the plan -- `isPullRequest: true` and all --
+  // directly contradicting the withholding this refusal promises. Certifying
+  // first makes the first thing a caller is told the thing they have to fix.
+  //
+  // THE PLAN IS NOT REPORTED WITH THIS REFUSAL, unlike the two below. It was
+  // computed over that same void object class, so publishing it would hand a
+  // --json caller exactly the artifact the refusal says is worthless -- and
+  // `pullRequests` already names the numbers that have to change before a plan
+  // means anything at all.
+  //
+  // ZERO WRITES EITHER WAY: the reads above are the only `gh` calls this path
+  // makes, and ./subissue.ts still certifies again at the write stage, so a
+  // caller reaching `consolidateClose` directly is guarded too.
+  try {
+    requireIssues(consolidationInputs(plan, parentSummary));
+  } catch (error) {
+    if (error instanceof NotAnIssueError) {
+      return refuseNotAnIssue(context, { parent, children, pullRequests: error.numbers }, error);
+    }
+    throw error;
+  }
 
   // WITH NO --severity-family, planConsolidation's severity-max reduction is
   // unreachable and every severity-shaped label falls into the union -- the
@@ -1074,13 +1144,30 @@ function consolidate(context: CommandContext): number {
     return 1;
   }
 
-  const report = consolidateClose(
-    context.seams,
-    target,
-    plan,
-    context.args.booleans.has("dry-run"),
-    closeComments,
-  );
+  // THE SECOND HALF OF THE OBJECT-CLASS REFUSAL, and it is deliberately still
+  // here after the hoisted check above. ./subissue.ts certifies the parent and
+  // every child again at the write stage -- that pre-flight is the module's
+  // own guarantee, owed to any caller that reaches `consolidateClose`
+  // directly -- and this catch is what turns that throw into this family's
+  // exit code and `refused: true` shape rather than a bare failure. In an
+  // ordinary run the hoisted check has already refused and nothing reaches
+  // here; what does reach here is an object whose class CHANGED between the
+  // two reads, which is exactly the case that must not be written through.
+  let report;
+  try {
+    report = consolidateClose(
+      context.seams,
+      target,
+      plan,
+      context.args.booleans.has("dry-run"),
+      closeComments,
+    );
+  } catch (error) {
+    if (error instanceof NotAnIssueError) {
+      return refuseNotAnIssue(context, { parent, children, pullRequests: error.numbers }, error);
+    }
+    throw error;
+  }
   if (context.json) {
     context.io.out(JSON.stringify({ plan, openPrs, report }, null, 2));
     return report.failed.length === 0 ? 0 : 1;
@@ -1093,14 +1180,25 @@ function consolidate(context: CommandContext): number {
   return 0;
 }
 
-// The chain verbs' object-class refusal (issue #25), rendered once for both:
-// exit 1 like every other refusal in this family, with the same stable
-// `refused: true` --json shape consolidate-close's refusals use -- a caller
-// that machine-reads these verbs must be able to tell "refused to classify"
-// from "classified", not just from the exit code.
-function refuseNotAnIssue(context: CommandContext, issue: number, error: NotAnIssueError): number {
+// THE OBJECT-CLASS REFUSAL, RENDERED ONCE FOR ALL FOUR VERBS THAT MAKE IT
+// (issue #25's chain-position/terminus, issue #77's attach-sub and
+// consolidate-close): exit 1 like every other refusal in this family, with the
+// same stable `refused: true` --json shape consolidate-close's own refusals
+// use -- a caller that machine-reads these verbs must be able to tell "refused
+// to act" from "acted", not just from an exit code they share.
+//
+// `subject` IS THE VERB'S OWN INPUT, so each verb answers in the vocabulary its
+// caller typed: `{issue}` for the classifiers, `{parent, children}` for the
+// choreography verbs, plus `pullRequests` -- exactly the offending numbers, so
+// a caller does not have to parse `reason` to learn which of its numbers was
+// wrong. The classifiers' shape is unchanged from #25, key order included.
+function refuseNotAnIssue(
+  context: CommandContext,
+  subject: Readonly<Record<string, unknown>>,
+  error: NotAnIssueError,
+): number {
   if (context.json) {
-    context.io.out(JSON.stringify({ issue, refused: true, reason: error.message }, null, 2));
+    context.io.out(JSON.stringify({ ...subject, refused: true, reason: error.message }, null, 2));
     return 1;
   }
   context.io.err(`nen: ${error.message}`);
@@ -1122,7 +1220,7 @@ function position(context: CommandContext): number {
   try {
     result = chainPosition(context.seams, target, issue, parsed.map);
   } catch (error) {
-    if (error instanceof NotAnIssueError) return refuseNotAnIssue(context, issue, error);
+    if (error instanceof NotAnIssueError) return refuseNotAnIssue(context, { issue }, error);
     throw error;
   }
   if (context.json) {
@@ -1159,7 +1257,7 @@ function chainTerminus(context: CommandContext): number {
       context.args.values["trunk"] ?? "main",
     );
   } catch (error) {
-    if (error instanceof NotAnIssueError) return refuseNotAnIssue(context, issue, error);
+    if (error instanceof NotAnIssueError) return refuseNotAnIssue(context, { issue }, error);
     throw error;
   }
   if (context.json) {

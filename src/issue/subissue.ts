@@ -53,8 +53,38 @@
 // would be a second, weaker record of the same fact. A caller who genuinely
 // wants an attach-time comment now composes `nen issue comment` with
 // `nen issue attach-sub`, which is what a general primitive is for.
+//
+// A PULL REQUEST IS NOT AN ISSUE, AND THIS IS THE FILE WHERE THAT COSTS MOST.
+// Issues and pull requests share ONE number sequence and one `issues/{n}`
+// endpoint, so a `--parent` or `--children` entry that names a pull request
+// used to run this whole choreography cleanly: the pull request was attached
+// as a sub-issue, or CLOSED with a consolidation comment, at exit 0
+// (zheref/nen#77). zheref/nen#25 fixed exactly this class for the CLASSIFYING
+// verbs (./chain.ts) and left the MUTATING consumers of `readIssue` unguarded,
+// which is the worse half: a wrong classification is a sentence on a terminal
+// that a caller can disbelieve, and a wrong close is a state change plus a
+// public timeline event that nobody re-reads.
+//
+// SO THE CERTIFICATION IS A PRE-FLIGHT, NOT A TEST INSIDE THE WRITE LOOP.
+// `attachSub` reads the parent and EVERY child before its first POST, and
+// refuses the whole run when any of them is a pull request. A per-child test
+// in the loop would refuse the offending number correctly and still leave the
+// children BEFORE it attached -- the half-finished graph the order rule at the
+// top of this file exists to prevent, produced by the guard meant to prevent
+// it. `consolidateClose` inherits that guard rather than repeating it:
+// attachment is its first write and it stops at the first failing stage, so a
+// refused pre-flight means nothing was attached, nothing was closed, and no
+// close comment was rendered, attempted or posted.
+//
+// `nen issue comment` DELIBERATELY DOES NOT REFUSE A PULL REQUEST, and that is
+// not an inconsistency -- ./comment.ts records the whole argument. The
+// distinction is what the verb DOES with the number: posting a caller's text
+// is what the caller asked for on either object class, and the comment URL
+// makes a mistyped number visible on the very next line; attaching and closing
+// are invisible the moment the command exits.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { conjoin } from "../cli/prose.js";
 import type { Target } from "../github/target.js";
 import { decomposeLabelName, type LabelTaxonomy } from "../schema/labels.js";
 
@@ -107,8 +137,113 @@ export function readIssue(seams: Seams, target: Target, number: number): IssueSu
     title: String(parsed["title"] ?? ""),
     state: String(parsed["state"] ?? ""),
     labels,
+    // AN EXPLICIT `null` IS TREATED AS ABSENT, i.e. as an issue, and that is
+    // deliberate rather than an oversight the reviewer caught (zheref/nen#77
+    // review, minor): real GitHub never sends the key as null -- it is absent
+    // on an issue and an OBJECT on a pull request -- so the only payload that
+    // reaches this branch is one no GitHub produced. The shapes that DO occur
+    // and could hide a pull request already fail closed: `pull_request: {}` is
+    // non-null and refuses, and a payload carrying no `number` fails the id
+    // resolution before any write. Refusing null instead would refuse a
+    // hand-written fixture rather than a real object, and would silently
+    // diverge from the predicate zheref/nen#25 shipped in ./chain.ts.
     isPullRequest: rawPullRequest !== undefined && rawPullRequest !== null,
   };
+}
+
+// --- the object-class refusal ------------------------------------------------
+
+/**
+ * The one sentence every object-class refusal in this binary ends with, so the
+ * two families that refuse (./chain.ts's classifiers and this file's mutating
+ * verbs) point a caller at the same place in the same words. Kept beside
+ * `readIssue` because this is where the discriminator is read; ./chain.ts
+ * imports it rather than owning a second copy that can drift.
+ */
+export const ASK_THE_PR_FAMILY =
+  "For the pull request's own state, ask the 'nen pr' family instead (e.g. 'nen pr ready', 'nen pr next-blocker').";
+
+/**
+ * Thrown when a number a verb was handed turns out to name a pull request.
+ *
+ * A DISTINCT CLASS, so the CLI layer can render its stable `refused: true`
+ * `--json` shape (../issue/command.ts) instead of letting the message fall
+ * through as a bare failure -- a caller that machine-reads these verbs must be
+ * able to tell "refused to act" from "acted and failed", not just from an exit
+ * code they share.
+ *
+ * `numbers` carries the offending numbers AS THE CALLER SPELLED THEM, not as
+ * the payload numbered itself. zheref/nen#25's review recorded the mismatch it
+ * left behind -- a message interpolating the payload's number beside a `--json`
+ * field carrying the argument -- and the fix for new code is simply never to
+ * mix the two: everything reported here comes from the argument the caller
+ * typed, so the message and the machine-readable field can never disagree.
+ */
+export class NotAnIssueError extends Error {
+  readonly numbers: readonly number[];
+
+  constructor(message: string, numbers: readonly number[]) {
+    super(message);
+    this.name = "NotAnIssueError";
+    this.numbers = [...numbers];
+  }
+}
+
+/** One number a verb was handed, with the flag the caller spelled it under. */
+export interface NumberedInput {
+  /** The number AS GIVEN -- see NotAnIssueError's note on why not the payload's. */
+  readonly number: number;
+  /** How the caller named it, e.g. `--parent`. Quoted back in the refusal. */
+  readonly role: string;
+  readonly summary: IssueSummary;
+}
+
+/**
+ * Refuse the WHOLE set if any of it names a pull request, naming every
+ * offender at once.
+ *
+ * ALL OF THEM, in one refusal, on the same "report the whole problem" idiom
+ * ../issue/command.ts's flag and close-comment guards follow: a caller fixing
+ * one number per round trip is the cost this repository designs against
+ * everywhere else -- and here each round trip is a set of `gh` reads.
+ *
+ * EACH OF THEM ONCE, THOUGH -- deduplicated BY NUMBER before anything is
+ * rendered (zheref/nen#77 review, minor). `--children 12,12` is one wrong
+ * number typed twice, not two wrong numbers, and a refusal that said
+ * `#12 (--children) and #12 (--children) name pull requests` alongside
+ * `pullRequests: [12, 12]` would tell a caller its list has two problems to
+ * fix and hand a machine-reader a multiset where a set was meant. A number
+ * that arrived under SEVERAL flags is still ONE number and is named once,
+ * carrying every flag it came in under -- `#12 (--parent, --children)` --
+ * because both places have to change and the refusal is the only thing that
+ * says so. First-appearance order throughout, so the sentence follows the
+ * caller's own list.
+ */
+export function requireIssues(inputs: readonly NumberedInput[]): void {
+  const offenders = new Map<number, string[]>();
+  for (const entry of inputs) {
+    if (!entry.summary.isPullRequest) continue;
+    const roles = offenders.get(entry.number);
+    if (roles === undefined) {
+      offenders.set(entry.number, [entry.role]);
+      continue;
+    }
+    if (!roles.includes(entry.role)) roles.push(entry.role);
+  }
+  if (offenders.size === 0) return;
+  const numbers = [...offenders.keys()];
+  const one = numbers.length === 1;
+  throw new NotAnIssueError(
+    `${conjoin(
+      numbers.map((number): string => `#${number} (${(offenders.get(number) ?? []).join(", ")})`),
+    )} ` +
+      `${one ? "names a pull request, not an issue" : "name pull requests, not issues"}; ` +
+      "sub-issue attachment and the consolidation close it drives are defined only for issues, and both WRITE. " +
+      "Nothing was attached, closed or commented on: every number is certified before the first write, so a list " +
+      "that mixes issues with a pull request refuses whole rather than attaching the issues in it and stopping " +
+      `halfway. ${ASK_THE_PR_FAMILY}`,
+    numbers,
+  );
 }
 
 export interface AttachReport {
@@ -131,6 +266,24 @@ function looksUnavailable(stderr: string): boolean {
   return /HTTP (404|410)\b/.test(stderr);
 }
 
+// THE PRE-FLIGHT RUNS FIRST, AND IT IS WHERE THE OBJECT CLASS IS CERTIFIED
+// (zheref/nen#77 -- see this file's header for why it is not a per-child test
+// inside the loop below).
+//
+// THE PARENT IS READ, WHICH IT NEVER USED TO BE. Every write below posts into
+// `issues/{parent}/sub_issues`, and until now nothing in this function had ever
+// looked at that number: a pull request in `--parent` collected children as
+// sub-issues and answered exit 0. The read is what makes the certification
+// possible, and it costs one `gh api` call per run.
+//
+// A PARENT THAT CANNOT BE READ IS NOT TOLERATED THE WAY A CHILD IS.
+// `readIssue`'s own error propagates instead of becoming a per-child failure,
+// because the parent is the target of every write here: a parent this run
+// could not read is a parent it could not certify, and posting into it anyway
+// is precisely the uncertified mutation the guard exists to refuse. A child
+// that cannot be read keeps its old, tolerant handling -- it is recorded in
+// `failed` and its siblings proceed -- because a child is one member of a set
+// and the run's own report says which members were left out.
 export function attachSub(
   seams: Seams,
   target: Target,
@@ -143,12 +296,31 @@ export function attachSub(
   const log: string[] = [];
   let fallback: string[] | null = null;
 
-  for (const child of children) {
-    let summary: IssueSummary;
-    try {
-      summary = readIssue(seams, target, child);
-    } catch (error) {
-      failed.push({ child, reason: error instanceof Error ? error.message : String(error) });
+  const parentSummary = readIssue(seams, target, parent);
+  const reads = children.map(
+    (child): { child: number; summary: IssueSummary | null; readError: string | null } => {
+      try {
+        return { child, summary: readIssue(seams, target, child), readError: null };
+      } catch (error) {
+        return { child, summary: null, readError: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  );
+  // EVERY number, in one refusal, BEFORE the first POST -- children included,
+  // so a mixed list refuses whole. A child that could not be READ is not
+  // certified (there is nothing to certify) and is reported below exactly as
+  // it always was; it cannot hide a pull request behind this guard, because a
+  // refusal here means nothing is written at all.
+  requireIssues([
+    { number: parent, role: "--parent", summary: parentSummary },
+    ...reads.flatMap((entry): readonly NumberedInput[] =>
+      entry.summary === null ? [] : [{ number: entry.child, role: "--children", summary: entry.summary }],
+    ),
+  ]);
+
+  for (const { child, summary, readError } of reads) {
+    if (summary === null) {
+      failed.push({ child, reason: readError ?? `#${child} could not be read` });
       continue;
     }
     if (summary.id === null) {
@@ -194,6 +366,21 @@ export function attachSub(
 export interface ConsolidationPlan {
   readonly parent: number;
   readonly children: readonly IssueSummary[];
+  /**
+   * The child numbers AS THE CALLER SPELLED THEM, index-for-index with
+   * `children` above -- which carries the numbers the PAYLOADS came back with.
+   *
+   * The two are the same number in every ordinary run and differ only where
+   * GitHub redirects a transferred object, which is exactly why this field
+   * exists (zheref/nen#77 review, minor): `consolidateClose` used to hand
+   * `children.map(c => c.number)` to `attachSub`, so the certification below
+   * reported PAYLOAD numbers on the consolidate path while `NotAnIssueError`'s
+   * docblock promises everything it reports comes from the caller's argument.
+   * A refusal naming a number the caller never typed is a refusal they cannot
+   * act on. So the requested list is carried through and it is the one both
+   * verbs certify and report.
+   */
+  readonly requested: readonly number[];
   /** The union of every child's labels, minus the severity family. */
   readonly labelUnion: readonly string[];
   /** The highest severity among the children, or null when none carries one. */
@@ -334,6 +521,7 @@ export function planConsolidation(
   return {
     parent,
     children: summaries,
+    requested: [...children],
     labelUnion: [...union].sort(),
     severity,
     severitySetBy,
@@ -341,6 +529,35 @@ export function planConsolidation(
     unreducedFamilies,
     notes,
   };
+}
+
+/**
+ * The plan's own numbers as certification inputs, CALLER-SPELLED.
+ *
+ * Exported so ./command.ts can run `requireIssues` on a plan BEFORE its other
+ * refusals fire, rather than inheriting the certification from `attachSub` at
+ * the bottom of the run (zheref/nen#77 review, minor). Ordering the guards
+ * that way was the whole finding: `consolidate-close`'s unreduced-families and
+ * open-PR refusals ran first, so a pull request in `--children` was answered
+ * with "pass --allow-open-pr" or with a published plan that contained the pull
+ * request -- the wrong remedy for the wrong object class, and, in `--json`,
+ * the very artifact the object-class refusal exists to withhold.
+ *
+ * The parent summary is passed in because a plan does not read the parent: the
+ * caller that hoists this check reads it, and `attachSub` reads it again at
+ * the write stage, where the certification must hold regardless of who called.
+ */
+export function consolidationInputs(
+  plan: ConsolidationPlan,
+  parent: IssueSummary,
+): readonly NumberedInput[] {
+  return [
+    { number: plan.parent, role: "--parent", summary: parent },
+    ...plan.children.flatMap((summary, index): readonly NumberedInput[] => {
+      const number = plan.requested[index];
+      return number === undefined ? [] : [{ number, role: "--children", summary }];
+    }),
+  ];
 }
 
 // --- the close comment ---------------------------------------------------------
@@ -539,13 +756,12 @@ export function consolidateClose(
   );
   for (const note of plan.notes) log.push(`note: ${note}`);
 
-  const attachReport = attachSub(
-    seams,
-    target,
-    plan.parent,
-    plan.children.map((child): number => child.number),
-    dryRun,
-  );
+  // THE REQUESTED NUMBERS, NOT THE PAYLOADS' -- see ConsolidationPlan.requested
+  // for the whole argument. This line used to read
+  // `plan.children.map(child => child.number)`, which made the inherited
+  // certification report numbers GitHub chose rather than numbers the caller
+  // typed the moment the two disagreed.
+  const attachReport = attachSub(seams, target, plan.parent, plan.requested, dryRun);
   log.push(...attachReport.log);
   if (attachReport.failed.length > 0) {
     for (const failure of attachReport.failed) {
