@@ -125,12 +125,23 @@ export function parseRoleMap(entries: readonly string[]): RoleMapParseResult {
 // issues" is not a thing the sub-issue module could say. Only the shared
 // closing sentence is imported, so the two families point a caller at the same
 // place in the same words.
-function requireIssue(summary: IssueSummary): IssueSummary {
+//
+// `requested` IS THE NUMBER THE CALLER TYPED (`--issue`), NOT `summary.number`.
+// zheref/nen#82's review caught this verb still breaking NotAnIssueError's own
+// docblock promise -- that `numbers` and the message always carry "the number
+// AS THE CALLER SPELLED IT" -- by reading the PAYLOAD's number instead. The
+// two agree in every ordinary run and differ only where GitHub redirects a
+// transferred object, exactly the case ./subissue.ts's `requireIssues` already
+// carries `requested` through on the attach/consolidate path. ../issue/command.ts's
+// `--json` refusal already reports `{issue}` from this same caller-typed
+// argument, so threading it here too is what makes that field and `reason`'s
+// number agree on every refusal path, not just the byte-identical same-repo one.
+function requireIssue(requested: number, summary: IssueSummary): IssueSummary {
   if (summary.isPullRequest) {
     throw new NotAnIssueError(
-      `#${summary.number} names a pull request, not an issue; a delivery-chain position is defined only for issues. ` +
+      `#${requested} names a pull request, not an issue; a delivery-chain position is defined only for issues. ` +
         ASK_THE_PR_FAMILY,
-      [summary.number],
+      [requested],
     );
   }
   return summary;
@@ -220,7 +231,7 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
 // is a CLI-boundary concern (parseRoleMap's `errors` need a place to be
 // reported and exited on, which is ../issue/verb.ts, not this wrapper).
 export function chainPosition(seams: Seams, target: Target, issue: number, map: RoleMap): ChainPositionResult {
-  return classifyChainPosition(requireIssue(readIssue(seams, target, issue)), map);
+  return classifyChainPosition(requireIssue(issue, readIssue(seams, target, issue)), map);
 }
 
 // --- terminus ----------------------------------------------------------------
@@ -345,5 +356,5 @@ export function terminus(
   integrationPrefix: string | null = null,
   trunk = "main",
 ): TerminusResult {
-  return classifyTerminus(requireIssue(readIssue(seams, target, issue)), map, integrationPrefix, trunk);
+  return classifyTerminus(requireIssue(issue, readIssue(seams, target, issue)), map, integrationPrefix, trunk);
 }

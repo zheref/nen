@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
-import type { IssueSummary } from "./subissue.js";
+import { NotAnIssueError, type IssueSummary } from "./subissue.js";
 import { chainPosition, classifyChainPosition, classifyTerminus, parseRoleMap, terminus } from "./chain.js";
 
 function issue(overrides: Partial<IssueSummary> = {}): IssueSummary {
@@ -240,5 +240,68 @@ describe("chainPosition / terminus -- refuse a pull request outright (issue #25)
       },
     ]);
     expect(terminus(seams, TARGET, 17, terminusMap).kind).toBe("own-pr");
+  });
+
+  // THE NUMBER THE CALLER TYPED, ON THIS PATH TOO (zheref/nen#82 review, on
+  // #77's own docblock). NotAnIssueError promises `numbers` and the message
+  // always carry the caller's own argument, never the payload's -- but
+  // chain-position and terminus used to build the error from `summary.number`
+  // instead of `--issue`, which agrees with the caller's number in every
+  // ordinary run and disagrees only on the one case that matters: GitHub
+  // redirects a transferred object. `--issue 925` is requested here; the
+  // payload answers as `926`, exactly the shape a redirect produces.
+  it("chain-position refuses with the REQUESTED number, not the payload's, on a redirect", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api repos/o/n/issues/925",
+        result: {
+          stdout: JSON.stringify({
+            number: 926,
+            id: 90926,
+            title: "some pull request",
+            state: "open",
+            labels: [],
+            pull_request: { url: "https://api.github.com/repos/o/n/pulls/926" },
+          }),
+        },
+      },
+    ]);
+    let caught: NotAnIssueError | null = null;
+    try {
+      chainPosition(seams, TARGET, 925, map);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/#925 names a pull request/);
+    expect(caught?.message).not.toMatch(/#926/);
+    expect(caught?.numbers).toEqual([925]);
+  });
+
+  it("terminus refuses with the REQUESTED number too -- both classifiers carry the fix", () => {
+    const { map: terminusMap } = parseRoleMap(["chore=type:chore", "epic=type:epic"]);
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api repos/o/n/issues/925",
+        result: {
+          stdout: JSON.stringify({
+            number: 926,
+            id: 90926,
+            title: "some pull request",
+            state: "open",
+            labels: [],
+            pull_request: { url: "https://api.github.com/repos/o/n/pulls/926" },
+          }),
+        },
+      },
+    ]);
+    let caught: NotAnIssueError | null = null;
+    try {
+      terminus(seams, TARGET, 925, terminusMap);
+    } catch (error) {
+      caught = error instanceof NotAnIssueError ? error : null;
+    }
+    expect(caught?.message).toMatch(/#925 names a pull request/);
+    expect(caught?.message).not.toMatch(/#926/);
+    expect(caught?.numbers).toEqual([925]);
   });
 });
