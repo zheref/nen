@@ -68,6 +68,35 @@ describe("nen warmup", () => {
     expect(result.out.join("\n")).toMatch(/stale pin/);
   });
 
+  // zheref/nen#17 (review minor): a `$`-prefixed key that also ends in
+  // `_pinned` (e.g. `"$comment_pinned": "v0.1.0"`, the same shape a consumer
+  // could nest beside a real `pinned` field) must not become a phantom
+  // per-caller pin -- this is the same `$`-prefix skip as product_codes,
+  // applied at the caller-pin walk in ../schema/repos.ts.
+  it("does not report a stale pin for a $-prefixed key that ends in _pinned (zheref/nen#17)", async () => {
+    const dir = cleanRegistryRepo("v1.0.0");
+    writeFileSync(
+      join(dir, "schemas", "repos.json"),
+      JSON.stringify({
+        latest: "v1.0.0",
+        consumers: [
+          {
+            repo: "o/r",
+            pinned: "v1.0.0",
+            $comment_pinned: "v0.1.0",
+            consumes: ["build.yml"],
+            code: "OR",
+          },
+        ],
+        product_codes: { OR: "r" },
+      }),
+    );
+    const result = await capture(["warmup", "--current", "v1.0.0"], dir);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/no stale pins/);
+    expect(result.out.join("\n")).not.toContain("$comment_pinned");
+  });
+
   describe("the handbook-question sweep's skip is explicit, never silent-clean (review finding)", () => {
     it("omitting --questions-from reports NOT CHECKED in human output and { checked: false } in --json, and does not fail the run on its own", async () => {
       const dir = cleanRegistryRepo("v1.0.0");

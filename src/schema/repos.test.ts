@@ -151,6 +151,28 @@ describe("parseRepoRegistry -- validation", () => {
     expect(registry.productCodes).toEqual({ XX: "owner/repo" });
   });
 
+  // zheref/nen#17 (review minor): the caller-pin walk applies the SAME
+  // `$`-prefix-is-metadata convention product_codes now gets -- a consumer
+  // carrying `"$comment_pinned": "..."` would otherwise pass the
+  // `_pinned`-suffix check and become a phantom per-caller pin, which
+  // `nen warmup` would then report as a stale pin for a caller that does not
+  // exist.
+  it("skips a $-prefixed key inside a consumer even when it also ends in _pinned", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [
+        {
+          repo: "a/b",
+          consumes: [],
+          pinned: "v1.0.0",
+          $comment_pinned: "v0.1.0",
+          db_migrate_pinned: "v0.9.0",
+        },
+      ],
+    });
+    expect(registry.byRepo("a/b")?.callerPins).toEqual({ db_migrate_pinned: "v0.9.0" });
+    expect(Object.keys(registry.byRepo("a/b")?.callerPins ?? {})).not.toContain("$comment_pinned");
+  });
+
   it("requires a maintained_tools/pending_onboarding entry to name an owner/name repo", () => {
     // These lists exist to record exactly the owner a bare product_codes value
     // omits, so an entry without one records nothing a resolution can use.

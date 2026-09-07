@@ -153,7 +153,10 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
 
     const callerPins: Record<string, string> = {};
     for (const [key, raw] of Object.entries(record)) {
-      if (key === "pinned" || !key.endsWith(CALLER_PIN_SUFFIX)) continue;
+      // Same `$`-prefix-is-metadata convention as `product_codes` below
+      // (zheref/nen#17): a `$comment_pinned` key would otherwise pass the
+      // `_pinned`-suffix check and become a phantom per-caller pin.
+      if (key === "pinned" || key.startsWith("$") || !key.endsWith(CALLER_PIN_SUFFIX)) continue;
       callerPins[key] = requireString(path, `${pointer}.${key}`, raw);
     }
 
