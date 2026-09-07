@@ -30,6 +30,30 @@
 // reference that wants to be a link is already a markdown link
 // (`[label](url)`), which is plain text this renderer treats like any other
 // cell.
+//
+// A PIPE INSIDE A CELL IS ESCAPED, AND THE PAIR ROUND-TRIPS (zheref/nen#10,
+// item 2 -- a defect PRESERVED from the porting source, scripts/
+// ichigo_prompt.sh:261, rather than introduced here). These two functions are
+// each other's inverse in practice: `nen board render` PRODUCES the table that
+// `nen stop` RE-PARSES, and a PR title like `feat: a | b` used to split into an
+// extra cell that shifted every later column -- so the rendered board claimed
+// `Refs: b`, `Status: XX-PR-#7`, and `nen stop --json` handed an automated
+// caller those wrong values with no error anywhere. `renderPipeTable` now
+// writes a literal `|` as markdown's own `\|`, and `parsePipeTable` splits only
+// on UNESCAPED pipes and folds `\|` back to `|`.
+//
+// THE SPACE BEFORE EVERY DELIMITER IS WHAT MAKES THE ESCAPE UNAMBIGUOUS on the
+// way back: `emit` always writes `| cell | cell |`, so a cell ENDING in a
+// backslash can never sit flush against the delimiter that follows it and be
+// misread as escaping it. Only a hand-written table could construct that case,
+// and only by writing a trailing backslash with no padding -- which markdown
+// itself reads the same ambiguous way.
+//
+// BACKSLASHES ARE NOT DOUBLED. Escaping only the pipe is the convention the
+// issue asks for, and it still round-trips a cell that already contains the two
+// characters `\|`: rendering writes `\\|` (backslash, then the escaped pipe),
+// and the parse's single left-to-right scan consumes the `\|` at the END of
+// that run, handing back `\|` unchanged.
 
 const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x1100, 0x115f], // Hangul Jamo
@@ -72,18 +96,62 @@ function pad(cell: string, width: number): string {
   return cell + " ".repeat(gap);
 }
 
+/** A literal `|` written as markdown's `\|`, so it stays INSIDE its cell. */
+export function escapeCell(cell: string): string {
+  return cell.replace(/\|/g, "\\|");
+}
+
+// Split one already-leading-pipe-stripped row on its UNESCAPED delimiters,
+// unescaping `\|` back to `|` in the SAME left-to-right pass. One pass rather
+// than split-then-unescape on purpose: a separate `replace(/\\\|/g, "|")`
+// afterwards would also rewrite a `\|` that the split had already decided was
+// content, which is how a two-step version loses the distinction it just made.
+function splitEscapedCells(row: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  for (let index = 0; index < row.length; index += 1) {
+    if (row[index] === "\\" && row[index + 1] === "|") {
+      cell += "|";
+      index += 1; // the backslash is the escape, never content
+      continue;
+    }
+    if (row[index] === "|") {
+      cells.push(cell);
+      cell = "";
+      continue;
+    }
+    cell += row[index] ?? "";
+  }
+  cells.push(cell);
+  return cells;
+}
+
 /** A parsed markdown pipe table: header + data rows, separator rows dropped. */
 export function parsePipeTable(text: string): string[][] {
   const rows: string[][] = [];
   for (const rawLine of text.split("\n")) {
     const line = rawLine.trim();
     if (!line.startsWith("|")) continue;
-    const cells = line
-      .replace(/^\|/, "")
-      .replace(/\|$/, "")
-      .split("|")
-      .map((cell): string => cell.trim());
+    // The leading `|` is punctuation, never an escape (nothing precedes it).
+    const raw = splitEscapedCells(line.slice(1));
+    // A row's CLOSING delimiter leaves one empty trailing element behind. It
+    // is dropped only when it is empty BEFORE trimming -- a genuinely empty
+    // last COLUMN (`| a |   |`) carries the padding spaces and survives, and a
+    // row written without a closing pipe (`| a | b`) keeps its last cell.
+    // `length > 1` keeps a lone `|` parsing exactly as it always did.
+    if (raw.length > 1 && raw[raw.length - 1] === "") raw.pop();
+    const cells = raw.map((cell): string => cell.trim());
     if (cells.every((cell): boolean => /^:?-{3,}:?$/.test(cell))) continue; // the separator row
+    // SHORT ROWS ARE PADDED TO THE HEADER'S WIDTH so a malformed row degrades
+    // one CELL rather than the whole table: an emitted row shorter than the
+    // header would otherwise slide every column left of where the header says
+    // it is. A row LONGER than the header is left alone -- dropping cells
+    // would throw away content, and renderPipeTable already evens up to the
+    // widest row it is given.
+    const header = rows[0];
+    if (header !== undefined) {
+      while (cells.length < header.length) cells.push("");
+    }
     rows.push(cells);
   }
   return rows;
@@ -96,8 +164,11 @@ export function parsePipeTable(text: string): string[][] {
 export function renderPipeTable(rows: readonly (readonly string[])[]): string[] {
   if (rows.length === 0) return [];
   const columnCount = Math.max(...rows.map((row): number => row.length));
+  // ESCAPED BEFORE THE WIDTHS ARE MEASURED, because the escape is what gets
+  // emitted: measuring the raw cell would under-pad every column holding a
+  // pipe by exactly the backslashes it grew.
   const evened = rows.map((row): string[] => {
-    const out = [...row];
+    const out = row.map((cell): string => escapeCell(cell));
     while (out.length < columnCount) out.push("");
     return out;
   });
