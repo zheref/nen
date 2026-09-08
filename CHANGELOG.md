@@ -14,6 +14,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Changed
 
+- **schema** — the canonical location of `labels.json`, `repos.json`, `colors.yml` and `gates.json` is now the repository's `nen/` directory; `schemas/` is read as a fallback through the v0.3 line and `nen schema check` names every legacy read and shadowed leftover; the fallback is removed in v0.4.0. `nen/contract.json` (optional) is parsed and validated — `dependency` (what the repository needs from nen) and `project` (the stack declaration) — but nothing acts on it yet ([#PR](link), closes #108)
 - review debt: seven Copilot threads left open on #71, #72, #74, #75, #76 answered with pins for the `--gh-repo` shorthand path, relative `--body-file` cwd resolution and the `GIT_FETCH_PLAIN` line-scan hinge, plus explicit result types in the classifier CLI ([#104](https://github.com/zheref/nen/pull/104), closes #98)
 
 ### Added

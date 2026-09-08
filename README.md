@@ -83,10 +83,11 @@ test fixture so it runs without any setup:
 ```
 $ nen schema check --repo src/schema/fixtures/bankai-repo
 repository: <absolute path to your checkout>/src/schema/fixtures/bankai-repo
-  ok    schemas/labels.json  13 labels
-  ok    schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
-  ok    schemas/colors.yml  3 categories, 13 values
-  ok    schemas/gates.json  5 reviewer identities
+  ok    nen/labels.json  13 labels
+  ok    nen/repos.json  3 consumers, 6 product codes, latest v0.11.2
+  ok    nen/colors.yml  3 categories, 13 values
+  ok    nen/gates.json  5 reviewer identities
+  ok    nen/contract.json  dependency (nen >= 0.3, pinned v0.3.0), project (2 lanes: web, android; 10 verbs; 3 toolchain entries)
 ```
 
 (`repository:` prints the resolved absolute path, which is unique to wherever
@@ -95,13 +96,12 @@ this block reads the same regardless of where that is; every other line is
 pasted verbatim.)
 
 Point `--repo` at any checkout instead of the fixture and Nen reads that
-repository's own `schemas/labels.json`, `schemas/repos.json`,
-`schemas/colors.yml`, and `schemas/gates.json` — see **Taxonomy as data**
-below.
+repository's own `nen/labels.json`, `nen/repos.json`, `nen/colors.yml`, and
+`nen/gates.json` — see **Taxonomy as data** below.
 
 ## Day to day
 
-Install once, bring a repository's `schemas/` taxonomy up to where the
+Install once, bring a repository's `nen/` taxonomy up to where the
 taxonomy-reading verbs work, then the four verbs that come up most. Every
 command runs as printed; the read-only ones ran against the bundled fixture
 `src/schema/fixtures/bankai-repo`. `owner/name` and `/path/to/repo` are
@@ -261,15 +261,29 @@ order they're evaluated, including which ones the gate does *not* decide.
 
 Nen hard-codes no label names, no repository names, no reviewer names, no
 colors. Every verb that needs a repository's own vocabulary reads it from
-that repository's `schemas/` directory at the path given by `--repo`
+that repository's `nen/` directory at the path given by `--repo`
 (defaulting to the current directory):
 
 | File | What it holds |
 |---|---|
-| `schemas/labels.json` | The label set — names, colors, descriptions |
-| `schemas/repos.json` | The repository registry — product codes, consumers |
-| `schemas/colors.yml` | The status-color precedence for board rendering |
-| `schemas/gates.json` | Reviewer identities for `nen pr ready`'s readiness check |
+| `nen/labels.json` | The label set — names, colors, descriptions |
+| `nen/repos.json` | The repository registry — product codes, consumers |
+| `nen/colors.yml` | The status-color precedence for board rendering |
+| `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check |
+| `nen/contract.json` | Optional. What this repository needs *from* Nen (`dependency`), and the stack declaration Nen reads *about* it (`project`). Parsed, validated and reported; nothing acts on it yet |
+
+`nen/` is committed configuration only. Generated output goes to a
+dot-prefixed, gitignored `.nen/` — the one-character difference is deliberate,
+so staging `nen/` after a run can never pick up a build log.
+
+**Migrating from `schemas/`.** Through the v0.3 line Nen still reads the four
+taxonomy files from a repository's legacy `schemas/` directory when `nen/` does
+not carry them, so a repository that has not moved yet keeps working unchanged.
+`nen schema check` names every file it read from the legacy location, and fails
+on a *shadowed leftover* — a file present in both places with different bytes,
+where `nen/` wins and the copy somebody may still be editing is the one Nen
+ignores. Moving the four files into `nen/` is the whole migration. The fallback
+is removed in **v0.4.0**.
 
 A repository that carries none of these files can still use Nen's
 repository-agnostic verbs (`nen commit format`, `nen ref format`, ...); a
