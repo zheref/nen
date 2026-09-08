@@ -1,0 +1,11 @@
+{
+  "name": "@placeholder/core",
+  "private": true,
+  "scripts": {
+    "test": "placeholder",
+    "test:coverage": "placeholder"
+  },
+  "devDependencies": {
+    "vitest": "2.1.8"
+  }
+}

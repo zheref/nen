@@ -33,6 +33,17 @@
 //      `--write` over one would overwrite a decision with an inference. There
 //      is no `--force`: the block is printed, and a human merges it.
 //
+// THE ONE THING IT DOES WRITE WITHOUT A COMMAND TO READ: an `unsupported` SEAT.
+// Every verb in the pack's `commandVerbs` gets a row -- a command where the
+// repository's own manifest confirms one, and `{"unsupported": "<the pack's own
+// reason, quoted>"}` where the pack has none. That is not this file deciding: it
+// is the catalogue's sentence, in the one form a declaration can carry it, in a
+// row a maintainer replaces. It is also what makes the proposal LOADABLE, which
+// is the argument that settles it -- ../schema/contract.ts refuses a lane whose
+// verb map is empty, by name, so a tree whose every command row was withheld
+// used to get a file the very next `nen shu build` rejected. `proposeVerbs`
+// below carries the full argument.
+//
 // A `Makefile` IS A FINDING, NEVER A PROPOSAL. Whether a repository routes its
 // verbs through one is that repository's call to write down; nen proposing it
 // would be nen choosing an indirection layer for somebody.
@@ -50,6 +61,7 @@ import {
   type StackProfile,
 } from "../profiles/pack.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
+import { parseYaml } from "../schema/yaml.js";
 
 /** Directories a marker scan never descends into. */
 const SKIP = new Set([
@@ -347,42 +359,68 @@ function laneName(cwd: string, stack: string, qualify: boolean, taken: ReadonlyS
 //       pack gained a row, silently, with no test able to notice it had not
 //       been.
 //
-// So the checks below are three syntactic rules over the SUBSTITUTED argv, and
-// they name no tool:
+// So the checks below are syntactic rules over the SUBSTITUTED argv, and they
+// name no tool:
 //
 //   1. PLACEHOLDERS. `{pm}` and `{packageManager}` are answered by the lane's
 //      own `package.json` (`packageManager: "<name>@<version>"`), which is the
-//      repository's statement about itself and never the pack's. Every OTHER
-//      token in the pack's closed set is withheld with the token named --
-//      `{scheme}`, `{destination}`, `{package}` and the rest are facts only the
-//      repository knows, and nen guessing one is a different command.
+//      repository's statement about itself and never the pack's. `{package}` is
+//      answered by that manifest's own `name` AND ONLY WHEN THE MANIFEST IS NOT
+//      A WORKSPACE ROOT (see below). Every OTHER token in the pack's closed set
+//      is withheld with the token named -- `{scheme}`, `{destination}` and the
+//      rest are facts only the repository knows, and nen guessing one is a
+//      different command.
 //   2. THE EXECUTABLE. A step's `exe` must be either the package manager the
 //      manifest names or a package the manifest declares as a dependency.
 //      Those are the only two ways `detect` can SEE that a repository carries a
 //      program, and "the marker matched so the tool must be here" is exactly
 //      the inference §2.6 calls a warning rather than a proposal.
-//   3. THE SCRIPT. An argv containing `run <task>` names a task the manifest
-//      must declare under `scripts` -- `<pm> run <script>` directly, and
-//      `<pm> <runner> run <task>` because a workspace task runner's task list
-//      is the manifest's scripts. This is the check whose absence made the
-//      header's "never proposes a command the repository cannot run" false: a
-//      manifest with `scripts: { lint: "…" }` and nothing else still got a
-//      proposed `build`. It is deliberately CONSERVATIVE about a task declared
-//      somewhere this reader cannot see (a workspace member, a runner's own
-//      config file), and the note says so, because withholding a row a human
-//      can add back beats proposing one that exits 1.
+//   3. THE SCRIPT, in two shapes. An argv containing `run <task>` names a task
+//      the manifest must declare under `scripts` -- `<pm> run <script>`
+//      directly, and `<pm> <runner> run <task>` because a workspace task
+//      runner's task list is the manifest's scripts. AND, for a row nen
+//      answered `{package}` in from this manifest's own `name`, the element
+//      that FOLLOWS that package name is the task that package must declare:
+//      `{package}`'s documented meaning is "one workspace package the command
+//      runs for", so everything before it is the manager's own filter syntax
+//      and what comes after it is the task. This is the check whose absence
+//      made the header's "never proposes a command the repository cannot run"
+//      false: a manifest with `scripts: { lint: "…" }` and nothing else still
+//      got a proposed `build`. It is deliberately CONSERVATIVE about a task
+//      declared somewhere this reader cannot see (a workspace member, a runner's
+//      own config file), and the note says so, because withholding a row a
+//      human can add back beats proposing one that exits 1.
+//
+// A WORKSPACE ROOT NEVER ANSWERS `{package}`. A manifest declaring `workspaces`
+// -- or sitting beside a `pnpm-workspace.yaml` -- is not itself the package a
+// per-package row runs for; it is the list of them. Substituting its own `name`
+// there would propose a command that runs the root against itself, which is a
+// different command from the N the repository actually runs, so the row is
+// withheld and the note NAMES THE MEMBERS nen could see, because "which of these,
+// and in what order" is the question the maintainer is being asked.
 //
 // Every check that fails withholds ONE ROW and names it. Nothing here refuses
 // the scan, and nothing here writes.
 
-/** The two placeholders a repository's own `package.json` answers. */
+/** The three placeholders a repository's own `package.json` answers. */
 const PM_EXECUTABLE = "{pm}";
 const PM_PIN = "{packageManager}";
+const PACKAGE_NAME = "{package}";
 
 /** Every token the pack may use, so a leftover one can be named exactly. */
 const PACK_TOKENS: readonly string[] = PLACEHOLDERS.map(
   (placeholder): string => placeholder.token,
 );
+
+/** A workspace root's own statement of where its members live. */
+interface WorkspaceShape {
+  /** Where the statement was read from, for the note. */
+  readonly source: string;
+  /** The patterns verbatim, in the order the file states them. */
+  readonly patterns: readonly string[];
+  /** Every member nen could resolve and name, in pattern order. */
+  readonly members: readonly string[];
+}
 
 interface Manifest {
   /** False when the lane has no readable `package.json` at all. */
@@ -398,8 +436,100 @@ interface Manifest {
    * which is reserved for the field being absent altogether.
    */
   readonly packageManagerIssue: string | null;
+  /** This manifest's own `name`, or null when it states none. */
+  readonly packageName: string | null;
+  /** Set when this lane is a workspace ROOT, which never answers `{package}`. */
+  readonly workspace: WorkspaceShape | null;
   readonly declares: (name: string) => boolean;
   readonly scripts: ReadonlySet<string>;
+}
+
+/** `"packages/*"` -> every directory under `packages/`; a literal path -> itself. */
+function expandWorkspacePattern(
+  laneDirectory: string,
+  pattern: string,
+): readonly string[] {
+  // ONLY A TRAILING `*` IS EXPANDED, and everything richer is left alone rather
+  // than half-understood: `**`, a `!negation` and a mid-segment glob each mean
+  // something a partial reader would get wrong, and this list exists to be
+  // NAMED in a note, not to be authoritative.
+  const segments = pattern.split("/");
+  const last = segments[segments.length - 1];
+  if (last === undefined || pattern.includes("**") || pattern.startsWith("!")) return [];
+  if (last !== "*") {
+    return pattern.includes("*") ? [] : [pattern];
+  }
+  const parent = segments.slice(0, -1).join("/");
+  if (parent === "" || parent.includes("*")) return [];
+  return listDirectory(join(laneDirectory, ...segments.slice(0, -1)))
+    .filter((entry): boolean => entry.directory && !SKIP.has(entry.name))
+    .map((entry): string => `${parent}/${entry.name}`)
+    .sort((a, b): number => a.localeCompare(b));
+}
+
+/** The name a resolved member states for itself, or its path when it states none. */
+function memberName(laneDirectory: string, memberPath: string): string {
+  const document = readJson(join(laneDirectory, ...memberPath.split("/"), "package.json"));
+  const name = document?.["name"];
+  return typeof name === "string" && name !== "" ? name : memberPath;
+}
+
+/**
+ * The workspace shape this lane declares, or null when it declares none.
+ *
+ * BOTH SPELLINGS ARE READ, because the two are the same statement in two files:
+ * `package.json`'s `workspaces` (an array, or an object with a `packages` array)
+ * and a sibling `pnpm-workspace.yaml`'s `packages`. A file that is PRESENT but
+ * unreadable still makes this a workspace root -- the whole point of the check
+ * is "this manifest is not itself the package", and a parse failure does not
+ * make it one.
+ */
+function readWorkspace(
+  laneDirectory: string,
+  document: Record<string, unknown> | null,
+): WorkspaceShape | null {
+  const shape = (source: string, patterns: readonly string[]): WorkspaceShape => ({
+    source,
+    patterns,
+    members: patterns
+      .flatMap((pattern): readonly string[] => expandWorkspacePattern(laneDirectory, pattern))
+      .map((memberPath): string => memberName(laneDirectory, memberPath)),
+  });
+
+  const declared = document?.["workspaces"];
+  const fromManifest = Array.isArray(declared)
+    ? declared
+    : typeof declared === "object" && declared !== null
+      ? (declared as Record<string, unknown>)["packages"]
+      : undefined;
+  if (Array.isArray(fromManifest)) {
+    return shape(
+      "package.json's own 'workspaces'",
+      fromManifest.filter((entry): entry is string => typeof entry === "string"),
+    );
+  }
+
+  const workspaceFile = "pnpm-workspace.yaml";
+  const text = readText(join(laneDirectory, workspaceFile));
+  if (text === null) return null;
+  try {
+    const parsed = parseYaml(text);
+    const packages =
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)["packages"]
+        : undefined;
+    return shape(
+      `the ${workspaceFile} beside it`,
+      Array.isArray(packages)
+        ? packages.filter((entry): entry is string => typeof entry === "string")
+        : [],
+    );
+  } catch {
+    // A WORKSPACE FILE NEN CANNOT PARSE IS STILL A WORKSPACE FILE. Falling back
+    // to "not a workspace" here would answer `{package}` with the root's own
+    // name on the strength of a syntax error.
+    return shape(`the ${workspaceFile} beside it (which nen could not parse)`, []);
+  }
 }
 
 function readManifest(laneDirectory: string): Manifest {
@@ -407,10 +537,12 @@ function readManifest(laneDirectory: string): Manifest {
   const declared = document?.["packageManager"];
   const pin = typeof declared === "string" && declared !== "" ? declared : null;
   const scriptBlock = document?.["scripts"];
-  const scripts =
+  const scriptRecord =
     typeof scriptBlock === "object" && scriptBlock !== null && !Array.isArray(scriptBlock)
-      ? new Set(Object.keys(scriptBlock))
-      : new Set<string>();
+      ? (scriptBlock as Record<string, unknown>)
+      : {};
+  const scripts = new Set(Object.keys(scriptRecord));
+  const name = document?.["name"];
   // The EXECUTABLE is the pin with its trailing `@<version>` stripped, and the
   // PIN is the string verbatim -- the pack keeps the two apart because one of
   // them may carry a version into an install argv and the other may not. The
@@ -429,9 +561,12 @@ function readManifest(laneDirectory: string): Manifest {
     present: document !== null,
     packageManager,
     packageManagerIssue,
-    declares: (name): boolean => dependsOn(document, name),
+    packageName: typeof name === "string" && name !== "" ? name : null,
+    workspace: readWorkspace(laneDirectory, document),
+    declares: (dependency): boolean => dependsOn(document, dependency),
     scripts,
   };
+
 }
 
 interface ProposedStep {
@@ -439,10 +574,20 @@ interface ProposedStep {
   readonly argv: readonly string[];
 }
 
+/** The value the manifest answers `{package}` with, or null when it answers none. */
+function packageAnswer(manifest: Manifest): string | null {
+  return manifest.workspace === null ? manifest.packageName : null;
+}
+
 function substitute(token: string, manifest: Manifest): string {
   const pm = manifest.packageManager;
-  if (pm === null) return token;
-  return token.split(PM_EXECUTABLE).join(pm.executable).split(PM_PIN).join(pm.pin);
+  const packageName = packageAnswer(manifest);
+  let out = token;
+  if (pm !== null) {
+    out = out.split(PM_EXECUTABLE).join(pm.executable).split(PM_PIN).join(pm.pin);
+  }
+  if (packageName !== null) out = out.split(PACKAGE_NAME).join(packageName);
+  return out;
 }
 
 function stepsOfCell(cell: ProfileVerb): readonly ProposedStep[] {
@@ -473,9 +618,42 @@ function runTask(argv: readonly string[]): string | null {
   return argv[at + 1] ?? null;
 }
 
+/**
+ * The task a PER-PACKAGE argv names, or null when it names none.
+ *
+ * `{package}`'s documented meaning is "one workspace package the command runs
+ * for", so an argv nen answered it in has the shape `<filter syntax> <package>
+ * <task>`: everything up to the package name is the manager's own way of
+ * saying WHICH package, and the element after it is what that package is asked
+ * to do. A row with nothing after the package name asks for no task and this
+ * returns null rather than inventing one.
+ */
+function packageTask(argv: readonly string[], packageName: string): string | null {
+  const at = argv.indexOf(packageName);
+  if (at === -1 || at === argv.length - 1) return null;
+  return argv[at + 1] ?? null;
+}
+
 interface ProposedVerbs {
   readonly verbs: Readonly<Record<string, unknown>>;
   readonly notes: readonly string[];
+}
+
+/** The reason clause a leftover `{package}` earns, or "" when it earns none. */
+function packageReason(manifest: Manifest): string {
+  const workspace = manifest.workspace;
+  if (workspace !== null) {
+    return ` -- ${workspace.source} declares this lane a WORKSPACE ROOT (${
+      workspace.patterns.length === 0 ? "no pattern nen could read" : workspace.patterns.join(", ")
+    }), so it is not itself the package this row runs for: the row runs ONCE PER PACKAGE, and the members nen can see here are ${
+      workspace.members.length === 0
+        ? "none nen could resolve (only a literal path and a trailing '*' are expanded)"
+        : workspace.members.join(", ")
+    }. Which of them this repository means, and in what order, is a list only it can state`;
+  }
+  return manifest.present
+    ? " -- package.json states no 'name' of its own, which is where nen reads a single-package lane's package name from"
+    : " -- this lane has no readable package.json to read a package name from";
 }
 
 /**
@@ -489,6 +667,27 @@ interface ProposedVerbs {
  * version-control work plus a delegation to `build` and `test`. None of the
  * three is an argv a lane declares, so proposing a row for them would put a
  * command in a place nothing reads.
+ *
+ * A CELL THE PACK CARRIES NO COMMAND FOR IS PROPOSED AS AN EXPLICIT
+ * `{"unsupported": "<the pack's own reason>"}` ROW rather than left out, and
+ * that is the one place this verb writes a row it did not read a command for.
+ * Three arguments, and the first is the decisive one:
+ *
+ *   * A LANE WITH AN EMPTY VERB MAP IS A DECLARATION NEN'S OWN READER REFUSES
+ *     (../schema/contract.ts: "declares no verb for lane '<lane>'", and its
+ *     message names this exact remedy). Before this, `detect --write` against a
+ *     tree whose every row was withheld wrote a file the very next `nen shu
+ *     build` rejected -- a proposal that cannot be run is the failure this file
+ *     exists to prevent, arrived at from the other side.
+ *   * The reason is QUOTED, never rewritten, so it is the catalogue's sentence
+ *     a maintainer reads -- and the executor prints that same sentence back at
+ *     exit 4, which is what makes an `unsupported` row a working answer rather
+ *     than a silence.
+ *   * A `declared-only` cell becomes `unsupported` TOO, because a declaration
+ *     has three forms and none of them is "the reference disagrees with
+ *     itself". The row is the visible seat for this repository's answer, the
+ *     note below says which rows are of that kind, and the pack's reason names
+ *     the commands it declined to pick between.
  */
 function proposeVerbs(
   pack: ProfilesPack,
@@ -499,16 +698,28 @@ function proposeVerbs(
   const verbs: Record<string, unknown> = {};
   const notes: string[] = [];
   const noCommand: string[] = [];
+  const declaredOnly: string[] = [];
 
   for (const verb of pack.commandVerbs) {
     const cell = verbCell(profile, verb);
     if (cell.kind === "unsupported" || cell.kind === "declared-only") {
       noCommand.push(`${verb} (${cell.summary})`);
+      if (cell.kind === "declared-only") declaredOnly.push(verb);
+      verbs[verb] = {
+        unsupported:
+          cell.kind === "declared-only"
+            ? cell.reason
+            : /* c8 ignore next -- the pack's reader gives an `unsupported` cell an `unsupported` invocation */
+              cell.invocation.kind === "unsupported"
+              ? cell.invocation.reason
+              : cell.summary,
+      };
       continue;
     }
-    /* c8 ignore next 4 -- `delegated` never appears among the command verbs */
+    /* c8 ignore next 5 -- `delegated` never appears among the command verbs */
     if (cell.kind === "delegated") {
       noCommand.push(`${verb} (delegates to ${cell.delegatesTo.join(", ")})`);
+      verbs[verb] = { unsupported: cell.why };
       continue;
     }
 
@@ -521,21 +732,24 @@ function proposeVerbs(
 
     const leftover = leftoverTokens(steps);
     if (leftover.length > 0) {
+      const clauses = [
+        leftover.includes(PM_EXECUTABLE) || leftover.includes(PM_PIN)
+          ? manifest.packageManagerIssue !== null
+            ? ` -- ${manifest.packageManagerIssue}`
+            : " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
+          : "",
+        leftover.includes(PACKAGE_NAME) ? packageReason(manifest) : "",
+      ].join("");
       notes.push(
-        `'${verb}' withheld: its reference command still names ${leftover.join(", ")}, which only this repository can answer${
-          leftover.includes(PM_EXECUTABLE) || leftover.includes(PM_PIN)
-            ? manifest.packageManagerIssue !== null
-              ? ` -- ${manifest.packageManagerIssue}`
-              : " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
-            : ""
-        }. nen never proposes an unsubstituted token: a guessed argument is a different command.`,
+        `'${verb}' withheld: its reference command still names ${leftover.join(", ")}, which only this repository can answer${clauses}. nen never proposes an unsubstituted token: a guessed argument is a different command.`,
       );
       continue;
     }
 
     const unknownExe = steps.find(
       (step): boolean =>
-        step.exe !== manifest.packageManager?.executable && !manifest.declares(step.exe),
+        step.exe !== manifest.packageManager?.executable &&
+        !manifest.declares(step.exe),
     );
     if (unknownExe !== undefined) {
       notes.push(
@@ -548,8 +762,18 @@ function proposeVerbs(
       continue;
     }
 
+    // THE TASK CHECK, over both shapes an argv names a task in. The per-package
+    // one applies only where nen ANSWERED `{package}` from this manifest, so a
+    // lane that never carried the token is never asked about a task it has no
+    // reason to declare.
+    const answeredPackage = leftoverTokens(stepsOfCell(cell)).includes(PACKAGE_NAME)
+      ? packageAnswer(manifest)
+      : null;
     const missingScript = steps
-      .map((step): string | null => runTask(step.argv))
+      .flatMap((step): readonly (string | null)[] => [
+        runTask(step.argv),
+        answeredPackage === null ? null : packageTask(step.argv, answeredPackage),
+      ])
       .find((task): boolean => task !== null && !manifest.scripts.has(task));
     if (missingScript !== undefined && missingScript !== null) {
       notes.push(
@@ -578,9 +802,14 @@ function proposeVerbs(
 
   if (noCommand.length > 0) {
     notes.push(
-      `the reference pack proposes no command for ${noCommand.join(", ")}. That is the pack DECLINING to choose for you rather than a gap in this proposal -- docs/STACK-MATRIX.md carries each one's full reason, and the declaration is where this repository's answer goes.`,
+      `the reference pack proposes no command for ${noCommand.join(", ")}. That is the pack DECLINING to choose for you rather than a gap in this proposal -- docs/STACK-MATRIX.md carries each one's full reason, and the declaration is where this repository's answer goes. Each is proposed as an explicit {"unsupported": "<the pack's own reason>"} row rather than left out, because a lane whose verb map is empty is a declaration nen's own reader refuses, and because a row a maintainer can SEE is a row they can replace.${
+        declaredOnly.length === 0
+          ? ""
+          : ` ${declaredOnly.join(", ")} ${declaredOnly.length === 1 ? "is" : "are"} declared-only rather than unsupported: the pack HAS observed commands for ${declaredOnly.length === 1 ? "it" : "them"} and declines to pick one, so ${declaredOnly.length === 1 ? "that row is" : "those rows are"} the first to replace.`
+      }`,
     );
   }
+
   // THERE IS DELIBERATELY NO LANE-LEVEL "no package.json" NOTE. An earlier
   // draft withheld the whole map with one such note, which was wrong twice: it
   // told a repository whose commands legitimately live elsewhere that its
@@ -736,6 +965,18 @@ export function writeProposal(repoRoot: string, report: DetectReport): DetectRep
   return { ...report, written: report.declaration };
 }
 
+/**
+ * Whether a proposed row is an `unsupported` seat rather than a command.
+ *
+ * Read off the ROW's own shape, which is the same test ../schema/contract.ts
+ * applies to a declaration: a row carrying `unsupported` is one form, a row
+ * carrying `exe` or `steps` is another. Nothing here needs a second field to
+ * remember what this verb just wrote.
+ */
+function isUnsupportedRow(row: unknown): boolean {
+  return typeof row === "object" && row !== null && "unsupported" in row;
+}
+
 /** The human rendering of the same value `--json` prints. */
 export function renderDetect(report: DetectReport): readonly string[] {
   const lines: string[] = [];
@@ -757,8 +998,25 @@ export function renderDetect(report: DetectReport): readonly string[] {
   for (const lane of report.lanes) {
     lines.push(`  ${lane.lane}  (${lane.stack})  cwd ${lane.cwd}`);
     for (const marker of lane.markers) lines.push(`        marker: ${marker}`);
-    const verbs = Object.keys(lane.verbs);
-    lines.push(`        verbs:  ${verbs.length === 0 ? "(none proposed)" : verbs.sort().join(", ")}`);
+    // THE TWO KINDS OF PROPOSED ROW ARE PRINTED APART, because they ask the
+    // reader for opposite things: a command row is one to keep or correct, and
+    // an `unsupported` row is a seat this repository's own answer goes into.
+    // One combined list read as "eleven verbs are ready", which is the reading
+    // that gets an unsupported row shipped unedited. The JSON is UNCHANGED --
+    // the split is derived from the row's own shape, not a new field.
+    const entries = Object.entries(lane.verbs);
+    const proposed = entries
+      .filter(([, row]): boolean => !isUnsupportedRow(row))
+      .map(([verb]): string => verb);
+    const unsupported = entries
+      .filter(([, row]): boolean => isUnsupportedRow(row))
+      .map(([verb]): string => verb);
+    lines.push(
+      `        verbs:  ${proposed.length === 0 ? "(none proposed)" : proposed.sort().join(", ")}`,
+    );
+    if (unsupported.length > 0) {
+      lines.push(`        unsupported (the pack's reason, yours to replace):  ${unsupported.sort().join(", ")}`);
+    }
     for (const note of lane.notes) lines.push(`        ^ ${note}`);
   }
   for (const note of report.notes) {
