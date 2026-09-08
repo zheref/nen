@@ -650,6 +650,27 @@ describe("--dry-run", () => {
     expect(text).not.toMatch(/-- exit /);
   });
 
+  it("still prints the git plan when the verification half would not pass, and says which is which", async () => {
+    // A dry run whose declared build cannot even be RENDERED -- an unmet
+    // precondition, an unsupported host -- has found something real. Both
+    // halves are wanted: the commands the git side would run, AND the reason
+    // the other side would not. The code is the delegate's.
+    const result = await withDeclaration(
+      {
+        lanes: { only: { stack: "s", cwd: "." } },
+        defaultLane: "only",
+        verbs: { only: { build: { exe: "placeholder-tool", argv: ["build"] } } },
+        hosts: { build: ["darwin"] },
+      },
+      ["warmup", "--branch", BRANCH, "--dry-run"],
+      { script: happyPath(), platform: "linux" },
+    );
+    expect(result.code).toBe(3);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.out.join("\n")).toMatch(/would run: {5}git fetch origin/);
+    expect(result.err.join("\n")).toMatch(/nothing ran, and the declared 'build' would not pass/);
+  });
+
   it("says which line a real run would spell differently, rather than reading git to find out", async () => {
     const result = await capture(["warmup", "--branch", BRANCH, "--dry-run"], { script: happyPath() });
     expect(result.out.join("\n")).toMatch(/a dry run reads no git state, so it cannot know which/);

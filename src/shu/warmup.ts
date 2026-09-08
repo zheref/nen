@@ -512,6 +512,14 @@ function planWarmup(
         context.io.err(`${PROGRAM} shu warmup: the declared '${verb}' verification refused: ${delegated.refusal}`);
       }
       if (delegated.code !== 0) {
+        // THE PLAN IS STILL PRINTED, and the code is still the delegate's. A
+        // dry run whose declared build could not even be RENDERED -- an unmet
+        // precondition, an unsupported host -- has found something real, and
+        // the caller wants both halves: the commands the git side would run,
+        // and the reason the verification half would not.
+        context.io.err(
+          `${PROGRAM} shu warmup: nothing ran, and the declared '${verb}' would not pass on lane '${lane}' as this repository stands (exit ${delegated.code}, reported above). The git plan above is unaffected; fix that first, or run this without --dry-run once it is.`,
+        );
         exitCode = delegated.code;
         break;
       }
