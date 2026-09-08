@@ -5,14 +5,14 @@
   "displayName": "Compose Desktop",
   "markers": [
     {
-      "pattern": "settings.gradle.kts",
-      "contains": "org.jetbrains.compose",
-      "why": "a Gradle build applying the Compose Multiplatform plugin. This lane is found by its OWN settings file, not the repository root's -- KroAndroid's `program/` is a wholly separate build inside an Android repository."
+      "pattern": "settings.gradle{,.kts}",
+      "contains": null,
+      "why": "the lane's OWN settings file, not the repository root's -- KroAndroid's `program/` is a wholly separate build inside an Android repository, with its own wrapper and its own settings file (program/settings.gradle.kts). It carries no `contains`, and that is a CORRECTION: the Compose Multiplatform plugin id is applied in the build file, not in the settings file, so a `contains` here named a literal the observed lane's settings file does not have."
     },
     {
-      "pattern": "build.gradle.kts",
-      "contains": "compose.desktop.application",
-      "why": "the refinement that makes it desktop rather than Android: the `compose.desktop.application` block."
+      "pattern": "build.gradle{,.kts}",
+      "contains": "compose.desktop",
+      "why": "the refinement that makes it desktop rather than Android: the desktop packaging block. THE LITERAL IS THE BLOCK'S RECEIVER, `compose.desktop`, and not `compose.desktop.application`, which is the block's NAME and appears in no build file on earth -- the DSL spells it `compose.desktop { application { ... } }` (KroAndroid/program/build.gradle.kts), so the dotted form was a marker that could never match."
     }
   ],
   "hosts": {
@@ -23,7 +23,7 @@
   "scaffoldNote": "no template is proposed: one observed lane and one observed command is not enough evidence for one.",
   "verbs": {
     "detect": {
-      "declaredOnly": "Detection is a marker match, not a spawned command: a `settings.gradle.kts` whose build applies `org.jetbrains.compose` with a `compose.desktop.application` block.",
+      "declaredOnly": "Detection is a marker match, not a spawned command: this lane's own Gradle wrapper, its own settings file, and a build file carrying a `compose.desktop` block.",
       "summary": "markers, no spawn",
       "source": "markers"
     },
