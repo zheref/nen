@@ -77,6 +77,19 @@ const LEGACY_LOCATION: Readonly<Record<string, string>> = {
   [GATES_FILE]: "schemas/gates.json",
 };
 
+/**
+ * The canonical paths that HAVE a legacy location, in byte order.
+ *
+ * DERIVED FROM THE MAP RATHER THAN TYPED OUT BESIDE IT, because a second hand-
+ * written list is a list that falls behind. `nen scaffold init` migrates by
+ * iterating this: a fifth entry added to `LEGACY_LOCATION` is a fifth file the
+ * scaffold copies, with no edit anywhere else, and -- more to the point -- an
+ * entry REMOVED here (which is what v0.4.0's deletion of the fallback is) stops
+ * being migrated in the same commit rather than becoming a copy of a file
+ * nothing reads any more.
+ */
+export const LEGACY_MIGRATABLE_FILES: readonly string[] = Object.keys(LEGACY_LOCATION).sort();
+
 /** Which of the two directories answered a read. */
 export type SchemaLocation = "nen" | "schemas";
 

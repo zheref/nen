@@ -125,29 +125,56 @@ is published, as [Install](#install) says. `--ref v0.1.0` resolves today.
 
 ### Set up a repository
 
-The directory skeleton, the commit-msg trailer hook, a canon-values template:
+The directory skeleton, the commit-msg trailer hook, a canon-values template,
+`nen/contract.json`, the stack's CI workflow, and `.nen/` in `.gitignore` — one
+verb, on a repository that already exists. `--accept-detected` accepts the stack
+proposal [`nen shu detect`](docs/USAGE.md#nen-shu-detect) prints, seats and open
+questions and all; **Nen never guesses a stack**, so pass `--stack <id>` instead
+to state one, and with neither flag the verb refuses and names both. Add
+`--dry-run` to see every write first — it spawns nothing at all:
 
 ```bash
-nen scaffold init --repo /path/to/repo --directories src,tests,docs \
+nen scaffold init --repo /path/to/repo --accept-detected --directories src,tests,docs \
   --agent-trailer Agent-Name --run-trailer Run-Id --marker-env NEN_AUTOMATED \
   --canon-values-path .claude/canon-values.yml --scenario swiftui-tca-uzf-v2
 ```
 
+It ends by running `nen shu tools` in **check** mode and printing what this
+machine is missing, without installing anything. Run it yourself for the host
+verdict — exit 5 with the install command per tool when something is missing or
+is the wrong version, and `--install` (corepack only, in this release) to fix
+what nen is allowed to fix:
+
+```bash
+nen shu tools --repo /path/to/repo
+```
+
 Then check the four taxonomy files read at all — one `ok`/`fail` row each,
-shown in full under [Try it](#try-it) above:
+shown in full under [Try it](#try-it) above. Any file still under the legacy
+`schemas/` directory was **copied** into `nen/` by the scaffold, never moved, and
+the `git rm` line for the leftovers was printed:
 
 ```bash
 nen schema check --repo /path/to/repo
 ```
 
-If the repository declares a toolchain, check that **this machine** can build it
-— exit 5 with the install command per tool when anything is missing or is the
-wrong version, and `--install` (corepack only, in this release) to fix what nen
-is allowed to fix:
+For a project that does not exist yet, `nen scaffold new` writes a fresh tree
+for one stack — the manifest that identifies it, `nen/contract.json` as `shu
+detect` proposes it, the hook, the CI workflow, `.gitignore` — into an empty
+directory it refuses to merge into. Every post-step (`git init`, a dependency
+install, a native prebuild) is **printed and never run**:
 
 ```bash
-nen shu tools --repo /path/to/repo
+nen scaffold new --stack nextjs --name my-site --dir ./my-site --dry-run
 ```
+
+Both verbs write `.github/workflows/nen-shu.yml`, pinned at a nen release —
+`--nen-ref vX.Y.Z` states one, and left off it is the greater of this binary's
+version and the oldest release carrying the `nen shu` verbs the workflow runs
+(`templates/index.json` declares it, with the reason). When those differ the
+report says so: Nen cannot check offline that a release exists for a ref, and
+until one is published the workflow's bootstrap refuses at **exit 6** for the
+reason [Install](#install) gives — the tag exists, the release does not.
 
 Then start a piece of work in one line — refuse (or `--discard`) uncommitted
 changes, fetch, fast-forward the trunk, cut the branch **you** name from its
@@ -326,10 +353,10 @@ exercises all three platforms on every change for exactly this reason.
 
 ## The verb surface
 
-`nen --help` lists every command family (35 as of v0.2.0); each
+`nen --help` lists every command family (35); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-83 verbs outside the binary — each one's purpose, arguments, exit codes and
+84 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 

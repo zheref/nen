@@ -294,6 +294,47 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md -- z").classification).toBe("mutating");
   });
 
+  // BOTH `scaffold` VERBS, PINNED IN BOTH DIRECTIONS. The rows moved from
+  // `mutating` to `dry-run-gated` when `--dry-run` arrived, and a seeded mutant
+  // that flipped `scaffold new` back the other way -- to read-only in every
+  // form -- passed the whole suite, because nothing asserted the bare form. A
+  // classifier that certifies a tree-writing verb as read-only is the one
+  // failure mode this table exists to prevent, so each spelling is pinned:
+  // bare writes, `--dry-run` does not, and a `--dry-run` the scan cannot
+  // distinguish from a quoted value is refused rather than trusted.
+  it("scaffold new is dry-run-gated: the bare form WRITES A TREE", () => {
+    expect(
+      classifyCommand("nen scaffold new --stack nextjs --name x --dir ./x").classification,
+    ).toBe("mutating");
+    expect(
+      classifyCommand("nen scaffold new --stack nextjs --name x --dir ./x --dry-run").classification,
+    ).toBe("read-only");
+  });
+
+  it("scaffold init is dry-run-gated, and --install-tools is never read-only", () => {
+    expect(classifyCommand("nen scaffold init --repo . --stack nextjs").classification).toBe("mutating");
+    expect(classifyCommand("nen scaffold init --repo . --stack nextjs --dry-run").classification).toBe(
+      "read-only",
+    );
+    // --install-tools changes the HOST, and the two flags are refused together
+    // by the verb itself -- so no invocation carrying it is ever read-only.
+    expect(
+      classifyCommand("nen scaffold init --repo . --stack nextjs --install-tools").classification,
+    ).not.toBe("read-only");
+  });
+
+  it("refuses a scaffold --dry-run the scan cannot tell from a quoted value", () => {
+    // The token is inside a value, so a real shell never passes `--dry-run` to
+    // nen at all. The classifier cannot see quoting, so it refuses rather than
+    // certifying a run that would write.
+    expect(
+      classifyCommand('nen scaffold new --stack nextjs --name "x --dry-run" --dir ./x').classification,
+    ).not.toBe("read-only");
+    expect(
+      classifyCommand('nen scaffold init --repo . --scenario "a --dry-run b"').classification,
+    ).not.toBe("read-only");
+  });
+
   // Verbs that WRITE BY DEFAULT are read-only only in their explicit
   // --dry-run form -- absence of the write is never inferred.
   it("dry-run-gated verbs: read-only ONLY with an explicit --dry-run", () => {

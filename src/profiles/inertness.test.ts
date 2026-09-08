@@ -60,6 +60,35 @@ const SRC = join(ROOT, "src");
 const PACK = "src/profiles/pack.ts";
 const PACK_DATA_DIRECTORY = "profiles";
 
+/**
+ * THE OTHER DATA DIRECTORY OUTSIDE `src/`, and it is here for RESOLUTION only.
+ *
+ * `templates/` is the scaffold template pack -- data, static-imported for the
+ * same bundler reason `profiles/` is. It is NOT under guard: it contributes a
+ * file body to a file nen writes, never a version, a URL or an argument to a
+ * command nen runs, and `src/scaffold/templates.ts` reads both directories
+ * side by side. But the graph has to be able to RESOLVE an edge into it, or
+ * the "every resolved edge points at a node the graph has" assertion below --
+ * the one that stops a broken resolver from passing as an unreachable pack --
+ * fails on an edge that is perfectly legitimate. Registering the nodes keeps
+ * that assertion about the resolver instead of about this directory.
+ */
+const DATA_DIRECTORIES: readonly string[] = [PACK_DATA_DIRECTORY, "templates"];
+
+/** Every JSON document under a data directory, `/`-separated and repo-relative. */
+function dataNodes(): readonly string[] {
+  const found: string[] = [];
+  const walk = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(join(ROOT, directory), { withFileTypes: true })) {
+      const name = `${prefix}${entry.name}`;
+      if (entry.isDirectory()) walk(join(directory, entry.name), `${name}/`);
+      else if (entry.name.endsWith(".json")) found.push(name);
+    }
+  };
+  for (const directory of DATA_DIRECTORIES) walk(directory, `${directory}/`);
+  return found;
+}
+
 // THE ONLY MODULES THAT MAY IMPORT THE PACK.
 //
 //   * `src/dev/matrix.ts` -- the generator. It renders a page and spawns
@@ -73,8 +102,33 @@ const PACK_DATA_DIRECTORY = "profiles";
 //                            else. This is the one narrowing of the invariant,
 //                            and it is why the rules below are written in terms
 //                            of the SEAM rather than in terms of this list.
+//   * `src/scaffold/templates.ts`
+//                         -- takes THREE strings per stack out of the
+//                            catalogue and nothing else: the NAME of the
+//                            scaffold template that stack is pointed at
+//                            (`scaffoldTemplate`, a filename lookup in a
+//                            bundled table), the `hosts` map, which lands
+//                            verbatim in a proposed declaration for a human to
+//                            read, and the id list a `--stack` is validated
+//                            against. None of the three reaches an argv,
+//                            because this family builds none: every command in
+//                            a generated CI file is `nen shu <verb>`, whose
+//                            argv comes from the SCAFFOLDED repository's own
+//                            declaration and is resolved by `shu` at run time,
+//                            on another machine, from a file this verb did not
+//                            write the commands of.
+//
+//                            `nen scaffold init` DOES end by running `nen shu
+//                            tools` in check mode, which spawns probes -- which
+//                            is exactly why this module exists apart from
+//                            `src/scaffold/init.ts` and `src/scaffold/
+//                            command.ts`. The catalogue reader and the module
+//                            that can reach a spawn are two files, and the
+//                            reachability rule below is what holds them apart
+//                            when somebody later merges them for tidiness.
 const ALLOWED_IMPORTERS: readonly string[] = [
   "src/dev/matrix.ts",
+  "src/scaffold/templates.ts",
   "src/shu/detect.ts",
   "src/shu/tools.ts",
 ];
@@ -532,9 +586,7 @@ function buildGraph(modules: readonly Module[]): Graph {
   // document in the pack's own directory -- which is how a direct data import
   // becomes an edge rather than an unresolvable string.
   const known = new Set<string>(modules.map((module): string => module.name));
-  for (const file of readdirSync(join(ROOT, PACK_DATA_DIRECTORY))) {
-    if (file.endsWith(".json")) known.add(`${PACK_DATA_DIRECTORY}/${file}`);
-  }
+  for (const node of dataNodes()) known.add(node);
   const edges = new Map<string, readonly string[]>();
   for (const module of modules) {
     edges.set(
@@ -782,10 +834,11 @@ describe("the profiles pack is inert", () => {
     // Every resolved edge points at a node the graph actually has: a typo in
     // the resolver would otherwise show up as an unreachable pack, i.e. a pass.
     const nodes = new Set(SHIPPED.map((module): string => module.name));
-    for (const file of readdirSync(join(ROOT, PACK_DATA_DIRECTORY))) {
-      if (file.endsWith(".json")) nodes.add(`${PACK_DATA_DIRECTORY}/${file}`);
-    }
+    for (const node of dataNodes()) nodes.add(node);
     expect(resolved.filter((edge): boolean => !nodes.has(edge))).toEqual([]);
+    // Both data directories really do contribute nodes, or the resolution the
+    // line above proves is resolution of nothing.
+    expect(dataNodes().filter((node): boolean => node.startsWith("templates/")).length).toBeGreaterThan(0);
     // And at least one module can spawn, or the seam rule is vacuous.
     expect(SHIPPED.filter((module): boolean => spawns(GRAPH, module.name)).length).toBeGreaterThan(
       0,

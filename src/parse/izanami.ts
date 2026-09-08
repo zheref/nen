@@ -1066,7 +1066,26 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
-  scaffold: { subcommands: { init: MUT("creates directories, a commit-msg hook and a template file") } },
+  // BOTH ROWS MOVED FROM `MUT` TO `DRY` WHEN THE FLAG ARRIVED, and the move is
+  // an argument rather than a convenience. `label apply` stays `MUT` despite
+  // having `--run` because its ledger line is written on EVERY call, dry run
+  // included -- there is no form of it that writes nothing. These two verbs
+  // have one: `--dry-run` here does not open a file for writing, does not
+  // migrate, and -- the part that decides it -- does not run the closing
+  // `nen shu tools` check at all, so it spawns nothing whatever, probes
+  // included. That is a property of nen rather than a claim about somebody
+  // else's declaration, which is exactly the line `shu`'s own rows are drawn
+  // on. The bare form stays MUTATING in both: it writes files.
+  scaffold: {
+    subcommands: {
+      init: DRY(
+        "creates directories, a commit-msg hook, a declaration, a CI workflow and a .gitignore entry, and copies the legacy taxonomy files -- unless --dry-run is given, which writes nothing and spawns nothing",
+      ),
+      new: DRY(
+        "writes a fresh project tree, its declaration and its CI workflow unless --dry-run is given; every post-step it names is printed and none is run",
+      ),
+    },
+  },
   // THE `shu` FAMILY'S ROWS, AND WHY EVERY EXECUTING VERB IS `dry-run-gated`.
   //
   // Everything this family spawns comes out of a file in the TARGET repository

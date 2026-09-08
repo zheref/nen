@@ -31,8 +31,8 @@
 // equal the calls a scripted seam records for the same invocation.
 
 import { lstatSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
+import { containedPath } from "../repo/contain.js";
 import type { Seams } from "../seam/exec.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
@@ -149,23 +149,15 @@ function entryExists(path: string): boolean {
  * the usual sense -- but a `cwd` or a precondition path of `../../etc` is a
  * mistake whose only symptom would otherwise be a verb quietly running
  * somewhere else, and a refusal that names the path costs nothing.
+ *
+ * THE RULE ITSELF LIVES IN ../repo/contain.ts and is shared with
+ * `nen scaffold init`, which asks the same question of a path a FLAG states.
+ * Only the refusal is written here, because a message that named neither a
+ * declaration pointer nor a flag would name nothing a caller can act on.
  */
 export function insideRepo(repoRoot: string, value: string, pointer: string): string {
-  const absolute = resolve(repoRoot, value);
-  const rel = relative(repoRoot, absolute);
-  // The escape check is `rel === ".."`, `rel` starting with `..` FOLLOWED BY A
-  // SEPARATOR, or `isAbsolute` -- never a bare `rel.startsWith("..")`, which
-  // also matches a root entry that merely happens to be NAMED starting with
-  // `..` (`..something`), rejecting a legitimate path that never left the
-  // tree. Both separators are checked -- `path.sep` for the platform `relative`
-  // actually used, and the literal `/` alongside it because a declaration may
-  // state a POSIX-style path even when nen runs on Windows. `isAbsolute`
-  // covers the Windows case where the two paths are on different drives and
-  // `relative` cannot express the step at all -- a platform-conditional hole
-  // this repository's CI matrix exists to catch.
-  const escapesRoot =
-    rel === ".." || rel.startsWith(`..${sep}`) || rel.startsWith("../") || isAbsolute(rel);
-  if (escapesRoot) {
+  const absolute = containedPath(repoRoot, value);
+  if (absolute === null) {
     throw new VerbUsageError(
       `${pointer} names '${value}', which resolves outside the repository at ${repoRoot}. Every path a declaration states is relative to the repository root, and nen will not step outside the tree --repo pointed it at.`,
     );

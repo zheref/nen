@@ -28,6 +28,34 @@
 // to pass exactly that pair; the point is that THIS module does not assume
 // it).
 
+import { chmodSync, writeFileSync } from "node:fs";
+
+/**
+ * Write a generated hook and make it executable, in that order.
+ *
+ * BOTH VERBS GO THROUGH THIS ONE FUNCTION, and the mode is why. `git` will not
+ * run a `commit-msg` hook that is not executable -- it skips it, silently, on
+ * every commit -- so a hook written 0644 is a hook that reports `created` and
+ * enforces nothing. `nen scaffold new` shipped one for exactly as long as it had
+ * its own two-line writer beside `nen scaffold init`'s three-line one; one
+ * writer is one place the mode is set.
+ *
+ * A FAILED `chmod` IS NOT A FAILED INSTALL. Windows filesystems do not model
+ * the POSIX executable bit and `git` only consults it on a POSIX checkout, so
+ * the bit is set where it means something and its absence is not an error where
+ * it does not. The write itself is NOT caught here: a `commit-msg` hook that
+ * could not be written is a fact the caller has to hear about, and each verb
+ * records it with the errno.
+ */
+export function writeHookFile(path: string, body: string): void {
+  writeFileSync(path, body, "utf8");
+  try {
+    chmodSync(path, 0o755);
+  } catch {
+    // See above: the bit is advisory on the platforms where this throws.
+  }
+}
+
 export interface HookSpec {
   /** The trailer key naming which agent/persona made an automated commit. */
   readonly agentTrailer: string;

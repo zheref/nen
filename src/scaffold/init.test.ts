@@ -6,6 +6,14 @@ import { renderCanonValuesTemplate, scaffoldInit } from "./init.js";
 
 const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
 
+// A STACK IS NOW REQUIRED, AND THE TAXONOMY LAYER IS UNCHANGED BY IT. Every
+// assertion in this describe block is v0.2.0's, verbatim; the only edit is the
+// flag the verb now refuses to run without. ./stack.test.ts is where the layer
+// this flag switches on is tested, and its first case is the byte-parity one:
+// with a stack named, the directories, the hook and the canon-values template
+// come out exactly as they did before this change.
+const STACK = "nextjs";
+
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "nen-scaffold-"));
 }
@@ -13,7 +21,7 @@ function tempRoot(): string {
 describe("scaffoldInit", () => {
   it("creates every requested directory that does not exist", () => {
     const root = tempRoot();
-    const result = scaffoldInit({ root, directories: ["src", "tests"], hook: HOOK });
+    const result = scaffoldInit({ root, platform: "linux", directories: ["src", "tests"], hook: HOOK, stack: STACK });
     expect(existsSync(join(root, "src"))).toBe(true);
     expect(existsSync(join(root, "tests"))).toBe(true);
     expect(result.createdDirectories.length).toBeGreaterThanOrEqual(2);
@@ -21,14 +29,14 @@ describe("scaffoldInit", () => {
 
   it("is idempotent -- a second run creates nothing new for existing directories", () => {
     const root = tempRoot();
-    scaffoldInit({ root, directories: ["src"], hook: HOOK });
-    const second = scaffoldInit({ root, directories: ["src"], hook: HOOK });
+    scaffoldInit({ root, platform: "linux", directories: ["src"], hook: HOOK, stack: STACK });
+    const second = scaffoldInit({ root, platform: "linux", directories: ["src"], hook: HOOK, stack: STACK });
     expect(second.createdDirectories).toEqual([]);
   });
 
   it("writes the commit-msg hook at the default path", () => {
     const root = tempRoot();
-    const result = scaffoldInit({ root, directories: [], hook: HOOK });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
     expect(result.hookWritten).toBe(join(root, ".git", "hooks", "commit-msg"));
     expect(result.hookOutcome).toBe("installed");
     expect(readFileSync(result.hookWritten, "utf8")).toContain("X-Agent");
@@ -36,8 +44,8 @@ describe("scaffoldInit", () => {
 
   it("is idempotent for the hook -- a second run with the same spec reports 'unchanged', not 'installed'", () => {
     const root = tempRoot();
-    scaffoldInit({ root, directories: [], hook: HOOK });
-    const second = scaffoldInit({ root, directories: [], hook: HOOK });
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const second = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
     expect(second.hookOutcome).toBe("unchanged");
   });
 
@@ -50,7 +58,7 @@ describe("scaffoldInit", () => {
     const projectsOwnHook = "#!/bin/sh\n# THE PROJECT OWNS THIS HOOK - do not clobber\nexit 0\n";
     writeFileSync(hookPath, projectsOwnHook);
 
-    const result = scaffoldInit({ root, directories: [], hook: HOOK });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
 
     expect(result.hookOutcome).toBe("refused");
     expect(result.hookError).toMatch(/already exists/);
@@ -67,7 +75,7 @@ describe("scaffoldInit", () => {
     const projectsOwnHook = "#!/bin/sh\n# THE PROJECT OWNS THIS HOOK\nexit 0\n";
     writeFileSync(hookPath, projectsOwnHook);
 
-    const result = scaffoldInit({ root, directories: [], hook: HOOK, force: true });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, force: true });
 
     expect(result.hookOutcome).toBe("installed");
     expect(readFileSync(hookPath, "utf8")).toContain("X-Agent");
@@ -76,16 +84,16 @@ describe("scaffoldInit", () => {
 
   it("takes a caller-supplied hook path", () => {
     const root = tempRoot();
-    const result = scaffoldInit({ root, directories: [], hook: HOOK, hookPath: "custom/hooks/commit-msg" });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, hookPath: "custom/hooks/commit-msg" });
     expect(result.hookWritten).toBe(join(root, "custom", "hooks", "commit-msg"));
   });
 
   it("writes a canon-values template only when a path is given, and never overwrites an existing one", () => {
     const root = tempRoot();
-    const withoutPath = scaffoldInit({ root, directories: [], hook: HOOK });
+    const withoutPath = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
     expect(withoutPath.canonValuesWritten).toBeNull();
 
-    const result = scaffoldInit({ root, directories: [], hook: HOOK, canonValuesPath: "canon-values.yml", scenario: "scenario-x" });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, canonValuesPath: "canon-values.yml", scenario: "scenario-x" });
     expect(result.canonValuesWritten).not.toBeNull();
     const content = readFileSync(result.canonValuesWritten as string, "utf8");
     expect(content).toContain("scenario: scenario-x");
@@ -93,13 +101,13 @@ describe("scaffoldInit", () => {
     // Hand-edit it, then re-init: the file must not be clobbered.
     const path = result.canonValuesWritten as string;
     writeFileSync(path, "hand edited");
-    scaffoldInit({ root, directories: [], hook: HOOK, canonValuesPath: "canon-values.yml", scenario: "scenario-x" });
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK, canonValuesPath: "canon-values.yml", scenario: "scenario-x" });
     expect(readFileSync(path, "utf8")).toBe("hand edited");
   });
 
   it("chmods the hook file (best-effort) so it is executable where the platform supports it", () => {
     const root = tempRoot();
-    const result = scaffoldInit({ root, directories: [], hook: HOOK });
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
     // Just confirms the file exists and is readable -- the mode bit itself is
     // platform-dependent (Windows filesystems do not model it the same way),
     // which is exactly why scaffoldInit treats chmod as best-effort.
