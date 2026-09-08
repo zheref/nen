@@ -2194,10 +2194,6 @@ function proposeVerbs(
       continue;
     }
 
-    // WHAT NEN ITSELF CAN ANSWER, ASKED BEFORE THE MANIFEST IS. It is scoped to
-    // the tokens THIS row actually names, so a stack that never mentions a
-    // wrapper never reads a directory looking for one, and a row that never
-    // mentions a task never reads a settings file.
     // A LANE WHOSE BUILD NEN CANNOT ADDRESS PROPOSES NOTHING, and it says which
     // build and why once per row rather than once per lane, so that the reason
     // travels with the row a maintainer is reading.
@@ -2208,6 +2204,10 @@ function proposeVerbs(
       continue;
     }
 
+    // WHAT NEN ITSELF CAN ANSWER, ASKED BEFORE THE MANIFEST IS. It is scoped to
+    // the tokens THIS row actually names, so a stack that never mentions a
+    // wrapper never reads a directory looking for one, and a row that never
+    // mentions a task never reads a settings file.
     const answers = laneAnswers(
       repoRoot,
       laneDirectory,
