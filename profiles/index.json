@@ -1,0 +1,28 @@
+{
+  "$comment": "profiles/index.json -- the pack's own table of contents, and the ONE place the stack set and the verb set are written down. Both lists are DATA on purpose: src/dev/matrix.ts renders the page without a single stack id or verb name as a literal, and src/profiles/pack.ts refuses a profile whose verb map is not exactly `verbs` -- no extra verb, no missing one. Adding a stack is a file plus a line here; adding a verb is a line here plus that verb in all seven profiles, which is the point.",
+  "$order": "`profiles` is sorted; `verbs` is the family's own declared order (nen shu detect | build | test | ui-test | lint | archive | release | dev | run | deploy | coverage | tools | warmup) and is NOT sorted -- it is the order the matrix's columns are read in.",
+  "profiles": [
+    "compose-desktop",
+    "dotnet-winui",
+    "expo",
+    "gatsby",
+    "gradle-android",
+    "nextjs",
+    "xcode-ios"
+  ],
+  "verbs": [
+    "detect",
+    "build",
+    "test",
+    "ui-test",
+    "lint",
+    "archive",
+    "release",
+    "dev",
+    "run",
+    "deploy",
+    "coverage",
+    "tools",
+    "warmup"
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. This profile carries the inventory's sharpest lesson about `deploy`: the observed repository's CI deploy has NO COMMAND LINE AT ALL -- it is an action, not a `run:` -- so the row says `unsupported` with a sentence rather than inventing a command that would look plausible and be wrong.",
+  "id": "gatsby",
+  "displayName": "Gatsby",
+  "markers": [
+    {
+      "pattern": "gatsby-config.js",
+      "contains": null,
+      "why": "or `gatsby-config.ts`. The config file is the whole marker: Gatsby has no ambiguity to resolve."
+    },
+    {
+      "pattern": "gatsby-config.ts",
+      "contains": null,
+      "why": "the TypeScript spelling."
+    }
+  ],
+  "hosts": {
+    "*": ["darwin", "linux", "win32"]
+  },
+  "hostNote": "any host with Node >= 18 (CI pins 20). `archive` AND `deploy` additionally need a LOCALLY INSTALLED Chrome/Chromium/Edge -- the PDF builder deliberately avoids puppeteer and probes for an installed browser binary (zheref.io/scripts/build-resume-pdf.mjs:38-44), which is exactly why that step is not in CI. That is a tool constraint, not a platform one, so it is a toolchain row rather than a narrower `hosts` entry.",
+  "scaffoldTemplate": "full",
+  "scaffoldNote": "a static-site skeleton a template can carry end to end.",
+  "verbs": {
+    "detect": {
+      "declaredOnly": "Detection is a marker match, not a spawned command: `gatsby-config.{js,ts}`.",
+      "summary": "markers, no spawn",
+      "source": "markers"
+    },
+    "build": {
+      "exe": "gatsby",
+      "argv": ["build"],
+      "why": "The repository's own build script. Its CI profile differs by one flag: `npx gatsby build --prefix-paths` when `PREFIX_PATHS=true`, else `npx gatsby build` -- a profile the declaration states, not a second row here.",
+      "source": "zheref.io/package.json:11 (ci profile: .github/workflows/deploy.yml:36-37)"
+    },
+    "test": {
+      "unsupported": "No test script and no test-runner dependency.",
+      "summary": "no test runner at all",
+      "source": "zheref.io/package.json"
+    },
+    "ui-test": {
+      "unsupported": "No UI or E2E runner of any kind.",
+      "summary": "no UI runner at all",
+      "source": "zheref.io (inventory sweep)"
+    },
+    "lint": {
+      "unsupported": "NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY.",
+      "summary": "no linter at all",
+      "source": "zheref.io (inventory sweep)"
+    },
+    "archive": {
+      "exe": "node",
+      "argv": ["{archiveScript}"],
+      "why": "The one archive in the inventory that produces a real artifact: a PDF. Cited verbatim as `node scripts/build-resume-pdf.mjs` (`npm run resume:pdf`); `{archiveScript}` is templated because the script path is that repository's, not this stack's. It deliberately avoids puppeteer and PROBES for an installed browser binary, which is why this step is not in CI.",
+      "source": "zheref.io/package.json:15; scripts/build-resume-pdf.mjs:38-44"
+    },
+    "release": {
+      "unsupported": "No release lane of any kind.",
+      "summary": "no release lane at all",
+      "source": "zheref.io (inventory sweep)"
+    },
+    "dev": {
+      "exe": "gatsby",
+      "argv": ["develop"],
+      "why": "Scripts `develop` and `start` are the same command; the repository's launch configuration adds a port (`npx gatsby develop -p 8000`), which is the declaration's argument to add.",
+      "source": "zheref.io/package.json:9, :10"
+    },
+    "run": {
+      "exe": "gatsby",
+      "argv": ["serve"],
+      "why": "Serves the PRODUCTION build on port 9000, so it requires a prior `build` exactly as every other `run` row in this pack does.",
+      "source": "zheref.io/package.json:12"
+    },
+    "deploy": {
+      "steps": [
+        { "exe": "node", "argv": ["{archiveScript}"] },
+        {
+          "exe": "gh-pages",
+          "argv": ["-d", "public", "-b", "gh-pages", "--dotfiles"]
+        }
+      ],
+      "why": "Cited verbatim as `npm run resume:pdf && gh-pages -d public -b gh-pages --dotfiles`: the first half IS this profile's own `archive` row, which is why it is spelled the same way here. `public` is Gatsby's own output directory and the branch name is the host's convention, so both are carried literally. THE CI PROFILE HAS NO COMMAND AT ALL -- the site is uploaded by one action and published by another (`.github/workflows/deploy.yml:41-43`, `:53`), which is a deploy with no command line for nen to run.",
+      "source": "zheref.io/package.json:14 (ci profile: .github/workflows/deploy.yml:41-43, :53)"
+    },
+    "coverage": {
+      "unsupported": "Same reason as `test`: no test script and no test-runner dependency, so there is nothing to instrument.",
+      "summary": "no tests to instrument",
+      "source": "zheref.io/package.json"
+    },
+    "tools": {
+      "declaredOnly": "All verify-only. Node -- verify-only, >= 18, CI pins 20. npm -- the repository uses npm rather than pnpm and ships NO `packageManager` field, so there is no corepack pin to activate: this is the one JS repository in the inventory where nen's single installable class does not apply. A local browser -- verify-only, and the most interesting row in the stack: `archive` and `deploy` need an installed Chrome/Chromium/Edge, which the PDF builder probes for BY PATH rather than downloading. nen probes the same way and reports; installing a browser is not something a build CLI does.",
+      "summary": "verify-only, all of it",
+      "source": "zheref.io/package.json; scripts/build-resume-pdf.mjs:38-44"
+    },
+    "warmup": {
+      "delegatesTo": ["build"],
+      "why": "The git steps are stack-independent and run regardless; build-verification delegates to this profile's own `build` row. The OPTIONAL `--test` step is the one that reports unsupported here -- `test` has no command for this stack -- rather than `warmup` failing as a whole.",
+      "source": "this profile's own build row (test is unsupported)"
+    }
+  },
+  "toolchain": {
+    "browser": {
+      "minimum": null,
+      "probe": ["{browserPath}"],
+      "versionFrom": "path-exists",
+      "installer": "verify-only",
+      "why": "`archive` and `deploy` need a locally installed Chrome, Chromium or Edge. The repository's PDF builder deliberately avoids puppeteer and probes for the binary BY PATH; nen probes the same way, reports, and never installs a browser. No version is pinned, so the probe is a presence check.",
+      "source": "zheref.io/scripts/build-resume-pdf.mjs:38-44"
+    },
+    "node": {
+      "minimum": "18.0.0",
+      "probe": ["node", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "The repository's floor is Node 18; its CI pins 20. Verify-only for the same reason as every other JS lane: a Node install is a system-wide decision nen does not make.",
+      "source": "zheref.io/package.json; .github/workflows/deploy.yml"
+    },
+    "npm": {
+      "minimum": null,
+      "probe": ["npm", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "THE ONE JS REPOSITORY WHERE COREPACK DOES NOT APPLY: it uses npm, not pnpm, and ships no `packageManager` field, so there is no pin to activate. npm arrives with Node, which is why the entry is verify-only rather than an install.",
+      "source": "zheref.io/package.json (no `packageManager` field)"
+    }
+  },
+  "notes": [
+    "THE SECOND `deploy` PROFILE IS THE POINT. Two of the seven repositories deploy through a mechanism that has NO COMMAND LINE AT ALL -- a Pages action here, a hosting provider's git integration in the nextjs profile. `unsupported` with a sentence, or a declared-only row, is the only honest rendering, and the schema has to be able to say it."
+  ]
+}

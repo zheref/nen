@@ -1,0 +1,138 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Every command below is verbatim from a product repository and cited in its own `source`; nothing here is invented. A target repository's own nen/contract.json is the only thing an execution path ever reads.",
+  "id": "gradle-android",
+  "displayName": "Gradle / Android",
+  "markers": [
+    {
+      "pattern": "gradlew",
+      "contains": null,
+      "why": "the repository's own wrapper. `{gw}` resolves to it -- `./gradlew` on POSIX, `gradlew.bat` on Windows -- and a lane without one is a finding, not an install."
+    },
+    {
+      "pattern": "settings.gradle.kts",
+      "contains": null,
+      "why": "or `settings.gradle`. Present with the wrapper, this is a Gradle build; it is not yet an Android one."
+    },
+    {
+      "pattern": "*/build.gradle.kts",
+      "contains": "com.android.application",
+      "why": "the refinement that makes it THIS stack rather than a plain JVM build: a module applying the Android application plugin."
+    }
+  ],
+  "hosts": {
+    "*": ["darwin", "linux", "win32"]
+  },
+  "hostNote": "any -- Gradle, the JDK and the Android SDK are all cross-platform, and the repository says so itself: \"The Gradle toolchain is platform-agnostic\" (KroAndroid/.github/workflows/build-test.yml:171-173). CI routes to a self-hosted Mac for BILLING, not because macOS is required.",
+  "scaffoldTemplate": "minimal",
+  "scaffoldNote": "wrapper, `settings.gradle.kts`, one module, nen/contract.json.",
+  "verbs": {
+    "detect": {
+      "declaredOnly": "Detection is a marker match, not a spawned command: `gradlew` plus `settings.gradle{,.kts}`, refined by a module applying `com.android.application`. The pack proposes no command because there is none to propose.",
+      "summary": "markers, no spawn",
+      "source": "markers"
+    },
+    "build": {
+      "exe": "{gw}",
+      "argv": ["assembleDebug", "--stacktrace"],
+      "why": "The repository's own CI build step, verbatim. `{gw}` is the one host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.",
+      "source": "KroAndroid/.github/workflows/build-test.yml:97"
+    },
+    "test": {
+      "exe": "{gw}",
+      "argv": ["verifyPaparazziDebug", "{unitTestTask}", "--stacktrace"],
+      "why": "THE TASK MUST BE `verifyPaparazziDebug`, NEVER `testDebugUnitTest` (KN-IS-#182): under plain `testDebugUnitTest` a snapshot test renders and discards, so replacing a golden with a completely different image still reports PASSED. The cited command is `{gw} verifyPaparazziDebug :KroCore:test --stacktrace`; `{unitTestTask}` is the repository's own JVM unit-test task (KroAndroid: `:KroCore:test`), templated here because the module name is that repository's, not this stack's.",
+      "source": "KroAndroid/.github/workflows/build-test.yml:100 (the why: :51-58)"
+    },
+    "ui-test": {
+      "exe": "{gw}",
+      "argv": ["verifyPaparazziDebug"],
+      "why": "Screenshot verification is this stack's UI test, and it is the same task the `test` row runs. RECORDING baselines is a different, deliberately separate command the declaration states if it wants it: `{gw} recordPaparazziDebug`. INSTRUMENTED UI tests are unsupported here: `app/src/androidTest/` sources, a `testInstrumentationRunner` (app/build.gradle.kts:48) and Espresso / Compose-UI-test dependencies (:216-219) all exist, and no `connectedAndroidTest` invocation exists anywhere.",
+      "source": "KroAndroid/.claude/rules/14-ui-screenshots.md:112-113 (record: :109)"
+    },
+    "lint": {
+      "exe": "{gw}",
+      "argv": [":app:lintDebug", "--stacktrace"],
+      "why": "The repository's own lint workflow step, verbatim. `:app` is the Android convention for the application module, not a product name, so it is carried literally.",
+      "source": "KroAndroid/.github/workflows/lint.yml:79"
+    },
+    "archive": {
+      "unsupported": "A `release` buildType is declared with NO signingConfig, and no `assembleRelease` / `bundleRelease` is invoked anywhere. An archive nen proposed would be an unsigned artifact nobody asked for.",
+      "summary": "release type, no signing",
+      "source": "KroAndroid/app/build.gradle.kts:44-49"
+    },
+    "release": {
+      "unsupported": "No release lane of any kind in the inventory.",
+      "summary": "no release lane at all",
+      "source": "the seven-repository inventory"
+    },
+    "dev": {
+      "unsupported": "No `installDebug`, no `run`. food-diary's Android lane is driven from the `expo` profile instead.",
+      "summary": "no installDebug, no run",
+      "source": "KroAndroid (inventory sweep)"
+    },
+    "run": {
+      "unsupported": "A release install to a device is a DEPLOY, not a local run, and no such invocation exists here either.",
+      "summary": "no local run lane",
+      "source": "KroAndroid (inventory sweep)"
+    },
+    "deploy": {
+      "unsupported": "No Play publishing, no Firebase App Distribution, no `publish`.",
+      "summary": "no deploy target",
+      "source": "KroAndroid (inventory sweep)"
+    },
+    "coverage": {
+      "unsupported": "No coverage plugin is declared, checked directly: neither JaCoCo nor Kover is applied anywhere. The root plugins block names the Android application plugin, Kotlin JVM / serialization / compose, KSP, Hilt and Paparazzi -- never `jacoco` or `kover`; the app module agrees; the version catalogue names neither. THE REPOSITORY'S OWN CHECKLIST DISAGREES WITH ITS OWN BUILD FILES: it documents `./gradlew jacocoTestReport`, a task that does not exist on a clean checkout.",
+      "summary": "no coverage plugin",
+      "source": "KroAndroid/build.gradle.kts:2-15, app/build.gradle.kts:4-13, gradle/libs.versions.toml (checklist: .claude/rules/12-session-completion-checklist.md:33-35)"
+    },
+    "tools": {
+      "declaredOnly": "One installable class, three verify-only. Gradle -- installer `wrapper`, which installs NOTHING: `{gw}` resolves the repository's own wrapper, and a repo without one is a finding rather than an install. JDK -- verify-only, because KroAndroid needs TWO JDKs at once, Temurin 17 and 21, \"21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves\"; an installer that got that ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. Android SDK COMPONENTS -- installer `sdkmanager`, components only, into an SDK root that already exists; nen never installs the SDK root and never runs `sdkmanager --licenses`, which is an acceptance a human gives, and an absent `ANDROID_HOME` degrades the row to verify-only. `node` on PATH (food-diary's Android lane only) -- verify-only, needed by the Gradle SYNC, not just the JS bundle.",
+      "summary": "components only",
+      "source": "wrapper: the repository; JDK/SDK: probes (KroAndroid/.github/actions/setup-kro/action.yml:12-23)"
+    },
+    "warmup": {
+      "delegatesTo": ["build", "test"],
+      "why": "The git steps are stack-independent and run regardless. The verification half delegates to this profile's own `build` and `test` rows, both of which carry a command.",
+      "source": "this profile's own build and test rows"
+    }
+  },
+  "toolchain": {
+    "android-sdk": {
+      "minimum": null,
+      "probe": ["sdkmanager", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "sdkmanager",
+      "why": "COMPONENTS ONLY, into an SDK root that already exists: `sdkmanager --install \"platforms;android-<n>\" \"build-tools;<v>\"`. nen never installs the SDK root and never runs `sdkmanager --licenses`. An absent `ANDROID_HOME` degrades this to verify-only with the message. GATED BY RESIDUAL QUESTION (d) -- it ships verify-only in the first release. No repository in the inventory pins a component version, so the pack states no minimum.",
+      "source": "KroAndroid (Android SDK required; no pinned component version in the tree)"
+    },
+    "gradle": {
+      "minimum": "9.5.1",
+      "probe": ["{gw}", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "wrapper",
+      "why": "NOTHING TO INSTALL: `{gw}` resolves the repository's own wrapper, and the minimum is what the root wrapper pins. nen never installs Gradle globally.",
+      "source": "KroAndroid root wrapper (contrast program/ at 8.7 -- see the compose-desktop profile)"
+    },
+    "jdk": {
+      "minimum": "17",
+      "probe": ["java", "-version"],
+      "versionFrom": "first-semver-on-stderr",
+      "installer": "verify-only",
+      "why": "KroAndroid needs TWO JDKs at once, Temurin 17 and 21 -- \"21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves\". The pack states the lower of the two as its minimum and reports both; an installer that got the ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. `java -version` writes to STDERR, which is why the reader is the stderr one.",
+      "source": "KroAndroid/.github/actions/setup-kro/action.yml:12-23"
+    },
+    "node": {
+      "minimum": null,
+      "probe": ["node", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "food-diary's Android lane needs `node` ON PATH for the Gradle SYNC, not merely for the JS bundle -- a verify-only probe most readers would not expect. No version is pinned anywhere, so the pack states presence only.",
+      "source": "food-diary android/build.gradle:16-19, android/settings.gradle:4-14"
+    }
+  },
+  "notes": [
+    "`{gw}` is the ONE host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.",
+    "PRECONDITIONS ASSERTED, NEVER PERFORMED: recursive submodules -- the root settings.gradle.kts:29-30 `includeBuild`s two sibling projects from a submodule, and without it nothing resolves; the two JDKs above; and a `local.properties` carrying the project's Supabase URL and anon key (app/build.gradle.kts:16-24)."
+  ]
+}

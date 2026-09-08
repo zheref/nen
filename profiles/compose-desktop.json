@@ -1,0 +1,113 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. This is the thinnest profile in the pack, and deliberately so: one observed lane, one observed command. Everything else is `unsupported` with the reason, because inventing the obvious Gradle task names here would be nen deciding a release path this repository has never taken.",
+  "id": "compose-desktop",
+  "displayName": "Compose Desktop",
+  "markers": [
+    {
+      "pattern": "settings.gradle.kts",
+      "contains": "org.jetbrains.compose",
+      "why": "a Gradle build applying the Compose Multiplatform plugin. This lane is found by its OWN settings file, not the repository root's -- KroAndroid's `program/` is a wholly separate build inside an Android repository."
+    },
+    {
+      "pattern": "build.gradle.kts",
+      "contains": "compose.desktop.application",
+      "why": "the refinement that makes it desktop rather than Android: the `compose.desktop.application` block."
+    }
+  ],
+  "hosts": {
+    "*": ["darwin", "linux", "win32"]
+  },
+  "hostNote": "any host to `run`; PACKAGING is per-format -- `packageDmg` needs macOS, `packageMsi` needs Windows, `packageDeb` needs Linux. That is a host constraint (exit 3), not a tool nen can supply.",
+  "scaffoldTemplate": null,
+  "scaffoldNote": "no template is proposed: one observed lane and one observed command is not enough evidence for one.",
+  "verbs": {
+    "detect": {
+      "declaredOnly": "Detection is a marker match, not a spawned command: a `settings.gradle.kts` whose build applies `org.jetbrains.compose` with a `compose.desktop.application` block.",
+      "summary": "markers, no spawn",
+      "source": "markers"
+    },
+    "build": {
+      "unsupported": "This lane has no CI, no Makefile and no documentation naming a command. Only `run` exists.",
+      "summary": "no command in the tree",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "test": {
+      "unsupported": "This lane has no CI, no Makefile and no documentation naming a command.",
+      "summary": "no command in the tree",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "ui-test": {
+      "unsupported": "This lane has no CI, no Makefile and no documentation naming a command.",
+      "summary": "no command in the tree",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "lint": {
+      "unsupported": "This lane has no CI, no Makefile and no documentation naming a command.",
+      "summary": "no command in the tree",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "archive": {
+      "unsupported": "`targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)` is declared, so the tasks exist -- but NO COMMAND STRING FOR THEM APPEARS ANYWHERE IN THE REPOSITORY, and each format is host-locked. Proposing one would be nen inventing a release path.",
+      "summary": "formats declared, never invoked",
+      "source": "KroAndroid/program/build.gradle.kts:31"
+    },
+    "release": {
+      "unsupported": "This lane has no CI, no Makefile and no documentation naming a command.",
+      "summary": "no command in the tree",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "dev": {
+      "unsupported": "This lane has no CI, no Makefile and no documentation naming a command. The one invocation that exists is `run`.",
+      "summary": "no command in the tree",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "run": {
+      "exe": "{gw}",
+      "argv": ["run"],
+      "why": "The ONLY invocation that exists for this lane, and it exists only as an IDE run configuration -- not in CI, not in a Makefile, not in prose.",
+      "source": "KroAndroid/program/.run/desktop.run.xml:11-15"
+    },
+    "deploy": {
+      "unsupported": "This lane has no CI, no Makefile and no documentation naming a command.",
+      "summary": "no command in the tree",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "coverage": {
+      "unsupported": "Same reason as `test`: no test command exists to instrument in the first place.",
+      "summary": "nothing to instrument",
+      "source": "KroAndroid/program/ (inventory sweep)"
+    },
+    "tools": {
+      "declaredOnly": "All verify-only. A JDK (probe `java -version`) and the lane's OWN Gradle wrapper at 8.7 -- a DIFFERENT wrapper from the repository root's 9.5.1, which is itself the clearest argument for a per-lane toolchain block. Nothing to install: the wrapper is in the tree and the JDK is the host's. Packaging additionally needs the host that matches the format, which is a `hosts` constraint (exit 3), not a tool nen can supply.",
+      "summary": "verify-only, all of it",
+      "source": "KroAndroid/program/gradle/wrapper/gradle-wrapper.properties"
+    },
+    "warmup": {
+      "declaredOnly": "The git steps still run -- classify, discard, fetch and branch are stack-independent -- but the build-verification step has nothing to delegate to, so `warmup` reports \"no build command for this lane\" rather than failing.",
+      "summary": "git half only",
+      "source": "this profile's own build row (unsupported)"
+    }
+  },
+  "toolchain": {
+    "gradle": {
+      "minimum": "8.7",
+      "probe": ["{gw}", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "wrapper",
+      "why": "NOTHING TO INSTALL: this lane resolves its OWN wrapper, pinned at 8.7 -- a different wrapper from the repository root's 9.5.1, in the same tree. Two lanes, two Gradle versions, one repository: this row is why `toolchain` is a per-lane block and not a per-repository one.",
+      "source": "KroAndroid/program/gradle/wrapper/gradle-wrapper.properties"
+    },
+    "jdk": {
+      "minimum": null,
+      "probe": ["java", "-version"],
+      "versionFrom": "first-semver-on-stderr",
+      "installer": "verify-only",
+      "why": "The host's JDK. This lane pins no version anywhere, so the pack states presence only. `java -version` writes to STDERR, which is why the reader is the stderr one.",
+      "source": "KroAndroid/program/ (no toolchain pin in the tree)"
+    }
+  },
+  "notes": [
+    "THIS LANE IS THE CLEAREST ARGUMENT IN THE INVENTORY FOR PER-LANE STACKS. It lives inside a repository whose every other verb is Android, with `rootProject.name = \"kro-windows\"`, its own wrapper, and inclusion by no workflow and no other build. A per-repository stack model gets it wrong by construction -- and so would a per-repository toolchain model, since the two lanes pin different Gradle versions in the same tree."
+  ]
+}

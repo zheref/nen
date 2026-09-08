@@ -1,0 +1,163 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Every command below is verbatim from a product repository and cited in its own `source`; nothing here is invented. A target repository's own nen/contract.json is the only thing an execution path ever reads -- this file exists so a human writing that declaration has somewhere honest to start, and so docs/STACK-MATRIX.md can be generated instead of hand-maintained.",
+  "id": "xcode-ios",
+  "displayName": "Xcode / iOS",
+  "markers": [
+    {
+      "pattern": "*.xcworkspace",
+      "contains": null,
+      "why": "preferred when both are present: a workspace is what CocoaPods produces, and building the bare project instead is how a Pods-based build fails with missing headers."
+    },
+    {
+      "pattern": "*.xcodeproj",
+      "contains": null,
+      "why": "the project, when no workspace exists."
+    },
+    {
+      "pattern": "Podfile",
+      "contains": null,
+      "why": "adds a `pod install` PRECONDITION; on its own it does not identify the stack."
+    }
+  ],
+  "hosts": {
+    "*": ["darwin"]
+  },
+  "hostNote": "darwin only -- `xcodebuild`, `xcrun` and CocoaPods exist nowhere else. KroApple further requires Xcode 26.5 with the iOS 26.5 simulator runtime and an `iPhone 17 Pro` device type (KroApple/docs/ci.md:84-86).",
+  "scaffoldTemplate": "minimal",
+  "scaffoldNote": "a project skeleton plus nen/contract.json. nen never generates a `.pbxproj`.",
+  "verbs": {
+    "detect": {
+      "declaredOnly": "Detection is a marker match over the working tree, not a spawned command: `*.xcworkspace` is preferred, else `*.xcodeproj`; a `Podfile` adds a `pod install` precondition. The pack proposes no command because there is none to propose.",
+      "summary": "markers, no spawn",
+      "source": "markers"
+    },
+    "build": {
+      "exe": "xcodebuild",
+      "argv": [
+        "-project",
+        "{project}",
+        "-scheme",
+        "{scheme}",
+        "-destination",
+        "{destination}",
+        "-configuration",
+        "Debug",
+        "build"
+      ],
+      "why": "The repository's own build-execution rule. Its CI profile is the `test` row's form with `build` in place of `test` (`xcodebuild -project {project} -scheme {scheme} -destination id={simUdid} -enableCodeCoverage YES -skipMacroValidation build`) -- derived from the test row, not separately observed.",
+      "source": "KroApple/.claude/rules/13-build-execution.md:111-113"
+    },
+    "test": {
+      "exe": "xcodebuild",
+      "argv": [
+        "-project",
+        "{project}",
+        "-scheme",
+        "{scheme}",
+        "-destination",
+        "id={simUdid}",
+        "-enableCodeCoverage",
+        "YES",
+        "-skipMacroValidation",
+        "test"
+      ],
+      "why": "CI runs this against a per-runner simulator created and booted BY UDID (`SCHEME: Kro`, tests.yml:58). The local snapshot-subset form is the same command with `-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'` and `-only-testing:{testTarget}/{name}` (KroApple/.claude/rules/07-testing.md:194-196).",
+      "source": "KroApple/.github/workflows/tests.yml:194-209"
+    },
+    "ui-test": {
+      "unsupported": "UI-test TARGETS exist and are never run. KroApple's shared scheme lists only `KroTests` in its test action; `KroUITests/` and `PreviewHostUITests/` appear in no shared scheme and no workflow. In food-diary it is worse: the scheme's TestAction references `fooddiaryTests`, but `project.pbxproj` contains exactly one native target and no test target -- so `xcodebuild test` on that scheme FAILS on a clean checkout.",
+      "summary": "targets exist, never run",
+      "source": "KroApple/Kro.xcscheme:38-47; food-diary ios/.../fooddiary.xcscheme:31-40 and project.pbxproj:137-160"
+    },
+    "lint": {
+      "declaredOnly": "Two incompatible meanings in one repository: `bash ci_scripts/lint_architecture.sh` (pure grep/find/bash, no Xcode) and `sh ci_scripts/verify_codex_guidance.sh`. SwiftLint appears nowhere in the seven repositories. No default is defensible, so the pack proposes none and the declaration says which this repository means.",
+      "summary": "two meanings, one repo",
+      "source": "KroApple/.github/workflows/lint.yml:42-43; KroApple/Makefile:16-17"
+    },
+    "archive": {
+      "unsupported": "No repository invokes `xcodebuild archive`. KroApple's Archive actions are scheme CONFIGURATION pinned to `Release`, and heavy builds are delegated to Xcode Cloud, whose workflows live server-side and have no command line here.",
+      "summary": "no xcodebuild archive",
+      "source": "KroApple/Kro.xcscheme:92; KroApple/README.md:97"
+    },
+    "release": {
+      "unsupported": "No fastlane, no `altool`, no `xcrun notarytool` and no App Store Connect step in any of the seven repositories.",
+      "summary": "no release lane at all",
+      "source": "the seven-repository inventory"
+    },
+    "dev": {
+      "unsupported": "Unsupported AS A SPAWNABLE COMMAND: the documented dev loop is a GUI gesture -- open the project, select the scheme, build and run with the IDE's own shortcut.",
+      "summary": "a GUI gesture",
+      "source": "KroApple/README.md:53-56"
+    },
+    "run": {
+      "unsupported": "Zero `xcrun simctl install` / `simctl launch` occurrences in KroApple.",
+      "summary": "no simctl install/launch",
+      "source": "KroApple (inventory sweep)"
+    },
+    "deploy": {
+      "unsupported": "Unsupported AT THE APP LEVEL. KroApple's only deploy lane is a Supabase DATABASE MIGRATION via a reusable workflow, which is not an app deploy and must not be filed as one.",
+      "summary": "db migration, not an app",
+      "source": "KroApple/.github/workflows/db-migrate.yml:23-26"
+    },
+    "coverage": {
+      "steps": [
+        {
+          "exe": "xcodebuild",
+          "argv": [
+            "-project",
+            "{project}",
+            "-scheme",
+            "{scheme}",
+            "-destination",
+            "id={simUdid}",
+            "-enableCodeCoverage",
+            "YES",
+            "-skipMacroValidation",
+            "-resultBundlePath",
+            "{resultBundle}",
+            "test"
+          ]
+        },
+        {
+          "exe": "xcrun",
+          "argv": ["xccov", "view", "--report", "--json", "{resultBundle}"]
+        }
+      ],
+      "why": "DERIVED, NOT OBSERVED, and the row says so rather than reading as a found command. Step 1 is the `test` row's real `-enableCodeCoverage YES` invocation plus `-resultBundlePath`, so a report exists to read; step 2 extracts it. NO REPOSITORY RUNS THE EXTRACTION STEP: KroApple's own coverage policy (80% on touched files) is read by hand from Xcode's Report Navigator.",
+      "source": "flag: KroApple/.github/workflows/tests.yml:194-209; policy: KroApple/.claude/rules/12-session-completion-checklist.md:23-33 and 07-testing.md:45-46"
+    },
+    "tools": {
+      "declaredOnly": "Every entry is verify-only: NOTHING IN THIS STACK CAN BE INSTALLED BY NEN. Xcode -- probe `xcodebuild -version` and `xcode-select -p`; a 10+ GB, Apple-ID-gated download with a licence agreement is not something a CLI performs on a human's behalf, so the row prints two paths (the Mac App Store, or `xcodes install <version>` if the machine already has `xcodes`). Simulator runtimes -- probe `xcrun simctl list runtimes --json`; `xcodebuild -downloadPlatform iOS` is PRINTED, never run. Device type -- KroApple needs an `iPhone 17 Pro`; nen reports present/absent and never creates one. CocoaPods -- probe `pod --version`; its common install is `sudo gem install`, and nen never elevates.",
+      "summary": "verify-only, all of it",
+      "source": "probes only; nothing installed"
+    },
+    "warmup": {
+      "delegatesTo": ["build", "test"],
+      "why": "The git steps (classify, discard, fetch, branch) are stack-independent and run regardless. The verification half delegates to this profile's own `build` and `test` rows, both of which carry a command.",
+      "source": "this profile's own build and test rows"
+    }
+  },
+  "toolchain": {
+    "cocoapods": {
+      "minimum": null,
+      "probe": ["pod", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "food-diary's iOS lane is a CocoaPods workspace, and no repository in the inventory pins a version -- so the pack states presence, not a minimum. Its common install is `sudo gem install`, and nen never elevates.",
+      "source": "food-diary ios/ (Podfile); no pin in any repository"
+    },
+    "xcode": {
+      "minimum": "26.5",
+      "probe": ["xcodebuild", "-version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "KroApple pins Xcode 26.5 with the matching iOS 26.5 simulator runtime. nen cannot install it and does not pretend otherwise: the row prints the Mac App Store path, or `xcodes install <version>` where the machine already has `xcodes`.",
+      "source": "KroApple/docs/ci.md:84-86"
+    }
+  },
+  "notes": [
+    "PRECONDITIONS THIS STACK ASSERTS AND NEVER PERFORMS (all from KroApple): a per-runner simulator created and booted by UDID (tests.yml:99-160, including the explicit prohibition on `xcrun simctl shutdown all` at :81-98); a gitignored `Kro/Config.xcconfig` written from secrets (:174-179); `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES` (:186-188, and the whole of ci_scripts/ci_post_clone.sh:2); and, for food-diary, `pod install` plus an Expo prebuild.",
+    "None of those preconditions becomes a `tools --install` action. They are assertions; `shu tools` installs host toolchains only."
+  ]
+}

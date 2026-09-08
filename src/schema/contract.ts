@@ -221,7 +221,15 @@ export interface RepositoryContract {
 // An argv list, with the two ways it is usually got wrong named separately: a
 // string (the shell form this family refuses) and an empty list (a probe that
 // runs nothing and reports no version).
-function requireArgv(path: string, pointer: string, value: unknown): readonly string[] {
+//
+// EXPORTED FOR THE PROFILES PACK (zheref/nen#111), and the three readers below
+// -- `requireArgv`, `requireEnum` and `parseInvocation` -- are exported for the
+// same one reason: the bundled pack states the SAME shapes this file validates,
+// in a different file, and a second copy of these rules is a second set of rules.
+// The pack's loader imports them rather than restating them, so a shape this
+// loader tightens tightens there too. Nothing else changed: the callers inside
+// this file are unaffected, and the pack passes its OWN path and pointers.
+export function requireArgv(path: string, pointer: string, value: unknown): readonly string[] {
   if (typeof value === "string") {
     throw new SchemaError(
       path,
@@ -242,7 +250,7 @@ function requireArgv(path: string, pointer: string, value: unknown): readonly st
   return value.map((item, index): string => requireString(path, `${pointer}[${index}]`, item));
 }
 
-function requireEnum<T extends string>(
+export function requireEnum<T extends string>(
   path: string,
   pointer: string,
   value: unknown,
@@ -330,7 +338,7 @@ function requireDeclaredLane(
   );
 }
 
-function parseInvocation(path: string, pointer: string, value: unknown): Invocation {
+export function parseInvocation(path: string, pointer: string, value: unknown): Invocation {
   const raw = requireRecord(path, pointer, value);
   const hasUnsupported = raw["unsupported"] !== undefined;
   const hasSteps = raw["steps"] !== undefined;
