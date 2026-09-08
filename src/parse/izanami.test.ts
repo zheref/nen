@@ -731,15 +731,26 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
     "epic next-wave": "nen epic next-wave --body-file b.md",
     "shu detect": "nen shu detect",
-    "shu tools": "nen shu tools",
+    // The one `dry-run-only` row, so its base is the form that IS certified:
+    // this row's bare invocation classifies `unknown` by design, and the
+    // coupling below needs a base that classifies read-only before it appends
+    // a write flag to it. What is proved is unchanged and is the thing that
+    // matters -- every spelling of --install the real parser accepts is
+    // refused, even sitting next to the gate.
+    "shu tools": "nen shu tools --dry-run",
     "wake fire": "nen wake fire --repo-slug o/r --ref XX-PR-#1 --label wake",
     "wake verify": "nen wake verify --repo-slug o/r --now 2026-01-01T00:00:00Z --author-pattern x",
   };
 
+  // BOTH KINDS THAT CARRY WRITE FLAGS, not just the one this suite was written
+  // for. `dry-run-only` (zheref/nen#113) carries `--install`, the one flag in
+  // this CLI whose blast radius is the developer's machine, and leaving it out
+  // would have exempted the most dangerous row in the table from the spelling
+  // coupling -- while the type system happily kept compiling.
   const gatedRows: GatedRow[] = [];
   for (const [family, entry] of Object.entries(NEN_VERB_TABLE)) {
     for (const [sub, policy] of Object.entries(entry.subcommands)) {
-      if (policy.kind === "write-flag-gated") {
+      if (policy.kind === "write-flag-gated" || policy.kind === "dry-run-only") {
         gatedRows.push({ key: `${family} ${sub}`, family, writeFlags: policy.writeFlags });
       }
     }
@@ -1407,28 +1418,43 @@ describe("NEN_VERB_TABLE -- exhaustive over the real verb registry", () => {
     expect(Object.keys(NEN_PRE_REGISTRY_TABLE).sort()).toEqual(["bootstrap", "schema", "version"]);
   });
 
-  it("every table policy is one of the five closed kinds", () => {
-    // Five since #31 round three added read-only-forwarding. This set is
-    // spelled out rather than derived from the union so that ADDING a policy
-    // kind cannot land without a reviewer also stating, here, that its
-    // scan-dependence was thought about (see evaluateNenPolicy's switch).
+  it("every table policy is one of the six closed kinds", () => {
+    // Five since #31 round three added read-only-forwarding; six since
+    // zheref/nen#113 added dry-run-only for the one verb with THREE answers
+    // rather than two. This set is spelled out rather than derived from the
+    // union so that ADDING a policy kind cannot land without a reviewer also
+    // stating, here, that its scan-dependence was thought about (see
+    // evaluateNenPolicy's switch).
     const kinds = new Set([
       "read-only",
       "read-only-forwarding",
       "mutating",
       "dry-run-gated",
       "write-flag-gated",
+      "dry-run-only",
     ]);
     for (const entry of Object.values(NEN_VERB_TABLE)) {
       const keys = Object.keys(entry.subcommands);
       expect(keys.length).toBeGreaterThan(0);
       for (const policy of Object.values(entry.subcommands)) {
         expect(kinds.has(policy.kind)).toBe(true);
-        if (policy.kind === "write-flag-gated") {
+        if (policy.kind === "write-flag-gated" || policy.kind === "dry-run-only") {
           expect(policy.writeFlags.length).toBeGreaterThan(0);
         }
       }
     }
+  });
+
+  it("uses dry-run-only for exactly one row, the one verb that acts on the HOST", () => {
+    // The narrowest kind in the table, and it should stay that way: a second
+    // row appearing here is a reviewer's conversation, not a silent widening.
+    const rows: string[] = [];
+    for (const [family, entry] of Object.entries(NEN_VERB_TABLE)) {
+      for (const [sub, policy] of Object.entries(entry.subcommands)) {
+        if (policy.kind === "dry-run-only") rows.push(`${family} ${sub}`);
+      }
+    }
+    expect(rows).toEqual(["shu tools"]);
   });
 });
 
@@ -1472,11 +1498,57 @@ describe("NEN_VERB_TABLE -- the shu family, every verb classified", () => {
     }
   });
 
-  it("gates detect on --write and tools on --install", () => {
+  it("gates detect on --write", () => {
     expect(classifyCommand("nen shu detect").classification).toBe("read-only");
     expect(classifyCommand("nen shu detect --write").classification).toBe("mutating");
-    expect(classifyCommand("nen shu tools").classification).toBe("read-only");
-    expect(classifyCommand("nen shu tools --install").classification).toBe("mutating");
+  });
+
+  // `shu tools` HAS THREE ANSWERS, and this is the PR-4 resolution of the TODO
+  // the row carried since the family shipped (zheref/nen#113). It used to be
+  // `write-flag-gated`, which certified the BARE form read-only on the strength
+  // of a verb nobody had written yet. Built, the check form spawns the `probe`
+  // argv out of the TARGET repository's `project.toolchain` -- the same
+  // provenance that makes every executing row `dry-run-gated` rather than
+  // read-only. A `--version` query is a convention, not a proof.
+  describe("tools -- unknown bare, mutating with --install, read-only with --dry-run", () => {
+    it("does not certify the bare form: nen did not choose the program it runs", () => {
+      const bare = classifyCommand("nen shu tools");
+      expect(bare.classification).toBe("unknown");
+      // UNKNOWN, NOT MUTATING, and the distinction is the point: a declared
+      // version probe is not evidence of a write. Both refuse; this one is
+      // true, and the reason a caller reads says which.
+      expect(bare.reason).toContain("TARGET repository");
+    });
+
+    it("classifies --install mutating, in every spelling the real parser takes", () => {
+      expect(classifyCommand("nen shu tools --install").classification).toBe("mutating");
+      expect(classifyCommand("nen shu tools -install").classification).toBe("mutating");
+    });
+
+    it("certifies --dry-run: on this verb a dry run spawns nothing, probes included", () => {
+      const dry = classifyCommand("nen shu tools --dry-run");
+      expect(dry.classification).toBe("read-only");
+      expect(dry.reason).toContain("probes included");
+      expect(classifyCommand("nen shu tools --repo /tmp/x --lane web --dry-run").classification).toBe(
+        "read-only",
+      );
+    });
+
+    it("refuses --install --dry-run anyway -- the write flag is decisive", () => {
+      // A DELIBERATE OVER-REFUSAL of a line that provably runs nothing (nen
+      // checks the dry run before the install). `--install` is the one flag in
+      // this CLI whose blast radius is the developer's machine, and a
+      // read-only claim that depends on an adjacent token still being present
+      // is the exact shape the write-flag rule exists for.
+      expect(classifyCommand("nen shu tools --install --dry-run").classification).toBe("mutating");
+      expect(classifyCommand("nen shu tools --dry-run --install").classification).toBe("mutating");
+    });
+
+    it("refuses the dry-run form on a line whose tokens are not provably arguments", () => {
+      // The one ADMITTING branch of this policy, held to the same
+      // scan-faithfulness bar every other admitting branch is.
+      expect(classifyCommand(`nen shu tools --repo "a b" --dry-run`).classification).toBe("unknown");
+    });
   });
 
   it("refuses `shu warmup` in EVERY form, dry run included", () => {
