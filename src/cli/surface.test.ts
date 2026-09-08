@@ -32,9 +32,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMMANDS } from "./registry.js";
 
+/**
+ * Every `toContain`/`matchAll` below expects LF, but `* text=auto` in
+ * .gitattributes (see that file) leaves the working-tree line ending to the
+ * platform: a Windows checkout of docs/USAGE.md and README.md comes back
+ * CRLF. A phrase this file expects as `"35 command\nfamilies"` then can't be
+ * found, because the document actually reads `"35 command\r\nfamilies"` --
+ * not a wrong document, a wrong assumption about its bytes. Normalising once
+ * here, before any assertion runs, means every `\n` written below means
+ * "line break" on every platform instead of "the LF one specifically".
+ */
+const normalizeEol = (text: string): string => text.replace(/\r\n/g, "\n");
+
 const ROOT = process.cwd();
-const USAGE = readFileSync(join(ROOT, "docs", "USAGE.md"), "utf8");
-const README = readFileSync(join(ROOT, "README.md"), "utf8");
+const USAGE = normalizeEol(readFileSync(join(ROOT, "docs", "USAGE.md"), "utf8"));
+const README = normalizeEol(readFileSync(join(ROOT, "README.md"), "utf8"));
 
 /**
  * The two commands ../index.ts spells out above the registry listing.
@@ -99,5 +111,32 @@ describe("the documented surface is this binary's surface", () => {
       const anchor = `#nen-${(heading[1] as string).replace(/ /g, "-")}`;
       expect(USAGE.includes(anchor), `${heading[0]} has no inbound link at ${anchor}`).toBe(true);
     }
+  });
+});
+
+describe("normalizeEol pins the windows-latest checkout failure", () => {
+  // The CI failure this reproduces, verbatim:
+  //   expected '# Using nen\r\n\r\nNen is a local dev…' to contain '35 command\nfamilies'
+  //   expected '# Nen\r\n\r\nNen is a local developme…' to contain 'documents all\n84 verbs outside the b…'
+  // A `text=auto` checkout on windows-latest hands this file's readers CRLF,
+  // so a phrase that wraps across a line with a bare `\n` cannot match a
+  // `\r\n` original. These feed CRLF straight through the same helper the
+  // suite above uses, without touching the checked-in documents, so the fix
+  // is pinned on POSIX too.
+  it("lets a family-count toContain match survive a CRLF checkout", () => {
+    const crlf = "# Using nen\r\n\r\nNen is a local dev tool. It lists every\r\n35 command\r\nfamilies in one place.\r\n";
+    expect(crlf).not.toContain("35 command\nfamilies");
+    expect(normalizeEol(crlf)).toContain("35 command\nfamilies");
+  });
+
+  it("lets a verb-count toContain match survive a CRLF checkout", () => {
+    const crlf = "# Nen\r\n\r\nNen is a local development tool. It documents all\r\n84 verbs outside the binary.\r\n";
+    expect(crlf).not.toContain("documents all\n84 verbs outside the binary");
+    expect(normalizeEol(crlf)).toContain("documents all\n84 verbs outside the binary");
+  });
+
+  it("is idempotent on documents that already checked out LF", () => {
+    const lf = "already\nLF\nthroughout\n";
+    expect(normalizeEol(lf)).toBe(lf);
   });
 });
