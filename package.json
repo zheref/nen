@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "matrix": "bun src/dev/matrix.ts",
     "build:linux-x64": "bun build --compile --target=bun-linux-x64 --sourcemap --outfile dist/nen-linux-x64 ./src/index.ts",
     "build:darwin-arm64": "bun build --compile --target=bun-darwin-arm64 --sourcemap --outfile dist/nen-darwin-arm64 ./src/index.ts",
     "build:windows-x64": "bun build --compile --target=bun-windows-x64 --sourcemap --outfile dist/nen-windows-x64.exe ./src/index.ts"
