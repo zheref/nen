@@ -4262,7 +4262,7 @@ describe("nen shu detect -- what the dotnet-winui lane refuses to answer", () =>
         expect(verbs).toEqual([]);
         expect(notes).toContain("C:\\Users\\z\\Other\\Other.csproj");
         expect(notes).toContain(
-          "it is an ABSOLUTE path, which names a location on one machine rather than a file in this repository",
+          "it is an ABSOLUTE path, naming a location on one machine rather than a file in this repository",
         );
       },
     );

@@ -3141,7 +3141,7 @@ function classifyReference(repoRoot: string, file: TreeFile, raw: string): Refer
     return {
       kind: "escape",
       resolved: normalised,
-      why: "it is an ABSOLUTE path, which names a location on one machine rather than a file in this repository",
+      why: "it is an ABSOLUTE path, naming a location on one machine rather than a file in this repository",
     };
   }
   const repoRelative = relativePath(repoRoot, join(file.directory, ...normalised.split("/")));
@@ -3156,7 +3156,7 @@ function classifyReference(repoRoot: string, file: TreeFile, raw: string): Refer
     return {
       kind: "escape",
       resolved: repoRelative,
-      why: "it resolves OUTSIDE the repository, and every path a declaration states is resolved against the repository root",
+      why: "it resolves OUTSIDE the repository",
     };
   }
   const found = lookInTree(repoRoot, repoRelative);
