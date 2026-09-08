@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BANKAI_REPO, LEGACY_REPO } from "./fixtures/paths.js";
@@ -8,14 +8,21 @@ import {
   COLORS_FILE,
   CONTRACT_FILE,
   GATES_FILE,
+  inspectShadow,
   LABELS_FILE,
   readSchemaFile,
   readSchemaJson,
   resolveSchemaFile,
   schemaPath,
-  shadowState,
 } from "./source.js";
 import { ABSENT_FILE_MARKER } from "./taxonomy.js";
+
+// The POSIX-only cases below build entries that CANNOT be built on Windows: a
+// self-referential symlink (ELOOP) needs the developer-mode privilege Windows
+// gates symlink creation behind, and `chmod 000` is a no-op on a filesystem
+// with no POSIX mode bits. They are skipped there rather than weakened,
+// because a weakened version of each would assert nothing anywhere.
+const POSIX = process.platform !== "win32";
 
 function scratch(): string {
   return mkdtempSync(join(tmpdir(), "nen-source-"));
@@ -82,14 +89,39 @@ describe("resolveSchemaFile", () => {
     expect(resolved.legacy?.present).toBe(false);
   });
 
-  it("resolves every one of the five files, including the contract", () => {
+  it("gives the FOUR taxonomy files a legacy location and the contract NONE", () => {
+    // The legacy map is a record of what released versions of nen actually
+    // read, not a naming convention applied to every file in the directory.
+    // `nen/contract.json` is new in this line; no release ever looked for it
+    // under `schemas/`, so it has no legacy path and every message about it
+    // names exactly one location.
     const root = scratch();
-    for (const file of [LABELS_FILE, "nen/repos.json", COLORS_FILE, GATES_FILE, CONTRACT_FILE]) {
+    for (const file of [LABELS_FILE, "nen/repos.json", COLORS_FILE, GATES_FILE]) {
       const resolved = resolveSchemaFile(root, file);
       expect(resolved.canonical.relative).toBe(file);
-      expect(resolved.legacy).not.toBeNull();
+      expect(resolved.legacy, file).not.toBeNull();
       expect(resolved.legacy?.relative.startsWith("schemas/")).toBe(true);
     }
+    const contract = resolveSchemaFile(root, CONTRACT_FILE);
+    expect(contract.canonical.relative).toBe(CONTRACT_FILE);
+    expect(contract.legacy).toBeNull();
+  });
+
+  it("claims NOTHING in schemas/ on the contract's behalf, so a foreign file there is not read", () => {
+    // REGRESSION GUARD, and the failure it guards is a consumer-facing one.
+    // Mapping `nen/contract.json` to a `schemas/` name does not preserve
+    // compatibility with anything -- it INVENTS a claim over a filename nen
+    // never read -- and a repository that happens to carry its own file of that
+    // name would have it parsed as a nen contract and be failed for it, having
+    // changed nothing. Whatever else is in `schemas/`, the contract resolves to
+    // `nen/contract.json` and is absent.
+    const root = scratch();
+    write(root, "schemas/stack.json", '{"this":"is not a nen contract"}');
+    const resolved = resolveSchemaFile(root, CONTRACT_FILE);
+    expect(resolved.location).toBe("nen");
+    expect(resolved.relative).toBe(CONTRACT_FILE);
+    expect(resolved.legacy).toBeNull();
+    expect(resolved.canonical.present).toBe(false);
   });
 
   it("reads the un-migrated fixture repository entirely through the fallback", () => {
@@ -109,18 +141,21 @@ describe("resolveSchemaFile", () => {
   });
 });
 
-describe("shadowState", () => {
+describe("inspectShadow", () => {
   it("is 'none' when only one location carries the file", () => {
     const root = scratch();
     write(root, LABELS_FILE, "{}");
-    expect(shadowState(resolveSchemaFile(root, LABELS_FILE))).toBe("none");
+    expect(inspectShadow(resolveSchemaFile(root, LABELS_FILE))).toEqual({
+      state: "none",
+      errno: null,
+    });
   });
 
   it("is 'identical' for a byte-identical leftover", () => {
     const root = scratch();
     write(root, LABELS_FILE, '{"a":1}');
     write(root, "schemas/labels.json", '{"a":1}');
-    expect(shadowState(resolveSchemaFile(root, LABELS_FILE))).toBe("identical");
+    expect(inspectShadow(resolveSchemaFile(root, LABELS_FILE)).state).toBe("identical");
   });
 
   it("is 'different' for a leftover whose bytes drifted", () => {
@@ -130,21 +165,96 @@ describe("shadowState", () => {
     const root = scratch();
     write(root, LABELS_FILE, '{"a":1}');
     write(root, "schemas/labels.json", '{"a":2}');
-    expect(shadowState(resolveSchemaFile(root, LABELS_FILE))).toBe("different");
-  });
-
-  it("is 'different' -- fail-closed -- when a copy cannot be read to compare", () => {
-    const root = scratch();
-    write(root, LABELS_FILE, "{}");
-    mkdirSync(schemaPath(root, "schemas/labels.json"), { recursive: true });
-    expect(shadowState(resolveSchemaFile(root, LABELS_FILE))).toBe("different");
+    expect(inspectShadow(resolveSchemaFile(root, LABELS_FILE)).state).toBe("different");
   });
 
   it("treats whitespace as a difference, because bytes are what nen compared", () => {
     const root = scratch();
     write(root, COLORS_FILE, "categories:\n");
     write(root, "schemas/colors.yml", "categories:\n\n");
-    expect(shadowState(resolveSchemaFile(root, COLORS_FILE))).toBe("different");
+    expect(inspectShadow(resolveSchemaFile(root, COLORS_FILE)).state).toBe("different");
+  });
+
+  it("treats a CRLF/LF difference as a difference, because the comparison is byte-exact", () => {
+    // The state a git checkout produces on its own, via `core.autocrlf` or a
+    // `.gitattributes` that covers one directory and not the other. Two files
+    // that differ only in line endings are still two files, and calling them
+    // identical would tell an operator the deletion is free on evidence that
+    // does not support it.
+    const root = scratch();
+    write(root, COLORS_FILE, "categories:\n");
+    write(root, "schemas/colors.yml", "categories:\r\n");
+    expect(inspectShadow(resolveSchemaFile(root, COLORS_FILE)).state).toBe("different");
+  });
+});
+
+describe("inspectShadow, when the comparison cannot be made at all", () => {
+  // THE STATE THAT USED TO LIE. A failed read answered `different`, which made
+  // `nen schema check` assert three things it did not know -- that the bytes
+  // differ, that nen read the `nen/` copy, and that the `schemas/` one is the
+  // one to delete. In every case below at least one of those is false, and in
+  // the first two the file being nominated for deletion is the only readable
+  // copy the repository has left.
+
+  it("answers 'unknown' with an errno when the LEGACY copy will not open", () => {
+    const root = scratch();
+    write(root, LABELS_FILE, "{}");
+    mkdirSync(schemaPath(root, "schemas/labels.json"), { recursive: true });
+    const verdict = inspectShadow(resolveSchemaFile(root, LABELS_FILE));
+    expect(verdict.state).toBe("unknown");
+    // The errno is carried, whatever the host calls it -- it is what turns
+    // "could not compare" into something an operator can act on.
+    expect(verdict.errno).not.toBeNull();
+    if (POSIX) expect(verdict.errno).toBe("EISDIR");
+  });
+
+  it("a STRAY FILE named nen is an ABSENCE, uniformly, and never an unknown comparison", () => {
+    // THE CASE THAT LOOKS LIKE THE ONES ABOVE AND IS NOT, pinned so the
+    // difference is a decision on the record rather than an accident of Node's
+    // API. `throwIfNoEntry: false` suppresses ENOTDIR alongside ENOENT, so a
+    // path whose `nen` component is a FILE reads as "nothing is there" -- which
+    // is the honest answer, since nothing can live under it -- and the fallback
+    // answers normally. The same holds on Windows, which reports
+    // ERROR_PATH_NOT_FOUND (mapped to ENOENT) where POSIX reports ENOTDIR: two
+    // errnos, one behaviour, no platform divergence to account for.
+    const root = scratch();
+    write(root, "schemas/labels.json", '{"labels":[]}');
+    writeFileSync(join(root, "nen"), "not a directory");
+    const resolved = resolveSchemaFile(root, LABELS_FILE);
+    expect(resolved.canonical.present).toBe(false);
+    expect(resolved.location).toBe("schemas");
+    expect(inspectShadow(resolved).state).toBe("none");
+    expect(readSchemaFile(root, LABELS_FILE).text).toBe('{"labels":[]}');
+  });
+
+  it.skipIf(!POSIX)("answers 'unknown' for a symlink that points at itself", () => {
+    const root = scratch();
+    write(root, "schemas/labels.json", "{}");
+    mkdirSync(join(root, "nen"), { recursive: true });
+    symlinkSync("labels.json", schemaPath(root, LABELS_FILE));
+    const verdict = inspectShadow(resolveSchemaFile(root, LABELS_FILE));
+    expect(verdict.state).toBe("unknown");
+    expect(verdict.errno).toBe("ELOOP");
+  });
+
+  it.skipIf(!POSIX)("answers 'unknown' when the CANONICAL copy is unreadable (EACCES)", () => {
+    // chmod is a no-op for root; the assertion is guarded on the mode having
+    // actually taken rather than being skipped blind, so it still runs for an
+    // ordinary developer and is honest about a root-owned CI container.
+    const root = scratch();
+    const path = write(root, LABELS_FILE, "{}");
+    write(root, "schemas/labels.json", "{}");
+    chmodSync(path, 0o000);
+    let verdict;
+    try {
+      verdict = inspectShadow(resolveSchemaFile(root, LABELS_FILE));
+    } finally {
+      chmodSync(path, 0o644);
+    }
+    if (verdict.state !== "identical") {
+      expect(verdict.state).toBe("unknown");
+      expect(verdict.errno).toBe("EACCES");
+    }
   });
 });
 
@@ -232,6 +342,50 @@ describe("readSchemaFile", () => {
       expect((error as SchemaError).path).toBe(schemaPath(root, LABELS_FILE));
     }
   });
+
+  it.skipIf(!POSIX)(
+    "A THROW COUNTS AS PRESENT: an unreadable nen/ copy fails loudly, it does not fall back",
+    () => {
+      // THE MUTATION GUARD FOR `isPresent`'s catch, and the property the whole
+      // fallback's safety rests on. `existsSync` answers false for ANY failure,
+      // which is why this resolver stats with `throwIfNoEntry: false` instead:
+      // a genuine ENOENT becomes `undefined`, and anything that THROWS means an
+      // entry exists in some form this process could not stat.
+      //
+      // Flip that catch to `false` and nothing else in the suite notices --
+      // while a repository whose `nen/labels.json` is an ELOOP symlink starts
+      // being served the STALE `schemas/` taxonomy, silently, at exit 0. That
+      // is the exact failure the fallback was most likely to introduce and the
+      // one it was designed not to have: a broken canonical file is a defect to
+      // report, never a reason to quietly read the old one.
+      //
+      // A SELF-REFERENTIAL SYMLINK is the cheapest portable way to build an
+      // entry that exists and cannot be stat'd. Windows is skipped because
+      // creating a symlink there needs a privilege ordinary CI does not hold.
+      const root = scratch();
+      const legacy = write(root, "schemas/labels.json", '{"which":"stale schemas copy"}');
+      mkdirSync(join(root, "nen"), { recursive: true });
+      symlinkSync("labels.json", schemaPath(root, LABELS_FILE));
+
+      const resolved = resolveSchemaFile(root, LABELS_FILE);
+      expect(resolved.canonical.present).toBe(true);
+      expect(resolved.location).toBe("nen");
+      expect(resolved.path).not.toBe(legacy);
+
+      try {
+        readSchemaFile(root, LABELS_FILE);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(SchemaError);
+        const message = (error as SchemaError).message;
+        // The real errno, not an absence -- and emphatically not the legacy
+        // file's contents returned as though nothing were wrong.
+        expect(message).toContain("ELOOP");
+        expect(message).not.toContain(ABSENT_FILE_MARKER);
+        expect((error as SchemaError).path).toBe(schemaPath(root, LABELS_FILE));
+      }
+    },
+  );
 
   it("reports an unreadable file by its errno rather than as an absence", () => {
     // chmod is a no-op for root and on Windows; the assertion below only runs

@@ -401,15 +401,22 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     if (check.note !== null) io.out(`        ^ ${check.note}`);
   }
   if (!report.ok) {
-    // TWO DIFFERENT FAILURES, TWO DIFFERENT SENTENCES. "Could not be read" is
-    // false about a repository whose every file loaded and whose only problem
-    // is a stale duplicate, and a refusal that misdescribes what happened sends
-    // the reader looking for a corrupt file that is not there.
+    // THREE DIFFERENT FAILURES, THREE DIFFERENT SENTENCES. "Could not be read"
+    // is false about a repository whose every file loaded and whose only
+    // problem is a stale duplicate, and a refusal that misdescribes what
+    // happened sends the reader looking for a corrupt file that is not there.
+    // The third exists for the same reason as the second: "with DIFFERENT
+    // contents. Nen read the 'nen/' one. Delete the legacy copy" asserts three
+    // things nen does not know when it could not open one of the two files --
+    // and nominates for deletion the copy that may be the only readable one.
     const unreadable = report.checks.some((check): boolean => !check.ok && check.required);
+    const unverified = report.checks.some((check): boolean => check.shadow === "unknown");
     io.err(
       unreadable
         ? `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`
-        : `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', with DIFFERENT contents. Nen read the 'nen/' one. Delete the legacy copy, or reconcile it -- the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`,
+        : unverified
+          ? `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', and nen could not read one of the two to compare them. It will not say which copy it served or which one to delete on evidence it does not have -- fix the unreadable path named above, then re-run. The schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`
+          : `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', with DIFFERENT contents. Nen read the 'nen/' one. Delete the legacy copy, or reconcile it -- the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`,
     );
   }
   return report.ok ? 0 : 1;

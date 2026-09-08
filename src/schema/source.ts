@@ -58,16 +58,22 @@ export const LEGACY_FALLBACK_REMOVED_IN = "v0.4.0";
  * THE FALLBACK IS READ-ONLY. Nothing in nen ever writes to `schemas/` again,
  * and `nen schema check` names every legacy read it performed so a consumer can
  * see how much of the migration is left.
+ *
+ * EXACTLY FOUR ENTRIES, AND `nen/contract.json` IS NOT ONE OF THEM. A legacy
+ * entry is a promise that some released nen once READ that path; the contract
+ * file is new in this line and no release ever looked for it anywhere. Mapping
+ * it to a `schemas/` name would not preserve compatibility -- it would INVENT a
+ * claim over a filename in a directory nen no longer owns, so that a repository
+ * carrying an unrelated file of that name (its own build's stack manifest, say)
+ * would start being parsed as a nen contract and fail `schema check` at exit 1
+ * having changed nothing. A file with no legacy location gets `legacy: null`
+ * below, and every message it produces names one path.
  */
 const LEGACY_LOCATION: Readonly<Record<string, string>> = {
   [LABELS_FILE]: "schemas/labels.json",
   [REPOS_FILE]: "schemas/repos.json",
   [COLORS_FILE]: "schemas/colors.yml",
   [GATES_FILE]: "schemas/gates.json",
-  // The stack declaration was drafted as `schemas/stack.json` before it became
-  // `nen/contract.json`; it is mapped here so the two names cannot both be
-  // live, and it dies with the rest of this map in v0.4.0.
-  [CONTRACT_FILE]: "schemas/stack.json",
 };
 
 /** Which of the two directories answered a read. */
@@ -103,10 +109,26 @@ export function schemaPath(repoRoot: string, relative: string): string {
 // `existsSync` returns false for any failure, so an EACCES on a parent
 // directory or an ELOOP symlink cycle would silently route the read to the
 // legacy location -- or, with neither readable, report "no such file" about a
-// file that is right there. `throwIfNoEntry: false` turns a genuine ENOENT into
-// `undefined`; anything this THROWS means the entry exists in some form this
-// process could not stat, so it counts as present and the read below reports
-// the real errno.
+// file that is right there. `throwIfNoEntry: false` narrows that to the
+// failures that genuinely mean "nothing is there"; anything this THROWS means
+// the entry exists in some form this process could not stat, so it counts as
+// present and the read below reports the real errno. EACCES and ELOOP throw,
+// which is the property the fallback's safety rests on and which
+// `source.test.ts` pins with a self-referential symlink.
+//
+// "NOTHING IS THERE" IS TWO ERRNOS, NOT ONE, and the second is worth naming
+// because it is a deliberate widening rather than a leak: `throwIfNoEntry:
+// false` suppresses ENOTDIR as well as ENOENT. A repository with a stray FILE
+// named `nen` therefore reads as an ABSENCE and routes to the `schemas/`
+// fallback rather than failing loudly -- which is the same answer that
+// repository would get with no `nen` entry at all, and the honest one, since
+// nothing can ever live under a path component that is a file.
+//
+// THAT ONE IS UNIFORM ACROSS PLATFORMS, which is worth stating because the
+// route differs: Windows reports `ERROR_PATH_NOT_FOUND` for a file used as a
+// directory, which libuv maps to ENOENT, where POSIX reports ENOTDIR. Both are
+// suppressed here, so both platforms fall back. There is no divergence to
+// account for in this case -- the two errnos arrive at the same behaviour.
 function isPresent(path: string): boolean {
   try {
     return statSync(path, { throwIfNoEntry: false }) !== undefined;
@@ -148,8 +170,31 @@ export function resolveSchemaFile(repoRoot: string, relative: string): ResolvedS
   return { relative: canonical.relative, path: canonical.path, location: "nen", canonical, legacy };
 }
 
-/** Whether a legacy copy is still sitting beside a migrated canonical one. */
-export type ShadowState = "none" | "identical" | "different";
+/**
+ * Whether a legacy copy is still sitting beside a migrated canonical one.
+ *
+ * `unknown` IS ITS OWN ANSWER AND NOT A SYNONYM FOR `different`. It means the
+ * comparison could not be PERFORMED -- one of the two copies would not open --
+ * which fails the report for the same fail-closed reason `different` does, but
+ * is a different thing to tell an operator. Collapsing it into `different`
+ * makes the report assert three things it does not know: that the bytes differ,
+ * that nen read the canonical copy, and that the legacy one is the one to
+ * delete. In the case that produces it most often -- the canonical copy is the
+ * unreadable one -- all three are false, and the last is advice to delete the
+ * only file that still works.
+ */
+export type ShadowState = "none" | "identical" | "different" | "unknown";
+
+export interface ShadowVerdict {
+  readonly state: ShadowState;
+  /**
+   * The errno that stopped the comparison, for `unknown` only -- `null` for
+   * every other state. It is what turns "could not compare" into something an
+   * operator can act on: EACCES is a permission, ENOTDIR a stray file where a
+   * directory belongs, ELOOP a symlink pointing at itself.
+   */
+  readonly errno: string | null;
+}
 
 /**
  * A LEGACY COPY THAT SURVIVED THE MOVE IS A FINDING, NOT A DETAIL. Both files
@@ -158,19 +203,31 @@ export type ShadowState = "none" | "identical" | "different";
  * done it yet. The two are reported differently by `nen schema check` and only
  * the first fails it.
  *
- * A read failure on either side answers `different`: "we could not prove they
- * agree" is the fail-closed reading, and the row that carries it already names
- * both paths.
+ * A read failure on either side answers `unknown`, carrying the errno. Both
+ * `different` and `unknown` fail the report -- "we could not prove they agree"
+ * is the fail-closed reading either way -- but only `different` may claim the
+ * bytes differ, and only `different` may name a file to delete.
+ *
+ * THE COMPARISON IS BYTE-EXACT, deliberately: two files that differ only in
+ * line endings are two files a git checkout can disagree about, and a
+ * "semantically identical" answer would tell an operator the deletion is free
+ * when the two copies may still round-trip differently through their tools.
  */
-export function shadowState(resolved: ResolvedSchemaFile): ShadowState {
+export function inspectShadow(resolved: ResolvedSchemaFile): ShadowVerdict {
   const { canonical, legacy } = resolved;
-  if (legacy === null || !canonical.present || !legacy.present) return "none";
+  if (legacy === null || !canonical.present || !legacy.present) {
+    return { state: "none", errno: null };
+  }
   try {
-    return readFileSync(canonical.path).equals(readFileSync(legacy.path))
-      ? "identical"
-      : "different";
-  } catch {
-    return "different";
+    return {
+      state: readFileSync(canonical.path).equals(readFileSync(legacy.path))
+        ? "identical"
+        : "different",
+      errno: null,
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { state: "unknown", errno: code ?? String(error) };
   }
 }
 

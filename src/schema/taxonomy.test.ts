@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALT_REPO, BANKAI_REPO, LEGACY_REPO } from "./fixtures/paths.js";
@@ -248,6 +256,50 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     expect(check?.note).toContain("nen/labels.json");
     expect(report.deprecations.some((d): boolean => d.includes("SHADOWED"))).toBe(true);
   });
+
+  it("an UNCOMPARABLE pair fails the report WITHOUT claiming the bytes differ", () => {
+    // The state the shadow check used to describe as `different`, which made
+    // the row assert three things nobody had checked. It still FAILS -- "we
+    // could not prove they agree" is the fail-closed reading either way -- but
+    // the sentence it fails with is now true.
+    const root = migrated();
+    mkdirSync(join(root, "schemas", "labels.json"), { recursive: true });
+    const report = checkTaxonomy({ repoFlag: root });
+    expect(report.ok).toBe(false);
+    const check = report.checks[0];
+    expect(check?.shadow).toBe("unknown");
+    expect(check?.shadowed).toBe(true);
+    // The canonical file loaded fine; it is the comparison that could not run.
+    expect(check?.ok).toBe(true);
+    expect(check?.location).toBe("nen");
+    expect(check?.note).toContain("UNVERIFIED LEFTOVER");
+    // The errno is NAMED, which is what makes the row actionable at all.
+    expect(check?.note).toContain("EISDIR");
+    expect(check?.note).not.toContain("bytes DIFFER");
+    expect(check?.note).not.toContain("SHADOWED LEFTOVER");
+    expect(report.deprecations.some((d): boolean => d.includes("UNVERIFIED"))).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does NOT tell an operator to delete the legacy copy when the nen/ one is the broken one",
+    () => {
+      // THE CASE THAT MADE THIS A FINDING. With the canonical copy unreadable,
+      // the old sentence said the bytes DIFFER, that nen read 'nen/labels.json'
+      // (it did not), and that the legacy copy should be deleted -- which is
+      // the only file the repository has left that works.
+      const root = migrated('{"labels":[]}');
+      rmSync(join(root, "nen", "labels.json"));
+      symlinkSync("labels.json", join(root, "nen", "labels.json"));
+      const check = checkTaxonomy({ repoFlag: root }).checks[0];
+      expect(check?.shadow).toBe("unknown");
+      expect(check?.ok).toBe(false);
+      expect(check?.detail).toContain("ELOOP");
+      expect(check?.note).toContain("UNVERIFIED LEFTOVER");
+      expect(check?.note).toContain("ELOOP");
+      expect(check?.note).not.toMatch(/Delete it/);
+      expect(check?.note).not.toContain("Nen read 'nen/labels.json'");
+    },
+  );
 
   it("a SHADOWED leftover with IDENTICAL bytes is ok, with a note", () => {
     const root = migrated(readFileSync(join(BANKAI_REPO, "nen", "labels.json"), "utf8"));

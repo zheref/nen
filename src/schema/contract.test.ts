@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
 import { SchemaError } from "./errors.js";
 import {
+  describeContract,
   INSTALLERS,
   loadContract,
   parseContract,
@@ -78,6 +79,22 @@ describe("the two blocks, and the empty file", () => {
 
   it("does not count a $-prefixed key as a block", () => {
     expect(refusal({ $schema: "nen.contract/v0.1" }).message).toContain("The file is empty of both");
+  });
+
+  it("does not REFUSE a $schema that is not a string, because no `$`-key is data", () => {
+    // This loader's header says `$`-keys are metadata "read by nobody". A
+    // `$schema` typed as a string was the one exception: a document declaring
+    // it as an object -- an inline JSON Schema, or an {id, version} pair -- was
+    // refused over a field nen does not use, which is the opposite of the rule.
+    // It is surfaced when it happens to be a string, ignored otherwise, and
+    // preserved either way by `raw`.
+    const object = parse({ $schema: { id: "nen.contract", version: 1 }, dependency: DEPENDENCY });
+    expect(object.schema).toBeNull();
+    expect(object.raw["$schema"]).toEqual({ id: "nen.contract", version: 1 });
+    expect(parse({ $schema: 7, dependency: DEPENDENCY }).schema).toBeNull();
+    expect(parse({ $schema: "nen.contract/v0.1", dependency: DEPENDENCY }).schema).toBe(
+      "nen.contract/v0.1",
+    );
   });
 });
 
@@ -159,6 +176,38 @@ describe("project", () => {
 
   it("refuses an EMPTY lane map", () => {
     expect(refusal({ project: { lanes: {}, verbs: {} } }).message).toContain("declares no lane");
+  });
+
+  it("refuses an EMPTY verb map, at both levels, exactly as lanes does", () => {
+    // `verbs` is REQUIRED, and its absence has its own sentence -- but `{}`,
+    // `{"web": {}}` and a map holding only a `$comment` were all accepted, and
+    // all three are the same file with the same consequence: a project block
+    // that declares a stack nothing can be run against. The emptiness test has
+    // to run AFTER the `$`-filter, or a map of pure metadata reads as populated.
+    expect(refusal({ project: { ...PROJECT, verbs: {} } }).pointer).toBe("project.verbs");
+    expect(refusal({ project: { ...PROJECT, verbs: {} } }).message).toContain("declares no lane");
+
+    const onlyComment = refusal({ project: { ...PROJECT, verbs: { $comment: "notes" } } });
+    expect(onlyComment.pointer).toBe("project.verbs");
+    expect(onlyComment.message).toContain("declares no lane");
+
+    const emptyLane = refusal({ project: { ...PROJECT, verbs: { web: {} } } });
+    expect(emptyLane.pointer).toBe("project.verbs.web");
+    expect(emptyLane.message).toContain("declares no verb for lane 'web'");
+    expect(emptyLane.message).toContain("unsupported");
+
+    const laneOfComments = refusal({
+      project: { ...PROJECT, verbs: { web: { $comment: "notes" } } },
+    });
+    expect(laneOfComments.pointer).toBe("project.verbs.web");
+    expect(laneOfComments.message).toContain("declares no verb");
+
+    // …and the shape that says "this lane genuinely runs nothing" is still
+    // accepted, because it says so in the repository's own words.
+    expect(
+      parse({ project: { ...PROJECT, verbs: { web: { build: { unsupported: "no build step" } } } } })
+        .project?.verbs["web"]?.["build"]?.kind,
+    ).toBe("unsupported");
   });
 
   for (const field of ["stack", "cwd"] as const) {
@@ -333,6 +382,39 @@ describe("project.toolchain", () => {
   it("refuses a probe written as a string", () => {
     expect(refusal(withToolchain({ ...NODE, probe: "node --version" })).message).toContain(
       "argv ARRAY",
+    );
+  });
+});
+
+describe("describeContract, the one line `schema check` prints", () => {
+  it("counts in the singular when there is one of a thing", () => {
+    // `lanes` and `toolchain entries` were already pluralised and `verbs` was
+    // not, so the smallest legal project block printed "1 lane … 1 verbs".
+    expect(describeContract(parse({ project: PROJECT }))).toBe(
+      "project (1 lane: web; 1 verb; 0 toolchain entries)",
+    );
+  });
+
+  it("counts in the plural when there is more than one", () => {
+    const contract = parse({
+      project: {
+        lanes: { web: { stack: "nextjs", cwd: "." }, api: { stack: "node", cwd: "api" } },
+        verbs: {
+          web: { build: { exe: "pnpm", argv: ["build"] } },
+          api: { build: { exe: "pnpm", argv: ["build"] } },
+        },
+        toolchain: {
+          node: {
+            version: ">=20.19.0",
+            probe: ["node", "--version"],
+            versionFrom: "first-semver-on-stdout",
+            installer: "verify-only",
+          },
+        },
+      },
+    });
+    expect(describeContract(contract)).toBe(
+      "project (2 lanes: web, api; 2 verbs; 1 toolchain entry)",
     );
   });
 });

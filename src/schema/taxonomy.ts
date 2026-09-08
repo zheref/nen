@@ -31,11 +31,12 @@ import {
   CONTRACT_FILE,
   GATES_FILE,
   LABELS_FILE,
+  inspectShadow,
   LEGACY_FALLBACK_REMOVED_IN,
   REPOS_FILE,
   resolveSchemaFile,
-  shadowState,
   type SchemaLocation,
+  type ShadowState,
 } from "./source.js";
 
 export interface Taxonomy {
@@ -98,11 +99,21 @@ export interface SchemaCheck {
    */
   readonly required: boolean;
   /**
-   * `true` when a DIFFERENT copy of this file is still sitting at the legacy
-   * `schemas/` path. Nen read the `nen/` one; the legacy one is a stale
-   * taxonomy somebody may still be editing, so the row FAILS even though the
-   * load succeeded -- a silent win for `nen/` is exactly how the wrong file
-   * stays on disk for a year.
+   * What the two copies of this file had to say to each other: `none` when only
+   * one location carries it, `identical` / `different` when both were read, and
+   * `unknown` when one of them would not open at all. Published because
+   * `different` and `unknown` are the same VERDICT and different FACTS, and a
+   * machine reader that has only the boolean below cannot tell "the bytes
+   * disagree" from "nen could not look".
+   */
+  readonly shadow: ShadowState;
+  /**
+   * `true` when a legacy copy at the `schemas/` path is unaccounted for --
+   * either its bytes DIFFER from the `nen/` one, or nen could not read one of
+   * the two to compare them. The row FAILS in both cases even though the load
+   * may have succeeded: a silent win for `nen/` is exactly how the wrong file
+   * stays on disk for a year, and an unverifiable pair is not evidence that the
+   * right one won.
    */
   readonly shadowed: boolean;
   /**
@@ -116,7 +127,10 @@ export interface SchemaCheck {
 export interface CheckReport {
   readonly root: string;
   readonly checks: readonly SchemaCheck[];
-  /** False when any REQUIRED file failed, or any file is shadowed by a different legacy copy. */
+  /**
+   * False when any REQUIRED file failed, or any file's legacy copy is
+   * unaccounted for -- different bytes, or a comparison nen could not make.
+   */
   readonly ok: boolean;
   /**
    * Every migration sentence the run produced, in row order, so a machine
@@ -126,18 +140,29 @@ export interface CheckReport {
   readonly deprecations: readonly string[];
 }
 
-// The two sentences a consumer mid-migration needs, written once so the four
-// files cannot disagree about what they promise.
+// The sentences a consumer mid-migration needs, written once so the four files
+// cannot disagree about what they promise.
+//
+// THE FOURTH ONE EXISTS BECAUSE THE THIRD MUST NOT COVER IT. "Its bytes DIFFER",
+// "Nen read '<canonical>'" and "delete the other one" are three claims that all
+// happen to be false in the state where the comparison could not be made at
+// all: when it is the CANONICAL copy that will not open, nen did not read it,
+// nobody knows whether the bytes differ, and the file being nominated for
+// deletion is the only one still working.
 function migrationNote(
   canonical: string,
   legacy: string,
-  kind: "read" | "shadow-different" | "shadow-identical",
+  kind: "read" | "shadow-different" | "shadow-identical" | "shadow-unknown",
+  errno: string | null = null,
 ): string {
   if (kind === "read") {
     return `legacy location. Move it to '${canonical}'; the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`;
   }
   if (kind === "shadow-identical") {
     return `an identical copy is still at '${legacy}'. Deleting it is free today; the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`;
+  }
+  if (kind === "shadow-unknown") {
+    return `UNVERIFIED LEFTOVER: '${legacy}' is also present, and nen could not read one of the two copies to compare them (${errno ?? "no errno reported"}). It does not know whether they agree, and it is not telling you to delete either one until they can be compared -- if it is '${canonical}' that will not open, that is the file to fix. Fail-closed, so this row fails the report; the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`;
   }
   return `SHADOWED LEFTOVER: '${legacy}' is also present and its bytes DIFFER from '${canonical}'. Nen read '${canonical}'; whoever is editing the other file is editing nothing. Delete it, or reconcile it into '${canonical}' -- the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`;
 }
@@ -151,21 +176,26 @@ function run(
   const resolved = resolveSchemaFile(root, relative);
   const { path, location } = resolved;
   const file = resolved.relative;
-  const shadow = shadowState(resolved);
+  const { state: shadow, errno } = inspectShadow(resolved);
   const legacyRelative = resolved.legacy?.relative ?? null;
-  const shadowed = shadow === "different";
+  // BOTH UNACCOUNTED-FOR STATES FAIL. `unknown` is not proof of a problem, but
+  // it is the absence of proof that there is none, and this is the one check
+  // whose entire job is to notice that two files disagree.
+  const shadowed = shadow === "different" || shadow === "unknown";
   const note =
     legacyRelative === null
       ? null
       : shadow === "different"
         ? migrationNote(resolved.canonical.relative, legacyRelative, "shadow-different")
-        : shadow === "identical"
-          ? migrationNote(resolved.canonical.relative, legacyRelative, "shadow-identical")
-          : location === "schemas"
-            ? migrationNote(resolved.canonical.relative, legacyRelative, "read")
-            : null;
+        : shadow === "unknown"
+          ? migrationNote(resolved.canonical.relative, legacyRelative, "shadow-unknown", errno)
+          : shadow === "identical"
+            ? migrationNote(resolved.canonical.relative, legacyRelative, "shadow-identical")
+            : location === "schemas"
+              ? migrationNote(resolved.canonical.relative, legacyRelative, "read")
+              : null;
   try {
-    return { file, path, location, ok: true, detail: load(), required, shadowed, note };
+    return { file, path, location, ok: true, detail: load(), required, shadow, shadowed, note };
   } catch (error) {
     return {
       file,
@@ -173,8 +203,6 @@ function run(
       location,
       ok: false,
       detail: error instanceof SchemaError ? error.message : String(error),
-      shadowed,
-      note,
       // ABSENT AND CORRUPT ARE NOT THE SAME FINDING, and conflating them was a
       // real hole. `required` is what decides whether the overall report fails,
       // and gates.json is declared optional because only the readiness verbs
@@ -187,7 +215,13 @@ function run(
       //
       // ENOENT is the one the loaders phrase as "no such file"; anything else
       // reaching here got past the read and failed validation.
+      //
+      // The field order matches the success branch above, so that `--json`
+      // publishes one key order for every row rather than one per outcome.
       required: required || !isAbsentFileError(error),
+      shadow,
+      shadowed,
+      note,
     };
   }
 }
@@ -254,11 +288,13 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
   return {
     root,
     checks,
-    // A SHADOWED LEFTOVER FAILS THE REPORT even though its file loaded. The
-    // alternative is a repository where `nen/` quietly wins, the stale
+    // AN UNACCOUNTED-FOR LEFTOVER FAILS THE REPORT even though its file loaded.
+    // The alternative is a repository where `nen/` quietly wins, the stale
     // `schemas/` copy is the one a human keeps editing, and nothing on screen
     // ever says so -- which is the single failure the fallback was most likely
-    // to introduce, so it is the one this verb refuses to pass.
+    // to introduce, so it is the one this verb refuses to pass. A pair nen
+    // could not compare fails the same way and for the same reason, while
+    // saying a different thing on screen.
     ok: checks.every((check): boolean => (check.ok || !check.required) && !check.shadowed),
     deprecations: checks
       .map((check): string | null => (check.note === null ? null : `${check.file}: ${check.note}`))

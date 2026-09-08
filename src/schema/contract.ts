@@ -6,8 +6,17 @@
 //
 //   * `dependency` -- the pin. Which nen version this repository requires, the
 //     ref its bootstrap installs, how to probe the installed one. zheref/hatsu
-//     already ships exactly this object at its repository root; the move here
-//     wraps it in a key and changes nothing else.
+//     already ships this object, near enough, at its repository root -- but
+//     "near enough" is not "verbatim", and the difference is the migration:
+//     hatsu's root `nen.contract.json` ALREADY HAS a top-level `dependency`
+//     key, with `bootstrap`, `install_paths`, `halt`, `no_improvised_fallback`
+//     and `no_jq` sitting BESIDE it rather than inside it, and writes
+//     `version_probe` as the string "nen --version". Moving that file here
+//     unchanged is refused at `dependency.version_probe` (argv is a list here)
+//     and then at `dependency.bootstrap` (absent, because it is a sibling).
+//     The move is: keep the `dependency` key, pull `bootstrap` and its fellow
+//     siblings INSIDE it -- where they are preserved verbatim as unknown keys
+//     -- and write the probe as ["nen", "--version"].
 //   * `project` -- the stack declaration. Lanes, per-lane verbs, the host
 //     toolchain, preconditions nen ASSERTS and never performs.
 //
@@ -25,12 +34,19 @@
 // A FILE WITH NEITHER BLOCK IS REFUSED, and that is a decision rather than an
 // oversight. "Both blocks are optional" makes an EMPTY object formally legal and
 // operationally useless -- no verb can ever read it -- while the shape that
-// produces one in practice is the migration typo this loader exists to catch: a
-// consumer moving its root `nen.contract.json` here and forgetting to wrap the
-// object in `dependency`, whose every key then lands at the top level, gets
-// preserved as an unknown key, and validates silently. Refusing costs a
-// repository nothing (delete the file, or add a block) and catches the one
-// mistake that would otherwise ship a contract nen reads as blank.
+// produces one in practice is a migration typo: a consumer moving a root
+// contract here and forgetting to wrap the object in `dependency`, whose every
+// key then lands at the top level, gets preserved as an unknown key, and
+// validates silently. Refusing costs a repository nothing (delete the file, or
+// add a block) and catches the one mistake that would otherwise ship a contract
+// nen reads as blank.
+//
+// THIS GUARD IS NOT THE ONE THAT CATCHES HATSU. A document that already carries
+// a `dependency` key sails past it and is caught, loudly and by pointer, inside
+// the block instead -- which is the better refusal of the two, because it names
+// the field. The empty-block guard is for the shape with no `dependency` key at
+// all; both refusals exist because a contract nen cannot read is worse than no
+// contract, whichever way it got that way.
 //
 // UNKNOWN KEYS ARE PRESERVED, NEVER REJECTED. `dependency` carries prose keys
 // (`authority`, `zero_major_caveat`, `install_paths`, `halt`, `no_jq`) that are
@@ -188,7 +204,10 @@ export interface ProjectBlock {
 export interface RepositoryContract {
   /** Absolute path of the file this was read from. */
   readonly path: string;
-  /** Which of `nen/` and `schemas/` answered. */
+  /**
+   * Which of `nen/` and `schemas/` answered. Always `nen` for this file: the
+   * contract has no legacy location, because no released nen ever read one.
+   */
   readonly location: SchemaLocation;
   readonly schema: string | null;
   readonly dependency: DependencyBlock | null;
@@ -393,7 +412,28 @@ function parseVerbs(
       // `resume:pdf`; a closed verb list here would make this file nen's.
       parsed[verb] = parseInvocation(path, `${pointer}.${verb}`, invocation);
     }
+    // EMPTY IS REFUSED AT BOTH LEVELS, exactly as `project.lanes` refuses it,
+    // and for the same reason: `$`-prefixed metadata is skipped above, so a map
+    // holding only a `$comment` is empty here even though the file looks
+    // populated -- and `{}` after the filter is a declaration that says nothing.
+    // `parseProjectBlock` already refuses an ABSENT `verbs` with a sentence
+    // about a stack nothing can be run against; `{}` and `{"web": {}}` are that
+    // same file with the same consequence, and were passing.
+    if (Object.keys(parsed).length === 0) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `declares no verb for lane '${lane}'. A lane listed under project.verbs is a lane something can be run in; state its verbs, using {"unsupported": "<why>"} for the ones it genuinely has none of, or drop the lane from project.verbs entirely`,
+      );
+    }
     verbs[lane] = parsed;
+  }
+  if (Object.keys(verbs).length === 0) {
+    throw new SchemaError(
+      path,
+      "project.verbs",
+      'declares no lane. A project block exists to say what this repository can be asked to run; an empty verb map declares a stack nothing can be run against. State the verbs per lane, using {"unsupported": "<why>"} for the ones this repository genuinely has none of',
+    );
   }
   return verbs;
 }
@@ -554,7 +594,14 @@ export function parseContract(
   return {
     path,
     location,
-    schema: optionalString(path, "$schema", raw["$schema"]),
+    // `$schema` IS A `$`-KEY LIKE EVERY OTHER, and this loader's header says
+    // those are "read by nobody". Requiring it to be a STRING made it the one
+    // `$`-key that could FAIL a document -- a repository whose `$schema` is an
+    // object (a JSON Schema written inline, a `{"id": …, "version": …}` pair)
+    // would be refused over a field nen does not use. It is surfaced when it
+    // happens to be a string, ignored otherwise, and preserved either way by
+    // `raw`, which is what every other `$`-key already gets.
+    schema: typeof raw["$schema"] === "string" && raw["$schema"] !== "" ? raw["$schema"] : null,
     dependency: hasDependency ? parseDependencyBlock(path, raw["dependency"]) : null,
     project: hasProject ? parseProjectBlock(path, raw["project"]) : null,
     raw,
@@ -590,7 +637,7 @@ export function describeContract(contract: RepositoryContract): string {
     );
     const tools = Object.keys(contract.project.toolchain).length;
     blocks.push(
-      `project (${lanes.length} ${lanes.length === 1 ? "lane" : "lanes"}: ${lanes.join(", ")}; ${verbs} verbs; ${tools} toolchain ${tools === 1 ? "entry" : "entries"})`,
+      `project (${lanes.length} ${lanes.length === 1 ? "lane" : "lanes"}: ${lanes.join(", ")}; ${verbs} ${verbs === 1 ? "verb" : "verbs"}; ${tools} toolchain ${tools === 1 ? "entry" : "entries"})`,
     );
   }
   return blocks.join(", ");
