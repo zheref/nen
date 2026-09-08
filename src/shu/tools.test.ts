@@ -31,11 +31,13 @@ import { ENABLED_INSTALLERS, readManifestPin, resolveInstall } from "./install.j
 import {
   compareVersions,
   extractVersion,
+  MAX_FOUND,
   parseVersion,
   parsePin,
   satisfiesMinimum,
   parseMinimum,
   satisfiesPin,
+  truncate,
 } from "./toolchain.js";
 
 /**
@@ -1526,6 +1528,34 @@ describe("the refusals", () => {
     expect(parsed.tools[0]?.packMinimum).toBeNull();
   });
 
+  it("prints NO document under --json when it refuses, exactly as the family does", async () => {
+    // THE FAMILY'S RULE, STATED RATHER THAN INVENTED AROUND. Every refusal in
+    // this CLI is a line on stderr and an empty stdout (../index.ts's
+    // `runFamily`), and a `--json` reader therefore never has to tell a report
+    // from an error object on the same stream. A refusal envelope for this one
+    // verb would be a second shape only this verb has -- and the caller who
+    // wants a machine-readable pre-flight already has `--dry-run --json`.
+    const refusals: readonly (readonly string[])[] = [
+      ["--install", "--json"],
+      ["--only", "pnmp", "--json"],
+      ["--lane", "nowhere", "--json"],
+      ["--install", "--only", "node", "--json"],
+    ];
+    for (const argv of refusals) {
+      const result = await capture(argv, {
+        platform: "win32",
+        script: withProbe("pnpm --version", { spawnFailed: true, code: -1 }),
+      });
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.out, argv.join(" ")).toEqual([]);
+      expect(result.err.length, argv.join(" ")).toBeGreaterThan(0);
+    }
+    // The pre-flight that IS a document, for the same declaration.
+    const preflight = await capture(["--install", "--dry-run", "--json"], { platform: "win32" });
+    expect(preflight.code).toBe(0);
+    expect(() => JSON.parse(preflight.out.join("\n"))).not.toThrow();
+  });
+
   it("refuses a sibling verb's flag rather than ignoring it", async () => {
     const result = await capture(["--write"]);
     expect(result.code).toBe(2);
@@ -1643,6 +1673,108 @@ describe("the install plan is decided against the HOST, and the host is injected
       );
       expect(new Set(plans).size, installer).toBe(1);
     }
+  });
+});
+
+// ── (j) the mutants this suite let live ────────────────────────────────────
+//
+// Four rules the code states and the suite did not pin: a mutation testing run
+// changed each one and every test still passed. They are here as their own
+// section, in the mutation-testing idiom this repository already uses -- a
+// surviving mutant is a missing test, and the missing test is written where the
+// rule is, not where it happened to be noticed.
+
+describe("the rules a mutation run walked through", () => {
+  it("matches --only EXACTLY: not by case", async () => {
+    // A tool name is the declaration's own spelling, and two spellings that
+    // differ only in case are two different tools to every other part of this
+    // verb (the row, the argv, the manifest cross-check). A `--only PNPM` that
+    // quietly matched `pnpm` would install a row the caller did not name.
+    const result = await capture(["--only", "PNPM"], { script: ALL_PRESENT });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--only names 'PNPM'/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("matches --only EXACTLY: not by prefix", async () => {
+    // `--only pn` is a typo, not a filter. Matching it would silently widen a
+    // narrowing flag -- the one flag whose whole job is to narrow.
+    for (const typo of ["pn", "pnpm-", "node2", "ode"]) {
+      const result = await capture(["--only", typo], { script: ALL_PRESENT });
+      expect(result.code, typo).toBe(2);
+      expect(result.err.join("\n"), typo).toMatch(/which this repository does not declare/);
+      expect(result.seams.calls, typo).toEqual([]);
+    }
+  });
+
+  it("prints no install command for a row that already passes", async () => {
+    // The usage text says `installCommand` is non-null only when there is
+    // something to do, and `pnpm` is the row that makes this provable: its
+    // installer IS the one nen runs, so the only thing suppressing the command
+    // is the row passing.
+    const check = await capture(["--only", "pnpm", "--json"], { script: [PM_OK] });
+    expect(row(check, "pnpm")).toMatchObject({ satisfied: true, installCommand: null });
+    const text = await capture(["--only", "pnpm"], { script: [PM_OK] });
+    expect(text.out.join("\n")).not.toMatch(/install:/);
+    // And the same row, failing, DOES print it -- so the assertion above is
+    // about the row's state and not about a command that was never there.
+    const failing = await capture(["--only", "pnpm", "--json"], {
+      script: [{ match: "pnpm --version", result: { stdout: "9.0.0\n" } }],
+    });
+    expect(row(failing, "pnpm").installCommand).toEqual([
+      "corepack enable",
+      "corepack prepare pnpm@9.15.9 --activate",
+    ]);
+  });
+
+  it("does not treat a probe's exit code as the verdict, for the three version members", async () => {
+    // A tool that printed its version and exited non-zero is PRESENT, and the
+    // version it printed is the observation. Only a failure to START it means
+    // missing -- which is why the seam keeps `spawnFailed` apart from a
+    // non-zero code in the first place.
+    const result = await capture(["--json"], {
+      script: [
+        { match: "nen --version", result: { code: 3, stdout: "0.3.1\n" } },
+        { match: "node --version", result: { code: 1, stdout: "v22.11.0\n" } },
+        { match: "pnpm --version", result: { code: 127, stdout: "9.15.9\n" } },
+        { match: "placeholder-jdk -version", result: { code: 2, stderr: 'openjdk version "17.0.9"\n' } },
+        SDK_OK,
+        WRAPPER_OK,
+      ],
+    });
+    expect(result.code).toBe(0);
+    for (const name of ["nen", "node", "pnpm", "placeholder-jdk"]) {
+      expect(row(result, name), name).toMatchObject({ state: "present-and-matching" });
+    }
+    // THE COUNTER-CASE, so this is a rule and not a blanket: for `path-exists`
+    // the exit code IS part of the answer, because that member has no version
+    // to stand as evidence that the tool answered at all.
+    const pathRow = await capture(["--only", "placeholder-sdk", "--json"], {
+      script: [{ match: "placeholder-sdk-select -p", result: { code: 1, stdout: "sdk-root\n" } }],
+    });
+    expect(row(pathRow, "placeholder-sdk").state).toBe("missing");
+  });
+
+  it("caps every observed string at MAX_FOUND, in the report and in the table", async () => {
+    // `whole-line-stdout` hands back whatever the probe printed; without the
+    // cap a probe that printed a paragraph puts a paragraph in a table cell and
+    // in a --json field.
+    expect(truncate("x".repeat(MAX_FOUND))).toHaveLength(MAX_FOUND);
+    expect(truncate("x".repeat(MAX_FOUND + 1))).toBe(`${"x".repeat(MAX_FOUND)}...`);
+    expect(truncate("x".repeat(MAX_FOUND * 10))).toHaveLength(MAX_FOUND + 3);
+
+    // End to end: the fixture's `pnpm` row reads a WHOLE LINE, so a paragraph
+    // on stdout is the one way arbitrary text reaches `found`.
+    const shout = `${"L".repeat(400)}`;
+    const result = await capture(["--only", "pnpm", "--json"], {
+      script: [{ match: "pnpm --version", result: { stdout: `${shout}\n` } }],
+    });
+    expect(row(result, "pnpm").found).toBe(`${"L".repeat(MAX_FOUND)}...`);
+    // And the same cap on the OTHER field that quotes a probe.
+    const unreadable = await capture(["--json"], {
+      script: withProbe("node --version", { stdout: `${shout}\n` }),
+    });
+    expect(row(unreadable, "node").probeOutput).toBe(`${"L".repeat(MAX_FOUND)}...`);
   });
 });
 
