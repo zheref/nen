@@ -22,8 +22,8 @@ different things.
   test asserts the same behaviour against both, that pair IS the proof that the
   names are data. Its `nen/contract.json` carries **`dependency` only** — the
   shape a plugin repository has, and the proof the two blocks are independent.
-- `legacy-repo/schemas/` — **not migrated**, and nothing under `nen/`. A copy of
-  `bankai-repo`'s four taxonomy files at the pre-v0.3 location, so the
+- `legacy-repo/schemas/` — **not migrated**, and nothing under `nen/`. The same
+  four taxonomy files as `bankai-repo`, at the pre-v0.3 location, so the
   `schemas/` fallback is exercised by a real repository root rather than by a
   temp directory a test builds. It is the ONLY thing in this tree keeping the
   old layout alive, which is what makes the v0.4.0 removal a deletion of one

@@ -51,7 +51,7 @@ categories:
 
   severity:
     scope: A finding's or issue's severity.
-    label_source: schemas/labels.json
+    label_source: nen/labels.json
     values:
       critical:
         emoji: "🛑"
