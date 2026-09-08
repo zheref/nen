@@ -366,8 +366,12 @@ through `corepack` with `--install` — every other declared installer is
 verify-only in this release. `nen shu warmup` is the one verb in the family that
 mutates git state: it warms a **working copy** (clean → fetch → fast-forward the
 trunk → cut your branch → verify the declared build), refusing at exit 2 rather
-than guessing at every step, and it is *not* the top-level `nen warmup`, which
-sweeps a **registry** for stale pins and reads only.
+than guessing at every step. Every check that needs no mutation is made *before*
+`--discard` destroys anything, so a mistyped `--branch` costs nothing; and what
+`--discard` ran is not what it achieved, so the tree is read again afterwards and
+whatever survived — a nested repository, a dirty submodule — is named rather than
+reported as clean. It is *not* the top-level `nen warmup`, which sweeps a
+**registry** for stale pins and reads only.
 
 What each verb can run **per stack** is written down in
 [`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
