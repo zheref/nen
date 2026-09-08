@@ -9,6 +9,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { readJsonFile, splitList } from "../cli/inputs.js";
+import { describeValue, rowLabel } from "../cli/shape.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { GH, mustJson, type Seams } from "../seam/exec.js";
 import { assembleRows, type RawIssue, type RawPr } from "./fetch.js";
@@ -38,6 +39,22 @@ order:
   issue number.
   --rows-from <path>        A JSON array of rows: { id, severity, createdAt,
                             number }, e.g. 'backlog fetch --json' reshaped.
+                            VALIDATED at the read seam: a wrong shape --
+                            including 'backlog fetch --json' output handed
+                            straight through, which is an OBJECT of
+                            { issueNumber, title, labels, prNumbers, createdAt }
+                            rows, not this array -- is refused (exit 2) by
+                            file, row and field, never crashes. Reshape a
+                            fetch result as: 'id'/'number' from 'issueNumber'
+                            (or the lone 'prNumbers' entry for a PR-only
+                            effort), 'severity' from each row's labels,
+                            'createdAt' as an ISO-8601 instant (ordering
+                            compares it as plain text, so a non-ISO value
+                            mis-sorts silently). Blocking/affecting is NEVER a
+                            row field: it is named on the COMMAND LINE
+                            instead, via --blocks/--affects-consumers below --
+                            'order' never reads
+                            'blocksOther'/'affectsConsumers' from this file.
   --severity-order <a,b,..> This repository's own severity vocabulary, in
                             priority order. A row whose severity is not in
                             this list ranks LAST.
@@ -228,6 +245,104 @@ function requireTokensMatch(
   }
 }
 
+interface InRow {
+  readonly id: string;
+  readonly severity: string | null;
+  readonly createdAt: string;
+  readonly number: number;
+}
+
+const ROW_SHAPE = "{ id, severity, createdAt, number }";
+
+// EVERY ROW IS VALIDATED AT THE JSON BOUNDARY, NOT CAST PAST IT (#105).
+// `readJsonFile<readonly InRow[]>` used to be a compile-time assertion about
+// runtime data: `--rows-from` given anything else at all -- a bare object, a
+// non-array, a row missing a field -- sailed straight through the cast. The
+// worst case was not even a row problem: `backlog fetch --json`'s OWN output
+// (`{ repo, truncated, rows, issueCount, prCount }`, an OBJECT, not the array
+// `order` expects) reached `requireTokensMatch`'s `for (const row of rows)`
+// as a bare object, which is not iterable, and crashed with the raw
+// "nen backlog: {} is not iterable" at exit 1 -- naming no file, no row, no
+// field, on an input this verb's OWN --help already anticipated ("e.g.
+// 'backlog fetch --json' reshaped") but never actually checked for. Mirrors
+// ../board/command.ts's validateBoardRows()/validateBoard() (#32/#68/#92),
+// this repository's exemplar for exactly this crash class: refuse by file,
+// row and field, exit 2, never crash.
+//
+// 'number' IS DELIBERATELY LEFT UNCHECKED HERE. #24/#64 already made the
+// --blocks/--affects-consumers matching layer below (bareNumberToken,
+// rowMatches) tolerant of a row whose 'number' is missing or not a clean
+// digit-only value -- such a row just never joins the bare-number match
+// path, on purpose, rather than being refused. Requiring 'number' here too
+// would refuse that same row one step earlier, for a field this codebase has
+// already decided is safe to degrade on.
+//
+// describeValue() and rowLabel() live in ../cli/shape.js, shared with
+// ../board/command.ts's validateBoardRows()/validateBoard() (#105 review,
+// minor 1) -- this file had grown a byte-for-byte copy of both; see that
+// module's header for why they now live in one place.
+
+// Detects specifically the `backlog fetch --json` envelope this file's own
+// `fetch()` emits (`emit(context.io, context.json, { repo, truncated,
+// ...assembly }, lines)`, where `assembly` is `fetch.ts`'s `Assembly`): an
+// OBJECT carrying a `rows` array plus `issueCount`/`prCount`. A caller who
+// pipes that straight into `--rows-from` -- the single most likely wrong
+// input, since `order`'s own --help says fetch output belongs here, reshaped
+// -- gets told exactly that, instead of a generic "must be an array" that
+// leaves them guessing what shape they actually have.
+function looksLikeFetchOutput(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+  const obj = raw as Record<string, unknown>;
+  return Array.isArray(obj["rows"]) && (typeof obj["issueCount"] === "number" || typeof obj["prCount"] === "number");
+}
+
+function validateOrderRows(raw: unknown, path: string): readonly InRow[] {
+  if (looksLikeFetchOutput(raw)) {
+    throw new VerbUsageError(
+      `'${path}' looks like 'backlog fetch --json' output (an OBJECT with a 'rows' array of { issueNumber, title, labels, prNumbers, createdAt }), not the JSON ARRAY of ${ROW_SHAPE} that 'order' expects. Reshape it first: 'id'/'number' from 'issueNumber' (or the lone 'prNumbers' entry for a PR-only effort), 'severity' from each row's labels, 'createdAt' as an ISO-8601 instant -- then pass the reshaped array. Blocking another issue and affecting consumer behaviour/DX are never row fields here: they are your own judgement, named on the COMMAND LINE instead, via --blocks/--affects-consumers -- 'order' does not read 'blocksOther'/'affectsConsumers' from this file. Run 'nen backlog --help'.`,
+    );
+  }
+  if (!Array.isArray(raw)) {
+    throw new VerbUsageError(
+      `'${path}' must be a JSON ARRAY of rows ${ROW_SHAPE}, got ${describeValue(raw)}. A single row is a one-element array, never a bare object.`,
+    );
+  }
+  return raw.map((item: unknown, index: number): InRow => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new VerbUsageError(
+        `'${path}': row at index ${index} is ${describeValue(item)}, not a row object ${ROW_SHAPE}.`,
+      );
+    }
+    const row = item as Record<string, unknown>;
+    const label = rowLabel(row, index);
+
+    const id = row["id"];
+    if (typeof id !== "string") {
+      throw new VerbUsageError(
+        `'${path}': ${label} needs a string 'id', got ${describeValue(id)}. The id is how --blocks/--affects-consumers and the ordered output address a row.`,
+      );
+    }
+    const severity = row["severity"];
+    if (severity !== null && typeof severity !== "string") {
+      throw new VerbUsageError(
+        `'${path}': ${label} needs a string 'severity', or null for a row that carries no severity label (it ranks last), got ${describeValue(severity)}. An omitted field is not the same statement as null -- only null says so explicitly.`,
+      );
+    }
+    const createdAt = row["createdAt"];
+    if (typeof createdAt !== "string") {
+      throw new VerbUsageError(
+        `'${path}': ${label} needs a string 'createdAt', got ${describeValue(createdAt)}. Age (oldest first) is the third ordering key.`,
+      );
+    }
+    return {
+      id,
+      severity,
+      createdAt,
+      number: row["number"] as number,
+    };
+  });
+}
+
 function order(context: CommandContext): number {
   const path = requireValue(context.args, "rows-from", "The JSON row array to order.");
   const orderRaw = requireValue(context.args, "severity-order", "This repository's own severity vocabulary, in priority order.");
@@ -236,13 +351,7 @@ function order(context: CommandContext): number {
   const affects = new Set(splitList(context.args.values["affects-consumers"]));
 
   const cwd = resolveRepoRoot({ repoFlag: context.repoFlag });
-  interface InRow {
-    readonly id: string;
-    readonly severity: string | null;
-    readonly createdAt: string;
-    readonly number: number;
-  }
-  const input = readJsonFile<readonly InRow[]>(path, cwd);
+  const input = validateOrderRows(readJsonFile<unknown>(path, cwd), path);
   requireTokensMatch(blocks, affects, input);
   const rows: OrderableRow[] = input.map((row): OrderableRow => ({
     id: row.id,

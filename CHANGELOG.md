@@ -10,6 +10,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 - **epic** — `nen epic next-wave` treats every ref spelling inside a `blocked by` / `blocks` clause (bare `#N`, `owner/repo#N`, a markdown link) as an edge, never the line's identity, and finds the clause even when a prose `blocked by` precedes it; a line whose only ref sits inside a clause is reported as unparsed instead of becoming a phantom child ([#103](https://github.com/zheref/nen/pull/103), closes #97)
 - **parse** — izanami's automation-policy classifier answers a verb that is mutating in every form (`tag cut`, `label apply`, `pr retarget`, …) as `mutating` with its own reason even when `--` is present, instead of a generic `unknown`; the refusal is unchanged ([#104](https://github.com/zheref/nen/pull/104))
 - **parse** — the shell-metacharacter refusal renders the caller's line safely when it contains a quote or backslash ([#104](https://github.com/zheref/nen/pull/104))
+- **backlog** — `nen backlog order --rows-from` validates the row document at the read seam and refuses a wrong shape at exit 2 naming the file, row and field — including `backlog fetch --json`'s own output, which must be reshaped first — instead of crashing with `{} is not iterable` ([#107](https://github.com/zheref/nen/pull/107), closes #105)
 
 ### Changed
 
