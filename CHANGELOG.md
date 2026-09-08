@@ -19,7 +19,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Added
 
-- **profiles** — a bundled, inert catalogue of reference commands per stack (`profiles/<stack>.json`, seven stacks) that nothing which spawns a process may read (pinned by a source-scan test), and `docs/STACK-MATRIX.md`, generated from it by `bun run matrix` and drift-checked in the suite ([#PR](link), closes #111)
+- **profiles** — a bundled, inert catalogue of reference commands per stack (`profiles/<stack>.json`, seven stacks) that nothing which spawns a process may read (pinned by a source-scan test), and `docs/STACK-MATRIX.md`, generated from it by `bun run matrix` and drift-checked in the suite ([#112](https://github.com/zheref/nen/pull/112), closes #111)
 - **docs** — `docs/USAGE.md`: every verb of all 34 families with purpose, arguments, exit codes, `--json` notes and a real example; conventions stated once (`--repo`, `--target`, exit codes, `--dry-run`, taxonomy as data, the bootstrap); six end-to-end developer workflows; a day-to-day-actions cross-reference ([#102](https://github.com/zheref/nen/pull/102), closes #90)
 - **docs** — README gains a "Day to day" section: pin the binary once, set up a repository's taxonomy, and the four verbs a maintainer runs most, each runnable as printed. `docs/USAGE.md`'s workflow 6 is corrected to match: `backlog fetch`, `backlog order` and `board build` do not compose by file, and the reshape between them is the caller's ([#106](https://github.com/zheref/nen/pull/106))
 
