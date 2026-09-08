@@ -79,10 +79,24 @@ export function probeTool(
     }
     const path = isAbsolute(named) ? named : resolve(cwd, named);
     return entryExists(path)
-      ? { kind: "present", version: null }
+      ? { kind: "present", version: null, output: named }
       : { kind: "missing", why: "the path the probe named is not there" };
   }
-  return { kind: "present", version: extractVersion(versionFrom, result.stdout, result.stderr) };
+  // WHAT THE PROBE PRINTED, CARRIED BACK RATHER THAN DROPPED. When no member
+  // could read a version out of it, this line is the finding -- the row says
+  // "present, version unknown", and a reader who cannot see the line has no way
+  // to tell a wrapper's banner from a permission error.
+  //
+  // THE DECLARED STREAM FIRST, THE OTHER AS A FALLBACK: "the declaration named
+  // the wrong stream" is one of the two things this line diagnoses, and quoting
+  // only the empty stream it named would diagnose neither.
+  const declared = versionFrom === "first-semver-on-stderr" ? result.stderr : result.stdout;
+  const other = versionFrom === "first-semver-on-stderr" ? result.stdout : result.stderr;
+  return {
+    kind: "present",
+    version: extractVersion(versionFrom, result.stdout, result.stderr),
+    output: firstLine(declared) ?? firstLine(other),
+  };
 }
 
 /**

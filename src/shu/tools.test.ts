@@ -143,12 +143,38 @@ interface Row {
   readonly name: string;
   readonly required: boolean;
   readonly packMinimum: string | null;
+  readonly pinned: string;
+  readonly versionFrom: string;
+  readonly probe: string;
   readonly found: string | null;
+  readonly probeOutput: string | null;
   readonly satisfied: boolean | null;
   readonly state: string;
   readonly installer: string;
   readonly installCommand: readonly string[] | null;
+  readonly remedy: string | null;
+  readonly install: {
+    readonly steps: readonly {
+      readonly exe: string;
+      readonly argv: readonly string[];
+      readonly exitCode: number | null;
+      readonly durationMs: number | null;
+    }[];
+    readonly outcome: string;
+    readonly failure: string | null;
+  } | null;
   readonly why: string | null;
+}
+
+interface Summary {
+  readonly checked: number;
+  readonly satisfied: number;
+  readonly missing: number;
+  readonly wrong: number;
+  readonly notProbed: number;
+  readonly installed: number;
+  readonly refused: number;
+  readonly notInstallable: number;
 }
 
 interface Report {
@@ -156,6 +182,7 @@ interface Report {
   readonly lane: string | null;
   readonly stack: string | null;
   readonly mode: string;
+  readonly summary: Summary;
   readonly tools: readonly Row[];
   readonly exitCode: number;
 }
@@ -962,6 +989,7 @@ describe("--json -- one object, in one key order", () => {
       "lane",
       "stack",
       "mode",
+      "summary",
       "tools",
       "exitCode",
     ]);
@@ -975,14 +1003,43 @@ describe("--json -- one object, in one key order", () => {
         "name",
         "required",
         "packMinimum",
+        "pinned",
+        "versionFrom",
+        "probe",
         "found",
+        "probeOutput",
         "satisfied",
         "state",
         "installer",
         "installCommand",
+        "remedy",
+        "install",
         "why",
       ]);
     }
+  });
+
+  it("pins the summary's key order, and its arithmetic", async () => {
+    const result = await capture(["--json"], {
+      script: withProbe("pnpm --version", { spawnFailed: true, code: -1 }),
+    });
+    const summary = report(result).summary;
+    expect(Object.keys(summary)).toEqual([
+      "checked",
+      "satisfied",
+      "missing",
+      "wrong",
+      "notProbed",
+      "installed",
+      "refused",
+      "notInstallable",
+    ]);
+    // THE FOUR STATE COUNTS SUM TO `checked`, which is what makes them readable
+    // as a whole rather than as four unrelated numbers.
+    expect(summary.satisfied + summary.missing + summary.wrong + summary.notProbed).toBe(
+      summary.checked,
+    );
+    expect(summary).toMatchObject({ checked: 6, missing: 1, satisfied: 5, installed: 0 });
   });
 
   it("keeps stdout exactly one document", async () => {
@@ -995,6 +1052,207 @@ describe("--json -- one object, in one key order", () => {
       script: withProbe("pnpm --version", { spawnFailed: true, code: -1 }),
     });
     expect(report(failed).exitCode).toBe(failed.code);
+  });
+});
+
+// ── (g2) --json says everything the table says ─────────────────────────────
+//
+// The finding this section exists for: `--json` shipped strictly WEAKER than
+// the text it comes from. The pin, each row's way out, what the probe printed
+// and what an install ran were all in the table and in none of the document --
+// so a REFUSED corepack row and a verify-only row were indistinguishable to a
+// machine reader, and a row nen had just fixed was byte-identical to one that
+// was always fine.
+
+describe("--json carries every value the table prints", () => {
+  it("carries the pin, normalised, for a pin and for a range alike", async () => {
+    const result = await capture(["--json"], { script: ALL_PRESENT });
+    expect(row(result, "pnpm").pinned).toBe("9.15.9");
+    expect(row(result, "node").pinned).toBe(">=20.19.0");
+    // The `nen` row's floor is rendered as the two-sided range it stands for,
+    // exactly as the table shows it.
+    expect(row(result, "nen").pinned).toBe(">=0.3.0 <0.4.0");
+    const text = await capture([], { script: ALL_PRESENT });
+    expect(text.out.join("\n")).toContain("pinned >=0.3.0 <0.4.0");
+  });
+
+  it("carries the probe argv and the versionFrom that reads it", async () => {
+    const result = await capture(["--json"], { script: ALL_PRESENT });
+    expect(row(result, "placeholder-jdk")).toMatchObject({
+      probe: "placeholder-jdk -version",
+      versionFrom: "first-semver-on-stderr",
+    });
+    // `versionFrom` is what makes a satisfied row with NO version readable: the
+    // table says "(presence only)" and the document now says why.
+    expect(row(result, "placeholder-sdk")).toMatchObject({
+      versionFrom: "path-exists",
+      found: null,
+      satisfied: true,
+    });
+  });
+
+  it("tells a REFUSED row from a verify-only row, which `why` could not", async () => {
+    // BOTH ROWS ARE UNRUNNABLE AND `why` IS THE DECLARATION'S REASON FOR THE
+    // PIN -- so before `remedy` these two were the same row to a reader that
+    // could not see the text.
+    const refused = await capture(["--only", "pnpm", "--json"], {
+      platform: "win32",
+      script: [{ match: "pnpm --version", result: { spawnFailed: true, code: -1 } }],
+    });
+    expect(row(refused, "pnpm").remedy).toMatch(/^corepack: REFUSED -- /);
+    expect(row(refused, "pnpm").installCommand).toBeNull();
+
+    const byHand = await capture(["--only", "node", "--json"], {
+      script: [{ match: "node --version", result: { spawnFailed: true, code: -1 } }],
+    });
+    expect(row(byHand, "node").remedy).toMatch(/^verify-only: install by hand -- /);
+
+    const notEnabled = await capture(["--only", "placeholder-sdk", "--json"], {
+      script: [{ match: "placeholder-sdk-select -p", result: { stdout: "no-such-directory\n" } }],
+    });
+    expect(row(notEnabled, "placeholder-sdk").remedy).toMatch(
+      /^sdkmanager: not enabled in this release -- /,
+    );
+
+    const nothing = await capture(["--only", "placeholder-wrapper", "--json"], {
+      script: [{ match: "placeholder-wrapper --version", result: { spawnFailed: true, code: -1 } }],
+    });
+    expect(row(nothing, "placeholder-wrapper").remedy).toMatch(/^wrapper: nothing to install -- /);
+  });
+
+  it("gives a row that passes no way out at all, in either field", async () => {
+    const result = await capture(["--json"], { script: ALL_PRESENT });
+    for (const entry of report(result).tools) {
+      expect([entry.installCommand, entry.remedy], entry.name).toEqual([null, null]);
+    }
+  });
+
+  it("carries the install transcript, so a fixed row is not a row that was fine", async () => {
+    const fixed = await capture(["--install", "--only", "pnpm", "--json"], {
+      staged: true,
+      script: [
+        { match: "pnpm --version", result: { spawnFailed: true, code: -1 } },
+        { match: "corepack enable", result: { code: 0 } },
+        { match: "corepack prepare pnpm@9.15.9 --activate", result: { code: 0 } },
+        { match: "pnpm --version", result: { stdout: "9.15.9\n" } },
+      ],
+    });
+    const install = row(fixed, "pnpm").install;
+    expect(install?.outcome).toBe("installed");
+    expect(install?.failure).toBeNull();
+    expect(install?.steps.map((step): string => [step.exe, ...step.argv].join(" "))).toEqual([
+      "corepack enable",
+      "corepack prepare pnpm@9.15.9 --activate",
+    ]);
+    expect(install?.steps.every((step): boolean => step.exitCode === 0)).toBe(true);
+    expect(install?.steps.every((step): boolean => typeof step.durationMs === "number")).toBe(true);
+    expect(report(fixed).summary.installed).toBe(1);
+
+    // The row that was ALWAYS fine, in the same mode: same state, and an
+    // install object that says nothing ran.
+    const alreadyFine = await capture(["--install", "--only", "pnpm", "--json"], {
+      script: [PM_OK],
+    });
+    expect(row(alreadyFine, "pnpm").state).toBe(row(fixed, "pnpm").state);
+    expect(row(alreadyFine, "pnpm").install).toEqual({
+      steps: [],
+      outcome: "skipped",
+      failure: null,
+    });
+    expect(report(alreadyFine).summary.installed).toBe(0);
+  });
+
+  it("reports a failed install as failed, with the step that stopped it", async () => {
+    const result = await capture(["--install", "--only", "pnpm", "--json"], {
+      script: [
+        { match: "pnpm --version", result: { spawnFailed: true, code: -1 } },
+        { match: "corepack enable", result: { code: 1 } },
+      ],
+    });
+    const install = row(result, "pnpm").install;
+    expect(install?.outcome).toBe("failed");
+    expect(install?.failure).toMatch(/the installer exited 1/);
+    expect(install?.steps).toHaveLength(1);
+  });
+
+  it("leaves `install` null in every mode that installs nothing", async () => {
+    for (const argv of [["--json"], ["--dry-run", "--json"], ["--install", "--dry-run", "--json"]]) {
+      const result = await capture(argv, {
+        script: argv.includes("--dry-run") ? [] : ALL_PRESENT,
+      });
+      for (const entry of report(result).tools) {
+        expect(entry.install, `${argv.join(" ")} / ${entry.name}`).toBeNull();
+      }
+    }
+  });
+
+  it("quotes what an unreadable probe printed, in both surfaces", async () => {
+    // m5: the row says "present, version unknown" and the output used to be
+    // discarded -- the one case where the output IS the finding.
+    const script = withProbe("node --version", { stdout: "a build with no version in it\n" });
+    const json = await capture(["--json"], { script });
+    expect(row(json, "node")).toMatchObject({
+      state: "present-but-wrong-version",
+      found: null,
+      probeOutput: "a build with no version in it",
+    });
+    const text = await capture([], { script });
+    expect(text.out.join("\n")).toMatch(/printed: a build with no version in it/);
+  });
+
+  it("falls back to the other stream when the declared one is empty", async () => {
+    // "the declaration named the wrong stream" is one of the two things this
+    // line diagnoses, and quoting only the empty stream would diagnose neither.
+    const result = await capture(["--json"], {
+      script: withProbe("node --version", { stdout: "", stderr: "permission denied\n" }),
+    });
+    expect(row(result, "node").probeOutput).toBe("permission denied");
+  });
+
+  it("leaves probeOutput null on every row whose version WAS read", async () => {
+    const result = await capture(["--json"], { script: ALL_PRESENT });
+    for (const entry of report(result).tools) {
+      expect(entry.probeOutput, entry.name).toBeNull();
+    }
+  });
+
+  it("renders the table FROM the document, so neither can outgrow the other", async () => {
+    // The structural pin behind this whole section: every way out, every
+    // command, every probe argv and every install step the DOCUMENT carries is
+    // a string the TABLE prints. A field dropped from one goes missing from the
+    // other, loudly, rather than quietly from one of them.
+    const dry = await capture(["--dry-run", "--json"]);
+    const dryText = await capture(["--dry-run"]);
+    for (const entry of report(dry).tools) {
+      expect(dryText.out.join("\n"), entry.name).toContain(entry.probe);
+      expect(dryText.out.join("\n"), entry.name).toContain(entry.pinned);
+      for (const command of entry.installCommand ?? []) {
+        expect(dryText.out.join("\n"), entry.name).toContain(command);
+      }
+      if (entry.remedy !== null) expect(dryText.out.join("\n"), entry.name).toContain(entry.remedy);
+    }
+
+    const installed = await capture(["--install", "--only", "pnpm", "--json"], {
+      staged: true,
+      script: [
+        { match: "pnpm --version", result: { spawnFailed: true, code: -1 } },
+        { match: "corepack enable", result: { code: 0 } },
+        { match: "corepack prepare pnpm@9.15.9 --activate", result: { code: 0 } },
+        { match: "pnpm --version", result: { stdout: "9.15.9\n" } },
+      ],
+    });
+    const installedText = await capture(["--install", "--only", "pnpm"], {
+      staged: true,
+      script: [
+        { match: "pnpm --version", result: { spawnFailed: true, code: -1 } },
+        { match: "corepack enable", result: { code: 0 } },
+        { match: "corepack prepare pnpm@9.15.9 --activate", result: { code: 0 } },
+        { match: "pnpm --version", result: { stdout: "9.15.9\n" } },
+      ],
+    });
+    for (const step of row(installed, "pnpm").install?.steps ?? []) {
+      expect(installedText.out.join("\n")).toContain(`ran: ${[step.exe, ...step.argv].join(" ")}`);
+    }
   });
 });
 

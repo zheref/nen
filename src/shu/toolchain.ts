@@ -58,7 +58,16 @@ export type ToolState =
 export type Observation =
   | { readonly kind: "not-probed" }
   | { readonly kind: "missing"; readonly why: string }
-  | { readonly kind: "present"; readonly version: string | null };
+  | {
+      readonly kind: "present";
+      readonly version: string | null;
+      /**
+       * The first non-empty line the probe printed, kept so a row nen could
+       * read NO version out of can quote what it actually saw. It is what
+       * ./probe.ts looked at, not a second guess at the version.
+       */
+      readonly output: string | null;
+    };
 
 /**
  * A version string, as a comparable value.
@@ -369,6 +378,18 @@ export interface Assessment {
   /** `null` only when nothing was observed -- a dry run. */
   readonly satisfied: boolean | null;
   readonly found: string | null;
+  /**
+   * WHAT THE PROBE PRINTED, kept for exactly one row state and null in every
+   * other: `present-but-wrong-version` with no `found`, which is the row that
+   * says "present, version unknown".
+   *
+   * That row used to discard the output entirely, so a reader was told a
+   * comparison had failed and never told what nen had been looking at -- the
+   * one case where the output IS the finding. Everywhere else it stays null on
+   * purpose: on a satisfied row `found` is the answer, and repeating the line
+   * beside it would be two fields racing to be the version.
+   */
+  readonly probeOutput: string | null;
 }
 
 /**
@@ -386,10 +407,10 @@ export function assess(
   isSatisfied: (found: string) => boolean,
 ): Assessment {
   if (observation.kind === "not-probed") {
-    return { state: "not-probed", satisfied: null, found: null };
+    return { state: "not-probed", satisfied: null, found: null, probeOutput: null };
   }
   if (observation.kind === "missing") {
-    return { state: "missing", satisfied: false, found: null };
+    return { state: "missing", satisfied: false, found: null, probeOutput: null };
   }
   if (observation.version === null) {
     // PRESENCE IS THE WHOLE ANSWER for `path-exists`, because that is what the
@@ -399,13 +420,21 @@ export function assess(
     // null version means the probe answered something no version could be read
     // out of -- present, version unknown, and NOT satisfied.
     return versionFrom === "path-exists"
-      ? { state: "present-and-matching", satisfied: true, found: null }
-      : { state: "present-but-wrong-version", satisfied: false, found: null };
+      ? { state: "present-and-matching", satisfied: true, found: null, probeOutput: null }
+      : {
+          state: "present-but-wrong-version",
+          satisfied: false,
+          found: null,
+          // THE ONE ROW THAT QUOTES THE OUTPUT, capped like every other observed
+          // string that reaches a report.
+          probeOutput: observation.output === null ? null : truncate(observation.output),
+        };
   }
   const satisfied = isSatisfied(observation.version);
   return {
     state: satisfied ? "present-and-matching" : "present-but-wrong-version",
     satisfied,
     found: observation.version,
+    probeOutput: null,
   };
 }

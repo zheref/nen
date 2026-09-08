@@ -265,19 +265,37 @@ flags:
                    keys in order:
                    { contract, lane, stack, verb, steps, cwd, env, host,
                      preconditions, exitCode, durationMs, artifacts, log }.
-                   On 'tools' it is a different, shorter contract
+                   On 'tools' it is a different contract
                    ('nen.shu.tools/v0.1'), keys in order:
-                   { contract, lane, stack, mode, tools, exitCode }, where each
-                   tools[] row is
-                   { name, required, packMinimum, found, satisfied, state,
-                     installer, installCommand, why }.
+                   { contract, lane, stack, mode, summary, tools, exitCode },
+                   where summary is
+                   { checked, satisfied, missing, wrong, notProbed, installed,
+                     refused, notInstallable }
+                   and each tools[] row is
+                   { name, required, packMinimum, pinned, versionFrom, probe,
+                     found, probeOutput, satisfied, state, installer,
+                     installCommand, remedy, install, why }.
+                   IT CARRIES EVERY VALUE THE TABLE PRINTS: the table is
+                   rendered FROM this object, so the two cannot come apart.
                    'state' is present-and-matching | present-but-wrong-version
                    | missing | not-probed -- the last only under --dry-run,
                    where nothing was looked at and 'satisfied' is null.
                    'packMinimum' is ADVISORY: the version nen has been tested
                    against, from the bundled profiles pack. It never moves the
                    exit code. 'installCommand' is non-null only for an
-                   installer nen runs and only when there is something to do.
+                   installer nen runs and only when there is something to do;
+                   'remedy' is the way out IN WORDS for a row with no command,
+                   and exactly one of the two is non-null on a row that needs
+                   one. 'probeOutput' is the first line an unreadable probe
+                   printed, and null on every row whose version WAS read.
+                   'install' is what --install ran here -- steps, outcome
+                   (installed | failed | skipped) and failure -- and null in
+                   every mode that installs nothing; it describes the
+                   INSTALLER, never the host, which is why a row can read
+                   'installed' and 'missing' at once. A REFUSAL PRINTS NO
+                   DOCUMENT: as everywhere else in this CLI, exit 2 is a line
+                   on stderr and an empty stdout, so a --json reader never has
+                   to tell a report from an error object on one stream.
                    'env' is variable NAMES only, never values. 'steps[].exitCode'
                    is the TOOL's code and is null when nothing was run, which is
                    how a --json reader tells a dry run from a real one;
@@ -551,12 +569,8 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
   const mode: ToolsMode = options.dryRun ? "dry-run" : options.install ? "install" : "check";
 
   if (plans.length === 0) {
-    emit(
-      context.io,
-      context.json,
-      assembleToolsReport([], lane, stack, mode, 0),
-      renderToolsReport([], lane, stack, mode),
-    );
+    const empty = assembleToolsReport([], lane, stack, mode, 0);
+    emit(context.io, context.json, empty, renderToolsReport(empty));
     context.io.err(
       `nothing to check: ${opened.path} declares no project.toolchain and no dependency block, so this repository has not said which host tools it needs. Run '${PROGRAM} shu detect --repo ${repoRoot}' to see what is on disk, then write the toolchain entries by hand -- nen reports a pin a repository states and never invents one.`,
     );
@@ -567,15 +581,13 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
   const checked = assessAll(context, plans, cwd, mode, minimums);
   const assessed = mode === "install" ? performInstalls(context, checked, cwd) : checked;
   const exitCode = toolsExitCode(assessed, mode);
-  emit(
-    context.io,
-    context.json,
-    assembleToolsReport(assessed, lane, stack, mode, exitCode),
-    renderToolsReport(assessed, lane, stack, mode),
-  );
+  // ONE VALUE, BOTH SURFACES. The table is rendered FROM the document rather
+  // than beside it, so `--json` cannot quietly become the weaker of the two.
+  const report = assembleToolsReport(assessed, lane, stack, mode, exitCode);
+  emit(context.io, context.json, report, renderToolsReport(report));
   if (exitCode !== 0) {
     const invocation = `${PROGRAM} shu tools --repo ${repoRoot}${lane === null ? "" : ` --lane ${lane}`}`;
-    for (const line of renderAdvice(assessed, invocation)) context.io.err(line);
+    for (const line of renderAdvice(report, invocation)) context.io.err(line);
   }
   return exitCode;
 }

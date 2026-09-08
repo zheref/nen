@@ -3729,14 +3729,40 @@ the alternative makes the install form permanently red on a machine nen can
 never fix, and "is this host ready" is the question the CHECK and its exit 5
 answer.
 
-**`--json`** is a different, shorter contract from the rest of the family:
-`{ contract, lane, stack, mode, tools, exitCode }` with `contract` =
-`nen.shu.tools/v0.1` and `mode` one of `check` / `install` / `dry-run`. Each
-`tools[]` row is `{ name, required, packMinimum, found, satisfied, state,
-installer, installCommand, why }`, in that order. `installCommand` is a list of
-rendered command lines, and is non-null only for an installer nen runs and only
-when there is something to do; every other row's way out is prose the text
-rendering builds from `installer` and `why`.
+**`--json`** is a different contract from the rest of the family:
+`{ contract, lane, stack, mode, summary, tools, exitCode }` with `contract` =
+`nen.shu.tools/v0.1` and `mode` one of `check` / `install` / `dry-run`. **It
+carries every value the table prints** — the human rendering is derived *from*
+this object, not beside it, so the two cannot come apart.
+
+`summary` is `{ checked, satisfied, missing, wrong, notProbed, installed,
+refused, notInstallable }`. The four state counts always sum to `checked`.
+`refused` counts rows carrying a pin this release will not act on;
+**`notInstallable` counts rows that do not pass and that nen has no installer
+for** — the number that explains an `--install` run exiting 0 beside a host that
+is still not ready, and the text prints it as a footer for the same reason.
+
+Each `tools[]` row is `{ name, required, packMinimum, pinned, versionFrom,
+probe, found, probeOutput, satisfied, state, installer, installCommand, remedy,
+install, why }`, in that order:
+
+| Field | Meaning |
+|---|---|
+| `pinned` | The declaration's pin, normalised — an exact version, `>=X.Y.Z`, or the two-sided range a `dependency.minimum` floor stands for. |
+| `versionFrom` | The member that read the version. It is what makes a satisfied row with no `found` readable: `path-exists` means presence *was* the check. |
+| `probe` | The declared probe argv, rendered exactly as `--dry-run` prints it. |
+| `probeOutput` | The first line the probe printed, **only** on a row that says "present, version unknown" — the one case where the output is the finding. Null everywhere else, including on satisfied rows, where `found` is the answer. Capped at 200 characters. |
+| `installCommand` | The rendered commands, non-null only for an installer nen runs *and* only when there is something to do. |
+| `remedy` | The way out **in words**, for a row with no command: `verify-only: install by hand — …`, `corepack: REFUSED — …`, `sdkmanager: not enabled in this release — …`, `wrapper: nothing to install — …`. Exactly one of `installCommand` and `remedy` is non-null on a row that needs a way out; both are null on a row that passes. Without it a refused `corepack` row and a `verify-only` row were the same row to a machine reader, because `why` is the *declaration's* reason for the pin and is null on most refusing rows. |
+| `install` | What `--install` ran for this row — `{ steps: [{ exe, argv, exitCode, durationMs }], outcome, failure }` — and `null` in every mode that installs nothing. `outcome` is `installed` (every step nen ran exited 0), `failed`, or `skipped` (nen acted on nothing here). It describes the **installer**, never the host: `installed` beside `state: "missing"` is the real finding "it installed somewhere not on this `PATH`", which is why this verb re-probes. There is no `refused` outcome, because a refusal stops the run before the first install and this CLI answers a refusal with a stderr line and exit 2 rather than a document (below). |
+
+**A refusal prints no document.** Every family in this CLI answers exit 2 with a
+line on stderr and an empty stdout, and `shu tools` is no exception: `--install`
+on a pin nen will not act on, an `--only` naming an undeclared tool, an
+unevaluable `version` and an unknown `--lane` all leave stdout empty under
+`--json` too. That is the family's rule rather than this verb's, and the reason
+for it is that a `--json` reader should never have to tell a report from an
+error object on the same stream.
 
 **Example**
 
