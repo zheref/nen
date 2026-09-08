@@ -8,6 +8,10 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 - **board** — `nen board render` and `nen board diff` validate the board file at the read seam and refuse a malformed board at exit 2 naming the file, row and field, instead of crashing with a raw `TypeError` (render) or silently diffing the string `"undefined"` (diff). Undeclared top-level board fields are now dropped from their `--json` output, as `build` already did for rows ([#99](https://github.com/zheref/nen/pull/99), closes #92)
 
+### Added
+
+- **docs** — `docs/USAGE.md`: every verb of all 34 families with purpose, arguments, exit codes, `--json` notes and a real example; conventions stated once (`--repo`, `--target`, exit codes, `--dry-run`, taxonomy as data, the bootstrap); six end-to-end developer workflows; a day-to-day-actions cross-reference ([#102](https://github.com/zheref/nen/pull/102), closes #90)
+
 ## v0.2.0 — 2026-09-07
 
 nen's second release, and the first minor bump on its independent 0.x line. While nen sits at 0.x, a minor is where a breaking change ships — semver only promises no breaking changes between minors once a project reaches 1.0, and every one of the behaviour changes below is exactly that kind of change, not a bug reclassified as a feature. This release closes every p1/p2 issue filed against v0.1.0, across the 22 PRs below, cut via the release PR [#88](https://github.com/zheref/nen/pull/88).
