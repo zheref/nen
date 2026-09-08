@@ -168,6 +168,14 @@ install, a native prebuild) is **printed and never run**:
 nen scaffold new --stack nextjs --name my-site --dir ./my-site --dry-run
 ```
 
+Both verbs write `.github/workflows/nen-shu.yml`, pinned at a nen release —
+`--nen-ref vX.Y.Z` states one, and left off it is the greater of this binary's
+version and the oldest release carrying the `nen shu` verbs the workflow runs
+(`templates/index.json` declares it, with the reason). When those differ the
+report says so: Nen cannot check offline that a release exists for a ref, and
+until one is published the workflow's bootstrap refuses at **exit 6** for the
+reason [Install](#install) gives — the tag exists, the release does not.
+
 Then start a piece of work in one line — refuse (or `--discard`) uncommitted
 changes, fetch, fast-forward the trunk, cut the branch **you** name from its
 fresh tip, and prove the declared build still passes; `--dry-run` prints every
@@ -345,10 +353,10 @@ exercises all three platforms on every change for exactly this reason.
 
 ## The verb surface
 
-`nen --help` lists every command family (35 as of v0.2.0); each
+`nen --help` lists every command family (35); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-83 verbs outside the binary — each one's purpose, arguments, exit codes and
+84 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 

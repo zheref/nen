@@ -9,8 +9,10 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers **v0.2.0**: 34 command families,
-70 verbs, every flag checked against that release's own `--help`.
+with the `nen` spelling. This document covers the **v0.3.0 line** (unreleased:
+`shu`, `scaffold new` and `issue comment` are not in v0.2.0): 35 command
+families, 84 verbs, every flag checked against the binary this repository
+builds.
 
 ## Conventions
 
@@ -231,7 +233,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
-| `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins). Parsed and validated; **no verb acts on it yet** | [`schema check`](#nen-schema-check) |
+| `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinnedRef` for the CI file's ref), [`schema check`](#nen-schema-check) |
 
 `nen/` holds committed configuration only. Generated output goes to a
 dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
@@ -336,7 +338,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 83 verbs, grouped as the README groups them. **Reads** is what a
+All 84 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -2951,7 +2953,7 @@ It still never generates scenario-specific project *code* — a framework's own 
 
 ### `nen scaffold init`
 
-Nine steps, each reporting `created` / `skipped` / `would-create` / `refused` with the reason. In order: resolve the stack (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; add the stack's CI workflow; append `.nen/` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
+Nine steps, each reporting `created` / `appended` / `skipped` / `would-create` / `would-append` / `refused` with the reason. In order: resolve the stack (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; add the stack's CI workflow; append `.nen/` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
 
 `--agent-trailer`/`--run-trailer`/`--marker-env` are caller data (which trailer pair and environment variable mark an automated commit is a convention of the target repository, not a literal this binary ships) and are validated as legal git-trailer-key / shell-identifier shapes, since each is interpolated into the generated hook script.
 
@@ -2964,7 +2966,7 @@ nen scaffold init --repo <path>
                   (--stack <id> | --accept-detected)
                   [--hook-path .git/hooks/commit-msg] [--force]
                   [--canon-values-path .claude/canon-values.yml] [--scenario <name>]
-                  [--install-tools] [--dry-run] [--json]
+                  [--nen-ref vX.Y.Z] [--install-tools] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -2978,22 +2980,29 @@ nen scaffold init --repo <path>
 | `--agent-trailer <key>` | yes | The git trailer key marking the acting agent. | Must match `[A-Za-z0-9][A-Za-z0-9-]*`; refused otherwise. |
 | `--run-trailer <key>` | yes | The git trailer key marking the run. | Same shape rule. |
 | `--marker-env <VAR>` | yes | The environment variable the hook reads to recognise an automated commit. | Must match `[A-Za-z_][A-Za-z0-9_]*`. |
-| `--hook-path <path>` | no | Where the commit-msg hook is installed. | Defaults to `.git/hooks/commit-msg`. |
+| `--hook-path <path>` | no | Where the commit-msg hook is installed. | Defaults to `.git/hooks/commit-msg`. **Contained**: a value resolving outside `--repo` (`../outside/evil-hook`, or an absolute path elsewhere) is exit 2 naming the flag and where it landed, decided before the first write — the same rule [`shu`](#family-shu) applies to a path a declaration states. The hook is written `0755`, because `git` silently skips a `commit-msg` hook that is not executable. |
 | `--force` | no | Overwrite a DIFFERENT existing hook at `--hook-path`. | Without it, a foreign hook there is refused (exit 1), not silently replaced; the existing file is backed up to `<path>.bak` first when `--force` is given. A hook with identical generated content is left alone either way. **It covers the hook only** — there is deliberately no override for a conflicting CI file, declaration or migration. |
-| `--canon-values-path <path>` | no | Where to write the canon-values template. | Only written if nothing is already there. |
+| `--canon-values-path <path>` | no | Where to write the canon-values template. | Only written if nothing is already there. Contained the same way `--hook-path` is. |
 | `--scenario <name>` | no | Recorded in the canon-values template. | |
+| `--nen-ref vX.Y.Z` | no | The nen release the generated workflow pins. | Left off, nen writes the **greater** of this binary's own version and the minimum `templates/index.json` declares — the first release carrying the `nen shu` verbs the workflow runs. A ref below that minimum is exit 2 naming both; so is anything that is not a `vX.Y.Z` tag. When the written ref is not this binary's own version, the report says so, and says nen cannot verify offline that a release exists for it. |
 | `--install-tools` | no | Run the closing check as `shu tools --install` instead of a check. | The one flag here whose blast radius is the **developer's machine**. Without it nothing is installed, ever; the report names the command instead. `--install-tools --dry-run` is exit 2. |
 | `--dry-run` | no | Print every write, every migration and every refusal; perform none. | It spawns **nothing**, probes included: the toolchain step prints `would check`. That is what makes this form `read-only` in izanami's table rather than a claim about somebody else's declaration. |
 
-**The `schemas/` → `nen/` migration is a COPY.** Each of the four taxonomy files found only under `schemas/` is copied to `nen/`, the original is **left in place**, and the `git rm` line is printed for the caller to run. A delete is not recoverable if some tool in the estate still reads the old path, and this verb's hook rule already established refuse-and-report over destroy; the `nen/` copy wins immediately because [the loader prefers it](#taxonomy-as-data), so the new behaviour arrives before the removal does, and [`schema check`](#nen-schema-check) reports the leftover as shadowed until it happens. A file present in **both** with identical bytes is `skipped` (only the removal is left); one present in both with **different** bytes is `refused`, naming both paths, with no `--force` — two disagreeing taxonomies is not a merge nen can make.
+**Every write stays inside `--repo`, and the report says where each one landed.** Two flags (`--hook-path`, `--canon-values-path`) are resolved against the repository root and refused at exit 2 when they leave it. The two writes that *create* a directory — `nen/contract.json` and `.github/workflows/nen-shu.yml` — are additionally checked against the **real** path: a symlinked `nen/` or `.github/` would send the write outside the tree while the report kept printing the repo-relative name, so it is `refused` (exit 1) naming the link and where it points. `.git/` is deliberately *not* held to that rule: it is legitimately a symlink or a gitdir file in a worktree.
+
+**A filesystem failure is a row, not a crash.** An unwritable path, a directory in the way, a read-only checkout: the errno becomes a `refused` write, the run continues, and the report is still printed — under `--json` too. A run that threw here used to exit 1 with empty stdout, having already written several files it never reported.
+
+**The `schemas/` → `nen/` migration is a COPY.** Each of the four taxonomy files found only under `schemas/` is copied to `nen/`, the original is **left in place**, and the `git rm` line is printed for the caller to run (and only for a copy that actually happened). A legacy file that is a **symlink** is `refused` naming both paths: `copyFileSync` follows it, so nen would be copying whatever it points at into the repository under a taxonomy file's name and then telling the caller to stage it. A delete is not recoverable if some tool in the estate still reads the old path, and this verb's hook rule already established refuse-and-report over destroy; the `nen/` copy wins immediately because [the loader prefers it](#taxonomy-as-data), so the new behaviour arrives before the removal does, and [`schema check`](#nen-schema-check) reports the leftover as shadowed until it happens. A file present in **both** with identical bytes is `skipped` (only the removal is left); one present in both with **different** bytes is `refused`, naming both paths, with no `--force` — two disagreeing taxonomies is not a merge nen can make.
+
+**`.gitignore` is APPENDED to, byte for byte.** The file's own bytes are written back unchanged and the appended line matches its own line ending, so a CRLF `.gitignore` is not silently rewritten wholesale. The action is `appended` (or `would-append` under `--dry-run`) rather than `created`, because the file was already there and the caller's own lines are still in it.
 
 **Idempotence.** A second run changes nothing and says so per item: the hook, the declaration, the workflow and the `.gitignore` entry all report `skipped` when what is on disk is already exactly what this run would write. That is the one place this verb is more permissive than `shu detect --write`, which refuses on *presence*; anything whose content differs is still refused here.
 
-**Output and exit codes** — the first three lines are v0.2.0's, unchanged: `created directories: <list>` (or `(none -- all already existed)`), `hook: <outcome> (<path>)`, and `canon-values: <path>` if one was written. Under `--dry-run` the first reads `would create directories:` and the second `hook: would-install`, because a preview that said `created` about directories that are not there would be the one line in the report that lies; `--dry-run` is new here, so no v0.2.0 caller reads that spelling. Then `stack: <id>`, one line per migration, one line per write, detect's notes, and the toolchain table. `--json` is a versioned contract, keys in order: `{ contract: "nen.scaffold.init/v0.1", writes: [{ path, action, why }], migrated: [{ from, to, action, why }], tools, exitCode }`, where `action` is `created`/`skipped`/`would-create`/`refused`, `path` is repo-relative, and `tools` is [`shu tools`](#nen-shu-tools)'s own `nen.shu.tools/v0.1` document or `null`.
+**Output and exit codes** — the first three lines are v0.2.0's, unchanged: `created directories: <list>` (or `(none -- all already existed)`), `hook: <outcome> (<path>)`, and `canon-values: <path>` if one was written. Under `--dry-run` the first reads `would create directories:` and the second `hook: would-install`, because a preview that said `created` about directories that are not there would be the one line in the report that lies; `--dry-run` is new here, so no v0.2.0 caller reads that spelling. Then `stack: <id>`, one line per migration, one line per write, detect's notes, and the toolchain table. `--json` is a versioned contract, keys in order: `{ contract: "nen.scaffold.init/v0.1", writes: [{ path, action, why }], migrated: [{ from, to, action, why }], tools, exitCode }`, where `action` is `created`/`appended`/`skipped`/`would-create`/`would-append`/`refused`, `path` is repo-relative, and `tools` is [`shu tools`](#nen-shu-tools)'s own `nen.shu.tools/v0.1` document or `null`. **A `refused` row is always published**, in `writes[]` alongside the rest — a report that listed only what succeeded would be a report that says "done".
 
 Under `--json`, stdout is exactly one document and the prose the shape has no field for — `detect`'s open questions, the toolchain table and its advice — is relayed to **stderr** rather than dropped, the way the [`shu`](#family-shu) verbs relay a child's output.
 
-Exit **2** for a usage refusal decided before any write (no stack, both stack flags, an unknown stack, a malformed trailer or marker, a missing `--repo`, `--dry-run --install-tools`); exit **1** when a write was `refused` (a foreign hook, an existing declaration, a differing CI file, a conflicting migration) — matching v0.2.0's hook behaviour; exit **0** otherwise. **The closing check never moves the exit code**: scaffolding succeeded, and whether this host can build the thing is a separate question with its own verb and its own code. A `scaffold init` that failed because an IDE is absent would be permanently red on every machine that is not already set up, CI runners that legitimately never build that stack included — run [`nen shu tools`](#nen-shu-tools) and read *its* exit code for the host verdict.
+Exit **2** for a usage refusal decided before any write (no stack, both stack flags, an unknown stack, a malformed trailer or marker, a missing `--repo`, a `--hook-path`/`--canon-values-path` outside the repository, a `--nen-ref` that is not a tag or is below the minimum, `--dry-run --install-tools`); exit **1** when a write was `refused` (a foreign hook, an existing declaration, a differing CI file, a conflicting migration, a symlinked legacy source, a symlinked target directory, an errno from the filesystem) — matching v0.2.0's hook behaviour; exit **0** otherwise. **`--dry-run` is a read-only form that can still return 1**: a preview over a tree that already carries a conflicting hook, declaration or workflow reports those refusals and exits 1, because "this run would refuse" is the answer the preview exists to give. It is still read-only — nothing is written and nothing is spawned. **The closing check never moves the exit code**: scaffolding succeeded, and whether this host can build the thing is a separate question with its own verb and its own code. A `scaffold init` that failed because an IDE is absent would be permanently red on every machine that is not already set up, CI runners that legitimately never build that stack included — run [`nen shu tools`](#nen-shu-tools) and read *its* exit code for the host verdict.
 
 **Example**
 
@@ -3027,8 +3036,10 @@ A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI
 ```text
 nen scaffold new --stack <id> --name <project> --dir <path>
                  [--agent-trailer <key> --run-trailer <key> --marker-env <VAR>]
-                 [--dry-run] [--json]
+                 [--nen-ref vX.Y.Z] [--dry-run] [--json]
 ```
+
+**It takes no `init` flag, and says so.** The two verbs share one flag spec, so the argv reader accepts `--hook-path`, `--force`, `--install-tools`, `--accept-detected`, `--canon-values-path`, `--scenario` and `--directories` on a `new` invocation — each is now **refused at exit 2 naming it**, rather than accepted and ignored. `--repo` is refused here too: this verb writes into `--dir`, and a caller who passed both has named two directories.
 
 **Arguments**
 
@@ -3036,11 +3047,12 @@ nen scaffold new --stack <id> --name <project> --dir <path>
 |---|---|---|---|
 | `--stack <id>` | yes | The stack to write. Never inferred — there is no tree to infer from. | Exit 2 for an unknown id, for a stack the catalogue proposes no template for (`compose-desktop`, `dotnet-winui`), and for one with no fresh-tree form (`gradle-android`, `xcode-ios`) — each naming the `scaffold init` invocation to run after creating the project with its own generator. |
 | `--name <project>` | yes | Written into this tree's own manifest. | Must match `[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]`: it is spliced into JSON bodies, and a name that has to be escaped first was never one. |
-| `--dir <path>` | yes | The directory to write into. | Must not exist, or must be empty. **No merge and no `--force`** — a directory with something in it is one somebody is using, and the failure a merge produces is a half-scaffolded tree whose declaration describes files that were skipped. Exit 2. |
-| `--agent-trailer` / `--run-trailer` / `--marker-env` | no | The trailer convention the commit-msg hook enforces. | All three or none. Omitted, the hook is `skipped` and the post-steps name the `scaffold init` line that installs it — nen ships no trailer convention and will not invent one for every project this verb ever writes. |
+| `--dir <path>` | yes | The directory to write into. | Must not exist, or must be empty. **No merge and no `--force`** — a directory with something in it is one somebody is using, and the failure a merge produces is a half-scaffolded tree whose declaration describes files that were skipped. Exit 2. A **one-slash relative** value (`parity/nextjs`) reads as an `owner/name` slug and is exit 2 naming the `./parity/nextjs` spelling — the same ambiguity [`--repo`](#--repo-path-is-a-path) refuses rather than guesses. Every other relative value is `./`-prefixed in the printed post-steps, seven of which pass it to `--repo`. |
+| `--agent-trailer` / `--run-trailer` / `--marker-env` | no | The trailer convention the commit-msg hook enforces. | All three or none. Omitted, the hook is `skipped` and the post-steps name the `scaffold init` line that installs it — nen ships no trailer convention and will not invent one for every project this verb ever writes. The hook is written `0755`, as `init` writes it. |
+| `--nen-ref vX.Y.Z` | no | The nen release the generated workflow pins. | Same rule and same refusals as [`init`](#nen-scaffold-init)'s. A fresh tree has no declaration to read a pin out of, so the answer is the greater of this binary's version and the declared minimum. |
 | `--dry-run` | no | Print the tree it would write, and write nothing. | The declaration is *described* rather than shown: there is no tree yet to read a marker out of, and deriving the block by a second route is how two routes to one document drift. |
 
-**Output and exit codes** — one line per write, then the numbered post-steps. `--json` publishes the same key order as `init` under its own contract string: `{ contract: "nen.scaffold.new/v0.1", writes, migrated: [], tools: null, exitCode }` — `tools` is always `null`, because this verb names the toolchain check and never runs it, and `migrated` is always empty, so both documents read alike. The post-steps have no field in that shape and are relayed to **stderr** under `--json` rather than dropped. Exit 2 for every refusal above; exit 0 otherwise.
+**Output and exit codes** — one line per write, then the numbered post-steps. `--json` publishes the same key order as `init` under its own contract string: `{ contract: "nen.scaffold.new/v0.1", writes, migrated: [], tools: null, exitCode }` — `tools` is always `null`, because this verb names the toolchain check and never runs it, and `migrated` is always empty, so both documents read alike. The post-steps have no field in that shape and are relayed to **stderr** under `--json` rather than dropped. Exit **2** for every usage refusal above, all of them decided before the first write; exit **1** when a write was `refused` — the filesystem rejecting one of the tree's files, or the written tree carrying no marker `shu detect` recognises (a defect in the template, reported rather than hidden); exit **0** otherwise. A malformed bundled template is exit 1 too, naming the document and field: nothing the caller typed can produce it, so `--help` would be advice about the wrong file.
 
 **Example**
 
@@ -3067,7 +3079,9 @@ post-steps (nen does NOT run these):
 ```
 (run for real)
 
-**What the generated workflow does.** `.github/workflows/nen-shu.yml` fetches nen's bootstrap at the ref this repository pins (`dependency.pinnedRef` when it has one, this binary's own version otherwise), runs `nen shu tools --repo .`, then `build`, `test` and `lint` — **`--dry-run` first, then for real** — treating exit 4 (this lane declares no such verb) as a fact rather than a failure. It names no build tool, no package manager and no test runner: every argv it runs comes from the scaffolded repository's own `nen/contract.json`, so changing what CI runs means changing the declaration.
+**What the generated workflow does.** `.github/workflows/nen-shu.yml` declares `permissions: contents: read`, fetches nen's bootstrap at a pinned ref, runs `nen shu tools --repo .`, then `build`, `test` and `lint` — **`--dry-run` first, then for real** — treating exit 4 (this lane declares no such verb) as a fact rather than a failure.
+
+**Which ref it pins, and why it needs a published release.** The ref is `--nen-ref` when given; otherwise the repository's own `dependency.pinnedRef` (for `init`) or this binary's own version, and then **the greater of that and the minimum `templates/index.json` declares** — which is the first release carrying the `nen shu` verbs the workflow runs. That floor exists because the failure without it is silent at scaffold time and total at CI time: a workflow pinned at a release with no `shu` family is red on the first push, and one pinned at a tag with no *release* never gets a binary at all — `bash nen-bootstrap.sh --ref <tag>` refuses at **exit 6**, because [a tag is not a release](#getting-the-binary) and there is no `SHA256SUMS` to verify against. nen cannot check either fact offline, so whenever the written ref is not this binary's own version it prints the ref, that caveat, and the releases page. It names no build tool, no package manager and no test runner: every argv it runs comes from the scaffolded repository's own `nen/contract.json`, so changing what CI runs means changing the declaration.
 
 <a id="family-canon"></a>
 
