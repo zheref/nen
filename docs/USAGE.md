@@ -3375,7 +3375,7 @@ nen shu detect [--repo <path>] [--write] [--json]
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--repo <path>` | no | Which tree to scan. | Defaults to the current directory. The scan is bounded to three directories deep and skips `.git`, `node_modules`, build output and the like. |
+| `--repo <path>` | no | Which tree to scan. | Defaults to the current directory. The scan is bounded twice — three directories deep for a lane, and two more below each lane for the module that carries a stack's plugin — and it skips `.git`, `node_modules`, build output and the like. |
 | `--write` | no | Write `nen/contract.json`. | Only into the **absence** of one. There is no `--force` and no merge: a declaration is a decision and a proposal is an inference, so an existing file — even a `dependency`-only one — is exit 2 with the block printed for you to merge. |
 
 **Markers**, one per stack. A filename is a universal fact, which is why this is
@@ -3387,8 +3387,8 @@ the one piece of filesystem knowledge the family is allowed to have:
 | `gatsby-config.{js,mjs,cjs,ts}` | `gatsby` |
 | `app.json` carrying an `expo` key, or `app.config.*` beside an `expo` dependency | `expo` |
 | `*.xcworkspace` (preferred) or `*.xcodeproj` | `xcode-ios` |
-| a Gradle wrapper plus a build file applying `com.android.application` | `gradle-android` |
-| a Gradle wrapper plus a build file carrying a `compose.desktop` block | `compose-desktop` |
+| a Gradle wrapper **and** the lane's own `settings.gradle{,.kts}`, plus a **module's** build file applying `com.android.application` | `gradle-android` |
+| a Gradle wrapper **and** the lane's own `settings.gradle{,.kts}`, plus a build file carrying a `compose.desktop` block | `compose-desktop` |
 | `*.csproj` containing `<UseWinUI>` | `dotnet-winui` |
 
 **What it will not do.** Two lanes in one tree get two lanes and
@@ -3397,10 +3397,34 @@ build` silently starts building something else. Two stacks' markers in **one**
 directory get both lanes, both names qualified by their stack
 (`web-gatsby`, `web-nextjs`), and neither is chosen. Two spellings of one
 framework's config in one directory are **one** lane with two markers. A
-subdirectory shipping its **own** build wrapper is its own lane and never a
-marker for the lane above it — a repository whose root is `gradle-android` and
-whose `program/` is `compose-desktop` gets exactly two lanes, not three. A
-`Makefile` beside a lane is reported as a **finding**, never as a proposal.
+subdirectory shipping its **own** build wrapper — or its **own** settings file —
+is its own build and never a marker for the lane above it: a repository whose
+root is `gradle-android` and whose `program/` is `compose-desktop` gets exactly
+two lanes, not three, and one whose `program/` has a settings file and no
+wrapper of its own gets exactly **one** lane plus a finding naming the build
+`detect` could see and could not address. A `Makefile` beside a lane is reported
+as a **finding**, never as a proposal.
+
+**A marker pattern's directory prefix is part of the marker.**
+`*/build.gradle{,.kts}` names a **module's** build file and is never satisfied
+by the lane's own one — an Android root build file names the application plugin
+`apply false` as a matter of convention, which is a line that switches it *off*,
+and reading it as the marker proposed a whole Android lane out of a tree with no
+Android module in it. A pattern written *without* a prefix names the lane's own
+build file; found one directory down instead, that directory is the build the
+pack's rows describe, so `detect` proposes `{gw} :<module>:<task>` using the
+module name the lane's own settings file states — running the pack's bare task
+name at the lane root would run the *root* project's task of that name, a
+different command with the same spelling. Where the settings file names no
+module there, every row is withheld: the build is neither a module this lane's
+wrapper can address nor a build of its own.
+
+**A commented-out fact is not a fact.** Both comment forms (`//` and `/* */`)
+are stripped before any build script is read — for the marker `contains` check
+and for the settings file's `include(...)` alike — with quoted strings stepped
+over so a `//` inside a URL is not mistaken for a comment. A
+`// TODO: id("com.android.application")` makes no lane, and a
+`/* include(":retired") */` names no module.
 
 **And every row is cross-checked before it is proposed.** The reference pack
 ([`docs/STACK-MATRIX.md`](STACK-MATRIX.md)) states a *shape*; `detect`
@@ -3463,21 +3487,36 @@ implies and the file that is actually there. A lane with no wrapper is a
 an unsubstituted `{gw}` by name at exit 2, so a hand-written declaration that
 carries the token is a refusal rather than a child process called `{gw}`.
 
+**And the declaration records which host answered it.** A committed declaration
+is read by a whole team, and the word inside it is true for exactly the machine
+that ran `detect`. So every lane whose proposed rows carry a resolved `{gw}`
+gets a note naming the platform and the spelling written — *"a teammate on the
+other host must re-run `nen shu detect` or hand-edit the spelling; the wrapper
+is committed under both names, but a declaration carries one."* `hosts` is
+deliberately **not** narrowed to that platform: the pack states this stack runs
+everywhere and cites the repository saying so, both wrapper spellings ship side
+by side in the tree, and narrowing would turn a one-word edit into exit **3**
+*"unsupported host"* — a refusal that is false about the stack and that hides
+the actual fix.
+
 **Per-stack notes.** The four stacks `detect` proposes end to end:
 
 | Stack | What it proposes | What it withholds, and why |
 |---|---|---|
 | `nextjs` | `build`, `test`, `dev` (`<pm> turbo run <task>`), `run` (`next start`), `lint` (**two steps, in order** — the repo-wide format check, then the per-workspace fan-out), and `coverage` (`<pm> --filter <package> test:coverage`) where the lane resolves to one package that declares the task. Every workspace member carrying a `next.config.*` becomes its own lane, plus the root when the root has one, with `defaultLane: null` and `--lane` required. Seats for `ui-test`, `archive`, `deploy` (all `declared-only`) and `release` (`unsupported` — one observed repository says so in its own Makefile). | The four turbo rows unless your manifest declares **turbo** and your lane has a `turbo.json` declaring that task — `turbo run build` does not run the npm `build` script, and a manager the manifest names says nothing about the tool it hands the work to. `lint` likewise needs **biome** declared (`@biomejs/biome` counts). `coverage` on a **workspace root** — the root is the *list* of packages, not one of them, so answering `{package}` with its own name would propose a command the repository never runs; the note names every member it found, negations applied and missing directories dropped. `coverage` on a lane with no `test:coverage` script, naming the task. Any row whose `{pm}` cannot be read, because `package.json` states no `packageManager` (or states one with no `@version` to split). |
 | `gatsby` | `build` (`gatsby build`), `dev` (`gatsby develop`), `run` (`gatsby serve`), `archive` (`node <the script your package.json names>`) and the two-step `deploy` (that same archive step, then the pages push the pack cites). Seats for `test`, `ui-test`, `lint`, `release` and `coverage`, each with the pack's sentence — *"no test script and no test-runner dependency"*, *"NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."* `hosts` is every platform. | `archive` and `deploy` when no declared script both matches the shape **and** corroborates it — `{archiveScript}` is a path, the one place `detect` can see a path this repository runs is its own `scripts` block, and `node {archiveScript}` is thin enough that arity alone would take the first one-argument `node` script in the file. A `resume:pdf` answers; a `start` is named as a near miss. Two corroborated scripts that disagree are an ambiguity, not a choice. `build`/`dev`/`run` when `gatsby` is not a declared dependency: a marker match is not evidence a tool is installed. And **no precondition for the locally installed browser** `archive` and `deploy` need — the reference probes for it *by path* and cites no environment variable, and a `path` precondition cannot name a location outside the repository at all, so `detect` reports the requirement in a note. |
-| `gradle-android` | `build` (`{gw} assembleDebug --stacktrace`), `ui-test` (`{gw} verifyPaparazziDebug` — screenshot verification; **recording** the baselines is the deliberately separate `{gw} recordPaparazziDebug`, which your declaration states if it wants it), `lint` (`{gw} :app:lintDebug --stacktrace`) and `test` (`{gw} verifyPaparazziDebug <your unit-test task> --stacktrace`) where your settings file names a single library module. Seats for `archive` (a `release` buildType with **no signingConfig**), `release`, `dev`, `run`, `deploy` and `coverage` (**no** JaCoCo or Kover is applied anywhere — and the observed repository's own checklist documents a task that does not exist on a clean checkout). `hosts` is every platform: the toolchain is cross-platform and the repository says so itself. **The `test` row's `why` is load-bearing and is carried verbatim into your declaration** — the task must be `verifyPaparazziDebug` and never `testDebugUnitTest`, because under the latter a snapshot test renders and discards: replacing a golden with a completely different image still reports PASSED. A note also reports a **conflict** the pack records and refuses to resolve: one canonical handbook binds its lint/test placeholder to exactly the forbidden task. Fix that upstream; nen encodes one side, cites it, and reports the other. | `test` when the lane's own `settings.gradle{,.kts}` does not name **one** library module — no settings file, no `include(...)` nen can read, every included module applying the application plugin, or two candidates, in which case the note lists them and asks which. (`includeBuild` is deliberately not read: it names a separate build, not a module of this one.) And every row on a lane whose wrapper is missing for **this** host, naming the platform, the spelling it implies and what the lane carries instead. |
-| `compose-desktop` | `run` (`{gw} run`) and nothing else — one observed lane, one observed command, and it exists only as an IDE run configuration. Seats for the other nine, each with the pack's sentence: `archive` in particular declares `Dmg`/`Msi`/`Deb` target formats, **so the tasks exist**, and no command string for them appears anywhere in the repository — proposing one would be nen inventing a release path. `hosts` is every platform *to run*; packaging is per-format and host-locked, which is a `hosts` constraint your declaration states rather than a tool nen can supply. | The `run` row on a lane whose wrapper is missing for this host. A note also carries the pack's own argument for **per-lane** stacks: this lane lives inside a repository whose every other verb is Android, with its own wrapper pinned to a different version than the root's. |
+| `gradle-android` | `build` (`{gw} assembleDebug --stacktrace`), `ui-test` (`{gw} verifyPaparazziDebug` — screenshot verification; **recording** the baselines is the deliberately separate `{gw} recordPaparazziDebug`, which your declaration states if it wants it), `lint` (`{gw} :app:lintDebug --stacktrace`) and `test` (`{gw} verifyPaparazziDebug <your unit-test task> --stacktrace`) where your settings file names exactly one module `detect` can see is a library. Seats for `archive` (a `release` buildType with **no signingConfig**), `release`, `dev`, `run`, `deploy` and `coverage` (**no** JaCoCo or Kover is applied anywhere — and the observed repository's own checklist documents a task that does not exist on a clean checkout). `hosts` is every platform: the toolchain is cross-platform and the repository says so itself. **The `test` row's `why` is load-bearing and is carried verbatim into your declaration** — the task must be `verifyPaparazziDebug` and never `testDebugUnitTest`, because under the latter a snapshot test renders and discards: replacing a golden with a completely different image still reports PASSED. A note also reports a **conflict** the pack records and refuses to resolve: one canonical handbook binds its lint/test placeholder to exactly the forbidden task. Fix that upstream; nen encodes one side, cites it, and reports the other. | `test` unless the lane's own `settings.gradle{,.kts}` names exactly **one** module `detect` can see is a library. Every included module is classified three ways — `application` (its build file carries the plugin that identified this lane), `library` (`detect` read the file, every plugin application in it is a literal id, and none of them is the plugin or a look-alike for it), and **`unknown`** — and a single `unknown` ends the row, naming the module and why. A module is `unknown` when its directory is not there, when its `projectDir` is remapped outside the repository, when its build file applies no plugin `detect` can see, when it applies one through an `alias(…)` or a dynamic `apply(…)` — the id then lives in a version catalogue `detect` does not read — or when it applies an id ending in the same word as the lane's plugin, which is how a **convention plugin** wrapping it is spelled. This is why `unknown` is not folded into `library`: an application module applying AGP through `id("myapp.android.application")` would otherwise be the one "library" the settings file named, and `{unitTestTask}` would be answered `:app:test` — the aggregate this row's own `why` exists to forbid. Also withheld: no `include(...)` `detect` can read, every module an application module, or two library candidates, in which case the note lists them and asks which. (`includeBuild` is deliberately not read: it names a separate build, not a module of this one.) And every row on a lane whose wrapper is missing for **this** host, naming the platform, the spelling it implies and what the lane carries instead. |
+| `compose-desktop` | `run` (`{gw} run`) and nothing else — one observed lane, one observed command, and it exists only as an IDE run configuration. Seats for the other nine, each with the pack's sentence: `archive` in particular declares `Dmg`/`Msi`/`Deb` target formats, **so the tasks exist**, and no command string for them appears anywhere in the repository — proposing one would be nen inventing a release path. `hosts` is every platform *to run*; packaging is per-format and host-locked, which is a `hosts` constraint your declaration states rather than a tool nen can supply. | The `run` row on a lane whose wrapper is missing for this host, **and** every row when the `compose.desktop` block sits in a subdirectory the lane's settings file names no module for — that build is neither addressable as `:<module>:run` nor a build of its own. Where the settings file *does* include it, the row is proposed as `{gw} :<module>:run`, and a note says so. A note also carries the pack's own argument for **per-lane** stacks: this lane lives inside a repository whose every other verb is Android, with its own wrapper pinned to a different version than the root's. |
 
-The scan is bounded, and both bounds can hide a real lane: it descends at most
-**three** directories below `--repo`, and it never enters `.git`, `.gradle`,
-`.idea`, `.nen`, `.next`, `DerivedData`, `Pods`, `build`, `dist`,
-`node_modules`, `out` or `vendor` — so a lane living in a directory named like
-build output is invisible to it by design. The "no lane detected" message says
-both, because a silent miss and an empty tree look identical from outside.
+The scan is bounded three ways, and every bound can hide a real lane: it
+descends at most **three** directories below `--repo` looking for a lane; from
+each lane root it looks at most **two** directories down for the module that
+carries a stack's plugin; and it never enters `.git`, `.gradle`, `.idea`,
+`.nen`, `.next`, `DerivedData`, `Pods`, `build`, `dist`, `node_modules`, `out`
+or `vendor`. So a lane living in a directory named like build output, and a lane
+whose application module sits three or more directories inside it, are both
+invisible by design. The "no lane detected" message names all three, because a
+silent miss and an empty tree look identical from outside.
 
 **Output and exit codes** — the proposal on stdout (as text with the block to
 paste, or as `--json` `{ contract, repo, declaration, declarationPresent, lanes,
