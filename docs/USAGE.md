@@ -3396,7 +3396,14 @@ the one piece of filesystem knowledge the family is allowed to have:
 | `*.xcworkspace` (preferred) or `*.xcodeproj` | `xcode-ios` |
 | a Gradle wrapper **and** the lane's own `settings.gradle{,.kts}`, plus a **module's** build file applying `com.android.application` | `gradle-android` |
 | a Gradle wrapper **and** the lane's own `settings.gradle{,.kts}`, plus a build file carrying a `compose.desktop` block | `compose-desktop` |
-| `*.csproj` containing `<UseWinUI>` | `dotnet-winui` |
+| `*.csproj` containing `<UseWinUI>true</UseWinUI>`, plus any `*.sln` beside it as a second marker | `dotnet-winui` |
+
+The last row is the one read out of the reference pack rather than out of
+`detect`'s own table, and the two halves are not equal: the `*.csproj` carrying
+the property **qualifies** the stack, and the `*.sln` only **corroborates** it.
+A directory with a solution and nothing else is not a lane — a `*.csproj` alone
+is .NET, which is not this stack, and a `*.sln` alone says less still. Both
+matched files are recorded on **one** lane, in byte order.
 
 An `eas.json` is the one file the reference pack calls a marker that `detect`
 declines to identify a lane from: a build service's configuration says nothing
@@ -3452,11 +3459,25 @@ stand behind, naming the row and the reason:
 
 | Check | A row is withheld when |
 |---|---|
-| **placeholders** | it still carries a pack token after substitution. Four are answered, all of them from the lane's own `package.json`: `{pm}` (the `packageManager` field with its version stripped), `{packageManager}` (that field verbatim), `{package}` (the manifest's own `name`, and **only** when the manifest is not a workspace root), and any token a declared **script** answers — the next row says what makes a script an answer. `{scheme}`, `{destination}`, `{resultBundle}` and the rest are facts only your repository knows, and a guessed argument is a different command |
+| **placeholders** | it still carries a pack token after substitution. Four are answered from the lane's own `package.json`: `{pm}` (the `packageManager` field with its version stripped), `{packageManager}` (that field verbatim), `{package}` (the manifest's own `name`, and **only** when the manifest is not a workspace root), and any token a declared **script** answers — the next row says what makes a script an answer. A fifth route reads *project files* where the pack says which file answers which token (the second table below). `{scheme}`, `{destination}`, `{resultBundle}` and the rest are facts only your repository knows, and a guessed argument is a different command |
 | **corroboration** | a script agrees with the step by word count and at every position the pack spelled out, and *nothing else backs the match up*. Arity is a strong match for a step that spells most of itself out — `<pm> turbo run build` states three words and asks for one — and no match at all for one that does not: `node {archiveScript}` states **one** word and asks for one, so every one-argument `node` script in your manifest agrees with it, and a `"start": "node server.js"` answered the PDF-archive row. So a step whose literal words do not outnumber its token positions is answered only where the **script's own key** names the intent: a word of that key appearing in the verb, in the token's name, or in the value the script would answer with. `"resume:pdf": "node scripts/build-resume-pdf.mjs"` corroborates itself — you named the script after the file it runs; `"start"` says nothing that ties it to an archive, and the note names it as a near miss rather than proposing it |
 | **the executable, and the tool it hands the work to** | its `exe` is neither the package manager `package.json` names, nor a package it declares as a dependency, nor part of a step the manifest spells out **verbatim** as one of its own scripts. The third is the strongest — a manifest whose `scripts` block contains this exact line is the repository saying it runs *this line*, so such a step skips this check and the task check both. **And the check follows the work one hop further.** `pnpm turbo run build` passes on `exe` the moment your manifest names pnpm, and says nothing whatever about turbo — which is the program that has to be there; the same held for `pnpm exec biome check .`. The three hand-off forms (`npx <tool>`, `<pm> exec <tool>`, `<pm> <tool> run <task>`) are read one level in, and that tool must be a declared dependency. A scoped `@biomejs/biome` answers for the `biome` an argv names: the scope is the publisher's |
 | **the task, against the list its runner reads** | `run <task>` names a task, and *who* is asked to run it is the word before `run`. `<pm> run <task>` asks the package manager, whose list is your `scripts`. `<pm> turbo run <task>` asks **turbo**, whose list is your `turbo.json` (`tasks`, or `pipeline` in turbo 1) — you can have the npm script and not the turbo task, or the reverse, so looking a turbo task up in `scripts` validated the wrong list in both directions. Where `detect` cannot see the runner's list — no `turbo.json` in the lane, or a runner whose config filename it does not know — the row is withheld saying which, because *"could not check"* must never render as *"checked, and fine"*. And for a row `{package}` was answered in, the element *after* the package name is a task your manifest must declare |
 | **ambiguity** | two of the lane's own scripts corroborate the match and answer the same token differently. `detect` resolves no ambiguity, and one arriving from inside a single file is not a different kind of ambiguity: both candidates are named and the row is yours to state. Corroboration decides what a *candidate* is and runs first, so a coincidence of word count is never a competing answer |
+
+**And a second family of checks reads project files rather than a
+`package.json`,** for the stacks whose ecosystem has no manifest to be
+cross-checked against. Everything they need is stated in the pack —
+`docs/STACK-MATRIX.md` renders each one beside that stack's markers — so
+`detect` carries no table of its own, and a stack that states none reads
+nothing and behaves exactly as before:
+
+| Check | A row is withheld when |
+|---|---|
+| **the file a row addresses** | the tree does not resolve to exactly **one** candidate at any rank the pack lists. The candidates are an *ordered* list and the order is an argument: for `dotnet-winui`, a `*.sln` outranks a `*.csproj`, because a solution is your own list of the projects a build addresses and naming one project of a tree that has a solution would be `detect` choosing a subset you never chose. Two solutions, or two WinUI project files and no solution, are an **ambiguity** — both are named and neither is picked |
+| **evidence the row needs** | nothing in the lane carries what the row would run against. `dotnet test` is a real command for a .NET lane and a fiction in a tree with no test project, so the row is proposed only where some `*.csproj` references `Microsoft.NET.Test.Sdk`, `xunit`, `NUnit` or `MSTest`. **The evidence file is also what the row addresses** — pointing `dotnet test` at the application would propose a command that builds fine and tests nothing — and several of them are an ambiguity rather than a choice |
+| **a reference that leaves the repository** | a project file points at a path outside the tree. `zheref/KroWindows`'s `KroCore/KroCore.csproj` names a sibling clone of `zheref/Bankai`, and there is no submodule, no package and no restore step that fetches it. That is not a precondition `detect` can *write*: every path a declaration states is resolved against the repository root and one that escapes it exits **2** by name — so the row is withheld with the reference and its landing place quoted, never proposed with a precondition that could never hold. `detect` clones nothing. A reference that stays **inside** the tree becomes a `path` precondition instead, asserted before a verb runs and never performed |
+| **a toolchain pin the tree does not state** | the entry's version file is absent or silent. `.NET` states its SDK in a `global.json` (looked for in the lane and then up to the repository root); `zheref/KroWindows` has none, so the build floats on whatever SDK is installed. `detect` then proposes **no** `project.toolchain` entry and says so: assert the version CI would need and `detect` will use it, but it will not invent one — a toolchain entry with no `version` is one nen's own reader refuses, and a pin `detect` chose is a pin that pins nothing. The note carries the block to paste, probe and installer included |
 
 A proposal you paste and then discover is fiction is worse than an empty map
 with a reason.
@@ -3518,7 +3539,7 @@ by side in the tree, and narrowing would turn a one-word edit into exit **3**
 *"unsupported host"* — a refusal that is false about the stack and that hides
 the actual fix.
 
-**Per-stack notes.** The four stacks `detect` proposes end to end, plus `expo`,
+**Per-stack notes.** The five stacks `detect` proposes end to end, plus `expo`,
 whose Metro lane is proposed end to end and whose native lanes are proposed as
 lanes of their own stacks:
 
@@ -3529,6 +3550,7 @@ lanes of their own stacks:
 | `gradle-android` | `build` (`{gw} assembleDebug --stacktrace`), `ui-test` (`{gw} verifyPaparazziDebug` — screenshot verification; **recording** the baselines is the deliberately separate `{gw} recordPaparazziDebug`, which your declaration states if it wants it), `lint` (`{gw} :app:lintDebug --stacktrace`) and `test` (`{gw} verifyPaparazziDebug <your unit-test task> --stacktrace`) where your settings file names exactly one module `detect` can see is a library. Seats for `archive` (a `release` buildType with **no signingConfig**), `release`, `dev`, `run`, `deploy` and `coverage` (**no** JaCoCo or Kover is applied anywhere — and the observed repository's own checklist documents a task that does not exist on a clean checkout). `hosts` is every platform: the toolchain is cross-platform and the repository says so itself. **The `test` row's `why` is load-bearing and is carried verbatim into your declaration** — the task must be `verifyPaparazziDebug` and never `testDebugUnitTest`, because under the latter a snapshot test renders and discards: replacing a golden with a completely different image still reports PASSED. A note also reports a **conflict** the pack records and refuses to resolve: one canonical handbook binds its lint/test placeholder to exactly the forbidden task. Fix that upstream; nen encodes one side, cites it, and reports the other. | `test` unless the lane's own `settings.gradle{,.kts}` names exactly **one** module `detect` can see is a library. Every included module is classified three ways — `application` (its build file carries the plugin that identified this lane), `library` (`detect` read the file, every plugin application in it is a literal id, and none of them is the plugin or a look-alike for it), and **`unknown`** — and a single `unknown` ends the row, naming the module and why. A module is `unknown` when its directory is not there, when its `projectDir` is remapped outside the repository, when its build file applies no plugin `detect` can see, when it applies one through an `alias(…)` or a dynamic `apply(…)` — the id then lives in a version catalogue `detect` does not read — or when it applies an id ending in the same word as the lane's plugin, which is how a **convention plugin** wrapping it is spelled. This is why `unknown` is not folded into `library`: an application module applying AGP through `id("myapp.android.application")` would otherwise be the one "library" the settings file named, and `{unitTestTask}` would be answered `:app:test` — the aggregate this row's own `why` exists to forbid. Also withheld: no `include(...)` `detect` can read, every module an application module, or two library candidates, in which case the note lists them and asks which. (`includeBuild` is deliberately not read: it names a separate build, not a module of this one.) And every row on a lane whose wrapper is missing for **this** host, naming the platform, the spelling it implies and what the lane carries instead. |
 | `compose-desktop` | `run` (`{gw} run`) and nothing else — one observed lane, one observed command, and it exists only as an IDE run configuration. Seats for the other nine, each with the pack's sentence: `archive` in particular declares `Dmg`/`Msi`/`Deb` target formats, **so the tasks exist**, and no command string for them appears anywhere in the repository — proposing one would be nen inventing a release path. `hosts` is every platform *to run*; packaging is per-format and host-locked, which is a `hosts` constraint your declaration states rather than a tool nen can supply. | The `run` row on a lane whose wrapper is missing for this host, **and** every row when the `compose.desktop` block sits in a subdirectory the lane's settings file names no module for — that build is neither addressable as `:<module>:run` nor a build of its own. Where the settings file *does* include it, the row is proposed as `{gw} :<module>:run`, and a note says so. A note also carries the pack's own argument for **per-lane** stacks: this lane lives inside a repository whose every other verb is Android, with its own wrapper pinned to a different version than the root's. |
 | `expo` | The **Metro lane**, end to end: `dev` (`expo start`) and `lint` (`expo lint`), each proposed only where `expo` is a dependency the lane's own `package.json` declares — `expo` is invoked through the project, and Expo itself warns against a global install. Seats for `test`, `ui-test`, `archive`, `release`, `deploy`, `coverage` and — the one worth reading — **`build`**. `hosts` is every platform for a single-lane tree. | **`build`, always, and this is a rule rather than a withholding.** `expo run:ios` and `expo run:android` build *and launch*; there is no build-only invocation, and `expo start --web` is a dev server rather than an export. A `build` row mapped onto either would start an application on somebody's simulator the first time a script asked for a compile, so the pack carries no such row and `detect` will not manufacture one — the seat quotes that reason and `nen shu build` refuses at exit 4 with it. And **`run`**, because `expo run:{platform}` names a native lane and neither half is the other's default. The note goes further than naming the token: it names every value the lane's **own scripts** spell in that position (`ios` from `"ios": "expo run:ios"`, `android` from `"android": "expo run:android"`) and says where to state one — seeing a value and choosing one are different acts, and only the second is forbidden. Paste the pack's row in unedited and the executor refuses at exit **2**, naming `{platform}`. |
+| `dotnet-winui` | `build` (`dotnet build <the project or solution your tree resolves to> -c Debug`) and, where a test project exists, `test` (`dotnet test <that test project>`). `hosts` is **`win32` only** — every verb, exit **3** everywhere else. A `path` precondition for each `ProjectReference` that stays inside the tree, and a `project.toolchain.dotnet-sdk` entry when a `global.json` states `sdk.version`. Seats for the other eight, each with the pack's own sentence — *"NOTHING IN THE REPOSITORY INVOKES A COMMAND"*. **Read those two rows honestly:** the observed repository (`zheref/KroWindows`) runs no command anywhere — no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/` at all — so `build` and `test` are the SDK's own documented entry points, approved as a decision rather than read off a tree, and every other cell is exactly what the inventory found. | **`archive`, and MSIX packaging with it.** Packaging here is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval was `dotnet build` **alone**. `build` and `test` when the tree does not resolve to exactly one project or solution, with the candidates named. Both of them when a `ProjectReference` **escapes the repository** — `KroCore/KroCore.csproj` points at a sibling clone of `zheref/Bankai`, `detect` will not clone one, and a path outside the tree is not something a declaration can even state. `test` when nothing in the tree is a test project. And the SDK **version** when no `global.json` states one: assert the version CI would need and `detect` uses it; it will not invent one. |
 
 **A bare-workflow Expo repository is three lanes, and `detect` says so.** Where
 `ios/` and `android/` prebuild output is committed beside the manifest —
@@ -5126,25 +5148,35 @@ declines to (`declared-only`, `unsupported`), and `detect` withholds anything it
 cannot cross-check against the repository's own `package.json`.
 [`docs/STACK-MATRIX.md`](STACK-MATRIX.md) is the cell-by-cell answer.
 
-**Four stacks are proposed end to end today: `nextjs`, `gatsby`,
-`gradle-android` and `compose-desktop`.** For those, `detect` fills every row of
-the declaration — a command where the repository's own files confirm one, and an
-explicit `{"unsupported": "<the pack's reason>"}` seat where the pack has none,
-so the file it writes is one the executor loads with no hand edit. The other
-three stacks get the same lane, the same `hosts` block and **their own** seats —
-the count differs per stack, because it is the pack's own tally of cells it has
-no command for: `nextjs` has 4 and `gatsby` 5, `expo` 7, `gradle-android` 6,
-`xcode-ios` 7, `compose-desktop` 9, and `dotnet-winui` all 10.
+**Five stacks are proposed end to end today: `nextjs`, `gatsby`,
+`gradle-android`, `compose-desktop` and `dotnet-winui`.** For those, `detect`
+fills every row of the declaration — a command where the repository's own files
+confirm one, and an explicit `{"unsupported": "<the pack's reason>"}` seat where
+the pack has none, so the file it writes is one the executor loads with no hand
+edit. The other two stacks get the same lane, the same `hosts` block and **their
+own** seats — the count differs per stack, because it is the pack's own tally of
+cells it has no command for: `nextjs` has 4 and `gatsby` 5, `expo` 7,
+`gradle-android` 6, `xcode-ios` 7, `compose-desktop` 9, and `dotnet-winui` 8.
 
-**What changed for the two Gradle stacks is what `detect` can SEE.** For every
-other stack the evidence for an argv is a `package.json` — a declared
+**What changed for the three newest stacks is what `detect` can SEE.** For
+`nextjs` and `gatsby` the evidence for an argv is a `package.json` — a declared
 dependency, a declared script — and a tree without one gets its command rows
-withheld. These two run through a wrapper the repository **commits**, so the
-evidence is a file on disk in the lane, and the only word that varies is its
-spelling: `./gradlew` on POSIX, `gradlew.bat` on win32, resolved by `detect`
+withheld. The two Gradle stacks run through a wrapper the repository **commits**,
+so the evidence is a file on disk in the lane, and the only word that varies is
+its spelling: `./gradlew` on POSIX, `gradlew.bat` on win32, resolved by `detect`
 from the host it is running on. Their remaining withholding is a real one:
 `gradle-android`'s `test` row names a module, and the only honest source for a
 module name is the lane's own `settings.gradle{,.kts}`.
+
+**`dotnet-winui` is the third, and it reads a second kind of file.** Its
+ecosystem has no `package.json` at all, so every row used to be withheld for the
+absence of a manifest that was never going to exist. It now reads the project
+files themselves — which one a build addresses, whether a test project is
+there, where each `ProjectReference` lands, what a `global.json` pins — all of
+it stated in the pack rather than in `detect`. Two rows are proposed on that
+evidence (`dotnet build`, and `dotnet test` where there is something to test),
+`win32` only. **MSIX packaging stays unsupported**, and so does anything whose
+project graph reaches outside the repository.
 
 **`expo` is the near miss among the rest and is worth naming**: it *does* carry
 one — a realistic Expo repository (an `app.json` with an `expo` key beside a
@@ -5156,9 +5188,10 @@ scripts spell, because `expo run:{platform}` names a native lane neither of
 whose halves is the other's default. A **bare-workflow** Expo tree (`ios/` and
 `android/` prebuild output committed, as in `zheref/food-diary`) is proposed as
 **three** lanes, with the Apple one's shared scheme read and cross-checked
-against the project's own targets. What the remaining two have in common is a
-build system `detect` cannot read: an Xcode project, an MSBuild project file.
-See [per-stack notes](#nen-shu-detect) under `shu detect`.
+against the project's own targets. That leaves `xcode-ios` alone in the last
+column, for the reason its own row gives: an Xcode project is a build system
+`detect` does not read. See [per-stack notes](#nen-shu-detect) under
+`shu detect`.
 
 | Action | Exists today? | Verb | Scope |
 |---|---|---|---|
@@ -5166,7 +5199,7 @@ See [per-stack notes](#nen-shu-detect) under `shu detect`.
 | test | **yes — any lane that declares one** | [`shu test`](#nen-shu-test), [`dev test`](#nen-dev-test) | `shu test` runs a *target project's* declared test invocation; `dev test` still spawns `bun run test` in *this* checkout. |
 | ui-test | **yes on `gradle-android`; a seat elsewhere** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form. **One stack ships a reference row, and `detect` now proposes it**: `gradle-android`'s `{gw} verifyPaparazziDebug` — screenshot verification, and recording the baselines is a deliberately separate command the declaration states if it wants it. Everywhere else the pack proposes no default, and for two different reasons a reader should not conflate: `nextjs` is the *declined-to-choose* case (Playwright as two steps, or a Storybook static build — the observed repositories disagree about what this verb even means), and `gatsby` the *nothing-observed* one. `detect` proposes those as `unsupported` **seats** carrying the pack's own sentence, and the declaration decides. Nen runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
 | lint | **yes — any lane that declares one** | [`shu lint`](#nen-shu-lint), [`dev lint`](#nen-dev-lint) | `shu lint` runs a *target project's* declared lint invocation (commonly two steps, in order); `dev lint` still spawns `bun run lint` in *this* checkout. |
-| archive | **yes on `gatsby`; a seat elsewhere** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. `gatsby` is the one stack whose archive produces a real artifact, and `detect` proposes it — `node <the script your package.json names>` — reading the path out of the repository's own `scripts` block rather than guessing one. Most other lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. No signing material is ever synthesised. |
+| archive | **yes on `gatsby`; a seat elsewhere** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. `gatsby` is the one stack whose archive produces a real artifact, and `detect` proposes it — `node <the script your package.json names>` — reading the path out of the repository's own `scripts` block rather than guessing one. Most other lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. `dotnet-winui` is the sharpest case: **MSIX packaging is unsupported and stays so** — it is a Visual Studio gesture needing a platform, a signing identity and a publish profile the repository states nowhere, and the approval that gave that stack a `build` row deliberately did not give it this one. No signing material is ever synthesised. |
 | release | **mechanics, plus the verb** | [`shu release`](#nen-shu-release), [`release resolve-target`](#nen-release-resolve-target), [`release preflight`](#nen-release-preflight), [`release self-check`](#nen-release-self-check), [`changelog collate`](#nen-changelog-collate), [`changelog completeness`](#nen-changelog-completeness), [`tag cut`](#nen-tag-cut), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record) | `shu release` runs a lane's declared publication step where it has one. The rest is unchanged: preconditions, the changelog, the annotated tag, the consumer fan-out — a tag is not a release. |
 | dev (debug run) | **yes — any lane that declares one** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. It is `compose-desktop`'s **only** row — `{gw} run`, the one invocation that lane has, which `detect` proposes end to end. On `expo` it is the verb that *builds and launches* a native lane, which is why `detect` proposes no `build` there and withholds `run` itself until the declaration names a platform — `expo run:{platform}` unedited is exit **2**. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
@@ -5199,7 +5232,9 @@ A command in that page is a **shape**, not a runnable line: `{project}`,
 substitutes, and the page's *Placeholders* section lists the closed set with
 what each one means. One of them — the Gradle wrapper — is resolved by nen from
 `process.platform`; every other value comes from your declaration and never
-from the pack. `nen shu detect` substitutes the two it can read out of a
-repository's own `package.json` and **withholds** every row still carrying a
+from the pack. `nen shu detect` substitutes the ones it can read out of a
+repository's own files — a `package.json`'s `packageManager`, `name` and
+`scripts`, and, where the pack says which file answers a token, a project file
+such as a `.sln` or a `.csproj` — and **withholds** every row still carrying a
 token, with the reason; a token that survived to a spawn is refused rather than
 run.
