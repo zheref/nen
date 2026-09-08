@@ -316,6 +316,25 @@ describe("versionFrom -- all four members, each read the way the enum says", () 
     expect(extractVersion("first-semver-on-stderr", "9.9.9", "")).toBeNull();
   });
 
+  it("prefers a three-component token over an earlier two-component one", () => {
+    // A BANNER OFTEN LEADS WITH SOMETHING THAT IS NOT THE VERSION. Two
+    // components are also what a build date, a schema stamp or a marketing
+    // number look like; three are unambiguously a version, so a line carrying
+    // both means the specific one.
+    expect(extractVersion("first-semver-on-stdout", "Build 2024.01 -- Tool 1.2.3\n", "")).toBe(
+      "1.2.3",
+    );
+    expect(extractVersion("first-semver-on-stderr", "", "rev 2026.09, version 4.5.6")).toBe("4.5.6");
+    // AND NO FURTHER. Two three-component tokens still yield the first:
+    // choosing between them would be nen guessing which version a probe meant.
+    expect(extractVersion("first-semver-on-stdout", "pnpm 9.15.9 (node 22.11.0)\n", "")).toBe(
+      "9.15.9",
+    );
+    // A line with only two-component tokens is unchanged -- MAJOR.MINOR is what
+    // several real probes answer, and reading none would be worse.
+    expect(extractVersion("first-semver-on-stdout", "Tool 15.0 (build 15A240d)\n", "")).toBe("15.0");
+  });
+
   it("whole-line-stdout takes the first non-empty line verbatim", () => {
     expect(extractVersion("whole-line-stdout", "\n  9.15.9  \n", "")).toBe("9.15.9");
     // Verbatim means verbatim: a line that is not a version comes back as one,
@@ -399,6 +418,54 @@ describe("version pins -- the exact form, the >= form, and nothing else", () => 
     expect(satisfiesPin(parsePin("9.15.9", "p"), "not a version")).toBe(false);
   });
 
+  it("holds a pre-release AND build metadata to semver's identifier charset", () => {
+    // THE ONE PART OF A PIN THAT REACHES AN ARGV UNRESHAPED. The numbers become
+    // numbers; these two halves were checked only for emptiness (pre-release)
+    // and not read at all (build), so a metacharacter rode into
+    // `<tool>@<version>` as part of the pin.
+    for (const hostile of [
+      "1.2.3-; rm -rf /",
+      "1.2.3-a&&b",
+      "1.2.3-a|b",
+      "1.2.3-`id`",
+      "1.2.3-$(id)",
+      "1.2.3-'x'",
+      '1.2.3-"x"',
+      "1.2.3-a b",
+      "1.2.3+; rm -rf /",
+      "1.2.3+$(id)",
+      "1.2.3+a b",
+      "1.2.3+a+b",
+      "1.2.3-",
+      "1.2.3-a..b",
+    ]) {
+      expect(parseVersion(hostile), hostile).toBeNull();
+      expect(() => parsePin(hostile, "project.toolchain.t.version"), hostile).toThrow(
+        /is not a version pin nen can evaluate/,
+      );
+    }
+    // And every legitimate identifier still parses: alphanumerics and a hyphen.
+    for (const good of ["1.2.3-rc.1", "1.2.3-alpha-2", "1.2.3+sha512.abc", "1.2.3-rc.1+build-9"]) {
+      expect(parseVersion(good), good).not.toBeNull();
+    }
+  });
+
+  it("refuses a hostile pre-release at exit 2, before anything is spawned", async () => {
+    const result = await withDeclaration(
+      oneTool({
+        $name: "placeholder-tool",
+        version: "1.2.3-; rm -rf /",
+        probe: ["placeholder-tool", "--version"],
+        versionFrom: "first-semver-on-stdout",
+        installer: "corepack",
+      }),
+      ["--install"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/project\.toolchain\.placeholder-tool\.version/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
   it("refuses a pin form it cannot evaluate, naming the pointer and both forms", async () => {
     const result = await withDeclaration(
       oneTool({
@@ -438,6 +505,56 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
     expect(satisfiesMinimum(floor, "1.9.9")).toBe(true);
     expect(satisfiesMinimum(floor, "1.3.9")).toBe(false);
     expect(satisfiesMinimum(floor, "2.0.0")).toBe(false);
+  });
+
+  it("REFUSES a three-component floor rather than dropping the patch", () => {
+    // `0.3.5` used to parse and silently become `0.3` -- a floor written to
+    // exclude 0.3.4, applied as one that admits it, with nothing saying so.
+    // There is no reading of MAJOR.MINOR.PATCH under this block's zero-major
+    // rule, so the honest answer names the pointer.
+    expect(() => parseMinimum("0.3.5", "dependency.minimum")).toThrow(
+      /dependency\.minimum is '0\.3\.5'.*exactly two components/s,
+    );
+    expect(() => parseMinimum("1", "dependency.minimum")).toThrow(/is not the MAJOR\.MINOR floor/);
+    expect(() => parseMinimum("not-a-version", "dependency.minimum")).toThrow(
+      /is not the MAJOR\.MINOR floor/,
+    );
+  });
+
+  it("normalises a leading v away rather than reading two floors out of one", () => {
+    // `parseVersion` accepts and drops a leading `v` everywhere else in this
+    // module, and `renderMinimum` renders the range back out of the NUMBERS --
+    // so no `v` a declaration wrote can reach a report or a comparison.
+    expect(parseMinimum("v0.3", "dependency.minimum")).toEqual(
+      parseMinimum("0.3", "dependency.minimum"),
+    );
+    expect(satisfiesMinimum(parseMinimum("v0.3", "dependency.minimum"), "0.3.1")).toBe(true);
+  });
+
+  it("refuses a three-component dependency.minimum end to end, before any probe", async () => {
+    const result = await withDeclaration(
+      {
+        $schema: "nen.contract/v0.1",
+        dependency: {
+          minimum: "0.3.5",
+          pinned_ref: "v0.3.0",
+          version_probe: ["nen", "--version"],
+          bootstrap: {
+            url: "https://example.invalid/nen.sh",
+            script_path_in_source: "bootstrap/nen.sh",
+          },
+        },
+        project: {
+          lanes: { only: { stack: "nextjs", cwd: "." } },
+          defaultLane: "only",
+          verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] } } },
+        },
+      },
+      [],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/dependency\.minimum is '0\.3\.5'/);
+    expect(result.seams.calls).toEqual([]);
   });
 
   it("renders the range rather than the bare floor, so the row explains itself", async () => {

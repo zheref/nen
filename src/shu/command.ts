@@ -209,7 +209,15 @@ the declaration:
                         "latest". 'probe' is argv. 'versionFrom' is one of
                         ${VERSION_FROM.join(", ")} -- a closed set, deliberately
                         not a regex, because a caller-supplied pattern is a
-                        caller-supplied program. 'installer' is one of
+                        caller-supplied program. The two 'first-semver' members
+                        read the first version-shaped token (one dot or more) on
+                        that stream, preferring a THREE-component one when the
+                        line offers several -- so a banner leading with a build
+                        date '2024.01' does not beat the '1.2.3' beside it. A
+                        probe whose line leads with an unrelated dotted number
+                        and carries no three-component version reads that first
+                        number: state a probe that prints the version alone.
+                        'installer' is one of
                         ${INSTALLERS.join(", ")}; only ${ENABLED_INSTALLER_IDS} runs
                         in this release and the rest are reported for a human.
 

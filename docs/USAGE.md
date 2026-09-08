@@ -3645,9 +3645,10 @@ nen shu tools --install [--only <tool[,tool]>] [--dry-run] [--json]
 
 | Field | Required | Meaning |
 |---|---|---|
-| `version` | **yes** | The pin. Either an exact version (`"9.15.9"`) or a floor (`">=20.19.0"`) — the two forms nen can evaluate. There is no caret, no tilde, no two-sided range and no dist-tag; one of those is exit 2 naming the pointer and both forms. **No entry may omit it**: nen never certifies or installs `latest`, and the loader refuses an entry that tries. |
+| *the key* | **yes** | The tool's name, and the one map key this loader validates — it does not stay in the file: `--install` renders `<tool>@<version>` into the argv it spawns, and `--only` matches against it. It is held to npm's package-name shape (an optional `@scope/`, then letters, digits, `.`, `_`, `~`, `-`, not starting with `-`, `.` or `_`), so a key of `--all` cannot become a **flag** to the installer. Anything else is exit 1 at load, naming the pointer. A `$`-prefixed key is metadata and is skipped, as everywhere else in this schema. |
+| `version` | **yes** | The pin. Either an exact version (`"9.15.9"`) or a floor (`">=20.19.0"`) — the two forms nen can evaluate. There is no caret, no tilde, no two-sided range and no dist-tag; one of those is exit 2 naming the pointer and both forms. A pre-release or build-metadata suffix is held to **semver's own identifier charset** (alphanumerics and `-`, per dot-separated identifier): `1.2.3-rc.1+sha512.abc` is a pin, `1.2.3-; rm -rf /` is exit 2 by pointer — that suffix is the one part of a pin that reaches an installer's argv unreshaped. **No entry may omit it**: nen never certifies or installs `latest`, and the loader refuses an entry that tries. |
 | `probe` | **yes** | Argv, never a string. There is no shell. |
-| `versionFrom` | **yes** | One of `first-semver-on-stdout`, `first-semver-on-stderr`, `whole-line-stdout`, `path-exists`. **Deliberately not a regex** — a caller-supplied pattern is a caller-supplied program, and a ReDoS surface `src/schema/pattern.ts` exists to guard. |
+| `versionFrom` | **yes** | One of `first-semver-on-stdout`, `first-semver-on-stderr`, `whole-line-stdout`, `path-exists`. **Deliberately not a regex** — a caller-supplied pattern is a caller-supplied program, and a ReDoS surface `src/schema/pattern.ts` exists to guard. The two `first-semver` members read the first version-shaped token (one dot or more) on that stream, **preferring a three-component one when the line offers several** — so a banner leading with a build date `2024.01` does not beat the `1.2.3` beside it, while `MAJOR.MINOR` is still read when that is all a probe prints. Nothing scores further: two three-component tokens on one line still yield the first, because choosing between them would be nen guessing which version the probe meant. A probe whose line leads with an unrelated dotted number and carries no three-component version reads *that* number — declare a probe that prints the version alone. |
 | `installer` | **yes** | One of `verify-only`, `corepack`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. Only **`corepack`** runs in this release. |
 | `why` | no | Where the pin comes from, in the repository's own words. Printed verbatim; never nen's. |
 
@@ -3655,7 +3656,10 @@ The **`nen` row** comes from the `dependency` block instead, when there is one:
 its `version_probe` argv, compared against `minimum` under the contract's own
 **zero-major rule** — at major zero the MINOR is the breaking-change vehicle, so
 `0.3` means `>=0.3.0 <0.4.0` *exactly*, out of range in both directions; above
-zero the vehicle moves one component up, so `1.4` means `>=1.4.0 <2.0.0`. It is
+zero the vehicle moves one component up, so `1.4` means `>=1.4.0 <2.0.0`. The
+floor is **exactly two components**: `0.3.5` is exit 2 naming the pointer, not a
+floor silently widened to `0.3` — a comparison nen quietly weakened is a
+comparison nobody made. A leading `v` is accepted and normalised away. It is
 always `verify-only`: re-pinning nen is [`nen bootstrap`](#family-bootstrap)'s job
 and the consuming repository's decision, and the row prints the `pinned_ref` its
 bootstrap would install. A `project.toolchain` entry of the same name wins, and

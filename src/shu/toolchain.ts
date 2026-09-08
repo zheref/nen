@@ -83,7 +83,32 @@ export interface ParsedVersion {
  * One dot IS required, so a bare year or a build number is not mistaken for a
  * version.
  */
-const VERSION_TOKEN = /\d+(?:\.\d+)+(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?/;
+const VERSION_TOKEN = /\d+(?:\.\d+)+(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?/g;
+
+/** How many dotted numeric components a token's CORE carries. */
+function componentCount(token: string): number {
+  return (token.split(/[-+]/)[0] ?? "").split(".").length;
+}
+
+/**
+ * The version-shaped token a line means, when it offers more than one.
+ *
+ * A THREE-COMPONENT TOKEN WINS OVER AN EARLIER TWO-COMPONENT ONE, and that is
+ * the whole rule. `MAJOR.MINOR.PATCH` is unambiguously a version; two
+ * components are what a build date (`2024.01`), a schema stamp or a marketing
+ * number also look like, and a banner that carries both is a banner whose
+ * version is the specific one. Nothing here scores further than that: a line
+ * with two three-component tokens (a build tool's banner that also prints its
+ * runtime's version) still yields the FIRST, because preferring anything else
+ * would be nen guessing which of two versions a probe meant -- and a
+ * declaration whose probe prints an unrelated dotted number FIRST should name a
+ * probe that prints the version alone, which is what the usage text says.
+ */
+function firstSemver(text: string): string | null {
+  const tokens = [...text.matchAll(VERSION_TOKEN)].map((match): string => match[0]);
+  if (tokens.length === 0) return null;
+  return tokens.find((token): boolean => componentCount(token) === 3) ?? tokens[0] ?? null;
+}
 
 /**
  * The cap on any observed string that reaches a report.
@@ -124,9 +149,9 @@ export function extractVersion(
 ): string | null {
   switch (versionFrom) {
     case "first-semver-on-stdout":
-      return VERSION_TOKEN.exec(stdout)?.[0] ?? null;
+      return firstSemver(stdout);
     case "first-semver-on-stderr":
-      return VERSION_TOKEN.exec(stderr)?.[0] ?? null;
+      return firstSemver(stderr);
     case "whole-line-stdout": {
       const line = firstLine(stdout);
       return line === null ? null : truncate(line);
@@ -134,6 +159,28 @@ export function extractVersion(
     case "path-exists":
       return null;
   }
+}
+
+/**
+ * SEMVER'S OWN IDENTIFIER CHARSET, for a pre-release identifier and a build
+ * one alike: ASCII alphanumerics and a hyphen, and at least one of them.
+ *
+ * IT IS ENFORCED RATHER THAN ASSUMED, because this is the one part of a
+ * declaration's `version` that reaches an argv WITHOUT being re-shaped. The
+ * numbers are parsed into numbers; the pre-release was previously checked only
+ * for emptiness, and the build half was split off and dropped unread -- so
+ * `1.2.3-; rm -rf /`, `1.2.3+$(id)`, a backtick, a quote, a pipe and a space
+ * all parsed cleanly and were handed to the one installer's argv as part of the
+ * `<tool>@<version>` element. There is no shell on that path and each one
+ * arrived as ONE argv element, so nothing was ever executed -- but "it is inert
+ * because nothing splits it" is a property of the seam, and a version is a
+ * version: anything that is not one is refused here, at exit 2, by pointer.
+ */
+const IDENTIFIER = /^[0-9A-Za-z-]+$/;
+
+/** Dot-separated identifiers, each held to semver's charset. */
+function identifiersAreSemver(text: string): boolean {
+  return text.split(".").every((identifier): boolean => IDENTIFIER.test(identifier));
 }
 
 /**
@@ -147,7 +194,12 @@ export function extractVersion(
 export function parseVersion(raw: string): ParsedVersion | null {
   const text = raw.trim().replace(/^[vV]/, "");
   if (text === "") return null;
-  const withoutBuild = text.split("+")[0] ?? "";
+  const plus = text.indexOf("+");
+  const withoutBuild = plus === -1 ? text : text.slice(0, plus);
+  // BUILD METADATA TAKES NO PART IN PRECEDENCE and is dropped -- but it is
+  // still READ first, because a string this function accepts is a string the
+  // caller may put in an argv verbatim.
+  if (plus !== -1 && !identifiersAreSemver(text.slice(plus + 1))) return null;
   const dash = withoutBuild.indexOf("-");
   const core = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash);
   const pre = dash === -1 ? null : withoutBuild.slice(dash + 1);
@@ -158,7 +210,7 @@ export function parseVersion(raw: string): ParsedVersion | null {
     if (!/^\d+$/.test(part)) return null;
     numbers.push(Number(part));
   }
-  if (pre !== null && (pre === "" || pre.split(".").some((id): boolean => id === ""))) return null;
+  if (pre !== null && !identifiersAreSemver(pre)) return null;
   return { numbers, prerelease: pre === null ? null : pre.split(".") };
 }
 
@@ -268,14 +320,24 @@ export interface Floor {
  * along, rather than a second rule nen invented for a case the prose did not
  * spell out.
  *
- * The floor is refused when it is not two-or-more numeric components, because
- * a floor nen cannot read is a comparison nen must not pretend to have made.
+ * THE FLOOR IS EXACTLY TWO COMPONENTS, and a third is REFUSED rather than
+ * dropped. `0.3.5` used to parse and silently become `0.3` -- a floor a
+ * repository wrote to exclude `0.3.4`, applied as one that admits it, with no
+ * line of output saying so. There is no reading of `MAJOR.MINOR.PATCH` under
+ * this block's own zero-major rule (`0.3` means `>=0.3.0 <0.4.0` EXACTLY), so
+ * the honest answer to a third component is to name the pointer and refuse:
+ * a comparison nen quietly weakened is a comparison nobody made.
+ *
+ * A LEADING `v` IS ACCEPTED AND NORMALISED AWAY, exactly as `parseVersion`
+ * accepts it everywhere else in this file -- and `renderMinimum` renders the
+ * range back out of the NUMBERS, so no `v` a declaration wrote can reach a
+ * report or a comparison.
  */
 export function parseMinimum(minimum: string, pointer: string): Floor {
   const floor = parseVersion(minimum);
-  if (floor === null || floor.numbers.length < 2) {
+  if (floor === null || floor.numbers.length !== 2) {
     throw new VerbUsageError(
-      `${pointer} is '${minimum}', which is not the MAJOR.MINOR floor this block states. At major zero it means '>=0.M.0 <0.(M+1).0' exactly -- the minor is the breaking-change vehicle there -- and above zero it means '>=X.Y.0 <(X+1).0.0'. nen compares against neither when it cannot read the floor.`,
+      `${pointer} is '${minimum}', which is not the MAJOR.MINOR floor this block states. It is exactly two components: at major zero it means '>=0.M.0 <0.(M+1).0' exactly -- the minor is the breaking-change vehicle there -- and above zero it means '>=X.Y.0 <(X+1).0.0'. A third component has no reading under that rule and is refused rather than dropped, because a floor nen quietly widened is a comparison nobody made.`,
     );
   }
   return { major: floor.numbers[0] ?? 0, minor: floor.numbers[1] ?? 0 };
