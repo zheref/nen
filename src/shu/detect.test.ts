@@ -319,35 +319,36 @@ describe("nen shu detect -- what the scan deliberately does not see", () => {
     }
   });
 
-  it(`descends exactly ${MAX_DEPTH} directories, and says so when it finds nothing`, () => {
-    const dir = mkdtempSync(join(tmpdir(), "nen-detect-depth-"));
-    try {
-      const atDepth = (depth: number): string =>
-        join(dir, ...Array.from({ length: depth }, (_, index): string => `d${index + 1}`));
-      mkdirSync(atDepth(MAX_DEPTH), { recursive: true });
-      writeFileSync(join(atDepth(MAX_DEPTH), "next.config.js"), "module.exports = {};\n");
-      expect(detect(dir).lanes).toHaveLength(1);
+  it("descends exactly three directories -- found at three, missed at four", () => {
+    // THE NUMBERS ARE LITERAL, and the constant is asserted against a literal
+    // too. Building the fixture out of `MAX_DEPTH` would make this test move
+    // with the bound it is supposed to pin: lowering the constant to 1 lowered
+    // the fixture with it and the test stayed green, which is the whole shape
+    // of a self-referential assertion.
+    expect(MAX_DEPTH).toBe(3);
+    const marker = (dir: string, ...segments: readonly string[]): void => {
+      const at = join(dir, ...segments);
+      mkdirSync(at, { recursive: true });
+      writeFileSync(join(at, "next.config.js"), "module.exports = {};\n");
+    };
 
-      const deeper = mkdtempSync(join(tmpdir(), "nen-detect-deeper-"));
-      try {
-        const tooDeep = join(
-          deeper,
-          ...Array.from({ length: MAX_DEPTH + 1 }, (_, index): string => `d${index + 1}`),
-        );
-        mkdirSync(tooDeep, { recursive: true });
-        writeFileSync(join(tooDeep, "next.config.js"), "module.exports = {};\n");
-        const report = detect(deeper);
-        expect(report.lanes).toEqual([]);
-        // The blind spot is NAMED in the output, because a silent miss and an
-        // empty tree look identical to the person reading it.
-        const rendered = renderDetect(report).join("\n");
-        expect(rendered).toMatch(new RegExp(`descends at most ${MAX_DEPTH} directories`));
-        expect(rendered).toMatch(/node_modules/);
-      } finally {
-        rmSync(deeper, { recursive: true, force: true });
-      }
+    const found = mkdtempSync(join(tmpdir(), "nen-detect-depth3-"));
+    const missed = mkdtempSync(join(tmpdir(), "nen-detect-depth4-"));
+    try {
+      marker(found, "one", "two", "three");
+      expect(detect(found).lanes.map((lane): string => lane.cwd)).toEqual(["one/two/three"]);
+
+      marker(missed, "one", "two", "three", "four");
+      const report = detect(missed);
+      expect(report.lanes).toEqual([]);
+      // The blind spot is NAMED in the output, because a silent miss and an
+      // empty tree look identical to the person reading it.
+      const rendered = renderDetect(report).join("\n");
+      expect(rendered).toMatch(/descends at most 3 directories/);
+      expect(rendered).toMatch(/node_modules/);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(found, { recursive: true, force: true });
+      rmSync(missed, { recursive: true, force: true });
     }
   });
 
