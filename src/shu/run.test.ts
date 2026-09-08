@@ -18,6 +18,7 @@ import { runFamily } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
+import { INTERACTIVE_VERBS } from "./run.js";
 
 const TOKEN = "PLACEHOLDER_LANE_TOKEN";
 /** The one value the fixture declares for a child's environment. */
@@ -59,6 +60,46 @@ async function capture(argv: readonly string[], options: Options = {}): Promise<
 
 function ok(match: string): ScriptedCall {
   return { match, result: { code: 0 } };
+}
+
+/**
+ * Run a verb against a declaration written into a temporary repository.
+ *
+ * SOME REFUSALS NEED A DECLARATION NOBODY SHOULD HAVE TO READ TWICE. A lane
+ * whose `cwd` escapes the repository, a precondition path pointing at
+ * `/etc/passwd`, a `path` stated as a LIST -- each is one sentence of JSON that
+ * exists to be refused, and putting them in the shared fixture would make every
+ * reader of that file wonder which lane was the real one.
+ */
+async function withDeclaration(
+  project: unknown,
+  argv: readonly string[],
+  options: Options = {},
+): Promise<Captured> {
+  const dir = mkdtempSync(join(tmpdir(), "nen-shu-decl-"));
+  try {
+    mkdirSync(join(dir, "nen"));
+    writeFileSync(
+      join(dir, "nen", "contract.json"),
+      JSON.stringify({ $schema: "nen.contract/v0.1", project }),
+    );
+    return await capture(argv, { ...options, repo: dir });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** A one-lane project block with one `build`, for the declarations above. */
+function oneLane(
+  overrides: Readonly<Record<string, unknown>> = {},
+  build: unknown = { exe: "placeholder-tool", argv: ["go"] },
+): Readonly<Record<string, unknown>> {
+  return {
+    lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+    defaultLane: "only",
+    verbs: { only: { build } },
+    ...overrides,
+  };
 }
 
 /** Every argv `--dry-run` printed, in order. */
@@ -121,6 +162,12 @@ describe("--dry-run parity -- the thing you approve is the thing that runs", () 
       const wet = await capture([verb], { script: NEXTJS_GOLDENS[verb]?.map(ok) ?? [] });
       expect(wouldRun(dry.out)).toEqual(spawned(wet.seams));
     });
+
+    // The two long-running verbs are absent from THIS half and only this half:
+    // `--json` without `--dry-run` is refused for them (stdout belongs to the
+    // child), so there is no second document to compare against. Their argv
+    // parity is proved by the text assertion above, over the same two runs.
+    if (INTERACTIVE_VERBS.includes(verb)) continue;
 
     it(`'${verb}': --json's steps are byte-identical between the two modes`, async () => {
       const dry = JSON.parse((await capture([verb, "--dry-run", "--json"])).out.join("\n")) as {
@@ -271,14 +318,17 @@ describe("preconditions -- asserted and never performed", () => {
     expect(result.code).toBe(2);
     expect(result.seams.calls).toEqual([]);
     expect(result.err.join("\n")).toMatch(/not satisfied/);
-    expect(result.out.join("\n")).toMatch(/FAIL {2}path {2}native\/deps -- not present/);
+    // The kind column is as wide as the widest kind in THIS report -- `native`
+    // declares a `command` precondition too, so `path` pads to seven.
+    expect(result.out.join("\n")).toMatch(/FAIL {2}path {4}native\/deps -- not present/);
   });
 
   it("refuses at exit 2 when a declared env variable is not set", async () => {
     const result = await capture(["build"], { env: {} });
     expect(result.code).toBe(2);
     expect(result.seams.calls).toEqual([]);
-    expect(result.out.join("\n")).toMatch(new RegExp(`FAIL {2}env {3}${TOKEN}`));
+    // `web` declares only `path` and `env`, so the column is four wide.
+    expect(result.out.join("\n")).toMatch(new RegExp(`FAIL {2}env {2}${TOKEN}`));
   });
 
   it("reports a kind it CANNOT assert as such, and refuses -- never as a pass", async () => {
@@ -298,6 +348,88 @@ describe("preconditions -- asserted and never performed", () => {
   it("never PERFORMS a precondition -- the probe argv reaches no seam", async () => {
     const result = await capture(["build", "--lane", "native"]);
     expect(spawned(result.seams)).toEqual([]);
+  });
+
+  it("cannot assert an ASSERTABLE kind whose value is a list, and says which", async () => {
+    // `path` is a kind nen can check; `["a", "b"]` is not a path. Reading the
+    // first element, or the join of them, would be nen guessing which one the
+    // declaration meant -- so the row is `satisfied: null` like any other kind
+    // it cannot assert, and the run refuses. Flipping that arm to `true` used
+    // to leave the whole suite green.
+    const result = await withDeclaration(
+      oneLane({ preconditions: { only: [{ kind: "path", value: ["deps", "other"] }] } }),
+      ["build", "--json"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    const report = JSON.parse(result.out.join("\n")) as {
+      preconditions: readonly { kind: string; value: unknown; satisfied: boolean | null }[];
+    };
+    expect(report.preconditions).toEqual([
+      { kind: "path", value: ["deps", "other"], satisfied: null },
+    ]);
+    expect(result.err.join("\n")).toMatch(/1 nen cannot assert/);
+  });
+
+  it("reports a path it cannot stat as PRESENT-and-broken, never as absent", async () => {
+    // A path THROUGH a regular file -- the declaration itself, which is the one
+    // file every temporary repository here has. `lstat` throws ENOTDIR rather
+    // than answering "no entry", and the catch arm exists to call that PRESENT:
+    // an entry nen cannot read is a repository problem to report, and "the
+    // build has not been run yet" is the one thing it is definitely not.
+    // Flipping that arm to `false` used to leave the whole suite green.
+    const result = await withDeclaration(
+      oneLane({
+        preconditions: { only: [{ kind: "path", value: "nen/contract.json/child" }] },
+      }),
+      ["build", "--dry-run", "--json"],
+    );
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as {
+      preconditions: readonly { satisfied: boolean | null }[];
+    };
+    expect(report.preconditions[0]?.satisfied).toBe(true);
+  });
+});
+
+// ── (c2) the repository boundary ───────────────────────────────────────────
+
+describe("nothing steps outside the tree --repo names", () => {
+  // A declaration is the repository's own file, so this is not a trust boundary
+  // in the usual sense -- but `../..` is a mistake whose only symptom would
+  // otherwise be a verb quietly running somewhere else, and both paths a
+  // declaration can state are checked. Neither had a test.
+
+  it("refuses a lane whose cwd escapes the repository, before anything spawns", async () => {
+    const result = await withDeclaration(
+      { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: "../.." } } },
+      ["build"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.\/\.\.'/);
+    expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
+  });
+
+  it("refuses a precondition path that escapes it, and asserts nothing", async () => {
+    const result = await withDeclaration(
+      oneLane({ preconditions: { only: [{ kind: "path", value: "../../etc/passwd" }] } }),
+      ["build", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(
+      /project\.preconditions\.only\[0\]\.value names '\.\.\/\.\.\/etc\/passwd'/,
+    );
+  });
+
+  it("refuses an artifact path that escapes it too", async () => {
+    const result = await withDeclaration(
+      oneLane({}, { exe: "placeholder-tool", argv: ["go"], artifacts: ["../outside"] }),
+      ["build", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/artifacts\[0\] names '\.\.\/outside'/);
   });
 });
 
@@ -340,6 +472,27 @@ describe("refusals", () => {
     }
   });
 
+  it("exit 1, not 2, for a declaration that is PRESENT and malformed", async () => {
+    // The distinction the help text now states: ABSENT (or present with no
+    // project block) is a mistyped invocation and exits 2; present and
+    // unreadable is a repository defect and exits 1 -- the code every family in
+    // this CLI answers an unreadable schema file with. Diverging here would
+    // make `shu` the one family where a malformed taxonomy file means something
+    // else.
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-bad-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "contract.json"), '{"project": {"lanes": "not an object"}}');
+      const result = await capture(["build"], { repo: dir });
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).toContain(join(dir, "nen", "contract.json"));
+      // Named pointer and expectation, not a bare "invalid".
+      expect(result.err.join("\n")).toMatch(/at project\.[a-zA-Z]+, expected /);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("exit 2 naming every declared lane when --lane is unknown", async () => {
     const result = await capture(["build", "--lane", "nope"]);
     expect(result.code).toBe(2);
@@ -375,11 +528,23 @@ describe("refusals", () => {
   });
 
   it("checks the verb BEFORE the host, because an unsupported verb is unsupported everywhere", async () => {
-    // `archive` is unsupported on `web`, and `web`'s hosts allow every platform;
-    // on a platform the declaration excludes for another verb, the answer must
-    // still be 4 rather than sending a developer to a different machine.
-    const result = await capture(["archive"], { platform: "win32" });
-    expect(result.code).toBe(4);
+    // `release` on `web` is the one verb that is BOTH: the declaration marks it
+    // unsupported for this lane, AND `hosts.release` allows only darwin. Run on
+    // linux, both gates would fire, and the answer must be 4 -- telling a
+    // developer to find a mac for a verb that has no answer on any machine is
+    // the failure this order exists to prevent.
+    //
+    // The earlier version of this test used `archive` on `web`, whose hosts are
+    // `*` -- so only ONE gate could ever fire and swapping the two blocks in
+    // render.ts left it green. That mutant now dies here.
+    const conflicted = await capture(["release"], { platform: "linux" });
+    expect(conflicted.code).toBe(4);
+    expect(conflicted.err.join("\n")).toMatch(/no package or store pipeline/);
+    expect(conflicted.err.join("\n")).not.toMatch(/this host is/);
+    // And the host gate is real for the same verb on a lane that DOES declare
+    // it, which is what makes the assertion above about the order.
+    const hosted = await capture(["release", "--lane", "native"], { platform: "linux" });
+    expect(hosted.code).toBe(3);
   });
 
   it("exit 2 naming the placeholder it will not guess at", async () => {
@@ -450,15 +615,59 @@ describe("the interactive verbs", () => {
   });
 
   it("prints the pre-flight report BEFORE handing over the terminal", async () => {
-    const result = await capture(["dev", "--json"], { script: [ok("pnpm exec next dev")] });
-    const report = JSON.parse(result.out.join("\n")) as {
-      log: { mode: string };
-      exitCode: number | null;
-      steps: readonly { exitCode: number | null }[];
-    };
-    expect(report.log.mode).toBe("interactive");
-    expect(report.exitCode).toBeNull();
-    expect(report.steps[0]?.exitCode).toBeNull();
+    const result = await capture(["dev"], { script: [ok("pnpm exec next dev")] });
+    expect(result.code).toBe(0);
+    // Nulls, not zeroes: there is no honest exit code for a process that has
+    // not started and may not stop for hours.
+    expect(result.out.join("\n")).toMatch(/would run|ran/);
+    expect(result.out.join("\n")).toMatch(/an interactive verb hands this terminal to the child/);
+  });
+
+  for (const verb of ["dev", "run"]) {
+    it(`refuses '${verb} --json' rather than interleaving a report with the child's stdout`, async () => {
+      // The child INHERITS stdout, so a JSON document printed before the
+      // handover is followed on the same stream by however much the child then
+      // writes -- and `nen shu dev --json | jq .` reads one object and then a
+      // dev server's log lines. Refusing costs one run; emitting it anyway
+      // costs a caller their parser, silently.
+      const result = await capture([verb, "--json"], { script: [] });
+      expect(result.code).toBe(2);
+      expect(result.seams.calls).toEqual([]);
+      expect(result.err.join("\n")).toMatch(/is long-running/);
+      expect(result.err.join("\n")).toMatch(/Pass --dry-run for the same pre-flight/);
+    });
+
+    it(`accepts '${verb} --dry-run --json', which is the machine-readable pre-flight`, async () => {
+      const result = await capture([verb, "--dry-run", "--json"]);
+      expect(result.code).toBe(0);
+      const report = JSON.parse(result.out.join("\n")) as {
+        log: { mode: string };
+        exitCode: number | null;
+        steps: readonly { exitCode: number | null }[];
+      };
+      expect(report.log.mode).toBe("dry-run");
+      expect(report.steps[0]?.exitCode).toBeNull();
+      expect(result.seams.calls).toEqual([]);
+    });
+  }
+
+  it("refuses the flag pair BEFORE reading the declaration -- it is about the line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-nodecl-"));
+    try {
+      const result = await capture(["dev", "--json"], { repo: dir });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/is long-running/);
+      // Not the missing-declaration message: a caller who typed an impossible
+      // pair should not need a valid declaration to be told so.
+      expect(result.err.join("\n")).not.toMatch(/nen shu detect/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("says in the report itself why the pre-flight carries nulls", async () => {
+    const result = await capture(["dev"], { script: [ok("pnpm exec next dev")] });
+    expect(result.out.join("\n")).toMatch(/--json is refused on a long-running verb/);
   });
 
   it("--dry-run on an interactive verb starts nothing at all", async () => {
@@ -493,11 +702,54 @@ describe("a declared env value never leaves the declaration", () => {
   });
 
   it("still HANDS the value to the child -- the seam gets it, the report does not", async () => {
-    // The scripted seam matches on argv alone, so this asserts the pairing at
-    // the point it matters: the run succeeded, and no output carried the value.
+    // BOTH HALVES, at the one point where they can disagree. The seam records
+    // the env it was given, so "the child received the value" is an assertion
+    // rather than an inference from the run having succeeded -- and the value
+    // still appears in no line of output. Without the first half, dropping
+    // `env` from the spawn options entirely would leave this suite green.
     const result = await capture(["run"], { script: [ok("pnpm exec next start")] });
     expect(result.code).toBe(0);
+    expect(result.seams.calls[0]?.env).toEqual({ PLACEHOLDER_PORT: DECLARED_ENV_VALUE });
     expect([...result.out, ...result.err].join("\n")).not.toContain(DECLARED_ENV_VALUE);
+  });
+
+  it("passes NO env at all for a verb that declares none", async () => {
+    const result = await capture(["build"], { script: [ok("pnpm turbo run build")] });
+    expect(result.seams.calls[0]?.env).toBeNull();
+  });
+});
+
+// ── (f2) the directory every step runs in ──────────────────────────────────
+
+describe("a step runs in the lane's own directory, resolved against --repo", () => {
+  it("hands the seam the lane cwd, resolved from the repository root", async () => {
+    // The scripted seam cannot MATCH on cwd, so a verb that resolved the lane
+    // against `process.cwd()` instead of `--repo` produced a call it answered
+    // happily. The recorded value is the assertion.
+    const result = await capture(["build"], { script: [ok("pnpm turbo run build")] });
+    expect(result.seams.calls[0]?.cwd).toBe(SHU_REPO);
+    // And the report says the same thing the seam was told.
+    const report = JSON.parse(
+      (await capture(["build", "--json"], { script: [ok("pnpm turbo run build")] })).out.join("\n"),
+    ) as { cwd: string; steps: readonly { cwd: string }[] };
+    expect(report.cwd).toBe(SHU_REPO);
+    expect(report.steps[0]?.cwd).toBe(SHU_REPO);
+  });
+
+  it("runs a lane whose cwd is a subdirectory THERE, not at the root", async () => {
+    const result = await capture(["build", "--lane", "native", "--dry-run", "--json"], {
+      env: { [TOKEN]: "x" },
+      repo: SHU_REPO,
+    });
+    // `native` declares `cwd: "native"`; its preconditions refuse a real run,
+    // so the dry run is where the resolved directory is observable.
+    const report = JSON.parse(result.out.join("\n")) as { cwd: string };
+    expect(report.cwd).toBe(join(SHU_REPO, "native"));
+  });
+
+  it("hands the interactive seam the same directory the captured one gets", async () => {
+    const result = await capture(["dev"], { script: [ok("pnpm exec next dev")] });
+    expect(result.seams.calls[0]).toMatchObject({ interactive: true, cwd: SHU_REPO });
   });
 });
 

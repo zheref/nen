@@ -127,6 +127,7 @@ verbs:
 the declaration:
   <repo>/nen/contract.json, "project" block. Absent, or present with no
   "project" block, is exit 2 naming the file -- 'nen shu detect' proposes one.
+  Present but MALFORMED is exit 1, not 2; see the exit codes below.
 
   project.lanes         { "<lane>": { "stack": "<id>", "cwd": "<repo-relative>" } }
                         A stack is a PER-LANE property: one repository is
@@ -137,14 +138,31 @@ the declaration:
                         invocation is { exe, argv } or { steps: [...] } or
                         { unsupported: "<why>" }. argv is a LIST, never a
                         string: there is no shell, no expansion, no 'sh -c'.
+                        An invocation may also carry:
+                          env       { "<NAME>": "<value>" }, passed to the
+                                    child. Only the NAMES are ever reported --
+                                    a declared value can be a token, and a
+                                    token in a log or a --json blob is a
+                                    leaked token.
+                          artifacts ["<repo-relative path>", ...], the outputs
+                                    this verb produces. Nen REPORTS whether
+                                    each exists and never creates one.
   project.preconditions { "<lane>": [ { kind, value, why } ] }. Nen ASSERTS
                         these and NEVER performs them. It asserts kind 'path'
                         (repo-root-relative) and kind 'env' (the variable is
-                        set; its value is never read or printed). A kind it
-                        cannot assert is reported as such and refused -- an
-                        unperformed check is never rendered as a clean one.
+                        set; its value is never read or printed), each stated
+                        as ONE string. A kind it cannot assert -- including an
+                        assertable kind given a LIST of values -- is reported
+                        as such and refused: an unperformed check is never
+                        rendered as a clean one.
   project.hosts         { "<verb>|*": ["darwin","linux","win32"] }, compared
-                        against this host.
+                        against this host. An exact verb key wins over "*", and
+                        a declaration with no hosts block constrains nothing.
+  project.targets       { "<name>": ... }, the deploy destinations. --target
+                        must name a key of it. A --target that names none is
+                        exit 2 listing what IS declared -- accepting the flag's
+                        mere presence would make it a formality satisfied by
+                        any word.
 
 flags:
   --lane <name>    Which lane to run in. Defaults to project.defaultLane.
@@ -152,28 +170,54 @@ flags:
                    nothing at all. The argv printed is the argv that would be
                    spawned, from the same rendering -- the thing you approve is
                    the thing that runs.
-  --target <name>  'deploy' only. Must name a key of project.targets.
+  --target <name>  'deploy' only. Must name a key of project.targets. Required,
+                   with no default ever -- not even when there is exactly one.
+                   It is checked BEFORE the lane and the verb, so a line that
+                   gets both wrong is told about the target first.
   --write          'detect' only. Writes nen/contract.json when there is none.
                    There is no --force and no merge.
+  --install        'tools' only, and not implemented yet. It is the one flag in
+                   that verb that would change the host.
   --json           The report as one object. Its keys, in order:
                    { contract, lane, stack, verb, steps, cwd, env, host,
                      preconditions, exitCode, durationMs, artifacts, log }.
                    'env' is variable NAMES only, never values. 'steps[].exitCode'
                    is the TOOL's code and is null when nothing was run, which is
                    how a --json reader tells a dry run from a real one;
-                   'exitCode' is nen's own.
+                   'exitCode' is nen's own. Under --json a step's own output
+                   goes to STDERR, so stdout stays exactly one document.
+                   REFUSED on 'dev' and 'run' unless --dry-run is also given:
+                   those two hand this terminal to the child, so stdout is the
+                   child's and one object followed by a server's log lines is
+                   not a document. '--dry-run --json' is their machine-readable
+                   pre-flight.
 
 exit codes:
   0  the tool ran and succeeded, or a dry run rendered
-  1  the tool ran and failed. Nen exits 1 whatever the tool's own code was
+  1  the tool ran and failed. Nen exits 1 whatever the tool's own code was.
+     A nen/contract.json that is PRESENT and MALFORMED is also 1: the file is
+     there and says something nen cannot read, which is a repository defect
+     rather than a mistyped invocation, and it is the code every family in this
+     CLI answers an unreadable schema file with. The refusal names the file,
+     the pointer and the expectation
   2  usage: no declaration, no "project" block, an unknown --lane, a
-     placeholder nen cannot substitute, or a PRECONDITION that is not satisfied
+     placeholder nen cannot substitute, a --target that names no declared
+     target, --json on a long-running verb without --dry-run, a path that
+     resolves outside the repository, or a PRECONDITION that is not satisfied
   3  unsupported host -- the verb is real, this machine cannot run it
   4  unsupported verb for THIS LANE -- the declaration says so, in its own
-     words. The invocation was correct; the answer is a fact about the repo
+     words. The invocation was correct; the answer is a fact about the repo.
+     'tools' and 'warmup' also answer 4 in this release, saying they are not
+     implemented yet and naming the PR each arrives in
   5  the declared program could not be started at all
 
   Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91).
+
+placeholders:
+  Only the reference pack's own tokens are refused -- {pm}, {scheme},
+  {destination} and the rest of the closed set docs/STACK-MATRIX.md publishes.
+  Every OTHER braced argument is passed to the child exactly as written, so a
+  declaration may state --define={"a":1} without nen having an opinion about it.
 
 An argv is printed with any element containing whitespace quoted. Those quotes
 are information: '-destination platform=iOS Simulator,name=...' is ONE argv

@@ -27,6 +27,28 @@ export interface RecordedRun {
    * for, which a single flat list of argv would erase.
    */
   readonly interactive: boolean;
+  /**
+   * The working directory the caller asked for, or null when it asked for
+   * none (the child then inherits this process's own).
+   *
+   * RECORDED BECAUSE THE SCRIPT CANNOT MATCH ON IT. `find` keys on the command
+   * plus its argv, so a verb that resolved a lane's `cwd` wrongly -- against
+   * the process's directory instead of `--repo`, say -- produced a call this
+   * seam happily answered and no test could see. `nen shu` runs every step in
+   * a directory the declaration names, so "which directory" is half of what
+   * it does.
+   */
+  readonly cwd: string | null;
+  /**
+   * The extra environment the caller passed to the child, or null for none.
+   *
+   * THE VALUES ARE HERE ON PURPOSE, and they are the only place in a test run
+   * where they legitimately appear: a declaration's `env` value must reach the
+   * CHILD and must never reach a report, a log line or a refusal. Asserting
+   * "the value is in no output" proves half of that; the other half needs
+   * somewhere the value is supposed to be.
+   */
+  readonly env: Readonly<Record<string, string | undefined>> | null;
 }
 
 export class ScriptedSeams implements Seams {
@@ -67,8 +89,14 @@ export class ScriptedSeams implements Seams {
     return found.result;
   }
 
-  run: Runner = (command, args): CommandResult => {
-    this.calls.push({ command, args, interactive: false });
+  run: Runner = (command, args, options = {}): CommandResult => {
+    this.calls.push({
+      command,
+      args,
+      interactive: false,
+      cwd: options.cwd ?? null,
+      env: options.env ?? null,
+    });
     const found = this.find(command, args, "subprocess");
     return {
       code: found.code ?? 0,
@@ -89,8 +117,14 @@ export class ScriptedSeams implements Seams {
    * which is the point of the seam: an interactive child's output went to the
    * terminal and nen never saw it.
    */
-  runInteractive: InteractiveRunner = (command, args): InteractiveResult => {
-    this.calls.push({ command, args, interactive: true });
+  runInteractive: InteractiveRunner = (command, args, options = {}): InteractiveResult => {
+    this.calls.push({
+      command,
+      args,
+      interactive: true,
+      cwd: options.cwd ?? null,
+      env: options.env ?? null,
+    });
     const found = this.find(command, args, "interactive subprocess");
     return {
       code: found.code ?? 0,

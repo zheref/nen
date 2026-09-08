@@ -8,6 +8,9 @@
 // to it is a deliberate, visible decision rather than a silent one.
 
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   defaultSeams,
   must,
@@ -130,13 +133,34 @@ describe("spawnInteractiveRunner -- the long-running seam", () => {
     expect(process.listenerCount("SIGINT")).toBe(before);
   });
 
-  it("runs the child in the cwd it was given", () => {
-    const result = spawnInteractiveRunner(
-      process.execPath,
-      ["-e", "process.exit(process.cwd().length > 0 ? 0 : 1)"],
-      { cwd: process.cwd() },
-    );
-    expect(result.code).toBe(0);
+  it("runs the child in the cwd it was given, and not in this process's own", () => {
+    // ASSERTS THE PATH, not that a path exists. The first version of this test
+    // exited 0 when `process.cwd().length > 0`, which is true of every
+    // directory on earth -- so deleting the `cwd` option entirely left it
+    // green, and the one thing the option does was untested.
+    //
+    // `realpathSync` on both sides because a temp directory on macOS is
+    // reached through a symlink (`/var` -> `/private/var`) and the child would
+    // otherwise report a path that is the same directory spelled differently.
+    const directory = mkdtempSync(join(tmpdir(), "nen-seam-cwd-"));
+    const compare =
+      "const {realpathSync} = require('node:fs'); process.exit(realpathSync(process.cwd()) === realpathSync(process.argv[1]) ? 0 : 1)";
+    try {
+      expect(
+        spawnInteractiveRunner(process.execPath, ["-e", compare, directory], { cwd: directory })
+          .code,
+      ).toBe(0);
+      // The negative half: the same child, told to compare against a different
+      // directory, says no. Without it the assertion above could pass on a
+      // runner that ignored `cwd` and a fixture that happened to match.
+      expect(
+        spawnInteractiveRunner(process.execPath, ["-e", compare, process.cwd()], {
+          cwd: directory,
+        }).code,
+      ).toBe(1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 

@@ -190,7 +190,17 @@ export function assertPreconditions(
   });
 }
 
-function describePrecondition(entry: AssertedPrecondition): string {
+// THE KIND COLUMN IS AS WIDE AS THIS REPORT NEEDS, not a fixed five. `kind` is
+// the REPOSITORY's own word for what must be true -- the schema leaves it open
+// on purpose -- so any constant here is a guess about somebody else's
+// vocabulary, and the first declaration to write a longer one (`command`, seven
+// characters) pushed its value out of the column and misaligned the row under
+// the two nen can assert. Measuring the rows costs one pass and cannot be wrong.
+function kindWidth(preconditions: readonly AssertedPrecondition[]): number {
+  return preconditions.reduce((width, entry): number => Math.max(width, entry.kind.length), 4);
+}
+
+function describePrecondition(entry: AssertedPrecondition, width: number): string {
   const mark = entry.satisfied === true ? "ok  " : entry.satisfied === false ? "FAIL" : "????";
   const value = Array.isArray(entry.value) ? entry.value.join(" ") : String(entry.value);
   const tail =
@@ -200,8 +210,10 @@ function describePrecondition(entry: AssertedPrecondition): string {
         ? entry.kind === "env"
           ? " -- not set in this environment"
           : " -- not present"
-        : ` -- nen cannot assert a precondition of kind '${entry.kind}' in this release (it asserts: ${ASSERTABLE_KINDS.join(", ")}). An unperformed check is never reported as a clean one`;
-  return `  ${mark}  ${entry.kind.padEnd(5)} ${value}${tail}`;
+        : ` -- nen cannot assert a precondition of kind '${entry.kind}'${
+            Array.isArray(entry.value) ? " stated as a LIST of values" : ""
+          } in this release (it asserts: ${ASSERTABLE_KINDS.join(", ")}, each as one string). An unperformed check is never reported as a clean one`;
+  return `  ${mark}  ${entry.kind.padEnd(width)} ${value}${tail}`;
 }
 
 const LABEL_WIDTH = 15;
@@ -230,7 +242,8 @@ export function renderReport(report: ShuReport): readonly string[] {
       ? labelled("preconditions", "(none declared)")
       : "preconditions:",
   );
-  for (const entry of report.preconditions) lines.push(describePrecondition(entry));
+  const width = kindWidth(report.preconditions);
+  for (const entry of report.preconditions) lines.push(describePrecondition(entry, width));
   const verbPrefix = report.log.mode === "dry-run" ? "would run" : "ran";
   for (const step of report.steps) {
     const argv = renderArgv({ exe: step.exe, argv: step.argv });
@@ -263,7 +276,7 @@ const LOG: Readonly<Record<ShuLogReport["mode"], string>> = {
   streamed:
     "not captured to a file -- each step's own stdout and stderr were relayed as it finished. A .nen/logs/ transcript is not in this release (zheref/nen#91).",
   interactive:
-    "not captured -- an interactive verb hands this terminal to the child, so nen never sees its output. This object is the pre-flight, printed before the handover.",
+    "not captured -- an interactive verb hands this terminal to the child, so nen never sees its output. This is the pre-flight, printed as TEXT before the handover: --json is refused on a long-running verb because stdout then belongs to the child, and '--dry-run --json' is the machine-readable form of this same report.",
 };
 
 function logReport(mode: ShuLogReport["mode"]): ShuLogReport {
@@ -316,14 +329,51 @@ export interface RunOptions {
 }
 
 /**
+ * `--json` ON A LONG-RUNNING VERB, WITHOUT `--dry-run`, IS REFUSED.
+ *
+ * An interactive verb hands this terminal to the child: the child's stdout IS
+ * nen's stdout, unbuffered and unparsed, for as long as it runs. So a `--json`
+ * report printed before the handover lands on the same stream the child is
+ * about to write to, and `nen shu dev --json | jq .` reads one JSON document
+ * followed by a dev server's log lines -- which is not a JSON document. The
+ * contract every machine reader of this CLI depends on is "stdout is exactly
+ * one object", and it cannot be honoured here.
+ *
+ * REFUSED RATHER THAN MOVED TO STDERR, which was the other candidate. Putting
+ * the report on stderr would keep stdout clean and make `--json` mean somewhere
+ * different for two verbs than for the other nine -- a caller redirecting
+ * stdout would get an empty file and no error. A refusal that names the
+ * alternative in the same sentence costs one run and teaches the rule.
+ */
+function refuseImpossibleFlags(context: CommandContext, options: RunOptions): void {
+  if (!context.json || options.dryRun || !INTERACTIVE_VERBS.includes(options.verb)) return;
+  throw new VerbUsageError(
+    `'${options.verb}' is long-running: nen inherits this terminal and hands it to the child, so stdout belongs to that child and a --json report would be one object followed by however much the child then writes. Pass --dry-run for the same pre-flight as one JSON document (it starts nothing), or drop --json and read the pre-flight as text. The two long-running verbs are: ${INTERACTIVE_VERBS.join(", ")}.`,
+  );
+}
+
+/**
  * One verb, from declaration to exit code.
  *
  * The refusals it can raise, and their codes, are ./exit.ts's subject; this
- * function's own contribution is the ORDER, which is: the declaration must
- * exist, then the lane, then the verb, then the host, then the preconditions,
- * and only then does anything spawn.
+ * function's own contribution is the ORDER, which is:
+ *
+ *   0. the FLAGS must be a combination nen can honour -- before anything is
+ *      read, because it is a fact about the command line and not about the
+ *      repository, and a caller who typed an impossible pair should not have
+ *      to have a valid declaration to be told so;
+ *   1. the declaration must exist;
+ *   2. `--target`, when given, must name a declared target -- BEFORE the lane
+ *      and the verb are resolved, so `--lane bogus --target x` reports the
+ *      target rather than the lane. That is deliberate and it is the reason
+ *      this list exists: `--target` is the flag whose blast radius is other
+ *      people's users, and a caller who got it wrong should hear about THAT
+ *      first, whatever else is also wrong with the line;
+ *   3. then the lane, then the verb, then the host, then the preconditions,
+ *      and only then does anything spawn.
  */
 export function runVerb(context: CommandContext, repoRoot: string, options: RunOptions): number {
+  refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
   if (options.target !== null && !Object.prototype.hasOwnProperty.call(project.targets, options.target)) {
     // A TARGET THAT IS NOT DECLARED IS NOT A TARGET. Accepting the flag's mere

@@ -5,7 +5,30 @@ describe("ScriptedSeams", () => {
   it("answers a matching call", () => {
     const seams = new ScriptedSeams([{ match: "git status", result: { stdout: "clean\n" } }]);
     expect(seams.run("git", ["status"])).toEqual({ code: 0, stdout: "clean\n", stderr: "", spawnFailed: false });
-    expect(seams.calls).toEqual([{ command: "git", args: ["status"], interactive: false }]);
+    expect(seams.calls).toEqual([
+      { command: "git", args: ["status"], interactive: false, cwd: null, env: null },
+    ]);
+  });
+
+  // `find` keys on the command plus its argv, so `cwd` and `env` are invisible
+  // to the script -- which is exactly why they are RECORDED. A verb that
+  // resolved a lane's directory against the wrong root, or dropped a declared
+  // environment on the floor, produced a call this seam answered happily and no
+  // test could see.
+  it("records the cwd and the env the caller asked for, which the script cannot match on", () => {
+    const seams = new ScriptedSeams([{ match: "tool go", result: { code: 0 } }]);
+    seams.run("tool", ["go"], { cwd: "/somewhere/lane", env: { PORT: "4173" } });
+    seams.runInteractive("tool", ["go"], { cwd: "/somewhere/else" });
+    expect(seams.calls).toEqual([
+      {
+        command: "tool",
+        args: ["go"],
+        interactive: false,
+        cwd: "/somewhere/lane",
+        env: { PORT: "4173" },
+      },
+      { command: "tool", args: ["go"], interactive: true, cwd: "/somewhere/else", env: null },
+    ]);
   });
 
   it("throws loudly on an unscripted call rather than answering empty", () => {
@@ -25,7 +48,9 @@ describe("ScriptedSeams", () => {
       signal: null,
       spawnFailed: false,
     });
-    expect(seams.calls).toEqual([{ command: "tool", args: ["serve"], interactive: true }]);
+    expect(seams.calls).toEqual([
+      { command: "tool", args: ["serve"], interactive: true, cwd: null, env: null },
+    ]);
   });
 
   it("throws on an unscripted interactive call, naming which seam it was", () => {
