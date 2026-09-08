@@ -214,7 +214,8 @@ verb does by default:
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr request-reviews`](#nen-pr-request-reviews), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
-| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu deploy`](#nen-shu-deploy), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. `deploy` additionally requires `--target <name>`, with no default ever -- resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` additionally **parses** the report its run produced — and its `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read |
+| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All nine are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` additionally **parses** the report its run produced — and its `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read |
+| [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
@@ -415,7 +416,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu release`](#nen-shu-release) | publish a lane's artifact, where its declaration states a publication step | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu dev`](#nen-shu-dev) | start a lane's DEBUG build; long-running, on this terminal | nen/contract.json (project block); inherits stdio unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu run`](#nen-shu-run) | start a lane's PRODUCTION build locally; long-running, on this terminal | nen/contract.json (project block); inherits stdio unless --dry-run | yes |
-| [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- --target is required and has no default, and a lane whose deploy is a seat refuses with its own reason whatever --target says | nen/contract.json (project block + project.targets: the destination's args, the env NAMES it requires, or the sentence saying it has no command line); spawns the declared argv unless --dry-run | yes |
+| [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- TWO flags and no single-flag path to acting: --target is required and has no default, --run is required before anything is sent, and a lane whose deploy is a seat refuses with its own reason whatever --target says | nen/contract.json (project block + project.targets: the destination's args, the env NAMES it requires, or the sentence saying it has no command line); spawns the declared argv only with --run | yes |
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
@@ -2998,6 +2999,18 @@ nen scaffold init --repo <path>
 
 **Idempotence.** A second run changes nothing and says so per item: the hook, the declaration, the workflow and the `.gitignore` entry all report `skipped` when what is on disk is already exactly what this run would write. That is the one place this verb is more permissive than `shu detect --write`, which refuses on *presence*; anything whose content differs is still refused here.
 
+**Idempotence holds within a release, not across one.** The declaration this
+verb writes is [`shu detect`](#nen-shu-detect)'s proposal, and that proposal
+grows: this release adds `"targets": {}` to every project block it proposes.
+So a tree scaffolded by **v0.2.0** and re-run under this release reports the
+declaration `refused` — *already exists with different content* — rather than
+`skipped`, which is correct and is not a regression: the file differs, and this
+verb never overwrites a declaration and has no `--force`. The block it would
+have written is printed above the refusal; add the one line by hand (or leave
+it out — an absent `targets` and an empty one behave identically, and
+[`shu deploy`](#nen-shu-deploy) refuses at 2 with the block to paste either
+way). Every other step still reports `skipped`.
+
 **Output and exit codes** — the first three lines are v0.2.0's, unchanged: `created directories: <list>` (or `(none -- all already existed)`), `hook: <outcome> (<path>)`, and `canon-values: <path>` if one was written. Under `--dry-run` the first reads `would create directories:` and the second `hook: would-install`, because a preview that said `created` about directories that are not there would be the one line in the report that lies; `--dry-run` is new here, so no v0.2.0 caller reads that spelling. Then `stack: <id>`, one line per migration, one line per write, detect's notes, and the toolchain table. `--json` is a versioned contract, keys in order: `{ contract: "nen.scaffold.init/v0.1", writes: [{ path, action, why }], migrated: [{ from, to, action, why }], tools, exitCode }`, where `action` is `created`/`appended`/`skipped`/`would-create`/`would-append`/`refused`, `path` is repo-relative, and `tools` is [`shu tools`](#nen-shu-tools)'s own `nen.shu.tools/v0.1` document or `null`. **A `refused` row is always published**, in `writes[]` alongside the rest — a report that listed only what succeeded would be a report that says "done".
 
 Under `--json`, stdout is exactly one document and the prose the shape has no field for — `detect`'s open questions, the toolchain table and its advice — is relayed to **stderr** rather than dropped, the way the [`shu`](#family-shu) verbs relay a child's output.
@@ -3399,7 +3412,7 @@ proposes one.
 | `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported) and `artifacts` (repo-relative paths the verb produces, which nen reports and never creates). |
 | `project.preconditions` | `{ "<lane>": [ { kind, value, why } ] }`. Nen **asserts** these and **never performs** them. |
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
-| `project.targets` | `{ "<name>": { args, requiresEnv, unsupported, why } }` — the deploy destinations. `--target` must name a key of it, and there is no default — not even when there is exactly one. The **command** stays in `project.verbs.<lane>.deploy`, where every other verb's command is; a target says where that command sends it. `args` are appended to that argv, in order (refused on a multi-step row: which step reaches the destination is a guess). `requiresEnv` names variables that must be **set**, asserted exactly as a precondition of kind `env` is — the value is never read, compared, logged or printed, so a credential belongs in the environment and never in this file. `unsupported` is the destination that has **no command line at all** (a hosting provider's git integration, a CI action): exit 4 in the repository's own words. All four keys are optional; `{}` is a legal name-only target, and naming it is still mandatory. See [`nen shu deploy`](#nen-shu-deploy). |
+| `project.targets` | `{ "<name>": { args, requiresEnv, unsupported, why } }` — the deploy destinations, and a **project-level** map rather than a per-lane one. `--target` must name a key of it, and there is no default — not even when there is exactly one. The **command** stays in `project.verbs.<lane>.deploy`, where every other verb's command is; a target says where that command sends it. `args` are appended to that argv, in order — refused on a multi-step row (which step reaches the destination is a guess), and refused, like any other argv, when they carry one of the reference pack's own placeholder tokens. `requiresEnv` names variables that must be **set**, asserted exactly as a precondition of kind `env` is — the value is never read, compared, logged or printed, so a credential belongs in the environment and never in this file; each entry is held to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) at load, because a name no environment could carry is a row that could only ever report `FAIL`. Repeats are collapsed, and a variable the lane's own preconditions already declare is asserted **once**. `unsupported` is the destination that has **no command line at all** (a hosting provider's own push integration, a CI action): exit 4 in the repository's own words, and the sentence is required rather than just the key. All four keys are optional; `{}` is a legal name-only target, and naming it is still mandatory. **Unknown keys are preserved** here as everywhere in this schema — with one exception: a key one edit away from one of the four (`arg`, `requireEnv`, `Args`) is **refused by pointer, naming the key it meant**, because preserving it means the flag was accepted, nothing was appended, and a different command deployed at exit 0. **Target names are the repository's own** and nen constrains them no more than it constrains a lane name: a name carrying a space or a leading `-` is legal, is listed verbatim in every refusal, and a leading `-` reaches `--target` only through the `--target=<name>` spelling. See [`nen shu deploy`](#nen-shu-deploy). |
 
 **Preconditions are asserted, never performed.** A declaration saying
 `{ "kind": "path", "value": "node_modules" }` is telling nen that a dependency
@@ -3410,7 +3423,7 @@ postinstall scripts. This release asserts two kinds:
 | `kind` | `value` | Satisfied when |
 |---|---|---|
 | `path` | one repo-root-relative path | the entry exists (a dangling symlink, or a path nen cannot `lstat` at all, counts as present-and-broken, not absent) |
-| `env` | one variable **name** | the variable is set. Its value is never read, compared or printed |
+| `env` | one variable **name**, held at load to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) | the variable is set. Its value is never read, compared or printed. `NAME=value`, `A B` and `--flag` are refused by pointer when the file loads rather than reported `FAIL` forever: a name no environment could carry is a check that cannot pass, which is a refusal wearing a check's clothes |
 
 A kind nen cannot assert is reported as `satisfied: null` — *"cannot assert"* —
 and **refuses at exit 2**. It is never reported as a pass: a check that could
@@ -3627,7 +3640,11 @@ repository root and one that escapes it exits **2** by name, so a machine's
 absolute install location is not expressible as a precondition at all. And
 `detect` names no environment variable the reference does not cite. If your
 repository has one, state it yourself:
-`{"kind": "env", "value": "<NAME>"}` under `project.preconditions.<lane>`. The
+`{"kind": "env", "value": "<NAME>"}` under `project.preconditions.<lane>` —
+where `<NAME>` is the variable's name alone and is held to a shell identifier
+(`[A-Za-z_][A-Za-z0-9_]*`) at load, the same rule a target's `requiresEnv`
+entries are held to, because a name no environment could carry is a row that
+could only ever report `FAIL`. The
 note appears for **every** toolchain probe carrying a pack token, `{gw}`
 included: the pack's prose calls that one "the token nen resolves itself", and
 the executor refuses it by name all the same — where the catalogue's prose and
@@ -3956,13 +3973,30 @@ stated as a refusal.
 **Usage**
 
 ```text
-nen shu deploy --target <name> [--repo <path>] [--lane <name>] [--dry-run] [--json]
+nen shu deploy --target <name> --run [--repo <path>] [--lane <name>] [--dry-run] [--json]
 ```
 
-`--target` is required and has **no default, ever** — not even when
-`project.targets` has exactly one key — and must name a key of that map;
-anything else is exit 2 listing what is declared. Nen never picks where a build
-goes, and it never handles a credential: a target names environment
+**Two flags, and no single-flag path to acting.** `--target` says *where* and
+`--run` says *now*, and neither implies the other:
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <name>` | yes | Which declared destination. | **No default, ever** — not even when `project.targets` has exactly one key — and it must name a key of that map; anything else is exit 2 listing what is declared. Nen never picks where a build goes. |
+| `--run` | yes, to act | Send it. | Without it the verb prints the **fully resolved plan** — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0, with one line on stderr saying nothing was sent. |
+| `--dry-run` | no | The explicit spelling of that same report. | Identical output. `--run --dry-run` together is **exit 2**: one says send it and the other says send nothing, and nen will not pick between two contradicting instructions on this verb. |
+
+`--run` is the same dry-run-first gate [`label apply`](#nen-label-apply) and
+[`wake fire`](#nen-wake-fire) carry, and it is here for the reason the other
+nine executing verbs do not have it: each of those spawns something inside a
+directory you are standing in and can be undone by running it again, and a
+deploy cannot. So `shu deploy` is the one row of this family that izanami
+classifies **`write-flag-gated`** rather than `dry-run-gated`: without `--run`
+it is **read-only**, because nen spawns nothing whatever the declaration says —
+a property of nen rather than a claim about somebody else's argv — and a quoted
+or escaped `--run` the scan cannot prove absent is refused rather than
+certified.
+
+Nen never handles a credential either: a target names environment
 **variables**, and nen asserts that each is set without ever reading its value.
 
 **What runs.** The command is the lane's own `project.verbs.<lane>.deploy`,
@@ -3982,21 +4016,35 @@ looks for one. The target contributes the destination:
     "why": "the live site"
   },
   "preview":   { "why": "a name-only target: the row above already names this destination" },
-  "on-push":   { "unsupported": "the push to main IS the deploy, through the host's git integration. There is no command line for nen to run." }
+  "on-push":   { "unsupported": "the push to main IS the deploy, through the host's own integration. There is no command line for nen to run." }
 }
 ```
 
-`nen shu deploy --lane site --target production --dry-run` then prints
+`nen shu deploy --lane site --target production` then prints
 
 ```text
 target:        production  (appends: --env production)  requires env: YOUR_DEPLOY_TOKEN
 would run:     your-deploy-tool publish --dir public --env production
 ```
 
-and spawns nothing. The three shapes above are the three the inventory behind
+and spawns nothing; adding `--run` spawns exactly that line and nothing else.
+The three target shapes above are the three the inventory behind
 [zheref/nen#91](https://github.com/zheref/nen/issues/91) found in the field: a
 destination that differs by a flag, a destination the command already names, and
 a destination that **has no command line at all**.
+
+**Targets are project-level; deploy rows are per-lane.** Nothing checks that a
+target is *meaningful* for the lane it is used on, and that is a decision rather
+than an oversight: a destination is a fact about where this repository ships,
+and a repository with one deployable lane — the common shape — would have to
+repeat itself under every lane to say so. The cost is real and worth stating: on
+a repository with two deployable lanes, `--target production` is accepted on
+either, so a flag written for one lane's command can be appended to the other's.
+Three things keep that visible rather than silent — the default form of this
+verb prints the whole composed argv before anything runs, the report's
+`target.args` says which half of the line came from the destination, and `--run`
+is a second, explicit instruction. A per-target lane allowlist
+(`targets.<name>.lanes`) is the follow-up if the shape turns out to be common.
 
 **The order the refusals come in, and why.** `--target` used to be a usage gate
 checked *before* the declaration was read. That made a written `deploy` **seat**
@@ -4008,33 +4056,49 @@ preconditions:
 
 | Order | Condition | Exit |
 |---|---|---|
-| 1 | `--json` on a long-running verb without `--dry-run` (not this verb) | 2 |
-| 2 | no declaration, or no `project` block | 2 (malformed: 1) |
-| 3 | `--lane` names no declared lane | 2 |
-| 4 | the lane declares no `deploy`, or declares it `{ "unsupported": "<why>" }` | **4**, quoting that sentence |
-| 5 | `project.hosts` does not allow this platform | 3 |
-| 6 | an argv still carries a reference-pack placeholder | 2 |
-| 7 | `--target` absent | 2, naming every declared target in byte order — or, with none declared, the exact `targets` block to paste |
-| 8 | `--target` names no declared target | 2, listing the declared ones |
-| 9 | the target declares `unsupported` | **4**, quoting that sentence |
-| 10 | the target has `args` and the lane's `deploy` has more than one step | 2 |
-| 11 | a precondition — the lane's, **or** a variable the target's `requiresEnv` names — is not satisfied | 2, with the report |
-| 12 | otherwise: `--dry-run` prints the resolved argv and runs nothing; without it, the declared command spawns | 0 / 1 / 5 |
+| 1 | a flag another `shu` verb owns, on this one (or `--target`/`--run` on a verb that is not this one) | 2 |
+| 2 | a flag pair nen cannot honour: `--run` with `--dry-run` here; `--json` on a long-running verb without `--dry-run` (not this verb) | 2 |
+| 3 | no declaration, or no `project` block | 2 (malformed: 1) |
+| 4 | `--lane` names no declared lane | 2 |
+| 5 | the lane declares no `deploy`, or declares it `{ "unsupported": "<why>" }` | **4**, quoting that sentence |
+| 6 | `project.hosts` does not allow this platform | 3 |
+| 7 | the lane's own argv still carries a reference-pack placeholder | 2 |
+| 8 | `--target` absent | 2, naming every declared target in byte order — or, with none declared, the exact `targets` block to paste |
+| 9 | `--target` names no declared target | 2, listing the declared ones |
+| 10 | the target declares `unsupported` | **4**, quoting that sentence |
+| 11 | the target has `args` and the lane's `deploy` has more than one step | 2 |
+| 12 | the target's `args` carry a reference-pack placeholder | 2, naming `project.targets.<name>.args` |
+| 13 | the lane's `cwd`, an `artifacts` path or a precondition path resolves outside the repository | 2, naming the path |
+| 14 | a precondition — the lane's, **or** a variable the target's `requiresEnv` names — is not satisfied | 2, **with the report** |
+| 15 | otherwise: without `--run` the resolved plan is printed and nothing spawns; with it, the declared command runs | 0 / 1 / 5 |
 
-Rows 4 and 9 are **terminal**: they are true however the line is retyped, and a
+Rows 5 and 10 are **terminal**: they are true however the line is retyped, and a
 refusal that sends someone to do work that cannot help is worse than one that
-costs them a retype. Everything from row 7 down is a fact about the command line
-or about this machine's environment, which the caller fixes and runs again. The
-one thing this order costs is that a mistyped `--target` on a seated lane is
-answered with the seat rather than with the typo — the right trade, because the
-typo is invisible to a repository that will never deploy that lane at all.
+costs them a retype. Rows 5 and 6 also beat rows 8–12 for that reason — a
+mistyped `--target` on a seated lane is answered with the seat, and on a
+host the declaration excludes with the host. Everything from row 8 down is a
+fact about the command line or about this machine's environment, which the
+caller fixes and runs again. The one thing this order costs is that a mistyped
+`--target` is invisible on a lane that will never deploy at all, which is the
+right trade.
 
 **`--json`** carries the destination in the report's `target` key —
 `{ name, args, requiresEnv }`, and `null` on every verb that takes no target —
 so a deploy that ran can be audited for *where* it went. `requiresEnv` is
-byte-ordered. No value of any variable appears in it, in the text rendering, in
-a refusal, or in a log line; a refusal prints no document at all, as everywhere
-else in this CLI.
+byte-ordered and de-duplicated. No value of any variable appears in it, in the
+text rendering, in a refusal, or in a log line.
+
+**Which refusals print a document, and which print none.** A refusal about the
+declaration or the command line — rows 1 through 13 — prints **no document at
+all** on stdout, as everywhere else in this CLI: exit 2, 3 or 4 is a line on
+stderr and an empty stdout, so a `--json` reader never has to tell a report from
+an error object. Row 14 is the exception, and deliberately so: an unsatisfied
+precondition prints the report **with the failing rows in it**, because a caller
+debugging *why this will not run* needs the table more there than anywhere.
+"Was anything executed" is still told the way it is told everywhere in this
+report — `steps[].exitCode` is `null` — so the gated form, `--dry-run` and a
+precondition refusal are all distinguishable from a run by the same field, and
+there is no `dryRun` boolean here either.
 
 **What `nen shu detect` proposes.** `"targets": {}`, always, on every stack —
 the one field in a proposal whose emptiness is a fact about *nen* rather than
@@ -4042,7 +4106,6 @@ about the tree, because a deploy destination is not a fact any checkout carries.
 The lane's notes carry the reference pack's own word on `deploy` for that stack,
 the shape to write, and the rule that a credential value never goes into a file
 that is committed.
-
 ### `nen shu coverage`
 
 Run the lane's coverage command — through the same executor as every other verb,
@@ -4344,7 +4407,14 @@ on a pin nen will not act on, an `--only` naming an undeclared tool, an
 unevaluable `version` and an unknown `--lane` all leave stdout empty under
 `--json` too. That is the family's rule rather than this verb's, and the reason
 for it is that a `--json` reader should never have to tell a report from an
-error object on the same stream.
+error object on the same stream. The rule is about refusals *this CLI* makes
+about your invocation or your declaration; it is not about a report of work
+that was attempted. Two documented exceptions state their own reason where they
+happen and are the only ones: an executing verb's **unsatisfied precondition**
+prints the report with the failing rows in it (see [`shu deploy`](#nen-shu-deploy)'s
+refusal order, row 14 — a caller debugging *why this will not run* needs the
+table most there), and [`shu warmup`](#nen-shu-warmup) prints one for any
+refusal reached *after* it has already changed the working copy.
 
 **Example**
 
@@ -5625,7 +5695,7 @@ rather than the reader. See [per-stack notes](#nen-shu-detect) under
 | release | **mechanics, plus the verb** | [`shu release`](#nen-shu-release), [`release resolve-target`](#nen-release-resolve-target), [`release preflight`](#nen-release-preflight), [`release self-check`](#nen-release-self-check), [`changelog collate`](#nen-changelog-collate), [`changelog completeness`](#nen-changelog-completeness), [`tag cut`](#nen-tag-cut), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record) | `shu release` runs a lane's declared publication step where it has one. The rest is unchanged: preconditions, the changelog, the annotated tag, the consumer fan-out — a tag is not a release. |
 | dev (debug run) | **yes — any lane that declares one** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. It is `compose-desktop`'s **only** row — `{gw} run`, the one invocation that lane has, which `detect` proposes end to end. On `expo` it is the verb that *builds and launches* a native lane, which is why `detect` proposes no `build` there and withholds `run` itself until the declaration names a platform — `expo run:{platform}` unedited is exit **2**. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
-| deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`, with the target's own `args` appended and the variables its `requiresEnv` names asserted (never read). There is no default target, ever — and the destination is resolved **after** the lane, the verb and the host, so a lane whose `deploy` is a seat answers exit 4 with its own reason whatever `--target` says, while a runnable row with no target is exit 2 naming what is declared. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push, proposed only where the tree declares the publishing tool); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. `detect` proposes `"targets": {}` on every stack and a destination on none. |
+| deploy | **the verb exists; `--target` and `--run` are both mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`, with the target's own `args` appended and the variables its `requiresEnv` names asserted (never read). Two flags and no single-flag path to acting: there is no default target, ever, and without `--run` the verb prints the fully resolved plan and spawns nothing at exit 0. The destination is resolved **after** the lane, the verb and the host, so a lane whose `deploy` is a seat answers exit 4 with its own reason whatever `--target` says, while a runnable row with no target is exit 2 naming what is declared. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push, proposed only where the tree declares the publishing tool); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. `detect` proposes `"targets": {}` on every stack and a destination on none. |
 | coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s two-step row is withheld naming the **simulator**, not the result bundle: the bundle path is the one value `detect` contributes rather than reads (it is an *output*, and nen's own generated output lives under `.nen/`). The note says so, and says four more things a maintainer would otherwise meet as a failure — the path is **lane-relative** (an `ios/` lane writes `ios/.nen/`); `.nen/` is the line [`nen scaffold init`](#nen-scaffold-init) appends to your `.gitignore`, so a repository stood up another way must ignore it itself; `xcodebuild` **refuses an existing `-resultBundlePath`**, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value carries something per-run; and the value must move in every step of the row at once. **The bundle is not the report.** When you fill that row in, the path to declare under `project.verbs.<lane>.coverage.artifacts` is the file the *second* step's JSON lands in — `xcrun xccov view --report --json` writes to stdout, so redirect it, and give the file a name with `xccov` in it — because an `.xcresult` is a **directory** and the coverage reader recognises a report by its name. What a run produced is then **parsed**: nen reads the first path under the verb's own `artifacts` whose format it recognises — the Istanbul/Vitest JSON summary, `xccov` JSON, Cobertura XML, JaCoCo XML, LCOV — into a total and a row per target, and refuses a report it cannot honestly read (truncated, or claiming more covered lines than lines) by name rather than printing a plausible number for it. `--threshold` reports `met` against the **counts** and never changes the exit code, in either direction. |
 | host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. |
 | start a piece of work (clean, fetch, branch, prove it builds) | **yes — the git half everywhere, the build half where a lane declares one** | [`shu warmup`](#nen-shu-warmup) | One line for the five things a developer does by hand at the start of every task: refuse (or, with `--discard`, destroy) uncommitted work, fetch, fast-forward the trunk, cut the branch **you** name from its fresh tip, then run the lane's declared `build` — and its `test` with `--tests`. The **only** `shu` verb that mutates git state, so `--repo` is required and every step refuses rather than guessing; `--dry-run` prints every git and toolchain command and runs none of them. A repository with no `project` block still gets the git half and exits 0. Not [`warmup`](#nen-warmup), which sweeps a registry for stale pins and reads only. |
