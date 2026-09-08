@@ -2808,13 +2808,69 @@ describe("nen shu detect -- the expo stack, three lanes in one tree", () => {
     // a one-child tree through unnoticed.
     const note = bare().notes.find((entry): boolean => entry.includes("SIBLING LANE"));
     expect(note).toBeDefined();
-    expect(note).toMatch(/the lane 'expo' names 'ios' among its OWN markers/);
+    // BOTH markers are named, because the pack's rule is a conjunction and the
+    // note is only allowed to speak when the conjunction is met.
+    expect(note).toMatch(/the lane 'expo' names 'ios' AND 'android' among its OWN markers/);
     expect(note).toMatch(/'android' \(gradle-android, cwd android\)/);
     expect(note).toMatch(/'ios' \(xcode-ios, cwd ios\)/);
     // The relationship is stated and the decision is not taken.
     expect(note).toMatch(/is a decision this repository makes/);
     // And the pack's own sentence for the marker is what carries the claim.
     expect(note).toMatch(/prebuild output is committed, and the native lanes are real/);
+    // Nothing here is described as unrelated, because nothing here is.
+    expect(note).not.toMatch(/nen also found/);
+  });
+
+  // M1. THE PAYLOAD IS THE DECLARED CHILDREN, NOT EVERY NESTED LANE. A `site/`
+  // Next.js build beside a bare Expo tree is hand-written, and the first draft
+  // of this note swept it into "SIBLING LANES ... generated native output
+  // committed beside the manifest" on the strength of `ios/` firing the gate.
+  // Building the payload from `children` again turns this red.
+  it("never calls an UNRELATED nested lane generated native output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-unrelated-child-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      cpSync(NEXTJS_SINGLE, join(dir, "site"), { recursive: true });
+      const note = detect(dir).notes.find((entry): boolean => entry.includes("SIBLING LANE"));
+      expect(note).toBeDefined();
+      // The sibling list is exactly the two the profile names.
+      expect(note).toContain(
+        "nen found a lane in each of them: 'android' (gradle-android, cwd android), 'ios' (xcode-ios, cwd ios).",
+      );
+      // And the unrelated lane is named in a clause that claims NOTHING.
+      expect(note).toMatch(/nen also found 'site' \(nextjs, cwd site\) directly inside 'expo'/);
+      expect(note).toMatch(/this profile's markers do not name that directory/);
+      expect(note).toMatch(/so nen relates it to nothing/);
+      // The decisive assertion: the sibling sentence must not reach the site.
+      expect(
+        note?.slice(0, note.indexOf("nen also found")),
+        "a hand-written Next.js build is not prebuild output",
+      ).not.toContain("site");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // M2. THE GATE IS THE CONJUNCTION THE `why` DESCRIBES. The pack says "`ios/`
+  // AND `android/` both present means the BARE workflow"; a note that fires on
+  // `ios/` alone quotes a sentence that is not true of the tree it is printed
+  // against. Loosening the gate back to "one declared child" turns this red.
+  it("claims no bare workflow from ios/ alone, whose marker why requires both", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-ios-only-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      rmSync(join(dir, "android"), { recursive: true, force: true });
+      const report = detect(dir);
+      // The Apple lane is still FOUND -- this is about the claim, not the scan.
+      expect(report.lanes.map((lane): string => lane.cwd)).toEqual([".", "ios"]);
+      expect(
+        report.notes.join("\n"),
+        "half a conjunction is a different tree, not a weaker claim",
+      ).not.toMatch(/SIBLING LANE/);
+      expect(report.notes.join("\n")).not.toMatch(/BARE workflow/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // A NESTED LANE IS NOT A SIBLING LANE, and the gate that says so is the
@@ -2921,9 +2977,41 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
     const note = iosNote(EXPO_BARE, "test");
     expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
     expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
-    expect(note).toMatch(/'Placeholder' names 'PlaceholderTests' \(PlaceholderTests\.xctest\)/);
+    // THE FILE IS PART OF THE SUBJECT, not just the name -- see the duplicate
+    // -name case below.
+    expect(note).toContain(
+      "'Placeholder' (Placeholder.xcodeproj/xcshareddata/xcschemes/Placeholder.xcscheme) names 'PlaceholderTests' (PlaceholderTests.xctest)",
+    );
     expect(note).toMatch(/this lane's project declares no such target -- it declares Placeholder/);
     expect(note).toMatch(/a test on that scheme fails before .* matters/);
+  });
+
+  // n1. TWO SCHEMES OF THE SAME NAME ARE TWO FILES. A repository that keeps a
+  // shared scheme in its `.xcworkspace` AND its `.xcodeproj` earned two
+  // byte-identical paragraphs, which read as one printed twice rather than as
+  // two files a maintainer must edit apart. Dropping the file back out of the
+  // clause turns this red.
+  it("tells two same-named schemes apart by the file each one lives in", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-twice-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      const shared = join(dir, "ios", "Placeholder.xcworkspace", "xcshareddata", "xcschemes");
+      mkdirSync(shared, { recursive: true });
+      cpSync(
+        join(dir, "ios", "Placeholder.xcodeproj", "xcshareddata", "xcschemes", "Placeholder.xcscheme"),
+        join(shared, "Placeholder.xcscheme"),
+      );
+      const note = iosNote(dir, "test");
+      const paragraphs = note
+        .split(" -- ")
+        .filter((clause): boolean => clause.includes("BROKEN ON A CLEAN CHECKOUT"));
+      expect(paragraphs, "one finding per FILE").toHaveLength(2);
+      expect(new Set(paragraphs).size, "and the two must not be byte-identical").toBe(2);
+      expect(note).toContain("Placeholder.xcworkspace/xcshareddata/xcschemes/Placeholder.xcscheme");
+      expect(note).toContain("Placeholder.xcodeproj/xcshareddata/xcschemes/Placeholder.xcscheme");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("names the shared scheme it found, by name and by file, and substitutes none of it", () => {
@@ -3057,7 +3145,13 @@ describe("nen shu detect -- the expo markers themselves", () => {
 
       writeFileSync(join(dir, "app.json"), JSON.stringify({ expo: { name: "p" } }), "utf8");
       const lane = detect(dir).lanes[0];
-      expect(lane?.markers).toEqual(["app.json", "eas.json"]);
+      // n3. THE TWO KINDS ARE KEPT APART, on the ONE surface `--json` and the
+      // text share: `markers` is what made the lane and `evidence` is what the
+      // lane merely carries. "Delete it and the lane goes away" is true of
+      // every path in the first list and false of every path in the second, and
+      // one list could not say both.
+      expect(lane?.markers).toEqual(["app.json"]);
+      expect(lane?.evidence).toEqual(["eas.json"]);
       const note = lane?.notes.find((entry): boolean => entry.includes("this lane also carries"));
       expect(note).toMatch(/this lane also carries eas\.json/);
       expect(note).toMatch(/nen did NOT identify the lane from/);
@@ -3078,7 +3172,27 @@ describe("nen shu detect -- the expo markers themselves", () => {
   it("says nothing of the kind when the file is absent", () => {
     for (const lane of detect(EXPO_BARE).lanes) {
       expect(lane.markers, lane.lane).not.toContain("eas.json");
+      expect(lane.evidence, lane.lane).toEqual([]);
       expect(lane.notes.join("\n"), lane.lane).not.toMatch(/this lane also carries/);
+    }
+  });
+
+  // n3, the other surface. The human rendering and `--json` say the same thing
+  // in the same words, which is the rule this file exists under: a field that
+  // only `--json` carries is a field a reader of the terminal cannot act on.
+  it("prints the carried file under its own word, apart from the markers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-eas-render-"));
+    try {
+      writeFileSync(join(dir, "app.json"), JSON.stringify({ expo: { name: "p" } }), "utf8");
+      writeFileSync(join(dir, "eas.json"), JSON.stringify({ build: {} }), "utf8");
+      const lines = renderDetect(detect(dir));
+      expect(lines).toContain("        marker: app.json");
+      expect(lines).toContain("        evidence: eas.json");
+      expect(lines, "the carried file is never listed as a marker").not.toContain(
+        "        marker: eas.json",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -3090,6 +3204,35 @@ describe("nen shu detect -- the expo markers themselves", () => {
     const proposal = detect(markerTree("expo")).proposal as unknown as Proposal;
     expect(proposal.project.hosts).toEqual({ "*": ["darwin", "linux", "win32"] });
     expect(proposal.project.defaultLane).toBe("expo");
+  });
+
+  // n2. THE PACK'S OWN QUALIFICATION OF THE BLOCK NEN JUST WROTE. `hosts` is
+  // keyed by verb and lists platforms, and this stack's whole difficulty is
+  // that the row cannot say what the pack says in prose: the same `*` row
+  // covers `expo start`, which runs anywhere, and `expo run:ios`, which needs
+  // macOS. Nen writes the pack's row and prints the pack's sentence beside it.
+  // Dropping the note leaves a maintainer a three-platform allowlist and no
+  // hint that a third of the verbs behind it are darwin-only.
+  it("prints the pack's own host note beside the hosts block it wrote", () => {
+    const report = detect(markerTree("expo"));
+    const note = report.notes.find((entry): boolean =>
+      entry.includes("the proposed 'hosts' block"),
+    );
+    expect(note).toBeDefined();
+    expect(note).toMatch(/the proposed 'hosts' block is the reference pack's own for the expo stack/);
+    // It is an ALLOWLIST, which is the thing the block's shape does not say.
+    expect(note).toMatch(/ALLOWLIST nen refuses to start outside/);
+    // And the pack's sentence is quoted, not paraphrased.
+    expect(note).toContain(profileById(loadProfilesPack(), "expo").hostNote);
+    expect(note).toMatch(/`expo run:ios` needs macOS with Xcode and CocoaPods/);
+  });
+
+  // The three-lane tree gets NO hosts block, so there is no block to qualify --
+  // and the note that fires instead is the one about the disagreement.
+  it("says nothing about a hosts block where it proposed none", () => {
+    const notes = detect(EXPO_BARE).notes.join("\n");
+    expect(notes).toMatch(/the lanes need different platforms/);
+    expect(notes).not.toMatch(/the proposed 'hosts' block/);
   });
 });
 

@@ -3395,8 +3395,10 @@ An `eas.json` is the one file the reference pack calls a marker that `detect`
 declines to identify a lane from: a build service's configuration says nothing
 about which manifest, lane or platform anything runs on, and a lane proposed
 from it alone would be nen deciding what kind of project this is from an
-ancillary file. Where one sits **beside** an Expo manifest it is recorded as a
-second marker of that lane, with a note — because the pack's `archive` and
+ancillary file. Where one sits **beside** an Expo manifest it is recorded under
+its own word — `evidence:` in the terminal, `evidence` in `--json`, kept apart
+from `markers` because "delete it and the lane goes away" is true of every
+marker and false of this — with a note, because the pack's `archive` and
 `release` seats were written about repositories that had none, and a seat whose
 quoted reason turns on that absence is the first row to distrust in a tree that
 has one.
@@ -3531,9 +3533,29 @@ stacks' rows. `defaultLane` is `null`, and **no `hosts` block is proposed**: the
 Apple lane runs on darwin alone and the other two run anywhere, and `hosts` is
 keyed by *verb* rather than by lane, so a union would let `nen shu test --lane
 ios` start on linux. A note relates the three — the `expo` profile names `ios`
-among its own markers, which is the pack's way of saying prebuild output is
-committed — and merges nothing: whether a verb on the Metro lane should drive a
-native one is a decision the repository makes.
+**and** `android` among its own markers, which is the pack's way of saying
+prebuild output is committed — and merges nothing: whether a verb on the Metro
+lane should drive a native one is a decision the repository makes.
+
+The note's gate is that **conjunction**, in full: the pack's sentence is *"`ios/`
+AND `android/` both present means the BARE workflow"*, so a tree with only one of
+them gets no claim at all rather than a weaker one — a half-met conjunction is a
+different tree, not a softer version of the same one. And the lanes the note
+calls siblings are only the ones the profile's markers **name**. A `site/`
+Next.js build sitting one directory down is hand-written rather than generated,
+so it is listed in a clause of its own that says exactly that: this profile's
+markers do not name that directory, so nen relates it to nothing.
+
+**Where a `hosts` block *is* proposed, the pack's own note on the platforms is
+printed beside it.** A `hosts` entry is an allowlist `nen shu` refuses to start
+outside (exit 3) — it is not a claim that every platform in it can do every part
+of every verb, and `expo` is the stack where the difference bites: a managed
+tree is written `"hosts": {"*": ["darwin", "linux", "win32"]}`, and the same `*`
+row covers `expo start`, which runs anywhere, and `expo run:ios`, which needs
+macOS with Xcode and CocoaPods. Nen writes the row the pack states and quotes
+the pack's sentence next to it. It will not narrow the row from the prose:
+deciding a platform policy out of a paragraph is exactly the kind of guess this
+verb does not make.
 
 **The Apple lane's scheme is read, and cross-checked against the project's own
 targets.** A row naming `{scheme}` stays withheld — which scheme a verb means is
@@ -3550,6 +3572,9 @@ would send you to fix the wrong thing. The claim is made only from a target list
 claim"*, because a cross-check that could not be performed is not one that
 passed. Where the container is a **workspace**, the note says so too — the
 reference row's own flag addresses a project, and a CocoaPods lane is not one.
+Every finding names the **file** as well as the scheme: a repository may keep a
+shared scheme of the same name in its `.xcworkspace` *and* its `.xcodeproj`, and
+those are two files to edit apart rather than one paragraph printed twice.
 
 The scan is bounded three ways, and every bound can hide a real lane: it
 descends at most **three** directories below `--repo` looking for a lane; from

@@ -171,8 +171,21 @@ export interface DetectedLane {
    * the order they were found. Usually one; a tree carrying `next.config.js`
    * AND `next.config.mjs` matches twice and is ONE lane with two markers, not
    * two lanes with one each.
+   *
+   * IDENTIFYING PATHS ONLY. A file the pack calls a marker that this scan
+   * declines to identify a lane from is not one of these -- it is `evidence`
+   * below, and mixing the two made `markers` a list a reader could not act on:
+   * "delete the marker and the lane goes away" is true of every entry here and
+   * false of every entry there.
    */
   readonly markers: readonly string[];
+  /**
+   * The repo-relative paths this lane CARRIES that the pack names as markers of
+   * its stack and that nen did NOT identify the lane from -- `eas.json` beside
+   * an Expo manifest is the one shape in the pack today. Empty for almost every
+   * lane, and never a reason a lane exists.
+   */
+  readonly evidence: readonly string[];
   /** The proposed per-verb argv, empty when nothing could be cross-checked. */
   readonly verbs: Readonly<Record<string, unknown>>;
   readonly notes: readonly string[];
@@ -2600,7 +2613,11 @@ function appleReason(lane: AppleLane, leftover: readonly string[]): string {
       .filter((entry): boolean => entry.missing.length > 0);
     for (const { scheme, missing } of broken) {
       clauses.push(
-        ` -- AND THAT SCHEME'S TEST ACTION IS BROKEN ON A CLEAN CHECKOUT: '${scheme.name}' names ${missing
+        // THE FILE IS NAMED, NOT JUST THE SCHEME. A repository may keep a
+        // scheme of the same name in its `.xcworkspace` AND its `.xcodeproj`,
+        // and two byte-identical paragraphs read as one printed twice rather
+        // than as two findings about two files a maintainer must edit apart.
+        ` -- AND THAT SCHEME'S TEST ACTION IS BROKEN ON A CLEAN CHECKOUT: '${scheme.name}' (${scheme.file}) names ${missing
           .map(
             (target): string =>
               `'${target.blueprint}'${target.buildable === "" ? "" : ` (${target.buildable})`}`,
@@ -3064,17 +3081,49 @@ function evidenceNotes(profile: StackProfile, matches: readonly Match[]): readon
 }
 
 /**
- * The note a lane earns for the lanes found INSIDE it, when its own profile
- * declares one of those directories as a marker.
+ * A marker pattern that could name a CHILD DIRECTORY rather than a file in the
+ * lane: a single bare segment, no extension and no glob.
  *
- * THE GATE IS THE PACK'S MARKER TABLE, and that is what keeps this from firing
- * on every nested lane in existence. A workspace root with two member lanes
- * under `apps/` is a nesting nen already explains a different way (the member
- * list in `{package}`'s reason), and calling those two "native siblings" would
- * be nonsense. A profile that names a child DIRECTORY among its own markers has
- * said something much narrower: that the directory being there means this lane
- * is of a particular kind -- prebuild output committed beside the manifest that
- * generates it -- and the pack's own `why` is the sentence that says so.
+ * THE CLASSIFICATION IS SYNTACTIC AND IT FAILS CLOSED, which is why a rule this
+ * blunt is safe here. Three patterns in the whole pack match it -- `ios` and
+ * `android` (expo), which are directories, and `gradlew` (gradle-android) and
+ * `Podfile` (xcode-ios), which are files. Reading a FILE as a directory marker
+ * can only make `nestedLaneNote` fire LESS: the gate below demands that every
+ * such pattern be present as a nested LANE, and no tree produces a lane whose
+ * directory is named `gradlew`. The misreading that would matter is the other
+ * one -- a directory read as a file, which would let the note fire on a partly
+ * met conjunction -- and it cannot happen for a pattern the pack writes as a
+ * bare name, because that is the only shape a lane's own directory name takes
+ * in the marker table.
+ */
+const DIRECTORY_MARKER = /^[^./\\*?{}[\]]+$/;
+
+/**
+ * The note a lane earns for the lanes found INSIDE it, when its own profile
+ * declares those directories as markers.
+ *
+ * THE GATE IS THE PACK'S MARKER TABLE, IN FULL, and both halves of that matter.
+ *
+ *   * IT IS THE MARKER TABLE rather than the nesting, which is what keeps this
+ *     from firing on every nested lane in existence. A workspace root with two
+ *     member lanes under `apps/` is a nesting nen already explains a different
+ *     way (the member list in `{package}`'s reason), and calling those two
+ *     "native siblings" would be nonsense. A profile that names a child
+ *     DIRECTORY among its own markers has said something much narrower: that
+ *     the directory being there means this lane is of a particular kind.
+ *   * IT IS THE TABLE IN FULL -- EVERY directory the profile names must be
+ *     present as a nested lane -- because the pack's `why` is a CONJUNCTION
+ *     ("`ios/` AND `android/` both present means the BARE workflow") and a note
+ *     that fires on `ios/` alone quotes a sentence that is not true of the tree
+ *     in front of it. A half-met conjunction is not a weaker version of the
+ *     claim; it is a different tree, and nen says nothing about it.
+ *
+ * THE PAYLOAD IS THE DECLARED CHILDREN AND NOTHING ELSE. An unrelated lane that
+ * happens to sit one directory down -- a `site/` Next.js build beside a bare
+ * Expo tree -- is not generated native output, and describing it as such was
+ * this note's first bug. Other nested lanes are still worth naming, so they get
+ * a clause of their own that says exactly what nen knows about them: the
+ * profile's markers do not name them, so nen relates them to nothing.
  *
  * WHAT THE READER GETS THAT THE LANE LIST DOES NOT ALREADY SAY: three lanes in
  * one tree read as three independent builds, and `defaultLane: null` reads as
@@ -3096,28 +3145,50 @@ function nestedLaneNote(
       !lane.cwd.slice(prefix.length).includes("/") &&
       lane.cwd !== parent.cwd,
   );
-  const declared = children
-    .map((lane): { lane: DetectedLane; marker: string } | null => {
-      const directory = lane.cwd.slice(prefix.length);
-      const marker = parentProfile.markers.find(
-        (entry): boolean => entry.pattern === directory,
-      );
-      return marker === undefined ? null : { lane, marker: marker.why };
-    })
-    .filter((entry): entry is { lane: DetectedLane; marker: string } => entry !== null);
-  const first = declared[0];
-  if (first === undefined) return null;
+  const directoryMarkers = parentProfile.markers.filter((marker): boolean =>
+    DIRECTORY_MARKER.test(marker.pattern),
+  );
+  if (directoryMarkers.length === 0) return null;
+  const declared = directoryMarkers.map(
+    (marker): { lane: DetectedLane | undefined; pattern: string; why: string } => ({
+      lane: children.find((lane): boolean => lane.cwd.slice(prefix.length) === marker.pattern),
+      pattern: marker.pattern,
+      why: marker.why,
+    }),
+  );
+  // THE CONJUNCTION, ENFORCED. One missing directory and nen says nothing:
+  // the sentence this note quotes is about a tree that has them all.
+  if (declared.some((entry): boolean => entry.lane === undefined)) return null;
+  // The LANES are listed in the order the scan found them (byte-ordered by
+  // directory), and the MARKERS in the order the pack's own table states them.
+  // Both are fixed, so one tree always prints one sentence.
+  const named = new Set(declared.map((entry): string => entry.pattern));
+  const siblings = children.filter((lane): boolean => named.has(lane.cwd.slice(prefix.length)));
+  const others = children.filter((lane): boolean => !named.has(lane.cwd.slice(prefix.length)));
+  const one = siblings.length === 1;
+  const unrelated =
+    others.length === 0
+      ? ""
+      : ` nen also found ${others
+          .map((lane): string => `'${lane.lane}' (${lane.stack}, cwd ${lane.cwd})`)
+          .join(", ")} directly inside '${parent.lane}', and says nothing of the kind about ${
+          others.length === 1 ? "it" : "them"
+        }: this profile's markers do not name ${
+          others.length === 1 ? "that directory" : "those directories"
+        }, so nen relates ${others.length === 1 ? "it" : "them"} to nothing.`;
   return `the lane '${parent.lane}' names ${declared
-    .map((entry): string => `'${entry.lane.cwd}'`)
-    .join(", ")} among its OWN markers, and the ${
-    children.length === 1 ? "lane" : "lanes"
-  } nen found directly inside it ${children.length === 1 ? "is" : "are"} ${children
+    .map((entry): string => `'${entry.pattern}'`)
+    .join(" AND ")} among its OWN markers, and nen found a lane in ${
+    one ? "it" : "each of them"
+  }: ${siblings
     .map((lane): string => `'${lane.lane}' (${lane.stack}, cwd ${lane.cwd})`)
     .join(
       ", ",
-    )}. ${children.length === 1 ? "It is a SIBLING LANE" : "They are SIBLING LANES"} of one application rather than ${
-    children.length === 1 ? "a separate project" : "separate projects"
-  }: generated native output committed beside the manifest that generates it. nen proposes each with its own stack's rows and relates them here without merging them -- whether a verb on '${parent.lane}' should drive a native lane, and which one, is a decision this repository makes. The pack's own reason for the marker: ${first.marker}`;
+    )}. ${one ? "It is a SIBLING LANE" : "They are SIBLING LANES"} of one application rather than ${
+    one ? "a separate project" : "separate projects"
+  }: generated native output committed beside the manifest that generates it. nen proposes each with its own stack's rows and relates them here without merging them -- whether a verb on '${parent.lane}' should drive a native lane, and which one, is a decision this repository makes.${unrelated} The pack's own ${
+    declared.length === 1 ? "reason for the marker" : "reasons for the markers"
+  }: ${declared.map((entry): string => `'${entry.pattern}' -- ${entry.why}`).join(" ")}`;
 }
 
 /** The `hosts` map a set of lanes agrees on, or null when they disagree. */
@@ -3186,7 +3257,12 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
         lane,
         stack,
         cwd,
-        markers: found.map((match): string => match.marker),
+        markers: found
+          .filter((match): boolean => match.identifying)
+          .map((match): string => match.marker),
+        evidence: found
+          .filter((match): boolean => !match.identifying)
+          .map((match): string => match.marker),
         verbs: proposed.verbs,
         // THE EVIDENCE-ONLY MARKERS COME FIRST, because they change how the
         // rows BELOW them should be read: a seat whose quoted reason turns on a
@@ -3254,6 +3330,23 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
   let hosts: Readonly<Record<string, readonly string[]>> = {};
   if (signatures.size === 1 && lanes[0] !== undefined) {
     hosts = profiles.get(lanes[0].lane)?.hosts ?? {};
+    // THE PACK'S OWN QUALIFICATION OF THE BLOCK NEN JUST WROTE. `hosts` is a
+    // machine-readable allowlist keyed by verb, and the pack states in prose
+    // what that shape cannot: a managed Expo tree is written `{"*": [darwin,
+    // linux, win32]}` while the pack's note says `expo run:ios` needs macOS.
+    // Nen writes the row the pack states and prints the sentence beside it --
+    // narrowing the row from the note would be nen deciding a platform policy
+    // from prose, and dropping the note leaves the reader the row alone.
+    for (const stack of [...new Set(lanes.map((lane): string => lane.stack))].sort(compareBytes)) {
+      const note = profiles.get(
+        lanes.find((lane): boolean => lane.stack === stack)?.lane ?? "",
+      )?.hostNote;
+      /* c8 ignore next -- every lane's stack has a profile, and every profile a hostNote */
+      if (note === undefined || note === "") continue;
+      notes.push(
+        `the proposed 'hosts' block is the reference pack's own for the ${stack} stack, and it is an ALLOWLIST nen refuses to start outside -- not a claim that every platform in it can do every part of every verb. The pack's own note on the platforms: ${note}`,
+      );
+    }
   } else if (signatures.size > 1) {
     notes.push(
       `the lanes need different platforms (${lanes
@@ -3351,6 +3444,9 @@ export function renderDetect(report: DetectReport): readonly string[] {
   for (const lane of report.lanes) {
     lines.push(`  ${lane.lane}  (${lane.stack})  cwd ${lane.cwd}`);
     for (const marker of lane.markers) lines.push(`        marker: ${marker}`);
+    // PRINTED APART FROM THE MARKERS, under a word that says what it is: this
+    // file did not make the lane, and a reader who deletes it still has a lane.
+    for (const carried of lane.evidence) lines.push(`        evidence: ${carried}`);
     // THE TWO KINDS OF PROPOSED ROW ARE PRINTED APART, because they ask the
     // reader for opposite things: a command row is one to keep or correct, and
     // an `unsupported` row is a seat this repository's own answer goes into.

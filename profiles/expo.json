@@ -23,6 +23,11 @@
       "pattern": "ios",
       "contains": null,
       "why": "`ios/` AND `android/` both present means the BARE workflow -- prebuild output is committed, and the native lanes are real."
+    },
+    {
+      "pattern": "android",
+      "contains": null,
+      "why": "the other half of the same conjunction, and it is a marker for the same reason: `android/` beside `ios/` is what makes the workflow BARE. Stated as its own row because the rule is an AND, and a table that names only one of the two directories reads as if either alone were enough."
     }
   ],
   "hosts": {

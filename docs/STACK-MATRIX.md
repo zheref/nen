@@ -207,6 +207,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 | `app.config.js` | `expo` | or `app.config.ts`: the dynamic manifest, same key. |
 | `eas.json` |  | identifies an Expo project on its own. NOTE: no repository in the inventory has one, which is why `archive` is unsupported here. |
 | `ios` |  | `ios/` AND `android/` both present means the BARE workflow -- prebuild output is committed, and the native lanes are real. |
+| `android` |  | the other half of the same conjunction, and it is a marker for the same reason: `android/` beside `ios/` is what makes the workflow BARE. Stated as its own row because the rule is an AND, and a table that names only one of the two directories reads as if either alone were enough. |
 
 ### Toolchain minimums (advisory)
 
