@@ -41,16 +41,30 @@
 //
 // VALIDATION IS BORROWED, NOT RESTATED. The verb forms this pack uses are the
 // declaration's own forms, so the declaration's own reader validates them
-// (`parseInvocation`, `requireArgv`, `requireEnum` from ../schema/contract.ts).
-// A second copy of those rules here would be a second set of rules, and the two
-// would drift in the direction of whichever file was edited last.
+// (`parseInvocation`, `requireArgv`, `requireEnum`, `parseHosts` from
+// ../schema/contract.ts). A second copy of those rules here would be a second
+// set of rules, and the two would drift in the direction of whichever file was
+// edited last.
+//
+// UNKNOWN KEYS FOLLOW THE FAMILY'S CONVENTION, WHICH IS THE DECLARATION'S:
+// unknown keys are PRESERVED (the whole document is kept on `raw`) and never
+// refused, `$`-prefixed keys are skipped as commentary, and a MISSPELLING of a
+// known key is therefore not detected -- it reads as an unknown key and the
+// known one reads as absent, which is where the refusal lands. That is a real
+// cost and it is paid on purpose: ../schema/contract.ts made the same trade for
+// the declaration, and a catalogue that refused what the declaration preserves
+// would teach a reader the wrong rule about the file they are about to write.
+// An earlier draft of this file refused a stray `summary` on a cell the grid
+// never abbreviates; it was the only key in the family treated that way, and it
+// is gone.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
   INSTALLERS,
   VERSION_FROM,
+  parseHosts,
   parseInvocation,
   requireArgv,
   requireEnum,
@@ -59,7 +73,6 @@ import {
   type VersionFrom,
 } from "../schema/contract.js";
 import {
-  describeValue,
   optionalString,
   requireArray,
   requireRecord,
@@ -68,6 +81,21 @@ import {
 } from "../schema/errors.js";
 
 // ── the bundled documents ───────────────────────────────────────────────────
+//
+// PURITY EXEMPTION, STATED HERE BECAUSE THE SWEEP CANNOT INFER IT. Four of
+// these eight specifiers spell a toolchain's name (a build tool, an IDE, an SDK
+// and a UI framework) inside a string literal, which is the shape
+// ../taxonomy-purity.test.ts's FORBIDDEN list exists to catch -- and a planned
+// extension of that sweep to toolchain names would report all eight.
+//
+// THEY ARE NOT VALUES THIS BINARY DECIDES WITH. They are FILE NAMES, and they
+// are file names a bundler REQUIRES to be literal: `bun build --compile` embeds
+// what a static import names and cannot follow a `readdirSync` (see this file's
+// header). The stack set itself is data -- `profiles/index.json` -- and neither
+// this module nor ../dev/matrix.ts branches on any of these strings; the loader
+// looks a filename up in this list and nothing reads the id. If that sweep is
+// extended, exempt THIS BLOCK by path and line, not the whole file: everything
+// below it should still be held to the rule.
 
 import composeDesktopDocument from "../../profiles/compose-desktop.json";
 import dotnetWinuiDocument from "../../profiles/dotnet-winui.json";
@@ -83,6 +111,225 @@ export const PACK_DIRECTORY = "profiles";
 
 /** The pack's table of contents, inside that directory. */
 export const PACK_INDEX_FILE = "index.json";
+
+// ── placeholders ────────────────────────────────────────────────────────────
+
+/**
+ * Where a placeholder's value comes from -- the whole reason the set is typed
+ * rather than being a list of strings.
+ *
+ *   * `host-conditional` -- nen resolves it from `process.platform`. Exactly
+ *     one token is this, and a second would be a design change, not a data
+ *     change: every other difference between hosts is a difference between
+ *     REPOSITORIES, and a repository states its own.
+ *   * `declaration-supplied` -- the consumer's `nen/contract.json` states the
+ *     value. The pack may NEVER contribute one: a version, a path or a UDID
+ *     from this file reaching a spawned command is the exact failure
+ *     `inertness.test.ts` exists to prevent.
+ */
+export type PlaceholderKind = "host-conditional" | "declaration-supplied";
+
+export interface Placeholder {
+  /** The token as it appears in the data, braces included. */
+  readonly token: string;
+  readonly kind: PlaceholderKind;
+  /** One line. It is rendered into the page verbatim. */
+  readonly meaning: string;
+}
+
+/**
+ * THE CLOSED SET OF PLACEHOLDERS THE PACK MAY USE.
+ *
+ * A catalogue command is a SHAPE, not a runnable line: `xcodebuild -project
+ * {project} -scheme {scheme}` is true of every iOS repository and executable in
+ * none of them. So the pack templates -- and the moment it does, the tokens
+ * become an interface, because a reader copying a row into their declaration
+ * has to know what to put in each one and PR 2's executor refuses a token that
+ * survived to a spawn.
+ *
+ * THIS LIST IS WHY IT IS AN INTERFACE AND NOT A HABIT.
+ * `requireKnownPlaceholders` below refuses any `{...}` in an `exe`, an `argv`
+ * or a `toolchain.probe` that is not here, naming the file, the field and the
+ * token; a test walks every
+ * argv in every shipped profile and asserts membership; and ../dev/matrix.ts
+ * renders the section of `docs/STACK-MATRIX.md` that explains them FROM THIS
+ * CONST, so a token cannot be added without being explained.
+ *
+ * MARKER PATTERNS ARE NOT SCANNED, deliberately: `settings.gradle{,.kts}` and
+ * `*.config.{js,mjs,ts}` are brace GLOBS, a different language that happens to
+ * share a delimiter, and holding them to this set would refuse three correct
+ * markers to enforce a rule about commands.
+ *
+ * Sorted by token -- by code unit, which is why `{packageManager}` precedes
+ * `{package}` -- so this list, the refusal's message and the rendered section
+ * all read in one order, and a test pins it.
+ */
+export const PLACEHOLDERS: readonly Placeholder[] = [
+  {
+    token: "{app}",
+    kind: "declaration-supplied",
+    meaning:
+      "the workspace an end-to-end or Storybook command is filtered to, in a monorepo whose root script fans out.",
+  },
+  {
+    token: "{archiveScript}",
+    kind: "declaration-supplied",
+    meaning:
+      "the repository's own archive script, as a path relative to the repository root -- the script is that repository's, not this stack's.",
+  },
+  {
+    token: "{browserPath}",
+    kind: "declaration-supplied",
+    meaning:
+      "the installed browser binary an archive step probes for, as an absolute path -- the probe is for presence, and the location is the machine's.",
+  },
+  {
+    token: "{destination}",
+    kind: "declaration-supplied",
+    meaning:
+      "an `xcodebuild -destination` argument, in either of its two forms: `id=<udid>`, or a `platform=...,name=...,OS=...` selector.",
+  },
+  {
+    token: "{gw}",
+    kind: "host-conditional",
+    meaning:
+      "the repository's Gradle wrapper: `./gradlew` on darwin and linux, `gradlew.bat` on win32. THE ONE TOKEN NEN RESOLVES ITSELF, from `process.platform` -- a lane with no wrapper is a finding, never an install.",
+  },
+  {
+    token: "{name}",
+    kind: "declaration-supplied",
+    meaning:
+      "the test-case name in an `-only-testing:<target>/<name>` selector, for the local subset form.",
+  },
+  {
+    token: "{packageManager}",
+    kind: "declaration-supplied",
+    meaning:
+      "the declaration's own `packageManager` PIN, `<name>@<version>`, as corepack activates it. Distinct from `{pm}`, and the distinction is the point: this one carries a VERSION, and a version in an install argv may only ever come from the declaration.",
+  },
+  {
+    token: "{package}",
+    kind: "declaration-supplied",
+    meaning:
+      "one workspace package the command runs for. The row is templated because the command runs ONCE PER PACKAGE, and the package names are the repository's.",
+  },
+  {
+    token: "{platform}",
+    kind: "declaration-supplied",
+    meaning:
+      "the native lane an `expo run:<platform>` targets. Neither lane is the other's default, so the pack templates rather than picks.",
+  },
+  {
+    token: "{pm}",
+    kind: "declaration-supplied",
+    meaning:
+      "the repository's package-manager EXECUTABLE, from its own `packageManager` field. The command name only; the pinned version is `{packageManager}`.",
+  },
+  {
+    token: "{project}",
+    kind: "declaration-supplied",
+    meaning:
+      "the Xcode project the build addresses -- and, for a workspace-based repository, the flag changes with it.",
+  },
+  {
+    token: "{resultBundle}",
+    kind: "declaration-supplied",
+    meaning:
+      "the `.xcresult` bundle path a test run writes and the coverage step then reads. The same value in both steps, which is why the row is a two-step cell and not two rows.",
+  },
+  {
+    token: "{scheme}",
+    kind: "declaration-supplied",
+    meaning: "the Xcode scheme to build, test or archive.",
+  },
+  {
+    token: "{simUdid}",
+    kind: "declaration-supplied",
+    meaning:
+      "the UDID of the simulator the run is pinned to. CI creates and boots one per runner; a name-based destination is the other observed form.",
+  },
+  {
+    token: "{testTarget}",
+    kind: "declaration-supplied",
+    meaning:
+      "the test target in an `-only-testing:<target>/<name>` selector, for the local subset form.",
+  },
+  {
+    token: "{unitTestTask}",
+    kind: "declaration-supplied",
+    meaning:
+      "the repository's own JVM unit-test Gradle task, module path included -- the module name is that repository's, not this stack's.",
+  },
+  {
+    token: "{workload}",
+    kind: "declaration-supplied",
+    meaning:
+      "the Visual Studio workload id a `vswhere -requires` probe asks for. It names what must be INSTALLED, and the probe never installs it.",
+  },
+];
+
+const PLACEHOLDER_TOKENS: ReadonlySet<string> = new Set(
+  PLACEHOLDERS.map((placeholder): string => placeholder.token),
+);
+
+// Matched braces only. An argv is data, not a template language: `{` with no
+// `}` is a literal brace some tool wanted, and refusing it would be this file
+// inventing a syntax rule for shells it does not run.
+const PLACEHOLDER_PATTERN = /\{[^{}]*\}/g;
+
+/**
+ * Refuse any placeholder an argv uses that this pack does not document.
+ *
+ * NAMED SEPARATELY FROM THE VALUE CHECKS, because the failure it prevents is
+ * not a malformed document: a profile carrying `{someUnknownPlaceholder}`
+ * parses, renders, and ships a row whose reader has no way to learn what to
+ * substitute. The refusal names the file, the field and the token, and lists
+ * the set -- which is the whole answer to "then what should I have written".
+ */
+export function requireKnownPlaceholders(path: string, pointer: string, text: string): string {
+  for (const match of text.matchAll(PLACEHOLDER_PATTERN)) {
+    const token = match[0];
+    if (PLACEHOLDER_TOKENS.has(token)) continue;
+    throw new SchemaError(
+      path,
+      pointer,
+      `uses the placeholder '${token}', which this pack does not document. Placeholders are a CLOSED set (src/profiles/pack.ts, PLACEHOLDERS): ${PLACEHOLDERS.map(
+        (placeholder): string => placeholder.token,
+      ).join(
+        ", ",
+      )}. A reader substitutes each one from their own nen/contract.json, so a token nothing explains is a row nobody can use; add it to that const with its meaning, or spell the existing one`,
+    );
+  }
+  return text;
+}
+
+/** The same check over every element of an argv, pointing at the element. */
+export function parsePlaceholders(
+  path: string,
+  pointer: string,
+  argv: readonly string[],
+): readonly string[] {
+  argv.forEach((item, index): void => {
+    requireKnownPlaceholders(path, `${pointer}[${index}]`, item);
+  });
+  return argv;
+}
+
+// The same check over a parsed invocation, in whichever of its two command
+// shapes the cell used. An `unsupported` cell has no argv to check.
+function checkInvocationPlaceholders(path: string, pointer: string, invocation: Invocation): void {
+  if (invocation.kind === "command") {
+    requireKnownPlaceholders(path, `${pointer}.exe`, invocation.exe);
+    parsePlaceholders(path, `${pointer}.argv`, invocation.argv);
+    return;
+  }
+  if (invocation.kind === "steps") {
+    invocation.steps.forEach((step, index): void => {
+      requireKnownPlaceholders(path, `${pointer}.steps[${index}].exe`, step.exe);
+      parsePlaceholders(path, `${pointer}.steps[${index}].argv`, step.argv);
+    });
+  }
+}
 
 interface BundledFile {
   /** The basename inside `profiles/`, which is also the error label's tail. */
@@ -206,6 +453,16 @@ export interface ProfilesPack {
   readonly ids: readonly string[];
   /** The thirteen verbs, in the family's own declared order -- NOT sorted. */
   readonly verbs: readonly string[];
+  /**
+   * The subset of `verbs` that names a command a repository RUNS.
+   *
+   * THE PAGE'S ONE HONEST NUMBER IS COUNTED OVER THESE. The other rows describe
+   * what nen does AROUND a build -- a marker match, a toolchain report, a
+   * delegation -- and folding them into the ratio moves it in both directions
+   * at once. It is data (`profiles/index.json`) so that ../dev/matrix.ts can
+   * say which rows those are without naming one.
+   */
+  readonly commandVerbs: readonly string[];
   readonly profiles: Readonly<Record<string, StackProfile>>;
   /** Where this pack came from: the binary, or a `--profiles <dir>` override. */
   readonly origin: string;
@@ -263,22 +520,21 @@ function parseMarkers(path: string, value: unknown): readonly ProfileMarker[] {
   });
 }
 
-function parseHosts(path: string, value: unknown): Record<string, readonly string[]> {
-  const record = requireRecord(path, "hosts", value);
-  const hosts: Record<string, readonly string[]> = {};
-  for (const [verb, entry] of Object.entries(record)) {
-    if (verb.startsWith("$")) continue;
-    const pointer = `hosts.${verb}`;
-    const platforms = requireArray(path, pointer, entry);
-    if (platforms.length === 0) {
-      throw new SchemaError(
-        path,
-        pointer,
-        "lists no platform. An empty allowlist is a verb no host may ever run, which is what an `unsupported` verb row says properly",
-      );
-    }
-    hosts[verb] = platforms.map((item, index): string =>
-      requireString(path, `${pointer}[${index}]`, item),
+// The declaration's own `hosts` reader, plus the two refusals a CATALOGUE needs
+// and a declaration does not.
+//
+// THE PLATFORM NAMES ARE VALIDATED IN ../schema/contract.ts, against
+// `HOST_PLATFORMS`, so both readers gained the check at once. It is the one
+// place a typo is visible: `hosts` is an ALLOWLIST, so `"macos"` does not fail,
+// it silently removes the verb from every machine that exists.
+function parsePackHosts(path: string, value: unknown): Record<string, readonly string[]> {
+  const hosts = parseHosts(path, "hosts", value);
+  for (const [verb, platforms] of Object.entries(hosts)) {
+    if (platforms.length > 0) continue;
+    throw new SchemaError(
+      path,
+      `hosts.${verb}`,
+      "lists no platform. An empty allowlist is a verb no host may ever run, which is what an `unsupported` verb row says properly",
     );
   }
   if (Object.keys(hosts).length === 0) {
@@ -292,22 +548,19 @@ function parseHosts(path: string, value: unknown): Record<string, readonly strin
 }
 
 // The short form the summary grid prints for a cell that carries no command.
-// REQUIRED on exactly the two forms the grid abbreviates, and refused on the
-// three it does not, because a field nothing reads is a field nobody maintains.
+// REQUIRED on exactly the two forms the grid abbreviates. It is NOT refused on
+// the three it does not: an unread key on a cell is an unknown key, and this
+// family preserves those (see this file's header).
 function requireSummary(path: string, pointer: string, raw: Record<string, unknown>): string {
   return requireString(path, `${pointer}.summary`, raw["summary"]);
 }
 
-function refuseSummary(path: string, pointer: string, raw: Record<string, unknown>): void {
-  if (raw["summary"] === undefined) return;
-  throw new SchemaError(
-    path,
-    `${pointer}.summary`,
-    "carries a summary, which only a `declaredOnly` or `unsupported` cell has: the grid prints the command itself for every other form, so this string would never be read",
-  );
-}
-
-function parseVerb(path: string, pointer: string, value: unknown): ProfileVerb {
+function parseVerb(
+  path: string,
+  pointer: string,
+  value: unknown,
+  expectedVerbs: readonly string[],
+): ProfileVerb {
   const raw = requireRecord(path, pointer, value);
   const source = requireString(path, `${pointer}.source`, raw["source"]);
 
@@ -348,12 +601,25 @@ function parseVerb(path: string, pointer: string, value: unknown): ProfileVerb {
         "delegates to no verb. A cell that delegates to nothing is a cell with no answer; state the verbs, or use `declaredOnly` with the reason",
       );
     }
-    refuseSummary(path, pointer, raw);
     return {
       kind: "delegated",
-      delegatesTo: targets.map((item, index): string =>
-        requireString(path, `${pointer}.delegatesTo[${index}]`, item),
-      ),
+      // EVERY TARGET IS A VERB THE INDEX LISTS. The point of this form is that
+      // a reader can FOLLOW it -- "this row's answer is that row's" -- and a
+      // target no column carries is a pointer at an empty seat. It renders as
+      // a plausible `delegates to \`x\`` in the grid, which is the failure
+      // shape worth refusing: wrong, and formatted exactly like right.
+      delegatesTo: targets.map((item, index): string => {
+        const at = `${pointer}.delegatesTo[${index}]`;
+        const target = requireString(path, at, item);
+        if (!expectedVerbs.includes(target)) {
+          throw new SchemaError(
+            path,
+            at,
+            `delegates to '${target}', which ${PACK_DIRECTORY}/${PACK_INDEX_FILE} does not list as a verb. A delegation names a row of this same matrix, and the matrix's rows are [${expectedVerbs.join(", ")}]`,
+          );
+        }
+        return target;
+      }),
       why: requireString(path, `${pointer}.why`, raw["why"]),
       source,
     };
@@ -363,7 +629,7 @@ function parseVerb(path: string, pointer: string, value: unknown): ProfileVerb {
   if (invocation.kind === "unsupported") {
     return { kind: "unsupported", invocation, summary: requireSummary(path, pointer, raw), source };
   }
-  refuseSummary(path, pointer, raw);
+  checkInvocationPlaceholders(path, pointer, invocation);
   // EVERY COMMAND CELL CARRIES ITS `why`, and the declaration's reader makes it
   // optional. That is the one rule this loader tightens rather than borrows: a
   // catalogue row is READ BY A HUMAN DECIDING WHAT TO DECLARE, and a command
@@ -387,7 +653,7 @@ function parseVerbs(
   const verbs: Record<string, ProfileVerb> = {};
   for (const [verb, entry] of Object.entries(record)) {
     if (verb.startsWith("$")) continue;
-    verbs[verb] = parseVerb(path, `verbs.${verb}`, entry);
+    verbs[verb] = parseVerb(path, `verbs.${verb}`, entry, expected);
   }
   // EXACTLY THE INDEX'S VERBS -- no more, no fewer. The matrix is a comparison
   // across stacks, and a comparison with a hole in it is worse than no
@@ -425,7 +691,13 @@ function parseToolchain(path: string, value: unknown): Record<string, PackMinimu
     toolchain[tool] = {
       tool,
       minimum: optionalString(path, `${pointer}.minimum`, raw["minimum"]),
-      probe: requireArgv(path, `${pointer}.probe`, raw["probe"]),
+      // A PROBE ARGV IS TEMPLATED TOO, and that is the argv a reader is most
+      // likely to copy without reading -- so it is held to the same closed set.
+      probe: parsePlaceholders(
+        path,
+        `${pointer}.probe`,
+        requireArgv(path, `${pointer}.probe`, raw["probe"]),
+      ),
       versionFrom: requireEnum(path, `${pointer}.versionFrom`, raw["versionFrom"], VERSION_FROM),
       installer: requireEnum(path, `${pointer}.installer`, raw["installer"], INSTALLERS),
       why: requireString(path, `${pointer}.why`, raw["why"]),
@@ -464,7 +736,7 @@ export function parseProfile(
     id,
     displayName: requireString(path, "displayName", raw["displayName"]),
     markers: parseMarkers(path, raw["markers"]),
-    hosts: parseHosts(path, raw["hosts"]),
+    hosts: parsePackHosts(path, raw["hosts"]),
     hostNote: requireString(path, "hostNote", raw["hostNote"]),
     scaffoldTemplate: optionalString(path, "scaffoldTemplate", raw["scaffoldTemplate"]),
     scaffoldNote: requireString(path, "scaffoldNote", raw["scaffoldNote"]),
@@ -478,6 +750,7 @@ export function parseProfile(
 interface PackIndex {
   readonly ids: readonly string[];
   readonly verbs: readonly string[];
+  readonly commandVerbs: readonly string[];
 }
 
 /** Parse `profiles/index.json`. Exported for the malformed-pack tests. */
@@ -513,7 +786,35 @@ export function parsePackIndex(path: string, value: unknown): PackIndex {
   if (duplicateVerb !== undefined) {
     throw new SchemaError(path, "verbs", `lists '${duplicateVerb}' more than once`);
   }
-  return { ids, verbs };
+  // WHICH VERBS NAME A SPAWNED COMMAND -- data, because the renderer must state
+  // the grid's ratio over them and may not contain a verb name to do it.
+  const commandNames = requireArray(path, "commandVerbs", raw["commandVerbs"]);
+  if (commandNames.length === 0) {
+    throw new SchemaError(
+      path,
+      "commandVerbs",
+      "lists no verb. This list is what the summary's ratio is counted over; an empty one makes the one honest number in the page vacuous",
+    );
+  }
+  const commandVerbs = commandNames.map((item, index): string => {
+    const pointer = `commandVerbs[${index}]`;
+    const verb = requireString(path, pointer, item);
+    if (!verbs.includes(verb)) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `is '${verb}', which is not one of the verbs this index lists [${verbs.join(", ")}]. This is a SUBSET of them, not a second vocabulary`,
+      );
+    }
+    return verb;
+  });
+  const duplicateCommand = commandVerbs.find(
+    (verb, index): boolean => commandVerbs.indexOf(verb) !== index,
+  );
+  if (duplicateCommand !== undefined) {
+    throw new SchemaError(path, "commandVerbs", `lists '${duplicateCommand}' more than once`);
+  }
+  return { ids, verbs, commandVerbs };
 }
 
 /**
@@ -532,7 +833,7 @@ export function loadProfilesPack(directory: string | null = null): ProfilesPack 
     directory === null ? bundledLabel(PACK_INDEX_FILE) : join(directory, PACK_INDEX_FILE);
   const indexValue =
     directory === null ? (indexDocument as unknown) : readJsonFile(indexPath);
-  const { ids, verbs } = parsePackIndex(indexPath, indexValue);
+  const { ids, verbs, commandVerbs } = parsePackIndex(indexPath, indexValue);
 
   const profiles: Record<string, StackProfile> = {};
   for (const id of ids) {
@@ -556,7 +857,35 @@ export function loadProfilesPack(directory: string | null = null): ProfilesPack 
     profiles[id] = parseProfile(path, id, verbs, readJsonFile(path));
   }
 
-  return { ids, verbs, profiles, origin };
+  // A `<id>.json` IN THE DIRECTORY AND ABSENT FROM THE INDEX IS REFUSED, which
+  // is the same rule the bundled pack is held to and the same reason.
+  //
+  // `pack.test.ts` pins the bundled import list against `profiles/` in both
+  // directions, so a stack added as a file and forgotten in the index fails the
+  // build rather than shipping as a silently absent row. An override directory
+  // had NO such check -- an author who dropped a file in and forgot the index
+  // line got a pack that loaded cleanly and rendered a matrix with their stack
+  // missing, and the only symptom was an absence. The asymmetry was the defect:
+  // an override is validated exactly as the bundled pack is, or the two teach
+  // different rules about the same directory layout.
+  if (directory !== null) {
+    const listed = new Set(ids.map((id): string => `${id}.json`));
+    const stray = readdirSync(directory)
+      .filter(
+        (file): boolean =>
+          file.endsWith(".json") && file !== PACK_INDEX_FILE && !listed.has(file),
+      )
+      .sort();
+    if (stray.length > 0) {
+      throw new SchemaError(
+        indexPath,
+        "profiles",
+        `does not list [${stray.join(", ")}], which ${directory} holds. A profile the index omits is a stack that loads nowhere and renders in no row -- an absence with no message. List it, or delete the file`,
+      );
+    }
+  }
+
+  return { ids, verbs, commandVerbs, profiles, origin };
 }
 
 /** One profile by id, or a refusal naming every id the pack does carry. */
@@ -577,9 +906,14 @@ export function verbCell(profile: StackProfile, verb: string): ProfileVerb {
   // Unreachable while `parseVerbs` holds every profile to the index's verbs;
   // stated as a refusal rather than a `!` so that a future caller asking for a
   // verb the pack does not have is told which ones it does.
+  //
+  // The message says "nothing" rather than describing `cell`, because on this
+  // line `cell` is PROVABLY undefined -- the branch above returned every other
+  // case -- and a `describeValue` of it could only ever print the one word it
+  // already knows. Naming the constant is the honest version of that call.
   throw new SchemaError(
     profile.id,
     "verbs",
-    `carries no verb '${verb}'. It carries: ${Object.keys(profile.verbs).join(", ")} (${describeValue(cell)})`,
+    `carries no verb '${verb}' (nothing is stored under that key). It carries: ${Object.keys(profile.verbs).join(", ")}`,
   );
 }

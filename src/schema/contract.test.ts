@@ -297,6 +297,22 @@ describe("project", () => {
     );
   });
 
+  it("refuses a platform name process.platform never returns", () => {
+    // AN ALLOWLIST FAILS SILENTLY WHEN IT IS WRONG, which is why this is worth
+    // a refusal at all: `"macos"` does not error, it removes the verb from
+    // every machine on earth and reports nothing. `"windows"` and `"osx"` are
+    // the same mistake. This reader is shared with the profiles pack's `hosts`
+    // (src/profiles/pack.ts), so both gained the check on one line.
+    for (const wrong of ["macos", "windows", "osx", "Darwin"]) {
+      const error = refusal({ project: { ...PROJECT, hosts: { "*": [wrong] } } });
+      expect(error.pointer, wrong).toBe("project.hosts.*[0]");
+      expect(error.message, wrong).toContain("CLOSED set");
+    }
+    expect(
+      parse({ project: { ...PROJECT, hosts: { build: ["win32"] } } }).project?.hosts["build"],
+    ).toEqual(["win32"]);
+  });
+
   it("reads a precondition value as either a path or an argv list", () => {
     const contract = parse({
       project: {

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { loadProfilesPack } from "../profiles/pack.js";
+import { escapeCell } from "../cli/table.js";
+import { loadProfilesPack, PLACEHOLDERS } from "../profiles/pack.js";
 import {
   MATRIX_COMMAND,
   MATRIX_DRIFT_MESSAGE,
@@ -68,11 +69,28 @@ describe("renderStackMatrix", () => {
       .split("\n")
       .find((line): boolean => line.startsWith("| stack |"));
     expect(header).toBeDefined();
-    // `| stack |` plus the thirteen verbs, so fourteen cells between pipes.
+    // `| stack | host | template |` plus the thirteen verbs.
     expect((header ?? "").split("|").filter((cell): boolean => cell.trim() !== "").length).toBe(
-      pack.verbs.length + 1,
+      pack.verbs.length + 3,
     );
+    expect(header).toContain("| host | template |");
     for (const id of pack.ids) expect(text).toContain(`| \`${id}\` |`);
+  });
+
+  it("gives every stack a host and a template cell in the grid", () => {
+    // The two facts a reader needs BEFORE a verb cell means anything. Both are
+    // compact by design; the full statement is in the stack's own section.
+    const text = renderStackMatrix(pack);
+    for (const id of pack.ids) {
+      const profile = pack.profiles[id];
+      const row = text.split("\n").find((line): boolean => line.startsWith(`| \`${id}\` |`));
+      expect(row, id).toBeDefined();
+      const cells = (row ?? "").split("|").map((cell): string => cell.trim());
+      // cells[0] is the empty string before the leading pipe.
+      expect(cells[2], `${id} host`).not.toBe("");
+      const template = profile?.scaffoldTemplate;
+      expect(cells[3], `${id} template`).toBe(template === null ? "—" : `\`${template ?? ""}\``);
+    }
   });
 
   it("gives every stack its own section, with its host, template and markers", () => {
@@ -114,23 +132,94 @@ describe("renderStackMatrix", () => {
     }
   });
 
-  it("counts the grid honestly in its own summary line", () => {
+  it("counts the grid honestly, over the COMMAND verbs only", () => {
+    // THE HEADLINE'S DENOMINATOR IS THE FINDING THIS TEST EXISTS FOR. Three of
+    // the thirteen rows are not a spawned command -- a marker match, a
+    // toolchain report, a delegation -- and folding them in moved the ratio in
+    // both directions at once: their declared-only cells read as "stacks with
+    // no answer" and their command cells read as builds. Neither is true.
     const text = renderStackMatrix(pack);
-    let carried = 0;
-    let declaredOnly = 0;
-    let unsupported = 0;
-    for (const id of pack.ids) {
-      for (const verb of pack.verbs) {
-        const kind = pack.profiles[id]?.verbs[verb]?.kind;
-        if (kind === "declared-only") declaredOnly += 1;
-        else if (kind === "unsupported") unsupported += 1;
-        else carried += 1;
+    const tally = (verbs: readonly string[]): Record<string, number> => {
+      const out = { yes: 0, declared: 0, no: 0 };
+      for (const id of pack.ids) {
+        for (const verb of verbs) {
+          const kind = pack.profiles[id]?.verbs[verb]?.kind;
+          if (kind === "declared-only") out.declared += 1;
+          else if (kind === "unsupported") out.no += 1;
+          else out.yes += 1;
+        }
       }
+      return out;
+    };
+    const commands = tally(pack.commandVerbs);
+    const others = tally(pack.verbs.filter((verb): boolean => !pack.commandVerbs.includes(verb)));
+    const total = (counts: Record<string, number>): number =>
+      (counts["yes"] ?? 0) + (counts["declared"] ?? 0) + (counts["no"] ?? 0);
+
+    expect(text).toContain(`Over the **${total(commands)}** stack × verb cells`);
+    expect(text).toContain(`**${commands["no"] ?? 0} are unsupported**`);
+    expect(text).toContain(`${commands["declared"] ?? 0} are declared-only`);
+    expect(text).toContain(`${commands["yes"] ?? 0} carry a command`);
+    // And the rows left out are ACCOUNTED FOR, not dropped: a headline that
+    // narrows its denominator without saying what it excluded is the same
+    // dishonesty in the other direction.
+    expect(text).toContain(`The remaining ${total(others)} cells are those`);
+    expect(total(commands) + total(others)).toBe(pack.ids.length * pack.verbs.length);
+  });
+
+  it("names no verb of its own: the command/non-command split is data", () => {
+    // ../taxonomy-purity.test.ts's property, restated for the one distinction
+    // this renderer could most easily have hard-coded. `profiles/index.json`
+    // carries `commandVerbs`; the renderer reads it.
+    const source = readFileSync(join(process.cwd(), "src/dev/matrix.ts"), "utf8");
+    for (const verb of pack.verbs) {
+      expect(source, `matrix.ts names the verb '${verb}'`).not.toContain(`"${verb}"`);
     }
-    expect(text).toContain(`Of the ${carried + declaredOnly + unsupported} stack × verb cells`);
-    expect(text).toContain(`**${unsupported} are unsupported**`);
-    expect(text).toContain(`${declaredOnly} are declared-only`);
-    expect(text).toContain(`${carried} carry an answer`);
+  });
+
+  it("puts no `<` outside a code span, so no cell renders as HTML", () => {
+    // `escapeCell` escapes the pipe and the newline -- the two characters that
+    // break a markdown TABLE -- and deliberately not `<`, because it is shared
+    // with ../cli/table.ts's terminal renderer where `&lt;` would be visible
+    // garbage. Escaping here instead would corrupt the code spans, which is
+    // where every `<` in this document actually lives: a `.csproj` property, an
+    // `<n>` in a placeholder-shaped citation. So the rule is stated as a
+    // PROPERTY OF THE OUTPUT: every `<` sits inside backticks, where markdown
+    // renders it literally and no HTML parser sees a tag.
+    const text = renderStackMatrix(pack);
+    const offences: string[] = [];
+    text.split("\n").forEach((line, index): void => {
+      // A `\`` count that is odd means a span opens and never closes, which
+      // would make the scan below meaningless rather than merely wrong.
+      const ticks = (line.match(/`/g) ?? []).length;
+      if (ticks % 2 !== 0) offences.push(`${index + 1}: unbalanced backticks -- ${line.slice(0, 60)}`);
+      let inCode = false;
+      for (const char of line) {
+        if (char === "`") inCode = !inCode;
+        else if (char === "<" && !inCode) {
+          offences.push(`${index + 1}: bare '<' -- ${line.slice(0, 80)}`);
+          break;
+        }
+      }
+    });
+    // The generated-file banner is the one HTML comment the page intends.
+    expect(offences.filter((offence): boolean => !offence.startsWith("1:"))).toEqual([]);
+  });
+
+  it("renders the placeholder table from the loader's own closed set", () => {
+    // ONE SOURCE FOR BOTH: the set the loader refuses an unknown token against
+    // is the set this page explains. A token documented nowhere cannot ship,
+    // and a documented token the page omits cannot happen.
+    const text = renderStackMatrix(pack);
+    expect(text).toContain("## Placeholders");
+    for (const placeholder of PLACEHOLDERS) {
+      expect(text, placeholder.token).toContain(`| \`${placeholder.token}\` |`);
+      expect(text, placeholder.token).toContain(escapeCell(placeholder.meaning));
+    }
+    // And it says the two things a reader acts on.
+    expect(text).toContain("nen/contract.json");
+    expect(text).toContain("host-conditional");
+    expect(text).toMatch(/unsubstituted token is refused/i);
   });
 
   it("renders an override pack rather than the bundled one when given one", () => {
@@ -139,6 +228,7 @@ describe("renderStackMatrix", () => {
     const single = {
       ids: ["only"],
       verbs: ["build"],
+      commandVerbs: ["build"],
       origin: "/fake",
       profiles: {
         only: {
@@ -165,7 +255,7 @@ describe("renderStackMatrix", () => {
     };
     const text = renderStackMatrix(single);
     expect(text).toContain("## `only` -- Only");
-    expect(text).toContain("Of the 1 stack × verb cells");
+    expect(text).toContain("Over the **1** stack × verb cells");
     expect(text).not.toContain("## `nextjs`");
   });
 });

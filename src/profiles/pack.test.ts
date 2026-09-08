@@ -11,6 +11,7 @@ import {
   PACK_INDEX_FILE,
   parsePackIndex,
   parseProfile,
+  PLACEHOLDERS,
   profileById,
   verbCell,
   type ProfileVerb,
@@ -187,17 +188,24 @@ describe("a malformed pack file is refused, naming the file and the field", () =
     expect(error.pointer).toBe("verbs.test.summary");
   });
 
-  it("refuses a summary on a cell the grid never abbreviates", () => {
-    const error = refusal(() =>
-      parseProfile(AT, "example", VERBS, profile({
-        verbs: {
-          build: { exe: "e", argv: ["a"], why: "w", source: "s", summary: "never read" },
-          test: { unsupported: "n", summary: "n", source: "s" },
-        },
-      })),
-    );
-    expect(error.pointer).toBe("verbs.build.summary");
-    expect(error.message).toContain("would never be read");
+  it("PRESERVES an unknown key rather than refusing it, as the declaration does", () => {
+    // ONE POLICY ACROSS THE FAMILY. ../schema/contract.ts preserves unknown
+    // keys on `raw`, skips `$`-prefixed commentary, and therefore does not
+    // detect a misspelling of a known key. This loader now behaves the same
+    // way. An earlier draft refused a stray `summary` on a cell the grid never
+    // abbreviates -- the only key in the family treated that way -- which
+    // taught a reader a rule the file they were about to write does not follow.
+    const parsed = parseProfile(AT, "example", VERBS, profile({
+      verbs: {
+        build: { exe: "e", argv: ["a"], why: "w", source: "s", summary: "never read", $note: "x" },
+        test: { unsupported: "n", summary: "n", source: "s" },
+      },
+    }));
+    expect(parsed.verbs["build"]?.kind).toBe("command");
+    // Preserved, not silently dropped: the whole document is on `raw`.
+    const verbs = parsed.raw["verbs"] as Record<string, Record<string, unknown>>;
+    expect(verbs["build"]?.["summary"]).toBe("never read");
+    expect(verbs["build"]?.["$note"]).toBe("x");
   });
 
   it("refuses a cell declaring two forms at once", () => {
@@ -291,17 +299,68 @@ describe("a malformed pack file is refused, naming the file and the field", () =
     expect(error.pointer).toBe("hosts.build");
   });
 
+  it("refuses a platform name outside process.platform's closed set", () => {
+    // AN ALLOWLIST FAILS SILENTLY WHEN IT IS WRONG. `"macos"` is not a value
+    // `process.platform` returns, so a verb gated on it never runs anywhere --
+    // and nothing errors, because an allowlist that matches nothing is a legal
+    // allowlist. This is the only place the typo is visible. The rule lives in
+    // ../schema/contract.ts, so the declaration's own `project.hosts` gained it
+    // at the same time and by the same line.
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, profile({ hosts: { "*": ["macos"] } })),
+    );
+    expect(error.pointer).toBe("hosts.*[0]");
+    expect(error.message).toContain("CLOSED set");
+    expect(error.message).toContain("darwin");
+  });
+
+  it("refuses a delegation to a verb the index does not list", () => {
+    // A DELEGATION IS A POINTER AT A ROW OF THIS SAME TABLE. One that names no
+    // column renders as a plausible `delegates to \`x\`` in the grid -- wrong,
+    // and formatted exactly like right, which is the failure worth refusing.
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, profile({
+        verbs: {
+          build: { delegatesTo: ["nonexistent-verb"], why: "w", source: "s" },
+          test: { unsupported: "n", summary: "n", source: "s" },
+        },
+      })),
+    );
+    expect(error.pointer).toBe("verbs.build.delegatesTo[0]");
+    expect(error.message).toContain("nonexistent-verb");
+    expect(error.message).toContain("build, test");
+  });
+
+  it("accepts a delegation to a verb the index does list", () => {
+    const parsed = parseProfile(AT, "example", VERBS, profile({
+      verbs: {
+        build: { delegatesTo: ["test"], why: "w", source: "s" },
+        test: { unsupported: "n", summary: "n", source: "s" },
+      },
+    }));
+    const cell = parsed.verbs["build"];
+    expect(cell?.kind).toBe("delegated");
+  });
+
+  it("refuses a commandVerbs entry that is not one of the index's verbs", () => {
+    const error = refusal(() =>
+      parsePackIndex(AT, { profiles: ["a"], verbs: ["build"], commandVerbs: ["deploy"] }),
+    );
+    expect(error.pointer).toBe("commandVerbs[0]");
+    expect(error.message).toContain("not one of the verbs this index lists");
+  });
+
   it("refuses an index listing no profile, and one listing no verb", () => {
-    expect(refusal(() => parsePackIndex(AT, { profiles: [], verbs: ["build"] })).pointer).toBe("profiles");
-    expect(refusal(() => parsePackIndex(AT, { profiles: ["a"], verbs: [] })).pointer).toBe("verbs");
+    expect(refusal(() => parsePackIndex(AT, { profiles: [], verbs: ["build"], commandVerbs: ["build"] })).pointer).toBe("profiles");
+    expect(refusal(() => parsePackIndex(AT, { profiles: ["a"], verbs: [], commandVerbs: [] })).pointer).toBe("verbs");
   });
 
   it("refuses a duplicated id or verb in the index", () => {
     expect(
-      refusal(() => parsePackIndex(AT, { profiles: ["a", "a"], verbs: ["build"] })).message,
+      refusal(() => parsePackIndex(AT, { profiles: ["a", "a"], verbs: ["build"], commandVerbs: ["build"] })).message,
     ).toContain("'a' more than once");
     expect(
-      refusal(() => parsePackIndex(AT, { profiles: ["a"], verbs: ["build", "build"] })).message,
+      refusal(() => parsePackIndex(AT, { profiles: ["a"], verbs: ["build", "build"], commandVerbs: ["build"] })).message,
     ).toContain("'build' more than once");
   });
 });
@@ -317,7 +376,7 @@ describe("--profiles <dir>", () => {
 
   it("loads an override directory instead of the bundled pack", () => {
     const dir = writePack({
-      [PACK_INDEX_FILE]: { profiles: ["example"], verbs: [...VERBS] },
+      [PACK_INDEX_FILE]: { profiles: ["example"], verbs: [...VERBS], commandVerbs: [...VERBS] },
       "example.json": profile(),
     });
     const pack = loadProfilesPack(dir);
@@ -329,7 +388,7 @@ describe("--profiles <dir>", () => {
 
   it("validates an override exactly as it validates the bundled pack", () => {
     const dir = writePack({
-      [PACK_INDEX_FILE]: { profiles: ["example"], verbs: [...VERBS, "lint"] },
+      [PACK_INDEX_FILE]: { profiles: ["example"], verbs: [...VERBS, "lint"], commandVerbs: [...VERBS] },
       "example.json": profile(),
     });
     const error = refusal(() => loadProfilesPack(dir));
@@ -339,7 +398,7 @@ describe("--profiles <dir>", () => {
   });
 
   it("names the missing file when a listed profile is not there", () => {
-    const dir = writePack({ [PACK_INDEX_FILE]: { profiles: ["absent"], verbs: [...VERBS] } });
+    const dir = writePack({ [PACK_INDEX_FILE]: { profiles: ["absent"], verbs: [...VERBS], commandVerbs: [...VERBS] } });
     const error = refusal(() => loadProfilesPack(dir));
     expect(error.path).toBe(join(dir, "absent.json"));
     expect(error.message).toContain("could not be read");
@@ -351,6 +410,217 @@ describe("--profiles <dir>", () => {
     const error = refusal(() => loadProfilesPack(dir));
     expect(error.path).toBe(join(dir, PACK_INDEX_FILE));
     expect(error.message).toContain("is not valid JSON");
+  });
+
+  it("refuses a profile file the index does not list, as the bundled pin does", () => {
+    // SYMMETRY WITH THE BUNDLED PACK, which is pinned against `profiles/` in
+    // BOTH directions by the suite above. Before this rule an override
+    // directory had no such check: drop a file in, forget the index line, and
+    // the pack loads cleanly with your stack missing from every row. The only
+    // symptom was an absence, which is the failure shape that survives review.
+    const dir = writePack({
+      [PACK_INDEX_FILE]: { profiles: ["example"], verbs: [...VERBS], commandVerbs: [...VERBS] },
+      "example.json": profile(),
+      "forgotten.json": { ...profile(), id: "forgotten" },
+    });
+    const error = refusal(() => loadProfilesPack(dir));
+    expect(error.pointer).toBe("profiles");
+    expect(error.message).toContain("forgotten.json");
+    expect(error.message).toContain("List it, or delete the file");
+  });
+});
+
+describe("placeholders", () => {
+  const pack = loadProfilesPack();
+
+  // Every `exe`, `argv` and `probe` string in the shipped pack, with the field
+  // it came from -- which is the whole point: a token in a `toolchain.probe` is
+  // as much an interface as one in a verb's argv, and the first draft of this
+  // pack documented neither.
+  function shippedArgvStrings(): { where: string; text: string }[] {
+    const out: { where: string; text: string }[] = [];
+    for (const id of pack.ids) {
+      const profile = profileById(pack, id);
+      for (const verb of pack.verbs) {
+        const cell = verbCell(profile, verb);
+        if (cell.kind === "command" && cell.invocation.kind === "command") {
+          out.push({ where: `${id}.verbs.${verb}.exe`, text: cell.invocation.exe });
+          for (const [index, item] of cell.invocation.argv.entries()) {
+            out.push({ where: `${id}.verbs.${verb}.argv[${index}]`, text: item });
+          }
+        }
+        if (cell.kind === "steps" && cell.invocation.kind === "steps") {
+          for (const [stepIndex, step] of cell.invocation.steps.entries()) {
+            out.push({ where: `${id}.verbs.${verb}.steps[${stepIndex}].exe`, text: step.exe });
+            for (const [index, item] of step.argv.entries()) {
+              out.push({
+                where: `${id}.verbs.${verb}.steps[${stepIndex}].argv[${index}]`,
+                text: item,
+              });
+            }
+          }
+        }
+      }
+      for (const [tool, entry] of Object.entries(profile.toolchain)) {
+        for (const [index, item] of entry.probe.entries()) {
+          out.push({ where: `${id}.toolchain.${tool}.probe[${index}]`, text: item });
+        }
+      }
+    }
+    return out;
+  }
+
+  it("documents every token any shipped argv or probe uses", () => {
+    // THE ASSERTION THE REVIEW ASKED FOR, walked over the real data rather than
+    // over a list somebody maintains by hand. Eight of the fifteen tokens that
+    // shipped were explained nowhere -- including every one of the five in the
+    // iOS profile, and one sitting inside a `toolchain.probe`.
+    const known = new Set(PLACEHOLDERS.map((placeholder): string => placeholder.token));
+    const undocumented: string[] = [];
+    let seen = 0;
+    for (const { where, text } of shippedArgvStrings()) {
+      for (const match of text.matchAll(/\{[^{}]*\}/g)) {
+        seen += 1;
+        if (!known.has(match[0])) undocumented.push(`${where}: ${match[0]}`);
+      }
+    }
+    expect(undocumented).toEqual([]);
+    // A sweep that found nothing would pass forever, and this pack templates
+    // heavily enough that finding nothing would mean the walker is broken.
+    expect(seen).toBeGreaterThan(20);
+  });
+
+  it("documents nothing the pack does not actually use", () => {
+    // The other direction: a closed set that accumulates entries nobody writes
+    // is a table a reader has to check against the data themselves.
+    const bundledDirectory = join(process.cwd(), PACK_DIRECTORY);
+    const text = readdirSync(bundledDirectory)
+      .filter((file): boolean => file.endsWith(".json"))
+      .map((file): string => readFileSync(join(bundledDirectory, file), "utf8"))
+      .join("\n");
+    const unused = PLACEHOLDERS.filter(
+      (placeholder): boolean => !text.includes(placeholder.token),
+    ).map((placeholder): string => placeholder.token);
+    expect(unused).toEqual([]);
+  });
+
+  it("gives every token a kind and a one-line meaning, and no duplicates", () => {
+    const tokens = PLACEHOLDERS.map((placeholder): string => placeholder.token);
+    expect(new Set(tokens).size).toBe(tokens.length);
+    expect([...tokens]).toEqual([...tokens].sort());
+    for (const placeholder of PLACEHOLDERS) {
+      expect(placeholder.token, placeholder.token).toMatch(/^\{[A-Za-z][A-Za-z0-9]*\}$/);
+      expect(placeholder.meaning.length, placeholder.token).toBeGreaterThan(20);
+      expect(["host-conditional", "declaration-supplied"]).toContain(placeholder.kind);
+    }
+    // EXACTLY ONE is host-conditional, and a second would be a design change
+    // rather than a data change: every other difference between hosts is a
+    // difference between repositories, and a repository states its own.
+    expect(
+      PLACEHOLDERS.filter((placeholder): boolean => placeholder.kind === "host-conditional").length,
+    ).toBe(1);
+  });
+
+  it("refuses an unknown token in an argv, naming the file, the field and it", () => {
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, profile({
+        verbs: {
+          build: {
+            exe: "e",
+            argv: ["--out", "{someUnknownPlaceholder}"],
+            why: "w",
+            source: "s",
+          },
+          test: { unsupported: "n", summary: "n", source: "s" },
+        },
+      })),
+    );
+    expect(error.path).toBe(AT);
+    expect(error.pointer).toBe("verbs.build.argv[1]");
+    expect(error.message).toContain("{someUnknownPlaceholder}");
+    expect(error.message).toContain("CLOSED set");
+    // It lists the set, which is the answer to "then what should I have written".
+    expect(error.message).toContain("{gw}");
+  });
+
+  it("refuses an unknown token in an exe, a step and a toolchain probe", () => {
+    // ALL THREE POSITIONS, because the review found one in a `toolchain.probe`
+    // and a rule that only covered verb argvs would have missed it.
+    expect(
+      refusal(() =>
+        parseProfile(AT, "example", VERBS, profile({
+          verbs: {
+            build: { exe: "{nope}", argv: ["--version"], why: "w", source: "s" },
+            test: { unsupported: "n", summary: "n", source: "s" },
+          },
+        })),
+      ).pointer,
+    ).toBe("verbs.build.exe");
+
+    expect(
+      refusal(() =>
+        parseProfile(AT, "example", VERBS, profile({
+          verbs: {
+            build: {
+              steps: [{ exe: "e", argv: ["{nope}"] }],
+              why: "w",
+              source: "s",
+            },
+            test: { unsupported: "n", summary: "n", source: "s" },
+          },
+        })),
+      ).pointer,
+    ).toBe("verbs.build.steps[0].argv[0]");
+
+    expect(
+      refusal(() =>
+        parseProfile(AT, "example", VERBS, profile({
+          toolchain: {
+            node: {
+              minimum: null,
+              probe: ["node", "{nope}"],
+              versionFrom: "first-semver-on-stdout",
+              installer: "verify-only",
+              why: "w",
+              source: "s",
+            },
+          },
+        })),
+      ).pointer,
+    ).toBe("toolchain.node.probe[1]");
+  });
+
+  it("accepts a documented token, and leaves an unmatched brace alone", () => {
+    const parsed = parseProfile(AT, "example", VERBS, profile({
+      verbs: {
+        build: { exe: "{gw}", argv: ["id={simUdid}"], why: "w", source: "s" },
+        test: { unsupported: "n", summary: "n", source: "s" },
+      },
+    }));
+    const cell = parsed.verbs["build"];
+    expect(cell?.kind).toBe("command");
+    // An argv is DATA, not a template language: a lone `{` is a brace some tool
+    // wanted, and refusing it would be this loader inventing syntax for shells
+    // it does not run.
+    expect(() =>
+      parseProfile(AT, "example", VERBS, profile({
+        verbs: {
+          build: { exe: "awk", argv: ["{ print $1 "], why: "w", source: "s" },
+          test: { unsupported: "n", summary: "n", source: "s" },
+        },
+      })),
+    ).not.toThrow();
+  });
+
+  it("does not hold a marker's brace GLOB to the placeholder set", () => {
+    // `settings.gradle{,.kts}` and `*.config.{js,mjs,ts}` are globs -- a
+    // different language that happens to share a delimiter. Three shipped
+    // markers use one, and refusing them would enforce a rule about commands
+    // against something that is not a command.
+    const parsed = parseProfile(AT, "example", VERBS, profile({
+      markers: [{ pattern: "settings.gradle{,.kts}", contains: null, why: "the build file" }],
+    }));
+    expect(parsed.markers[0]?.pattern).toBe("settings.gradle{,.kts}");
   });
 });
 

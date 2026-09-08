@@ -4208,3 +4208,10 @@ the reason. It is **generated** from the bundled profiles pack
 (`profiles/*.json`) by `bun run matrix` and drift-checked in the suite, so it
 cannot go stale. It is reference material only: no verb reads the pack today,
 and a source-scan test keeps it that way.
+
+A command in that page is a **shape**, not a runnable line: `{project}`,
+`{scheme}`, `{pm}` and the rest are placeholders your own `nen/contract.json`
+substitutes, and the page's *Placeholders* section lists the closed set with
+what each one means. One of them — the Gradle wrapper — is resolved by nen from
+`process.platform`; every other value comes from your declaration and never
+from the pack. A token left unsubstituted is refused rather than run.

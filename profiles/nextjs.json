@@ -87,7 +87,7 @@
     "coverage": {
       "exe": "{pm}",
       "argv": ["--filter", "{package}", "test:coverage"],
-      "why": "AN EXISTING COMMAND, NOT A PROPOSAL, in both repositories -- and both run the identical shape once per workspace package that declares a `test:coverage` script, each resolving to `vitest run --coverage` with a real `coverage: { provider: 'v8', reporter: ['text','lcov'] }` block. Cited verbatim: `{pm} --filter @kro/core test:coverage` then `{pm} --filter @kro/app test:coverage`; `{package}` is templated because the package names are those repositories', not this stack's. GAP WORTH CARRYING: neither repository's `test-coverage` target reaches `apps/web`, whose own `test` script already bakes coverage in.",
+      "why": "ONE TEMPLATED COMMAND, RUN ONCE PER PACKAGE -- and reading it as a single invocation is the one way to get this row wrong. Both repositories run this exact shape N times, once for each workspace package that declares a `test:coverage` script, and a declaration reproduces that as N steps (or as its own root target that fans out); the pack states the SHAPE because the package list is the repository's, not this stack's. AN EXISTING COMMAND, NOT A PROPOSAL: each invocation resolves to `vitest run --coverage` with a real `coverage: { provider: 'v8', reporter: ['text','lcov'] }` block. Cited verbatim: `{pm} --filter @kro/core test:coverage` then `{pm} --filter @kro/app test:coverage` -- two runs, one shape. GAP WORTH CARRYING: neither repository's `test-coverage` target reaches `apps/web`, whose own `test` script already bakes coverage in.",
       "source": "kro-pwa/Makefile:71-73 (packages/core/package.json:19, packages/app/package.json:22); GymKai/Makefile:51-53"
     },
     "tools": {
@@ -114,11 +114,11 @@
       "source": "kro-pwa/package.json (`engines.node`); GymKai CI setup step"
     },
     "pnpm": {
-      "minimum": "9.0.0",
+      "minimum": "9.15.9",
       "probe": ["pnpm", "--version"],
       "versionFrom": "first-semver-on-stdout",
       "installer": "corepack",
-      "why": "ADVISORY ONLY: this is the minimum nen has been TESTED against, and it never contributes to an install argv. kro-pwa's own `packageManager` field pins 9.15.9, and that pin -- the declaration's, not this one -- is what `--install` would activate.",
+      "why": "ADVISORY ONLY: this is the version nen has been TESTED against, and it never contributes to an install argv. IT IS THE ONE VERSION THE INVENTORY STATES: kro-pwa/package.json's `packageManager` field reads `pnpm@9.15.9`, and that is the whole evidence -- no repository in the inventory declares a `>= 9` range, an `engines.pnpm` floor, or any other pnpm version at all. An earlier draft wrote `9.0.0`, which was a floor nothing measured: rounding a measured version down to a plausible-looking major is exactly how an advisory column starts asserting things nobody checked. The pin that an `--install` would actually activate is the DECLARATION's `packageManager`, never this one.",
       "source": "kro-pwa/package.json (`packageManager`)"
     }
   },

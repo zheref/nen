@@ -10,6 +10,19 @@
     "nextjs",
     "xcode-ios"
   ],
+  "$commandVerbs": "The subset of `verbs` that names a command a repository RUNS. The other three do not, and each for its own reason: `detect` is a marker match against a checkout and spawns nothing; `tools` is a toolchain REPORT whose few command cells install a package manager rather than build anything; `warmup` is version-control work plus a delegation to this same table's `build` and `test` rows. Counting those twenty-one cells in the headline ratio flatters it in both directions at once -- `detect`'s seven declared-only cells are not seven stacks with no answer, and `tools`'s two command cells are not two more builds. The list lives HERE, as data, for the same reason the stack set does: src/dev/matrix.ts contains no verb name, so this distinction is a line in this file rather than a branch in the renderer.",
+  "commandVerbs": [
+    "build",
+    "test",
+    "ui-test",
+    "lint",
+    "archive",
+    "release",
+    "dev",
+    "run",
+    "deploy",
+    "coverage"
+  ],
   "verbs": [
     "detect",
     "build",
