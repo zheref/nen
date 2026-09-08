@@ -82,13 +82,13 @@
       "exe": "{gw}",
       "argv": ["verifyPaparazziDebug", "{unitTestTask}", "--stacktrace"],
       "why": "THE TASK MUST BE `verifyPaparazziDebug`, NEVER `testDebugUnitTest` (KN-IS-#182): under plain `testDebugUnitTest` a snapshot test renders and discards, so replacing a golden with a completely different image still reports PASSED. The cited command is `{gw} verifyPaparazziDebug :KroCore:test --stacktrace`; `{unitTestTask}` is the repository's own JVM unit-test task (KroAndroid: `:KroCore:test`), templated here because the module name is that repository's, not this stack's.",
-      "source": "KroAndroid/.github/workflows/build-test.yml:100 (the why: :51-58). GATED by this profile's `crossChecks`: the observed command runs the Paparazzi plugin's own task, so the row is proposed only where a module of the target lane actually applies that plugin (argued in PR #PR, closes #128)"
+      "source": "KroAndroid/.github/workflows/build-test.yml:100 (the why: :51-58). GATED by this profile's `crossChecks`: the observed command runs the Paparazzi plugin's own task, so the row is proposed only where a module of the target lane actually applies that plugin (argued in PR #134, closes #128)"
     },
     "ui-test": {
       "exe": "{gw}",
       "argv": ["verifyPaparazziDebug"],
       "why": "Screenshot verification is this stack's UI test, and it is the same task the `test` row runs. RECORDING baselines is a different, deliberately separate command the declaration states if it wants it: `{gw} recordPaparazziDebug`. INSTRUMENTED UI tests are unsupported here: `app/src/androidTest/` sources, a `testInstrumentationRunner` (app/build.gradle.kts:48) and Espresso / Compose-UI-test dependencies (:216-219) all exist, and no `connectedAndroidTest` invocation exists anywhere.",
-      "source": "KroAndroid/.claude/rules/14-ui-screenshots.md:112-113 (record: :109). GATED by this profile's `crossChecks` for the same reason the `test` row is, and it is the row the gap was found on (argued in PR #PR, closes #128)"
+      "source": "KroAndroid/.claude/rules/14-ui-screenshots.md:112-113 (record: :109). GATED by this profile's `crossChecks` for the same reason the `test` row is, and it is the row the gap was found on (argued in PR #134, closes #128)"
     },
     "lint": {
       "exe": "{gw}",
