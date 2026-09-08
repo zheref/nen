@@ -1,8 +1,8 @@
 # Test fixtures
 
-Five fake repository roots. Two carry a migrated `nen/` directory; the third
-deliberately still carries `schemas/`; the last two carry only a contract — one
-for the executor, one for the toolchain check.
+Six fake repository roots. Two carry a migrated `nen/` directory; the third
+deliberately still carries `schemas/`; the last three carry only a contract — one
+for the executor, one for the toolchain check, one for the coverage parse.
 
 These are **test data, not shipped code**. They deliberately contain concrete
 persona, label and check-name strings — that is the point of them: the loaders
@@ -60,8 +60,22 @@ different things.
   itself; and `sdk-root/` exists so the `path-exists` member has a path that is
   really there.
 
+- `shu-coverage-repo/nen/contract.json` — the repository `nen shu coverage` is
+  proved against, and the reason it is not folded into `shu-repo` either: that
+  one's `coverage` row declares **no** `artifacts`, which is the "nothing to
+  parse" case this verb must answer for. This one carries four lanes, one per
+  answer: `web` declares an artifact that **is** a report nen reads (and
+  `coverage/coverage-summary.json` is committed beside it, so the parse runs end
+  to end), `core` declares no artifact at all, `native` declares a real file in
+  no format nen reads, and `gone` declares a report that is not on disk. Its
+  three stacks (`nextjs`, `xcode-ios`, `gatsby`) are chosen so the advisory the
+  refusal quotes differs per lane — one stack has a conventional report location
+  and the others say why they have none.
+
 The marker trees `nen shu detect` scans are a different kind of input and live
-separately, at `src/shu/fixtures/` — see that directory's own README.
+separately, at `src/shu/fixtures/` — see that directory's own README; the
+coverage REPORT fixtures the five parsers are proved against live at
+`src/shu/fixtures/coverage/`, which has one too.
 
 Nothing under this directory is linted (`eslint.config.js` ignores
 `**/fixtures/**`) or type-checked, and the taxonomy-purity sweep in

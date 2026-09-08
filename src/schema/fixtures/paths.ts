@@ -52,3 +52,16 @@ export const SHU_REPO = join(FIXTURES, "shu-repo");
  * the two together would delete a state this verb has to answer for.
  */
 export const SHU_TOOLS_REPO = join(FIXTURES, "shu-tools-repo");
+
+/**
+ * A repository whose `nen/contract.json` gives `nen shu coverage` one lane per
+ * answer it has to have: a lane whose declared artifact is a report nen parses,
+ * a lane that declares no artifact at all, a lane whose artifact is a real file
+ * in no format nen reads, and a lane whose declared report is not on disk.
+ *
+ * SEPARATE FROM `SHU_REPO` FOR THE SAME REASON `SHU_TOOLS_REPO` IS. That fixture
+ * declares a coverage verb with NO artifacts, which is the "declares none" case
+ * this verb must answer for; adding a report to it would delete that case from
+ * the suite in exchange for saving one directory.
+ */
+export const SHU_COVERAGE_REPO = join(FIXTURES, "shu-coverage-repo");

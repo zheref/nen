@@ -35,6 +35,8 @@ import { INSTALLERS, VERSION_FROM, type ProjectBlock } from "../schema/contract.
 import { PROGRAM } from "../version.js";
 import { openDeclaration } from "./declaration.js";
 import { EXIT_UNSUPPORTED_HOST, ShuRefusal } from "./exit.js";
+import { coverageAdvisories } from "./coverage-defaults.js";
+import { runCoverage } from "./coverage.js";
 import { detect, renderDetect, writeProposal } from "./detect.js";
 import { ENABLED_INSTALLERS } from "./install.js";
 import { probeTool, runInstallSteps } from "./probe.js";
@@ -74,7 +76,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   dev: { values: ["lane"], booleans: ["dry-run"] },
   run: { values: ["lane"], booleans: ["dry-run"] },
   deploy: { values: ["lane", "target"], booleans: ["dry-run"] },
-  coverage: { values: ["lane"], booleans: ["dry-run"] },
+  coverage: { values: ["lane", "threshold"], booleans: ["dry-run"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
 };
@@ -149,7 +151,11 @@ verbs:
   run         Start the lane's PRODUCTION build, locally. Also long-running.
   deploy      Send a build to a declared, NAMED target. --target is required
               and has no default, not even when exactly one target exists.
-  coverage    Run the lane's coverage command.
+  coverage    Run the lane's coverage command, then PARSE the report it
+              produced into one shape: a total, a row per target, and -- with
+              --threshold -- whether the number cleared a bar. The report is
+              the first path under this verb's 'artifacts' whose format nen
+              reads; a lane that names none is exit 1 saying so.
   tools       Check the HOST toolchain this repository pins under
               project.toolchain (and, from a dependency block, nen itself).
               Read-only by default: it runs each declared version probe and
@@ -257,6 +263,11 @@ flags:
                    name the declaration gives them. A name it does not declare
                    is exit 2 listing the ones it does -- an empty report is not
                    an answer to a mistyped tool.
+  --threshold <n>  'coverage' only. A percentage, 0-100. nen compares it
+                   against the report's own line coverage and REPORTS
+                   'met: true|false'. IT NEVER CHANGES THE EXIT CODE, in
+                   either direction: nen does not decide whether a number is
+                   good enough. Read 'met' and decide.
   --branch <name>  'warmup' only. The branch to cut from the freshly-fetched
                    trunk. REQUIRED, with no default: nen never invents a branch
                    name. It is validated with git's own 'check-ref-format
@@ -369,6 +380,23 @@ flags:
                    DOCUMENT: as everywhere else in this CLI, exit 2 is a line
                    on stderr and an empty stdout, so a --json reader never has
                    to tell a report from an error object on one stream.
+                   On 'coverage' it is a FOURTH contract
+                   ('nen.shu.coverage/v0.1'), keys in order:
+                   { contract, lane, stack, total, targets, threshold, report,
+                     exitCode }, where 'total' is
+                   { lines: { covered, total, percent } } plus a 'branches'
+                   block in the same shape when the tool measures them, and each
+                   targets[] row is { name, lines, branches }. 'percent' is
+                   COMPUTED from the counts, to two decimals, and is null for a
+                   report about no lines -- 0 of 0 is neither 100% nor 0%.
+                   'threshold' is { value, met } or null, and 'met' is null when
+                   there was no number to compare it with. 'report' is
+                   { format, path }: the declared artifact nen actually parsed,
+                   or null. A DRY RUN IS TOLD BY exitCode 0 WITH total null --
+                   nothing else produces that pair, which is why there is no
+                   'dryRun' boolean here either. The EXECUTOR's own report for
+                   this verb is rendered to stderr under --json, so stdout stays
+                   exactly one document and nothing it produced is lost.
                    'env' is variable NAMES only, never values. 'steps[].exitCode'
                    is the TOOL's code and is null when nothing was run, which is
                    how a --json reader tells a dry run from a real one;
@@ -717,6 +745,20 @@ export const shuCommand: Command = {
           only: commaList(context.args.values["only"]),
           install: context.args.booleans.has("install"),
           dryRun: context.args.booleans.has("dry-run"),
+        });
+      }
+
+      if (subcommand === "coverage") {
+        // THE JOIN, exactly as `tools` above and for the same rule: the
+        // advisory catalogue values are read HERE -- this file imports no seam
+        // -- and handed across as strings that can only land in a message.
+        // ../profiles/inertness.test.ts is what keeps that a property of the
+        // program rather than a sentence in a header.
+        return runCoverage(context, repoRoot, {
+          lane: context.args.values["lane"] ?? null,
+          dryRun: context.args.booleans.has("dry-run"),
+          threshold: context.args.values["threshold"] ?? null,
+          advisories: coverageAdvisories(),
         });
       }
 
