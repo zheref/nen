@@ -372,15 +372,24 @@ describe("preconditions -- asserted and never performed", () => {
   });
 
   it("reports a path it cannot stat as PRESENT-and-broken, never as absent", async () => {
-    // A path THROUGH a regular file -- the declaration itself, which is the one
-    // file every temporary repository here has. `lstat` throws ENOTDIR rather
-    // than answering "no entry", and the catch arm exists to call that PRESENT:
-    // an entry nen cannot read is a repository problem to report, and "the
-    // build has not been run yet" is the one thing it is definitely not.
-    // Flipping that arm to `false` used to leave the whole suite green.
+    // `entryExists` uses `lstatSync(..., { throwIfNoEntry: false })`, so an
+    // ABSENT entry comes back as `undefined` and only a real error throws. The
+    // catch arm exists for those -- EACCES on a parent, ENOTDIR on a path
+    // through a regular file -- and it answers PRESENT: an entry nen cannot
+    // read is a repository problem to report, and "the build has not been run
+    // yet" is the one thing it is definitely not. Flipping that arm to `false`
+    // used to leave the whole suite green.
+    //
+    // THE TRIGGER IS A PATH THE RUNTIME ITSELF REJECTS, not a path through a
+    // file, because the two POSIX errnos above are not portable: on Windows,
+    // `lstat` of `file\child` answers "no entry" rather than ENOTDIR, and a
+    // test built on that arrives green on two of the three CI lanes and red on
+    // the third -- which is exactly what happened. A NUL in the path is
+    // refused by node's own argument validation on every platform, before any
+    // syscall, and reaches the same arm.
     const result = await withDeclaration(
       oneLane({
-        preconditions: { only: [{ kind: "path", value: "nen/contract.json/child" }] },
+        preconditions: { only: [{ kind: "path", value: "not\u0000a-path" }] },
       }),
       ["build", "--dry-run", "--json"],
     );
