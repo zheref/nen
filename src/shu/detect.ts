@@ -110,6 +110,23 @@ const WINUI_MARKER = "<UseWinUI>";
 const EXPO_MANIFEST_KEY = "expo";
 
 /**
+ * The cloud-build profile file that sits beside an Expo manifest.
+ *
+ * EVIDENCE, NEVER AN IDENTIFICATION, and the difference is the whole reason it
+ * is a separate constant. The reference pack lists it as a marker that
+ * "identifies an Expo project on its own", and `detect` deliberately declines
+ * that half: a tree carrying only this file has stated a build service's
+ * configuration and not which manifest, lane or platform anything runs on, and
+ * a lane proposed from it would be nen deciding what kind of project this is
+ * from an ancillary file. So its presence is recorded as a SECOND marker of a
+ * lane the manifest already identified, and `detect` notes it -- because the
+ * pack's `archive` and `release` seats were written about repositories that had
+ * NONE, and a maintainer reading those seats against a tree that has one needs
+ * to be told the premise differs here.
+ */
+const EAS_CONFIG = "eas.json";
+
+/**
  * Every stack id `matchesIn` below can answer with.
  *
  * IT IS ASSERTED AGAINST THE PACK'S OWN ID LIST (./detect.test.ts), in both
@@ -337,6 +354,18 @@ function relativePath(repoRoot: string, path: string): string {
 interface Match {
   readonly stack: string;
   readonly marker: string;
+  /**
+   * Whether this marker is what ANSWERED the stack, or a second file recorded
+   * beside one that did.
+   *
+   * The distinction exists for exactly one shape today and is worth a field
+   * rather than a convention: a file the reference pack names as a marker, that
+   * this scan declines to identify a lane from, and whose presence still
+   * changes how a reader should read the pack's own seats. `detect()` turns
+   * every non-identifying marker into a note quoting the pack's reason for the
+   * marker, so the fact is never recorded silently.
+   */
+  readonly identifying: boolean;
 }
 
 // ── the host-tool stacks, read off the catalogue ────────────────────────────
@@ -625,7 +654,10 @@ function matchesIn(
   const nestedBuilds = new Set<string>();
   const found: Match[] = [];
   const add = (stack: string, marker: string): void => {
-    found.push({ stack, marker: relativePath(repoRoot, marker) });
+    found.push({ stack, marker: relativePath(repoRoot, marker), identifying: true });
+  };
+  const alsoCarries = (stack: string, marker: string): void => {
+    found.push({ stack, marker: relativePath(repoRoot, marker), identifying: false });
   };
 
   for (const name of names) {
@@ -638,13 +670,22 @@ function matchesIn(
   // JS/TS manifest form, which cannot be read without executing it, is
   // confirmed against the dependency the repository declares instead.
   const appJson = names.includes("app.json") ? readJson(join(directory, "app.json")) : null;
+  let expoManifest: string | null = null;
   if (appJson !== null && appJson[EXPO_MANIFEST_KEY] !== undefined) {
-    add("expo", join(directory, "app.json"));
+    expoManifest = join(directory, "app.json");
   } else {
     const appConfig = names.find((name): boolean => APP_CONFIG.test(name));
     if (appConfig !== undefined && dependsOn(readJson(join(directory, "package.json")), EXPO_MANIFEST_KEY)) {
-      add("expo", join(directory, appConfig));
+      expoManifest = join(directory, appConfig);
     }
+  }
+  if (expoManifest !== null) {
+    add("expo", expoManifest);
+    // THE CLOUD-BUILD PROFILE IS RECORDED AND NEVER IDENTIFIES. See EAS_CONFIG:
+    // the pack says it identifies a project on its own, and this scan declines
+    // that half deliberately -- so it is a second marker of a lane the manifest
+    // already answered, and `detect()` notes it against the pack's own seats.
+    if (names.includes(EAS_CONFIG)) alsoCarries("expo", join(directory, EAS_CONFIG));
   }
 
   // Apple: the workspace is PREFERRED over the project, because a tree carrying
@@ -2013,6 +2054,112 @@ function leftoverTokens(steps: readonly ProposedStep[]): readonly string[] {
   return PACK_TOKENS.filter((token): boolean => text.includes(token));
 }
 
+// ── what a withheld row can still SHOW a maintainer ─────────────────────────
+//
+// Nothing below this line ever proposes anything. Every function here runs only
+// after a row has ALREADY been withheld, and its whole output is text in that
+// row's note. The distinction matters more here than anywhere else in the file,
+// because both readers are deliberately WIDER than the ones that answer a
+// token: they read a word that merely CONTAINS a token, and they read files
+// (`.xcscheme`, `project.pbxproj`) that no substitution consults. Reading a
+// half-understood shape into a PROPOSAL is how a command acquires an argument
+// nobody wrote -- `scriptAnswers` refuses exactly that, one screen up, and this
+// section does not weaken it. Reading it into a REASON is the opposite: it is
+// the difference between "nen cannot answer {platform}" and "nen cannot answer
+// {platform}, and here are the two values your own scripts spell in that
+// position".
+
+/** A word that EMBEDS a pack token rather than being one, with its literal halves. */
+interface EmbeddedToken {
+  readonly token: string;
+  readonly index: number;
+  readonly prefix: string;
+  readonly suffix: string;
+}
+
+/**
+ * Every position of a step whose word wraps a token in literal text.
+ *
+ * `run:{platform}` and `id={simUdid}` are the two shapes in the pack, and both
+ * are invisible to every other reader in this file: `PACK_TOKEN_SET.has(word)`
+ * is false for each, so `scriptAnswers` skips the position and the row is
+ * withheld naming a token with nothing else said about it.
+ */
+function embeddedTokens(step: ProposedStep): readonly EmbeddedToken[] {
+  const words = [step.exe, ...step.argv];
+  const found: EmbeddedToken[] = [];
+  words.forEach((word, index): void => {
+    if (PACK_TOKEN_SET.has(word)) return;
+    for (const token of PACK_TOKENS) {
+      const at = word.indexOf(token);
+      if (at === -1) continue;
+      found.push({
+        token,
+        index,
+        prefix: word.slice(0, at),
+        suffix: word.slice(at + token.length),
+      });
+    }
+  });
+  return found;
+}
+
+/** One value a declared script spells where the pack wrote an embedded token. */
+interface EmbeddedValue {
+  readonly value: string;
+  readonly key: string;
+  readonly command: string;
+}
+
+/**
+ * The values this lane's own scripts spell in an embedded token's position.
+ *
+ * THE MATCH IS THE STRICTEST ONE THAT CAN SEE ANYTHING: same word count, every
+ * other position either identical or a whole token the pack wrote, and at the
+ * embedded position a word that opens with the pack's literal prefix, closes
+ * with its literal suffix, and has something of its own in between. Against
+ * `expo run:{platform}` a `"web": "expo start --web"` disagrees on arity, a
+ * `"lint": "expo lint"` disagrees on the prefix, and `"ios": "expo run:ios"`
+ * and `"android": "expo run:android"` each contribute one value.
+ *
+ * TWO VALUES ARE NOT AN AMBIGUITY TO RESOLVE, because there is nothing here to
+ * resolve: the row stays withheld either way. They are two facts to REPORT, and
+ * reporting both is the point -- neither native lane is the other's default,
+ * which is precisely why the pack templated the position instead of picking.
+ */
+function embeddedValues(
+  step: ProposedStep,
+  embedded: EmbeddedToken,
+  manifest: Manifest,
+): readonly EmbeddedValue[] {
+  const words = [step.exe, ...step.argv];
+  const seen = new Set<string>();
+  const values: EmbeddedValue[] = [];
+  for (const script of manifest.scriptWords) {
+    if (script.words.length !== words.length) continue;
+    let usable = true;
+    for (let index = 0; index < words.length; index += 1) {
+      if (index === embedded.index) continue;
+      const word = words[index] ?? "";
+      const part = script.words[index] ?? "";
+      if (word === part || PACK_TOKEN_SET.has(word)) continue;
+      usable = false;
+      break;
+    }
+    if (!usable) continue;
+    const spelled = script.words[embedded.index] ?? "";
+    if (!spelled.startsWith(embedded.prefix) || !spelled.endsWith(embedded.suffix)) continue;
+    const value = spelled.slice(
+      embedded.prefix.length,
+      spelled.length - embedded.suffix.length,
+    );
+    if (value === "" || seen.has(value)) continue;
+    seen.add(value);
+    values.push({ value, key: script.key, command: script.words.join(" ") });
+  }
+  return [...values].sort((a, b): number => compareBytes(a.value, b.value));
+}
+
 /** What a `run <task>` in a step names, and WHO is being asked to run it. */
 interface RunClause {
   /** The program the task is handed to: the word before `run`. */
@@ -2204,6 +2351,49 @@ function packageReason(manifest: Manifest): string {
 }
 
 /**
+ * The reason clause an EMBEDDED token earns, or "" when nothing was found.
+ *
+ * WHY THIS IS WORTH A CLAUSE AND NOT A SHRUG. A withheld row naming
+ * `{platform}` tells a maintainer that nen will not guess and nothing else --
+ * yet the same manifest that failed to answer the token spells both of the
+ * values out, one per script, and a reader can see it in five seconds. The
+ * clause closes exactly that gap: it names every value the lane's own scripts
+ * put in that position, quotes the script that says so, and then says the one
+ * thing that has not changed -- nen is not choosing between them.
+ *
+ * IT NAMES WHERE THE ANSWER GOES, because a note that stops at "state it
+ * yourself" makes a reader go looking for the field. The row's own address in
+ * the declaration is `project.verbs.<lane>.<verb>`, which is where the proposal
+ * this note is printed beside already puts it.
+ */
+function embeddedReason(
+  steps: readonly ProposedStep[],
+  manifest: Manifest,
+  lane: string,
+  verb: string,
+): string {
+  const clauses: string[] = [];
+  for (const step of steps) {
+    for (const embedded of embeddedTokens(step)) {
+      const values = embeddedValues(step, embedded, manifest);
+      if (values.length === 0) continue;
+      clauses.push(
+        ` -- this lane's own scripts spell ${embedded.token}'s position ${
+          values.length === 1 ? "one way" : `${values.length} ways`
+        } (${values
+          .map((found): string => `${found.value}, in '${found.key}': ${found.command}`)
+          .join("; ")}), so nen can SEE the value${values.length === 1 ? "" : "s"} and still will not pick${
+          values.length === 1 ? " it up" : " one"
+        }: a script is what this repository runs by hand, and which of them a verb MEANS is a decision. State it under project.verbs.${lane}.${verb}${
+          values.length === 1 ? "" : ", or give each value a lane of its own"
+        }`,
+      );
+    }
+  }
+  return clauses.join("");
+}
+
+/**
  * The pack's reference verbs for this lane, substituted and cross-checked, plus
  * a note for every row that was withheld and the reason it was.
  *
@@ -2383,6 +2573,10 @@ function proposeVerbs(
             : " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
           : "",
         leftover.includes(PACKAGE_NAME) ? packageReason(manifest) : "",
+        // THE VALUES THE LANE'S OWN SCRIPTS SPELL where the pack embedded a
+        // token in a longer word. Note-only: see the section header above
+        // `embeddedTokens`.
+        embeddedReason(steps, manifest, lane, verb),
         // THE NEAR MISS IS NAMED. A script that agreed by word count and that
         // nothing corroborated is the most useful thing nen can say here: it is
         // the row a maintainer either confirms in one edit or recognises as the
@@ -2593,7 +2787,42 @@ function proposeVerbs(
   return { verbs, notes };
 }
 
-/** The `hosts` map a set of lanes agrees on, or null when they disagree. */
+/**
+ * A note for every marker this lane CARRIES and was not IDENTIFIED by.
+ *
+ * ONE SHAPE PRODUCES ONE TODAY and the mechanism is still general, which is the
+ * right way round: `matchesIn` decides what is evidence and what identifies,
+ * and this reads the pack for the reason rather than restating it. A lane with
+ * a single marker -- every lane in the reference set but one -- produces
+ * nothing here, so no stack acquires a note by accident.
+ *
+ * WHAT THE NOTE IS FOR. The pack's `unsupported` seats quote observations about
+ * the repositories the catalogue read, and a maintainer meeting one in their own
+ * proposal has no way to tell which of those observations still holds. A file
+ * that is HERE and that the catalogue recorded as absent is exactly that signal,
+ * and it is the one a reader can act on: the seat is not merely a seat, it is a
+ * seat whose stated reason is already untrue of this tree.
+ */
+function evidenceNotes(profile: StackProfile, matches: readonly Match[]): readonly string[] {
+  const notes: string[] = [];
+  for (const match of matches) {
+    if (match.identifying) continue;
+    const name = match.marker.split("/").pop() ?? match.marker;
+    // The pattern is matched WHOLE and never globbed. A pack pattern carrying a
+    // `*` simply finds nothing here, which is honest: this file has no glob
+    // engine, and half-expanding one is how a note starts describing a file
+    // that is not there.
+    const declared = profile.markers.find((marker): boolean => marker.pattern === name);
+    /* c8 ignore next -- every evidence marker `matchesIn` records is one the pack declares */
+    if (declared === undefined) continue;
+    notes.push(
+      `this lane also carries ${match.marker}, which the reference pack names as a marker of this stack and which nen did NOT identify the lane from -- a lane proposed from that file alone would be nen deciding what kind of project this is from an ancillary one. It is reported because the pack's own seats below were written about repositories that had none, so a seat whose quoted reason turns on its absence is the first row to distrust here. The pack's reason for the marker: ${declared.why}`,
+    );
+  }
+  return notes;
+}
+
+
 function hostSignature(hosts: Readonly<Record<string, readonly string[]>>): string {
   return JSON.stringify(
     Object.entries(hosts)
@@ -2628,10 +2857,10 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
     // ONE LANE PER STACK PER DIRECTORY, whatever the marker count. A tree with
     // both `next.config.js` and `next.config.mjs` matched twice and used to
     // become two lanes, the second with a name nobody could have predicted.
-    const byStack = new Map<string, string[]>();
+    const byStack = new Map<string, Match[]>();
     for (const match of matches) {
       const markers = byStack.get(match.stack) ?? [];
-      markers.push(match.marker);
+      markers.push(match);
       byStack.set(match.stack, markers);
     }
     const stacks = [...byStack.keys()].sort(compareBytes);
@@ -2654,13 +2883,19 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
         platform,
         hostStacks.find((entry): boolean => entry.stack === stack),
       );
+      const found = byStack.get(stack) ?? [];
       lanes.push({
         lane,
         stack,
         cwd,
-        markers: byStack.get(stack) ?? [],
+        markers: found.map((match): string => match.marker),
         verbs: proposed.verbs,
-        notes: proposed.notes,
+        // THE EVIDENCE-ONLY MARKERS COME FIRST, because they change how the
+        // rows BELOW them should be read: a seat whose quoted reason turns on a
+        // file this tree actually has is the first row a maintainer should
+        // distrust, and a note about it printed after eleven rows is a note
+        // read too late.
+        notes: [...evidenceNotes(profile, found), ...proposed.notes],
       });
     }
   }

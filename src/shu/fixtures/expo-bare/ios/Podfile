@@ -1,0 +1,3 @@
+# TEST FIXTURE -- a Podfile is a `pod install` PRECONDITION, never a marker on
+# its own. Nothing here is ever run.
+platform :ios, '15.1'

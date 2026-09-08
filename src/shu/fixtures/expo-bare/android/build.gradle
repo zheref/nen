@@ -1,0 +1,6 @@
+// TEST FIXTURE -- nothing here is run. The Gradle SYNC of a prebuilt native
+// lane reads `node` from PATH, which is the verify-only probe the pack's own
+// notes say most readers would not expect.
+buildscript {
+    ext { buildToolsVersion = "35.0.0" }
+}

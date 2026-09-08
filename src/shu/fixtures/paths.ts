@@ -18,6 +18,7 @@ export const NEXTJS_PARTIAL = join(FIXTURES, "nextjs-partial");
 export const NEXTJS_WORKSPACES = join(FIXTURES, "nextjs-workspaces");
 export const NEXTJS_UNTOOLED = join(FIXTURES, "nextjs-untooled");
 export const GATSBY_SITE = join(FIXTURES, "gatsby-site");
+export const EXPO_BARE = join(FIXTURES, "expo-bare");
 export const EMPTY_TREE = join(FIXTURES, "empty-tree");
 /** Two separate Gradle builds in one tree, the shape the inventory found. */
 export const KRO_SHAPED = join(FIXTURES, "kro-shaped");
