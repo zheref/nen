@@ -50,7 +50,7 @@ paths and slugs they are handed. Every verb of [`commit`](#family-commit),
 [`wake`](#family-wake) and [`watch`](#family-watch) is one; so are
 [`backlog fetch`](#nen-backlog-fetch),
 [`canon mirror generate`](#nen-canon-mirror-generate) and
-[`check`](#nen-canon-mirror-check), [`labels rename`](#nen-labels-rename),
+[`canon mirror check`](#nen-canon-mirror-check), [`labels rename`](#nen-labels-rename),
 [`pr fetch`](#nen-pr-fetch), [`pr retarget`](#nen-pr-retarget),
 [`pr request-reviews`](#nen-pr-request-reviews),
 [`ref parse`](#nen-ref-parse), [`repo inventory`](#nen-repo-inventory),
@@ -85,7 +85,7 @@ against the **process's current directory** and `--repo` is ignored:
 | [`split verify`](#nen-split-verify) | `--original`, `--branches` |
 | [`quality tooling`](#nen-quality-tooling) | `--table` |
 | [`quality method-check`](#nen-quality-method-check) | `--input` |
-| [`canon mirror generate`](#nen-canon-mirror-generate) / [`check`](#nen-canon-mirror-check) | `--rules-dir`, `--canon-values`, `--out-dir`, `--mirror-dir`, `--markdown-out` |
+| [`canon mirror generate`](#nen-canon-mirror-generate) / [`canon mirror check`](#nen-canon-mirror-check) | `--rules-dir`, `--canon-values`, `--out-dir`, `--mirror-dir`, `--markdown-out` |
 
 Every one of these verbs is also in the accept-but-never-read list above, so
 there is nothing inconsistent about a single invocation — but there IS an
@@ -2577,7 +2577,7 @@ nen issue file --target zheref/bankai-core --repo src/schema/fixtures/bankai-rep
 ```text
 would run: gh issue create --repo zheref/bankai-core --title wake verify does not paginate PR comments past one page --body-file /tmp/body.md --assignee zheref --label bankai:stage/idea --label bankai:severity/medium
 ```
-(--dry-run, run for real against the bundled fixture repo)
+(from a real run in `--dry-run` mode — no GitHub write, no network)
 
 ### `nen issue comment`
 
@@ -2614,7 +2614,7 @@ would run: gh issue comment 90 --repo zheref/bankai-core --body Filed as part of
 Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up.
 --- end of body (no trailing newline) ---
 ```
-(--dry-run, run for real)
+(from a real run in `--dry-run` mode — no GitHub write, no network)
 
 ### `nen issue attach-sub`
 
