@@ -416,12 +416,19 @@ exit codes:
      a dirty submodule). Every one of them prints its evidence on stderr.
      THE DOCUMENT FOLLOWS THE MUTATION, not the code: a refusal reached before
      this verb changed anything prints NO document on stdout, as everywhere
-     else in this CLI; one reached after it has already discarded work or moved
-     a ref prints the report of what it changed, for the reason a failed step
-     does -- the caller now holds a working copy in a state they did not ask
-     for, and 'steps' is the only thing that says which. stdout is still either
-     empty or exactly one document of the published shape, and never an error
-     object
+     else in this CLI; one reached after it has already discarded work,
+     COMPLETED A FETCH or moved a ref prints the report of what it changed, for
+     the reason a failed step does -- the caller now holds a repository in a
+     state they did not ask for, and 'steps' is the only thing that says which.
+     A COMPLETED 'git fetch ${WARMUP_REMOTE}' COUNTS, because it writes objects and
+     moves remote-tracking refs -- even though it leaves the working copy, the
+     index and every local branch alone, so it is nothing a caller has to
+     repair. A diverged trunk, a --branch already on ${WARMUP_REMOTE} and a look-up
+     that could not answer are therefore each refused WITH the report; every
+     refusal made before the fetch still prints none, except the --discard
+     re-read, which already carried one for a destruction of its own. stdout is
+     still either empty or exactly one document of the published shape, and
+     never an error object
   3  unsupported host -- the verb is real, this machine cannot run it
   4  unsupported verb for THIS LANE -- the declaration says so, in its own
      words. The invocation was correct; the answer is a fact about the repo.

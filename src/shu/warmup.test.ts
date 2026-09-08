@@ -586,7 +586,7 @@ describe("what --discard did not manage to discard", () => {
 
 // ── (c) the refusals, one per decision this verb will not make ──────────────
 
-describe("every refusal is exit 2 with the evidence, and prints no document", () => {
+describe("every refusal is exit 2 with the evidence, and the document follows the mutation", () => {
   it("refuses a repository with no 'origin', listing the remotes it does have", async () => {
     const result = await capture(["warmup", "--branch", BRANCH], {
       script: happyPath([ok(REMOTES, "upstream\nfork\n")]),
@@ -656,7 +656,6 @@ describe("every refusal is exit 2 with the evidence, and prints no document", ()
       script: happyPath([{ match: ANCESTOR, result: { code: 1 } }]),
     });
     expect(result.code).toBe(2);
-    expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toMatch(/has DIVERGED from origin\/main/);
     expect(result.err.join("\n")).toMatch(/never resolves a divergence/);
     expect(argvOf(result.seams)).not.toContain(FF_REF);
@@ -805,6 +804,102 @@ describe("every refusal is exit 2 with the evidence, and prints no document", ()
     expect(err.join("\n")).toMatch(/--repo <path> is required/);
     expect(seams.calls).toEqual([]);
   });
+});
+
+// ── (c2) a COMPLETED FETCH is a mutation, and the document follows it ───────
+//
+// `git fetch origin` writes objects and moves this repository's
+// remote-tracking refs. It leaves the working copy, the index and every local
+// branch alone -- which is why it is safe to leave behind -- but "this run
+// changed nothing" stops being true the moment it exits 0, and the report is
+// the only thing that says the fetch ran. Both directions are pinned here: a
+// refusal reached after it carries the document, and one reached before it
+// still carries none.
+
+describe("a refusal reached AFTER the fetch", () => {
+  /** The whole of stdout, parsed, with "exactly one document" asserted first. */
+  function oneDocument(out: readonly string[]): {
+    exitCode: number;
+    steps: readonly { argv: string[]; exitCode: number | null }[];
+  } {
+    const text = out.join("\n");
+    expect(text.split(WARMUP_CONTRACT).length - 1).toBe(1);
+    return JSON.parse(text) as { exitCode: number; steps: readonly { argv: string[]; exitCode: number | null }[] };
+  }
+
+  /** The fetch's own row, which is what says the repository was touched. */
+  function fetchStep(
+    report: { steps: readonly { argv: string[]; exitCode: number | null }[] },
+  ): { argv: string[]; exitCode: number | null } | undefined {
+    return report.steps.find((step): boolean => step.argv.join(" ") === FETCH);
+  }
+
+  it("carries the report on a DIVERGED trunk, even though nothing local moved", async () => {
+    // The divergence is found between the fetch and the fast-forward, so this
+    // is the refusal where the fetch is the ONLY thing that has happened.
+    const result = await capture(["warmup", "--branch", BRANCH, "--json"], {
+      script: happyPath([{ match: ANCESTOR, result: { code: 1 } }]),
+    });
+    expect(result.code).toBe(2);
+    const report = oneDocument(result.out);
+    expect(report.exitCode).toBe(2);
+    // The fetch RAN and exited 0 -- which is the whole reason this refusal owes
+    // the caller a document at all.
+    expect(fetchStep(report)?.argv).toEqual(FETCH.split(" "));
+    expect(fetchStep(report)?.exitCode).toBe(0);
+    // And nothing local was moved: the report says "fetched", not "moved".
+    expect(report.steps.map((step): string => step.argv.join(" "))).not.toContain(FF_REF);
+  });
+
+  it("carries the report when the reachability test could not answer at all", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH, "--json"], {
+      script: happyPath([{ match: ANCESTOR, result: { code: 128, stderr: "Not a valid object name" } }]),
+    });
+    expect(result.code).toBe(2);
+    expect(fetchStep(oneDocument(result.out))?.exitCode).toBe(0);
+  });
+
+  it("carries the report when --branch is already a branch on origin", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH, "--json"], {
+      script: happyPath([ok(REMOTE_REF, `abc123\trefs/heads/${BRANCH}\n`)]),
+    });
+    expect(result.code).toBe(2);
+    const report = oneDocument(result.out);
+    expect(report.exitCode).toBe(2);
+    expect(fetchStep(report)?.exitCode).toBe(0);
+  });
+
+  it("carries the report when the remote look-up itself could not answer", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH, "--json"], {
+      script: happyPath([{ match: REMOTE_REF, result: { code: 128, stderr: "Could not read from remote" } }]),
+    });
+    expect(result.code).toBe(2);
+    expect(fetchStep(oneDocument(result.out))?.exitCode).toBe(0);
+  });
+});
+
+describe("a refusal reached BEFORE the fetch", () => {
+  // The other direction, and the one that keeps the rule a rule rather than
+  // "warmup always prints something": each of these is answered from the tree
+  // as it stands, nothing has been written into `.git`, and stdout stays empty.
+  const cases: readonly { readonly what: string; readonly script: readonly ScriptedCall[] }[] = [
+    { what: "no 'origin' at all", script: happyPath([ok(REMOTES, "upstream\n")]) },
+    {
+      what: "a --branch git will not accept",
+      script: happyPath([{ match: NAME_OK, result: { code: 128, stderr: "fatal: not a valid branch name" } }]),
+    },
+    { what: "a --branch that is already a local branch", script: happyPath([ok(LOCAL_REF)]) },
+    { what: "no local trunk", script: happyPath([{ match: TRUNK_REF, result: { code: 1 } }]) },
+  ];
+
+  for (const { what, script } of cases) {
+    it(`prints NO document for ${what}, and never reaches the fetch`, async () => {
+      const result = await capture(["warmup", "--branch", BRANCH, "--json"], { script });
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      expect(argvOf(result.seams)).not.toContain(FETCH);
+    });
+  }
 });
 
 // ── (d) a step that RAN and failed: exit 1, and nothing rolled back ─────────
@@ -1296,8 +1391,11 @@ describe("the --json contract", () => {
   });
 
   it("prints NO document on a refusal that changed nothing", async () => {
+    // Before the fetch, so nothing has been written into `.git` at all -- the
+    // rule this CLI keeps everywhere else. A refusal reached AFTER the fetch is
+    // the other direction, and section (c2) pins it.
     const result = await capture(["warmup", "--branch", BRANCH, "--json"], {
-      script: happyPath([{ match: ANCESTOR, result: { code: 1 } }]),
+      script: happyPath([ok(REMOTES, "upstream\n")]),
     });
     expect(result.code).toBe(2);
     expect(result.out).toEqual([]);

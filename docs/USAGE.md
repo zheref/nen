@@ -3926,10 +3926,15 @@ that warmup has no better answer to.
 
 **The document follows the mutation, not the code.** A refusal reached **before** this verb changed
 anything prints its evidence on stderr and **no document** on stdout, as everywhere else in this CLI. A
-refusal reached **after** it has already discarded work or moved a ref prints the report of what it
-changed first — the same argument a failed step makes: the caller now holds a working copy in a state they
-did not ask for, and `steps` is the only thing that says which state. stdout is therefore always either
-empty or exactly one document of the published shape, and never an error object.
+refusal reached **after** it has already discarded work, **completed a fetch** or moved a ref prints the
+report of what it changed first — the same argument a failed step makes: the caller now holds a repository
+in a state they did not ask for, and `steps` is the only thing that says which state. **A completed
+`git fetch origin` counts**, because it writes objects and moves remote-tracking refs — even though it
+leaves the working copy, the index and every local branch alone, so it is nothing a caller has to repair.
+A diverged trunk (step 8), a name already on `origin` and a look-up that could not answer (step 10) are
+therefore each refused **with** the report; every refusal made before the fetch still prints none, except
+the `--discard` re-read (step 6a), which already carried one for a destruction of its own. stdout is
+therefore always either empty or exactly one document of the published shape, and never an error object.
 
 `--json` is `{ contract, repo, trunk, remote, branch, discard, steps, lane, exitCode }`, in that order,
 with `contract: "nen.shu.warmup/v0.1"`. Each `steps[]` row is `{ kind, argv, exitCode, durationMs, note }`,

@@ -43,9 +43,10 @@
 // follows from that: ONCE THIS RUN HAS CHANGED SOMETHING, EVEN A REFUSAL CARRIES
 // THE REPORT. A refusal that mutated nothing prints evidence on stderr and no
 // document at all, which is this CLI's rule everywhere; a refusal reached after
-// the working copy has already been changed prints the list of what changed it,
-// for `failedStep`'s reason -- the caller now has a tree in a state they did not
-// ask for, and that list is the only thing that says which state.
+// this run has already discarded work, COMPLETED A FETCH or moved a ref prints
+// the list of what changed it, for `failedStep`'s reason -- the caller now has a
+// repository in a state they did not ask for, and that list is the only thing
+// that says which state.
 //
 // THE ONE EXECUTABLE IS `git`, which is the one this CLI already names
 // (../seam/exec.ts's GIT). Everything on the toolchain side comes from the
@@ -712,9 +713,11 @@ function performWarmup(
   const git = gitRunner(context, repoRoot);
   const steps = git.steps;
   let lane = earlyLane;
-  // HAS THIS RUN CHANGED THE WORKING COPY YET? It decides one thing and one
+  // HAS THIS RUN CHANGED THIS REPOSITORY YET? It decides one thing and one
   // only: whether a refusal carries the report. Every mutating step below sets
-  // it immediately after the call that succeeded.
+  // it immediately after the call that succeeded -- the discard, the COMPLETED
+  // FETCH (which writes objects and moves remote-tracking refs, even though it
+  // leaves the working copy alone) and the fast-forward.
   let mutated = false;
 
   const report = (exitCode: number): void => {
@@ -973,6 +976,16 @@ function performWarmup(
   if (fetched.code !== 0) {
     return failedStep(`git fetch ${WARMUP_REMOTE}`, fetched, "Nothing local has changed yet.");
   }
+  // A COMPLETED FETCH IS A MUTATION, for the one purpose `mutated` serves. It
+  // writes objects into `.git` and moves this repository's remote-tracking
+  // refs, so `${WARMUP_REMOTE}/${trunk}` is not the ref it was a moment ago --
+  // and every refusal below this line is therefore reached in a repository this
+  // run has already changed. Those refusals carry the report for the same
+  // reason a failed step does: `steps[]` is the only thing that says the fetch
+  // ran. It is NOT a discard and nothing is undone by it -- the working copy,
+  // the index and every local branch are untouched, which is what makes a fetch
+  // safe to leave behind rather than something a caller must repair.
+  mutated = true;
 
   // ── 4. the fast-forward, refused on a divergence ─────────────────────────
   //
