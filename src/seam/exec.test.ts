@@ -14,6 +14,7 @@ import {
   mustJson,
   normalizeEol,
   outputLines,
+  spawnInteractiveRunner,
   spawnRunner,
   ToolError,
   type Seams,
@@ -21,7 +22,13 @@ import {
 
 /** A real-spawn Seams (no scripting) for the `must`/`mustJson` tests below. */
 function realSeams(): Seams {
-  return { run: spawnRunner, now: (): Date => new Date(), env: {} };
+  return {
+    run: spawnRunner,
+    runInteractive: spawnInteractiveRunner,
+    now: (): Date => new Date(),
+    env: {},
+    platform: process.platform,
+  };
 }
 
 describe("normalizeEol", () => {
@@ -91,6 +98,45 @@ describe("defaultSeams", () => {
     expect(seams.run).toBe(spawnRunner);
     expect(seams.now()).toBeInstanceOf(Date);
     expect(seams.env).toBe(process.env);
+  });
+
+  it("wires the interactive runner and the real host platform", () => {
+    const seams = defaultSeams();
+    expect(seams.runInteractive).toBe(spawnInteractiveRunner);
+    expect(seams.platform).toBe(process.platform);
+  });
+});
+
+describe("spawnInteractiveRunner -- the long-running seam", () => {
+  it("relays the child's own exit code, with nothing captured", () => {
+    const zero = spawnInteractiveRunner(process.execPath, ["-e", "process.exit(0)"]);
+    expect(zero).toEqual({ code: 0, signal: null, spawnFailed: false });
+    const seven = spawnInteractiveRunner(process.execPath, ["-e", "process.exit(7)"]);
+    expect(seven.code).toBe(7);
+    expect(seven.spawnFailed).toBe(false);
+  });
+
+  it("reports spawnFailed rather than a code when the binary never starts", () => {
+    const result = spawnInteractiveRunner("definitely-not-a-real-binary-xyz", []);
+    expect(result.spawnFailed).toBe(true);
+    // `code` is meaningless on this branch, exactly as CommandResult's header
+    // says: a caller must branch on spawnFailed, never on the number.
+    expect(result.code).toBe(-1);
+  });
+
+  it("leaves no SIGINT listener behind -- a later verb stays interruptible", () => {
+    const before = process.listenerCount("SIGINT");
+    spawnInteractiveRunner(process.execPath, ["-e", "process.exit(0)"]);
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  it("runs the child in the cwd it was given", () => {
+    const result = spawnInteractiveRunner(
+      process.execPath,
+      ["-e", "process.exit(process.cwd().length > 0 ? 0 : 1)"],
+      { cwd: process.cwd() },
+    );
+    expect(result.code).toBe(0);
   });
 });
 

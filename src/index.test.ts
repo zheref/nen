@@ -40,7 +40,15 @@ async function captureWithSeams(
       err.push(line);
     },
   };
-  const seams: Seams = { run: runFn, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
+  const seams: Seams = {
+    run: runFn,
+    now: (): Date => new Date("2026-01-01T00:00:00Z"),
+    env: {},
+    runInteractive: (): never => {
+      throw new Error("this verb has no interactive form");
+    },
+    platform: "linux",
+  };
   return { code: await run(argv, io, seams), out, err };
 }
 
