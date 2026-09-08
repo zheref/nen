@@ -1459,15 +1459,110 @@ function lastSegment(literal: string): string {
   return literal.split(".").pop() ?? literal;
 }
 
-/** Where a module's directory is, honouring a `projectDir` remap. */
+/**
+ * A `projectDir` value that is ROOTED SOMEWHERE OF ITS OWN, decided by SHAPE.
+ *
+ * `path.isAbsolute` is the wrong question here and it was the hole: it answers
+ * for the host NEN IS RUNNING ON, and the host that WROTE the settings file is
+ * a different one. On a POSIX host `isAbsolute("C:\\shared")` is `false`, so
+ * `join(lane, "C:\\shared")` produced `<lane>/C:\shared` -- a path the escape
+ * check below then certified as INSIDE the repository, for a statement that
+ * says the module lives on another drive entirely. `/srv/shared` was worse
+ * still: `join` swallows the leading separator, so an ABSOLUTE remap became
+ * `<lane>/srv/shared`, and nen read whatever happened to be there.
+ *
+ * So the three shapes are read off the text directly, and all three are read on
+ * EVERY host, because the value is the settings file's word and not this host's:
+ *
+ *   * `/srv/shared`     -- a POSIX absolute path (and the `//server/share` UNC form)
+ *   * `C:\shared`       -- a Windows drive letter, rooted or drive-relative (`C:shared`)
+ *   * `\\server\share`  -- a UNC path (and `\shared`, rooted on the current drive)
+ *
+ * A rooted value NEVER resolves inside the tree nen was pointed at, so it is an
+ * escape before any join happens rather than after one that hid it.
+ */
+const ROOTED_PATH = /^(?:\/|[A-Za-z]:|\\)/;
+
+/**
+ * A `projectDir` value nen cannot resolve to a directory AT ALL.
+ *
+ * `file("$rootDir/shared")`, `file("${rootDir}/shared")` and `file("~/shared")`
+ * name a Gradle property and a shell home directory -- values whose meaning
+ * lives outside the text nen is reading. Resolving one would be nen GUESSING
+ * where a module is and then reading the guess, which is rule 1 of this file's
+ * header wearing a filesystem hat.
+ */
+const UNRESOLVED_REFERENCE = /[$]|^~/;
+
+/**
+ * The segments of a remap, over BOTH separators.
+ *
+ * A settings file written on Windows spells `file("..\\shared")`, and splitting
+ * that on `/` alone produced the single segment `..\shared` -- a directory name
+ * with a backslash in it, which is not what the file says and which the escape
+ * check could not see the `..` inside.
+ */
+function pathSegments(value: string): readonly string[] {
+  return value.split(/[/\\]+/).filter((segment): boolean => segment !== "" && segment !== ".");
+}
+
+/**
+ * THE ONE TEST FOR "does this leave the repository", over a resolved path.
+ *
+ * The `..` reading alone is not enough on win32: two paths on DIFFERENT DRIVES
+ * have no relative spelling, so `relative` hands back an absolute path instead
+ * of a `..` -- which the first conjunct reads as inside. The shape test is the
+ * same one the raw value goes through, which is the point: one predicate, two
+ * inputs, rather than two predicates that can drift apart.
+ */
+function leavesRepository(repoRoot: string, directory: string): boolean {
+  const within = relative(repoRoot, directory);
+  return within.split(sep)[0] === ".." || ROOTED_PATH.test(within);
+}
+
+/** Where a module's directory is -- or why nen will not go looking for it. */
+type ModuleLocation =
+  | { readonly kind: "inside"; readonly directory: string }
+  | { readonly kind: "withheld"; readonly why: string };
+
+/**
+ * Where a module's directory is, honouring a `projectDir` remap -- or refusing.
+ *
+ * BOTH READERS OF A MODULE'S PATH COME THROUGH HERE (`classifyModule` and
+ * `laneScope`), so the containment rule is stated once. A remap that leaves the
+ * repository -- by shape, by `..`, or by naming something nen cannot resolve --
+ * yields no directory at all rather than one its caller is trusted to re-check.
+ */
 function moduleDirectory(
+  repoRoot: string,
   laneDirectory: string,
   module: string,
   remaps: ReadonlyMap<string, string>,
-): string {
+): ModuleLocation {
   const remapped = remaps.get(module);
-  if (remapped !== undefined) return join(laneDirectory, ...remapped.split("/"));
-  return join(laneDirectory, ...module.split(":").filter((segment): boolean => segment !== ""));
+  const outside = (): ModuleLocation => ({
+    kind: "withheld",
+    why:
+      remapped === undefined
+        ? "its name resolves to a directory outside this repository -- nen reads only the tree it was given"
+        : `its projectDir is remapped to '${remapped}', which resolves outside this repository -- nen reads only the tree it was given`,
+  });
+  // SHAPE FIRST, BEFORE ANY JOIN, because the join is what hid it.
+  if (remapped !== undefined && ROOTED_PATH.test(remapped)) return outside();
+  if (remapped !== undefined && UNRESOLVED_REFERENCE.test(remapped)) {
+    return {
+      kind: "withheld",
+      why: `its projectDir is remapped to '${remapped}', which names a property or a home directory rather than a path nen can resolve -- nen resolves neither, and it reads nothing on a guess about where a module is`,
+    };
+  }
+  const directory = join(
+    laneDirectory,
+    ...(remapped === undefined
+      ? module.split(":").filter((segment): boolean => segment !== "")
+      : pathSegments(remapped)),
+  );
+  if (leavesRepository(repoRoot, directory)) return outside();
+  return { kind: "inside", directory };
 }
 
 function classifyModule(
@@ -1478,17 +1573,16 @@ function classifyModule(
   refinements: readonly Refinement[],
 ): ModuleFinding {
   const unknown = (why: string): ModuleFinding => ({ module, kind: "unknown", why });
-  const directory = moduleDirectory(laneDirectory, module, remaps);
-  const remapped = remaps.get(module);
   // A REMAP THAT ESCAPES THE REPOSITORY IS NOT A CANDIDATE. nen reads only the
   // tree it was pointed at -- every other path in this family is resolved
   // against the repository root and one that leaves it is refused by name --
   // so a module living outside it is one nen cannot see, let alone classify.
-  if (relative(repoRoot, directory).split(sep)[0] === "..") {
-    return unknown(
-      `its projectDir is remapped to '${remapped ?? ""}', which resolves outside this repository -- nen reads only the tree it was given`,
-    );
-  }
+  // The judgement is `moduleDirectory`'s, over the raw value AND the resolved
+  // path; this seam only reports it.
+  const location = moduleDirectory(repoRoot, laneDirectory, module, remaps);
+  if (location.kind === "withheld") return unknown(location.why);
+  const directory = location.directory;
+  const remapped = remaps.get(module);
   const buildFiles = new Set(refinements.flatMap((entry): readonly string[] => [...entry.files]));
   const present = listDirectory(directory).filter(
     (entry): boolean => !entry.directory && buildFiles.has(entry.name),
@@ -1691,10 +1785,12 @@ function laneScope(
     );
     const text = settings === undefined ? "" : (readText(join(laneDirectory, settings.name)) ?? "");
     const remaps = projectDirectories(text);
-    const declared = includedModules(text).find(
-      (candidate): boolean =>
-        relativePath(laneDirectory, moduleDirectory(laneDirectory, candidate, remaps)) === within,
-    );
+    // A module whose remap leaves the repository is NOT a name for this carrier
+    // either: `moduleDirectory` yields no directory for it, so it cannot match.
+    const declared = includedModules(text).find((candidate): boolean => {
+      const location = moduleDirectory(repoRoot, laneDirectory, candidate, remaps);
+      return location.kind === "inside" && relativePath(laneDirectory, location.directory) === within;
+    });
     if (declared === undefined) {
       return {
         kind: "unaddressable",

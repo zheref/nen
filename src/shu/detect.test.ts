@@ -2190,6 +2190,106 @@ describe("nen shu detect -- a module the project does not contain is a warning",
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // A REMAP THAT IS ROOTED SOMEWHERE OF ITS OWN IS AN ESCAPE BY SHAPE, and it
+  // is one on EVERY host: `path.isAbsolute` answers for the host nen runs on,
+  // and the host that WROTE the settings file is a different one. Each `value`
+  // below is spelled exactly as the settings file spells it, escapes and all.
+  //
+  // THE MUTANT THIS KILLS: `join(laneDirectory, ...remapped.split("/"))`. `join`
+  // SWALLOWS a leading separator, so `/srv/shared` became `<lane>/srv/shared`,
+  // which the escape check then certified as inside the repository -- and nen
+  // read it. The first case plants a real build file at exactly that spot, so
+  // under the naive join `:shared` classifies as a library and `:shared:test` is
+  // PROPOSED off a directory the settings file never named. The drive-letter
+  // case kills the narrower mutant of dropping `[A-Za-z]:` from the shape test:
+  // `C:\\shared` then splits into `C:` and `shared` and lands in-repo, on a
+  // POSIX host too.
+  const ROOTED: readonly { name: string; value: string; plant?: readonly string[] }[] = [
+    { name: "a POSIX absolute path", value: "/srv/shared", plant: ["srv", "shared"] },
+    { name: "a Windows drive letter", value: String.raw`C:\\shared` },
+    { name: "a UNC share", value: String.raw`\\\\server\\share` },
+  ];
+  for (const { name, value, plant } of ROOTED) {
+    it(`withholds a module whose projectDir is ${name}`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-detect-remap-rooted-"));
+      try {
+        cpSync(KRO_SHAPED, dir, { recursive: true });
+        if (plant !== undefined) {
+          mkdirSync(join(dir, ...plant), { recursive: true });
+          writeFileSync(
+            join(dir, ...plant, "build.gradle.kts"),
+            'plugins {\n    id("org.jetbrains.kotlin.jvm")\n}\n',
+          );
+        }
+        writeFileSync(
+          join(dir, "settings.gradle.kts"),
+          `include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("${value}")\n`,
+        );
+        const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
+        expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+        const notes = lane?.notes.join("\n") ?? "";
+        expect(notes).toContain("nen could not classify :shared");
+        // The remap is quoted VERBATIM, so the reader can see the statement nen
+        // refused rather than nen's paraphrase of it.
+        expect(notes).toContain(value);
+        expect(notes).toContain("resolves outside this repository");
+        expect(JSON.stringify(lane?.verbs)).not.toContain(":shared:test");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // A BACKSLASH IS A SEPARATOR, not a character in a directory name: a settings
+  // file written on Windows spells an in-tree remap `file("libs\\shared")`, and
+  // splitting on `/` alone made that one segment -- a directory that is not
+  // there, so an in-tree module was withheld as missing. The same normalisation
+  // is what lets the escape check SEE the `..` in `..\shared`.
+  it("follows a remap written with BACKSLASH separators that stays in the tree", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-remap-backslash-"));
+    try {
+      cpSync(KRO_SHAPED, dir, { recursive: true });
+      mkdirSync(join(dir, "libs", "shared"), { recursive: true });
+      writeFileSync(
+        join(dir, "libs", "shared", "build.gradle.kts"),
+        'plugins {\n    id("org.jetbrains.kotlin.jvm")\n}\n',
+      );
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        `include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("${String.raw`libs\\shared`}")\n`,
+      );
+      const row = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android")
+        ?.verbs["test"] as { argv?: string[] };
+      expect(row?.argv).toContain(":shared:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A VALUE NEN CANNOT RESOLVE AT ALL is neither followed nor guessed at: a
+  // `${rootDir}` or a `~` names something outside the text nen is reading, and
+  // joining it produced a directory named after the reference itself.
+  it("withholds a module whose projectDir is a property reference", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-remap-property-"));
+    try {
+      cpSync(KRO_SHAPED, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        // A plain quoted string, so the `${...}` reaches the fixture unexpanded.
+        'include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("${rootDir}/shared")\n',
+      );
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toContain("nen could not classify :shared");
+      expect(notes).toContain("${rootDir}/shared");
+      expect(notes).toContain("names a property or a home directory");
+      expect(JSON.stringify(lane?.verbs)).not.toContain(":shared:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("stripScriptComments -- the one reader every build-script match goes through", () => {
