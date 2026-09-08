@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A comment carrying a > and a "quote", so the scanner is proved to skip it. -->
+<coverage line-rate="0.8235" branch-rate="0.75" version="1.9" timestamp="1767225600" lines-covered="14" lines-valid="17" branches-covered="3" branches-valid="4">
+  <sources>
+    <source>/repo</source>
+  </sources>
+  <packages>
+    <package name="Placeholder.Core" line-rate="0.8461" branch-rate="0.75" complexity="4">
+      <classes>
+        <class name="Placeholder.Core.Store" filename="Core/Store.cs" line-rate="0.8461" branch-rate="0.75">
+          <methods>
+            <method name="Load" signature="()" line-rate="1" branch-rate="1">
+              <lines>
+                <!-- THE TRAP: these two lines are the class list's again. A
+                     reader that counts every <line> element in the document
+                     reports 19 lines for a file that has 13. -->
+                <line number="10" hits="3" branch="false" />
+                <line number="11" hits="1" branch="false" />
+              </lines>
+            </method>
+          </methods>
+          <lines>
+            <line number="10" hits="3" branch="false" />
+            <line number="11" hits="1" branch="false" />
+            <line number="12" hits="2" branch="true" condition-coverage="75% (3/4)" />
+            <line number="13" hits="1" branch="false" />
+            <line number="14" hits="1" branch="false" />
+            <line number="15" hits="1" branch="false" />
+            <line number="16" hits="0" branch="false" />
+            <line number="17" hits="4" branch="false" />
+            <line number="18" hits="1" branch="false" />
+            <line number="19" hits="1" branch="false" />
+            <line number="20" hits="0" branch="false" />
+            <line number="21" hits="1" branch="false" />
+            <line number="22" hits="1" branch="false" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+    <package name="Placeholder.App" line-rate="0.75" branch-rate="1" complexity="1">
+      <classes>
+        <class name="Placeholder.App.Program" filename="App/Program.cs" line-rate="0.75" branch-rate="1">
+          <lines>
+            <line number="5" hits="1" branch="false" />
+            <line number="6" hits="1" branch="false" />
+            <line number="7" hits="0" branch="false" />
+            <line number="8" hits="2" branch="false" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

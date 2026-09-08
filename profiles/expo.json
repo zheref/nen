@@ -127,6 +127,12 @@
       "source": "food-diary/package.json (no `engines`); android/build.gradle:16-19"
     }
   },
+  "reportDefault": {
+    "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
+    "path": null,
+    "why": "Nothing to instrument, so no report exists to locate: no jest, no `jest-expo`, no vitest, and no `coverage` hit anywhere in the repository.",
+    "source": "this profile's own `coverage` row (food-diary/package.json:14-49)"
+  },
   "notes": [
     "PRECONDITIONS ASSERTED, NEVER PERFORMED: `pod install` for the iOS lane; a JDK plus the Android SDK AND `node` on PATH for the Gradle lane; and a booted simulator. The repository's own helper hardcodes booting an `iPhone 16 Pro` (food-diary/start-ios.sh:5, :12) -- nen asserts a simulator exists and never boots one.",
     "The native lanes' toolchains are the xcode-ios and gradle-android profiles' rows, not copies of them. Duplicating those entries here would create two places to fix the same fact."

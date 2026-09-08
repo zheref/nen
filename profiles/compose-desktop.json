@@ -107,6 +107,12 @@
       "source": "KroAndroid/program/ (no toolchain pin in the tree)"
     }
   },
+  "reportDefault": {
+    "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
+    "path": null,
+    "why": "No test command exists to instrument, so nothing writes a report. The JVM convention, once one does, is a JaCoCo XML under the module's own build tree -- named by the declaration, because the module layout is the repository's.",
+    "source": "this profile's own `coverage` row (KroAndroid/program/, inventory sweep)"
+  },
   "notes": [
     "THIS LANE IS THE CLEAREST ARGUMENT IN THE INVENTORY FOR PER-LANE STACKS. It lives inside a repository whose every other verb is Android, with `rootProject.name = \"kro-windows\"`, its own wrapper, and inclusion by no workflow and no other build. A per-repository stack model gets it wrong by construction -- and so would a per-repository toolchain model, since the two lanes pin different Gradle versions in the same tree."
   ]

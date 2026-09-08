@@ -131,6 +131,12 @@
       "source": "food-diary android/build.gradle:16-19, android/settings.gradle:4-14"
     }
   },
+  "reportDefault": {
+    "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
+    "path": null,
+    "why": "No coverage plugin is declared -- neither JaCoCo nor Kover is applied -- so there is no report and no path to record. With a plugin applied the location is the plugin's own (a JaCoCo report task writes under the module's `build/reports` tree, and its XML output is off by default), and the declaration states it: this repository's checklist already names a `jacocoTestReport` task that does not exist on a clean checkout, and recording a plausible path here would repeat that mistake in nen's own voice.",
+    "source": "this profile's own `coverage` row (KroAndroid/build.gradle.kts:2-15, app/build.gradle.kts:4-13)"
+  },
   "notes": [
     "`{gw}` is the ONE host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.",
     "A CONFLICT THIS PACK RECORDS AND REFUSES TO RESOLVE. Two canonical sources disagree about this stack's unit-test task, and only one of them can be right: bankai-core's compose handbook binds its lint/test placeholder to `./gradlew :app:testDebugUnitTest`, while KroAndroid's own CI forbids exactly that task in the sentence quoted in the `test` row's `why` (build-test.yml:51-58). The pack states the task that is OBSERVED RUNNING, cited to the line that runs it, and states the disagreement HERE rather than encoding both -- a reference that carried the forbidden task in any row, even a commented one, is a reference that will eventually be pasted. Resolve it upstream in whichever source is wrong; nen reports it and changes neither.",

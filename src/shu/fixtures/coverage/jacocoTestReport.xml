@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
+<report name="placeholder">
+  <sessioninfo id="placeholder-host" start="1767225600000" dump="1767225601000" />
+  <package name="io/placeholder/core">
+    <class name="io/placeholder/core/Store" sourcefilename="Store.kt">
+      <method name="load" desc="()V" line="10">
+        <counter type="INSTRUCTION" missed="1" covered="14" />
+        <counter type="BRANCH" missed="1" covered="3" />
+        <counter type="LINE" missed="2" covered="11" />
+      </method>
+      <counter type="INSTRUCTION" missed="1" covered="14" />
+      <counter type="BRANCH" missed="1" covered="3" />
+      <counter type="LINE" missed="2" covered="11" />
+    </class>
+    <sourcefile name="Store.kt">
+      <line nr="10" mi="0" ci="3" mb="0" cb="0" />
+      <line nr="12" mi="1" ci="2" mb="1" cb="3" />
+      <counter type="INSTRUCTION" missed="1" covered="14" />
+      <counter type="BRANCH" missed="1" covered="3" />
+      <counter type="LINE" missed="2" covered="11" />
+    </sourcefile>
+    <counter type="INSTRUCTION" missed="1" covered="14" />
+    <counter type="BRANCH" missed="1" covered="3" />
+    <counter type="COMPLEXITY" missed="1" covered="4" />
+    <counter type="LINE" missed="2" covered="11" />
+    <counter type="METHOD" missed="0" covered="2" />
+    <counter type="CLASS" missed="0" covered="1" />
+  </package>
+  <package name="io/placeholder/app">
+    <class name="io/placeholder/app/MainActivity" sourcefilename="MainActivity.kt">
+      <counter type="INSTRUCTION" missed="2" covered="6" />
+      <counter type="LINE" missed="1" covered="3" />
+    </class>
+    <counter type="INSTRUCTION" missed="2" covered="6" />
+    <counter type="LINE" missed="1" covered="3" />
+    <counter type="METHOD" missed="1" covered="1" />
+    <counter type="CLASS" missed="0" covered="1" />
+  </package>
+  <counter type="INSTRUCTION" missed="3" covered="20" />
+  <counter type="BRANCH" missed="1" covered="3" />
+  <counter type="COMPLEXITY" missed="2" covered="5" />
+  <counter type="LINE" missed="3" covered="14" />
+  <counter type="METHOD" missed="1" covered="3" />
+  <counter type="CLASS" missed="0" covered="2" />
+</report>

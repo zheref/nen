@@ -126,12 +126,37 @@ function dataNodes(): readonly string[] {
 //                            that can reach a spawn are two files, and the
 //                            reachability rule below is what holds them apart
 //                            when somebody later merges them for tidiness.
+//   * `src/shu/coverage-defaults.ts`
+//                         -- the SAME narrowing, for the same kind of column.
+//                            `nen shu coverage` parses the report a DECLARATION
+//                            names under the verb's `artifacts`; when a lane
+//                            names none, this module supplies the sentence the
+//                            refusal quotes -- where that stack's tooling
+//                            conventionally writes one. That path is PRINTED and
+//                            never resolved, opened or spawned: the module that
+//                            can spawn (`src/shu/coverage.ts`, through
+//                            `src/shu/run.ts`) takes it as a parameter from
+//                            `src/shu/command.ts`, which imports both halves and
+//                            no seam. The rule below is what enforces that
+//                            rather than this comment.
 const ALLOWED_IMPORTERS: readonly string[] = [
   "src/dev/matrix.ts",
   "src/scaffold/templates.ts",
+  "src/shu/coverage-defaults.ts",
   "src/shu/detect.ts",
   "src/shu/tools.ts",
 ];
+
+/**
+ * The coverage PARSERS: on neither side, by construction.
+ *
+ * They read a file somebody else's build tool wrote and turn it into numbers.
+ * They must not reach the pack (a parser that took a path from the catalogue
+ * would be nen opening a file nobody declared) and they must not reach the seam
+ * (a parser that could spawn is not a parser). Both directions are one
+ * assertion below, over the same resolved graph every other rule here uses.
+ */
+const COVERAGE_PARSERS = "src/shu/coverage/";
 
 // The module every spawn in this repository goes through, and the node builtins
 // it is the only legitimate user of. A module that reaches any of these is a
@@ -864,6 +889,30 @@ describe("the profiles pack is inert", () => {
     // many hops and through an allowlisted importer just the same. It is
     // COMPUTED from the seam, so widening the allowlist does not widen it.
     expect(offences(GRAPH)).toEqual([]);
+  });
+
+  it("keeps the coverage parsers off both sides: no pack, no seam, at any depth", () => {
+    // A DIRECTORY RULE RATHER THAN A FILE LIST, so a sixth format module joins
+    // it by existing. The two halves of `nen shu coverage` meet only in
+    // `src/shu/command.ts`, which spawns nothing itself; everything under
+    // `src/shu/coverage/` is pure computation over text, and this is what says
+    // so about the real graph rather than about the headers.
+    const modules = SHIPPED.filter((module): boolean => module.name.startsWith(COVERAGE_PARSERS));
+    expect(modules.length).toBeGreaterThan(3);
+    const offending: string[] = [];
+    for (const module of modules) {
+      for (const reached of reachableFrom(GRAPH, module.name)) {
+        if (isPack(reached)) offending.push(`${module.name} -> ${reached} (the pack)`);
+        if (reached === SEAM || CHILD_PROCESS.includes(reached)) {
+          offending.push(`${module.name} -> ${reached} (the seam)`);
+        }
+      }
+    }
+    expect(offending.sort()).toEqual([]);
+    // And the advisory half is the mirror image: it reads the pack and can
+    // never spawn. (The `offences` rule above would catch it too -- this states
+    // it where a reader is looking for it.)
+    expect(spawns(GRAPH, "src/shu/coverage-defaults.ts")).toBe(false);
   });
 
   it("is not read by path from any shipped module", () => {

@@ -316,6 +316,7 @@ describe("renderStackMatrix", () => {
             },
           },
           toolchain: {},
+          reportDefault: { path: null, why: "nothing observed", source: "a:1" },
           notes: [],
           raw: {},
         },

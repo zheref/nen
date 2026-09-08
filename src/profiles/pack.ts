@@ -635,6 +635,30 @@ export interface PackMinimum {
   readonly source: string;
 }
 
+/**
+ * Where this stack's tooling conventionally writes a machine-readable coverage
+ * report -- ADVISORY, and never a path nen opens on its own say-so.
+ *
+ * `nen shu coverage` parses the report a DECLARATION names, under the coverage
+ * verb's `artifacts`. This entry exists for the refusal a repository gets when
+ * it names none: naming the conventional location beats "declare something",
+ * and a reader can check the path against their own tree in one glance. The
+ * seam-side half of that verb never sees this value -- ../shu/coverage-defaults
+ * .ts reads it and hands it across as a STRING that lands in a message.
+ *
+ * `path` IS NULLABLE, AND FOR MOST STACKS IT IS NULL. Four of the seven have no
+ * conventional location at all: two have no tests to instrument, one has no
+ * coverage plugin declared, and one prints its report to STDOUT rather than to
+ * a file. `why` carries that sentence, and a null with a reason is worth more
+ * than a plausible path nobody measured -- which is the same rule `minimum`
+ * above follows.
+ */
+export interface ReportDefault {
+  readonly path: string | null;
+  readonly why: string;
+  readonly source: string;
+}
+
 export interface StackProfile {
   readonly id: string;
   readonly displayName: string;
@@ -654,6 +678,8 @@ export interface StackProfile {
   readonly scaffoldNote: string;
   readonly verbs: Readonly<Record<string, ProfileVerb>>;
   readonly toolchain: Readonly<Record<string, PackMinimum>>;
+  /** The advisory coverage-report location. Never a path nen opens by itself. */
+  readonly reportDefault: ReportDefault;
   readonly notes: readonly string[];
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
@@ -1137,6 +1163,33 @@ function parseToolchain(path: string, value: unknown): Record<string, PackMinimu
   return toolchain;
 }
 
+/**
+ * The advisory coverage-report location, or the absence stated as one.
+ *
+ * ABSENT IS LEGAL AND IS NOT A PATH. A profile that says nothing here yields a
+ * `null` path with a sentence saying the pack records none -- which is exactly
+ * what the refusal that quotes it should then say. Making the key REQUIRED
+ * would have been the other defensible choice and was rejected for one reason:
+ * it turns "this stack has no conventional location" into a thing an author
+ * discovers by failing the loader, and the honest answer is already writable
+ * here as `"path": null` with the reason beside it.
+ */
+function parseReportDefault(path: string, value: unknown): ReportDefault {
+  if (value === undefined || value === null) {
+    return {
+      path: null,
+      why: `${PACK_DIRECTORY}/ records no conventional coverage-report location for this stack.`,
+      source: "not recorded",
+    };
+  }
+  const raw = requireRecord(path, "reportDefault", value);
+  return {
+    path: optionalString(path, "reportDefault.path", raw["path"]),
+    why: requireString(path, "reportDefault.why", raw["why"]),
+    source: requireString(path, "reportDefault.source", raw["source"]),
+  };
+}
+
 function parseNotes(path: string, value: unknown): readonly string[] {
   if (value === undefined || value === null) return [];
   const entries = requireArray(path, "notes", value);
@@ -1215,6 +1268,7 @@ export function parseProfile(
     scaffoldNote: requireString(path, "scaffoldNote", raw["scaffoldNote"]),
     verbs,
     toolchain: parseToolchain(path, raw["toolchain"]),
+    reportDefault: parseReportDefault(path, raw["reportDefault"]),
     notes: parseNotes(path, raw["notes"]),
     raw,
   };
