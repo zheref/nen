@@ -254,6 +254,13 @@ flags:
                    installer is reported as work for a human, with the pin.
                    What it installed is RE-PROBED afterwards: an installer that
                    exited 0 has not said the tool is on this PATH.
+                   ON win32 THE ENABLED INSTALLER IS REFUSED, with the exact
+                   commands to run by hand: there it is a batch shim, and this
+                   binary's one subprocess seam never uses a shell -- a runtime
+                   that refuses to start a batch file without one fails, and a
+                   runtime that starts it anyway starts it through the command
+                   interpreter, which re-parses the argv nen assembled. nen will
+                   not guess which; the CHECK is unaffected on every host.
   --json           On every verb that executes one, the report as one object,
                    keys in order:
                    { contract, lane, stack, verb, steps, cwd, env, host,
@@ -533,7 +540,14 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
       ? repoRoot
       : insideRepo(repoRoot, declaredLane.cwd, `project.lanes.${lane}.cwd`);
 
-  const plans = narrowTo(buildPlans(opened.contract, opened.project, cwd), options.only);
+  const plans = narrowTo(
+    // THE HOST IS AN ARGUMENT, from the seam, exactly as the allowlist check
+    // above takes it: one installer's plan depends on the platform, and a plan
+    // read out of `process.platform` could only ever be proved on the platform
+    // the suite runs on.
+    buildPlans(opened.contract, opened.project, cwd, context.seams.platform),
+    options.only,
+  );
   const mode: ToolsMode = options.dryRun ? "dry-run" : options.install ? "install" : "check";
 
   if (plans.length === 0) {

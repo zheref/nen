@@ -56,7 +56,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Installer, ToolchainEntry } from "../schema/contract.js";
-import type { RenderedStep } from "./render.js";
+import { renderArgv, type RenderedStep } from "./render.js";
 import { parsePin } from "./toolchain.js";
 
 /**
@@ -79,6 +79,39 @@ export const ENABLED_INSTALLERS: readonly Installer[] = ["corepack"];
 
 /** The package-manager activator that ships with the runtime it manages. */
 const COREPACK = "corepack";
+
+/**
+ * The host this release will not run the enabled installer on, and the whole
+ * argument for refusing rather than shipping a name that might work.
+ *
+ * ON WINDOWS THE ACTIVATOR IS A BATCH SHIM (`<name>.cmd`), not an executable
+ * image, and every other binary this CLI spawns is a real one. Whether a shim
+ * can be STARTED through this binary's one subprocess seam is not nen's
+ * choice, and it is not stable either:
+ *
+ *   * node refuses it. Since the fix for CVE-2024-27980, `spawnSync` on Windows
+ *     rejects a `.bat`/`.cmd` target unless `shell` is set -- and this family's
+ *     first rule is that there is no shell, anywhere, ever.
+ *   * a runtime that DOES start one starts it THROUGH the command interpreter,
+ *     because Windows cannot execute a batch file any other way. That is a
+ *     shell by another name: it re-parses the argument list nen assembled
+ *     element by element, which is exactly the re-parse the CVE above was
+ *     filed about, and it is the property this whole family is built to keep.
+ *
+ * So both answers are wrong for this verb -- one fails, the other quietly
+ * becomes the thing nen promised not to do -- and the difference between them
+ * depends on the runtime and its version rather than on anything in this
+ * repository. NEN REFUSES, NAMING THE TWO COMMANDS TO RUN BY HAND. That is
+ * fail-closed in this family's own direction: an install that "works on POSIX
+ * and is untested on Windows" is a claim nobody checked, and the CHECK -- which
+ * spawns only the declared probe -- is unaffected on every host.
+ *
+ * THE WAY THIS ROW OPENS is a Windows smoke test that starts the real shim on
+ * the CI lane that already runs this suite on `windows-latest`, opt-in and
+ * out of scope here (zheref/nen#91's item (f)). Until something has actually
+ * started it, refusing is the only honest plan.
+ */
+const REFUSED_INSTALL_HOST: NodeJS.Platform = "win32";
 
 /** The lane manifest whose pin the one enabled installer must agree with. */
 const MANIFEST_FILE = "package.json";
@@ -148,13 +181,23 @@ function corepackSteps(tool: string, version: string): readonly RenderedStep[] {
   ];
 }
 
-function corepackPlan(entry: ToolchainEntry, manifest: ManifestPin | null): InstallPlan {
-  let pin;
-  try {
-    pin = parsePin(entry.version, `project.toolchain.${entry.tool}.version`);
-  } catch (error) {
-    return { kind: "refused", why: error instanceof Error ? error.message : String(error) };
-  }
+function corepackPlan(
+  entry: ToolchainEntry,
+  manifest: ManifestPin | null,
+  host: NodeJS.Platform,
+): InstallPlan {
+  // NO try/catch. `parsePin` throws only for a form nen cannot evaluate, and
+  // ./tools.ts's `buildPlans` parses THIS pointer, for this entry, before it
+  // calls here -- so the throw lands there, as the exit-2 refusal naming the
+  // pointer and both supported forms, and a `refused` value built out of that
+  // same message here would be a second spelling of one rule. A caller
+  // reaching this function directly with an unevaluable pin gets that identical
+  // refusal, which is the right answer rather than a special case.
+  const pin = parsePin(entry.version, `project.toolchain.${entry.tool}.version`);
+  // THE DECLARATION'S OWN FAULTS COME FIRST, and the host's second. A range pin
+  // and a contradicted manifest are true on every machine and must be fixed
+  // once; hearing about the host first would send a Windows reader to a
+  // different computer to be told their declaration is still unusable.
   if (pin.kind !== "exact") {
     return {
       kind: "refused",
@@ -167,22 +210,49 @@ function corepackPlan(entry: ToolchainEntry, manifest: ManifestPin | null): Inst
       why: `project.toolchain.${entry.tool}.version pins '${pin.version}', and this lane's ${MANIFEST_FILE} states '${MANIFEST_FIELD}: "${manifest.raw}"'. The two disagree, and nen installs neither: activating one would leave this repository running a version its own manifest contradicts, and choosing between them is a decision the repository has not made. Make them agree, then run this again.`,
     };
   }
-  return { kind: "runnable", steps: corepackSteps(entry.tool, pin.version) };
+  const steps = corepackSteps(entry.tool, pin.version);
+  if (host === REFUSED_INSTALL_HOST) {
+    return {
+      kind: "refused",
+      why: `on ${REFUSED_INSTALL_HOST} this installer is a batch shim ('${COREPACK}.cmd'), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a batch file without one fails here; a runtime that starts it anyway starts it THROUGH the command interpreter, which re-parses the argument list nen assembled element by element -- a shell by another name, and the thing this family promises not to do. nen will not guess which of the two this host does, so it installs nothing on ${REFUSED_INSTALL_HOST} in this release. Run it by hand -- ${steps.map(renderArgv).join(" && ")} -- or run this verb without --install: the CHECK spawns only the probe this repository declared and works on every host.`,
+    };
+  }
+  return { kind: "runnable", steps };
 }
 
 /**
- * What `--install` would do for one entry, from the entry and nothing else.
+ * What `--install` would do for one entry, from the entry, the lane's manifest
+ * and the host -- and from nothing else.
  *
  * THE SWITCH IS EXHAUSTIVE OVER ../schema/contract.ts's CLOSED SET, by type, so
  * a new installer id added to the contract fails to compile here rather than
  * falling through to a default that quietly does nothing. That is the whole
  * reason the set is closed: a declaration naming an installer nen has forgotten
  * about must be a build failure in nen, not a silent skip on somebody's host.
+ *
+ * `host` IS `Seams.platform`'S VALUE, PASSED AS A STRING, never read from
+ * `process.platform`. Every host decision in this CLI is injected for the same
+ * reason (the subprocess seam's own header states it): a refusal that could
+ * only be proved on the platform the suite happens to run on is a refusal
+ * proved on one of three CI lanes, which is the same as not proved -- and this
+ * one is about `win32`, which is the lane nobody develops on. It arrives as an
+ * argument rather than
+ * through a seam because this module builds commands and runs none -- importing
+ * the seam here is what ./purity.test.ts forbids, by name.
+ *
+ * IT STILL TAKES A DECLARATION AND NOTHING FROM THE CATALOGUE. `manifest` is the
+ * lane's own `package.json` and `host` is this machine; neither is the profiles
+ * pack, so decision (d2) -- an install argv is built from the DECLARATION's own
+ * pin and from nothing else -- is untouched by either.
  */
-export function resolveInstall(entry: ToolchainEntry, manifest: ManifestPin | null): InstallPlan {
+export function resolveInstall(
+  entry: ToolchainEntry,
+  manifest: ManifestPin | null,
+  host: NodeJS.Platform,
+): InstallPlan {
   switch (entry.installer) {
     case "corepack":
-      return corepackPlan(entry, manifest);
+      return corepackPlan(entry, manifest, host);
     case "wrapper":
       return {
         kind: "nothing-to-install",

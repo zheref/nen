@@ -1156,6 +1156,89 @@ describe("the refusals", () => {
   });
 });
 
+// ── (i2) the install plan, per host ────────────────────────────────────────
+
+describe("the install plan is decided against the HOST, and the host is injected", () => {
+  const PNPM = {
+    tool: "pnpm",
+    version: "9.15.9",
+    probe: ["pnpm", "--version"],
+    versionFrom: "first-semver-on-stdout",
+    installer: "corepack",
+    why: null,
+    raw: {},
+  } as const;
+
+  /** The golden argv, per host. One table, so a change to either is visible. */
+  const GOLDEN: Readonly<Record<string, readonly string[] | null>> = {
+    darwin: ["corepack enable", "corepack prepare pnpm@9.15.9 --activate"],
+    linux: ["corepack enable", "corepack prepare pnpm@9.15.9 --activate"],
+    // `null` means: no plan at all on this host.
+    win32: null,
+  };
+
+  for (const [host, expected] of Object.entries(GOLDEN)) {
+    it(`renders ${expected === null ? "no runnable plan" : "the two steps"} on ${host}`, () => {
+      const plan = resolveInstall(PNPM, null, host as NodeJS.Platform);
+      if (expected === null) {
+        expect(plan.kind).toBe("refused");
+        // ACTIONABLE, NOT MERELY REFUSED: the exact commands to run by hand.
+        if (plan.kind !== "refused") return;
+        expect(plan.why).toContain("corepack enable && corepack prepare pnpm@9.15.9 --activate");
+        expect(plan.why).toContain("never uses a shell");
+        expect(plan.why).toContain("without --install");
+        return;
+      }
+      expect(plan.kind).toBe("runnable");
+      if (plan.kind !== "runnable") return;
+      expect(plan.steps.map((step): string => [step.exe, ...step.argv].join(" "))).toEqual(expected);
+    });
+  }
+
+  it("refuses --install on win32 before anything is installed, and says how to do it", async () => {
+    const result = await capture(["--install", "--only", "pnpm"], {
+      platform: "win32",
+      script: [{ match: "pnpm --version", result: { spawnFailed: true, code: -1 } }],
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/nothing was installed/);
+    expect(result.err.join("\n")).toMatch(/corepack enable && corepack prepare pnpm@9\.15\.9/);
+    // The probe ran (assessment precedes the install); no installer did.
+    expect(spawned(result.seams)).toEqual(["pnpm --version"]);
+  });
+
+  it("still CHECKS on win32, and prints the refusal as that row's way out", async () => {
+    const result = await capture(["--only", "pnpm"], {
+      platform: "win32",
+      script: [{ match: "pnpm --version", result: { spawnFailed: true, code: -1 } }],
+    });
+    // A missing tool is still exit 5 on Windows: only the INSTALL is refused.
+    expect(result.code).toBe(5);
+    expect(result.out.join("\n")).toMatch(/corepack: REFUSED --/);
+    expect(result.err.join("\n")).toMatch(/None of them has an installer nen runs/);
+  });
+
+  it("does not offer the commands as installable in a win32 dry run", async () => {
+    const dry = await capture(["--dry-run", "--only", "pnpm", "--json"], { platform: "win32" });
+    expect(dry.code).toBe(0);
+    expect(dry.seams.calls).toEqual([]);
+    expect(row(dry, "pnpm").installCommand).toBeNull();
+  });
+
+  it("keeps every other installer's plan host-independent", () => {
+    // Only the ENABLED installer has a host to disagree about; the rest answer
+    // the same everywhere, and a host-conditional refusal must not leak into a
+    // row that was never going to run anything.
+    for (const installer of INSTALLERS.filter((id): boolean => !ENABLED_INSTALLERS.includes(id))) {
+      const entry = { ...PNPM, tool: "placeholder-tool", installer };
+      const plans = (["darwin", "linux", "win32"] as const).map((host): string =>
+        JSON.stringify(resolveInstall(entry, null, host)),
+      );
+      expect(new Set(plans).size, installer).toBe(1);
+    }
+  });
+});
+
 describe("the no-elevation sweep", () => {
   // ../../ THE `taxonomy-purity.test.ts` PATTERN, APPLIED TO A DIFFERENT
   // INVARIANT. Every install command this release can render, for every
@@ -1177,6 +1260,7 @@ describe("the no-elevation sweep", () => {
           raw: {},
         },
         null,
+        "linux",
       );
       if (plan.kind === "runnable") {
         for (const step of plan.steps) rendered.push([step.exe, ...step.argv].join(" "));
@@ -1214,6 +1298,7 @@ describe("the no-elevation sweep", () => {
           raw: {},
         },
         null,
+        "linux",
       );
       expect(plan.kind === "runnable", installer).toBe(ENABLED_INSTALLERS.includes(installer));
     }

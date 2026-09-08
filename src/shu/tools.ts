@@ -197,6 +197,7 @@ export function buildPlans(
   contract: RepositoryContract,
   project: ProjectBlock,
   laneDirectory: string,
+  host: NodeJS.Platform,
 ): readonly ToolPlan[] {
   const plans: ToolPlan[] = [];
   const dependency = contract.dependency;
@@ -241,7 +242,7 @@ export function buildPlans(
       installer: entry.installer,
       pinned: renderPin(pin),
       satisfiedBy: (found): boolean => satisfiesPin(pin, found),
-      install: resolveInstall(entry, manifest),
+      install: resolveInstall(entry, manifest, host),
       why: entry.why,
     });
   }
