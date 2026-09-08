@@ -493,8 +493,20 @@ function rowInstallOf(assessed: AssessedTool, mode: ToolsMode): RowInstall | nul
   };
 }
 
-/** The report's own arithmetic: every count derived from the rows above it. */
-function summarise(rows: readonly ToolRow[]): ToolsSummary {
+/**
+ * The report's own arithmetic: every count derived from the STRUCTURED data
+ * behind the rows, never from a rendered string.
+ *
+ * `refused` READS `plan.install.kind`, NOT `row.remedy`. `remedy` is prose, and
+ * prose is null on a row that already passes (`remedyOf`'s `needsAWayOut`
+ * gate) -- so a row whose plan is refused AND whose host already satisfies the
+ * pin would silently drop out of this count if it were parsed from `remedy`'s
+ * text instead of asked of the plan directly. The comment on `ToolsSummary`
+ * above is the actual rule: refused counts over every row, satisfied ones
+ * included, because a refused plan is a finding about the DECLARATION and does
+ * not stop being one because the host happens to be fine today.
+ */
+function summarise(rows: readonly ToolRow[], assessed: readonly AssessedTool[]): ToolsSummary {
   const counted = (state: ToolState): number =>
     rows.filter((row): boolean => row.state === state).length;
   return {
@@ -507,7 +519,7 @@ function summarise(rows: readonly ToolRow[]): ToolsSummary {
     // COUNTED OVER EVERY ROW, satisfied ones included: a pin this release will
     // not act on is a finding about the declaration, and it does not stop being
     // one because the host happens to satisfy it today.
-    refused: rows.filter((row): boolean => row.remedy?.includes(": REFUSED -- ") === true).length,
+    refused: assessed.filter((entry): boolean => entry.plan.install.kind === "refused").length,
     notInstallable: rows.filter(
       (row): boolean => row.satisfied !== true && row.installCommand === null,
     ).length,
@@ -544,7 +556,7 @@ export function assembleToolsReport(
     lane,
     stack,
     mode,
-    summary: summarise(tools),
+    summary: summarise(tools, assessed),
     tools,
     exitCode,
   };

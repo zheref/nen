@@ -1115,6 +1115,38 @@ describe("--json -- one object, in one key order", () => {
     expect(summary).toMatchObject({ checked: 6, missing: 1, satisfied: 5, installed: 0 });
   });
 
+  it("counts a refused plan even when the host already satisfies the pin", async () => {
+    // THE PLAN CAN BE REFUSED WHILE THE ROW PASSES: a manifest that disagrees
+    // with the declaration's pin refuses the corepack plan regardless of what
+    // the host reports, and here the host happens to already be at the exact
+    // version the declaration pins. `summary.refused` has to count this row
+    // anyway -- it is a finding about the DECLARATION, not about the host --
+    // and the row itself has no way out to print, because there is nothing for
+    // this run to fix: `remedy` is null and `satisfied` is true. A version of
+    // `summarise` that derives `refused` from `row.remedy`'s rendered text
+    // (rather than from `plan.install.kind`) misses this row entirely, because
+    // `remedyOf` prints nothing for a row that already passes.
+    const result = await withDeclaration(
+      oneTool({
+        $name: "pnpm",
+        version: "9.15.9",
+        probe: ["pnpm", "--version"],
+        versionFrom: "first-semver-on-stdout",
+        installer: "corepack",
+      }),
+      ["--json"],
+      {
+        manifest: { name: "x", packageManager: "pnpm@10.0.0" },
+        script: [{ match: "pnpm --version", result: { stdout: "9.15.9\n" } }],
+      },
+    );
+    expect(result.code).toBe(0);
+    const parsed = report(result);
+    const pnpmRow = parsed.tools.find((entry): boolean => entry.name === "pnpm");
+    expect(pnpmRow).toMatchObject({ satisfied: true, remedy: null, state: "present-and-matching" });
+    expect(parsed.summary.refused).toBe(1);
+  });
+
   it("keeps stdout exactly one document", async () => {
     const result = await capture(["--json"], { script: ALL_PRESENT });
     expect(() => JSON.parse(result.out.join("\n"))).not.toThrow();
