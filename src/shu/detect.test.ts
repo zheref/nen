@@ -26,12 +26,14 @@ import {
   readAppleContainer,
   detect as detectOn,
   hostToolPrograms,
+  hostToolStacks,
   listDirectory,
   MARKER_STACKS,
   markerSpellings,
   matchesPattern,
   MAX_DEPTH,
   PACK_MATCHED_STACKS,
+  readStack,
   renderDetect,
   REFINEMENT_DEPTH,
   APPLE_TOKENS,
@@ -3254,6 +3256,59 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
       const seat = reasonOf(lane?.verbs, "ui-test");
       expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
       expect(seat).toContain("declares catalogues of its own");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── a plugin rule that resolves no catalogue at all (PR #134's Copilot
+  //    thread on #128) ──────────────────────────────────────────────────────
+  //
+  // `ProfilePluginRule.catalogue` IS `string | null` -- ../profiles/pack.ts
+  // lets a plugin rule state no catalogue at all -- but no SHIPPED profile
+  // currently does, so this reaches the path through a clone of the real
+  // gradle-android pack with just that one field forced null, read through the
+  // same `readStack` the real `test` and `ui-test` rows go through. Mutating a
+  // copy of the real pack rather than typing a rule by hand keeps every other
+  // field (why the gate exists, what to write instead) the real one, so this
+  // proves the SENTENCE changed and nothing about the gate's own shape did.
+  it("says the rule resolves no catalogue, and never interpolates an empty pattern", () => {
+    // THE MUTANT THIS KILLS: `declaredCataloguesReason` used to interpolate
+    // `rule.catalogue` unconditionally. With it null the old sentence read
+    // "REPLACES the  this rule resolves aliases through" -- an empty gap where
+    // the pattern belongs -- and blamed the `versionCatalogs {` block for
+    // replacing a file this rule never had.
+    const pack = loadProfilesPack();
+    const profile = profileById(pack, "gradle-android");
+    const hostStack = hostToolStacks(pack).find((entry): boolean => entry.stack === "gradle-android");
+    const uiTestCheck = profile.crossChecks.find(
+      (entry): boolean => entry.plugin !== null && entry.verbs.includes("ui-test"),
+    );
+    expect(uiTestCheck?.plugin, "the pack still states a plugin rule for 'ui-test'").not.toBeNull();
+    const withNoCatalogue: StackProfile = {
+      ...profile,
+      crossChecks: profile.crossChecks.map((entry): typeof entry =>
+        entry === uiTestCheck && entry.plugin !== null
+          ? { ...entry, plugin: { ...entry.plugin, catalogue: null } }
+          : entry,
+      ),
+    };
+    const dir = laneWith(`plugins {\n    ${JVM}\n    alias(libs.plugins.paparazzi)\n}\n`);
+    try {
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'rootProject.name = "placeholder"\ninclude(":app")\ninclude(":PlaceholderCore")\ndependencyResolutionManagement {\n    versionCatalogs {\n        create("libs") { from(files("deps/libs.toml")) }\n    }\n}\n',
+      );
+      const reading = readStack(withNoCatalogue, dir, dir, hostStack);
+      const seat = reading.withheld.get("ui-test") ?? "";
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("declares catalogues of its own with a 'versionCatalogs {' block");
+      expect(seat).toContain("this rule resolves no catalogue at all");
+      // NEITHER OLD DEFECT SURVIVES: no interpolated empty pattern (the
+      // double space "REPLACES the  " it left behind) and no "REPLACES the"
+      // at all -- this rule has no catalogue for anything to replace.
+      expect(seat).not.toMatch(/REPLACES the {2}/);
+      expect(seat).not.toContain("REPLACES the");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

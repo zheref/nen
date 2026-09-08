@@ -721,7 +721,7 @@ interface Refinement {
 }
 
 /** One stack whose lanes are found by a tool the repository ships. */
-interface HostToolStack {
+export interface HostToolStack {
   readonly stack: string;
   /**
    * Every `contains` marker the profile states. ALL must match, which is the
@@ -762,7 +762,7 @@ function profileUses(profile: StackProfile, token: string): boolean {
 }
 
 /** The pack's host-tool stacks, in the pack's own id order. */
-function hostToolStacks(pack: ProfilesPack): readonly HostToolStack[] {
+export function hostToolStacks(pack: ProfilesPack): readonly HostToolStack[] {
   const out: HostToolStack[] = [];
   for (const id of pack.ids) {
     const profile = profileById(pack, id);
@@ -4090,9 +4090,23 @@ function rootReason(file: TreeFile, signals: readonly string[]): string {
   )}, ${signals.length === 1 ? "which" : "any of which"} can apply a plugin to every module without that module's own build file naming it -- so nen cannot tell from the modules alone. nen reads the root for THAT SIGNAL ONLY and never for the plugin's id, because a root plugins block naming a plugin 'apply false' declares a version for the modules and applies it nowhere`;
 }
 
-/** A lane that builds its own catalogues: the alias route cannot be trusted. */
-function declaredCataloguesReason(settings: string, catalogue: string): string {
-  return `${settings} declares catalogues of its own with a 'versionCatalogs {' block, which nen does not follow -- a catalogue created there can carry any name and read any file, including one that REPLACES the ${catalogue} this rule resolves aliases through, so no alias in this lane can be answered from that file alone`;
+/**
+ * A lane that builds its own catalogues: the alias route cannot be trusted.
+ *
+ * `catalogue` IS NULL FOR A RULE THAT READS NO CATALOGUE AT ALL -- ../profiles/pack.ts
+ * lets a plugin rule state one, or state none, and the two are different
+ * findings. Interpolating a pattern that does not exist used to read "REPLACES
+ * the  this rule resolves aliases through" (an empty gap where the pattern
+ * belongs) and blamed the `versionCatalogs {` block for replacing a file the
+ * rule never had -- true of neither the block nor the rule. The null branch
+ * below says the actual reason instead: this rule has no catalogue to read, so
+ * an alias in this lane cannot be resolved through one whatever the settings
+ * file declares.
+ */
+function declaredCataloguesReason(settings: string, catalogue: string | null): string {
+  return catalogue === null
+    ? `${settings} declares catalogues of its own with a 'versionCatalogs {' block, and this rule resolves no catalogue at all -- there is no pattern for that block to replace, so an alias(...) application in this lane cannot be read against one`
+    : `${settings} declares catalogues of its own with a 'versionCatalogs {' block, which nen does not follow -- a catalogue created there can carry any name and read any file, including one that REPLACES the ${catalogue} this rule resolves aliases through, so no alias in this lane can be answered from that file alone`;
 }
 
 /**
@@ -4229,7 +4243,7 @@ function pluginVerdict(
           ? resolveAlias(accessor, catalogues)
           : ({
               kind: "unresolved",
-              why: declaredCataloguesReason(declared, cataloguePattern ?? ""),
+              why: declaredCataloguesReason(declared, cataloguePattern),
             } as const);
       if (found.kind === "unresolved") {
         unresolved.push({ accessor, why: found.why });
@@ -4678,7 +4692,7 @@ interface TokenLayer {
 }
 
 /** What a stack's own files answered, and what they refused to answer. */
-interface StackReading {
+export interface StackReading {
   /** Token -> the value read out of this repository's tree, for every verb. */
   readonly answers: ReadonlyMap<string, string>;
   /** Token -> why this tree could not answer it. Named in the withheld note. */
@@ -4806,7 +4820,7 @@ function findVersionFile(repoRoot: string, laneDirectory: string, file: string):
  * does not resolve. Reporting an ambiguity between two solutions to somebody
  * whose build cannot load either would be the less useful of two true things.
  */
-function readStack(
+export function readStack(
   profile: StackProfile,
   repoRoot: string,
   laneDirectory: string,
