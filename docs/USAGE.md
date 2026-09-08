@@ -3701,8 +3701,12 @@ never elevation; a test sweeps every rendered install plan for `sudo`, `runas`,
 does not name. (5) **Never a version the declaration does not pin** — a range
 pin is refused rather than resolved to "the newest thing that satisfies it", and
 a pin the lane's own `package.json` `packageManager` field contradicts is
-refused rather than silently preferred. Both refusals fire *before* anything is
-installed. (6) Never a URL nen invented. (7) Never edits `PATH`, a shell profile
+refused rather than silently preferred. That cross-check compares **versions,
+not strings** — `9.15` and `9.15.0` agree, `v9.15.9` and `9.15.9` agree, and an
+integrity suffix is split off — and it fires only when both sides state
+something nen can read, because that field belongs to the ecosystem rather than
+to nen. Agreeing is not adopting: the argv still carries the *declaration's*
+spelling. Both refusals fire *before* anything is installed. (6) Never a URL nen invented. (7) Never edits `PATH`, a shell profile
 or an environment — and what it installed is **re-probed** afterwards, because
 an installer that exited 0 has not said the tool is on this `PATH`. (8) Never
 installs a project's dependencies: that is a precondition nen asserts and never

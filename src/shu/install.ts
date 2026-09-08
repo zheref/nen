@@ -57,7 +57,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Installer, ToolchainEntry } from "../schema/contract.js";
 import { renderArgv, type RenderedStep } from "./render.js";
-import { parsePin } from "./toolchain.js";
+import { compareVersions, parsePin, parseVersion } from "./toolchain.js";
 
 /**
  * What `--install` would do for one entry.
@@ -169,6 +169,30 @@ export function readManifestPin(directory: string): ManifestPin | null {
   return { name: declared.slice(0, at), version, raw: declared };
 }
 
+/**
+ * Whether the lane's manifest and the declaration's pin name DIFFERENT
+ * versions -- compared as versions, never as strings.
+ *
+ * A STRING COMPARE MADE TWO AGREEING SIDES DISAGREE. `9.15` beside a manifest's
+ * `9.15.0`, or `v9.15.9` beside `9.15.9`, are the same version under this
+ * family's own arithmetic (missing components are zero; a leading `v` is
+ * dropped) -- `satisfiesPin` says so on the row right above -- and yet the
+ * cross-check refused the install, telling a repository its own manifest
+ * contradicted a pin it agrees with. One comparison, in one place, so the
+ * courtesy cannot contradict the verdict.
+ *
+ * A MANIFEST VERSION THAT IS NOT A VERSION IS NOT A DISAGREEMENT. This field
+ * belongs to the ecosystem rather than to nen, and the cross-check fires only
+ * when BOTH sides state something comparable -- the same rule `readManifestPin`
+ * follows when it answers `null` to everything it cannot read.
+ */
+function disagrees(manifest: ManifestPin, pinned: string): boolean {
+  const stated = parseVersion(manifest.version);
+  const wanted = parseVersion(pinned);
+  if (stated === null || wanted === null) return false;
+  return compareVersions(stated, wanted) !== 0;
+}
+
 /** The one command pair the enabled installer runs, in order. */
 function corepackSteps(tool: string, version: string): readonly RenderedStep[] {
   return [
@@ -204,7 +228,7 @@ function corepackPlan(
       why: `project.toolchain.${entry.tool}.version pins the range '${entry.version}', and this installer activates ONE exact version. nen will not resolve a range to "the newest thing that satisfies it" -- that is an unpinned install wearing a pin's clothes. State the exact version this repository runs, or set the installer to 'verify-only' so nen reports and never acts.`,
     };
   }
-  if (manifest !== null && manifest.name === entry.tool && manifest.version !== pin.version) {
+  if (manifest !== null && manifest.name === entry.tool && disagrees(manifest, pin.version)) {
     return {
       kind: "refused",
       why: `project.toolchain.${entry.tool}.version pins '${pin.version}', and this lane's ${MANIFEST_FILE} states '${MANIFEST_FIELD}: "${manifest.raw}"'. The two disagree, and nen installs neither: activating one would leave this repository running a version its own manifest contradicts, and choosing between them is a decision the repository has not made. Make them agree, then run this again.`,

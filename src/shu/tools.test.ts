@@ -827,6 +827,70 @@ describe("--install -- the one installer nen runs, at the version the declaratio
     expect(spawned(result.seams)).toEqual(["pnpm --version"]);
   });
 
+  it("compares the manifest pin as a VERSION, so two agreeing spellings agree", async () => {
+    // A STRING COMPARE MADE AGREEING SIDES DISAGREE. `9.15` beside a manifest's
+    // `9.15.0` is the same version under this family's own arithmetic --
+    // `satisfiesPin` says so on the row above -- and yet the cross-check
+    // refused, telling a repository its manifest contradicted a pin it agrees
+    // with. Both spellings, both directions.
+    for (const [pin, manifest] of [
+      ["9.15", "pnpm@9.15.0"],
+      ["9.15.0", "pnpm@9.15"],
+      ["9.15.9", "pnpm@v9.15.9"],
+      ["9.15.9", "pnpm@9.15.9+sha512.abc"],
+    ] as const) {
+      const result = await withDeclaration(
+        oneTool({
+          $name: "pnpm",
+          version: pin,
+          probe: ["pnpm", "--version"],
+          versionFrom: "first-semver-on-stdout",
+          installer: "corepack",
+        }),
+        ["--install", "--only", "pnpm"],
+        {
+          manifest: { name: "x", packageManager: manifest },
+          script: [
+            { match: "pnpm --version", result: { spawnFailed: true, code: -1 } },
+            { match: "corepack enable", result: { code: 0 } },
+            { match: `corepack prepare pnpm@${pin} --activate`, result: { code: 0 } },
+          ],
+        },
+      );
+      expect(result.err.join("\n"), `${pin} vs ${manifest}`).not.toMatch(/The two disagree/);
+      // AND THE ARGV CARRIES THE DECLARATION'S SPELLING, not the manifest's:
+      // agreeing is not the same as adopting.
+      expect(spawned(result.seams), `${pin} vs ${manifest}`).toContain(
+        `corepack prepare pnpm@${pin} --activate`,
+      );
+    }
+  });
+
+  it("does not call a manifest version it cannot read a disagreement", async () => {
+    // The field belongs to the ecosystem, not to nen: the courtesy fires when
+    // BOTH sides state something comparable, and stays quiet otherwise.
+    const result = await withDeclaration(
+      oneTool({
+        $name: "pnpm",
+        version: "9.15.9",
+        probe: ["pnpm", "--version"],
+        versionFrom: "first-semver-on-stdout",
+        installer: "corepack",
+      }),
+      ["--install", "--only", "pnpm"],
+      {
+        manifest: { name: "x", packageManager: "pnpm@catalog:default" },
+        script: [
+          { match: "pnpm --version", result: { spawnFailed: true, code: -1 } },
+          { match: "corepack enable", result: { code: 0 } },
+          { match: "corepack prepare pnpm@9.15.9 --activate", result: { code: 0 } },
+        ],
+      },
+    );
+    expect(result.err.join("\n")).not.toMatch(/The two disagree/);
+    expect(spawned(result.seams)).toContain("corepack prepare pnpm@9.15.9 --activate");
+  });
+
   it("accepts an agreeing manifest pin, integrity suffix and all", () => {
     // The fixture's own manifest agrees, which is the case the end-to-end
     // install test above rides on. This pins the SPLIT that makes it agree.
