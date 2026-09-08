@@ -76,6 +76,7 @@ import {
 import {
   optionalString,
   requireArray,
+  requireBoolean,
   requireRecord,
   requireString,
   SchemaError,
@@ -1115,7 +1116,19 @@ function parseToolchain(path: string, value: unknown): Record<string, PackMinimu
       ),
       versionFrom: requireEnum(path, `${pointer}.versionFrom`, raw["versionFrom"], VERSION_FROM),
       installer: requireEnum(path, `${pointer}.installer`, raw["installer"], INSTALLERS),
-      hostTool: raw["hostTool"] === true,
+      // A FIELD THAT DECIDES WHAT NEN WILL PROPOSE IS HELD TO ITS TYPE, and
+      // `=== true` was not holding it to anything: `"true"`, `1` and `"yes"`
+      // all loaded as FALSE, which re-arms the executable check and silently
+      // withholds every command row of the stack that wrote them. A pack this
+      // file cannot read is a pack it refuses, the way every other field here
+      // is refused -- silence is the one outcome a catalogue must not have.
+      // ABSENT IS THE DEFAULT AND NULL IS NOT: `undefined` means the profile
+      // did not state it, which is the false this field documents; `null` is a
+      // statement, and a statement that is not a boolean is a refusal.
+      hostTool:
+        raw["hostTool"] === undefined
+          ? false
+          : requireBoolean(path, `${pointer}.hostTool`, raw["hostTool"]),
       versionFile: parseVersionFile(path, `${pointer}.versionFile`, raw["versionFile"]),
       why: requireString(path, `${pointer}.why`, raw["why"]),
       source: requireString(path, `${pointer}.source`, raw["source"]),
@@ -1149,6 +1162,41 @@ export function parseProfile(
       `is '${id}', but this document was read as '${expectedId}'. The id and the filename are the same fact spelled twice; ${PACK_DIRECTORY}/${PACK_INDEX_FILE} addresses the profile by id and the bundler addresses it by file`,
     );
   }
+  const crossChecks = parseCrossChecks(path, raw["crossChecks"], expectedVerbs);
+  const verbs = parseVerbs(path, raw["verbs"], expectedVerbs);
+  // A TOKEN A CROSS-CHECK ANSWERS MUST BE ONE THIS PROFILE'S OWN ROWS CARRY,
+  // and the check was asymmetric until this line: an `answers` naming a token
+  // from the global closed set loaded clean even when no row in this document
+  // spelled it, so `"answers": "{scheme}"` on a stack with no `{scheme}`
+  // anywhere was a rule that could never fire and that nothing would ever
+  // report. The verbs themselves are already held to this stack's own matrix a
+  // few lines up; a token is the same kind of fact and gets the same treatment.
+  for (const check of crossChecks) {
+    const token = check.answers;
+    if (token === null) continue;
+    const carried = check.verbs.filter((verb): boolean => {
+      const cell = verbs[verb];
+      if (cell === undefined) return false;
+      if (cell.kind !== "command" && cell.kind !== "steps") return false;
+      const invocation = cell.invocation;
+      const steps =
+        invocation.kind === "command"
+          ? [{ exe: invocation.exe, argv: invocation.argv }]
+          : invocation.kind === "steps"
+            ? invocation.steps
+            : [];
+      return steps.some((step): boolean =>
+        [step.exe, ...step.argv].some((word): boolean => word.includes(token)),
+      );
+    });
+    if (carried.length === 0) {
+      throw new SchemaError(
+        path,
+        `crossChecks.answers`,
+        `answers '${token}', which no row it gates carries: [${check.verbs.join(", ")}] name it nowhere in this document. A rule answering a token its own rows never spell is a rule that can never fire, and nothing downstream would ever report it -- state the token the row actually carries, or drop the field`,
+      );
+    }
+  }
   return {
     id,
     displayName: requireString(path, "displayName", raw["displayName"]),
@@ -1158,14 +1206,14 @@ export function parseProfile(
       "declares no marker. A profile with no marker is a stack nothing can ever be detected as; state at least one filename pattern",
       raw["markers"],
     ),
-    crossChecks: parseCrossChecks(path, raw["crossChecks"], expectedVerbs),
+    crossChecks,
     answers: parseAnswers(path, raw["answers"]),
     references: parseReferences(path, raw["references"]),
     hosts: parsePackHosts(path, raw["hosts"]),
     hostNote: requireString(path, "hostNote", raw["hostNote"]),
     scaffoldTemplate: optionalString(path, "scaffoldTemplate", raw["scaffoldTemplate"]),
     scaffoldNote: requireString(path, "scaffoldNote", raw["scaffoldNote"]),
-    verbs: parseVerbs(path, raw["verbs"], expectedVerbs),
+    verbs,
     toolchain: parseToolchain(path, raw["toolchain"]),
     notes: parseNotes(path, raw["notes"]),
     raw,

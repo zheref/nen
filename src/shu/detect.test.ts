@@ -3981,6 +3981,213 @@ describe("nen shu detect -- what the dotnet-winui lane refuses to answer", () =>
     );
   });
 
+  // ── a reference nen cannot resolve is UNANSWERABLE ────────────────────────
+  //
+  // NOT ABSENT, AND NOT PRESENT. Each of these was resolved as a LITERAL path,
+  // written into the declaration as a `path` precondition, and proposed with a
+  // command beside it -- a row that exits 2 forever on a tree that builds.
+
+  const UNRESOLVABLE: readonly { readonly label: string; readonly value: string }[] = [
+    { label: "an MSBuild property", value: "$(SolutionDir)Core\\Core.csproj" },
+    { label: "item metadata", value: "%(Filename).csproj" },
+    { label: "a wildcard", value: "Libs\\**\\*.csproj" },
+    { label: "a single-character wildcard", value: "Core?\\Core.csproj" },
+    { label: "a ';'-separated list", value: "A\\A.csproj;B\\B.csproj" },
+    { label: "an XML entity", value: "Caf&#233;\\Cafe.csproj" },
+  ];
+
+  for (const { label, value } of UNRESOLVABLE) {
+    it(`withholds every row for ${label}, quotes it verbatim, and proposes NO precondition`, () => {
+      const dir = winuiTree({
+        "App.csproj":
+          "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup>" +
+          `<ItemGroup><ProjectReference Include="${value}" /></ItemGroup></Project>\n`,
+      });
+      try {
+        const report = detect(dir);
+        const lane = report.lanes[0];
+        expect(commandRows(lane?.verbs)).toEqual([]);
+        const notes = lane?.notes.join("\n") ?? "";
+        // VERBATIM, because a maintainer greps for the line they wrote.
+        expect(notes).toContain(value);
+        expect(
+          (report.proposal as unknown as { project: Record<string, unknown> }).project,
+          "an assertion nen cannot evaluate is worse than none",
+        ).not.toHaveProperty("preconditions");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("proposes NO precondition for a reference that resolves inside the tree and is NOT THERE", () => {
+    const dir = winuiTree({
+      "App.csproj":
+        "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup>" +
+        '<ItemGroup><ProjectReference Include="Core\\Core.csproj" /></ItemGroup></Project>\n',
+    });
+    try {
+      const report = detect(dir);
+      const lane = report.lanes[0];
+      // The row is still proposed: the reference resolves, stays inside the
+      // tree, and is a fact about the repository's build rather than about
+      // nen's ability to address it.
+      expect(commandRows(lane?.verbs)).toEqual(["build"]);
+      expect(
+        (report.proposal as unknown as { project: Record<string, unknown> }).project,
+        "a precondition naming a file that is not there fails every verb forever",
+      ).not.toHaveProperty("preconditions");
+      expect(lane?.notes.join("\n")).toContain("names a file that is NOT in the tree");
+      expect(lane?.notes.join("\n")).toContain("Core/Core.csproj");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds, naming BOTH spellings, when a reference differs from disk only in case", () => {
+    withTree(
+      {
+        "App.csproj":
+          "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup>" +
+          '<ItemGroup><ProjectReference Include="core\\core.csproj" /></ItemGroup></Project>\n',
+        "Core/Core.csproj": "<Project></Project>\n",
+      },
+      (notes, verbs): void => {
+        expect(verbs).toEqual([]);
+        expect(notes).toContain("core/core.csproj");
+        expect(notes).toContain("this tree spells that file Core/Core.csproj");
+        expect(notes).toContain("A case-insensitive host builds it and a case-sensitive one does not");
+      },
+    );
+  });
+
+  it("names EVERY blocking reference, in byte order, not the first the walk reached", () => {
+    withTree(
+      {
+        "App.csproj":
+          "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup><ItemGroup>" +
+          '<ProjectReference Include="Zed\\Zed.csproj" />' +
+          '<ProjectReference Include="Alpha\\Alpha.csproj" />' +
+          "</ItemGroup></Project>\n",
+        "Zed/Zed.csproj":
+          '<Project><ItemGroup><ProjectReference Include="C:\\zed\\Zed.csproj" /></ItemGroup></Project>\n',
+        "Alpha/Alpha.csproj":
+          '<Project><ItemGroup><ProjectReference Include="$(Other)\\Alpha.csproj" /></ItemGroup></Project>\n',
+      },
+      (notes, verbs): void => {
+        expect(verbs).toEqual([]);
+        expect(notes).toContain("2 references in this lane's project graph");
+        const withheld =
+          notes.split("\n").find((note): boolean => note.startsWith("'build' withheld:")) ?? "";
+        // BYTE ORDER: `Alpha/Alpha.csproj states ...` before `Zed/Zed.csproj
+        // states ...`, whatever order the walk reached them in.
+        expect(withheld.indexOf("Alpha/Alpha.csproj states")).toBeGreaterThan(-1);
+        expect(withheld.indexOf("Alpha/Alpha.csproj states")).toBeLessThan(
+          withheld.indexOf("Zed/Zed.csproj states"),
+        );
+      },
+    );
+  });
+
+  it("credits EVERY referrer of one shared project, in byte order", () => {
+    const dir = winuiTree({
+      "App.csproj":
+        "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup><ItemGroup>" +
+        '<ProjectReference Include="Shared\\Shared.csproj" />' +
+        '<ProjectReference Include="Zed\\Zed.csproj" />' +
+        "</ItemGroup></Project>\n",
+      "Shared/Shared.csproj": "<Project></Project>\n",
+      "Zed/Zed.csproj":
+        '<Project><ItemGroup><ProjectReference Include="..\\Shared\\Shared.csproj" /></ItemGroup></Project>\n',
+    });
+    try {
+      const proposal = detect(dir).proposal as unknown as {
+        project: { preconditions?: Record<string, readonly Record<string, unknown>[]> };
+      };
+      const declared = proposal.project.preconditions?.["dotnet-winui"] ?? [];
+      const shared = declared.find((row): boolean => row["value"] === "Shared/Shared.csproj");
+      // BOTH referrers, sorted -- a reason crediting whichever file the listing
+      // returned first is a sentence that changes when a file is renamed.
+      expect(String(shared?.["why"])).toContain("App.csproj, Zed/Zed.csproj point");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── the graph a build actually resolves ───────────────────────────────────
+
+  it("proposes build for a lane whose ESCAPING project is one nothing points at", () => {
+    withTree(
+      {
+        "App.csproj":
+          "<Project><PropertyGroup><UseWinUI>true</UseWinUI></PropertyGroup></Project>\n",
+        "third_party/Vendor/Vendor.csproj":
+          '<Project><ItemGroup><ProjectReference Include="..\\..\\..\\Outside\\Outside.csproj" /></ItemGroup></Project>\n',
+      },
+      (notes, verbs): void => {
+        // A file in the same tree is not a file in this lane's project graph.
+        expect(verbs).toContain("build");
+        expect(notes).toContain("this lane's answered graph does not reach");
+        expect(notes).toContain("third_party/Vendor/Vendor.csproj");
+      },
+    );
+  });
+
+  // ── the solution answers only when it lists the project ───────────────────
+
+  it("does not let an UNRELATED solution answer {project}, and names it", () => {
+    withTree(
+      {
+        "App.csproj": WINUI_CSPROJ,
+        "samples/Unrelated.sln": 'Project("{G}") = "Other", "Other.csproj", "{H}"\n',
+        "samples/Other.csproj": "<Project></Project>\n",
+      },
+      (notes, verbs): void => {
+        expect(verbs).toEqual(["build"]);
+        expect(notes).toContain("samples/Unrelated.sln matches '*.sln' and does NOT answer {project}");
+      },
+    );
+  });
+
+  it("does not let an EMPTY solution answer {project}", () => {
+    const dir = winuiTree({ "App.csproj": WINUI_CSPROJ, "Empty.sln": "" });
+    try {
+      const lane = detect(dir).lanes[0];
+      expect(lane?.verbs["build"]).toMatchObject({ argv: ["build", "App.csproj", "-c", "Debug"] });
+      expect(lane?.notes.join("\n")).toContain("Empty.sln matches '*.sln' and does NOT answer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a STALE solution -- one listing only files that are gone -- answer {project}", () => {
+    const dir = winuiTree({
+      "App.csproj": WINUI_CSPROJ,
+      "Stale.sln": 'Project("{G}") = "Deleted", "Deleted\\Deleted.csproj", "{H}"\n',
+    });
+    try {
+      const lane = detect(dir).lanes[0];
+      expect(lane?.verbs["build"]).toMatchObject({ argv: ["build", "App.csproj", "-c", "Debug"] });
+      expect(lane?.notes.join("\n")).toContain("Stale.sln matches '*.sln' and does NOT answer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets the solution answer when it DOES list the lane's WinUI project", () => {
+    const dir = winuiTree({
+      "App.csproj": WINUI_CSPROJ,
+      "App.sln": 'Project("{G}") = "App", "App.csproj", "{H}"\n',
+    });
+    try {
+      expect(detect(dir).lanes[0]?.verbs["build"]).toMatchObject({
+        argv: ["build", "App.sln", "-c", "Debug"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("withholds both rows, naming BOTH solutions, when a tree carries two", () => {
     withTree({ "App.csproj": WINUI_CSPROJ, "A.sln": "a\n", "B.sln": "b\n" }, (notes, verbs): void => {
       expect(verbs).toEqual([]);
@@ -4011,7 +4218,9 @@ describe("nen shu detect -- what the dotnet-winui lane refuses to answer", () =>
       (notes, verbs): void => {
         expect(verbs).toEqual([]);
         expect(notes).toContain("C:\\Users\\z\\Other\\Other.csproj");
-        expect(notes).toContain("resolves OUTSIDE the repository");
+        expect(notes).toContain(
+          "it is an ABSOLUTE path, which names a location on one machine rather than a file in this repository",
+        );
       },
     );
   });

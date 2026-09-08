@@ -58,6 +58,7 @@ import {
   spellOnHost,
   verbCell,
   type Placeholder,
+  type ProfileCrossCheck,
   type ProfileMarker,
   type ProfilesPack,
   type ProfileVerb,
@@ -2871,15 +2872,21 @@ function walkLaneFiles(repoRoot: string, laneDirectory: string): readonly TreeFi
   return files;
 }
 
-/** Every file in the lane whose NAME matches this pattern. */
-function filesMatching(files: readonly TreeFile[], pattern: string): readonly TreeFile[] {
-  return files.filter((file): boolean => matchesPattern(pattern, file.name));
-}
-
-/** Every file in the lane that matches a marker's pattern AND carries its literal. */
-function filesCarrying(files: readonly TreeFile[], marker: ProfileMarker): readonly TreeFile[] {
-  return filesMatching(files, marker.pattern).filter(
-    (file): boolean => marker.contains === null || (file.markup() ?? "").includes(marker.contains),
+/**
+ * Every file in the lane that matches ANY of these markers' patterns AND
+ * carries that marker's literal.
+ *
+ * VARIADIC BECAUSE A RANK CAN BE A LIST. One marker is the ordinary call; the
+ * agreement check below asks it about every LOWER rank at once, which is one
+ * question ("what would the next rank have answered?") rather than several.
+ */
+function filesCarrying(files: readonly TreeFile[], ...markers: readonly ProfileMarker[]): readonly TreeFile[] {
+  return files.filter((file): boolean =>
+    markers.some(
+      (marker): boolean =>
+        matchesPattern(marker.pattern, file.name) &&
+        (marker.contains === null || (file.markup() ?? "").includes(marker.contains)),
+    ),
   );
 }
 
@@ -2913,96 +2920,293 @@ function isAbsoluteReference(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
 }
 
-/** A reference this lane's project graph makes to a path outside the repository. */
-interface EscapingReference {
+/**
+ * The shapes a reference value can have that are NOT A PATH AT ALL, each with
+ * the sentence a maintainer needs to see.
+ *
+ * A REFERENCE NEN CANNOT RESOLVE IS UNANSWERABLE, AND UNANSWERABLE IS NOT THE
+ * SAME AS ABSENT. Every one of these used to be resolved as a LITERAL path --
+ * `$(SolutionDir)Core\Core.csproj` became a directory named `$(SolutionDir)Core`
+ * -- written into the declaration as a `path` precondition and proposed with a
+ * command beside it. That row exits 2 forever, on a tree that builds perfectly,
+ * over a file that was never missing. The same property fails the other way
+ * when the separators fall differently: `$(MSBuildThisFileDirectory)/../../x`
+ * carries a `..`, so it was reported as an ESCAPE and the rows refused. One
+ * property, a false proposal or a false refusal depending on punctuation.
+ *
+ * So nen says what it can see and stops: the rows are withheld, the value is
+ * quoted verbatim, and NO precondition is written -- an assertion nen cannot
+ * evaluate is worse than none, because a maintainer reads it as checked.
+ */
+const UNRESOLVABLE_SHAPES: readonly { readonly probe: string; readonly what: string }[] = [
+  {
+    probe: "$(",
+    what: "an MSBuild PROPERTY, whose value lives outside the text nen reads -- nen expands none, so the file this names is not knowable from this file",
+  },
+  { probe: "%(", what: "an ITEM METADATA reference, whose value is computed while the build runs" },
+  { probe: "*", what: "a WILDCARD, which names a SET of files rather than one" },
+  { probe: "?", what: "a WILDCARD, which names a SET of files rather than one" },
+  { probe: ";", what: "a ';'-SEPARATED LIST, which names several files in one attribute" },
+  { probe: "&", what: "an XML ENTITY, which nen does not expand" },
+];
+
+/** What one path walk found at its last segment. */
+type TreeLookup =
+  | { readonly kind: "file" }
+  | { readonly kind: "directory" }
+  | { readonly kind: "missing" }
+  /** Present under a DIFFERENT spelling; `actual` is the one on disk. */
+  | { readonly kind: "case"; readonly actual: string };
+
+/**
+ * Whether this repo-relative path names a file in the tree, BYTE FOR BYTE.
+ *
+ * `existsSync` IS THE WRONG QUESTION ON TWO OF THE THREE HOSTS. macOS and
+ * Windows answer from a case-insensitive filesystem, so a `core\core.csproj`
+ * naming a `Core/Core.csproj` on disk "exists" there and does not on the Linux
+ * runner that has to build it -- a precondition that passes on the machine that
+ * wrote it and fails in CI, which is the worst shape a check can have. So the
+ * walk compares each segment against that directory's own listing exactly, and
+ * where only a case-folded match is there it says so and names BOTH spellings,
+ * which is the one fact that makes the fix a one-character edit.
+ */
+function lookInTree(repoRoot: string, repoRelative: string): TreeLookup {
+  const segments = repoRelative.split("/").filter((segment): boolean => segment !== "");
+  /* c8 ignore next -- a reference resolving to the repository root itself is
+     refused by `insideRepo` before this is asked */
+  if (segments.length === 0) return { kind: "directory" };
+  let directory = repoRoot;
+  const walked: string[] = [];
+  // THE WALK CONTINUES THROUGH A FOLDED SEGMENT rather than stopping at it, so
+  // the spelling reported is the whole path as this tree writes it. Stopping at
+  // the first difference reported `Core/core.csproj` for a tree containing
+  // `Core/Core.csproj`, which is a third spelling that exists nowhere.
+  let folded = false;
+  for (let index = 0; index < segments.length; index += 1) {
+    const wanted = segments[index] ?? "";
+    const entries = listDirectory(directory);
+    let match = entries.find((entry): boolean => entry.name === wanted);
+    if (match === undefined) {
+      match = entries.find((entry): boolean => entry.name.toLowerCase() === wanted.toLowerCase());
+      if (match === undefined) return { kind: "missing" };
+      folded = true;
+    }
+    walked.push(match.name);
+    if (index === segments.length - 1) {
+      if (!match.directory && folded) return { kind: "case", actual: walked.join("/") };
+      return { kind: match.directory ? "directory" : "file" };
+    }
+    if (!match.directory) return { kind: "missing" };
+    directory = join(directory, match.name);
+  }
+  /* c8 ignore next -- the loop returns on its final iteration */
+  return { kind: "missing" };
+}
+
+/** What nen could make of ONE reference value. */
+type ReferenceVerdict =
+  /** Not a path nen can resolve at all: withhold, quote it, assert nothing. */
+  | { readonly kind: "unresolvable"; readonly why: string }
+  /** A path that leaves the repository: withhold, and say where it lands. */
+  | { readonly kind: "escape"; readonly resolved: string; readonly why: string }
+  /** Inside the tree under a DIFFERENT spelling: withhold, naming both. */
+  | { readonly kind: "case"; readonly resolved: string; readonly actual: string }
+  /** Inside the tree and NOT THERE: a note, and no precondition. */
+  | { readonly kind: "missing"; readonly resolved: string }
+  /** Inside the tree and there today: the one shape a precondition is written for. */
+  | { readonly kind: "file"; readonly resolved: string };
+
+/** Every verdict but `file` and `missing` -- the ones that end a row. */
+function blocks(verdict: ReferenceVerdict): boolean {
+  return verdict.kind === "unresolvable" || verdict.kind === "escape" || verdict.kind === "case";
+}
+
+/** One reference, the file that states it, and what nen could make of it. */
+interface ReadReference {
   /** The file that states it, repo-relative. */
   readonly from: string;
   /** The attribute value verbatim, as the project file spells it. */
   readonly value: string;
-  /** Where it lands, as far as nen can say. */
-  readonly resolved: string;
+  /** `<Element Attribute="...">`, so a note names the rule it read. */
   readonly rule: string;
-}
-
-interface ReferenceReading {
-  readonly escaping: readonly EscapingReference[];
-  /** Repo-relative paths inside the tree, byte-sorted and de-duplicated. */
-  readonly inside: readonly { readonly path: string; readonly from: readonly string[] }[];
+  readonly verdict: ReferenceVerdict;
 }
 
 /**
- * Every path this lane's project files point at, split by whether nen can
- * assert it.
+ * ONE reference value, classified -- the single place the refusals are decided.
  *
- * THE SPLIT IS THE POINT, and it is made by asking the EXECUTOR's own function
- * rather than by restating its rule. `./run.ts`'s `insideRepo` is what a
- * declared path is resolved through at run time, and it refuses one that leaves
- * the tree by name at exit 2 -- so a reference it would refuse is a precondition
- * that could never hold, and proposing a row that depends on one would be
- * proposing a build nen already knows will not start. Asking the same function
- * is what keeps the two answers equal; a second copy of the escape rule here
- * would drift the first time either was fixed.
+ * THE ORDER IS THE ARGUMENT. A value that is not a path cannot be asked whether
+ * it leaves the tree, and a path that leaves the tree cannot be asked whether it
+ * is there: each question is meaningful only once the one before it is
+ * answered. Reversing any pair is how one MSBuild property produced a false
+ * refusal on one machine and a false proposal on another.
  */
-function readReferences(
+function classifyReference(repoRoot: string, file: TreeFile, raw: string): ReferenceVerdict {
+  const shape = UNRESOLVABLE_SHAPES.find((entry): boolean => raw.includes(entry.probe));
+  if (shape !== undefined) return { kind: "unresolvable", why: shape.what };
+  // A PROJECT FILE IS WRITTEN FOR ONE PLATFORM AND READ ON THREE. The separator
+  // is normalised before anything resolves it, because a backslash is a legal
+  // filename character on POSIX and a `..\..\x` would otherwise resolve to a
+  // single file named `..\..\x` sitting safely inside the tree -- an escape
+  // reported as a local path.
+  const normalised = raw.split("\\").join("/");
+  if (isAbsoluteReference(normalised)) {
+    return {
+      kind: "escape",
+      resolved: normalised,
+      why: "it is an ABSOLUTE path, which names a location on one machine rather than a file in this repository",
+    };
+  }
+  const repoRelative = relativePath(repoRoot, join(file.directory, ...normalised.split("/")));
+  try {
+    // THE EXECUTOR'S OWN FUNCTION, ASKED RATHER THAN RESTATED. `./run.ts`'s
+    // `insideRepo` is what a declared path is resolved through at run time, and
+    // it refuses one that leaves the tree by name at exit 2 -- so a reference it
+    // would refuse is a precondition that could never hold. A second copy of the
+    // rule here would drift the first time either was fixed.
+    insideRepo(repoRoot, repoRelative, `project.preconditions (from ${file.repoRelative})`);
+  } catch {
+    return {
+      kind: "escape",
+      resolved: repoRelative,
+      why: "it resolves OUTSIDE the repository, and every path a declaration states is resolved against the repository root",
+    };
+  }
+  const found = lookInTree(repoRoot, repoRelative);
+  if (found.kind === "case") return { kind: "case", resolved: repoRelative, actual: found.actual };
+  if (found.kind !== "file") return { kind: "missing", resolved: repoRelative };
+  return { kind: "file", resolved: repoRelative };
+}
+
+interface ReferenceReading {
+  /** Every reference every matching file states, in walk order. */
+  readonly all: readonly ReadReference[];
+  /** Repo-relative path -> the files that point at it, both byte-sorted. */
+  readonly byTarget: ReadonlyMap<string, readonly string[]>;
+}
+
+/** The reference values ONE file states, per the pack's own element/attribute rules. */
+function referencesIn(
   profile: StackProfile,
   repoRoot: string,
-  files: readonly TreeFile[],
-): ReferenceReading {
-  const escaping: EscapingReference[] = [];
-  // EVERY referrer is kept, not the first one the walk happened to reach: two
-  // project files naming one shared library is the ordinary case, and a
-  // precondition's reason that credits whichever of them the directory listing
-  // returned first is a sentence that changes when a file is renamed.
-  const inside = new Map<string, Set<string>>();
+  file: TreeFile,
+): readonly ReadReference[] {
+  const out: ReadReference[] = [];
   for (const rule of profile.references) {
+    if (!matchesPattern(rule.pattern, file.name)) continue;
     const pattern = new RegExp(
       `<${literalPattern(rule.element)}\\b[^>]*?\\b${literalPattern(rule.attribute)}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
       "g",
     );
     const label = `<${rule.element} ${rule.attribute}="...">`;
-    for (const file of filesMatching(files, rule.pattern)) {
-      const text = file.markup();
-      if (text === null) continue;
-      for (const match of text.matchAll(pattern)) {
-        const raw = (match[1] ?? match[2] ?? "").trim();
-        if (raw === "") continue;
-        // A PROJECT FILE IS WRITTEN FOR ONE PLATFORM AND READ ON THREE. The
-        // separator is normalised before anything resolves it, because a
-        // backslash is a legal filename character on POSIX and a `..\..\x`
-        // would otherwise resolve to a single file named `..\..\x` sitting
-        // safely inside the tree -- an escape reported as a local path.
-        const normalised = raw.split("\\").join("/");
-        if (isAbsoluteReference(normalised)) {
-          escaping.push({ from: file.repoRelative, value: raw, resolved: normalised, rule: label });
-          continue;
-        }
-        const absolute = join(file.directory, ...normalised.split("/"));
-        const repoRelative = relativePath(repoRoot, absolute);
-        try {
-          insideRepo(repoRoot, repoRelative, `project.preconditions (from ${file.repoRelative})`);
-        } catch {
-          escaping.push({
-            from: file.repoRelative,
-            value: raw,
-            resolved: repoRelative,
-            rule: label,
-          });
-          continue;
-        }
-        const referrers = inside.get(repoRelative) ?? new Set<string>();
-        referrers.add(file.repoRelative);
-        inside.set(repoRelative, referrers);
-      }
+    const text = file.markup();
+    if (text === null) continue;
+    for (const match of text.matchAll(pattern)) {
+      const raw = (match[1] ?? match[2] ?? "").trim();
+      if (raw === "") continue;
+      out.push({
+        from: file.repoRelative,
+        value: raw,
+        rule: label,
+        verdict: classifyReference(repoRoot, file, raw),
+      });
     }
   }
+  return out;
+}
+
+/**
+ * Every OTHER file this one names that is itself a file the reference rules
+ * read -- how an AGGREGATE's list becomes an edge without teaching this file
+ * what an aggregate is.
+ *
+ * A SOLUTION IS A LIST OF PROJECTS, AND NOTHING HERE KNOWS THE WORD "SOLUTION".
+ * What it knows is the shape the pack already states: `references[].pattern`
+ * says which files carry a project graph, so a quoted value that resolves to
+ * one of THOSE is this file naming a member of the graph. A quoted value that
+ * resolves to a source file, a GUID, a configuration name or nothing at all is
+ * not, and is dropped without a word -- this is a reader of edges, not a parser
+ * of somebody's file format, and the difference matters because the format is
+ * theirs to change.
+ */
+function listedProjects(
+  profile: StackProfile,
+  repoRoot: string,
+  file: TreeFile,
+): readonly string[] {
+  const text = file.markup();
+  if (text === null) return [];
+  const out: string[] = [];
+  for (const match of text.matchAll(/"([^"\n]{1,400})"|'([^'\n]{1,400})'/g)) {
+    const raw = (match[1] ?? match[2] ?? "").trim();
+    if (raw === "") continue;
+    if (!profile.references.some((rule): boolean => matchesPattern(rule.pattern, laneRelativeName(raw.split("\\").join("/"))))) {
+      continue;
+    }
+    const verdict = classifyReference(repoRoot, file, raw);
+    if (verdict.kind === "file") out.push(verdict.resolved);
+  }
+  return out;
+}
+
+/**
+ * Every path this lane's project files point at, and which of them the graph
+ * NEN IS ADDRESSING can actually reach.
+ *
+ * REACHABILITY IS THE WHOLE OF THIS FUNCTION AND IT USED TO BE ABSENT. The
+ * reader globbed every file in the lane matching the rule's pattern, so an
+ * escaping reference in `third_party/Vendor/Vendor.csproj` -- a checked-in
+ * vendor drop the application references nowhere -- withheld the lane's `build`,
+ * with a note claiming it was "this lane's project graph". It was a file in the
+ * same directory tree, which is a different statement. What a build resolves is
+ * the graph reachable from the file it is pointed at, so that is what is walked:
+ * the answered project, the projects an aggregate lists, and every reference
+ * edge out of each. Anything outside that set is reported and blocks nothing.
+ */
+function walkGraph(
+  profile: StackProfile,
+  repoRoot: string,
+  files: readonly TreeFile[],
+  roots: readonly TreeFile[],
+): ReferenceReading {
+  const byPath = new Map<string, TreeFile>(
+    files.map((file): [string, TreeFile] => [file.repoRelative, file]),
+  );
+  const seen = new Set<string>();
+  const all: ReadReference[] = [];
+  const byTarget = new Map<string, Set<string>>();
+  const queue: TreeFile[] = [];
+  const push = (file: TreeFile | undefined): void => {
+    if (file === undefined || seen.has(file.repoRelative)) return;
+    seen.add(file.repoRelative);
+    queue.push(file);
+  };
+  for (const root of roots) push(root);
+  while (queue.length > 0) {
+    const file = queue.shift();
+    /* c8 ignore next -- the loop condition guarantees one */
+    if (file === undefined) continue;
+    for (const reference of referencesIn(profile, repoRoot, file)) {
+      all.push(reference);
+      if (reference.verdict.kind !== "file") continue;
+      // EVERY referrer is kept, not the first one the walk happened to reach:
+      // two project files naming one shared library is the ordinary case, and a
+      // precondition's reason crediting whichever of them the directory listing
+      // returned first is a sentence that changes when a file is renamed.
+      const referrers = byTarget.get(reference.verdict.resolved) ?? new Set<string>();
+      referrers.add(file.repoRelative);
+      byTarget.set(reference.verdict.resolved, referrers);
+      push(byPath.get(reference.verdict.resolved));
+    }
+    for (const listed of listedProjects(profile, repoRoot, file)) push(byPath.get(listed));
+  }
   return {
-    escaping,
-    inside: [...inside.entries()]
-      .sort(([a], [b]): number => compareBytes(a, b))
-      .map(([path, from]): { path: string; from: readonly string[] } => ({
-        path,
-        from: [...from].sort(compareBytes),
-      })),
+    all,
+    byTarget: new Map(
+      [...byTarget.entries()]
+        .sort(([a], [b]): number => compareBytes(a, b))
+        .map(([path, from]): [string, readonly string[]] => [path, [...from].sort(compareBytes)]),
+    ),
   };
 }
 
@@ -3135,25 +3339,24 @@ function readStack(
   const answers = new Map<string, string>();
   const unanswered = new Map<string, string>();
   const perVerb = new Map<string, TokenLayer>();
+  /** Each cross-check's own layer, held until the graph says whether it stands. */
+  const perVerbEvidence = new Map<ProfileCrossCheck, TokenLayer>();
   const withheld = new Map<string, string>();
   const confirmed = new Set<string>();
   const toolchain: Record<string, unknown> = {};
   const preconditions: unknown[] = [];
   const notes: string[] = [];
 
-  const references = readReferences(profile, repoRoot, files);
-  const escape = references.escaping[0];
-  const escapeReason =
-    escape === undefined
-      ? null
-      : `${references.escaping.length === 1 ? "a reference in this lane's project graph resolves" : `${references.escaping.length} references in this lane's project graph resolve`} OUTSIDE the repository -- ${escape.from} states ${escape.rule} '${escape.value}', which lands at ${escape.resolved}. nen cannot assert that as a precondition: every path a declaration states is resolved against the repository root and one that escapes it exits 2 by name, so a row depending on it would be proposed with a precondition that can never hold. Nothing here clones, fetches or vendors a sibling checkout. Clone it beside this repository yourself, or make the dependency one this tree contains, and run detect again`;
-
+  // ── 1. WHICH FILE THIS LANE'S ROWS ADDRESS ─────────────────────────────────
+  //
+  // ANSWERED BEFORE THE REFERENCES ARE READ, and the order is now the other way
+  // round from the first draft. The graph a build resolves is the graph
+  // reachable FROM the file it is pointed at, so nen cannot know which
+  // references matter until it knows which file that is. Reading the references
+  // first is what let a vendored project nothing points at withhold a lane.
+  const roots: TreeFile[] = [];
   for (const rule of profile.answers) {
-    if (escapeReason !== null) {
-      unanswered.set(rule.token, escapeReason);
-      continue;
-    }
-    let answered = false;
+    let answered: TreeFile | null = null;
     let ambiguity: string | null = null;
     for (const candidate of rule.from) {
       const hits = filesCarrying(files, candidate);
@@ -3169,14 +3372,44 @@ function readStack(
           .join(", ")}), and nen resolves no ambiguity: naming one of them would be nen choosing which of these this repository builds. State the row this repository means. ${rule.why}`;
         break;
       }
+      const hit = hits[0];
+      /* c8 ignore next -- `hits.length === 1` is the only way here */
+      if (hit === undefined) continue;
+      // AN AGGREGATE MUST AGREE WITH WHAT IT AGGREGATES, or it does not answer.
+      // A candidate at a HIGHER rank wins because it is the repository's own
+      // list of what a build addresses -- and a list that does not name the file
+      // the next rank would have answered with is not a list of THIS lane: an
+      // unrelated `samples/Unrelated.sln`, a zero-byte one, one still naming
+      // projects that were deleted. All three used to beat the project file
+      // beside them, because nothing ever opened them. So the check is that it
+      // NAMES the thing it claims to aggregate, and a candidate that fails it is
+      // reported by name and stands aside rather than answering.
+      const subordinate = rule.from.slice(rule.from.indexOf(candidate) + 1);
+      const named = subordinate.length === 0 ? null : filesCarrying(files, ...subordinate);
+      if (named !== null && named.length > 0) {
+        const listed = new Set(listedProjects(profile, repoRoot, hit));
+        const agrees = named.some((file): boolean => listed.has(file.repoRelative));
+        if (!agrees) {
+          notes.push(
+            `${hit.laneRelative} matches ${describeMarkers([candidate])} and does NOT answer ${rule.token}: it names none of this lane's own ${describeMarkers(subordinate)} (${named
+              .map((file): string => file.laneRelative)
+              .sort(compareBytes)
+              .join(", ")}). A file that aggregates others is the repository's list of what a build addresses, and one naming none of them is a list of something else -- unrelated, empty, or left behind by a project that was deleted. nen reads the next rank instead, and says so here rather than silently preferring a file it could not corroborate.`,
+          );
+          continue;
+        }
+      }
       // A row is answered with the LANE-RELATIVE path, because a verb runs in
       // the lane's own `cwd` and a repo-relative argument would miss by exactly
       // that many directories.
-      answers.set(rule.token, hits[0]?.laneRelative ?? "");
-      answered = true;
+      answers.set(rule.token, hit.laneRelative);
+      answered = hit;
       break;
     }
-    if (answered) continue;
+    if (answered !== null) {
+      roots.push(answered);
+      continue;
+    }
     unanswered.set(
       rule.token,
       ambiguity ??
@@ -3184,6 +3417,14 @@ function readStack(
     );
   }
 
+  // ── 2. THE PER-ROW EVIDENCE, AND THE FILE EACH GATED ROW ADDRESSES ─────────
+  //
+  // BEFORE THE GRAPH WALK, because a cross-check that ANSWERS a token names a
+  // SECOND file this lane's rows address -- the project carrying the tests is
+  // not the application -- and the graph the gated row resolves starts there.
+  // Reading it after would walk the graph of the build and then propose a row
+  // addressing a file outside it.
+  const evidenceRoots: TreeFile[] = [];
   for (const check of profile.crossChecks) {
     // ONE FILE MAY CARRY SEVERAL OF THE MARKERS -- a test project referencing
     // both a test SDK and a framework matches twice and is ONE piece of
@@ -3204,21 +3445,75 @@ function readStack(
     const token = check.answers;
     if (token === null) continue;
     const paths = [...evidence.keys()].sort(compareBytes);
-    const layer: TokenLayer =
-      escapeReason !== null
-        ? { answers: new Map(), unanswered: new Map([[token, escapeReason]]) }
-        : paths.length === 1
-          ? { answers: new Map([[token, paths[0] ?? ""]]), unanswered: new Map() }
-          : {
-              answers: new Map(),
-              unanswered: new Map([
-                [
-                  token,
-                  `${paths.length} files in this lane carry the evidence this row needs (${paths.join(", ")}), and nen resolves no ambiguity: which of them this row means, and in what order, is a list only this repository can state. ${check.why}`,
-                ],
-              ]),
-            };
-    for (const verb of check.verbs) perVerb.set(verb, layer);
+    if (paths.length === 1) {
+      const only = evidence.get(paths[0] ?? "");
+      /* c8 ignore next -- `paths` is keyed off `evidence` */
+      if (only !== undefined) evidenceRoots.push(only);
+      perVerbEvidence.set(check, {
+        answers: new Map([[token, paths[0] ?? ""]]),
+        unanswered: new Map(),
+      });
+      continue;
+    }
+    perVerbEvidence.set(check, {
+      answers: new Map(),
+      unanswered: new Map([
+        [
+          token,
+          `${paths.length} files in this lane carry the evidence this row needs (${paths.join(", ")}), and nen resolves no ambiguity: which of them this row means, and in what order, is a list only this repository can state. ${check.why}`,
+        ],
+      ]),
+    });
+  }
+
+  // ── 3. THE GRAPH THOSE ANSWERS REACH ───────────────────────────────────────
+  const references = walkGraph(profile, repoRoot, files, [...roots, ...evidenceRoots]);
+  const blocking = references.all.filter((reference): boolean => blocks(reference.verdict));
+  const describeBlocking = (reference: ReadReference): string => {
+    const verdict = reference.verdict;
+    /* c8 ignore next -- `blocking` is filtered on exactly the three below */
+    if (verdict.kind === "file" || verdict.kind === "missing") return "";
+    if (verdict.kind === "unresolvable") {
+      return `${reference.from} states ${reference.rule} '${reference.value}', which is ${verdict.why}`;
+    }
+    if (verdict.kind === "case") {
+      return `${reference.from} states ${reference.rule} '${reference.value}', which resolves to ${verdict.resolved} -- this tree spells that file ${verdict.actual}, and the two differ only in case. A case-insensitive host builds it and a case-sensitive one does not, so nen asserts neither spelling`;
+    }
+    return `${reference.from} states ${reference.rule} '${reference.value}', which lands at ${verdict.resolved}, and ${verdict.why}`;
+  };
+  // EVERY blocking reference is named, in byte order, not the first the walk
+  // reached. A maintainer who fixes the one nen happened to print runs `detect`
+  // again to be told about the next one, which is the shape of a tool that
+  // knows more than it says.
+  const blockingSentences = blocking
+    .map(describeBlocking)
+    .sort(compareBytes)
+    .join("; ");
+  const escapeReason =
+    blocking.length === 0
+      ? null
+      : `${blocking.length === 1 ? "a reference in this lane's project graph is one nen cannot assert" : `${blocking.length} references in this lane's project graph are ones nen cannot assert`} -- ${blockingSentences}. Every path a declaration states is resolved against the repository root, and one nen cannot resolve, or that escapes the tree, exits 2 by name -- so a row depending on it would be proposed with a precondition that can never hold, or with none at all and a build that fails later. Nothing here clones, fetches or vendors a sibling checkout. Make the dependency one this tree contains, spell it as this tree spells it, or state the row by hand, and run detect again`;
+  // ── 4. WHAT A BLOCKING REFERENCE TAKES WITH IT ─────────────────────────────
+  //
+  // EVERY TOKEN, LANE-WIDE AND PER-VERB ALIKE. A row addressing a graph that
+  // does not resolve is a row nen already knows will not start, and reporting
+  // an ambiguity between two solutions to somebody whose build cannot load
+  // either would be the less useful of two true things.
+  if (escapeReason !== null) {
+    for (const token of [...answers.keys()]) {
+      answers.delete(token);
+      unanswered.set(token, escapeReason);
+    }
+  }
+  for (const [check, layer] of perVerbEvidence) {
+    const token = check.answers;
+    /* c8 ignore next -- only checks that answer a token are recorded */
+    if (token === null) continue;
+    const resolved: TokenLayer =
+      escapeReason === null
+        ? layer
+        : { answers: new Map(), unanswered: new Map([[token, escapeReason]]) };
+    for (const verb of check.verbs) perVerb.set(verb, resolved);
   }
 
   for (const [tool, entry] of Object.entries(profile.toolchain)) {
@@ -3257,23 +3552,66 @@ function readStack(
     );
   }
 
-  for (const entry of references.inside) {
+  // ── 3. WHAT THE GRAPH LETS NEN ASSERT ──────────────────────────────────────
+  //
+  // A `path` PRECONDITION IS WRITTEN FOR ONE SHAPE ONLY: a reference that
+  // resolves, stays inside the tree, and names a file that is there TODAY. Not
+  // for a property nen cannot expand, not for a path that leaves the tree, and
+  // not for a file the tree does not contain -- that last one is the case that
+  // reads most like a feature and is not: `<ProjectReference Include="Core\Core.csproj" />`
+  // pointing at a directory somebody deleted became `FAIL path Core/Core.csproj
+  // -- not present` on every verb of the lane, forever, for a build that had
+  // already been fixed some other way. nen states what it CHECKED, and a file
+  // it could not find is a finding.
+  for (const [path, from] of references.byTarget) {
     preconditions.push({
       kind: "path",
-      value: entry.path,
-      why: `${entry.from.join(", ")} point${entry.from.length === 1 ? "s" : ""} this lane's project graph at it, and the build does not resolve without it. nen ASSERTS a precondition of kind ${ASSERTABLE_KINDS.map((kind): string => `'${kind}'`).join(" or ")} and performs neither: it will not create, fetch or vendor what is missing.`,
+      value: path,
+      why: `${from.join(", ")} point${from.length === 1 ? "s" : ""} this lane's project graph at it, and the build does not resolve without it. nen ASSERTS a precondition of kind ${ASSERTABLE_KINDS.map((kind): string => `'${kind}'`).join(" or ")} and performs neither: it will not create, fetch or vendor what is missing.`,
     });
   }
   if (preconditions.length > 0) {
     notes.push(
-      `${preconditions.length} path precondition${preconditions.length === 1 ? " is" : "s are"} proposed under project.preconditions from this lane's own project references (${references.inside
-        .map((entry): string => entry.path)
-        .join(", ")}). Each is a fact nen CHECKS before a verb runs and never one it performs.`,
+      `${preconditions.length} path precondition${preconditions.length === 1 ? " is" : "s are"} proposed under project.preconditions from this lane's own project references (${[...references.byTarget.keys()].join(", ")}). Each is a fact nen CHECKS before a verb runs and never one it performs.`,
+    );
+  }
+  const missing = references.all.filter((reference): boolean => reference.verdict.kind === "missing");
+  if (missing.length > 0) {
+    notes.push(
+      `${missing.length === 1 ? "one reference in this lane's project graph names a file that is NOT in the tree" : `${missing.length} references in this lane's project graph name files that are NOT in the tree`}: ${missing
+        .map(
+          (reference): string =>
+            `${reference.from} states ${reference.rule} '${reference.value}' (${reference.verdict.kind === "missing" ? reference.verdict.resolved : ""})`,
+        )
+        .sort(compareBytes)
+        .join("; ")}. No precondition is proposed for ${missing.length === 1 ? "it" : "them"}: nen asserts what it CHECKED, and a precondition naming a file that is not there would fail every verb of this lane on a tree whose build a maintainer may already have fixed another way. Restore the file, delete the reference, or state the precondition by hand.`,
     );
   }
   if (escapeReason !== null) {
     notes.push(
-      `no precondition is proposed for the reference that leaves the repository: ${escapeReason}. It is named here rather than written into the file because a declaration cannot state it at all.`,
+      `no precondition is proposed for ${blocking.length === 1 ? "the reference nen cannot assert" : "the references nen cannot assert"}: ${escapeReason}. ${blocking.length === 1 ? "It is" : "They are"} named here rather than written into the file because a declaration cannot state ${blocking.length === 1 ? "it" : "them"} at all.`,
+    );
+  }
+  // A BLOCKING REFERENCE THE ANSWERED PROJECT CANNOT REACH IS A FINDING, NOT A
+  // WITHHOLDING -- and saying nothing about it would be the other error. A
+  // vendored drop under `third_party/` with an absolute reference in it is real,
+  // and it is also not in the graph this lane's `build` resolves; a maintainer
+  // who adds a reference to it tomorrow should have been told today.
+  const reached = new Set(references.all.map((reference): string => reference.from));
+  const outside = files
+    .filter(
+      (file): boolean =>
+        !reached.has(file.repoRelative) &&
+        profile.references.some((rule): boolean => matchesPattern(rule.pattern, file.name)),
+    )
+    .flatMap((file): readonly ReadReference[] => referencesIn(profile, repoRoot, file))
+    .filter((reference): boolean => blocks(reference.verdict));
+  if (outside.length > 0) {
+    notes.push(
+      `${outside.length === 1 ? "one project file this lane's answered graph does not reach states a reference nen could not assert" : `${outside.length} references live in project files this lane's answered graph does not reach`}: ${outside
+        .map(describeBlocking)
+        .sort(compareBytes)
+        .join("; ")}. ${outside.length === 1 ? "It withholds" : "They withhold"} nothing, because a build resolves the graph reachable from the file it is pointed at and nothing in that graph names ${outside.length === 1 ? "this file" : "these files"} -- but a reference added to ${outside.length === 1 ? "it" : "them"} tomorrow would.`,
     );
   }
 
@@ -3750,6 +4088,16 @@ function proposeVerbs(
     const missingEvidence = reading.withheld.get(verb);
     if (missingEvidence !== undefined) {
       notes.push(`'${verb}' withheld: ${missingEvidence}`);
+      // AND IT IS SEATED, not deleted -- the same argument `proposeVerbs`'s
+      // header makes for the pack's own `unsupported` cells, one layer in. A
+      // row that is simply absent makes `nen shu test` answer "this lane
+      // declares no 'test'", which is true of the FILE and says nothing about
+      // the tree: the maintainer is told the declaration is incomplete rather
+      // than that their repository has no test project. A row a maintainer can
+      // SEE is a row they can replace, and the reason travels inside it.
+      verbs[verb] = {
+        unsupported: `PROPOSED SEAT -- replace it once this repository can answer it. nen shu detect withheld the reference pack's command for '${verb}' on ${profile.id}: ${missingEvidence}`,
+      };
       continue;
     }
 

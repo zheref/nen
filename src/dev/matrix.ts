@@ -225,13 +225,24 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
     .sort()
     .map((tool): string[] => {
       const entry = profile.toolchain[tool];
-      if (entry === undefined) return [code(tool), "", "", "", "", ""];
+      /* c8 ignore next -- the keys come from the same record */
+      if (entry === undefined) return [code(tool), "", "", "", "", "", "", ""];
       return [
         code(tool),
         entry.minimum === null ? "presence only" : code(entry.minimum),
         code(commandLine(entry.probe[0] ?? "", entry.probe.slice(1))),
         code(entry.versionFrom),
         code(entry.installer),
+        // THE TWO FIELDS `detect` ACTS ON, rendered rather than left to the
+        // JSON. `versionFile` is where a TARGET repository's own pin is read
+        // from -- the difference between a proposed `version` and a withheld
+        // one -- and `hostTool` decides whether this stack's rows may be
+        // proposed at all without a manifest to confirm the executable. A
+        // reader comparing stacks in this table could see neither.
+        entry.versionFile === null
+          ? "--"
+          : `${code(entry.versionFile.file)} at ${code(entry.versionFile.path.join("."))}`,
+        entry.hostTool ? "**yes**" : "no",
         `${entry.why} *(source: ${entry.source})*`,
       ];
     });
@@ -256,6 +267,54 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
     ...table(["pattern", "must contain", "why"], markerRows),
     "",
   ];
+
+  // HOW A TOKEN IS ANSWERED IS THE LOAD-BEARING RULE OF THE STACKS THAT STATE
+  // ONE, and it was the one field of the pack this page dropped. The ORDER is
+  // the whole content: `from` is tried in order and the first rank the tree
+  // resolves to exactly one file answers, so a reader who cannot see the order
+  // cannot predict which file a proposed row will name -- which is the only
+  // question this section exists to answer. A stack stating none gets no
+  // heading, which is six of the seven.
+  for (const rule of profile.answers) {
+    lines.push(
+      `### How ${code(rule.token)} is answered`,
+      "",
+      `${rule.why} The ranks below are tried **in order**; the first one the lane's own tree resolves to exactly ONE file answers the token, and a rank matching several is an ambiguity \`nen shu detect\` reports rather than resolves.`,
+      "",
+      ...table(
+        ["rank", "pattern", "must contain", "why this rank"],
+        rule.from.map((marker, index): string[] => [
+          `${index + 1}`,
+          code(marker.pattern),
+          marker.contains === null ? "" : code(marker.contains),
+          marker.why,
+        ]),
+      ),
+      "",
+    );
+  }
+
+  // THE OTHER FIELD `detect` ACTS ON AND THIS PAGE HID: which element of which
+  // file names a path, and therefore which paths become `path` preconditions --
+  // and which withhold a row instead, because a build cannot resolve them.
+  if (profile.references.length > 0) {
+    lines.push(
+      "### Project references",
+      "",
+      "The element and attribute `nen shu detect` reads a path out of. A reference that resolves to a file **inside** the repository becomes a `path` precondition nen ASSERTS and never performs; one that escapes the tree, or that nen cannot resolve at all (an MSBuild property, a wildcard, a `;`-list, an entity), **withholds** every row this stack's tokens fill, with the value quoted verbatim.",
+      "",
+      ...table(
+        ["in files matching", "element", "attribute", "why"],
+        profile.references.map((rule): string[] => [
+          code(rule.pattern),
+          code(`<${rule.element}>`),
+          code(rule.attribute),
+          rule.why,
+        ]),
+      ),
+      "",
+    );
+  }
 
   // A CROSS-CHECK IS A CONDITION ON A ROW, so it is rendered beside the markers
   // rather than inside the verb table: the verb table's job is "what would run",
@@ -287,10 +346,19 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
     lines.push(
       "### Toolchain minimums (advisory)",
       "",
-      "What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.",
+      "What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.",
       "",
       ...table(
-        ["tool", "pack minimum", "probe", "version from", "installer", "why / source"],
+        [
+          "tool",
+          "pack minimum",
+          "probe",
+          "version from",
+          "installer",
+          "pin read from",
+          "host tool",
+          "why / source",
+        ],
         toolRows,
       ),
       "",

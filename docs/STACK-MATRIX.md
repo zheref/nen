@@ -104,12 +104,12 @@ The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declar
 
 ### Toolchain minimums (advisory)
 
-What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.
+What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
 
-| tool | pack minimum | probe | version from | installer | why / source |
-| --- | --- | --- | --- | --- | --- |
-| `gradle` | `8.7` | `{gw} --version` | `first-semver-on-stdout` | `wrapper` | NOTHING TO INSTALL: this lane resolves its OWN wrapper, pinned at 8.7 -- a different wrapper from the repository root's 9.5.1, in the same tree. Two lanes, two Gradle versions, one repository: this row is why `toolchain` is a per-lane block and not a per-repository one. *(source: KroAndroid/program/gradle/wrapper/gradle-wrapper.properties)* |
-| `jdk` | presence only | `java -version` | `first-semver-on-stderr` | `verify-only` | The host's JDK. This lane pins no version anywhere, so the pack states presence only. `java -version` writes to STDERR, which is why the reader is the stderr one. *(source: KroAndroid/program/ (no toolchain pin in the tree))* |
+| tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `gradle` | `8.7` | `{gw} --version` | `first-semver-on-stdout` | `wrapper` | -- | no | NOTHING TO INSTALL: this lane resolves its OWN wrapper, pinned at 8.7 -- a different wrapper from the repository root's 9.5.1, in the same tree. Two lanes, two Gradle versions, one repository: this row is why `toolchain` is a per-lane block and not a per-repository one. *(source: KroAndroid/program/gradle/wrapper/gradle-wrapper.properties)* |
+| `jdk` | presence only | `java -version` | `first-semver-on-stderr` | `verify-only` | -- | no | The host's JDK. This lane pins no version anywhere, so the pack states presence only. `java -version` writes to STDERR, which is why the reader is the stderr one. *(source: KroAndroid/program/ (no toolchain pin in the tree))* |
 
 ### Notes
 
@@ -154,6 +154,23 @@ What nen has been *tested* against, never what it installs: the pin an install w
 | `*.csproj` | `<UseWinUI>true</UseWinUI>` | THE REFINEMENT IS THE MARKER. A `*.csproj` or `*.sln` alone identifies .NET, which is not this stack; `<UseWinUI>true</UseWinUI>` is what makes it WinUI 3. |
 | `*.sln` |  | the solution, present but not sufficient: it must be refined by the WinUI property above. |
 
+### How `{project}` is answered
+
+The file this repository builds -- and NOTHING in KroWindows names one: there is no Makefile, no `.cmd` / `.ps1` / `.sh` and no `.github/`, so the only statement of it is the tree itself. Where the tree does not resolve to exactly one file at either rank, the row is withheld with the candidates named: `nen shu detect` resolves no ambiguity, and picking one of two solutions is picking which application this repository is. The ranks below are tried **in order**; the first one the lane's own tree resolves to exactly ONE file answers the token, and a rank matching several is an ambiguity `nen shu detect` reports rather than resolves.
+
+| rank | pattern | must contain | why this rank |
+| --- | --- | --- | --- |
+| 1 | `*.sln` |  | THE SOLUTION WINS WHEN THERE IS ONE, and the reason is what a solution IS: the repository's own list of the projects a build addresses, in its own order. `dotnet build <solution>` is what the Visual Studio gesture this stack lives by actually does, and pointing the build at one project of a multi-project tree would be nen choosing a subset the repository never chose. KroWindows has one solution and three project files, which is exactly the shape this preference is for. |
+| 2 | `*.csproj` | `<UseWinUI>true</UseWinUI>` | ONLY WHERE NO SOLUTION EXISTS. A single-project tree has nothing to aggregate, so the project file IS the build. The refinement is kept from the marker deliberately: the file that answers the token is the file that identified the stack, and a bare `*.csproj` here would let a test project or a library answer for the application. |
+
+### Project references
+
+The element and attribute `nen shu detect` reads a path out of. A reference that resolves to a file **inside** the repository becomes a `path` precondition nen ASSERTS and never performs; one that escapes the tree, or that nen cannot resolve at all (an MSBuild property, a wildcard, a `;`-list, an entity), **withholds** every row this stack's tokens fill, with the value quoted verbatim.
+
+| in files matching | element | attribute | why |
+| --- | --- | --- | --- |
+| `*.csproj` | `<ProjectReference>` | `Include` | THE ONE ELEMENT THAT CAN POINT OUT OF THE REPOSITORY. KroCore/KroCore.csproj:10 carries `<ProjectReference Include="..\..\Bankai\C#\BankaiCore\BankaiCore\BankaiCore.csproj" />` -- a path that ESCAPES THE REPOSITORY to a sibling clone of zheref/Bankai. No submodule, no NuGet package and no restore step fetches it, so the solution will not load unless that repository is cloned as a sibling directory, and NEN NEVER CLONES ONE. A path outside the repository is not a precondition nen can even state: every path a declaration names is resolved against the repository root and one that escapes it is refused by name. So a build depending on such a reference is WITHHELD with the reference quoted, never proposed with a precondition that could not hold. A reference that stays inside the tree is the opposite case and becomes a `path` precondition nen asserts and never performs. |
+
 ### Cross-checks for `test`
 
 KroWindows DOES carry a test project (`KroCoreTests/KroCoreTests.csproj`, which references `coverlet.collector` 6.0.2), and NO COMMAND ANYWHERE IN THAT REPOSITORY INVOKES `dotnet test` -- so the row is the SDK's documented entry point rather than an observed one, and it is proposed only where the tree itself shows something to run. THE EVIDENCE FILE IS ALSO WHAT THE ROW ADDRESSES, and that is not a detail: `{project}` for `build` is the solution or the application, and pointing `dotnet test` at either of those runs a command that builds and then reports there is nothing to test. The project that CARRIES the tests is the project the test row names, which is why this entry answers the token itself. Any ONE of the following matching in the lane's tree is the evidence; without it the row is withheld with this reason, and the file that carries it is also what answers `{project}` for `test` -- several of them are an ambiguity rather than a choice.
@@ -167,12 +184,12 @@ KroWindows DOES carry a test project (`KroCoreTests/KroCoreTests.csproj`, which 
 
 ### Toolchain minimums (advisory)
 
-What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.
+What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
 
-| tool | pack minimum | probe | version from | installer | why / source |
-| --- | --- | --- | --- | --- | --- |
-| `dotnet-sdk` | presence only | `dotnet --version` | `first-semver-on-stdout` | `dotnet-install` | THE ONLY INSTALLER IN THE SET THAT FETCHES AND EXECUTES VENDOR CODE, which is why it is gated by residual question (d) and ships VERIFY-ONLY in the first release. There is NO `global.json` in the repository, so no pin exists to carry and the pack states no minimum: the declaration must state one, and nen never installs "latest". *(source: KroWindows (no global.json; target framework net8.0-windows10.0.22621.0))* |
-| `visual-studio` | `17.10` | `vswhere -latest -products * -requires {workload}` | `first-semver-on-stdout` | `verify-only` | Visual Studio 2022 17.10+ with the Windows App SDK tooling, which also brings the Windows 10 SDK 22621 -- so the row points at the WORKLOAD rather than at a separate SDK install. nen probes and reports the workload id a human installs; it never `winget install`s a 40 GB IDE. *(source: KroWindows/KroWindows.csproj:13 (UseWinUI), :133 (packaging menu))* |
+| tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `dotnet-sdk` | presence only | `dotnet --version` | `first-semver-on-stdout` | `dotnet-install` | `global.json` at `sdk.version` | **yes** | THE ONLY INSTALLER IN THE SET THAT FETCHES AND EXECUTES VENDOR CODE, which is why it is gated by residual question (d) and ships VERIFY-ONLY in the first release. There is NO `global.json` in the repository, so no pin exists to carry and the pack states no minimum: the declaration must state one, and nen never installs "latest". *(source: KroWindows (no global.json; target framework net8.0-windows10.0.22621.0))* |
+| `visual-studio` | `17.10` | `vswhere -latest -products * -requires {workload}` | `first-semver-on-stdout` | `verify-only` | -- | no | Visual Studio 2022 17.10+ with the Windows App SDK tooling, which also brings the Windows 10 SDK 22621 -- so the row points at the WORKLOAD rather than at a separate SDK install. nen probes and reports the workload id a human installs; it never `winget install`s a 40 GB IDE. *(source: KroWindows/KroWindows.csproj:13 (UseWinUI), :133 (packaging menu))* |
 
 ### Notes
 
@@ -223,12 +240,12 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Toolchain minimums (advisory)
 
-What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.
+What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
 
-| tool | pack minimum | probe | version from | installer | why / source |
-| --- | --- | --- | --- | --- | --- |
-| `expo-cli` | presence only | `expo --version` | `first-semver-on-stdout` | `npx` | NOTHING TO INSTALL GLOBALLY. `expo` is invoked through the project's own dependency, and Expo itself warns against a global install; this entry exists to state that rather than leave a reader to discover it. The observed project is Expo SDK 53 with expo-router 5 on React Native 0.79.5, and the CLI version travels with the project, so the pack states no host minimum. *(source: food-diary/package.json (Expo SDK 53 / expo-router 5 / RN 0.79.5))* |
-| `node` | presence only | `node --version` | `first-semver-on-stdout` | `verify-only` | The repository pins no `engines` range, so the pack states presence only. Node is verify-only here for the same reason it is everywhere: a Node install is a system-wide decision with five common answers. The Android lane additionally needs it ON PATH for the Gradle sync. *(source: food-diary/package.json (no `engines`); android/build.gradle:16-19)* |
+| tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `expo-cli` | presence only | `expo --version` | `first-semver-on-stdout` | `npx` | -- | no | NOTHING TO INSTALL GLOBALLY. `expo` is invoked through the project's own dependency, and Expo itself warns against a global install; this entry exists to state that rather than leave a reader to discover it. The observed project is Expo SDK 53 with expo-router 5 on React Native 0.79.5, and the CLI version travels with the project, so the pack states no host minimum. *(source: food-diary/package.json (Expo SDK 53 / expo-router 5 / RN 0.79.5))* |
+| `node` | presence only | `node --version` | `first-semver-on-stdout` | `verify-only` | -- | no | The repository pins no `engines` range, so the pack states presence only. Node is verify-only here for the same reason it is everywhere: a Node install is a system-wide decision with five common answers. The Android lane additionally needs it ON PATH for the Gradle sync. *(source: food-diary/package.json (no `engines`); android/build.gradle:16-19)* |
 
 ### Notes
 
@@ -276,13 +293,13 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Toolchain minimums (advisory)
 
-What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.
+What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
 
-| tool | pack minimum | probe | version from | installer | why / source |
-| --- | --- | --- | --- | --- | --- |
-| `browser` | presence only | `{browserPath}` | `path-exists` | `verify-only` | `archive` and `deploy` need a locally installed Chrome, Chromium or Edge. The repository's PDF builder deliberately avoids puppeteer and probes for the binary BY PATH; nen probes the same way, reports, and never installs a browser. No version is pinned, so the probe is a presence check. *(source: zheref.io/scripts/build-resume-pdf.mjs:38-44)* |
-| `node` | `18.0.0` | `node --version` | `first-semver-on-stdout` | `verify-only` | The repository's floor is Node 18; its CI pins 20. Verify-only for the same reason as every other JS lane: a Node install is a system-wide decision nen does not make. *(source: zheref.io/package.json; .github/workflows/deploy.yml)* |
-| `npm` | presence only | `npm --version` | `first-semver-on-stdout` | `verify-only` | THE ONE JS REPOSITORY WHERE COREPACK DOES NOT APPLY: it uses npm, not pnpm, and ships no `packageManager` field, so there is no pin to activate. npm arrives with Node, which is why the entry is verify-only rather than an install. *(source: zheref.io/package.json (no `packageManager` field))* |
+| tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `browser` | presence only | `{browserPath}` | `path-exists` | `verify-only` | -- | no | `archive` and `deploy` need a locally installed Chrome, Chromium or Edge. The repository's PDF builder deliberately avoids puppeteer and probes for the binary BY PATH; nen probes the same way, reports, and never installs a browser. No version is pinned, so the probe is a presence check. *(source: zheref.io/scripts/build-resume-pdf.mjs:38-44)* |
+| `node` | `18.0.0` | `node --version` | `first-semver-on-stdout` | `verify-only` | -- | no | The repository's floor is Node 18; its CI pins 20. Verify-only for the same reason as every other JS lane: a Node install is a system-wide decision nen does not make. *(source: zheref.io/package.json; .github/workflows/deploy.yml)* |
+| `npm` | presence only | `npm --version` | `first-semver-on-stdout` | `verify-only` | -- | no | THE ONE JS REPOSITORY WHERE COREPACK DOES NOT APPLY: it uses npm, not pnpm, and ships no `packageManager` field, so there is no pin to activate. npm arrives with Node, which is why the entry is verify-only rather than an install. *(source: zheref.io/package.json (no `packageManager` field))* |
 
 ### Notes
 
@@ -330,14 +347,14 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Toolchain minimums (advisory)
 
-What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.
+What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
 
-| tool | pack minimum | probe | version from | installer | why / source |
-| --- | --- | --- | --- | --- | --- |
-| `android-sdk` | presence only | `sdkmanager --version` | `first-semver-on-stdout` | `sdkmanager` | COMPONENTS ONLY, into an SDK root that already exists: `sdkmanager --install "platforms;android-<n>" "build-tools;<v>"`. nen never installs the SDK root and never runs `sdkmanager --licenses`. An absent `ANDROID_HOME` degrades this to verify-only with the message. GATED BY RESIDUAL QUESTION (d) -- it ships verify-only in the first release. No repository in the inventory pins a component version, so the pack states no minimum. *(source: KroAndroid (Android SDK required; no pinned component version in the tree))* |
-| `gradle` | `9.5.1` | `{gw} --version` | `first-semver-on-stdout` | `wrapper` | NOTHING TO INSTALL: `{gw}` resolves the repository's own wrapper, and the minimum is what the root wrapper pins. nen never installs Gradle globally. *(source: KroAndroid root wrapper (contrast program/ at 8.7 -- see the compose-desktop profile))* |
-| `jdk` | `17` | `java -version` | `first-semver-on-stderr` | `verify-only` | KroAndroid needs TWO JDKs at once, Temurin 17 and 21 -- "21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves". The pack states the lower of the two as its minimum and reports both; an installer that got the ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. `java -version` writes to STDERR, which is why the reader is the stderr one. *(source: KroAndroid/.github/actions/setup-kro/action.yml:12-23)* |
-| `node` | presence only | `node --version` | `first-semver-on-stdout` | `verify-only` | food-diary's Android lane needs `node` ON PATH for the Gradle SYNC, not merely for the JS bundle -- a verify-only probe most readers would not expect. No version is pinned anywhere, so the pack states presence only. *(source: food-diary android/build.gradle:16-19, android/settings.gradle:4-14)* |
+| tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `android-sdk` | presence only | `sdkmanager --version` | `first-semver-on-stdout` | `sdkmanager` | -- | no | COMPONENTS ONLY, into an SDK root that already exists: `sdkmanager --install "platforms;android-<n>" "build-tools;<v>"`. nen never installs the SDK root and never runs `sdkmanager --licenses`. An absent `ANDROID_HOME` degrades this to verify-only with the message. GATED BY RESIDUAL QUESTION (d) -- it ships verify-only in the first release. No repository in the inventory pins a component version, so the pack states no minimum. *(source: KroAndroid (Android SDK required; no pinned component version in the tree))* |
+| `gradle` | `9.5.1` | `{gw} --version` | `first-semver-on-stdout` | `wrapper` | -- | no | NOTHING TO INSTALL: `{gw}` resolves the repository's own wrapper, and the minimum is what the root wrapper pins. nen never installs Gradle globally. *(source: KroAndroid root wrapper (contrast program/ at 8.7 -- see the compose-desktop profile))* |
+| `jdk` | `17` | `java -version` | `first-semver-on-stderr` | `verify-only` | -- | no | KroAndroid needs TWO JDKs at once, Temurin 17 and 21 -- "21 last so it's the default JAVA_HOME (Gradle daemon), 17 present so toolchain(17) resolves". The pack states the lower of the two as its minimum and reports both; an installer that got the ordering wrong would break the Gradle daemon in a way that looks like a compiler bug. `java -version` writes to STDERR, which is why the reader is the stderr one. *(source: KroAndroid/.github/actions/setup-kro/action.yml:12-23)* |
+| `node` | presence only | `node --version` | `first-semver-on-stdout` | `verify-only` | -- | no | food-diary's Android lane needs `node` ON PATH for the Gradle SYNC, not merely for the JS bundle -- a verify-only probe most readers would not expect. No version is pinned anywhere, so the pack states presence only. *(source: food-diary android/build.gradle:16-19, android/settings.gradle:4-14)* |
 
 ### Notes
 
@@ -387,12 +404,12 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Toolchain minimums (advisory)
 
-What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.
+What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
 
-| tool | pack minimum | probe | version from | installer | why / source |
-| --- | --- | --- | --- | --- | --- |
-| `node` | `20.19.0` | `node --version` | `first-semver-on-stdout` | `verify-only` | kro-pwa's `engines.node` is `>=20.19.0`; GymKai's CI runs 22. A Node install is a system-wide decision with five common answers (nvm, fnm, asdf, a distro package, the vendor installer), and picking one is exactly the line nen does not cross: it probes and prints the pin. *(source: kro-pwa/package.json (`engines.node`); GymKai CI setup step)* |
-| `pnpm` | `9.15.9` | `pnpm --version` | `first-semver-on-stdout` | `corepack` | ADVISORY ONLY: this is the version nen has been TESTED against, and it never contributes to an install argv. IT IS THE ONE VERSION THE INVENTORY STATES: kro-pwa/package.json's `packageManager` field reads `pnpm@9.15.9`, and that is the whole evidence -- no repository in the inventory declares a `>= 9` range, an `engines.pnpm` floor, or any other pnpm version at all. An earlier draft wrote `9.0.0`, which was a floor nothing measured: rounding a measured version down to a plausible-looking major is exactly how an advisory column starts asserting things nobody checked. The pin that an `--install` would actually activate is the DECLARATION's `packageManager`, never this one. *(source: kro-pwa/package.json (`packageManager`))* |
+| tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `node` | `20.19.0` | `node --version` | `first-semver-on-stdout` | `verify-only` | -- | no | kro-pwa's `engines.node` is `>=20.19.0`; GymKai's CI runs 22. A Node install is a system-wide decision with five common answers (nvm, fnm, asdf, a distro package, the vendor installer), and picking one is exactly the line nen does not cross: it probes and prints the pin. *(source: kro-pwa/package.json (`engines.node`); GymKai CI setup step)* |
+| `pnpm` | `9.15.9` | `pnpm --version` | `first-semver-on-stdout` | `corepack` | -- | no | ADVISORY ONLY: this is the version nen has been TESTED against, and it never contributes to an install argv. IT IS THE ONE VERSION THE INVENTORY STATES: kro-pwa/package.json's `packageManager` field reads `pnpm@9.15.9`, and that is the whole evidence -- no repository in the inventory declares a `>= 9` range, an `engines.pnpm` floor, or any other pnpm version at all. An earlier draft wrote `9.0.0`, which was a floor nothing measured: rounding a measured version down to a plausible-looking major is exactly how an advisory column starts asserting things nobody checked. The pin that an `--install` would actually activate is the DECLARATION's `packageManager`, never this one. *(source: kro-pwa/package.json (`packageManager`))* |
 
 ### Notes
 
@@ -442,12 +459,12 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Toolchain minimums (advisory)
 
-What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one.
+What nen has been *tested* against, never what it installs: the pin an install would use is the target repository's own, and this column can never contribute one. **Pin read from** names the file `nen shu detect` reads a *target* repository's own version out of -- where a tree states one, that version is proposed and nothing else; where it does not, the entry is withheld with the reason rather than invented. **Host tool** is the one flag that widens what `detect` proposes: the program this entry probes for is the stack's own driver, supplied by the host, so a row naming it is confirmed by this entry instead of by a `package.json` its ecosystem does not have.
 
-| tool | pack minimum | probe | version from | installer | why / source |
-| --- | --- | --- | --- | --- | --- |
-| `cocoapods` | presence only | `pod --version` | `first-semver-on-stdout` | `verify-only` | food-diary's iOS lane is a CocoaPods workspace, and no repository in the inventory pins a version -- so the pack states presence, not a minimum. Its common install is `sudo gem install`, and nen never elevates. *(source: food-diary ios/ (Podfile); no pin in any repository)* |
-| `xcode` | `26.5` | `xcodebuild -version` | `first-semver-on-stdout` | `verify-only` | KroApple pins Xcode 26.5 with the matching iOS 26.5 simulator runtime. nen cannot install it and does not pretend otherwise: the row prints the Mac App Store path, or `xcodes install <version>` where the machine already has `xcodes`. *(source: KroApple/docs/ci.md:84-86)* |
+| tool | pack minimum | probe | version from | installer | pin read from | host tool | why / source |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `cocoapods` | presence only | `pod --version` | `first-semver-on-stdout` | `verify-only` | -- | no | food-diary's iOS lane is a CocoaPods workspace, and no repository in the inventory pins a version -- so the pack states presence, not a minimum. Its common install is `sudo gem install`, and nen never elevates. *(source: food-diary ios/ (Podfile); no pin in any repository)* |
+| `xcode` | `26.5` | `xcodebuild -version` | `first-semver-on-stdout` | `verify-only` | -- | no | KroApple pins Xcode 26.5 with the matching iOS 26.5 simulator runtime. nen cannot install it and does not pretend otherwise: the row prints the Mac App Store path, or `xcodes install <version>` where the machine already has `xcodes`. *(source: KroApple/docs/ci.md:84-86)* |
 
 ### Notes
 
