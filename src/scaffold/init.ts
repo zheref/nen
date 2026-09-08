@@ -31,11 +31,8 @@ import { dirname, join, relative, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { loadContract } from "../schema/contract.js";
 import {
-  COLORS_FILE,
   CONTRACT_FILE,
-  GATES_FILE,
-  LABELS_FILE,
-  REPOS_FILE,
+  LEGACY_MIGRATABLE_FILES,
   inspectShadow,
   resolveSchemaFile,
 } from "../schema/source.js";
@@ -53,13 +50,15 @@ export const GITIGNORE_FILE = ".gitignore";
 /** The one line `.gitignore` upkeep appends, and the comment above it. */
 export const GITIGNORE_ENTRY = ".nen/";
 
-/** The four taxonomy files the `schemas/` -> `nen/` migration covers. */
-export const MIGRATED_FILES: readonly string[] = [
-  COLORS_FILE,
-  GATES_FILE,
-  LABELS_FILE,
-  REPOS_FILE,
-];
+/**
+ * The taxonomy files the `schemas/` -> `nen/` migration covers.
+ *
+ * IT IS THE LOADER'S OWN LIST, not a copy of it. A hand-written four-entry list
+ * here would be a second place the migration set is written down, and the two
+ * would come apart in exactly one direction: a file the loader still falls back
+ * for, that the scaffold silently stops copying.
+ */
+export const MIGRATED_FILES: readonly string[] = LEGACY_MIGRATABLE_FILES;
 
 /**
  * What happened to one path.

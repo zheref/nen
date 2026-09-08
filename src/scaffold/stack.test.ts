@@ -27,8 +27,17 @@ import type { CommandResult, Seams } from "../seam/exec.js";
 import { detect } from "../shu/detect.js";
 import { shuCommand } from "../shu/command.js";
 import { EMPTY_TREE, GATSBY_SITE, NEXTJS_MULTI, NEXTJS_SINGLE, markerTree } from "../shu/fixtures/paths.js";
+import {
+  COLORS_FILE,
+  CONTRACT_FILE,
+  GATES_FILE,
+  LABELS_FILE,
+  LEGACY_MIGRATABLE_FILES,
+  REPOS_FILE,
+  resolveSchemaFile,
+} from "../schema/source.js";
 import { scaffoldCommand } from "./command.js";
-import { scaffoldInit, type ToolsOutcome } from "./init.js";
+import { MIGRATED_FILES, scaffoldInit, type ToolsOutcome } from "./init.js";
 
 const TRAILERS = ["--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"];
 const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
@@ -356,6 +365,26 @@ describe("the schemas/ -> nen/ migration is a COPY", () => {
     expect(result.out.join("\n")).toMatch(/nen\/labels\.json/);
     expect(readFileSync(join(root, "schemas", "labels.json"), "utf8")).toBe('{"labels":["legacy"]}\n');
     expect(readFileSync(join(root, "nen", "labels.json"), "utf8")).toBe('{"labels":["current"]}\n');
+  });
+
+  it("covers exactly the files the LOADER still falls back for, and no others", async () => {
+    // BOTH DIRECTIONS, AND NEITHER IS THE LIST COMPARED TO ITSELF. The set is
+    // computed against `resolveSchemaFile`'s own answer for each of the five
+    // canonical paths, so a hand-written list re-introduced here -- which is
+    // the drift this guards -- fails whichever way it is wrong: a file the
+    // loader still falls back for that the scaffold stopped copying (a
+    // repository that keeps working by fallback and never finishes migrating),
+    // or one it copies that no released nen ever read from `schemas/`.
+    const root = tempEmpty();
+    const hasLegacy = (file: string): boolean => resolveSchemaFile(root, file).legacy !== null;
+    const everyTaxonomyFile = [LABELS_FILE, REPOS_FILE, COLORS_FILE, GATES_FILE, CONTRACT_FILE];
+    expect([...MIGRATED_FILES].sort()).toEqual(everyTaxonomyFile.filter(hasLegacy).sort());
+    expect([...MIGRATED_FILES]).toEqual([...LEGACY_MIGRATABLE_FILES]);
+    expect(MIGRATED_FILES.length).toBeGreaterThan(0);
+    // And the one file with no legacy location is not in it: no released nen
+    // ever looked for a contract under `schemas/`, and migrating one would
+    // invent a claim over a filename in a directory nen no longer owns.
+    expect(MIGRATED_FILES).not.toContain(CONTRACT_FILE);
   });
 
   it("has nothing to say about a repository with no schemas/ at all", async () => {
