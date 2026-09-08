@@ -2801,6 +2801,50 @@ describe("nen shu detect -- the expo stack, three lanes in one tree", () => {
     expect(report.notes.join("\n")).toMatch(/the lanes need different platforms/);
   });
 
+  it("relates the native lanes to the manifest that generates them, and merges nothing", () => {
+    // The phrase is matched in its SINGULAR form on purpose: the note says
+    // "SIBLING LANE" for one child and "SIBLING LANES" for several, and an
+    // assertion that only knew the plural let a mutant that fires the note on
+    // a one-child tree through unnoticed.
+    const note = bare().notes.find((entry): boolean => entry.includes("SIBLING LANE"));
+    expect(note).toBeDefined();
+    expect(note).toMatch(/the lane 'expo' names 'ios' among its OWN markers/);
+    expect(note).toMatch(/'android' \(gradle-android, cwd android\)/);
+    expect(note).toMatch(/'ios' \(xcode-ios, cwd ios\)/);
+    // The relationship is stated and the decision is not taken.
+    expect(note).toMatch(/is a decision this repository makes/);
+    // And the pack's own sentence for the marker is what carries the claim.
+    expect(note).toMatch(/prebuild output is committed, and the native lanes are real/);
+  });
+
+  // A NESTED LANE IS NOT A SIBLING LANE, and the gate that says so is the
+  // parent profile's OWN marker table rather than the nesting. This tree has a
+  // lane DIRECTLY inside another -- the same shape the note fires on -- and
+  // `nextjs` names no directory among its markers, so nothing is claimed about
+  // the relationship. Widening the gate to any nesting turns this red.
+  it("says nothing of the kind about a lane merely nested inside another", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-nested-not-sibling-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n", "utf8");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "root", devDependencies: { next: "15.1.0" } }),
+        "utf8",
+      );
+      cpSync(GATSBY_SITE, join(dir, "site"), { recursive: true });
+      const report = detect(dir);
+      expect(report.lanes.map((lane): string => lane.cwd)).toEqual([".", "site"]);
+      expect(
+        report.notes.join("\n"),
+        "the gate is the pack's marker table, not the nesting",
+      ).not.toMatch(/SIBLING LANE/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // And the same for a workspace root's members, which are one level deeper.
+    expect(detect(NEXTJS_WORKSPACES).notes.join("\n")).not.toMatch(/SIBLING LANE/);
+  });
+
   it("proposes exactly the two rows this lane's own manifest confirms", () => {
     const lane = laneNamed("expo");
     expect(commandRows(lane?.verbs)).toEqual(["dev", "lint"]);
@@ -2863,6 +2907,110 @@ describe("nen shu detect -- the expo stack, three lanes in one tree", () => {
     );
     expect(note).not.toMatch(/nothing corroborates the match/);
     expect(note).not.toMatch(/'lint': expo lint/);
+  });
+});
+
+describe("nen shu detect -- the Apple lane's scheme, read against the project's targets", () => {
+  const iosNote = (repo: string, verb: string): string =>
+    detect(repo)
+      .lanes.find((lane): boolean => lane.stack === "xcode-ios")
+      ?.notes.find((entry): boolean => entry.startsWith(`'${verb}' withheld`)) ?? "";
+
+  // MUTANT 3.
+  it("withholds test naming the target the scheme asks for and the project has not got", () => {
+    const note = iosNote(EXPO_BARE, "test");
+    expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+    expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+    expect(note).toMatch(/'Placeholder' names 'PlaceholderTests' \(PlaceholderTests\.xctest\)/);
+    expect(note).toMatch(/this lane's project declares no such target -- it declares Placeholder/);
+    expect(note).toMatch(/a test on that scheme fails before .* matters/);
+  });
+
+  it("names the shared scheme it found, by name and by file, and substitutes none of it", () => {
+    const note = iosNote(EXPO_BARE, "build");
+    expect(note).toMatch(
+      /the shared scheme nen can see here is 'Placeholder' \(Placeholder\.xcodeproj\/xcshareddata\/xcschemes\/Placeholder\.xcscheme\)/,
+    );
+    expect(note).toMatch(/which scheme a verb means is this repository's decision, not a count/);
+    // The row is still WITHHELD. Reading a scheme name off the disk is not the
+    // same act as deciding which scheme a verb means.
+    const lane = detect(EXPO_BARE).lanes.find((entry): boolean => entry.stack === "xcode-ios");
+    expect(commandRows(lane?.verbs)).toEqual([]);
+  });
+
+  it("says the container is a workspace, which the reference row's own flag does not address", () => {
+    expect(iosNote(EXPO_BARE, "build")).toMatch(
+      /this lane's container is a WORKSPACE \(Placeholder\.xcworkspace\)/,
+    );
+  });
+
+  // THE OTHER HALF OF THE CROSS-CHECK, and the one a checked-in fixture cannot
+  // carry because the point is the ABSENCE of a finding: a project that
+  // declares the target its scheme names earns the token reason and no more.
+  it("makes no such claim when the project DOES declare the target the scheme names", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-ok-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      const pbxproj = join(dir, "ios", "Placeholder.xcodeproj", "project.pbxproj");
+      writeFileSync(
+        pbxproj,
+        readFileSync(pbxproj, "utf8").replace(
+          "/* End PBXNativeTarget section */",
+          [
+            "\t\t00E356ED1AD99517003FC87E /* PlaceholderTests */ = {",
+            "\t\t\tisa = PBXNativeTarget;",
+            "\t\t\tname = PlaceholderTests;",
+            "\t\t};",
+            "/* End PBXNativeTarget section */",
+          ].join("\n"),
+        ),
+        "utf8",
+      );
+      const note = iosNote(dir, "test");
+      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+      expect(note, "the finding must be GONE, not merely reworded").not.toMatch(
+        /BROKEN ON A CLEAN CHECKOUT/,
+      );
+      // The scheme is still NAMED -- that half is about what is on disk, not
+      // about whether the scheme works.
+      expect(note).toMatch(/the shared scheme nen can see here is 'Placeholder'/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // FAIL CLOSED. A project file nen cannot parse is one nen knows nothing
+  // about, and reporting every scheme in the lane as broken on the strength of
+  // an unfamiliar format is the worst answer available.
+  it("makes NO claim at all when it cannot read a target list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-unreadable-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "ios", "Placeholder.xcodeproj", "project.pbxproj"),
+        "// a format this reader does not know\n",
+        "utf8",
+      );
+      const note = iosNote(dir, "test");
+      expect(note).toMatch(/could not read a native-target list out of Placeholder\.xcodeproj/);
+      expect(note).toMatch(/a cross-check nen could not perform is not one that passed/);
+      expect(note).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A scheme kept in `xcuserdata/` belongs to one developer's checkout. Nen
+  // reads the SHARED directory only, and says so rather than reporting a name a
+  // colleague's clone has not got.
+  it("reports no shared scheme when the lane has none, and names where it looked", () => {
+    const note =
+      detect(markerTree("xcode")).lanes[0]?.notes.find((entry): boolean =>
+        entry.startsWith("'build' withheld"),
+      ) ?? "";
+    expect(note).toMatch(/nen found no SHARED scheme in this lane/);
+    expect(note).toMatch(/<container>\/xcshareddata\/xcschemes\//);
+    expect(note).toMatch(/a scheme under xcuserdata\/ is one developer's checkout/);
   });
 });
 
