@@ -101,49 +101,31 @@ below.
 
 ## Day to day
 
-Install once, bring a repository's own `schemas/` taxonomy up to the point
-where the taxonomy-reading verbs work against it, and run the handful of
-verbs that come up most: a readiness check before merging, the board
-pipeline, filing and commenting, polling a check, and cutting a tag. Every
-command below is real — verified against [`docs/USAGE.md`](docs/USAGE.md)'s
-own conventions, and, where it is read-only, run against this repository's
-own bundled fixture, `src/schema/fixtures/bankai-repo`.
+Install once, bring a repository's `schemas/` taxonomy up to where the
+taxonomy-reading verbs work, then the four verbs that come up most. Every
+command runs as printed; the read-only ones ran against the bundled fixture
+`src/schema/fixtures/bankai-repo`. `owner/name` and `/path/to/repo` are
+placeholders.
 
 ### Install
 
-The two-step bootstrap under [Install](#install) above is the one-time
-fetch. Day to day, pin it once — in a shell profile, or a CI job's setup
-step — and reuse the resulting path instead of re-running `curl` on every
-invocation:
+[Install](#install) above is the one-time fetch. Day to day, pin it once — in a
+shell profile, or a CI job's setup step — and reuse the path; `nen bootstrap`
+is the in-CLI form of the same fetch, for re-pinning from an existing checkout:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.2.0)"
-"$nen" --version
-```
-```text
-0.2.0
-```
-
-From inside a checkout that already has a binary, `nen bootstrap` is the
-in-CLI form of the same fetch — for re-pinning to a newer tag, or for
-pinning a second `nen` a script wants to call by an explicit path:
-
-```bash
+nen="$(bash nen-bootstrap.sh --ref v0.2.0)" && "$nen" --version
 nen bootstrap --ref v0.2.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
-Every exit code either form can return is a published contract; see
-`bootstrap/nen.sh`'s own header for what each one means and which one is
-safe to retry.
+Once a release is published for `v0.2.0`, the first prints `0.2.0`. Until then
+both refuse at exit 6 — the tag exists but no release does, so there is no
+`SHA256SUMS` to verify a binary against, and assets exist only once a release
+is published, as [Install](#install) says. `--ref v0.1.0` resolves today.
 
 ### Set up a repository
 
-Bring a new (or newly-onboarded) repository up to the point where the
-taxonomy-reading verbs work against it. `owner/name` below is a
-placeholder — substitute the repository you are onboarding.
-
-Create the directory skeleton, the trailer-enforcing commit-msg hook, and a
-canon-values template:
+The directory skeleton, the commit-msg trailer hook, a canon-values template:
 
 ```bash
 nen scaffold init --repo /path/to/repo --directories src,tests,docs \
@@ -151,45 +133,29 @@ nen scaffold init --repo /path/to/repo --directories src,tests,docs \
   --canon-values-path .claude/canon-values.yml --scenario swiftui-tca-uzf-v2
 ```
 
-Check that the four taxonomy files can be read at all — `--repo .` against
-your own checkout; here, against this repository's bundled fixture so the
-block runs as printed:
+Then check the four taxonomy files read at all — one `ok`/`fail` row each,
+shown in full under [Try it](#try-it) above:
 
-```
-$ nen schema check --repo src/schema/fixtures/bankai-repo
-repository: <absolute path to your checkout>/src/schema/fixtures/bankai-repo
-  ok    schemas/labels.json  13 labels
-  ok    schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
-  ok    schemas/colors.yml  3 categories, 13 values
-  ok    schemas/gates.json  5 reviewer identities
+```bash
+nen schema check --repo /path/to/repo
 ```
 
-Push the label set — preview first, then for real:
+Preview the label set, then drop `--dry-run` to push it. `--dry-run` makes no
+`gh` call at all; without it one bad label never aborts the run — every other
+good label lands, and the failures are named at the end (exit 1):
 
 ```
 $ nen labels sync --target owner/name --repo src/schema/fixtures/bankai-repo --dry-run
 would sync: bankai:stage/idea (#ededed) -- Raw idea awaiting research
-would sync: bankai:stage/researched (#1d76db) -- Epic drafted, awaiting G1 approval
-would sync: bankai:stage/building (#fbca04) -- Released to a builder
 ...
 would sync: bankai:epic (#5319e7) -- An epic, delivered on an integration branch
 ```
-```bash
-nen labels sync --target owner/name --repo /path/to/repo
-```
 
-`--dry-run` makes no `gh` call at all — safe against any target. Drop it and
-the sync runs for real: one bad label never aborts the run, every other good
-label still lands, and the failures are named at the end (exit 1).
-
-Resolve which handbooks the repository loads (`--target` must name a
-repository the registry actually records as a consumer — `zheref/KroApple`
-is the bundled fixture's own; point it at your real, registered repository
-instead):
+Resolve which handbooks it loads. `--target` must name a registered consumer;
+`zheref/KroApple` is the fixture's own:
 
 ```
-$ nen canon resolve --repo src/schema/fixtures/bankai-repo --target zheref/KroApple \
-  --always-load handbooks/uzf-core.md,handbooks/security-baseline.md --stack-dir handbooks/stacks
+$ nen canon resolve --repo src/schema/fixtures/bankai-repo --target zheref/KroApple --always-load handbooks/uzf-core.md,handbooks/security-baseline.md --stack-dir handbooks/stacks
 scenario: swiftui-tca-uzf-v2
 always load: handbooks/uzf-core.md, handbooks/security-baseline.md
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
@@ -197,50 +163,56 @@ stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 
 ### Use it every day
 
-Six verbs, one block each, with the reason you would reach for it.
-
 **Is this pull request ready to merge, before you look any further?**
 
 ```bash
-nen pr ready owner/name#42 --explain
+nen pr ready 42 --gh-repo owner/name --repo . --explain
 ```
 
-`--explain` prints the full conjunct table, in evaluation order, plus what
-the gate does *not* decide. `--json` carries the same result behind a
-stable, versioned `contract` field (`"nen.pr.ready/v0.1"`), so a caller can
-tell a future breaking change from a compatible one — a non-zero exit never
-means "cleared": `unevaluated` (GitHub could not be read) exits 1 exactly
-like `not-ready`.
-
-**What is the one thing standing in the way of merging it?**
-
-```bash
-nen pr next-blocker --target owner/name --pr 42 --repo .
-```
-
-Reports the first blocking condition only, in a fixed order — conflict, red
-required check, owed reviewer round, unresolved thread, missing body
-requirement — so you fix one thing and re-run rather than reading a whole
-table every time. `--repo` is required by name here; it is where
-`schemas/gates.json` (or an explicit `--gates <path>`) is read from.
+The ref is either `<CODE>#<N>` against the target repository's own product
+codes (`KP#42`, or `KP42` — the `#` is optional) or, as here, a bare number
+with `--gh-repo owner/name`. `--json` carries the same verdict behind a stable
+contract line, `"contract": "nen.pr.ready/v0.1",`. A non-zero exit never means
+cleared: with no readable token the verdict is `unevaluated` at exit 1.
 
 **What does the backlog look like as a board, right now?**
 
 ```bash
 nen backlog fetch --repo-slug owner/name --limit 200 --json > rows.json
-nen backlog order --rows-from rows.json --severity-order critical,high,medium,low
-
-nen board build --repo-slug owner/name --rows-from board-rows.json --json > board.json
-nen board render --board-from board.json
 ```
 
-Four verbs, composed by file: `fetch` is fresh over `gh api` every time
-(never cached, and paginated past GitHub's 100-row clamp), `order` applies
-severity/blocks/consumer/age priority to a pre-fetched row set, `build`
-assembles the padded-markdown table's rows and validates their shape at the
-JSON boundary, `render` prints it.
+`fetch`'s rows are `{issueNumber, title, labels, prNumbers, createdAt}` inside
+an object — deliberately not the input of the verbs below. `backlog order`
+takes a JSON **array** of `{id, severity, blocksOther, affectsConsumers,
+createdAt, number}`; `board build` an array of BoardRow. Severity out of
+labels, the blocking edges, a row's gate/status/needs are judgement calls, so
+that reshape is the caller's — a skill or a script — not this CLI's. (Piping
+`fetch` straight into `order` today crashes rather than refusing,
+[#105](https://github.com/zheref/nen/issues/105).) Hand-written illustration:
 
-**File the issue you just found, and comment on the one it duplicates.**
+```json
+[
+  {"id": "42", "title": "Pin the read-only table", "refs": ["KP-IS-#42", "KP-PR-#57"], "gate": "G2", "status": "🟢 ready", "needs": "review"},
+  {"id": "43", "title": "Escape pipes in titles", "refs": ["KP-IS-#43"], "gate": null, "status": "🟡 blocked", "needs": "waiting on #42"}
+]
+```
+
+`build` validates every row at the JSON boundary; `render` prints the table:
+
+```
+$ nen board build --repo-slug owner/name --rows-from board-rows.json --json > board.json
+$ nen board render --board-from board.json
+owner/name -- generated 2026-09-08T00:34:25.497Z
+
+| Effort                  | Refs                 | Status (gate) | Needs          |
+| ----------------------- | -------------------- | ------------- | -------------- |
+| Pin the read-only table | KP-IS-#42, KP-PR-#57 | 🟢 ready (G2) | review         |
+| Escape pipes in titles  | KP-IS-#43            | 🟡 blocked    | waiting on #42 |
+```
+
+**File the issue you just found.** `--dry-run` prints the exact `gh` call and
+makes no network call at all; the labels are checked against `--repo`'s own
+taxonomy first, where GitHub would silently create an unknown one instead:
 
 ```
 $ nen issue file --target owner/name --repo src/schema/fixtures/bankai-repo \
@@ -249,15 +221,6 @@ $ nen issue file --target owner/name --repo src/schema/fixtures/bankai-repo \
   --assignee you --dry-run
 would run: gh issue create --repo owner/name --title watch until refuses a quoted --jq argument on a read-only gh api call --body-file ./body.md --assignee you --label bankai:stage/idea --label bankai:severity/medium
 ```
-```bash
-nen issue comment --target owner/name --issue 90 \
-  --body "Filed as #<n> -- see its body for the repro." --dry-run
-```
-
-Both print the exact `gh` call and write nothing under `--dry-run` — no
-network call at all. `issue file`'s labels are checked against `--repo`'s
-own taxonomy first; GitHub itself would silently create an unknown label
-rather than refuse.
 
 **Wait for a check to go green without babysitting the terminal.**
 
@@ -265,48 +228,22 @@ rather than refuse.
 nen watch until --command "gh pr checks 42 --json bucket" --true-pattern "pass" --interval-ms 5000
 ```
 
-The command is classified against izanami's read-only table before the
-first run, and spawned directly with no shell — a mutating command is
-refused outright, not run once and reported on. izanami is also stricter
-than it looks: a quoted or metacharacter-bearing argument refuses too,
-because it reads as one word to the classifier's scan and something else to
-a real shell:
+The command is classified against izanami's read-only table before the first
+run and spawned with no shell, so a mutating one is refused outright. A quoted
+or metacharacter-bearing argument refuses too (exit 2) — it reads as one word
+to the classifier's scan and something else to a real shell:
 
 ```
 $ nen watch until --command "gh api repos/owner/name/pulls --jq '.[].number'" --max-iterations 1
 nen: 'gh api repos/owner/name/pulls --jq '.[].number'' classifies as unknown ...
 ```
 
-exit 2 — drop the quotes, or use a command the table can classify.
-
-**Cut the tag once a release's preconditions all pass.**
-
-```bash
-nen release preflight --repo-slug owner/name --tag v0.3.0 --range v0.2.0..HEAD \
-  --changelog CHANGELOG.md --owner-repo owner/name --critical-issues '' \
-  --live-chores-from live-chores.json
-
-nen tag cut --repo . --name v0.3.0 --at <sha> --push
-```
-
-`preflight` reports all six precondition rows, never just the first
-failure. `tag cut` pins the tag at an explicit commit — `--at` is required
-and never defaults to `HEAD` — and never auto-pushes without `--push`.
-Either way, cutting a tag is not publishing a release: the binaries a
-consumer's bootstrap needs exist only once a release has actually been
-published for that tag.
-
----
-
-[`docs/USAGE.md`](docs/USAGE.md) documents every verb's arguments, exit
-codes and `--json` shape, plus six full end-to-end workflows these six
-verbs are drawn from. Its own [day-to-day actions
-table](docs/USAGE.md#day-to-day-actions--todays-verbs) is the honest
-counterpart to this section: stack-aware developer verbs — `build`, `test`,
-`lint`, `dev`, `run`, `deploy`, and the rest a maintainer reaches for daily
-on a real project — do not exist in this release. They are being designed,
-tracked in [zheref/nen#91](https://github.com/zheref/nen/issues/91); until
-they land, those actions stay with each project's own toolchain.
+[`docs/USAGE.md`](docs/USAGE.md) has every verb's arguments, exit codes and
+`--json` shape — `pr next-blocker`, `release preflight`, `tag cut` and the rest
+— plus six end-to-end workflows and a [day-to-day actions
+table](docs/USAGE.md#day-to-day-actions--todays-verbs): stack-aware developer
+verbs (`build`, `test`, `lint`, `dev`, `run`, `deploy`) do not exist in this
+release, and are tracked in [#91](https://github.com/zheref/nen/issues/91).
 
 ## The one-surface contract
 
