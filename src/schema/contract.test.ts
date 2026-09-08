@@ -318,7 +318,10 @@ describe("project", () => {
     expect(target?.why).toBe("the live site");
     // UNKNOWN KEYS ARE PRESERVED, NOT REFUSED -- this schema's convention
     // everywhere, so a shape a later release reads is not a shape this one
-    // deletes.
+    // deletes. THE ONE EXCEPTION is a key one letter away from a key nen acts
+    // on, refused below: `host` is four edits from the nearest of the four and
+    // is a key somebody MEANT, while `arg` is a key somebody MISSPELLED and
+    // preserving it silently drops the arguments a deploy was supposed to add.
     expect(target?.raw["host"]).toBe("a");
   });
 
@@ -357,6 +360,113 @@ describe("project", () => {
       refusal({ project: { ...PROJECT, targets: { prod: { requiresEnv: [{}] } } } }).pointer,
     ).toBe("project.targets.prod.requiresEnv[0]");
     expect(refusal({ project: { ...PROJECT, targets: [] } }).pointer).toBe("project.targets");
+  });
+
+  it("refuses a key one letter away from one nen reads, naming the key it meant", () => {
+    // THE FAILURE THIS BLOCK WAS PARSED TO PREVENT, and the half a wrong-TYPE
+    // check does not reach: `{"arg": ["--prod"]}` is a perfectly-shaped list
+    // under a key nothing reads, so the flag is accepted, nothing is appended,
+    // and a DIFFERENT command deploys at exit 0.
+    for (const [key, meant] of [
+      ["arg", "args"],
+      ["Args", "args"],
+      ["argss", "args"],
+      ["requireEnv", "requiresEnv"],
+      ["requiresEnvs", "requiresEnv"],
+      ["unsuported", "unsupported"],
+      ["hy", "why"],
+    ] as const) {
+      const error = refusal({
+        project: { ...PROJECT, targets: { prod: { [key]: ["--prod"] } } },
+      });
+      expect(error.pointer, key).toBe(`project.targets.prod.${key}`);
+      expect(error.message, key).toContain(`is one letter away from '${meant}'`);
+    }
+  });
+
+  it("keeps a key that is nobody's typo -- and a $-key -- exactly as written", () => {
+    // THE OTHER DIRECTION, and the reason the radius is one edit rather than
+    // two: these are keys a repository MEANT, for a release that may read them.
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        targets: {
+          prod: { $note: "metadata", host: "a", region: "eu-west-1", branch: "main", url: "x" },
+        },
+      },
+    });
+    const target = contract.project?.targets["prod"];
+    expect(target?.raw["$note"]).toBe("metadata");
+    expect(target?.raw["region"]).toBe("eu-west-1");
+    expect(target?.raw["branch"]).toBe("main");
+    expect(target?.raw["url"]).toBe("x");
+  });
+
+  it("requires the SENTENCE on 'unsupported', exactly as an unsupported VERB row does", () => {
+    // `""` read as a reason is exit 4 with nothing after the colon; `""` read
+    // as "not unsupported" would run a destination the declaration was closing.
+    const error = refusal({ project: { ...PROJECT, targets: { pages: { unsupported: "" } } } });
+    expect(error.pointer).toBe("project.targets.pages.unsupported");
+    expect(error.message).toContain("expected a non-empty string");
+    // Absent is still `null` -- the key is optional, its VALUE is not.
+    expect(parse({ project: { ...PROJECT, targets: { prod: {} } } }).project?.targets["prod"]?.unsupported).toBeNull();
+  });
+
+  it("refuses a requiresEnv entry that is not a name an environment variable can have", () => {
+    for (const name of ["lower-case", "1ABC", "A B", "PATH=evil", "--flag", ""]) {
+      const error = refusal({
+        project: { ...PROJECT, targets: { prod: { requiresEnv: [name] } } },
+      });
+      expect(error.pointer, name).toBe("project.targets.prod.requiresEnv[0]");
+    }
+    // And the shapes that ARE names: a leading underscore, digits after the
+    // first character, and the screaming-snake form every real one uses.
+    const contract = parse({
+      project: { ...PROJECT, targets: { prod: { requiresEnv: ["_X", "A1", "DEPLOY_TOKEN_2"] } } },
+    });
+    expect(contract.project?.targets["prod"]?.requiresEnv).toEqual(["_X", "A1", "DEPLOY_TOKEN_2"]);
+  });
+
+  it("holds an 'env' PRECONDITION to the same rule, for the same reason", () => {
+    // The lane's own env rows are asserted by exactly the same code path as a
+    // target's -- `seams.env[name] !== undefined` -- so a name no environment
+    // could carry is a row that can only ever report FAIL there too.
+    const error = refusal({
+      project: {
+        ...PROJECT,
+        preconditions: { web: [{ kind: "env", value: "DEPLOY TOKEN" }] },
+      },
+    });
+    expect(error.pointer).toBe("project.preconditions.web[0].value");
+    expect(error.message).toContain("shell identifier");
+    // A kind nen does not assert is NOT held to it: `kind` is the repository's
+    // own word, and only `env` names a variable.
+    expect(() =>
+      parse({
+        project: { ...PROJECT, preconditions: { web: [{ kind: "note", value: "anything at all" }] } },
+      }),
+    ).not.toThrow();
+  });
+
+  it("keeps a target named '__proto__' in the map AND in the listing", () => {
+    // On an ordinary object literal that key sets the PROTOTYPE: the target
+    // vanishes from the map and from Object.keys, so `--target __proto__` is
+    // refused as undeclared and the refusal lists a set that does not include
+    // it -- nen telling a maintainer their file does not say what it says.
+    // Built through JSON.parse, which is how a declaration really reaches this
+    // loader: an object LITERAL with that key sets the prototype at the call
+    // site instead, so the test would never hand the loader the key at all.
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        targets: JSON.parse('{"__proto__": {"args": ["--weird"]}, "prod": {}}') as unknown,
+      },
+    });
+    expect(Object.keys(contract.project?.targets ?? {}).sort()).toEqual(["__proto__", "prod"]);
+    expect(
+      Object.prototype.hasOwnProperty.call(contract.project?.targets ?? {}, "__proto__"),
+    ).toBe(true);
+    expect(contract.project?.targets["__proto__"]?.args).toEqual(["--weird"]);
   });
 
   it("skips a $-prefixed key, as every other block in this schema does", () => {

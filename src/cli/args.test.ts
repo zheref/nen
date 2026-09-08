@@ -95,4 +95,39 @@ describe("parseArgs", () => {
   it("does not cluster short flags", () => {
     expect(() => parseArgs(["-vh"], SPEC)).toThrow(UsageError);
   });
+
+  it("REFUSES a value flag given twice rather than taking the last one", () => {
+    // Last-one-wins makes the meaning of a line depend on argv order with
+    // nothing on screen saying so. On `shu deploy --target a --target b` that
+    // is a build sent somewhere nobody named.
+    for (const argv of [
+      ["--repo", "a", "--repo", "b"],
+      ["--repo=a", "--repo=b"],
+      ["--repo", "a", "--repo=b"],
+      ["--repo=a", "--repo", "b"],
+    ]) {
+      expect(() => parseArgs(argv, SPEC), argv.join(" ")).toThrow(UsageError);
+      expect(() => parseArgs(argv, SPEC), argv.join(" ")).toThrow(
+        /--repo is given more than once \(already 'a'\)/,
+      );
+    }
+    // The same value twice is still twice: nen does not compare them, because
+    // "you typed it once" and "you typed it twice identically" are different
+    // lines and only one of them is what the caller meant to write.
+    expect(() => parseArgs(["--repo", "a", "--repo", "a"], SPEC)).toThrow(UsageError);
+  });
+
+  it("leaves a repeated BOOLEAN alone -- it cannot mean two different things", () => {
+    const parsed = parseArgs(["--json", "--json", "-v", "--version"], SPEC);
+    expect(parsed.booleans.has("json")).toBe(true);
+    expect(parsed.booleans.has("version")).toBe(true);
+  });
+
+  it("does not read a flag repeated AFTER a passthrough '--' as a repetition", () => {
+    // Everything after a bare `--` belongs to the sub-tool and is never
+    // interpreted here -- so `nen dev test --repo x -- --repo y` is one --repo.
+    const parsed = parseArgs(["--repo", "x", "--", "--repo", "y"], SPEC);
+    expect(parsed.values["repo"]).toBe("x");
+    expect(parsed.passthrough).toEqual(["--repo", "y"]);
+  });
 });

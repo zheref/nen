@@ -17,6 +17,7 @@
 
 import { assertRepoRoot } from "../repo/root.js";
 import { commaList } from "../cli/comma.js";
+import { ENV_VAR_NAME } from "../schema/contract.js";
 import {
   emit,
   requireRepoFlag,
@@ -44,7 +45,12 @@ import { freshTreeSupport, resolveStackId } from "./templates.js";
 // safer and more honest than trying to escape a key that was never a valid
 // trailer key to begin with.
 const TRAILER_KEY = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
-const MARKER_ENV_VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// `--marker-env` asks the SAME question the declaration loader asks of the
+// variable names `project.targets.<name>.requiresEnv` and an `env` precondition
+// state (../schema/contract.ts's ENV_VAR_NAME): "is this a name an environment
+// variable can have". It used to be a second copy of that regex here, which is
+// a second rule the day either is widened.
+const MARKER_ENV_VAR = ENV_VAR_NAME;
 
 /**
  * The three fresh-tree lists, rendered for `--help`.
