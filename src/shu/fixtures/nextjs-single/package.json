@@ -2,6 +2,12 @@
   "name": "@placeholder/single",
   "private": true,
   "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "build": "placeholder",
+    "test": "placeholder",
+    "lint": "placeholder",
+    "dev": "placeholder"
+  },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
     "next": "15.1.0",

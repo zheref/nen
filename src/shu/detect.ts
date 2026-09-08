@@ -6,9 +6,16 @@
 // every repository on earth -- while a repository's lane names, its argv, its
 // preconditions and its targets are that repository's own vocabulary, which §3
 // forbids this binary from deciding. So the marker table lives here and the argv
-// table does not: the argv comes from ../../profiles/, is proposed rather than
-// run, and is cross-checked against what the repository actually declares before
-// it is even proposed.
+// table does not: the argv comes from ../profiles/pack.ts, is proposed rather
+// than run, and is cross-checked against what the repository actually declares
+// before it is even proposed.
+//
+// THIS IS THE ONE MODULE IN THE FAMILY THAT READS THE PACK, and the reason it
+// may is a property rather than a promise: ../profiles/inertness.test.ts sweeps
+// the whole import graph and fails the build if anything that can spawn a
+// process reaches the pack, at any depth. `detect` spawns nothing. It writes a
+// FILE a human then edits, and the executor (./render.ts, ./run.ts) has no
+// parameter a pack could arrive through.
 //
 // THE THREE THINGS THIS VERB WILL NOT DO, each of which is a temptation the
 // design names by hand:
@@ -17,11 +24,11 @@
 //      gets two lanes and `defaultLane: null`, plus a note. Choosing for the
 //      caller is how a scripted `nen shu build` silently starts building
 //      something else the day a second lane appears.
-//   2. **It never proposes a command the repository cannot run.** Every verb
-//      from the pack is dropped unless package.json declares the dependency its
-//      argv names, and the whole verb map is dropped unless `packageManager`
-//      names the manager every argv routes through. A proposal a human pastes
-//      and then discovers is fiction is worse than an empty map with a reason.
+//   2. **It never proposes a command the repository cannot run.** Every cell
+//      the pack carries is substituted and then cross-checked against the
+//      lane's own `package.json`; a row that fails any check is WITHHELD with
+//      the reason, never proposed unverified. A proposal a human pastes and
+//      then discovers is fiction is worse than an empty map with a reason.
 //   3. **It never overwrites a declaration.** A declaration is a DECISION, and
 //      `--write` over one would overwrite a decision with an inference. There
 //      is no `--force`: the block is printed, and a human merges it.
@@ -33,39 +40,16 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
+import {
+  loadProfilesPack,
+  PLACEHOLDERS,
+  profileById,
+  verbCell,
+  type ProfilesPack,
+  type ProfileVerb,
+  type StackProfile,
+} from "../profiles/pack.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
-import { PACK, type PackStack } from "./pack.js";
-
-/** The seven stacks the design names, defined by the seven product repos. */
-export const STACKS: readonly string[] = [
-  "compose-desktop",
-  "dotnet-winui",
-  "expo",
-  "gatsby",
-  "gradle-android",
-  "nextjs",
-  "xcode-ios",
-];
-
-/**
- * Which platforms each stack's toolchain can run on.
- *
- * A PLATFORM IS NOT A TOOLCHAIN NAME -- `darwin`, `linux` and `win32` are
- * `process.platform`'s own vocabulary, and the fact that one stack's build
- * system ships only on macOS is a property of the world rather than of any
- * repository. This is the one per-stack fact detect proposes for a stack the
- * pack has no verbs for, because getting it wrong costs a caller an exit 3 on
- * the right machine.
- */
-const STACK_HOSTS: Readonly<Record<string, readonly string[]>> = {
-  "compose-desktop": ["darwin", "linux", "win32"],
-  "dotnet-winui": ["win32"],
-  expo: ["darwin", "linux", "win32"],
-  gatsby: ["darwin", "linux", "win32"],
-  "gradle-android": ["darwin", "linux", "win32"],
-  nextjs: ["darwin", "linux", "win32"],
-  "xcode-ios": ["darwin"],
-};
 
 /** Directories a marker scan never descends into. */
 const SKIP = new Set([
@@ -90,8 +74,13 @@ const SKIP = new Set([
  * one or two directories down (a workspace, an `android/` sibling); an unbounded
  * walk of a large checkout is slow, and a marker eight directories down inside
  * somebody's fixture tree is far more likely to be test data than a lane.
+ *
+ * THE BOUND IS A REAL BLIND SPOT AND IS SAID OUT LOUD: a lane deeper than this,
+ * or one living in a directory named like build output, is invisible to the
+ * scan. `renderDetect`'s "no lane detected" prose names both, because a silent
+ * miss and an empty tree look identical from the outside.
  */
-const MAX_DEPTH = 3;
+export const MAX_DEPTH = 3;
 
 const NEXT_CONFIG = /^next\.config\.(js|mjs|cjs|ts|mts|cts)$/;
 const GATSBY_CONFIG = /^gatsby-config\.(js|mjs|cjs|ts)$/;
@@ -110,12 +99,36 @@ const WINUI_MARKER = "<UseWinUI>";
 /** The key an app manifest carries when the project is an Expo one. */
 const EXPO_MANIFEST_KEY = "expo";
 
+/**
+ * Every stack id `matchesIn` below can answer with.
+ *
+ * IT IS ASSERTED AGAINST THE PACK'S OWN ID LIST (./detect.test.ts), in both
+ * directions. A marker answering a stack the pack has no profile for is a lane
+ * whose verb lookup throws; a profile no marker can reach is a stack `detect`
+ * can never propose, which is a gap worth failing the build over rather than
+ * discovering from a user.
+ */
+export const MARKER_STACKS: readonly string[] = [
+  "compose-desktop",
+  "dotnet-winui",
+  "expo",
+  "gatsby",
+  "gradle-android",
+  "nextjs",
+  "xcode-ios",
+];
+
 export interface DetectedLane {
   readonly lane: string;
   readonly stack: string;
   /** Repo-relative, forward-slashed. `.` for the repository root. */
   readonly cwd: string;
-  /** The repo-relative paths that matched, in the order they were found. */
+  /**
+   * The repo-relative paths that identified this stack in this directory, in
+   * the order they were found. Usually one; a tree carrying `next.config.js`
+   * AND `next.config.mjs` matches twice and is ONE lane with two markers, not
+   * two lanes with one each.
+   */
   readonly markers: readonly string[];
   /** The proposed per-verb argv, empty when nothing could be cross-checked. */
   readonly verbs: Readonly<Record<string, unknown>>;
@@ -290,19 +303,154 @@ function scan(repoRoot: string): readonly { directory: string; matches: readonly
  * A lane's name: the directory it lives in, or the stack id at the root.
  *
  * DETERMINISTIC AND COLLISION-FREE, because a lane name is what a caller types
- * into `--lane` and what a script pins. Two stacks in one directory take the
- * directory name and the directory-plus-stack name, in the stacks' own sorted
- * order, so the same tree always produces the same names.
+ * into `--lane` and what a script pins. Two stacks in ONE subdirectory are both
+ * qualified by their stack id -- `web-gatsby` and `web-nextjs`, never `web` and
+ * `web-nextjs`, which would give one of the two the unqualified name for no
+ * reason a reader could see and would change the day a marker was deleted.
  */
-function laneName(cwd: string, stack: string, taken: ReadonlySet<string>): string {
-  const base = cwd === "." ? stack : (cwd.split("/").pop() ?? stack);
+function laneName(cwd: string, stack: string, qualify: boolean, taken: ReadonlySet<string>): string {
+  const directory = cwd === "." ? stack : (cwd.split("/").pop() ?? stack);
+  // At the repository root the base IS the stack id, so qualifying would spell
+  // it twice.
+  const base = qualify && cwd !== "." ? `${directory}-${stack}` : directory;
   if (!taken.has(base)) return base;
-  const qualified = `${base}-${stack}`;
+  const qualified = `${directory}-${stack}`;
   if (!taken.has(qualified)) return qualified;
   for (let index = 2; ; index += 1) {
     const numbered = `${qualified}-${index}`;
     if (!taken.has(numbered)) return numbered;
   }
+}
+
+// ── the cross-checks ────────────────────────────────────────────────────────
+//
+// RE-HOMED ONTO PR 3's PACK, AND DERIVED RATHER THAN DECLARED. An earlier draft
+// of this file read two extra fields off its own private pack -- a
+// `requiresDependency` per verb and a `packageManager` per stack -- and PR 3
+// (zheref/nen#112) shipped the pack for all seven stacks without either. The
+// three ways to put them back, and why this is the one taken:
+//
+//   (a) ADD THE FIELDS TO PR 3's PROFILES. Rejected. The pack is a CATALOGUE of
+//       what seven product repositories were observed to run, every cell cited
+//       to a file and a line; `requiresDependency` is not an observation about
+//       those repositories, it is an instruction to THIS verb about how to
+//       check a different repository. Detection knowledge in the catalogue is
+//       how a catalogue starts deciding.
+//   (b) DERIVE THE CHECKS FROM THE ROW ITSELF -- taken, below. Everything these
+//       checks need is already in the argv the pack states plus the manifest
+//       the target repository states, and neither file grows a field.
+//   (c) A CROSS-CHECK TABLE LOCAL TO THIS FILE. Rejected for the reason the
+//       marker table is KEPT: a marker is a universal fact about a filename,
+//       and "this argv needs that package" is not -- it is a per-stack, per-row
+//       claim, which is exactly the shape of thing §3 says this binary may not
+//       carry. A hand table here would also have to be edited every time the
+//       pack gained a row, silently, with no test able to notice it had not
+//       been.
+//
+// So the checks below are three syntactic rules over the SUBSTITUTED argv, and
+// they name no tool:
+//
+//   1. PLACEHOLDERS. `{pm}` and `{packageManager}` are answered by the lane's
+//      own `package.json` (`packageManager: "<name>@<version>"`), which is the
+//      repository's statement about itself and never the pack's. Every OTHER
+//      token in the pack's closed set is withheld with the token named --
+//      `{scheme}`, `{destination}`, `{package}` and the rest are facts only the
+//      repository knows, and nen guessing one is a different command.
+//   2. THE EXECUTABLE. A step's `exe` must be either the package manager the
+//      manifest names or a package the manifest declares as a dependency.
+//      Those are the only two ways `detect` can SEE that a repository carries a
+//      program, and "the marker matched so the tool must be here" is exactly
+//      the inference §2.6 calls a warning rather than a proposal.
+//   3. THE SCRIPT. An argv containing `run <task>` names a task the manifest
+//      must declare under `scripts` -- `<pm> run <script>` directly, and
+//      `<pm> <runner> run <task>` because a workspace task runner's task list
+//      is the manifest's scripts. This is the check whose absence made the
+//      header's "never proposes a command the repository cannot run" false: a
+//      manifest with `scripts: { lint: "…" }` and nothing else still got a
+//      proposed `build`. It is deliberately CONSERVATIVE about a task declared
+//      somewhere this reader cannot see (a workspace member, a runner's own
+//      config file), and the note says so, because withholding a row a human
+//      can add back beats proposing one that exits 1.
+//
+// Every check that fails withholds ONE ROW and names it. Nothing here refuses
+// the scan, and nothing here writes.
+
+/** The two placeholders a repository's own `package.json` answers. */
+const PM_EXECUTABLE = "{pm}";
+const PM_PIN = "{packageManager}";
+
+/** Every token the pack may use, so a leftover one can be named exactly. */
+const PACK_TOKENS: readonly string[] = PLACEHOLDERS.map(
+  (placeholder): string => placeholder.token,
+);
+
+interface Manifest {
+  /** False when the lane has no readable `package.json` at all. */
+  readonly present: boolean;
+  /** `{ executable: "pnpm", pin: "pnpm@9.15.9" }`, or null when unstated. */
+  readonly packageManager: { readonly executable: string; readonly pin: string } | null;
+  readonly declares: (name: string) => boolean;
+  readonly scripts: ReadonlySet<string>;
+}
+
+function readManifest(laneDirectory: string): Manifest {
+  const document = readJson(join(laneDirectory, "package.json"));
+  const declared = document?.["packageManager"];
+  const pin = typeof declared === "string" && declared !== "" ? declared : null;
+  const scriptBlock = document?.["scripts"];
+  const scripts =
+    typeof scriptBlock === "object" && scriptBlock !== null && !Array.isArray(scriptBlock)
+      ? new Set(Object.keys(scriptBlock))
+      : new Set<string>();
+  return {
+    present: document !== null,
+    // The EXECUTABLE is the pin with its version stripped, and the PIN is the
+    // string verbatim -- the pack keeps the two apart because one of them may
+    // carry a version into an install argv and the other may not.
+    packageManager:
+      pin === null ? null : { executable: pin.split("@")[0] ?? pin, pin },
+    declares: (name): boolean => dependsOn(document, name),
+    scripts,
+  };
+}
+
+interface ProposedStep {
+  readonly exe: string;
+  readonly argv: readonly string[];
+}
+
+function substitute(token: string, manifest: Manifest): string {
+  const pm = manifest.packageManager;
+  if (pm === null) return token;
+  return token.split(PM_EXECUTABLE).join(pm.executable).split(PM_PIN).join(pm.pin);
+}
+
+function stepsOfCell(cell: ProfileVerb): readonly ProposedStep[] {
+  if (cell.kind === "command" && cell.invocation.kind === "command") {
+    return [{ exe: cell.invocation.exe, argv: cell.invocation.argv }];
+  }
+  /* c8 ignore next 5 -- the two kinds are the two the caller filters to */
+  if (cell.kind === "steps" && cell.invocation.kind === "steps") {
+    return cell.invocation.steps.map(
+      (step): ProposedStep => ({ exe: step.exe, argv: step.argv }),
+    );
+  }
+  return [];
+}
+
+/** Every pack token still standing in a substituted step, in the pack's order. */
+function leftoverTokens(steps: readonly ProposedStep[]): readonly string[] {
+  const text = steps.flatMap((step): readonly string[] => [step.exe, ...step.argv]).join(" ");
+  return PACK_TOKENS.filter((token): boolean => text.includes(token));
+}
+
+/** The task an argv's `run <task>` names, or null when it names none. */
+function runTask(argv: readonly string[]): string | null {
+  const at = argv.indexOf("run");
+  // `<tool> run` with nothing after it is a MODE, not a task -- a test runner
+  // told to run once instead of watching. There is nothing to look up.
+  if (at === -1 || at === argv.length - 1) return null;
+  return argv[at + 1] ?? null;
 }
 
 interface ProposedVerbs {
@@ -311,90 +459,162 @@ interface ProposedVerbs {
 }
 
 /**
- * The pack's reference verbs for this lane, cross-checked, or an empty map with
- * the reason it is empty.
+ * The pack's reference verbs for this lane, substituted and cross-checked, plus
+ * a note for every row that was withheld and the reason it was.
+ *
+ * ONLY THE PACK'S `commandVerbs` ARE CONSIDERED, which is the index's own name
+ * for "the subset of the thirteen that names a command a repository RUNS". The
+ * other three are not gaps in a proposal: `detect` is this verb, `tools` is a
+ * host-toolchain report read out of `project.toolchain`, and `warmup` is
+ * version-control work plus a delegation to `build` and `test`. None of the
+ * three is an argv a lane declares, so proposing a row for them would put a
+ * command in a place nothing reads.
  */
-function proposeVerbs(pack: PackStack | undefined, laneDirectory: string): ProposedVerbs {
-  if (pack === undefined) {
-    return {
-      verbs: {},
-      notes: [
-        "the reference pack carries no verbs for this stack yet (zheref/nen#91's PR3 fills the remaining six). The lane is proposed so the declaration's shape is right; write its verbs from what this project already runs.",
-      ],
-    };
-  }
-  const packageJson = readJson(join(laneDirectory, "package.json"));
-  if (packageJson === null) {
-    return {
-      verbs: {},
-      notes: [
-        "no readable package.json in this lane, so nothing the pack would propose could be cross-checked. Every reference verb is withheld rather than proposed unverified.",
-      ],
-    };
-  }
-  if (pack.packageManager !== null) {
-    const declared = packageJson["packageManager"];
-    const names =
-      typeof declared === "string" &&
-      (declared === pack.packageManager || declared.startsWith(`${pack.packageManager}@`));
-    if (!names) {
-      return {
-        verbs: {},
-        notes: [
-          `package.json declares ${
-            typeof declared === "string" ? `packageManager '${declared}'` : "no packageManager"
-          }, and every reference verb for this stack routes through '${pack.packageManager}'. The verbs are withheld: proposing a command this repository has never run would be nen choosing its toolchain.`,
-        ],
-      };
-    }
-  }
-
+function proposeVerbs(
+  pack: ProfilesPack,
+  profile: StackProfile,
+  laneDirectory: string,
+): ProposedVerbs {
+  const manifest = readManifest(laneDirectory);
   const verbs: Record<string, unknown> = {};
   const notes: string[] = [];
-  for (const [verb, entry] of Object.entries(pack.verbs)) {
-    if (entry.requiresDependency !== null && !dependsOn(packageJson, entry.requiresDependency)) {
+  const noCommand: string[] = [];
+
+  for (const verb of pack.commandVerbs) {
+    const cell = verbCell(profile, verb);
+    if (cell.kind === "unsupported" || cell.kind === "declared-only") {
+      noCommand.push(`${verb} (${cell.summary})`);
+      continue;
+    }
+    /* c8 ignore next 4 -- `delegated` never appears among the command verbs */
+    if (cell.kind === "delegated") {
+      noCommand.push(`${verb} (delegates to ${cell.delegatesTo.join(", ")})`);
+      continue;
+    }
+
+    const steps = stepsOfCell(cell).map(
+      (step): ProposedStep => ({
+        exe: substitute(step.exe, manifest),
+        argv: step.argv.map((token): string => substitute(token, manifest)),
+      }),
+    );
+
+    const leftover = leftoverTokens(steps);
+    if (leftover.length > 0) {
       notes.push(
-        `'${verb}' withheld: its reference command names '${entry.requiresDependency}', which package.json does not declare. A verb the project does not carry is a warning, never a proposal.`,
+        `'${verb}' withheld: its reference command still names ${leftover.join(", ")}, which only this repository can answer${
+          leftover.includes(PM_EXECUTABLE) || leftover.includes(PM_PIN)
+            ? " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
+            : ""
+        }. nen never proposes an unsubstituted token: a guessed argument is a different command.`,
       );
       continue;
     }
-    const steps = entry.steps;
+
+    const unknownExe = steps.find(
+      (step): boolean =>
+        step.exe !== manifest.packageManager?.executable && !manifest.declares(step.exe),
+    );
+    if (unknownExe !== undefined) {
+      notes.push(
+        `'${verb}' withheld: it runs '${unknownExe.exe}', ${
+          manifest.present
+            ? "which this lane's package.json neither declares as a dependency nor names as its packageManager"
+            : "and this lane has no readable package.json to confirm the project carries it"
+        }. A tool the project does not visibly carry is a warning, never a proposal.`,
+      );
+      continue;
+    }
+
+    const missingScript = steps
+      .map((step): string | null => runTask(step.argv))
+      .find((task): boolean => task !== null && !manifest.scripts.has(task));
+    if (missingScript !== undefined && missingScript !== null) {
+      notes.push(
+        `'${verb}' withheld: its reference command runs the task '${missingScript}', and this lane's package.json declares no such script. If the task is declared somewhere nen does not read -- a workspace member, a task runner's own config -- add the row by hand; a verb the project does not visibly carry is a warning, never a proposal.`,
+      );
+      continue;
+    }
+
     const first = steps[0];
-    /* c8 ignore next -- the pack reader always produces at least one step */
+    /* c8 ignore next -- the pack's reader always produces at least one step */
     if (first === undefined) continue;
+    // The pack requires a `why` on every command cell, and the row carries it
+    // verbatim: it is the sentence a human reads while deciding whether to keep
+    // the row, and rewriting it here would make it nen's reason rather than the
+    // catalogue's.
+    /* c8 ignore next -- the `unsupported` arm was filtered out above */
+    const why = cell.invocation.kind === "unsupported" ? null : cell.invocation.why;
     verbs[verb] =
       steps.length === 1
-        ? { exe: first.exe, argv: first.argv, why: entry.why }
-        : { steps: steps.map((step): unknown => ({ exe: step.exe, argv: step.argv })), why: entry.why };
+        ? { exe: first.exe, argv: first.argv, why }
+        : {
+            steps: steps.map((step): unknown => ({ exe: step.exe, argv: step.argv })),
+            why,
+          };
   }
+
+  if (noCommand.length > 0) {
+    notes.push(
+      `the reference pack proposes no command for ${noCommand.join(", ")}. That is the pack DECLINING to choose for you rather than a gap in this proposal -- docs/STACK-MATRIX.md carries each one's full reason, and the declaration is where this repository's answer goes.`,
+    );
+  }
+  // THERE IS DELIBERATELY NO LANE-LEVEL "no package.json" NOTE. An earlier
+  // draft withheld the whole map with one such note, which was wrong twice: it
+  // told a repository whose commands legitimately live elsewhere that its
+  // manifest was the problem, and it hid WHICH rows the manifest would have
+  // answered. Every withheld row now carries its own reason, and a row that
+  // never needed a manifest never mentions one.
   return { verbs, notes };
+}
+
+/** The `hosts` map a set of lanes agrees on, or null when they disagree. */
+function hostSignature(hosts: Readonly<Record<string, readonly string[]>>): string {
+  return JSON.stringify(
+    Object.entries(hosts)
+      .map(([verb, platforms]): [string, readonly string[]] => [verb, platforms])
+      .sort(([a], [b]): number => a.localeCompare(b)),
+  );
 }
 
 /** Scan, cross-check and assemble the proposal. Writes nothing. */
 export function detect(repoRoot: string): DetectReport {
+  const pack = loadProfilesPack();
   const resolved = resolveSchemaFile(repoRoot, CONTRACT_FILE);
   const found = scan(repoRoot);
   const lanes: DetectedLane[] = [];
+  const profiles = new Map<string, StackProfile>();
   const taken = new Set<string>();
   const notes: string[] = [];
 
   for (const { directory, matches } of found) {
     const cwd = relativePath(repoRoot, directory);
-    const stacks = [...matches].sort((a, b): number => a.stack.localeCompare(b.stack));
+    // ONE LANE PER STACK PER DIRECTORY, whatever the marker count. A tree with
+    // both `next.config.js` and `next.config.mjs` matched twice and used to
+    // become two lanes, the second with a name nobody could have predicted.
+    const byStack = new Map<string, string[]>();
+    for (const match of matches) {
+      const markers = byStack.get(match.stack) ?? [];
+      markers.push(match.marker);
+      byStack.set(match.stack, markers);
+    }
+    const stacks = [...byStack.keys()].sort((a, b): number => a.localeCompare(b));
     if (stacks.length > 1) {
       notes.push(
-        `${cwd} carries markers for ${stacks.length} stacks (${stacks.map((match): string => match.stack).join(", ")}). Both lanes are proposed and neither is chosen -- delete the one this repository does not build.`,
+        `${cwd} carries markers for ${stacks.length} stacks (${stacks.join(", ")}). Both lanes are proposed and neither is chosen -- delete the one this repository does not build.`,
       );
     }
-    for (const match of stacks) {
-      const lane = laneName(cwd, match.stack, taken);
+    for (const stack of stacks) {
+      const lane = laneName(cwd, stack, stacks.length > 1, taken);
       taken.add(lane);
-      const proposed = proposeVerbs(PACK[match.stack], directory);
+      const profile = profileById(pack, stack);
+      profiles.set(lane, profile);
+      const proposed = proposeVerbs(pack, profile, directory);
       lanes.push({
         lane,
-        stack: match.stack,
+        stack,
         cwd,
-        markers: [match.marker],
+        markers: byStack.get(stack) ?? [],
         verbs: proposed.verbs,
         notes: proposed.notes,
       });
@@ -420,14 +640,25 @@ export function detect(repoRoot: string): DetectReport {
     );
   }
 
-  const hostSets = new Set(lanes.map((lane): string => (STACK_HOSTS[lane.stack] ?? []).join(",")));
+  // THE PLATFORMS COME FROM THE PACK, PER STACK, and the pack states them the
+  // same way a declaration does -- keyed by verb, with `*` for a stack whose
+  // every verb runs anywhere. Lanes that disagree get NO block rather than a
+  // union: a union would let a verb start on a host that cannot run it.
+  const signatures = new Set(
+    lanes.map((lane): string => hostSignature(profiles.get(lane.lane)?.hosts ?? {})),
+  );
   let hosts: Readonly<Record<string, readonly string[]>> = {};
-  if (hostSets.size === 1 && lanes[0] !== undefined) {
-    hosts = { "*": STACK_HOSTS[lanes[0].stack] ?? [] };
-  } else if (hostSets.size > 1) {
+  if (signatures.size === 1 && lanes[0] !== undefined) {
+    hosts = profiles.get(lanes[0].lane)?.hosts ?? {};
+  } else if (signatures.size > 1) {
     notes.push(
       `the lanes need different platforms (${lanes
-        .map((lane): string => `${lane.lane}: ${(STACK_HOSTS[lane.stack] ?? []).join("/")}`)
+        .map(
+          (lane): string =>
+            `${lane.lane}: ${Object.entries(profiles.get(lane.lane)?.hosts ?? {})
+              .map(([verb, platforms]): string => `${verb} ${platforms.join("/")}`)
+              .join(", ")}`,
+        )
         .join("; ")}), and 'hosts' is keyed by VERB rather than by lane. No hosts block is proposed -- state one per verb yourself rather than take a union, which would let a verb start on a host that cannot run it.`,
     );
   }
@@ -494,6 +725,9 @@ export function renderDetect(report: DetectReport): readonly string[] {
     lines.push("");
     lines.push(
       "no lane detected. Nen proposes a lane only from a marker it can see -- a framework config, a workspace, a wrapper plus its plugin, a project file. If this repository has a build nen should know about, write the project block by hand: `nen shu --help` names the fields.",
+    );
+    lines.push(
+      `the scan is bounded, and both bounds can hide a real lane: it descends at most ${MAX_DEPTH} directories below --repo, and it never enters ${[...SKIP].sort().join(", ")} -- so a lane living in a directory named like build output is invisible to it by design.`,
     );
     return lines;
   }

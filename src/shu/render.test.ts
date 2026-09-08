@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { VerbUsageError } from "../cli/command.js";
 import { parseProjectBlock, type ProjectBlock } from "../schema/contract.js";
 import { ShuRefusal } from "./exit.js";
-import { renderArgv, renderInvocation, resolveLane } from "./render.js";
+import { REFUSED_PLACEHOLDERS, renderArgv, renderInvocation, resolveLane } from "./render.js";
 
 function project(overrides: Record<string, unknown> = {}): ProjectBlock {
   return parseProjectBlock("/fixture/nen/contract.json", {
@@ -126,18 +126,50 @@ describe("renderInvocation", () => {
     });
   });
 
-  describe("placeholders", () => {
+  describe("placeholders -- exactly the reference pack's closed set, and nothing else", () => {
     it("refuses every unsubstituted placeholder at once, naming each", () => {
       const declaration = project({
-        verbs: { one: { build: { exe: "{gw}", argv: ["{task}", "--flag"] } } },
+        verbs: { one: { build: { exe: "{gw}", argv: ["{scheme}", "--flag"] } } },
       });
       expect(() => renderInvocation(declaration, request)).toThrow(VerbUsageError);
-      expect(() => renderInvocation(declaration, request)).toThrow(/\{gw\}, \{task\}/);
+      expect(() => renderInvocation(declaration, request)).toThrow(/\{gw\}, \{scheme\}/);
     });
 
     it("says it will not guess, rather than offering a substitution", () => {
       const declaration = project({ verbs: { one: { build: { exe: "{gw}", argv: ["x"] } } } });
       expect(() => renderInvocation(declaration, request)).toThrow(/will not guess/);
+    });
+
+    it("RUNS a braced argument that is not one of those tokens", () => {
+      // The first draft refused `/\{[^}]*\}/` outright, which is a rule about
+      // somebody else's command line rather than about nen: each of these means
+      // exactly itself, and refusing it told a repository its own verb was
+      // un-runnable for a reason it could do nothing about.
+      const ordinary = [
+        '--define={"NODE_ENV":"test"}',
+        "{}",
+        "-Pflavour={release}",
+        "{not-a-known-token}",
+      ];
+      for (const argument of ordinary) {
+        const rendered = renderInvocation(
+          project({ verbs: { one: { build: { exe: "tool", argv: [argument] } } } }),
+          request,
+        );
+        expect(rendered.steps[0]?.argv, argument).toEqual([argument]);
+      }
+    });
+
+    it("refuses every member of the published set, one at a time", () => {
+      // The whole set, not a sample: a token dropped from the refusal would
+      // otherwise reach a spawn as a literal argument, and only the token
+      // nobody wrote a case for would do it.
+      for (const token of REFUSED_PLACEHOLDERS) {
+        const declaration = project({
+          verbs: { one: { build: { exe: "tool", argv: [`--x=${token}`] } } },
+        });
+        expect(() => renderInvocation(declaration, request), token).toThrow(VerbUsageError);
+      }
     });
   });
 

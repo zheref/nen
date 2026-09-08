@@ -79,8 +79,57 @@ export interface RenderRequest {
   readonly platform: string;
 }
 
-/** Every placeholder token this family's substitution rules would fill. */
-const PLACEHOLDER = /\{[^}]*\}/g;
+// Matched braces only, and a candidate rather than a verdict: what comes out of
+// this is checked against the closed set below. `{` with no `}` is a literal
+// brace some tool wanted -- ../profiles/pack.ts's own scanner draws the same
+// line, for the same reason.
+const BRACED = /\{[^{}]*\}/g;
+
+/**
+ * THE CLOSED SET OF PLACEHOLDER TOKENS -- the ONLY braced strings this family
+ * refuses. Everything else in an argv is an argument.
+ *
+ * WHY A SET AND NOT `\{[^}]*\}`. The first draft refused ANY braced token, and
+ * that is a rule about somebody else's command line rather than about nen: a
+ * declaration stating `--define={"NODE_ENV":"test"}`, a JSON body, a Gradle
+ * `-P` value, a `find -exec ... {} \;` -- all of them are ordinary arguments
+ * that mean exactly themselves, and refusing them told a repository its own
+ * verb was un-runnable for a reason it could do nothing about. What must be
+ * refused is a token that was meant to be SUBSTITUTED and was not, and that set
+ * is closed and published: ../profiles/pack.ts's `PLACEHOLDERS`, which the
+ * catalogue's own loader refuses an unknown member of.
+ *
+ * WHY IT IS RESTATED HERE RATHER THAN IMPORTED. This module is on the execution
+ * path -- ./run.ts spawns what it renders -- and ../profiles/inertness.test.ts
+ * fails the build when anything that can spawn reaches the pack, at any depth.
+ * That guard is the reason "the pack is a catalogue, not an authority" is a
+ * property of the program rather than a sentence in a header, and importing a
+ * const through it to save six lines would be trading the property for the
+ * lines. ./purity.test.ts pins this list against `PLACEHOLDERS` in both
+ * directions instead, so the two cannot drift: a token added to the pack and
+ * not to this list fails there, loudly, rather than reaching a spawn.
+ */
+export const REFUSED_PLACEHOLDERS: readonly string[] = [
+  "{app}",
+  "{archiveScript}",
+  "{browserPath}",
+  "{destination}",
+  "{gw}",
+  "{name}",
+  "{packageManager}",
+  "{package}",
+  "{platform}",
+  "{pm}",
+  "{project}",
+  "{resultBundle}",
+  "{scheme}",
+  "{simUdid}",
+  "{testTarget}",
+  "{unitTestTask}",
+  "{workload}",
+];
+
+const REFUSED: ReadonlySet<string> = new Set(REFUSED_PLACEHOLDERS);
 
 /**
  * The lane to run in: `--lane` if given, else the declaration's `defaultLane`.
@@ -188,13 +237,15 @@ function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb:
   const found: string[] = [];
   for (const step of steps) {
     for (const token of [step.exe, ...step.argv]) {
-      for (const match of token.matchAll(PLACEHOLDER)) found.push(match[0]);
+      for (const match of token.matchAll(BRACED)) {
+        if (REFUSED.has(match[0])) found.push(match[0]);
+      }
     }
   }
   if (found.length === 0) return;
   const unique = [...new Set(found)];
   throw new VerbUsageError(
-    `'${verb}' on lane '${lane}' names ${unique.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute: ${unique.join(", ")}. Placeholder substitution is not in this release (zheref/nen#91): write the literal argv this lane runs, or run the verb on a lane whose declaration carries none. Nen will not guess what a placeholder stands for -- a guessed argument is a different command.`,
+    `'${verb}' on lane '${lane}' names ${unique.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute: ${unique.join(", ")}. Placeholder substitution is not in this release (zheref/nen#91): write the literal argv this lane runs, or run the verb on a lane whose declaration carries none. Nen will not guess what a placeholder stands for -- a guessed argument is a different command. (Only the reference pack's own tokens are refused -- ${REFUSED_PLACEHOLDERS.join(", ")}; every other braced argument is passed to the child exactly as written.)`,
   );
 }
 

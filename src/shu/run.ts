@@ -159,9 +159,10 @@ function insideRepo(repoRoot: string, value: string, pointer: string): string {
  * Assert every precondition the lane declares. Nothing is performed.
  *
  * `path` is repo-root-relative, NOT lane-relative, and that is what the
- * declarations in the field already assume: a lane whose `cwd` is `android`
- * states its wrapper as `android/gradlew`, because a precondition is a fact
- * about the repository rather than about the directory a verb happens to run in.
+ * declarations in the field already assume: a lane whose `cwd` is a
+ * subdirectory states its build wrapper with that subdirectory in front of it,
+ * because a precondition is a fact about the repository rather than about the
+ * directory a verb happens to run in.
  */
 export function assertPreconditions(
   plan: RenderedInvocation,

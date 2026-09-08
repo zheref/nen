@@ -94,9 +94,9 @@
           "why": "Declared, and restricted to one platform under `hosts` -- the exit-3 refusal needs a verb that is real everywhere except the host."
         },
         "test": {
-          "exe": "{placeholder}",
-          "argv": ["test"],
-          "why": "A placeholder this release cannot substitute -- the refusal is exit 2 naming it."
+          "exe": "placeholder-build-tool",
+          "argv": ["test", "-scheme", "{scheme}"],
+          "why": "A placeholder from the reference pack's own closed set, which this release cannot substitute -- the refusal is exit 2 naming it."
         },
         "archive": { "unsupported": "signing material is a human's, and nen never synthesises it." }
       }

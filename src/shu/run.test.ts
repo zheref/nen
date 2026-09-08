@@ -385,7 +385,11 @@ describe("refusals", () => {
   it("exit 2 naming the placeholder it will not guess at", async () => {
     const result = await capture(["test", "--lane", "native"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/names a placeholder nen cannot substitute: \{placeholder\}/);
+    expect(result.err.join("\n")).toMatch(/names a placeholder nen cannot substitute: \{scheme\}/);
+    // And the refusal lists the closed set, which is the whole answer to "then
+    // what may I write" -- the token is refused because it is one of the
+    // reference pack's, not because it has braces around it.
+    expect(result.err.join("\n")).toMatch(/every other braced argument is passed to the child/);
   });
 
   it("exit 1 naming the step that failed, and stops there", async () => {

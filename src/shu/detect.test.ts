@@ -14,7 +14,8 @@ import { join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
-import { detect } from "./detect.js";
+import { loadProfilesPack, PLACEHOLDERS } from "../profiles/pack.js";
+import { detect, MARKER_STACKS, MAX_DEPTH, renderDetect } from "./detect.js";
 import {
   EMPTY_TREE,
   markerTree,
@@ -70,19 +71,48 @@ describe("nen shu detect -- the nextjs lane, end to end", () => {
     ]);
   });
 
-  it("proposes the reference argv from the matrix, verbatim", () => {
+  it("proposes the pack's argv with {pm} substituted from package.json, and nowhere else from", () => {
     const proposal = detect(NEXTJS_SINGLE).proposal as unknown as Proposal;
     const verbs = proposal.project.verbs["nextjs"] as Record<string, { exe?: string; argv?: string[]; steps?: { exe: string; argv: string[] }[] }>;
+    // `{pm}` became `pnpm` because THIS FIXTURE's package.json says so. The
+    // pack states the token; the repository states the value.
     expect(verbs["build"]).toMatchObject({ exe: "pnpm", argv: ["turbo", "run", "build"] });
-    expect(verbs["test"]).toMatchObject({ exe: "pnpm", argv: ["exec", "vitest", "run"] });
-    expect(verbs["dev"]).toMatchObject({ exe: "pnpm", argv: ["exec", "next", "dev"] });
-    expect(verbs["run"]).toMatchObject({ exe: "pnpm", argv: ["exec", "next", "start"] });
+    expect(verbs["test"]).toMatchObject({ exe: "pnpm", argv: ["turbo", "run", "test"] });
+    expect(verbs["dev"]).toMatchObject({ exe: "pnpm", argv: ["turbo", "run", "dev"] });
+    // A row the pack states with no token at all is proposed as it stands.
+    expect(verbs["run"]).toMatchObject({ exe: "next", argv: ["start"] });
     // The two-step lint: the second command alone misses the repo-wide format
     // check, which is why the row is steps rather than one longer argv.
     expect(verbs["lint"]?.steps).toEqual([
       { exe: "pnpm", argv: ["exec", "biome", "check", "."] },
       { exe: "pnpm", argv: ["turbo", "run", "lint"] },
     ]);
+    // AND NOT ONE PROPOSED ARGV CARRIES A PLACEHOLDER. This is the whole rule
+    // stated over the output rather than over one row: a token nen could not
+    // substitute is withheld, never shipped into somebody's declaration. It is
+    // scoped to the COMMAND, not to the row: the pack's `why` is prose about
+    // the token and quotes it on purpose.
+    const commands = Object.values(verbs).flatMap((row): readonly string[] =>
+      (row.steps ?? [{ exe: row.exe ?? "", argv: row.argv ?? [] }]).flatMap(
+        (step): readonly string[] => [step.exe, ...step.argv],
+      ),
+    );
+    expect(commands.length).toBeGreaterThan(0);
+    for (const token of commands) expect(token).not.toMatch(/\{[a-zA-Z]+\}/);
+  });
+
+  it("substitutes only {pm} and {packageManager}, and they are the pack's own tokens", () => {
+    // The two this verb answers are answered from the REPOSITORY's manifest,
+    // never from the pack -- and they are members of the pack's closed set, so
+    // a rename there fails here rather than silently stopping substitution.
+    const tokens = PLACEHOLDERS.map((placeholder): string => placeholder.token);
+    expect(tokens).toContain("{pm}");
+    expect(tokens).toContain("{packageManager}");
+  });
+
+  it("answers only stacks the pack carries, and can reach every one of them", () => {
+    const pack = loadProfilesPack();
+    expect([...MARKER_STACKS].sort()).toEqual([...pack.ids].sort());
   });
 
   it("proposes a defaultLane only because there is exactly one lane", () => {
@@ -124,33 +154,88 @@ describe("nen shu detect -- the nextjs lane, end to end", () => {
 });
 
 describe("nen shu detect -- the cross-checks that keep a proposal honest", () => {
-  it("withholds every verb when package.json names a different package manager", () => {
+  it("withholds every templated row when package.json states no packageManager", () => {
     const report = detect(NEXTJS_UNVERIFIED);
     expect(report.lanes).toHaveLength(1);
     expect(report.lanes[0]?.verbs).toEqual({});
-    expect(report.lanes[0]?.notes.join("\n")).toMatch(/packageManager 'placeholder-manager@1\.0\.0'/);
-    expect(report.lanes[0]?.notes.join("\n")).toMatch(/nen choosing its toolchain/);
+    const notes = report.lanes[0]?.notes.join("\n") ?? "";
+    // Named, not merely counted: a reader has to be able to see WHICH token
+    // stayed and where its value would have come from.
+    expect(notes).toMatch(/'build' withheld: its reference command still names \{pm\}/);
+    expect(notes).toMatch(/declares no 'packageManager' field/);
+    // And the one untemplated row is withheld for its own, different reason.
+    expect(notes).toMatch(/'run' withheld: it runs 'next'/);
   });
 
-  it("withholds only the verbs whose dependency is absent, naming each", () => {
+  it("withholds the verbs whose task package.json declares no script for, naming each", () => {
     const report = detect(NEXTJS_PARTIAL);
-    // The tree declares two of the four dependencies the reference rows name.
+    // The tree declares `build` and `dev` as scripts and neither `test` nor
+    // `lint`, so exactly those two rows are withheld -- and `run`, which names
+    // no task at all, is proposed because its executable IS a dependency here.
     expect(Object.keys(report.lanes[0]?.verbs ?? {}).sort()).toEqual(["build", "dev", "run"]);
     const notes = report.lanes[0]?.notes.join("\n") ?? "";
-    expect(notes).toMatch(/'test' withheld/);
-    expect(notes).toMatch(/'lint' withheld/);
+    expect(notes).toMatch(/'test' withheld: its reference command runs the task 'test'/);
+    expect(notes).toMatch(/'lint' withheld: its reference command runs the task 'lint'/);
     expect(notes).toMatch(/a warning, never a proposal/);
   });
 
-  it("withholds everything when there is no readable package.json at all", () => {
+  it("proposes NOTHING for a manifest that declares a task runner and no scripts", () => {
+    // The header's claim -- "never proposes a command the repository cannot
+    // run" -- was false without this check: a manifest whose only script was
+    // `lint` still got a proposed `build`.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-scripts-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          packageManager: "pnpm@9.15.9",
+          scripts: { lint: "placeholder" },
+          devDependencies: { turbo: "2.3.3" },
+        }),
+      );
+      const report = detect(dir);
+      expect(Object.keys(report.lanes[0]?.verbs ?? {})).toEqual(["lint"]);
+      expect(report.lanes[0]?.notes.join("\n")).toMatch(
+        /'build' withheld: its reference command runs the task 'build'/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds a row whose executable no manifest confirms, and says there is none", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-detect-nopkg-"));
     try {
       writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
       const report = detect(dir);
       expect(report.lanes[0]?.verbs).toEqual({});
-      expect(report.lanes[0]?.notes.join("\n")).toMatch(/no readable package.json/);
+      expect(report.lanes[0]?.notes.join("\n")).toMatch(
+        /'run' withheld: it runs 'next', and this lane has no readable package\.json/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the cells the pack itself proposes no command for, with the pack's own summary", () => {
+    // Not a gap in the proposal: the pack declining to choose. A reader who
+    // cannot tell those two apart writes the row nen was avoiding.
+    const notes = detect(NEXTJS_SINGLE).lanes[0]?.notes.join("\n") ?? "";
+    expect(notes).toMatch(/the reference pack proposes no command for/);
+    expect(notes).toMatch(/ui-test \(two meanings\)/);
+    expect(notes).toMatch(/release \(declared n\/a in the repo\)/);
+    expect(notes).toMatch(/STACK-MATRIX\.md/);
+  });
+
+  it("proposes no row for a verb that is not one of the pack's commandVerbs", () => {
+    // `detect`, `tools` and `warmup` are the three the index excludes: none is
+    // an argv a lane declares, so a row for one would put a command where
+    // nothing reads it.
+    const pack = loadProfilesPack();
+    const proposed = Object.keys(detect(NEXTJS_SINGLE).lanes[0]?.verbs ?? {});
+    for (const verb of pack.verbs.filter((name): boolean => !pack.commandVerbs.includes(name))) {
+      expect(proposed, verb).not.toContain(verb);
     }
   });
 
@@ -179,14 +264,19 @@ describe("nen shu detect -- one marker per stack", () => {
   ];
 
   for (const { tree, stack, marker } of CASES) {
-    it(`answers '${stack}' for ${marker}, with an empty verb map and the reason`, () => {
+    it(`answers '${stack}' for ${marker}, with an empty verb map and a reason per row`, () => {
       const report = detect(markerTree(tree));
       expect(report.lanes.map((lane): string => lane.stack)).toContain(stack);
       const lane = report.lanes.find((entry): boolean => entry.stack === stack);
       expect(lane?.markers).toEqual([marker]);
+      // These six trees carry a marker and nothing else, so every command cell
+      // the pack has for them is withheld -- and the lane is still proposed,
+      // because the SHAPE of the declaration is what a human needs first.
       expect(lane?.verbs).toEqual({});
-      expect(lane?.notes.join("\n")).toMatch(/no verbs for this stack yet/);
-      expect(lane?.notes.join("\n")).toMatch(/PR3/);
+      expect(lane?.notes.length, "a withheld map with no reason is the failure").toBeGreaterThan(0);
+      for (const note of lane?.notes ?? []) {
+        expect(note).toMatch(/withheld|proposes no command/);
+      }
     });
   }
 
@@ -208,6 +298,76 @@ describe("nen shu detect -- one marker per stack", () => {
   });
 });
 
+describe("nen shu detect -- what the scan deliberately does not see", () => {
+  // EACH OF THESE IS A BOUND, NOT A BUG -- and each was a surviving mutant
+  // before it was a test: deleting the skip set, or widening the depth, left
+  // the whole suite green. A bound nothing pins is a bound somebody removes.
+
+  it("never proposes a lane from a marker inside a skipped directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-skip-"));
+    try {
+      mkdirSync(join(dir, "node_modules", "some-package"), { recursive: true });
+      writeFileSync(join(dir, "node_modules", "some-package", "next.config.js"), "module.exports = {};\n");
+      expect(detect(dir).lanes).toEqual([]);
+      // And the same marker one directory over IS found, so the assertion
+      // above is about the skip and not about the fixture being empty.
+      mkdirSync(join(dir, "app"));
+      writeFileSync(join(dir, "app", "next.config.js"), "module.exports = {};\n");
+      expect(detect(dir).lanes.map((lane): string => lane.cwd)).toEqual(["app"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it(`descends exactly ${MAX_DEPTH} directories, and says so when it finds nothing`, () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-depth-"));
+    try {
+      const atDepth = (depth: number): string =>
+        join(dir, ...Array.from({ length: depth }, (_, index): string => `d${index + 1}`));
+      mkdirSync(atDepth(MAX_DEPTH), { recursive: true });
+      writeFileSync(join(atDepth(MAX_DEPTH), "next.config.js"), "module.exports = {};\n");
+      expect(detect(dir).lanes).toHaveLength(1);
+
+      const deeper = mkdtempSync(join(tmpdir(), "nen-detect-deeper-"));
+      try {
+        const tooDeep = join(
+          deeper,
+          ...Array.from({ length: MAX_DEPTH + 1 }, (_, index): string => `d${index + 1}`),
+        );
+        mkdirSync(tooDeep, { recursive: true });
+        writeFileSync(join(tooDeep, "next.config.js"), "module.exports = {};\n");
+        const report = detect(deeper);
+        expect(report.lanes).toEqual([]);
+        // The blind spot is NAMED in the output, because a silent miss and an
+        // empty tree look identical to the person reading it.
+        const rendered = renderDetect(report).join("\n");
+        expect(rendered).toMatch(new RegExp(`descends at most ${MAX_DEPTH} directories`));
+        expect(rendered).toMatch(/node_modules/);
+      } finally {
+        rmSync(deeper, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("makes ONE lane out of a directory whose stack matched twice", () => {
+    // Two spellings of one framework's config is one lane with two markers --
+    // not two lanes, the second of which would take a name nobody could have
+    // predicted from the tree.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-twice-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(join(dir, "next.config.mjs"), "export default {};\n");
+      const report = detect(dir);
+      expect(report.lanes).toHaveLength(1);
+      expect(report.lanes[0]?.markers).toEqual(["next.config.js", "next.config.mjs"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("nen shu detect -- ambiguity is reported, never resolved", () => {
   it("proposes BOTH lanes for one directory carrying two stacks' markers", () => {
     const report = detect(markerTree("ambiguous"));
@@ -221,6 +381,20 @@ describe("nen shu detect -- ambiguity is reported, never resolved", () => {
     const second = detect(markerTree("ambiguous")).lanes.map((lane): string => lane.lane);
     expect(first).toEqual(second);
     expect(new Set(first).size).toBe(first.length);
+  });
+
+  it("qualifies BOTH names in a subdirectory, never one bare and one qualified", () => {
+    // `web` and `web-nextjs` was the old answer, and it is the wrong shape: one
+    // of the two got the unqualified name for no reason a reader could see, and
+    // which one got it depended on the stacks' sort order.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-names-"));
+    try {
+      cpSync(markerTree("ambiguous"), join(dir, "web"), { recursive: true });
+      const report = detect(dir);
+      expect(report.lanes.map((lane): string => lane.lane)).toEqual(["web-gatsby", "web-nextjs"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("proposes NO hosts block when the lanes need different platforms", () => {
