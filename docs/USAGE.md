@@ -3895,7 +3895,10 @@ nen epic next-wave --body-file epic-body.md --citation CON-25 \
   --completed 101 --inflight 102 --cap 2 --out epic-out.md
 
 nen backlog fetch --repo-slug zheref/nen --limit 200 --json > rows.json
-nen backlog order --rows-from rows.json --severity-order critical,high,medium,low --blocks 98
+
+# order-rows.json and board-rows.json are the CALLER's files, reshaped from
+# rows.json -- neither is any verb's output. See below.
+nen backlog order --rows-from order-rows.json --severity-order critical,high,medium,low --blocks 98
 
 nen board build --repo-slug zheref/nen --rows-from board-rows.json --json > board.json
 nen board render --board-from board.json
@@ -3907,6 +3910,19 @@ duplicate child id — it never writes `--out` when it refuses. `backlog fetch`
 paginates past GitHub's 100-row page clamp and always reports a `--limit` cap
 as `TRUNCATED`. `board build`, `render`, and `diff` all validate every row at the
 JSON boundary (`refs` must be an array) — fixed in #99 (issue #92).
+
+These verbs deliberately do **not** compose by file on their own. `backlog
+fetch --json` emits `{issueNumber, title, labels, prNumbers, createdAt}` rows
+*inside an object*; [`backlog order`](#nen-backlog-order) takes a JSON **array**
+of `{id, severity, blocksOther, affectsConsumers, createdAt, number}`, and
+[`board build`](#nen-board-build) a JSON array of BoardRow — `{id, title, refs,
+gate, status, needs}`, its `gate` from [`gate derive`](#nen-gate-derive) and its
+`status` from [`color status`](#nen-color-status). Reading a severity out of
+labels, deciding which rows block another, and deciding what a row needs next
+are judgement calls, so both reshapes belong to the caller — a skill or a
+script — not to these verbs. Handing `fetch`'s output straight to `order` today
+crashes with `{} is not iterable` instead of refusing with that explanation:
+[zheref/nen#105](https://github.com/zheref/nen/issues/105).
 
 ```bash
 # 7. Classify the efforts, then check whether there is room to start another.
