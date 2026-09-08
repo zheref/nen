@@ -77,7 +77,7 @@ export const BAR_WIDTH = 12;
 export const PROGRESS_HEADER = "## Progress";
 
 // CHECKBOX_LINE recognizes the checkbox SHAPE only -- `- [ ]` / `- [x]`, any
-// indent -- and leaves finding the child reference to firstChildRef below.
+// indent -- and leaves finding the child reference to analyzeLine below.
 // This is the zheref/nen#51 fix: the port's original regex demanded the bare
 // `#<num>` IMMEDIATELY after the checkbox, so every real-world variant --
 // `- [ ] Phase 0a — #101` (trailing reference), `- [ ] **Child 1** [#570](url)`
@@ -92,8 +92,30 @@ export const PROGRESS_HEADER = "## Progress";
 // -- the old flip re-serialized `#${num}${rest}`, which only round-trips for
 // the one line shape it parsed.
 const CHECKBOX_LINE = /^(?<indent>[ \t]*)- \[(?<mark>[ xX])\](?<rest>(?:[ \t].*)?)$/;
-const BLOCKED_BY = /blocked by\s+((?:#\d+[,\s]*)+)/i;
-const BLOCKS = /\bblocks\s+((?:#\d+[,\s]*)+)/i;
+// BLOCKED_BY/BLOCKS match the KEYWORD only -- not the ref list that follows --
+// and GLOBALLY, so `matchClause` below can walk every occurrence rather than
+// only the first. zheref/nen#97: the list used to be captured inline as
+// `(?:#\d+[,\s]*)+`, which only ever recognized BARE refs -- so
+// `blocked by [#5](url)` did not read as a clause at all, and the link inside
+// it fell through to compete for the line's own IDENTITY (a phantom child)
+// while the edge itself silently vanished. `matchClause` finds the ref list by
+// walking the SAME candidates `collectRefs` already found for identity
+// resolution, so a clause recognizes a link exactly where identity resolution
+// would have -- one seam, not two descriptions of what a ref looks like.
+//
+// A first cut at this fix matched only the keyword's FIRST occurrence (a
+// non-global regex). That silently loses the clause whenever a `blocked
+// by`/`blocks` keyword occurs in ordinary prose BEFORE the real clause -- e.g.
+// `#12 was blocked by legal, blocked by #5` -- because `keyword.exec` stops at
+// the first "blocked by", finds no ref run after it (just "legal,"), and never
+// looks further. Main's inline ref-run regex avoided this by construction: a
+// keyword not immediately followed by a ref simply failed to match AT ALL, so
+// the engine's own backtracking tried the NEXT "blocked by". Splitting keyword
+// from ref-list reintroduced that lost degree of freedom, so `matchClause` now
+// restores it explicitly: it walks every keyword occurrence via
+// `rest.matchAll`, and returns the first one that yields a non-empty run.
+const BLOCKED_BY = /blocked by\s+/gi;
+const BLOCKS = /\bblocks\s+/gi;
 const OWNER = /\*\*\[([A-Za-z0-9_-]+)\]\*\*/;
 
 // A bare `#123`. The `(?<!&)` guard exists because HTML entities are legal in
@@ -119,59 +141,130 @@ export interface Child {
   readonly lineIndex: number;
 }
 
-function numbers(text: string): number[] {
-  return [...text.matchAll(/#(\d+)/g)].map((match): number => Number(match[1]));
+// A ref candidate found ANYWHERE on a checkbox line's remainder: a bare
+// `#123` (never one embedded inside a markdown link's own span -- see below)
+// or a markdown link whose text or `/issues/N` URL resolves to an issue
+// number. `start`/`end` are the candidate's span in `rest` -- used both to
+// order candidates by POSITION (a checklist line names its own issue before
+// it says anything else about it) and, in `matchClause`, to test whether a
+// candidate falls inside a `blocked by`/`blocks` clause. That second use is
+// zheref/nen#97's fix: identity resolution and clause detection now consult
+// the SAME candidate list, so a link is excluded from identity by a clause
+// exactly when a bare ref would be.
+interface RefCandidate {
+  readonly start: number;
+  readonly end: number;
+  readonly num: number;
 }
 
-// The FIRST child reference on a checkbox line's remainder, or null when the
-// line carries none. "First" is by POSITION, because a checklist line names its
-// own issue before it says anything else about it -- and three shapes count:
-//
-//   * a bare `#123` anywhere (`Phase 0a — #101` trails its reference),
-//   * a markdown link whose TEXT names the issue (`[#570](any-url)`),
-//   * a markdown link whose URL is an `/issues/123` path even when the link
-//     text says something else entirely (`[the auth leg](.../issues/571)`).
-//
-// Two exclusions keep "first" from lying:
-//
-//   * a bare ref INSIDE a link's span never competes on its own -- the link
-//     resolves (or refuses) as a unit, so `[note](https://x.com/a#123)` does
-//     not smuggle 123 in as a child id via its fragment;
-//   * a ref inside a `blocked by #N` / `blocks #N` clause is an EDGE, not the
-//     line's identity -- `- [ ] mystery blocked by #1` must surface as
-//     unparsed rather than claim to BE child #1, or the dependency graph
-//     would gain a phantom node that shadows the real #1.
-function firstChildRef(rest: string): number | null {
-  const candidates: { index: number; num: number }[] = [];
-  const spans: [number, number][] = [];
+// Returns every ref candidate on the line's remainder, ordered by POSITION.
+// Sorting here -- once, at the source -- rather than in each of the three
+// call sites that used to re-sort the same list (`matchClause` twice, once
+// per clause keyword, and `analyzeLine`'s identity pick) means every
+// consumer gets an already-ordered list for free and there is exactly one
+// place that defines "ordered".
+function collectRefs(rest: string): RefCandidate[] {
+  const refs: RefCandidate[] = [];
+  const linkSpans: [number, number][] = [];
 
   for (const link of rest.matchAll(MARKDOWN_LINK)) {
     const start = link.index ?? 0;
-    spans.push([start, start + link[0].length]);
+    const end = start + link[0].length;
+    linkSpans.push([start, end]);
     const text = link.groups?.["text"] ?? "";
     const url = link.groups?.["url"] ?? "";
     const textRef = /(?<!&)#(\d+)\b/.exec(text);
     if (textRef !== null) {
-      candidates.push({ index: start, num: Number(textRef[1]) });
+      refs.push({ start, end, num: Number(textRef[1]) });
       continue;
     }
     const urlRef = ISSUE_URL.exec(url);
-    if (urlRef !== null) candidates.push({ index: start, num: Number(urlRef[1]) });
+    if (urlRef !== null) refs.push({ start, end, num: Number(urlRef[1]) });
   }
-
-  const blockedBy = BLOCKED_BY.exec(rest);
-  if (blockedBy !== null) spans.push([blockedBy.index, blockedBy.index + blockedBy[0].length]);
-  const blocks = BLOCKS.exec(rest);
-  if (blocks !== null) spans.push([blocks.index, blocks.index + blocks[0].length]);
 
   for (const bare of rest.matchAll(BARE_REF)) {
-    const index = bare.index ?? 0;
-    if (spans.some(([from, to]): boolean => index >= from && index < to)) continue;
-    candidates.push({ index, num: Number(bare[1]) });
+    const start = bare.index ?? 0;
+    const end = start + bare[0].length;
+    // A bare ref INSIDE a link's span never competes on its own -- the link
+    // resolves (or refuses) as a unit, so `[note](https://x.com/a#123)` does
+    // not smuggle 123 in as a child id via its fragment.
+    if (linkSpans.some(([from, to]): boolean => start >= from && start < to)) continue;
+    refs.push({ start, end, num: Number(bare[1]) });
   }
 
-  const first = candidates.sort((a, b): number => a.index - b.index)[0];
-  return first === undefined ? null : first.num;
+  return refs.sort((a, b): number => a.start - b.start);
+}
+
+// Whether a `blocked by`/`blocks` KEYWORD is immediately followed -- then
+// separated only by commas/whitespace between entries -- by a run of refs of
+// ANY spelling. Walking the candidates `collectRefs` already found (rather
+// than writing a second regex that re-describes link syntax) is what lets
+// `blocked by [#5](url)` and `blocked by #1, [#2](url)` both read as a
+// two-entry-capable clause without the clause grammar knowing what a link
+// looks like on its own.
+//
+// `keyword` is global, so this scans EVERY occurrence in source order and
+// returns the first one whose run is non-empty -- never just the first
+// occurrence. That matters whenever the keyword also occurs in ordinary prose
+// ahead of the real clause: `#12 was blocked by legal, blocked by #5` has TWO
+// "blocked by"s, and only the second is followed by a ref run. `refs` is
+// already sorted by `collectRefs`, so no re-sort is needed here.
+function matchClause(
+  rest: string,
+  keyword: RegExp,
+  refs: readonly RefCandidate[],
+): { span: [number, number]; nums: number[] } | null {
+  for (const match of rest.matchAll(keyword)) {
+    const clauseStart = match.index;
+    let cursor = clauseStart + match[0].length;
+    const nums: number[] = [];
+    for (const ref of refs) {
+      if (ref.start < cursor) continue;
+      const gap = rest.slice(cursor, ref.start);
+      if (!/^[,\s]*$/.test(gap)) break;
+      nums.push(ref.num);
+      cursor = ref.end;
+    }
+    if (nums.length > 0) return { span: [clauseStart, cursor], nums };
+  }
+  return null;
+}
+
+// The line's identity (the FIRST ref outside any clause) plus the edges
+// declared by its `blocked by`/`blocks` clauses. "First" is by POSITION,
+// because a checklist line names its own issue before it says anything else
+// about it -- and three shapes count as a ref: a bare `#123` anywhere
+// (`Phase 0a — #101` trails its reference), a markdown link whose TEXT names
+// the issue (`[#570](any-url)`), or a markdown link whose URL is an
+// `/issues/123` path even when the link text says something else entirely
+// (`[the auth leg](.../issues/571)`).
+//
+// A ref inside a `blocked by #N` / `blocks #N` clause is an EDGE, never the
+// line's identity, REGARDLESS OF SPELLING (zheref/nen#97) --
+// `- [ ] mystery blocked by [#5](url)` must surface as unparsed rather than
+// claim to BE child #5 (a phantom child shadowing the real #5), exactly as
+// `- [ ] mystery blocked by #1` already refused to claim to BE child #1.
+function analyzeLine(rest: string): { identity: number | null; blockedBy: number[]; blocks: number[] } {
+  const refs = collectRefs(rest);
+  const blockedByClause = matchClause(rest, BLOCKED_BY, refs);
+  const blocksClause = matchClause(rest, BLOCKS, refs);
+  const clauseSpans: [number, number][] = [];
+  if (blockedByClause !== null) clauseSpans.push(blockedByClause.span);
+  if (blocksClause !== null) clauseSpans.push(blocksClause.span);
+
+  // `refs` is already sorted by position (collectRefs), and `filter` preserves
+  // order, so the first surviving candidate is the first BY POSITION without
+  // a second sort.
+  const identityCandidates = refs.filter(
+    (ref): boolean => !clauseSpans.some(([from, to]): boolean => ref.start >= from && ref.start < to),
+  );
+  const first = identityCandidates[0];
+
+  return {
+    identity: first === undefined ? null : first.num,
+    blockedBy: blockedByClause?.nums ?? [],
+    blocks: blocksClause?.nums ?? [],
+  };
 }
 
 // A checkbox line whose remainder resolved to NO child reference. Surfaced --
@@ -197,19 +290,17 @@ export function parseChildren(lines: readonly string[]): ChecklistParse {
     const match = CHECKBOX_LINE.exec(line);
     if (match === null || match.groups === undefined) return;
     const rest = match.groups["rest"] ?? "";
-    const num = firstChildRef(rest);
-    if (num === null) {
+    const { identity, blockedBy, blocks } = analyzeLine(rest);
+    if (identity === null) {
       unparsed.push({ line: index + 1, text: line.trim() });
       return;
     }
-    const blockedBy = BLOCKED_BY.exec(rest);
-    const blocks = BLOCKS.exec(rest);
     const owner = OWNER.exec(rest);
     children.push({
-      num,
+      num: identity,
       checked: (match.groups["mark"] ?? " ").toLowerCase() === "x",
-      blockedBy: blockedBy === null ? [] : numbers(blockedBy[1] ?? ""),
-      blocks: blocks === null ? [] : numbers(blocks[1] ?? ""),
+      blockedBy,
+      blocks,
       owner: owner === null ? null : (owner[1] ?? "").toLowerCase(),
       lineIndex: index,
     });

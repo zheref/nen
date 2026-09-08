@@ -32,11 +32,13 @@ usage:
   --out         write the rewritten body here. Omit to compute without writing.
 
 A child line is any '- [ ]' / '- [x]' checkbox, at any indent, that references
-its issue ANYWHERE on the line: a bare '#123', a '[#123](url)' markdown link,
-or a link to an '/issues/123' URL under any link text. The FIRST reference on
-the line identifies the child ('blocked by #N' / 'blocks #N' clauses are
-edges, never identity). A checkbox with NO resolvable reference is counted
-into "unparsed" and reported loudly, never silently skipped.
+its issue ANYWHERE on the line: a bare '#123' (owner/repo#123 reads the same
+way), a '[#123](url)' markdown link, or a link to an '/issues/123' URL under
+any link text. The FIRST such reference on the line identifies the child.
+A 'blocked by' / 'blocks' clause takes refs in ANY of those same spellings --
+bare, owner/repo-qualified, or markdown link -- and every ref inside one is an
+edge, never the line's identity. A checkbox with NO resolvable reference is
+counted into "unparsed" and reported loudly, never silently skipped.
 
 Prints {"total","done","release","unparsed"} on stdout with --json, or a short
 report otherwise. A child is released only when EVERY declared blocker is a

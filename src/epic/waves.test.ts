@@ -123,6 +123,97 @@ describe("parseChildren -- checklist line parsing", () => {
     expect(children).toEqual([]);
     expect(unparsed.map((entry): number => entry.line)).toEqual([1, 2]);
   });
+
+  // ---- zheref/nen#97: a markdown-link ref inside a 'blocked by'/'blocks'
+  // clause is an edge, never the line's identity -- regardless of spelling.
+  // The Copilot thread on PR #65 found this unaddressed: the guard that keeps
+  // a BARE ref inside these clauses from impersonating the line's identity
+  // never recognized a LINKED ref as being inside the clause at all, so it
+  // both won identity (when it was the line's only ref) and silently dropped
+  // the edge (when a bare identity ref preceded it).
+
+  it("reads a markdown-link ref inside 'blocked by' as an edge, not the identity", () => {
+    const { children } = parseChildren(["- [ ] #12 blocked by [#5](https://github.com/o/r/issues/5)"]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [5], blocks: [] }]);
+  });
+
+  it("reads a markdown-link ref inside 'blocks' as an edge, not the identity", () => {
+    const { children } = parseChildren(["- [ ] #12 blocks [#5](https://github.com/o/r/issues/5)"]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [], blocks: [5] }]);
+  });
+
+  it("reads BOTH links of a two-link 'blocked by' clause as edges", () => {
+    const { children } = parseChildren([
+      "- [ ] #12 blocked by [#4](https://github.com/o/r/issues/4), [#5](https://github.com/o/r/issues/5)",
+    ]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [4, 5] }]);
+  });
+
+  it("reads a mixed bare-ref-then-link 'blocked by' clause as edges of both spellings", () => {
+    const { children } = parseChildren(["- [ ] #12 blocked by #4, [#5](https://github.com/o/r/issues/5)"]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [4, 5] }]);
+  });
+
+  it("a link whose TEXT is not '#N' but whose URL is an issue still reads as an edge, not identity", () => {
+    const { children } = parseChildren([
+      "- [ ] #12 blocked by [the blocker](https://github.com/o/r/issues/5)",
+    ]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [5] }]);
+  });
+
+  it("surfaces a checkbox as unparsed rather than let a linked 'blocked by' ref impersonate its identity", () => {
+    // The exact phantom-child shape: with NO ref outside the clause, the
+    // linked ref must not fall through to become the line's own identity.
+    const { children, unparsed } = parseChildren([
+      "- [ ] mystery work blocked by [#5](https://github.com/o/r/issues/5)",
+    ]);
+    expect(children).toEqual([]);
+    expect(unparsed).toEqual([
+      { line: 1, text: "- [ ] mystery work blocked by [#5](https://github.com/o/r/issues/5)" },
+    ]);
+  });
+
+  it("resolves identity to the first ref outside the clause regardless of whether the clause comes before or after it", () => {
+    const { children } = parseChildren([
+      "- [ ] #12 blocked by [#5](https://github.com/o/r/issues/5) more text",
+      "- [ ] blocked by [#5](https://github.com/o/r/issues/5) — #12 the real work",
+    ]);
+    expect(children).toMatchObject([
+      { num: 12, blockedBy: [5] },
+      { num: 12, blockedBy: [5] },
+    ]);
+  });
+
+  // ---- review of zheref/nen#97: a PROSE occurrence of 'blocked by'/'blocks'
+  // ahead of the real clause must not hide it. The first cut at #97's fix
+  // made BLOCKED_BY/BLOCKS match the keyword alone and had `matchClause`
+  // inspect only the FIRST occurrence -- which is exactly what main's inline
+  // `(?:#\d+[,\s]*)+` ref-run regex never did, because a keyword not
+  // immediately followed by a ref simply failed to match at all, letting the
+  // engine try the NEXT occurrence. `matchClause` now walks every occurrence
+  // itself and returns the first that yields a non-empty run.
+
+  it("finds the real 'blocked by' clause after a prose occurrence of the same keyword", () => {
+    const { children } = parseChildren(["- [ ] #12 was blocked by legal, blocked by #5"]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [5], blocks: [] }]);
+  });
+
+  it("finds the real 'blocks' clause after a prose occurrence of the same keyword", () => {
+    const { children } = parseChildren(["- [ ] #12 this blocks everything, blocks #13"]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [], blocks: [13] }]);
+  });
+
+  it("finds the real 'blocks' clause after a keyword occurrence trapped inside a markdown link's own text", () => {
+    const { children } = parseChildren(["- [ ] #12 [blocks #3](https://github.com/o/r/issues/3) blocks #4"]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [], blocks: [4] }]);
+  });
+
+  it("finds a linked 'blocked by' ref after a prose occurrence of the keyword -- #97's own shape, unfixed when prose precedes it", () => {
+    const { children } = parseChildren([
+      "- [ ] #12 blocked by design, blocked by [#5](https://github.com/o/r/issues/5)",
+    ]);
+    expect(children).toMatchObject([{ num: 12, blockedBy: [5], blocks: [] }]);
+  });
 });
 
 describe("renderProgress", () => {
@@ -278,5 +369,15 @@ describe("coordinate -- the full choreography", () => {
     const result = coordinate("just prose, no checklist", null, new Set(), 3, "UZF-1");
     expect(result.summary).toMatchObject({ total: 0, done: 0 });
     expect(result.summary.unparsed).toEqual([]);
+  });
+
+  // Review of zheref/nen#97: a prose 'blocked by' ahead of the real clause
+  // used to make the edge vanish entirely, so #2's unfinished blocker never
+  // gated its own release -- #2 would have shipped in the SAME wave as #1,
+  // silently, at exit 0.
+  it("releases only the unblocked child when its sibling's real 'blocked by' clause sits after a prose occurrence of the keyword", () => {
+    const body2 = ["- [ ] #1 the migration", "- [ ] #2 was blocked by legal, blocked by #1"].join("\n");
+    const result = coordinate(body2, null, new Set(), 3, "UZF-1");
+    expect(result.summary.release.map((r): number => r.child)).toEqual([1]);
   });
 });

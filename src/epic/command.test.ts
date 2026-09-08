@@ -159,6 +159,21 @@ describe("nen epic next-wave -- CLI wiring", () => {
     expect(existsSync(outFile)).toBe(false);
   });
 
+  // ---- zheref/nen#97: a markdown-link ref inside a 'blocked by'/'blocks'
+  // clause is an edge, never the line's identity, replayed through the CLI.
+
+  it("reads a markdown-link 'blocked by' ref as an edge, not a phantom child, end to end", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-epic-"));
+    const bodyFile = join(dir, "epic-blocked-link.md");
+    writeFileSync(bodyFile, "- [ ] #12 blocked by [#5](https://github.com/o/r/issues/5)");
+    const result = await capture(["epic", "next-wave", "--body-file", bodyFile, "--citation", "UZF-1", "--json"]);
+    expect(result.code).toBe(0);
+    // #5 is not itself a known child of this epic, so #12's blocker is never
+    // satisfied -- #12 must NOT release, and #5 must never appear as a
+    // released (phantom) child.
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ total: 1, done: 0, release: [], unparsed: [] });
+  });
+
   it("refuses an unknown subcommand", async () => {
     expect((await capture(["epic", "bogus"])).code).toBe(2);
   });
