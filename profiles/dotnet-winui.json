@@ -1,6 +1,6 @@
 {
   "$schema": "nen.profile/v0.1",
-  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY -- and the one profile in the pack with no invocable command anywhere. `msbuild <solution> /p:Configuration=Release /p:Platform=x64` and `dotnet test` are what a .NET developer would type, and NEITHER STRING EXISTS IN THE REPOSITORY. Writing them here would be nen deciding this project's toolchain rather than reading it. The right output for this stack is a proposed declaration with every verb `unsupported` and its reason, and a maintainer filling in the two or three that matter.",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY -- and the one profile in the pack whose observed repository invokes NO COMMAND ANYWHERE: no Makefile, no `.cmd`/`.ps1`/`.sh`, no `.github/`. Every verb below is therefore `unsupported` with its reason, WITH EXACTLY TWO EXCEPTIONS, both approved by the maintainer as decisions v3 q7 rather than read off the tree: `build` is `dotnet build <project> -c Debug` -- the SDK's own documented entry point, with MSIX packaging left `unsupported` because packaging here is a Visual Studio gesture -- and `test` is `dotnet test <project>`, gated by a crossCheck so it is proposed only where a project file in the tree actually declares a test SDK or framework. `msbuild <solution> /p:Configuration=Release /p:Platform=x64` is the OTHER string a .NET developer would type and it stays out: it names a Platform, a Configuration and a toolchain this repository states nowhere, and inventing those three is nen deciding the project's build rather than reading it.",
   "id": "dotnet-winui",
   "displayName": ".NET / WinUI 3",
   "markers": [
@@ -13,6 +13,61 @@
       "pattern": "*.sln",
       "contains": null,
       "why": "the solution, present but not sufficient: it must be refined by the WinUI property above."
+    }
+  ],
+  "answers": [
+    {
+      "token": "{project}",
+      "from": [
+        {
+          "pattern": "*.sln",
+          "contains": null,
+          "why": "THE SOLUTION WINS WHEN THERE IS ONE, and the reason is what a solution IS: the repository's own list of the projects a build addresses, in its own order. `dotnet build <solution>` is what the Visual Studio gesture this stack lives by actually does, and pointing the build at one project of a multi-project tree would be nen choosing a subset the repository never chose. KroWindows has one solution and three project files, which is exactly the shape this preference is for."
+        },
+        {
+          "pattern": "*.csproj",
+          "contains": "<UseWinUI>true</UseWinUI>",
+          "why": "ONLY WHERE NO SOLUTION EXISTS. A single-project tree has nothing to aggregate, so the project file IS the build. The refinement is kept from the marker deliberately: the file that answers the token is the file that identified the stack, and a bare `*.csproj` here would let a test project or a library answer for the application."
+        }
+      ],
+      "why": "The file this repository builds -- and NOTHING in KroWindows names one: there is no Makefile, no `.cmd` / `.ps1` / `.sh` and no `.github/`, so the only statement of it is the tree itself. Where the tree does not resolve to exactly one file at either rank, the row is withheld with the candidates named: `nen shu detect` resolves no ambiguity, and picking one of two solutions is picking which application this repository is."
+    }
+  ],
+  "references": [
+    {
+      "pattern": "*.csproj",
+      "element": "ProjectReference",
+      "attribute": "Include",
+      "why": "THE ONE ELEMENT THAT CAN POINT OUT OF THE REPOSITORY. KroCore/KroCore.csproj:10 carries `<ProjectReference Include=\"..\\..\\Bankai\\C#\\BankaiCore\\BankaiCore\\BankaiCore.csproj\" />` -- a path that ESCAPES THE REPOSITORY to a sibling clone of zheref/Bankai. No submodule, no NuGet package and no restore step fetches it, so the solution will not load unless that repository is cloned as a sibling directory, and NEN NEVER CLONES ONE. A path outside the repository is not a precondition nen can even state: every path a declaration names is resolved against the repository root and one that escapes it is refused by name. So a build depending on such a reference is WITHHELD with the reference quoted, never proposed with a precondition that could not hold. A reference that stays inside the tree is the opposite case and becomes a `path` precondition nen asserts and never performs."
+    }
+  ],
+  "crossChecks": [
+    {
+      "verbs": ["test"],
+      "markers": [
+        {
+          "pattern": "*.csproj",
+          "contains": "Microsoft.NET.Test.Sdk",
+          "why": "the package the SDK itself requires before `dotnet test` will discover anything in a project: without it the command runs and finds no tests, which is a pass that means nothing."
+        },
+        {
+          "pattern": "*.csproj",
+          "contains": "xunit",
+          "why": "one of the three test frameworks the .NET SDK's own project templates ship; a project referencing it is a test project whatever else it is called."
+        },
+        {
+          "pattern": "*.csproj",
+          "contains": "NUnit",
+          "why": "the second of those three. The list is an OR: these are three spellings of one fact about a tree, not three requirements."
+        },
+        {
+          "pattern": "*.csproj",
+          "contains": "MSTest",
+          "why": "the third. `MSTest.TestAdapter` and `MSTest.TestFramework` both carry it, so the shorter literal covers the pair without naming either."
+        }
+      ],
+      "answers": "{project}",
+      "why": "KroWindows DOES carry a test project (`KroCoreTests/KroCoreTests.csproj`, which references `coverlet.collector` 6.0.2), and NO COMMAND ANYWHERE IN THAT REPOSITORY INVOKES `dotnet test` -- so the row is the SDK's documented entry point rather than an observed one, and it is proposed only where the tree itself shows something to run. THE EVIDENCE FILE IS ALSO WHAT THE ROW ADDRESSES, and that is not a detail: `{project}` for `build` is the solution or the application, and pointing `dotnet test` at either of those runs a command that builds and then reports there is nothing to test. The project that CARRIES the tests is the project the test row names, which is why this entry answers the token itself."
     }
   ],
   "hosts": {
@@ -28,14 +83,16 @@
       "source": "KroWindows/KroWindows.csproj:13"
     },
     "build": {
-      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND. There is no Makefile, no `.cmd` / `.ps1` / `.sh`, no `global.json`, no `nuget.config`, no `Directory.Build.props`, and no `.github/` directory at all. Every action is a Visual Studio GUI gesture.",
-      "summary": "no command in the repo",
-      "source": "KroWindows/Properties/launchSettings.json:3-8; KroWindows.csproj:133"
+      "exe": "dotnet",
+      "argv": ["build", "{project}", "-c", "Debug"],
+      "why": "THE ONE ROW IN THIS PROFILE THAT IS NOT READ OFF THE TREE, and it says so. NOTHING IN KroWindows INVOKES A COMMAND -- no Makefile, no `.cmd` / `.ps1` / `.sh`, no `nuget.config`, no `Directory.Build.props`, and no `.github/` directory at all; every action is a Visual Studio GUI gesture. This row is the .NET SDK's own documented entry point, approved as decisions v3 q7 for exactly that reason: it is the one line that is true of every SDK-style project rather than of one repository's conventions. `-c Debug` is stated rather than left off because the SDK's default is itself a convention, and a build whose configuration nen did not state is a build nen cannot describe. MSIX PACKAGING STAYS `unsupported` -- see the `archive` row: it needs a signing identity, a publish profile and a platform this repository states nowhere, and it is a Visual Studio gesture rather than a command line.",
+      "source": "decisions v3 q7 (approved); KroWindows/KroWindows.csproj:13 (UseWinUI), Properties/launchSettings.json:3-8 (the GUI gestures this replaces)"
     },
     "test": {
-      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND -- and specifically, no command anywhere invokes `dotnet test`, even though a test project exists.",
-      "summary": "no command in the repo",
-      "source": "KroWindows (inventory sweep)"
+      "exe": "dotnet",
+      "argv": ["test", "{project}"],
+      "why": "The SDK's own documented entry point, approved as decisions v3 q7 alongside `build` -- NOT an observed command: no command anywhere in KroWindows invokes it, even though `KroCoreTests/KroCoreTests.csproj` is a real test project referencing `coverlet.collector`. It carries no `--collect` argument for that reason: coverage is its own verb, and this profile's `coverage` row states why it stays unsupported. The row is GATED by this profile's `crossChecks` entry, so a tree with no test project gets the reason instead of a command that would exit 0 having tested nothing.",
+      "source": "decisions v3 q7 (approved); KroWindows/KroCoreTests/KroCoreTests.csproj"
     },
     "ui-test": {
       "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND.",
@@ -48,8 +105,8 @@
       "source": "KroWindows (inventory sweep)"
     },
     "archive": {
-      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND. Packaging is a Visual Studio gesture: `HasPackageAndPublishMenu true`, with an MSIX launch profile.",
-      "summary": "no command in the repo",
+      "unsupported": "MSIX PACKAGING IS UNSUPPORTED, AND STAYS UNSUPPORTED -- decisions v3 q7 approved `dotnet build` alone and left this row exactly where it was. NOTHING IN THE REPOSITORY INVOKES A COMMAND: packaging is a Visual Studio gesture (`HasPackageAndPublishMenu true`, with an MSIX launch profile), and the three things it would need -- a Platform, a signing identity and a publish profile -- are stated nowhere here. `<AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>` and a `<PublishProfile>` naming profiles that do not exist are what the tree says instead.",
+      "summary": "MSIX is a GUI gesture",
       "source": "KroWindows/KroWindows.csproj:133; Properties/launchSettings.json:3-8"
     },
     "release": {
@@ -73,7 +130,7 @@
       "source": "KroWindows (solution deploy entries)"
     },
     "coverage": {
-      "unsupported": "Unsupported -- but NOT a pure invention like an msbuild line would be. The test project already references `coverlet.collector` (`Version=\"6.0.2\"`) as a real `PackageReference`, so the dependency `dotnet test --collect:\"XPlat Code Coverage\"` needs is already in the tree. Identically to every other verb in this stack, no command anywhere invokes `dotnet test` at all: real tooling, zero usage.",
+      "unsupported": "Unsupported -- but NOT a pure invention like an msbuild line would be. The test project already references `coverlet.collector` (`Version=\"6.0.2\"`) as a real `PackageReference`, so the dependency a `--collect:\"XPlat Code Coverage\"` run needs is already in the tree. What is missing is the other half: no command anywhere in the repository invokes it, no report path is stated, and nen does not yet parse coverlet's Cobertura output. Real tooling, zero usage -- which is why `test` carries no `--collect` argument either.",
       "summary": "coverlet present, unused",
       "source": "KroWindows/KroCoreTests/KroCoreTests.csproj"
     },
@@ -83,9 +140,9 @@
       "source": "KroWindows/KroWindows.csproj:13, :133; no global.json in the tree"
     },
     "warmup": {
-      "declaredOnly": "The git steps run -- classify, discard, fetch and branch are stack-independent -- but build and test verification has nothing to delegate to, because every verb in this stack is unsupported. `warmup` reports that and stops there.",
-      "summary": "git half only",
-      "source": "this profile's own build and test rows (both unsupported)"
+      "declaredOnly": "The git steps run -- classify, discard, fetch and branch are stack-independent. What the verification half delegates to is whatever the DECLARATION ends up carrying for `build` and `test`, and on this stack both are conditional: `build` needs a project file this repository's own tree resolves to one of, and `test` needs a test project. Where either row was withheld, `warmup` reports that rather than failing.",
+      "summary": "git half, then what is declared",
+      "source": "this profile's own build and test rows (both conditional)"
     }
   },
   "toolchain": {
@@ -94,6 +151,12 @@
       "probe": ["dotnet", "--version"],
       "versionFrom": "first-semver-on-stdout",
       "installer": "dotnet-install",
+      "hostTool": true,
+      "versionFile": {
+        "file": "global.json",
+        "path": ["sdk", "version"],
+        "why": "THE ONE FILE A .NET REPOSITORY PINS ITS SDK IN, and KroWindows does not have it -- which is the whole complication this row carries. Where a tree does state one, `nen shu detect` proposes that version and nothing else; where it does not, the version is WITHHELD with the reason, because a toolchain entry with no `version` is one the declaration's own reader refuses and a version nen invented is a pin that pins nothing."
+      },
       "why": "THE ONLY INSTALLER IN THE SET THAT FETCHES AND EXECUTES VENDOR CODE, which is why it is gated by residual question (d) and ships VERIFY-ONLY in the first release. There is NO `global.json` in the repository, so no pin exists to carry and the pack states no minimum: the declaration must state one, and nen never installs \"latest\".",
       "source": "KroWindows (no global.json; target framework net8.0-windows10.0.22621.0)"
     },
@@ -107,6 +170,7 @@
     }
   },
   "notes": [
+    "TWO ROWS IN THIS PROFILE ARE APPROVED RATHER THAN OBSERVED, and the distinction is the whole reason this note exists. `build` and `test` name the .NET SDK's own documented entry points; KroWindows invokes neither, and no repository in the inventory invokes either. They are here because the maintainer approved them as decisions v3 q7 -- `dotnet build`-only, with MSIX packaging left unsupported -- and every other row in the grid stays exactly as the sweep found it. A reader comparing this profile against the others should read those two cells as the pack's ONE concession to a stack whose whole workflow is a GUI, not as evidence that this repository builds from a command line.",
     "PRECONDITIONS THIS STACK MUST ASSERT AND CANNOT FIX: a `ProjectReference` that ESCAPES THE REPOSITORY to a sibling clone of another project (KroCore/KroCore.csproj:10) -- no submodule, no NuGet package, no restore step fetches it, so the solution will not load unless that repository is cloned as a sibling directory, and nen never clones one; an `<AppInstallerUri>` hardcoding an absolute path on one machine (KroWindows.csproj:23); `<AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>` (:17), unsigned packaging, and signing is exactly the thing nen never touches; and a `<PublishProfile>` naming profiles that DO NOT EXIST (:12)."
   ]
 }

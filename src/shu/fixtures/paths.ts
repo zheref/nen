@@ -19,6 +19,8 @@ export const NEXTJS_WORKSPACES = join(FIXTURES, "nextjs-workspaces");
 export const NEXTJS_UNTOOLED = join(FIXTURES, "nextjs-untooled");
 export const GATSBY_SITE = join(FIXTURES, "gatsby-site");
 export const EXPO_BARE = join(FIXTURES, "expo-bare");
+export const WINUI_APP = join(FIXTURES, "winui-app");
+export const WINUI_LINKED = join(FIXTURES, "winui-linked");
 export const EMPTY_TREE = join(FIXTURES, "empty-tree");
 /** Two separate Gradle builds in one tree, the shape the inventory found. */
 export const KRO_SHAPED = join(FIXTURES, "kro-shaped");

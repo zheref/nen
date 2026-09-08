@@ -257,6 +257,32 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
     "",
   ];
 
+  // A CROSS-CHECK IS A CONDITION ON A ROW, so it is rendered beside the markers
+  // rather than inside the verb table: the verb table's job is "what would run",
+  // and this one's is "and only where the tree shows this". A stack with none
+  // gets no heading, which is most of them.
+  for (const check of profile.crossChecks) {
+    lines.push(
+      `### Cross-checks for ${check.verbs.map(code).join(", ")}`,
+      "",
+      `${check.why} Any ONE of the following matching in the lane's tree is the evidence; without it the row is withheld with this reason${
+        check.answers === null
+          ? ""
+          : `, and the file that carries it is also what answers ${code(check.answers)} for ${check.verbs.map(code).join(", ")} -- several of them are an ambiguity rather than a choice`
+      }.`,
+      "",
+      ...table(
+        ["pattern", "must contain", "why"],
+        check.markers.map((marker): string[] => [
+          code(marker.pattern),
+          marker.contains === null ? "" : code(marker.contains),
+          marker.why,
+        ]),
+      ),
+      "",
+    );
+  }
+
   if (toolRows.length > 0) {
     lines.push(
       "### Toolchain minimums (advisory)",

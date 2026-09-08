@@ -282,7 +282,7 @@ export const PLACEHOLDERS: readonly Placeholder[] = [
     token: "{project}",
     kind: "declaration-supplied",
     meaning:
-      "the Xcode project the build addresses -- and, for a workspace-based repository, the flag changes with it.",
+      "the project file the build addresses: an Xcode project -- and, for a workspace-based repository, the flag changes with it -- or the .NET project or solution a build is pointed at. One token, because it is one hole: the file this repository builds, which only this repository knows.",
   },
   {
     token: "{resultBundle}",
@@ -441,6 +441,116 @@ export interface ProfileMarker {
 }
 
 /**
+ * EVIDENCE A VERB'S ROW NEEDS, beyond the markers that found the stack.
+ *
+ * A marker answers "which stack is this". A cross-check answers a narrower
+ * question -- "does this particular tree carry the thing this particular row
+ * would run against" -- and the two are not the same file. `dotnet test` is a
+ * real command for a .NET lane and a fiction in a tree with no test project,
+ * and the difference is visible in a project file rather than in the marker
+ * that identified the stack.
+ *
+ * IT IS DATA RATHER THAN A BRANCH IN `nen shu detect` FOR THE REASON THE MARKER
+ * TABLE IS DATA TOO: which packages make a project a TEST project is a fact
+ * about a stack's ecosystem, cited to the repository it was read from, and a
+ * hand table in the detector would have to be edited every time the pack grew a
+ * row -- silently, with no test able to notice it had not been. The detector
+ * reads `verbs` and `markers` off this shape and names neither.
+ *
+ * ANY ONE MARKER MATCHING IS THE EVIDENCE. The list is an OR: `xunit` and
+ * `nunit` are two spellings of the same fact about a tree, not two requirements.
+ */
+export interface ProfileCrossCheck {
+  /** The verbs this evidence gates. Each is one of the index's own verbs. */
+  readonly verbs: readonly string[];
+  /** Any ONE of these matching in the lane's tree is the evidence. */
+  readonly markers: readonly ProfileMarker[];
+  /**
+   * A token the EVIDENCE FILE answers for these verbs, overriding the profile's
+   * general `answers` rule, or null when the general rule stands.
+   *
+   * IT EXISTS BECAUSE THE GENERAL ANSWER CAN BE THE WRONG FILE FOR ONE ROW, and
+   * that is not hypothetical: a `{project}` answered from the application's own
+   * project file is right for a build and wrong for a test run, which has to
+   * address the project that CARRIES the tests. Gating the row on evidence
+   * found somewhere else in the tree and then pointing it at the application
+   * would propose a command that builds fine and tests nothing -- the exact
+   * shape of failure this whole family exists to avoid.
+   *
+   * SEVERAL EVIDENCE FILES ARE AN AMBIGUITY, not a choice: which of them this
+   * repository means, and in what order, is a list only it can state.
+   */
+  readonly answers: string | null;
+  /** Why the row is withheld without it. Quoted verbatim into the proposal. */
+  readonly why: string;
+}
+
+/**
+ * WHERE A TOKEN'S VALUE IS READ OUT OF THE TREE, when the tree can answer it.
+ *
+ * Every placeholder is `declaration-supplied` by default, and that stays true:
+ * this does not let the PACK contribute a value. It says which FILE OF THE
+ * TARGET REPOSITORY answers the hole, so `nen shu detect` can propose a row
+ * already filled in from that repository's own bytes -- exactly what it already
+ * does for `{pm}` out of a `package.json`, stated as data instead of as a
+ * branch, because a project file is not a universal fact the way a filename is.
+ *
+ * `from` IS TRIED IN ORDER AND THE ORDER IS AN ARGUMENT, not a convenience:
+ * the first pattern the tree matches EXACTLY ONCE answers, a pattern matching
+ * several is an ambiguity naming them, and a pattern matching nothing falls
+ * through to the next. Whoever writes the list is stating which file outranks
+ * which when a tree has both, and each entry's `why` is where that is argued.
+ */
+export interface ProfileAnswer {
+  /** The token this rule answers. One of `PLACEHOLDERS`. */
+  readonly token: string;
+  /** Candidate files, in preference order. */
+  readonly from: readonly ProfileMarker[];
+  /** Read into the note when nothing answers. */
+  readonly why: string;
+}
+
+/**
+ * A REFERENCE ONE PROJECT FILE MAKES TO ANOTHER PATH -- the element and the
+ * attribute, never a regular expression.
+ *
+ * `nen shu detect` needs this for one reason: a reference that resolves OUTSIDE
+ * the repository is a precondition nen cannot assert (./run.ts's `insideRepo`
+ * refuses such a path by name, at exit 2), so a row whose build depends on it
+ * must be withheld rather than proposed with a precondition that could never
+ * hold. Which element carries that path is a fact about a FILE FORMAT, so it
+ * lives here beside the markers rather than in the detector.
+ */
+export interface ProfileReference {
+  /** Which files carry it, as a marker pattern. */
+  readonly pattern: string;
+  /** The element name, without angle brackets. */
+  readonly element: string;
+  /** The attribute on that element whose value is the path. */
+  readonly attribute: string;
+  readonly why: string;
+}
+
+/**
+ * A FILE OF THE TARGET REPOSITORY THAT PINS A TOOLCHAIN VERSION.
+ *
+ * The pack states `minimum` -- what nen was TESTED against -- and may never
+ * contribute a pin to a declaration. This says where the REPOSITORY states its
+ * own, so `detect` can propose the entry filled in from that file instead of
+ * withholding the whole row. Where the file is absent the version is withheld
+ * with the reason: a toolchain entry with no `version` is one the declaration's
+ * own reader refuses, and inventing one is how a pinned toolchain stops being
+ * pinned.
+ */
+export interface PackVersionFile {
+  /** The filename, looked for in the lane and then up to the repository root. */
+  readonly file: string;
+  /** The key path inside that document, outermost first. */
+  readonly path: readonly string[];
+  readonly why: string;
+}
+
+/**
  * A verb's cell in the pack, in FIVE forms -- three of them the declaration's
  * own (`command`, `steps`, `unsupported`, parsed by ../schema/contract.ts), and
  * two that exist only in a catalogue:
@@ -494,6 +604,32 @@ export interface PackMinimum {
   readonly probe: readonly string[];
   readonly versionFrom: VersionFrom;
   readonly installer: Installer;
+  /**
+   * Whether the program this entry probes for is the stack's OWN DRIVER,
+   * supplied by the host rather than declared by the repository.
+   *
+   * IT DECIDES ONE THING, IN ONE PLACE: whether `nen shu detect` may treat a
+   * row whose `exe` is this probe's program as confirmed. Its cross-checks
+   * otherwise require an executable to be a package the lane's `package.json`
+   * declares, names as its `packageManager`, or spells out verbatim as a
+   * script -- three routes that exist because a tool the project does not
+   * visibly carry is a warning rather than a proposal. A stack whose driver is
+   * an SDK on the machine has NONE of those routes available: no manifest in
+   * that ecosystem can declare it, so the toolchain entry -- probed by `nen shu
+   * tools`, pinned by the declaration -- is the only place a repository states
+   * it at all, and requiring a manifest would withhold every row of that stack
+   * forever for the absence of a file its ecosystem does not have.
+   *
+   * FALSE BY DEFAULT, INCLUDING FOR TOOLS THAT WOULD QUALIFY. Several entries
+   * in this pack probe for a host tool and do not set it, because setting it
+   * WIDENS what `detect` will propose for their stacks and each of those
+   * widenings wants its own evidence and its own goldens. A tool a repository
+   * can also declare as a dependency must never set it: for those the manifest
+   * is the evidence, and this flag would erase the check.
+   */
+  readonly hostTool: boolean;
+  /** Where the TARGET repository states its own pin, when it states one. */
+  readonly versionFile: PackVersionFile | null;
   readonly why: string;
   readonly source: string;
 }
@@ -502,6 +638,12 @@ export interface StackProfile {
   readonly id: string;
   readonly displayName: string;
   readonly markers: readonly ProfileMarker[];
+  /** Per-verb evidence a row needs before it may be proposed. Usually empty. */
+  readonly crossChecks: readonly ProfileCrossCheck[];
+  /** Where a token's value is read out of the target tree. Usually empty. */
+  readonly answers: readonly ProfileAnswer[];
+  /** Path references one project file makes to another. Usually empty. */
+  readonly references: readonly ProfileReference[];
   /** Per-verb allowlist of `process.platform` values; `*` means every verb. */
   readonly hosts: Readonly<Record<string, readonly string[]>>;
   /** The prose the `hosts` map cannot carry -- per-format and per-lane splits. */
@@ -568,17 +710,18 @@ function readJsonFile(path: string): unknown {
   }
 }
 
-function parseMarkers(path: string, value: unknown): readonly ProfileMarker[] {
-  const entries = requireArray(path, "markers", value);
+function parseMarkers(
+  path: string,
+  block: string,
+  emptyReason: string,
+  value: unknown,
+): readonly ProfileMarker[] {
+  const entries = requireArray(path, block, value);
   if (entries.length === 0) {
-    throw new SchemaError(
-      path,
-      "markers",
-      "declares no marker. A profile with no marker is a stack nothing can ever be detected as; state at least one filename pattern",
-    );
+    throw new SchemaError(path, block, emptyReason);
   }
   return entries.map((entry, index): ProfileMarker => {
-    const pointer = `markers[${index}]`;
+    const pointer = `${block}[${index}]`;
     const raw = requireRecord(path, pointer, entry);
     return {
       pattern: requireString(path, `${pointer}.pattern`, raw["pattern"]),
@@ -586,6 +729,140 @@ function parseMarkers(path: string, value: unknown): readonly ProfileMarker[] {
       why: requireString(path, `${pointer}.why`, raw["why"]),
     };
   });
+}
+
+/**
+ * `crossChecks`, which is OPTIONAL: most stacks state none.
+ *
+ * The verbs a cross-check gates are held to the index's own verb list for the
+ * reason `delegatesTo`'s targets are -- a gate on a verb no column carries is a
+ * rule that can never fire, and an unfireable rule reads exactly like a
+ * satisfied one.
+ */
+function parseCrossChecks(
+  path: string,
+  value: unknown,
+  expectedVerbs: readonly string[],
+): readonly ProfileCrossCheck[] {
+  if (value === undefined || value === null) return [];
+  const entries = requireArray(path, "crossChecks", value);
+  return entries.map((entry, index): ProfileCrossCheck => {
+    const pointer = `crossChecks[${index}]`;
+    const raw = requireRecord(path, pointer, entry);
+    const verbs = requireArray(path, `${pointer}.verbs`, raw["verbs"]);
+    if (verbs.length === 0) {
+      throw new SchemaError(
+        path,
+        `${pointer}.verbs`,
+        "gates no verb. A cross-check exists to withhold a row; one that gates none can never fire, and a rule that can never fire reads exactly like a satisfied one",
+      );
+    }
+    return {
+      verbs: verbs.map((item, at): string => {
+        const where = `${pointer}.verbs[${at}]`;
+        const verb = requireString(path, where, item);
+        if (!expectedVerbs.includes(verb)) {
+          throw new SchemaError(
+            path,
+            where,
+            `gates '${verb}', which ${PACK_DIRECTORY}/${PACK_INDEX_FILE} does not list as a verb. A cross-check gates a row of this same matrix, and the matrix's rows are [${expectedVerbs.join(", ")}]`,
+          );
+        }
+        return verb;
+      }),
+      markers: parseMarkers(
+        path,
+        `${pointer}.markers`,
+        "states no marker. A cross-check with no evidence to look for withholds its verbs always, which is what an `unsupported` cell says properly",
+        raw["markers"],
+      ),
+      answers: requireAnsweredToken(path, `${pointer}.answers`, raw["answers"]),
+      why: requireString(path, `${pointer}.why`, raw["why"]),
+    };
+  });
+}
+
+/** A token a rule claims to answer: one whole member of the closed set, or null. */
+function requireAnsweredToken(path: string, pointer: string, value: unknown): string | null {
+  const token = optionalString(path, pointer, value);
+  if (token === null) return null;
+  if (PLACEHOLDER_TOKENS.has(token)) return token;
+  requireKnownPlaceholders(path, pointer, token);
+  throw new SchemaError(
+    path,
+    pointer,
+    `is '${token}', which is not one whole placeholder. A rule answers exactly one token from the closed set: ${PLACEHOLDERS.map((placeholder): string => placeholder.token).join(", ")}`,
+  );
+}
+
+/** `answers`, which is OPTIONAL: most stacks read every token from a manifest. */
+function parseAnswers(path: string, value: unknown): readonly ProfileAnswer[] {
+  if (value === undefined || value === null) return [];
+  const entries = requireArray(path, "answers", value);
+  const seen = new Set<string>();
+  return entries.map((entry, index): ProfileAnswer => {
+    const pointer = `answers[${index}]`;
+    const raw = requireRecord(path, pointer, entry);
+    // THE SAME CLOSED SET AN ARGV IS HELD TO. A rule answering a token no row
+    // can carry is a rule that never fires, and one answering a token this
+    // pack does not document is a hole nobody could have read about.
+    const token =
+      requireAnsweredToken(path, `${pointer}.token`, raw["token"]) ??
+      requireString(path, `${pointer}.token`, raw["token"]);
+    if (seen.has(token)) {
+      throw new SchemaError(
+        path,
+        `${pointer}.token`,
+        `answers '${token}' a second time. Two rules for one token is an ambiguity in the CATALOGUE, and nen resolves none: state the preference inside one rule's ordered 'from' list`,
+      );
+    }
+    seen.add(token);
+    return {
+      token,
+      from: parseMarkers(
+        path,
+        `${pointer}.from`,
+        "names no file to read the answer from. A rule with no candidates answers nothing, which is what leaving the token out of this block already says",
+        raw["from"],
+      ),
+      why: requireString(path, `${pointer}.why`, raw["why"]),
+    };
+  });
+}
+
+/** `references`, which is OPTIONAL: most stacks state none. */
+function parseReferences(path: string, value: unknown): readonly ProfileReference[] {
+  if (value === undefined || value === null) return [];
+  const entries = requireArray(path, "references", value);
+  return entries.map((entry, index): ProfileReference => {
+    const pointer = `references[${index}]`;
+    const raw = requireRecord(path, pointer, entry);
+    return {
+      pattern: requireString(path, `${pointer}.pattern`, raw["pattern"]),
+      element: requireString(path, `${pointer}.element`, raw["element"]),
+      attribute: requireString(path, `${pointer}.attribute`, raw["attribute"]),
+      why: requireString(path, `${pointer}.why`, raw["why"]),
+    };
+  });
+}
+
+/** A toolchain entry's `versionFile`, which is OPTIONAL and usually absent. */
+function parseVersionFile(path: string, pointer: string, value: unknown): PackVersionFile | null {
+  if (value === undefined || value === null) return null;
+  const raw = requireRecord(path, pointer, value);
+  const keys = requireArray(path, `${pointer}.path`, raw["path"]);
+  if (keys.length === 0) {
+    throw new SchemaError(
+      path,
+      `${pointer}.path`,
+      "names no key. A version file with no key path points at a whole document rather than at a version; state the keys, outermost first",
+    );
+  }
+  return {
+    file: requireString(path, `${pointer}.file`, raw["file"]),
+    path: keys.map((item, index): string => requireString(path, `${pointer}.path[${index}]`, item)),
+    why: requireString(path, `${pointer}.why`, raw["why"]),
+  };
 }
 
 // The declaration's own `hosts` reader, plus the two refusals a CATALOGUE needs
@@ -838,6 +1115,8 @@ function parseToolchain(path: string, value: unknown): Record<string, PackMinimu
       ),
       versionFrom: requireEnum(path, `${pointer}.versionFrom`, raw["versionFrom"], VERSION_FROM),
       installer: requireEnum(path, `${pointer}.installer`, raw["installer"], INSTALLERS),
+      hostTool: raw["hostTool"] === true,
+      versionFile: parseVersionFile(path, `${pointer}.versionFile`, raw["versionFile"]),
       why: requireString(path, `${pointer}.why`, raw["why"]),
       source: requireString(path, `${pointer}.source`, raw["source"]),
     };
@@ -873,7 +1152,15 @@ export function parseProfile(
   return {
     id,
     displayName: requireString(path, "displayName", raw["displayName"]),
-    markers: parseMarkers(path, raw["markers"]),
+    markers: parseMarkers(
+      path,
+      "markers",
+      "declares no marker. A profile with no marker is a stack nothing can ever be detected as; state at least one filename pattern",
+      raw["markers"],
+    ),
+    crossChecks: parseCrossChecks(path, raw["crossChecks"], expectedVerbs),
+    answers: parseAnswers(path, raw["answers"]),
+    references: parseReferences(path, raw["references"]),
     hosts: parsePackHosts(path, raw["hosts"]),
     hostNote: requireString(path, "hostNote", raw["hostNote"]),
     scaffoldTemplate: optionalString(path, "scaffoldTemplate", raw["scaffoldTemplate"]),
