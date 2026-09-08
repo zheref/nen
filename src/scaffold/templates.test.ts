@@ -23,9 +23,14 @@ import {
   TEMPLATE_DIRECTORY,
   TEMPLATE_FILE,
   TEMPLATE_INDEX_FILE,
+  TemplateError,
+  assertWritablePath,
   bundledTemplateNames,
+  compareNenRefs,
+  freshTreeSupport,
   indexedTemplateNames,
   knownStacks,
+  minimumNenRef,
   resolveStackId,
   stackHosts,
   substitute,
@@ -34,6 +39,46 @@ import {
 
 const ROOT = process.cwd();
 const TEMPLATES = join(ROOT, TEMPLATE_DIRECTORY);
+
+/** The filesystem/path modules a read of `templates/` would have to come from. */
+const PATH_MODULES = "node:fs|node:fs/promises|node:path|node:path/posix|node:path/win32|fs|path";
+
+/**
+ * Every callee IN ONE FILE that could compose or read a path, ALIASES INCLUDED.
+ *
+ * A fixed name list is defeated by one rename (`readFileSync as _rfs`), which
+ * is exactly the mutation that survived the first draft of this sweep. Reading
+ * the file's own import clauses closes that: a binding renamed on the way in is
+ * still bound to the module it came from, and the local name is what the call
+ * site has to use.
+ */
+function pathCallers(source: string): RegExp {
+  const names = new Set([
+    "join",
+    "resolve",
+    "readFileSync",
+    "readdirSync",
+    "existsSync",
+    "statSync",
+    "lstatSync",
+    "openSync",
+  ]);
+  const named = new RegExp(`import\\s*(?:type\\s*)?\\{([^}]*)\\}\\s*from\\s*["'](?:${PATH_MODULES})["']`, "g");
+  for (const match of source.matchAll(named)) {
+    for (const clause of (match[1] ?? "").split(",")) {
+      const local = clause.trim().split(/\s+as\s+/).at(-1)?.trim() ?? "";
+      if (/^[A-Za-z_$][\w$]*$/.test(local)) names.add(local);
+    }
+  }
+  const namespace = new RegExp(
+    `import\\s*\\*\\s*as\\s+([A-Za-z_$][\\w$]*)\\s*from\\s*["'](?:${PATH_MODULES})["']`,
+    "g",
+  );
+  for (const match of source.matchAll(namespace)) {
+    if (match[1] !== undefined) names.add(`${match[1]}\\.[A-Za-z_$][\\w$]*`);
+  }
+  return new RegExp(`(?:\\b(?:${[...names].join("|")})|Bun\\.file)\\s*\\(`);
+}
 
 const onDisk = readdirSync(TEMPLATES, { withFileTypes: true })
   .filter((entry): boolean => entry.isDirectory())
@@ -79,6 +124,41 @@ describe("the bundled template list", () => {
     expect(readdirSync(TEMPLATES)).toContain(TEMPLATE_INDEX_FILE);
   });
 
+  it("does not let the LOADER import a filesystem or a path module at all", () => {
+    // THE PROPERTY, STATED AS THE PROPERTY rather than as a pattern over call
+    // sites. The sweep below asks "does any statement call a path function AND
+    // name `templates`", and a one-line mutation defeats it:
+    //
+    //     import { readFileSync as _rfs } from "node:fs";
+    //     const doc = JSON.parse(_rfs(_j(process.cwd(), "templates", ...)));
+    //
+    // -- the call names neither `readFileSync` nor `join`, and the sweep is
+    // green while the loader reads from disk. The real property is simpler and
+    // cannot be aliased around: THIS module has no business touching a
+    // filesystem or composing a path in the first place. It reads two bundled
+    // JSON documents and the profiles pack, and nothing else. So the import
+    // list is the assertion, and the alias goes with the import it renames.
+    const source = readFileSync(join(ROOT, "src", "scaffold", "templates.ts"), "utf8");
+    // Every specifier this module imports, static and dynamic, by the only
+    // syntax that can name one -- a bare `"path"` inside an expression is a
+    // JSON field name, not a module, and matching it would make the rule
+    // unreadable rather than strict.
+    const specifiers = [
+      ...source.matchAll(/\bfrom\s*["']([^"']+)["']/g),
+      ...source.matchAll(/\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g),
+    ].map((match): string => match[1] ?? "");
+    expect(specifiers.length, "the specifier scan must actually see this module's imports").toBeGreaterThan(3);
+    const forbidden = specifiers.filter((specifier): boolean =>
+      /^(?:node:)?(?:fs|path|os|child_process)(?:\/|$)/.test(specifier) || specifier === "bun",
+    );
+    expect(
+      forbidden,
+      "src/scaffold/templates.ts neither reads a file nor composes a path: it imports two bundled JSON documents and the profiles pack",
+    ).toEqual([]);
+    expect(source).not.toMatch(/Bun\s*\.\s*file/);
+    expect(source).not.toMatch(/process\s*\.\s*cwd/);
+  });
+
   it("is reached by STATIC IMPORT ONLY -- no shipped module reads templates/ by path", () => {
     // THE PROPERTY THAT MAKES EMBEDDING WORK, checked the way
     // ../profiles/inertness.test.ts checks the same one for `profiles/`: a
@@ -105,21 +185,42 @@ describe("the bundled template list", () => {
         // draft matched `callee\([^)]*templates` over the whole source, and a
         // seeded `join(process.cwd(), "templates", ...)` walked straight
         // through it -- the `)` of `process.cwd()` ended the character class
-        // two arguments early. A per-statement test cannot be defeated that
-        // way, because both halves are on the same line whatever nests inside.
+        // two arguments early. Splitting fixes that one, and does NOT make the
+        // rule undefeatable: a second seeded mutant renamed the import
+        // (`readFileSync as _rfs`) and the fixed name list saw nothing. So the
+        // callee list is now BUILT FROM EACH FILE'S OWN IMPORTS -- every local
+        // binding brought in from a filesystem or path module, whatever it was
+        // renamed to -- and the test above closes the loader's own door
+        // entirely by forbidding those imports there at all.
         const offends = source
           .split(/[;\n]/)
           .some(
             (statement): boolean =>
-              /\b(join|resolve|readFileSync|readdirSync|existsSync|statSync|openSync|Bun\.file)\s*\(/.test(
-                statement,
-              ) && /(["'`]templates["'`]|TEMPLATE_DIRECTORY)/.test(statement),
+              pathCallers(source).test(statement) &&
+              /(["'`]templates["'`]|TEMPLATE_DIRECTORY)/.test(statement),
           );
         if (offends) offenders.push(path);
       }
     };
     walk(join(ROOT, "src"));
     expect(offenders).toEqual([]);
+  });
+
+  it("sees through an ALIASED import, which is how the first draft was defeated", () => {
+    // The mutant, as a fixture: the pattern the old fixed name list missed.
+    const aliased = [
+      'import { readFileSync as _rfs } from "node:fs";',
+      'import { join as _j } from "node:path";',
+      'const document = JSON.parse(_rfs(_j(process.cwd(), "templates", "full", "template.json"), "utf8"));',
+    ].join("\n");
+    const offends = aliased
+      .split(/[;\n]/)
+      .some(
+        (statement): boolean =>
+          pathCallers(aliased).test(statement) &&
+          /(["'`]templates["'`]|TEMPLATE_DIRECTORY)/.test(statement),
+      );
+    expect(offends, "an aliased filesystem read of templates/ must be caught").toBe(true);
   });
 });
 
@@ -310,5 +411,194 @@ describe("no module of the scaffold family names a toolchain", () => {
         new RegExp(`(?<![a-z0-9_])${name}(?![a-z0-9_])`).test(body),
       ),
     ).toContain("pnpm");
+  });
+});
+
+// ── a template writes INSIDE the tree it was pointed at ─────────────────────
+
+describe("a template's paths are validated at LOAD time", () => {
+  // WHY LOAD TIME AND NOT WRITE TIME. Every byte of a template ships inside the
+  // binary, so a `files` key of `../ESCAPED.txt` is a file nen writes one
+  // directory ABOVE `--dir`, reported by the key it was written from, at exit
+  // 0. The containment checks in ./init.ts guard a path a CALLER typed; this
+  // guards a path the DATA states, and a bad one must fail this repository's
+  // own suite rather than a user's scaffold.
+  const escapes = [
+    "../ESCAPED.txt",
+    "a/../../ESCAPED.txt",
+    "/etc/hosts",
+    "./relative.txt",
+    ".",
+    "..",
+    "a//b.txt",
+    "a\\b.txt",
+    "C:/x.txt",
+    "",
+  ];
+  for (const value of escapes) {
+    it(`refuses '${value}' as a template path`, () => {
+      expect((): string => assertWritablePath(value, "<doc>", "files.x")).toThrow(TemplateError);
+    });
+  }
+
+  it("accepts the shapes a real template uses", () => {
+    for (const value of ["package.json", ".gitignore", ".github/workflows/nen-shu.yml", "app.json"]) {
+      expect(assertWritablePath(value, "<doc>", "files.x")).toBe(value);
+    }
+  });
+
+  it("every bundled template's own paths pass it", () => {
+    // The rule applied to the shipped data, so the two cannot come apart: a
+    // template that gained an escaping key fails HERE, in this suite.
+    for (const stack of knownStacks()) {
+      const template = templateForStack(stack);
+      if (template === null) continue;
+      expect(assertWritablePath(template.ci.path, "<bundled>", "ci.path")).toBe(template.ci.path);
+      for (const file of template.freshTree) {
+        expect(assertWritablePath(file.path, "<bundled>", "files")).toBe(file.path);
+      }
+    }
+  });
+});
+
+// ── substitution reads OWN properties only ──────────────────────────────────
+
+describe("substitute", () => {
+  it("refuses an INHERITED property name instead of substituting the prototype's", () => {
+    // `values["constructor"]` is not undefined on a plain object: it is
+    // `Object`, whose `String()` is the source of a native function. A template
+    // body carrying `{{constructor}}` used to have that spliced into a
+    // generated file at exit 0.
+    for (const token of ["constructor", "toString", "valueOf", "hasOwnProperty"]) {
+      expect((): string => substitute(`x {{${token}}} y`, { name: "kro" }, "<doc>")).toThrow(
+        VerbUsageError,
+      );
+      expect((): string => substitute(`x {{${token}}} y`, { name: "kro" }, "<doc>")).toThrow(
+        `{{${token}}}`,
+      );
+    }
+  });
+
+  it("still substitutes an own property, including one whose value is empty", () => {
+    expect(substitute("a {{name}} b", { name: "kro" }, "<doc>")).toBe("a kro b");
+    expect(substitute("a {{name}} b", { name: "" }, "<doc>")).toBe("a  b");
+  });
+});
+
+// ── the ref a generated workflow may pin nen at ─────────────────────────────
+
+describe("templates/index.json's minimumNenRef", () => {
+  const CHANGELOG = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+
+  /** Every released heading, newest first. `## vX.Y.Z -- <date>`. */
+  const released = [...CHANGELOG.matchAll(/^## (v\d+\.\d+\.\d+)/gm)].map(
+    (match): string => match[1] as string,
+  );
+
+  it("is a well-formed tag with a reason beside it", () => {
+    const minimum = minimumNenRef();
+    expect(minimum.ref).toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(minimum.why.length).toBeGreaterThan(80);
+  });
+
+  it("is NEWER than every release the CHANGELOG has published", () => {
+    // THE GIT-FREE EVIDENCE, AND THE ARGUMENT FOR CHOOSING IT. The question the
+    // minimum answers is "which release first carried the verbs these templates
+    // call", and this repository has exactly one artifact that records when a
+    // verb SHIPPED: CHANGELOG.md, whose `## vX.Y.Z` headings are the published
+    // releases and whose `## Unreleased` section is what has not shipped yet. A
+    // constant in src/shu/command.ts was the alternative and is worse twice
+    // over -- it is a second place to write a fact that already has a place,
+    // and it would record what a developer TYPED rather than what was
+    // RELEASED, which is the fact the bootstrap actually depends on.
+    // `git ls-tree v0.2.0` is the direct evidence and is not available to a
+    // test: this suite runs on three platforms, on a checkout that may be
+    // shallow, with no network.
+    expect(released.length, "the changelog must carry released headings").toBeGreaterThan(0);
+    for (const version of released) {
+      expect(
+        compareNenRefs(minimumNenRef().ref, version),
+        `${minimumNenRef().ref} must be newer than the released ${version}`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("is justified: the shu family is announced under '## Unreleased', not under a release", () => {
+    const firstRelease = `## ${released[0] as string}`;
+    const unreleased = CHANGELOG.slice(CHANGELOG.indexOf("## Unreleased"), CHANGELOG.indexOf(firstRelease));
+    expect(unreleased).toContain("new family `nen shu`");
+    // ...and nowhere in a released section, which is what makes "no published
+    // release carries these verbs" an observation rather than a claim.
+    expect(CHANGELOG.slice(CHANGELOG.indexOf(firstRelease))).not.toContain("new family `nen shu`");
+  });
+
+  it("compares refs NUMERICALLY, field by field", () => {
+    // `"v0.10.0" < "v0.9.0"` as strings, and a minimum compared that way would
+    // accept a ref older than itself.
+    expect(compareNenRefs("v0.10.0", "v0.9.0")).toBeGreaterThan(0);
+    expect(compareNenRefs("v0.2.0", "v0.3.0")).toBeLessThan(0);
+    expect(compareNenRefs("v1.0.0", "v0.99.99")).toBeGreaterThan(0);
+    expect(compareNenRefs("v0.3.0", "v0.3.0")).toBe(0);
+    expect(compareNenRefs("v0.3.1", "v0.3.0")).toBeGreaterThan(0);
+  });
+});
+
+// ── which stacks have a fresh-tree form ─────────────────────────────────────
+
+describe("freshTreeSupport", () => {
+  it("partitions every known stack exactly once", () => {
+    const support = freshTreeSupport();
+    const all = [...support.freshTree, ...support.initOnly, ...support.noTemplate].sort();
+    expect(all).toEqual([...knownStacks()].sort());
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("agrees with what each template actually says", () => {
+    const support = freshTreeSupport();
+    expect(support.freshTree.length).toBeGreaterThan(0);
+    expect(support.initOnly.length).toBeGreaterThan(0);
+    for (const stack of support.freshTree) {
+      const template = templateForStack(stack);
+      expect(template?.noFreshTree).toBeNull();
+      expect(template?.freshTree.length).toBeGreaterThan(0);
+    }
+    for (const stack of support.initOnly) {
+      const template = templateForStack(stack);
+      expect(typeof template?.noFreshTree).toBe("string");
+      expect(template?.freshTree).toEqual([]);
+      // The refusal has to name the way forward, or it is a dead end.
+      expect(template?.noFreshTree).toContain("scaffold init");
+    }
+    for (const stack of support.noTemplate) {
+      expect(templateForStack(stack)).toBeNull();
+    }
+  });
+});
+
+// ── the generated workflow's own shape ──────────────────────────────────────
+
+describe("every bundled CI body", () => {
+  const bodies = (): readonly string[] =>
+    bundledTemplateNames().map((name): string => {
+      const stack = knownStacks().find(
+        (id): boolean => profileById(loadProfilesPack(), id).scaffoldTemplate === name,
+      );
+      return templateForStack(stack as string)?.ci.body ?? "";
+    });
+
+  it("declares a read-only token", () => {
+    // A generated workflow that declares no `permissions:` inherits whatever
+    // the repository's default is -- write, in many repositories. This one
+    // fetches a pinned release and runs read-only verbs against a checkout.
+    for (const body of bodies()) {
+      expect(body, "a workflow body declares no permissions block").toContain("permissions:");
+      expect(body).toContain("contents: read");
+    }
+  });
+
+  it("spells every workflow expression with spaces, so no token reads as a placeholder", () => {
+    // `${{env.X}}` matches this pack's own `{{token}}` grammar and would refuse
+    // the whole template for a token nen was never asked to fill.
+    for (const body of bodies()) expect(body).not.toMatch(/\$\{\{[A-Za-z]/);
   });
 });

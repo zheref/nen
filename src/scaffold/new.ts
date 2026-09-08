@@ -23,13 +23,14 @@
 // in that directory a second later. ./new.test.ts asserts exactly that.
 
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
+import { looksLikeOwnerSlug } from "../repo/root.js";
 import { CONTRACT_FILE } from "../schema/source.js";
 import { detect } from "../shu/detect.js";
-import { PROGRAM, VERSION } from "../version.js";
-import { renderCommitMsgHook, type HookSpec } from "./hook.js";
-import type { ScaffoldWrite } from "./init.js";
+import { PROGRAM } from "../version.js";
+import { renderCommitMsgHook, writeHookFile, type HookSpec } from "./hook.js";
+import { bootstrapRef, type ScaffoldWrite, type WriteAction } from "./init.js";
 import { substitute, templateForStack } from "./templates.js";
 
 /** `nen.scaffold.new/v0.1` -- this verb's own versioned contract string. */
@@ -51,10 +52,42 @@ export interface ScaffoldNewOptions {
   readonly name: string;
   /** The directory to create. Must not exist, or must be empty. */
   readonly dir: string;
+  /** The host `nen shu detect`'s `{gw}` resolution answers for. */
+  readonly platform: NodeJS.Platform;
   /** The trailer convention. Omitted, the hook is a printed post-step. */
   readonly hook?: HookSpec;
+  /** The nen release the generated workflow pins. Omitted, nen chooses one. */
+  readonly nenRef?: string;
   /** Print the tree and write nothing. */
   readonly dryRun?: boolean;
+}
+
+/**
+ * `--dir`, in the spelling every printed post-step can actually be pasted with.
+ *
+ * SEVEN OF THIS VERB'S EIGHT POST-STEPS PASS `--dir`'s VALUE TO `--repo`, and
+ * `--repo` refuses an `owner/name`-shaped value by design (../repo/root.ts):
+ * `--dir parity/nextjs` produced five post-steps that refuse at exit 2 when
+ * pasted. Two rules, and they are the CLI's existing ones rather than new ones:
+ *
+ *   * A one-slash relative value reads as a slug and is refused HERE, at exit 2,
+ *     with the same way out `--repo` offers -- spell it `./parity/nextjs` if a
+ *     path is what was meant. Guessing would make `--dir` the one flag in this
+ *     CLI that resolves the ambiguity silently.
+ *   * Every other relative value is `./`-prefixed for the post-steps, so
+ *     `a/b/c` prints as `./a/b/c` and is a path to every verb that reads it.
+ *
+ * An absolute value is already unambiguous and is returned unchanged.
+ */
+export function postStepDir(dir: string): string {
+  if (looksLikeOwnerSlug(dir)) {
+    throw new VerbUsageError(
+      `--dir '${dir}' reads as an owner/name slug, and this verb writes to a filesystem PATH. Every post-step it prints passes this value to --repo, which refuses a slug by name -- so spell it './${dir}' if that is the directory you meant.`,
+    );
+  }
+  if (isAbsolute(dir) || dir.startsWith("./") || dir.startsWith("../")) return dir;
+  if (dir.startsWith(".\\") || dir.startsWith("..\\")) return dir;
+  return `./${dir}`;
 }
 
 export interface ScaffoldNewResult {
@@ -115,39 +148,70 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
       `'scaffold new' has no fresh-tree form for '${options.stack}': ${template.noFreshTree}`,
     );
   }
-  requireEmptyDir(options.dir);
+  // The `--dir` spelling every post-step below is printed with -- and the one
+  // this verb reports. Refused before the first write when it is ambiguous.
+  const dir = postStepDir(options.dir);
+  // The ref the workflow pins, decided before any write: a `--nen-ref` that is
+  // not a tag, or is older than the workflow can run, is a usage refusal. A
+  // fresh tree has no declaration to read a pin out of yet, so the answer is
+  // the greater of this build's version and the template pack's minimum.
+  const bootstrap = bootstrapRef(dir, options.nenRef);
+  requireEmptyDir(dir);
 
   const writes: ScaffoldWrite[] = [];
   const notes: string[] = [];
   const values = { name: options.name, stack: options.stack };
 
-  const put = (relativePath: string, body: string, why: string): void => {
+  /**
+   * One file of the tree.
+   *
+   * A FILESYSTEM FAILURE IS A `refused` ROW, not a crash: the same rule
+   * `scaffold init` follows, and for the same reason -- a run that already
+   * wrote three files and then threw left the caller with a tree and no report
+   * of it.
+   */
+  const put = (relativePath: string, body: string, why: string, write: (path: string) => void): void => {
     if (dry) {
       writes.push({ path: relativePath, action: "would-create", why });
       return;
     }
-    const path = join(options.dir, ...relativePath.split("/"));
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, body, "utf8");
-    writes.push({ path: relativePath, action: "created", why });
+    const path = join(dir, ...relativePath.split("/"));
+    let action: WriteAction = "created";
+    let reason = why;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      write(path);
+    } catch (error) {
+      action = "refused";
+      const code = (error as NodeJS.ErrnoException).code;
+      reason = `the filesystem refused this write (${typeof code === "string" ? code : String(error)}). Every file written before it is reported above; this tree is incomplete.`;
+    }
+    writes.push({ path: relativePath, action, why: reason });
+  };
+
+  const putText = (relativePath: string, body: string, why: string): void => {
+    put(relativePath, body, why, (path): void => {
+      writeFileSync(path, body, "utf8");
+    });
   };
 
   for (const file of template.freshTree) {
-    put(
+    putText(
       file.path,
       substitute(file.body, values, `the '${template.template}' template's ${file.path}`),
       `the '${template.template}' template`,
     );
   }
-  put(
+  putText(
     template.ci.path,
     substitute(
       template.ci.body,
-      { ...values, runner: template.runner, nenRef: `v${VERSION}` },
+      { ...values, runner: template.runner, nenRef: bootstrap.ref },
       `the '${template.template}' CI template`,
     ),
     `the '${template.template}' template's workflow for ${options.stack}`,
   );
+  notes.push(...bootstrap.notes);
 
   // The hook, ONLY when the caller stated the convention it enforces. Which
   // two trailer keys mark an automated commit, and which environment variable
@@ -155,9 +219,15 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
   // and inventing a pair here would bake one system's convention into every
   // project this verb ever writes.
   const hookPath = ".git/hooks/commit-msg";
-  const postSteps: string[] = [`cd ${options.dir} && git init && git add -A && git commit -m "chore: scaffold"`];
+  const postSteps: string[] = [`cd ${dir} && git init && git add -A && git commit -m "chore: scaffold"`];
   if (options.hook !== undefined) {
-    put(hookPath, renderCommitMsgHook(options.hook), "the trailer-enforcing commit-msg hook");
+    const body = renderCommitMsgHook(options.hook);
+    // THROUGH ./hook.ts's WRITER, exactly as `scaffold init` does. A hook
+    // written 0644 is one `git` skips in silence on every commit, and this verb
+    // shipped one for as long as it had a writer of its own.
+    put(hookPath, body, "the trailer-enforcing commit-msg hook", (path): void => {
+      writeHookFile(path, body);
+    });
   } else {
     writes.push({
       path: hookPath,
@@ -169,14 +239,14 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
   postSteps.push(...template.postSteps);
   if (options.hook === undefined) {
     postSteps.push(
-      `${PROGRAM} scaffold init --repo ${options.dir} --stack ${options.stack} --agent-trailer <key> --run-trailer <key> --marker-env <VAR>`,
+      `${PROGRAM} scaffold init --repo ${dir} --stack ${options.stack} --agent-trailer <key> --run-trailer <key> --marker-env <VAR>`,
     );
   }
   postSteps.push(
-    `${PROGRAM} shu detect --repo ${options.dir}            # re-propose the rows it withheld, once the manifest answers`,
+    `${PROGRAM} shu detect --repo ${dir}            # re-propose the rows it withheld, once the manifest answers`,
   );
-  postSteps.push(`${PROGRAM} shu tools --repo ${options.dir}            # checks the host; --install acts`);
-  postSteps.push(`${PROGRAM} shu build --repo ${options.dir} --dry-run  # confirm the declaration`);
+  postSteps.push(`${PROGRAM} shu tools --repo ${dir}            # checks the host; --install acts`);
+  postSteps.push(`${PROGRAM} shu build --repo ${dir} --dry-run  # confirm the declaration`);
 
   // The declaration, read back off the tree this verb just wrote. On a dry run
   // there is no tree to read, so the row says what would be written and where
@@ -189,10 +259,10 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
       why: `proposed by '${PROGRAM} shu detect' off the marker written above -- the same block '${PROGRAM} shu detect --write' writes, seats and all`,
     });
     notes.push(
-      `a dry run writes nothing, so the declaration is described rather than shown: it is exactly what '${PROGRAM} shu detect --repo ${options.dir}' prints once the tree exists.`,
+      `a dry run writes nothing, so the declaration is described rather than shown: it is exactly what '${PROGRAM} shu detect --repo ${dir}' prints once the tree exists.`,
     );
   } else {
-    const report = detect(options.dir);
+    const report = detect(dir, options.platform);
     if (report.proposal === null) {
       writes.push({
         path: CONTRACT_FILE,
@@ -200,14 +270,12 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
         why: `the tree was written, but '${PROGRAM} shu detect' found no lane in it -- so there is nothing to declare, and nen will not write a declaration it did not derive from a marker. This is a defect in the '${template.template}' template for '${options.stack}'.`,
       });
     } else {
-      const path = join(options.dir, ...CONTRACT_FILE.split("/"));
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, `${JSON.stringify(report.proposal, null, 2)}\n`, "utf8");
-      writes.push({
-        path: CONTRACT_FILE,
-        action: "created",
-        why: `proposed by '${PROGRAM} shu detect' off the marker this verb wrote, seats and all`,
-      });
+      const body = `${JSON.stringify(report.proposal, null, 2)}\n`;
+      putText(
+        CONTRACT_FILE,
+        body,
+        `proposed by '${PROGRAM} shu detect' off the marker this verb wrote, seats and all`,
+      );
       notes.push(...report.notes);
     }
   }
@@ -217,7 +285,7 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
     contract: SCAFFOLD_NEW_CONTRACT,
     stack: options.stack,
     name: options.name,
-    dir: options.dir,
+    dir,
     writes,
     migrated: [],
     postSteps,

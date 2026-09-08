@@ -18,6 +18,9 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,8 +39,12 @@ import {
   REPOS_FILE,
   resolveSchemaFile,
 } from "../schema/source.js";
+import { looksLikeOwnerSlug } from "../repo/root.js";
+import { VERSION } from "../version.js";
 import { scaffoldCommand } from "./command.js";
 import { MIGRATED_FILES, scaffoldInit, type ToolsOutcome } from "./init.js";
+import { postStepDir } from "./new.js";
+import { compareNenRefs, minimumNenRef } from "./templates.js";
 
 const TRAILERS = ["--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"];
 const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
@@ -107,6 +114,26 @@ function tempCopy(fixture: string): string {
 
 function tempEmpty(): string {
   return mkdtempSync(join(tmpdir(), "nen-scaffold-stack-"));
+}
+
+/**
+ * Can this host make a symlink at all?
+ *
+ * WINDOWS NEEDS A PRIVILEGE FOR ONE. Creating a symlink there requires either
+ * Developer Mode or SeCreateSymbolicLinkPrivilege, and a CI runner may have
+ * neither -- so the containment tests below PROBE first and return without
+ * asserting when the probe fails, rather than failing a platform for a
+ * capability the test needs and the product does not. The probe link is removed
+ * either way.
+ */
+function linkable(probe: string, target: string): boolean {
+  try {
+    symlinkSync(target, probe, "junction");
+    rmSync(probe, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -236,7 +263,7 @@ describe("--accept-detected writes exactly detect's own proposal", () => {
   ] as const) {
     it(`accepts ${what}`, async () => {
       const root = tempCopy(fixture);
-      const expected = detect(root).proposal;
+      const expected = detect(root, "linux").proposal;
       expect(expected, "the fixture must actually detect").not.toBeNull();
       const result = await capture(["scaffold", "init", "--accept-detected", ...TRAILERS], root);
       expect(result.code).toBe(0);
@@ -301,7 +328,7 @@ describe("--accept-detected writes exactly detect's own proposal", () => {
 describe("--stack narrows, and never invents a command", () => {
   it("takes only the named stack's lanes out of a mixed tree", async () => {
     const root = tempCopy(markerTree("ambiguous"));
-    const all = detect(root);
+    const all = detect(root, "linux");
     expect(new Set(all.lanes.map((lane): string => lane.stack)).size).toBeGreaterThan(1);
     await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
     const written = JSON.parse(readFileSync(join(root, "nen", "contract.json"), "utf8")) as {
@@ -641,9 +668,9 @@ describe("the injected checker", () => {
       calls.push(install);
       return { report: { contract: "x" }, lines: ["checked"] };
     };
-    scaffoldInit({ root, directories: [], hook: HOOK, stack: "nextjs", tools });
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: "nextjs", tools });
     expect(calls).toEqual([false]);
-    scaffoldInit({ root, directories: [], hook: HOOK, stack: "nextjs", installTools: true, tools });
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: "nextjs", installTools: true, tools });
     expect(calls).toEqual([false, true]);
   });
 
@@ -651,6 +678,7 @@ describe("the injected checker", () => {
     const root = tempCopy(NEXTJS_SINGLE);
     const result = scaffoldInit({
       root,
+      platform: "linux",
       directories: [],
       hook: HOOK,
       stack: "nextjs",
@@ -733,7 +761,7 @@ describe("nen scaffold new", () => {
       "package.json",
     ]);
     // The declaration is detect's own proposal off the marker this verb wrote.
-    const report = detect(dir);
+    const report = detect(dir, "linux");
     expect(report.lanes.map((lane): string => lane.stack)).toEqual(["nextjs"]);
     expect(JSON.parse(readFileSync(join(dir, "nen", "contract.json"), "utf8"))).toEqual(report.proposal);
     // {{name}} really was substituted, everywhere.
@@ -848,6 +876,466 @@ describe("nen scaffold new", () => {
     const result = await runShu(["shu", "build", "--dry-run"], root);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toContain("turbo");
+  });
+});
+
+// ── the ref the generated workflow pins ─────────────────────────────────────
+
+describe("the CI workflow's NEN_REF is a ref that can actually run it", () => {
+  const MINIMUM = minimumNenRef().ref;
+
+  const refIn = (body: string): string => {
+    const match = /NEN_REF: (v\d+\.\d+\.\d+)/.exec(body);
+    expect(match, "the workflow must pin a ref").not.toBeNull();
+    return (match as RegExpExecArray)[1] as string;
+  };
+
+  it("init writes the GREATER of this build's version and the declared minimum", async () => {
+    // THE BLOCKER THIS CLOSES. `v${VERSION}` is v0.2.0, and `git ls-tree
+    // v0.2.0` has no src/shu at all -- so every repository this verb
+    // scaffolded received a workflow whose bootstrap refuses at exit 6 and
+    // whose verbs would not exist even if it did not. The written ref is now
+    // pinned to be at least the minimum, whatever version this build carries.
+    const root = tempCopy(NEXTJS_SINGLE);
+    await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    const body = readFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "utf8");
+    expect(compareNenRefs(refIn(body), MINIMUM)).toBeGreaterThanOrEqual(0);
+    expect(refIn(body)).toBe(MINIMUM);
+    expect(compareNenRefs(MINIMUM, `v${VERSION}`)).toBeGreaterThan(0);
+  });
+
+  it("new writes the same ref, by the same rule", async () => {
+    const dir = join(tempEmpty(), "kro-site");
+    await capture(["scaffold", "new", "--stack", "nextjs", "--name", "kro", "--dir", dir], null);
+    const body = readFileSync(join(dir, ".github", "workflows", "nen-shu.yml"), "utf8");
+    expect(compareNenRefs(refIn(body), MINIMUM)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("says out loud that it cannot verify offline that a release exists for it", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    const printed = result.out.join("\n");
+    expect(printed).toContain(MINIMUM);
+    expect(printed).toContain("cannot verify offline");
+    // The README's own sentence about what happens when a tag has no release.
+    expect(printed).toContain("exit 6");
+    expect(printed).toContain("SHA256SUMS");
+  });
+
+  it("--nen-ref states one, and it is what lands in the file", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--nen-ref", "v9.9.9", ...TRAILERS],
+      root,
+    );
+    expect(result.code).toBe(0);
+    expect(readFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "utf8")).toContain(
+      "NEN_REF: v9.9.9",
+    );
+  });
+
+  it("refuses a --nen-ref BELOW the minimum, naming both refs, before any write", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    const before = tree(root);
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--nen-ref", "v0.1.0", ...TRAILERS],
+      root,
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--nen-ref 'v0.1.0'");
+    expect(result.err.join("\n")).toContain(MINIMUM);
+    expect(tree(root)).toEqual(before);
+  });
+
+  it("refuses a --nen-ref that is not a tag at all", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    for (const bad of ["main", "0.3.0", "v0.3", "v0.3.0-rc1", "../x"]) {
+      const result = await capture(
+        ["scaffold", "init", "--stack", "nextjs", "--nen-ref", bad, ...TRAILERS],
+        root,
+      );
+      expect(result.code, bad).toBe(2);
+      expect(result.err.join("\n")).toContain("vX.Y.Z");
+    }
+  });
+
+  it("`scaffold new` takes --nen-ref too, and refuses one below the minimum", async () => {
+    const dir = join(tempEmpty(), "kro-site");
+    const refused = await capture(
+      ["scaffold", "new", "--stack", "nextjs", "--name", "kro", "--dir", dir, "--nen-ref", "v0.0.1"],
+      null,
+    );
+    expect(refused.code).toBe(2);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("lifts a repository's OWN pin to the minimum, and says which pin it lifted", async () => {
+    // A repository that pinned an older nen decided something, and nen does not
+    // silently re-pin it -- but a workflow written at that ref cannot run, so
+    // the write is at the minimum and the note names the declaration to fix.
+    const root = tempCopy(NEXTJS_SINGLE);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    const fixture = JSON.parse(
+      readFileSync(
+        join(process.cwd(), "src", "schema", "fixtures", "shu-tools-repo", "nen", "contract.json"),
+        "utf8",
+      ),
+    ) as { dependency: Record<string, unknown> };
+    writeFileSync(
+      join(root, "nen", "contract.json"),
+      `${JSON.stringify(
+        {
+          $schema: "nen.contract/v0.1",
+          dependency: { ...fixture.dependency, minimum: "0.1", pinned_ref: "v0.1.0" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    const body = readFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "utf8");
+    expect(refIn(body)).toBe(MINIMUM);
+    expect(result.out.join("\n")).toContain("v0.1.0");
+    expect(result.out.join("\n")).toContain("re-pin the declaration");
+  });
+});
+
+// ── every write stays inside the repository ─────────────────────────────────
+
+describe("containment: nen writes only inside the tree --repo pointed at", () => {
+  for (const [flag, value] of [
+    ["--hook-path", join("..", "outside", "evil-hook")],
+    ["--canon-values-path", join("..", "outside", "values.yml")],
+  ] as const) {
+    it(`refuses ${flag} pointing out of the repository, at exit 2, before any write`, async () => {
+      // BOTH FLAGS USED TO `join(root, value)` AND WRITE. `--hook-path` put an
+      // EXECUTABLE one directory above --repo and reported exit 0.
+      const parent = tempEmpty();
+      const root = join(parent, "repo");
+      cpSync(NEXTJS_SINGLE, root, { recursive: true });
+      const before = tree(root);
+      const result = await capture(
+        ["scaffold", "init", "--stack", "nextjs", flag, value, ...TRAILERS],
+        root,
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain(flag);
+      expect(result.err.join("\n")).toContain("outside the repository");
+      // Nothing written, inside or out.
+      expect(tree(root)).toEqual(before);
+      expect(existsSync(join(parent, "outside"))).toBe(false);
+    });
+
+    it(`refuses ${flag} given an ABSOLUTE path outside the repository`, async () => {
+      const parent = tempEmpty();
+      const root = join(parent, "repo");
+      cpSync(NEXTJS_SINGLE, root, { recursive: true });
+      const outside = join(parent, "elsewhere", "x");
+      const result = await capture(
+        ["scaffold", "init", "--stack", "nextjs", flag, outside, ...TRAILERS],
+        root,
+      );
+      expect(result.code).toBe(2);
+      expect(existsSync(join(parent, "elsewhere"))).toBe(false);
+    });
+  }
+
+  it("still accepts a path that merely LOOKS like an escape but stays inside", async () => {
+    // `..something` is a legitimate entry name, and a `rel.startsWith("..")`
+    // check would refuse it. The rule is ../repo/contain.ts's, shared with shu.
+    const root = tempCopy(NEXTJS_SINGLE);
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--canon-values-path", "..values/x.yml", ...TRAILERS],
+      root,
+    );
+    expect(result.code).toBe(0);
+    expect(existsSync(join(root, "..values", "x.yml"))).toBe(true);
+  });
+
+  it("accepts a nested path inside the repository, as it always did", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--hook-path", "custom/hooks/commit-msg", ...TRAILERS],
+      root,
+    );
+    expect(result.code).toBe(0);
+    expect(existsSync(join(root, "custom", "hooks", "commit-msg"))).toBe(true);
+  });
+
+  for (const [directory, printed] of [
+    ["nen", "nen/contract.json"],
+    [join(".github", "workflows"), ".github/workflows/nen-shu.yml"],
+  ] as const) {
+    it(`refuses the ${printed} write when '${directory}' is a SYMLINK out of the tree`, async () => {
+      // A LEXICAL CHECK PASSES HERE AND THE WRITE STILL LANDS OUTSIDE. Both of
+      // these are directories this verb creates when they are absent; a symlink
+      // in their place redirects the write while the report keeps printing the
+      // repo-relative name.
+      const parent = tempEmpty();
+      const root = join(parent, "repo");
+      cpSync(NEXTJS_SINGLE, root, { recursive: true });
+      const target = join(parent, "outside");
+      mkdirSync(target, { recursive: true });
+      if (!linkable(join(root, "probe-link"), target)) return;
+      mkdirSync(dirname(join(root, directory)), { recursive: true });
+      symlinkSync(target, join(root, directory), "junction");
+
+      const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+      expect(result.code).toBe(1);
+      const printedReport = result.out.join("\n");
+      expect(printedReport).toContain("refused");
+      // The refusal names the LINK and where it points -- the two facts a
+      // caller needs to understand a report that otherwise looks right.
+      expect(printedReport).toContain("is a symlink pointing at");
+      expect(readdirSync(target)).toEqual([]);
+    });
+  }
+});
+
+// ── an fs failure is a row, not a crash ─────────────────────────────────────
+
+describe("a filesystem refusal is reported, and the rest of the report survives", () => {
+  it("records the errno, keeps every earlier write in the report, and exits 1", async () => {
+    // A DIRECTORY WHERE A FILE GOES works on every platform, where a chmod
+    // does not. Before this, the whole run threw: exit 1, EMPTY stdout under
+    // --json, and four files already written that the caller never heard about.
+    const root = tempCopy(NEXTJS_SINGLE);
+    mkdirSync(join(root, ".gitignore"), { recursive: true });
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", "--json", ...TRAILERS], root);
+    expect(result.code).toBe(1);
+    const document = JSON.parse(result.out.join("\n")) as {
+      writes: { path: string; action: string; why: string }[];
+    };
+    const row = document.writes.find((write): boolean => write.path === ".gitignore");
+    expect(row?.action).toBe("refused");
+    expect(row?.why).toMatch(/EISDIR|EPERM|EACCES|EBUSY/);
+    // The steps that ran BEFORE it are still in the report, which is the whole
+    // point: the caller can see what is on disk.
+    expect(document.writes.some((write): boolean => write.path === "nen/contract.json")).toBe(true);
+    expect(existsSync(join(root, "nen", "contract.json"))).toBe(true);
+  });
+
+  it("a refused row is published in --json's writes[], never filtered out", async () => {
+    // The mutation this kills: filtering `refused` out of the document. A
+    // report that only lists what succeeded is a report that says "done".
+    const root = tempCopy(NEXTJS_SINGLE);
+    await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    writeFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "name: theirs\n", "utf8");
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", "--json", ...TRAILERS], root);
+    expect(result.code).toBe(1);
+    const document = JSON.parse(result.out.join("\n")) as {
+      writes: { path: string; action: string }[];
+      exitCode: number;
+    };
+    expect(
+      document.writes.filter((write): boolean => write.action === "refused").map((w): string => w.path),
+    ).toContain(".github/workflows/nen-shu.yml");
+    expect(document.exitCode).toBe(1);
+  });
+});
+
+// ── .gitignore is APPENDED to, byte for byte ────────────────────────────────
+
+describe(".gitignore upkeep preserves the file it is appending to", () => {
+  it("leaves a CRLF file's own bytes and line endings alone", async () => {
+    // Reading through a CRLF-normalising reader and writing the result back
+    // rewrote the whole file -- every line of it -- under a comment promising
+    // the file is never rewritten.
+    const root = tempCopy(NEXTJS_SINGLE);
+    const theirs = "node_modules\r\n.env\r\n";
+    writeFileSync(join(root, ".gitignore"), theirs, "utf8");
+    await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    const after = readFileSync(join(root, ".gitignore"), "utf8");
+    expect(after.startsWith(theirs), "the caller's own bytes must survive verbatim").toBe(true);
+    // ...and the appended line matches the file's own ending, not the host's.
+    expect(after).toContain("\r\n.nen/\r\n");
+    expect(after).not.toContain("\n.nen/\n\n");
+    expect(after.split("\n").every((line): boolean => line === "" || line.endsWith("\r"))).toBe(true);
+  });
+
+  it("recognises an entry that is already there in a CRLF file, and adds nothing", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    const theirs = "dist\r\n.nen/\r\n";
+    writeFileSync(join(root, ".gitignore"), theirs, "utf8");
+    await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(theirs);
+  });
+
+  it("says 'would-append' on a dry run over an existing file, and 'would-create' over none", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    const bare = await capture(["scaffold", "init", "--stack", "nextjs", "--dry-run", ...TRAILERS], root);
+    expect(bare.out.join("\n")).toContain("would-create: .gitignore");
+    writeFileSync(join(root, ".gitignore"), "dist\n", "utf8");
+    const existing = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--dry-run", ...TRAILERS],
+      root,
+    );
+    expect(existing.out.join("\n")).toContain("would-append: .gitignore");
+  });
+
+  it("reports a real append as 'appended', not as 'created'", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    writeFileSync(join(root, ".gitignore"), "dist\n", "utf8");
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", "--json", ...TRAILERS], root);
+    const document = JSON.parse(result.out.join("\n")) as { writes: { path: string; action: string }[] };
+    expect(document.writes.find((write): boolean => write.path === ".gitignore")?.action).toBe("appended");
+  });
+});
+
+// ── the migration never follows a link ──────────────────────────────────────
+
+describe("the schemas/ -> nen/ migration refuses a SYMLINKED source", () => {
+  it("names both paths, copies nothing, and never tells the caller to stage it", async () => {
+    // `copyFileSync` follows the link: `schemas/labels.json ->
+    // ../../outside/secret.json` was copied INTO the repository under a
+    // taxonomy file's name, and the printed next step said `git add nen/`.
+    const parent = tempEmpty();
+    const root = join(parent, "repo");
+    cpSync(EMPTY_TREE, root, { recursive: true });
+    const secret = join(parent, "secret.json");
+    writeFileSync(secret, `${JSON.stringify({ secret: true })}\n`, "utf8");
+    mkdirSync(join(root, "schemas"), { recursive: true });
+    if (!linkable(join(root, "probe-link"), secret)) return;
+    // LABELS_FILE is the CANONICAL spelling (`nen/labels.json`); the legacy
+    // location this migration reads is the same basename under `schemas/`.
+    const basename = LABELS_FILE.split("/").at(-1) as string;
+    symlinkSync(secret, join(root, "schemas", basename));
+
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    expect(result.code).toBe(1);
+    const printed = result.out.join("\n");
+    expect(printed).toContain("is a SYMLINK");
+    expect(printed).toContain(`schemas/${basename}`);
+    expect(existsSync(join(root, "nen", basename))).toBe(false);
+    // And the removal advice must not name a file whose copy never happened.
+    expect(printed).not.toContain(`git rm schemas/${basename}`);
+  });
+});
+
+// ── `scaffold new`'s own surface ────────────────────────────────────────────
+
+describe("nen scaffold new, corrected", () => {
+  it("writes an EXECUTABLE commit-msg hook, exactly as init does", async () => {
+    // `git` silently skips a commit-msg hook that is not executable, so a hook
+    // written 0644 reports `created` and enforces nothing. Both verbs now go
+    // through one writer.
+    const dir = join(tempEmpty(), "kro-site");
+    const result = await capture(
+      ["scaffold", "new", "--stack", "nextjs", "--name", "kro", "--dir", dir, ...TRAILERS],
+      null,
+    );
+    expect(result.code).toBe(0);
+    const hook = join(dir, ".git", "hooks", "commit-msg");
+    expect(existsSync(hook)).toBe(true);
+    expect(readFileSync(hook, "utf8")).toContain("X-Agent");
+    if (process.platform === "win32") return; // no POSIX mode bits to assert
+    expect(statSync(hook).mode & 0o111, "the hook must be executable").not.toBe(0);
+  });
+
+  it("init's hook is executable too, which is the property they now share", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    if (process.platform === "win32") return;
+    expect(statSync(join(root, ".git", "hooks", "commit-msg")).mode & 0o111).not.toBe(0);
+  });
+
+  it("refuses a --name carrying a path separator or a traversal", async () => {
+    // The name is spliced into two JSON manifests and would otherwise decide
+    // where they land.
+    for (const name of ["../x", "a/b", "..", "/abs", "a\\b", 'q"uote', "", "-lead"]) {
+      const dir = join(tempEmpty(), "kro-site");
+      const result = await capture(
+        ["scaffold", "new", "--stack", "nextjs", "--name", name, "--dir", dir],
+        null,
+      );
+      expect(result.code, `--name '${name}'`).toBe(2);
+      expect(existsSync(dir), `--name '${name}' wrote a tree`).toBe(false);
+    }
+  });
+
+  it("refuses a --dir that reads as an owner/name slug, naming the './' spelling", async () => {
+    const result = await capture(
+      ["scaffold", "new", "--stack", "nextjs", "--name", "kro", "--dir", "parity/nextjs"],
+      null,
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("./parity/nextjs");
+    expect(existsSync("parity")).toBe(false);
+  });
+
+  it("prints post-steps whose --repo value every verb accepts", async () => {
+    // Seven of the eight post-steps pass --dir's value to --repo, and --repo
+    // refuses a slug. A relative --dir is `./`-prefixed for exactly that.
+    const parent = tempEmpty();
+    const dir = join(parent, "a", "b", "c");
+    const result = await capture(
+      ["scaffold", "new", "--stack", "nextjs", "--name", "kro", "--dir", dir],
+      null,
+    );
+    expect(result.code).toBe(0);
+    for (const line of result.out) {
+      const match = /--repo (\S+)/.exec(line);
+      if (match?.[1] === undefined) continue;
+      expect(looksLikeOwnerSlug(match[1]), `post-step names a slug: ${line}`).toBe(false);
+    }
+  });
+
+  it("normalises a bare relative --dir to './...' in what it prints", () => {
+    expect(postStepDir("a/b/c")).toBe("./a/b/c");
+    expect(postStepDir("kro")).toBe("./kro");
+    expect(postStepDir("./kro")).toBe("./kro");
+    expect(postStepDir("../kro")).toBe("../kro");
+    expect(postStepDir(join(tmpdir(), "kro"))).toBe(join(tmpdir(), "kro"));
+    expect((): string => postStepDir("owner/name")).toThrow(/owner\/name slug/);
+  });
+
+  it("refuses an init-only flag rather than accepting and ignoring it", async () => {
+    // The two verbs share one flag spec, so the argv reader accepts every init
+    // flag here and hands it to a function that never reads it: --hook-path
+    // used to write the hook to the default path and report success.
+    for (const argv of [
+      ["--hook-path", ".husky/commit-msg"],
+      ["--force"],
+      ["--install-tools"],
+      ["--accept-detected"],
+      ["--canon-values-path", "x.yml"],
+      ["--scenario", "swiftui"],
+      ["--directories", "src,tests"],
+    ]) {
+      const dir = join(tempEmpty(), "kro-site");
+      const result = await capture(
+        ["scaffold", "new", "--stack", "nextjs", "--name", "kro", "--dir", dir, ...argv],
+        null,
+      );
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n")).toContain(argv[0] as string);
+      expect(existsSync(dir)).toBe(false);
+    }
+  });
+
+  it("refuses --repo, which names a different directory than the one it writes", async () => {
+    const dir = join(tempEmpty(), "kro-site");
+    const result = await capture(
+      ["scaffold", "new", "--stack", "nextjs", "--name", "kro", "--dir", dir],
+      tempEmpty(),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--dir, not --repo");
+    expect(existsSync(dir)).toBe(false);
+  });
+});
+
+// ── the advice a caller is meant to paste ───────────────────────────────────
+
+describe("the closing check names a verb this CLI actually has", () => {
+  it("prints 'nen shu tools --repo <path>', with the family in it", async () => {
+    // `argv.slice(1)` dropped the family and advised `nen tools --repo ...`.
+    const root = tempCopy(EMPTY_TREE);
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
+    const printed = [...result.out, ...result.err].join("\n");
+    expect(printed).toContain("nen shu tools --repo");
+    expect(printed).not.toMatch(/(?<!shu )nen tools --repo/);
   });
 });
 

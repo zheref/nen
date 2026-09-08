@@ -26,9 +26,10 @@
 // module imports no seam and `--dry-run` cannot spawn even by accident: a dry
 // run never calls it.
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
+import { containedPath, realContainment } from "../repo/contain.js";
 import { loadContract } from "../schema/contract.js";
 import {
   CONTRACT_FILE,
@@ -38,8 +39,15 @@ import {
 } from "../schema/source.js";
 import { detect, type DetectReport } from "../shu/detect.js";
 import { PROGRAM, VERSION } from "../version.js";
-import { renderCommitMsgHook, type HookSpec } from "./hook.js";
-import { stackHosts, substitute, templateForStack } from "./templates.js";
+import { renderCommitMsgHook, writeHookFile, type HookSpec } from "./hook.js";
+import {
+  NEN_REF,
+  compareNenRefs,
+  minimumNenRef,
+  stackHosts,
+  substitute,
+  templateForStack,
+} from "./templates.js";
 
 /** `nen.scaffold.init/v0.1` -- this verb's own versioned contract string. */
 export const SCAFFOLD_INIT_CONTRACT = "nen.scaffold.init/v0.1";
@@ -63,13 +71,26 @@ export const MIGRATED_FILES: readonly string[] = LEGACY_MIGRATABLE_FILES;
 /**
  * What happened to one path.
  *
- * FOUR VALUES, AND `skipped` IS NOT A SYNONYM FOR `created`. "It was already
- * exactly this" and "nen wrote it" are different facts about the repository,
- * and an idempotent second run has to be able to say which one it is for every
- * line it prints -- otherwise "idempotent" is a claim rather than an
- * observation.
+ * `skipped` IS NOT A SYNONYM FOR `created`. "It was already exactly this" and
+ * "nen wrote it" are different facts about the repository, and an idempotent
+ * second run has to be able to say which one it is for every line it prints --
+ * otherwise "idempotent" is a claim rather than an observation.
+ *
+ * AND `appended` IS NOT A SYNONYM FOR EITHER. Exactly one step of this verb adds
+ * to a file somebody else owns rather than writing one of nen's own
+ * (`.gitignore`), and reporting that as `created` about a file that was already
+ * there -- with the caller's own thirty lines still in it -- is the one line in
+ * the report that would need a second look to be believed. The dry form says
+ * `would-append` for the same reason: a preview that says `would-create` about
+ * an existing file invites exactly the wrong question.
  */
-export type WriteAction = "created" | "skipped" | "would-create" | "refused";
+export type WriteAction =
+  | "created"
+  | "appended"
+  | "skipped"
+  | "would-create"
+  | "would-append"
+  | "refused";
 
 export interface ScaffoldWrite {
   /** Repo-relative, forward-slashed -- the spelling every message prints. */
@@ -117,6 +138,8 @@ export type ToolsChecker = (install: boolean) => ToolsOutcome;
 
 export interface ScaffoldInitOptions {
   readonly root: string;
+  /** The host `nen shu detect`'s `{gw}` resolution answers for. */
+  readonly platform: NodeJS.Platform;
   /** Repo-relative directories to create, e.g. ["src", "tests", "docs"]. */
   readonly directories: readonly string[];
   readonly hook: HookSpec;
@@ -135,6 +158,8 @@ export interface ScaffoldInitOptions {
   readonly stack?: string;
   /** Accept `nen shu detect`'s proposal exactly as `detect --write` writes it. */
   readonly acceptDetected?: boolean;
+  /** The nen release the generated workflow pins. Omitted, nen chooses one. */
+  readonly nenRef?: string;
   /** Print every write and perform none. Spawns nothing, not even a probe. */
   readonly dryRun?: boolean;
   /** Run the closing check as `--install` rather than as a check. */
@@ -272,28 +297,135 @@ function proposeProject(
   };
 }
 
-/**
- * The ref a generated CI workflow pins nen at.
- *
- * THE REPOSITORY'S OWN ANSWER WINS. A repository that already carries a
- * `dependency` block has decided which nen it runs, and a scaffold that wrote a
- * different ref into its CI would have quietly re-pinned it. Only when there is
- * no such block does the running binary's own version answer, which is the one
- * ref nen can state about itself.
- */
-function bootstrapRef(root: string): string {
+/** What a repository's own `dependency` block pins nen at, or null. */
+function declaredRef(root: string): string | null {
   try {
-    return loadContract(root).dependency?.pinnedRef ?? `v${VERSION}`;
+    return loadContract(root).dependency?.pinnedRef ?? null;
   } catch {
     // An absent or malformed contract is not this step's business to report:
     // the declaration step above has already said what it found.
-    return `v${VERSION}`;
+    return null;
   }
+}
+
+/** The ref a generated workflow will pin nen at, and what to say about it. */
+export interface BootstrapRef {
+  readonly ref: string;
+  /** Lines to print, empty when the ref is this build's own version. */
+  readonly notes: readonly string[];
+}
+
+/**
+ * The ref a generated CI workflow pins nen at.
+ *
+ * THREE ANSWERS, IN THIS ORDER, AND THE MINIMUM IS A FLOOR UNDER ALL OF THEM.
+ *
+ *   1. `--nen-ref vX.Y.Z` -- the caller states it. Validated by shape, and
+ *      refused BY NAME below the minimum: a caller who pins a release that
+ *      cannot run the workflow has made a typo, not a decision.
+ *   2. The repository's own `dependency.pinnedRef`. A repository that carries
+ *      one has decided which nen it runs, and a scaffold that wrote a different
+ *      ref into its CI would have quietly re-pinned it.
+ *   3. This build's own `v${VERSION}` -- the one ref nen can state about itself.
+ *
+ * AND THEN THE GREATER OF THAT AND `templates/index.json`'s `minimumNenRef`,
+ * which is the whole point. `src/version.ts` says which nen WROTE the workflow;
+ * the minimum says which nen can RUN it. While `nen shu` is unreleased those are
+ * different numbers, and writing the first of them produced a workflow that was
+ * red on the first push of every repository this verb ever scaffolded -- the
+ * bootstrap refusing at exit 6 before a single verb ran, because the tag exists
+ * and no release does.
+ *
+ * NEN CANNOT CHECK OFFLINE THAT THE REF IT WRITES HAS A RELEASE, and says so
+ * rather than implying it did: whenever the written ref is not this build's own
+ * version, the notes name it, quote the exit-6 behaviour, and send the caller to
+ * the releases page.
+ */
+export function bootstrapRef(root: string, override: string | undefined): BootstrapRef {
+  const minimum = minimumNenRef();
+  const own = `v${VERSION}`;
+  if (override !== undefined) {
+    if (!NEN_REF.test(override)) {
+      throw new VerbUsageError(
+        `--nen-ref '${override}' is not a release tag (vX.Y.Z). It is written into the generated workflow as the ref the bootstrap fetches, and a value that is not a tag fetches nothing.`,
+      );
+    }
+    if (compareNenRefs(override, minimum.ref) < 0) {
+      throw new VerbUsageError(
+        `--nen-ref '${override}' is older than ${minimum.ref}, which is the oldest release the generated workflow can run: ${minimum.why} Pass ${minimum.ref} or newer, or write the workflow yourself.`,
+      );
+    }
+    return { ref: override, notes: override === own ? [] : [offlineNote(override, minimum.ref)] };
+  }
+  const declared = declaredRef(root);
+  const chosen = declared ?? own;
+  const ref = compareNenRefs(chosen, minimum.ref) < 0 ? minimum.ref : chosen;
+  const notes: string[] = [];
+  if (declared !== null && ref !== declared) {
+    notes.push(
+      `this repository's nen/contract.json pins nen at ${declared}, which is older than ${minimum.ref}: ${minimum.why} The workflow is pinned at ${minimum.ref} instead -- re-pin the declaration, or pass --nen-ref to state a ref yourself.`,
+    );
+  }
+  if (ref !== own) notes.push(offlineNote(ref, minimum.ref));
+  return { ref, notes };
+}
+
+function offlineNote(ref: string, minimum: string): string {
+  return `the generated workflow pins nen at ${ref}, not at this binary's own v${VERSION}${ref === minimum ? ` (${minimum} is the oldest release that carries the verbs the workflow runs)` : ""}. nen cannot verify offline that a release exists for ${ref}: a tag is not a release, and until one is published 'bash nen-bootstrap.sh --ref ${ref}' refuses at exit 6 -- the tag exists but no release does, so there is no SHA256SUMS to verify a binary against. Check https://github.com/zheref/nen/releases before the first CI run.`;
 }
 
 /** Compare what is on disk with what would be written, byte for byte. */
 function existingText(path: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : null;
+}
+
+/** The raw bytes on disk, unnormalised. Null when nothing is there. */
+function rawText(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+/**
+ * A path a FLAG stated, resolved against the repository and refused if it left.
+ *
+ * `--hook-path ../outside/evil-hook` used to write an EXECUTABLE outside
+ * `--repo` and report success. The rule is ../repo/contain.ts's, shared with
+ * `nen shu` -- which asks the same question of a path a declaration states --
+ * and the refusal is exit 2 because it is decided before the first write, like
+ * every other usage refusal this verb makes.
+ */
+function containFlag(root: string, value: string, flag: string): string {
+  const absolute = containedPath(root, value);
+  if (absolute === null) {
+    throw new VerbUsageError(
+      `${flag} '${value}' resolves to '${resolve(root, value)}', which is outside the repository at ${root}. Every path this verb writes is relative to the repository root, and nen will not write outside the tree --repo pointed it at.`,
+    );
+  }
+  return absolute;
+}
+
+/**
+ * The same question, asked of the path the KERNEL would write to.
+ *
+ * A LEXICAL CHECK IS NOT ENOUGH FOR A DIRECTORY NEN CREATES ITSELF. `nen/` and
+ * `.github/workflows/` are two directories this verb makes when they are
+ * absent; when one is a SYMLINK the write lands wherever it points, and the
+ * report still says `nen/contract.json`. Only these two writes are held to it:
+ * `.git/` is legitimately a symlink or a gitdir file in a worktree, and a check
+ * here would refuse a repository that is merely laid out that way.
+ *
+ * Returns the refusal sentence, or null when the write may proceed.
+ */
+function symlinkEscape(root: string, absolute: string, printed: string): string | null {
+  const check = realContainment(root, absolute);
+  if (check.contained) return null;
+  return `'${printed}' would be written to '${check.real}', outside the repository at ${root}: '${check.link ?? absolute}' is a symlink pointing at '${check.target ?? check.real}'. nen writes what its report says it writes, so this write is refused rather than followed -- remove the link, or point --repo at the tree you meant.`;
+}
+
+/** The errno a failed filesystem call carried, for a `refused` row. */
+function errnoOf(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (typeof code === "string") return code;
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
@@ -304,6 +436,35 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   const notes: string[] = [];
   const record = (path: string, action: WriteAction, why: string): void => {
     writes.push({ path: repoRelative(root, path), action, why });
+  };
+
+  /**
+   * One step, whose FILESYSTEM failure is a `refused` row rather than a crash.
+   *
+   * WHY THE REPORT SURVIVES AN EACCES. Without this, an unwritable `.gitignore`
+   * (or a full disk, or a read-only checkout, or a directory sitting where a
+   * file goes) threw out of the middle of the run: exit 1, EMPTY stdout under
+   * `--json`, and four files already on disk that the caller was never told
+   * about. A scaffold's whole contract is that every path it touched is in the
+   * report with an outcome beside it, and "it crashed" is the one outcome that
+   * cannot be. So the errno becomes a row, the run continues, and the exit code
+   * is 1 because a write was refused -- which is exactly what happened.
+   *
+   * A `VerbUsageError` STILL PROPAGATES. An unsubstituted template token is not
+   * a filesystem failure; it is the caller's invocation being wrong, it is exit
+   * 2, and swallowing it here would turn a usage error into a mystery row.
+   */
+  const step = (path: string, run: () => void): void => {
+    try {
+      run();
+    } catch (error) {
+      if (error instanceof VerbUsageError) throw error;
+      record(
+        path,
+        "refused",
+        `the filesystem refused this write (${errnoOf(error)}). Every step before it stands and is reported above; fix the path or the permission and re-run -- this verb is idempotent, so a second run does only what is left.`,
+      );
+    }
   };
 
   // ── 1. the stack, resolved BEFORE the first write ──────────────────────────
@@ -322,7 +483,21 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
       `scaffold init needs a stack, and nen never guesses one: pass --stack <id> to state it, or --accept-detected to write exactly the proposal '${PROGRAM} shu detect --repo ${root}' prints (seats, notes and all).`,
     );
   }
-  const report = detect(root);
+  // Both flag-stated paths are CONTAINED HERE, before the first write, so a
+  // refusal leaves the repository exactly as it was -- and so that `--hook-path`
+  // and `--canon-values-path` are answered at exit 2 like every other usage
+  // refusal rather than half-way through a report.
+  const hookRelative = options.hookPath ?? join(".git", "hooks", "commit-msg");
+  const hookPath = containFlag(root, hookRelative, "--hook-path");
+  const canonValuesPath =
+    options.canonValuesPath === undefined
+      ? null
+      : containFlag(root, options.canonValuesPath, "--canon-values-path");
+  // The workflow's ref is decided here for the same reason: a `--nen-ref` that
+  // is not a tag, or is older than the workflow can run, is a usage refusal.
+  const bootstrap = bootstrapRef(root, options.nenRef);
+
+  const report = detect(root, options.platform);
   const proposed = proposeProject(report, options.stack, accept);
   const stack = proposed.stack;
   notes.push(...proposed.notes);
@@ -332,13 +507,19 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   // Unchanged from v0.2.0, in the same order, producing the same bytes.
   const createdDirectories: string[] = [];
   for (const dir of options.directories) {
-    ensureDir(join(root, dir), createdDirectories, dry);
+    step(join(root, dir), (): void => {
+      ensureDir(join(root, dir), createdDirectories, dry);
+    });
   }
 
-  const hookPath = join(root, options.hookPath ?? join(".git", "hooks", "commit-msg"));
-  ensureDir(dirname(hookPath), createdDirectories, dry);
+  step(dirname(hookPath), (): void => {
+    ensureDir(dirname(hookPath), createdDirectories, dry);
+  });
   const desiredHook = renderCommitMsgHook(options.hook);
-  let hookOutcome: HookOutcome;
+  // "refused" until a branch below says otherwise: a step whose write the
+  // filesystem rejected has not installed a hook, and the summary line must not
+  // claim it did.
+  let hookOutcome: HookOutcome = "refused";
   let hookError: string | null = null;
   const existingHook = existingText(hookPath);
   if (existingHook !== null && existingHook === desiredHook) {
@@ -364,33 +545,39 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
         : "--force would replace a different hook, backing it up to <path>.bak first",
     );
   } else {
-    if (existingHook !== null) {
-      // --force: back up what was there before replacing it.
-      writeFileSync(`${hookPath}.bak`, existingHook, "utf8");
+    step(hookPath, (): void => {
+      if (existingHook !== null) {
+        // --force: back up what was there before replacing it, RAW. A backup
+        // that normalised the line endings of the file it is preserving would
+        // be a backup the caller cannot restore byte for byte.
+        writeFileSync(`${hookPath}.bak`, rawText(hookPath) ?? existingHook, "utf8");
+      }
+      // ONE HOOK WRITER for both verbs (./hook.ts), and the mode is the reason:
+      // `git` silently skips a `commit-msg` hook that is not executable.
+      writeHookFile(hookPath, desiredHook);
+      hookOutcome = "installed";
+      record(hookPath, "created", existingHook === null ? "installed" : "--force replaced a different hook");
+    });
+    if (hookOutcome === "refused") {
+      hookError = `the commit-msg hook at '${hookPath}' could not be written -- see the refused row above.`;
     }
-    writeFileSync(hookPath, desiredHook, "utf8");
-    try {
-      chmodSync(hookPath, 0o755);
-    } catch {
-      // Windows filesystems that do not model the POSIX executable bit --
-      // git itself only consults it on a POSIX checkout, so a failed chmod
-      // here is not a failure of the hook install.
-    }
-    hookOutcome = "installed";
-    record(hookPath, "created", existingHook === null ? "installed" : "--force replaced a different hook");
   }
 
   let canonValuesWritten: string | null = null;
-  if (options.canonValuesPath !== undefined) {
-    const path = join(root, options.canonValuesPath);
-    ensureDir(dirname(path), createdDirectories, dry);
+  if (canonValuesPath !== null) {
+    const path = canonValuesPath;
+    step(dirname(path), (): void => {
+      ensureDir(dirname(path), createdDirectories, dry);
+    });
     if (existsSync(path)) {
       record(path, "skipped", "a canon-values file is already there, and this verb never overwrites one");
     } else if (dry) {
       record(path, "would-create", "nothing is there yet");
     } else {
-      writeFileSync(path, renderCanonValuesTemplate(options.scenario), "utf8");
-      record(path, "created", "the canon-values template");
+      step(path, (): void => {
+        writeFileSync(path, renderCanonValuesTemplate(options.scenario), "utf8");
+        record(path, "created", "the canon-values template");
+      });
     }
     canonValuesWritten = path;
   }
@@ -408,6 +595,28 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     const resolved = resolveSchemaFile(root, file);
     const legacy = resolved.legacy;
     if (legacy === null || !legacy.present) continue;
+    // A SYMLINKED LEGACY SOURCE IS NOT A LEGACY TAXONOMY FILE. `copyFileSync`
+    // follows the link and copies whatever it points at INTO the repository
+    // under a taxonomy file's name, and the printed next step then tells the
+    // caller to `git add` it: `schemas/labels.json -> ../../outside/secret.json`
+    // is a file this verb would have committed on their behalf. `lstat`, not
+    // `stat`, is the whole check.
+    const link = ((): string | null => {
+      try {
+        return lstatSync(legacy.path).isSymbolicLink() ? legacy.path : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (link !== null) {
+      migrated.push({
+        from: legacy.relative,
+        to: resolved.canonical.relative,
+        action: "refused",
+        why: `'${legacy.relative}' is a SYMLINK, not a taxonomy file. nen copies bytes it can see into '${resolved.canonical.relative}' and prints the 'git add' that commits them, and following a link would commit whatever it points at under a name that says otherwise. Copy the file yourself if that is what you meant.`,
+      });
+      continue;
+    }
     if (!resolved.canonical.present) {
       if (dry) {
         migrated.push({
@@ -416,7 +625,11 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
           action: "would-create",
           why: "the legacy copy is there, the canonical one is not",
         });
-      } else {
+        removals.push(legacy.relative);
+        continue;
+      }
+      let copied = false;
+      step(resolved.canonical.path, (): void => {
         mkdirSync(dirname(resolved.canonical.path), { recursive: true });
         copyFileSync(legacy.path, resolved.canonical.path);
         migrated.push({
@@ -425,8 +638,12 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
           action: "created",
           why: "copied; the original is left in place",
         });
-      }
-      removals.push(legacy.relative);
+        copied = true;
+      });
+      // The removal line is printed only for a copy that HAPPENED. Telling a
+      // caller to `git rm` a legacy file whose copy the filesystem refused is
+      // telling them to delete the only copy there is.
+      if (copied) removals.push(legacy.relative);
       continue;
     }
     const shadow = inspectShadow(resolved);
@@ -484,9 +701,23 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     record(contractResolved.canonical.path, "would-create", "no declaration is there yet");
     notes.push(contractBody.trimEnd());
   } else {
-    mkdirSync(dirname(contractResolved.canonical.path), { recursive: true });
-    writeFileSync(contractResolved.canonical.path, contractBody, "utf8");
-    record(contractResolved.canonical.path, "created", "the project block, written into absence");
+    // THE ONE PLACE A LEXICAL CHECK IS NOT ENOUGH: this write CREATES `nen/`
+    // when it is absent, and a symlinked `nen/` sends it out of the tree while
+    // the report still says `nen/contract.json`.
+    const escape = symlinkEscape(
+      root,
+      contractResolved.canonical.path,
+      contractResolved.canonical.relative,
+    );
+    if (escape !== null) {
+      record(contractResolved.canonical.path, "refused", escape);
+    } else {
+      step(contractResolved.canonical.path, (): void => {
+        mkdirSync(dirname(contractResolved.canonical.path), { recursive: true });
+        writeFileSync(contractResolved.canonical.path, contractBody, "utf8");
+        record(contractResolved.canonical.path, "created", "the project block, written into absence");
+      });
+    }
   }
 
   // ── 5. the stack's CI workflow ─────────────────────────────────────────────
@@ -503,7 +734,7 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     const ciPath = join(root, ...template.ci.path.split("/"));
     const body = substitute(
       template.ci.body,
-      { runner: template.runner, nenRef: bootstrapRef(root) },
+      { runner: template.runner, nenRef: bootstrap.ref },
       `the '${template.template}' CI template`,
     );
     const existing = existingText(ciPath);
@@ -517,10 +748,21 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
       );
     } else if (dry) {
       record(ciPath, "would-create", `the '${template.template}' template's workflow for ${stack}`);
+      notes.push(...bootstrap.notes);
     } else {
-      mkdirSync(dirname(ciPath), { recursive: true });
-      writeFileSync(ciPath, body, "utf8");
-      record(ciPath, "created", `the '${template.template}' template's workflow for ${stack}`);
+      // `.github/workflows/` is the second directory this verb creates, and is
+      // held to the same real-path rule as `nen/` for the same reason.
+      const escape = symlinkEscape(root, ciPath, template.ci.path);
+      if (escape !== null) {
+        record(ciPath, "refused", escape);
+      } else {
+        step(ciPath, (): void => {
+          mkdirSync(dirname(ciPath), { recursive: true });
+          writeFileSync(ciPath, body, "utf8");
+          record(ciPath, "created", `the '${template.template}' template's workflow for ${stack}`);
+          notes.push(...bootstrap.notes);
+        });
+      }
     }
   }
 
@@ -530,23 +772,57 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   // `.gitignore` is a file people edit, and a scaffold that normalised one
   // would produce a diff nobody asked for on every run.
   const gitignorePath = join(root, GITIGNORE_FILE);
-  const gitignore = existingText(gitignorePath);
+  // THE RAW BYTES ARE WHAT GETS WRITTEN BACK, and only a NORMALISED copy is
+  // scanned. Reading through existingText() and writing the result back
+  // rewrote a CRLF `.gitignore` wholesale -- every line of it, in a diff nobody
+  // asked for -- under a comment promising the file is never rewritten. The
+  // appended line matches the file's own ending for the same reason: a lone LF
+  // in a CRLF file is a line some Windows tools do not see at all.
+  // A read that FAILS is not an absence: `.gitignore` being a directory, or
+  // unreadable, must become a `refused` row rather than "there was nothing
+  // there, so create one" -- which is how a crash used to escape this step.
+  let gitignore: string | null = null;
+  let unreadable: unknown = null;
+  try {
+    gitignore = rawText(gitignorePath);
+  } catch (error) {
+    unreadable = error;
+  }
   const alreadyIgnored =
     gitignore !== null &&
-    gitignore.split("\n").some((line): boolean => line.trim() === GITIGNORE_ENTRY);
-  const gitignoreBlock = `# nen writes generated output here; committed configuration lives in nen/.\n${GITIGNORE_ENTRY}\n`;
-  if (alreadyIgnored) {
-    record(gitignorePath, "skipped", `'${GITIGNORE_ENTRY}' is already ignored`);
-  } else if (dry) {
-    record(gitignorePath, "would-create", `append '${GITIGNORE_ENTRY}'; nothing else in the file is touched`);
-  } else {
-    const prefix = gitignore === null || gitignore === "" || gitignore.endsWith("\n") ? "" : "\n";
-    writeFileSync(gitignorePath, `${gitignore ?? ""}${prefix}${gitignoreBlock}`, "utf8");
+    gitignore.replace(/\r\n/g, "\n").split("\n").some((line): boolean => line.trim() === GITIGNORE_ENTRY);
+  const eol = gitignore !== null && gitignore.includes("\r\n") ? "\r\n" : "\n";
+  const gitignoreBlock = [
+    "# nen writes generated output here; committed configuration lives in nen/.",
+    GITIGNORE_ENTRY,
+    "",
+  ].join(eol);
+  if (unreadable !== null) {
     record(
       gitignorePath,
-      "created",
-      gitignore === null ? `created, ignoring '${GITIGNORE_ENTRY}'` : `appended '${GITIGNORE_ENTRY}'`,
+      "refused",
+      `'${GITIGNORE_FILE}' could not be read (${errnoOf(unreadable)}), so nen cannot tell whether '${GITIGNORE_ENTRY}' is already there -- and it will not append to a file it could not read. Every step before this one stands and is reported above.`,
     );
+  } else if (alreadyIgnored) {
+    record(gitignorePath, "skipped", `'${GITIGNORE_ENTRY}' is already ignored`);
+  } else if (dry) {
+    record(
+      gitignorePath,
+      gitignore === null ? "would-create" : "would-append",
+      gitignore === null
+        ? `create it, ignoring '${GITIGNORE_ENTRY}'`
+        : `append '${GITIGNORE_ENTRY}'; nothing else in the file is touched`,
+    );
+  } else {
+    const prefix = gitignore === null || gitignore === "" || /\r?\n$/.test(gitignore) ? "" : eol;
+    step(gitignorePath, (): void => {
+      writeFileSync(gitignorePath, `${gitignore ?? ""}${prefix}${gitignoreBlock}`, "utf8");
+      record(
+        gitignorePath,
+        gitignore === null ? "created" : "appended",
+        gitignore === null ? `created, ignoring '${GITIGNORE_ENTRY}'` : `appended '${GITIGNORE_ENTRY}'`,
+      );
+    });
   }
 
   // ── 7. the closing toolchain check ─────────────────────────────────────────
