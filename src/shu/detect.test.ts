@@ -18,6 +18,7 @@ import { loadProfilesPack, PLACEHOLDERS, profileById, verbCell } from "../profil
 import { detect, MARKER_STACKS, MAX_DEPTH, renderDetect } from "./detect.js";
 import {
   EMPTY_TREE,
+  GATSBY_SITE,
   markerTree,
   NEXTJS_MULTI,
   NEXTJS_PARTIAL,
@@ -956,6 +957,299 @@ describe("nen shu detect -- the nextjs golden suite, byte for byte", () => {
       );
       expect(withTarget.code).toBe(2);
       expect(withTarget.err.join("\n")).toMatch(/declares no targets at all/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── the gatsby stack ────────────────────────────────────────────────────────
+
+describe("nen shu detect -- the gatsby lane, end to end", () => {
+  it("proposes one lane from the config marker, with the pack's five command rows", () => {
+    const report = detect(GATSBY_SITE);
+    expect(report.exitCode).toBe(0);
+    expect(report.lanes).toHaveLength(1);
+    expect(report.lanes[0]?.stack).toBe("gatsby");
+    expect(report.lanes[0]?.markers).toEqual(["gatsby-config.js"]);
+    expect(commandRows(report.lanes[0]?.verbs)).toEqual([
+      "archive",
+      "build",
+      "deploy",
+      "dev",
+      "run",
+    ]);
+    expect(unsupportedRows(report.lanes[0]?.verbs)).toEqual([
+      "coverage",
+      "lint",
+      "release",
+      "test",
+      "ui-test",
+    ]);
+  });
+
+  it("proposes the pack's argv, verbatim, for the three rows that carry no token", () => {
+    const verbs = detect(GATSBY_SITE).lanes[0]?.verbs as Record<
+      string,
+      { exe?: string; argv?: string[]; steps?: { exe: string; argv: string[] }[] }
+    >;
+    expect(verbs["build"]).toMatchObject({ exe: "gatsby", argv: ["build"] });
+    expect(verbs["dev"]).toMatchObject({ exe: "gatsby", argv: ["develop"] });
+    expect(verbs["run"]).toMatchObject({ exe: "gatsby", argv: ["serve"] });
+  });
+
+  it("answers {archiveScript} from the manifest's own script, and only from there", () => {
+    const verbs = detect(GATSBY_SITE).lanes[0]?.verbs as Record<
+      string,
+      { exe?: string; argv?: string[]; steps?: { exe: string; argv: string[] }[] }
+    >;
+    // The token is a PATH, and the one place `detect` can see a path this
+    // repository actually runs is a script whose command is this step, word
+    // for word, with the token in one position.
+    expect(verbs["archive"]).toMatchObject({
+      exe: "node",
+      argv: ["scripts/build-placeholder-pdf.mjs"],
+    });
+    expect(verbs["deploy"]?.steps).toEqual([
+      { exe: "node", argv: ["scripts/build-placeholder-pdf.mjs"] },
+      { exe: "gh-pages", argv: ["-d", "public", "-b", "gh-pages", "--dotfiles"] },
+    ]);
+    // AND NOT ONE PROPOSED ARGV CARRIES A PLACEHOLDER.
+    for (const verb of commandRows(verbs)) {
+      const row = verbs[verb] as {
+        exe?: string;
+        argv?: string[];
+        steps?: { exe: string; argv: string[] }[];
+      };
+      const steps = row.steps ?? [{ exe: row.exe ?? "", argv: row.argv ?? [] }];
+      for (const token of steps.flatMap((step): readonly string[] => [step.exe, ...step.argv])) {
+        expect(token, verb).not.toMatch(/\{[a-zA-Z]+\}/);
+      }
+    }
+  });
+
+  it("withholds the two rows that need {archiveScript} when no script names one", () => {
+    // THE MUTANT THIS KILLS: proposing `node {archiveScript}` unsubstituted,
+    // which the executor would then refuse at exit 2 -- a proposal a human
+    // pastes and then discovers is fiction.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-gatsby-noscript-"));
+    try {
+      writeFileSync(join(dir, "gatsby-config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@placeholder/site",
+          scripts: { build: "gatsby build" },
+          dependencies: { gatsby: "5.14.0" },
+        }),
+      );
+      const lane = detect(dir).lanes[0];
+      // The three rows that need no token are still proposed -- `gatsby` is a
+      // declared dependency here. Only the two that need the PATH are withheld.
+      expect(commandRows(lane?.verbs)).toEqual(["build", "dev", "run"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(
+        /'archive' withheld: its reference command still names \{archiveScript\}/,
+      );
+      expect(notes).toMatch(/'deploy' withheld: its reference command still names \{archiveScript\}/);
+      expect(notes).toMatch(/a guessed argument is a different command/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds rather than choosing when two scripts answer the same token differently", () => {
+    // Rule 1 of ./detect.ts's header is not suspended because the two
+    // candidates arrived from one file.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-gatsby-ambiguous-"));
+    try {
+      writeFileSync(join(dir, "gatsby-config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@placeholder/site",
+          scripts: {
+            "pdf:one": "node scripts/one.mjs",
+            "pdf:two": "node scripts/two.mjs",
+          },
+          dependencies: { gatsby: "5.14.0" },
+        }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).not.toContain("archive");
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/'archive' withheld: 2 of this lane's own scripts match/);
+      expect(notes).toMatch(
+        /\{archiveScript\} = scripts\/one\.mjs; \{archiveScript\} = scripts\/two\.mjs/,
+      );
+      expect(notes).toMatch(/nen resolves no ambiguity/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a token from a script whatever the token is, and never from the pack", () => {
+    // The scripts route is over TOKENS, not over one token. A manifest that
+    // spells the whole command out has said something stronger about itself
+    // than any single field does -- so a manager named only in a script answers
+    // `{pm}` too, and the row is proposed because the repository states it runs
+    // exactly this line. The value still comes from the repository and never
+    // from the catalogue, which is the property that matters.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-pm-from-script-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        // No `packageManager` field at all, and no dependency naming the
+        // manager either: the script is the whole evidence.
+        JSON.stringify({ name: "@placeholder/scripted", scripts: { build: "pnpm turbo run build" } }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(lane?.verbs["build"]).toMatchObject({ exe: "pnpm", argv: ["turbo", "run", "build"] });
+      // And the rows no script spells out stay withheld -- the route confirms
+      // the line it matched and nothing else.
+      expect(commandRows(lane?.verbs)).toEqual(["build"]);
+      expect(lane?.notes.join("\n")).toMatch(
+        /'test' withheld: its reference command still names \{pm\}/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("holds the executable cross-check for gatsby: the tool must be a declared dependency", () => {
+    // THE SHARED RULE, PROVED ON THE NEW STACK. A marker match is not evidence
+    // that the tool is installed; a dependency the manifest declares is.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-gatsby-nodep-"));
+    try {
+      writeFileSync(join(dir, "gatsby-config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "@placeholder/site", dependencies: { react: "18.3.1" } }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).toEqual([]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/'build' withheld: it runs 'gatsby'/);
+      expect(notes).toMatch(
+        /neither declares as a dependency, nor names as its packageManager, nor spells out verbatim as one of its own scripts/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries the pack's reason into each unsupported row, including the two the draft names", () => {
+    const verbs = detect(GATSBY_SITE).lanes[0]?.verbs;
+    expect(reasonOf(verbs, "test")).toBe("No test script and no test-runner dependency.");
+    expect(reasonOf(verbs, "lint")).toBe("NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY.");
+    expect(reasonOf(verbs, "ui-test")).toBe("No UI or E2E runner of any kind.");
+    expect(reasonOf(verbs, "release")).toBe("No release lane of any kind.");
+    expect(reasonOf(verbs, "coverage")).toMatch(/nothing to instrument/);
+  });
+
+  it("proposes hosts of any, from the pack, for every verb", () => {
+    const proposal = detect(GATSBY_SITE).proposal as unknown as Proposal;
+    expect(proposal.project.hosts).toEqual({ "*": ["darwin", "linux", "win32"] });
+  });
+
+  it("proposes NO precondition for the browser, and says why rather than inventing one", () => {
+    // The design source cites a browser PROBED FOR BY PATH and names no
+    // environment variable at all. A `path` precondition would pin one machine's
+    // install location into a file every machine reads, and nen has no honest
+    // second choice -- so it proposes nothing and puts the constraint in a note.
+    const lane = detect(GATSBY_SITE).lanes[0];
+    const notes = lane?.notes.join("\n") ?? "";
+    expect(notes).toMatch(/no precondition is proposed for the 'browser'/);
+    expect(notes).toMatch(
+      /\{browserPath\} is a value only the machine running the verb can answer/,
+    );
+    expect(notes).toMatch(/the reference pack names no environment variable to assert instead/);
+    expect(notes).toMatch(/project\.preconditions\.gatsby/);
+    // The pack's own reason travels with it, so the note is the catalogue's
+    // sentence rather than this file's paraphrase of it.
+    expect(notes).toMatch(/never installs a browser/);
+    // AND NOTHING IS PROPOSED. The proposal carries no preconditions block at
+    // all, which is the assertion the note would otherwise merely describe.
+    const proposal = detect(GATSBY_SITE).proposal as unknown as Record<string, unknown>;
+    expect(Object.keys((proposal["project"] ?? {}) as object)).not.toContain("preconditions");
+  });
+
+  it("names no environment variable anywhere in the proposal, because the source cites none", () => {
+    // THE MUTANT THIS KILLS: inventing a plausible variable name. A precondition
+    // nen made up reads exactly like one the repository stated.
+    const rendered = renderDetect(detect(GATSBY_SITE)).join("\n");
+    // Case-SENSITIVE, and specifically the shapes an environment variable takes:
+    // the pack's own prose says the builder "avoids puppeteer", and forbidding
+    // the word would forbid the catalogue from explaining itself.
+    expect(rendered).not.toMatch(/PUPPETEER_EXECUTABLE_PATH|CHROME_PATH|CHROMIUM_PATH|EDGE_PATH|CHROME_BIN/);
+  });
+});
+
+describe("nen shu detect -- the gatsby golden suite, byte for byte", () => {
+  const ARGV: Readonly<Record<string, readonly string[]>> = {
+    build: ["would run:     gatsby build"],
+    dev: ["would run:     gatsby develop"],
+    run: ["would run:     gatsby serve"],
+    archive: ["would run:     node scripts/build-placeholder-pdf.mjs"],
+  };
+
+  it("renders every proposed command row back to the argv the pack cites", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-gatsby-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      for (const [verb, lines] of Object.entries(ARGV)) {
+        const result = await capture([verb, "--dry-run"], dir);
+        expect(result.code, verb).toBe(0);
+        expect(
+          result.out.filter((line): boolean => line.startsWith("would run:")),
+          verb,
+        ).toEqual(lines);
+      }
+      // `deploy` is the two-step row and it never reaches the steps: --target is
+      // checked FIRST by design, and a proposal declares no targets.
+      const deploy = await capture(["deploy", "--dry-run", "--target", "x"], dir);
+      expect(deploy.code).toBe(2);
+      expect(deploy.err.join("\n")).toMatch(/declares no targets at all/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses each unsupported row at exit 4, quoting the pack's reason back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-gatsby-unsup-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const verbs = detect(dir).lanes[0]?.verbs;
+      for (const verb of ["test", "ui-test", "lint", "release", "coverage"]) {
+        const result = await capture([verb, "--dry-run"], dir);
+        expect(result.code, verb).toBe(4);
+        expect(result.err.join("\n"), verb).toBe(
+          `nen shu ${verb}: '${verb}' is unsupported on lane 'gatsby' (gatsby). The declaration's own reason: ${reasonOf(verbs, verb)}`,
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a declaration the executor loads without a single hand edit", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-gatsby-load-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const built = await capture(["build", "--dry-run", "--json"], dir);
+      expect(built.code).toBe(0);
+      const report = JSON.parse(built.out.join("\n")) as {
+        stack: string;
+        steps: readonly unknown[];
+      };
+      expect(report.stack).toBe("gatsby");
+      expect(report.steps).toEqual([
+        { exe: "gatsby", argv: ["build"], cwd: dir, exitCode: null, durationMs: null },
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

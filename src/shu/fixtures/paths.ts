@@ -16,6 +16,7 @@ export const NEXTJS_MULTI = join(FIXTURES, "nextjs-multi");
 export const NEXTJS_UNVERIFIED = join(FIXTURES, "nextjs-unverified");
 export const NEXTJS_PARTIAL = join(FIXTURES, "nextjs-partial");
 export const NEXTJS_WORKSPACES = join(FIXTURES, "nextjs-workspaces");
+export const GATSBY_SITE = join(FIXTURES, "gatsby-site");
 export const EMPTY_TREE = join(FIXTURES, "empty-tree");
 
 /** One marker tree per stack, by the stack id `detect` should answer with. */

@@ -370,11 +370,29 @@ function laneName(cwd: string, stack: string, qualify: boolean, taken: ReadonlyS
 //      is withheld with the token named -- `{scheme}`, `{destination}` and the
 //      rest are facts only the repository knows, and nen guessing one is a
 //      different command.
-//   2. THE EXECUTABLE. A step's `exe` must be either the package manager the
-//      manifest names or a package the manifest declares as a dependency.
-//      Those are the only two ways `detect` can SEE that a repository carries a
-//      program, and "the marker matched so the tool must be here" is exactly
-//      the inference §2.6 calls a warning rather than a proposal.
+//   1b. A TOKEN THE MANIFEST'S OWN `scripts` ANSWERS. A step that matches a
+//      declared script's command word for word, differing only where the pack
+//      wrote a token, is answered from that script -- `node {archiveScript}`
+//      against `"resume:pdf": "node scripts/build-resume-pdf.mjs"` yields the
+//      path the repository itself runs. TWO MATCHES THAT DISAGREE ARE AN
+//      AMBIGUITY AND ARE WITHHELD, never resolved: rule 1 in this file's header
+//      is not suspended because the two candidates came from the same file.
+//      THE RULE IS OVER TOKENS, NOT OVER ONE TOKEN, and deliberately so: a
+//      manifest that spells the whole command out has stated something stronger
+//      about itself than any single field does, so a manager named in a script
+//      answers as well as one named in a field. What it may never do is answer
+//      a token from anywhere but this repository -- the pack contributes the
+//      SHAPE and never a value, which is the property the whole family rests on.
+//   2. THE EXECUTABLE. A step's `exe` must be the package manager the manifest
+//      names, or a package the manifest declares as a dependency, or -- the
+//      third route -- part of a step the manifest declares VERBATIM as one of
+//      its own scripts. Those are the only three ways `detect` can SEE that a
+//      repository carries a program, and "the marker matched so the tool must
+//      be here" is exactly the inference §2.6 calls a warning rather than a
+//      proposal. The third route is the strongest of the three and is why it
+//      exists: a manifest whose `scripts` block spells this exact command is
+//      the repository stating that it runs THIS LINE, which outranks a guess
+//      from a dependency list that the line merely might use.
 //   3. THE SCRIPT, in two shapes. An argv containing `run <task>` names a task
 //      the manifest must declare under `scripts` -- `<pm> run <script>`
 //      directly, and `<pm> <runner> run <task>` because a workspace task
@@ -412,6 +430,24 @@ const PACK_TOKENS: readonly string[] = PLACEHOLDERS.map(
   (placeholder): string => placeholder.token,
 );
 
+const PACK_TOKEN_SET: ReadonlySet<string> = new Set(PACK_TOKENS);
+
+/**
+ * The tokens whose value a DECLARATION supplies, as the pack itself classifies
+ * them.
+ *
+ * Read off `PLACEHOLDERS[].kind` rather than listed here, because the one token
+ * of the other kind (`host-conditional`) is one nen resolves for itself from
+ * the platform it is running on -- so a probe naming it is not a probe nen has
+ * to decline to propose a precondition for, and hard-coding either list here
+ * would be this file re-deciding a classification the catalogue already makes.
+ */
+const DECLARATION_TOKENS: ReadonlySet<string> = new Set(
+  PLACEHOLDERS.filter((placeholder): boolean => placeholder.kind === "declaration-supplied").map(
+    (placeholder): string => placeholder.token,
+  ),
+);
+
 /** A workspace root's own statement of where its members live. */
 interface WorkspaceShape {
   /** Where the statement was read from, for the note. */
@@ -442,6 +478,8 @@ interface Manifest {
   readonly workspace: WorkspaceShape | null;
   readonly declares: (name: string) => boolean;
   readonly scripts: ReadonlySet<string>;
+  /** Each declared script's command, split on whitespace, in declared order. */
+  readonly scriptWords: readonly (readonly string[])[];
 }
 
 /** `"packages/*"` -> every directory under `packages/`; a literal path -> itself. */
@@ -542,6 +580,10 @@ function readManifest(laneDirectory: string): Manifest {
       ? (scriptBlock as Record<string, unknown>)
       : {};
   const scripts = new Set(Object.keys(scriptRecord));
+  const scriptWords = Object.values(scriptRecord)
+    .filter((command): command is string => typeof command === "string")
+    .map((command): readonly string[] => command.trim().split(/\s+/))
+    .filter((words): boolean => words.length > 0 && words[0] !== "");
   const name = document?.["name"];
   // The EXECUTABLE is the pin with its trailing `@<version>` stripped, and the
   // PIN is the string verbatim -- the pack keeps the two apart because one of
@@ -565,8 +607,8 @@ function readManifest(laneDirectory: string): Manifest {
     workspace: readWorkspace(laneDirectory, document),
     declares: (dependency): boolean => dependsOn(document, dependency),
     scripts,
+    scriptWords,
   };
-
 }
 
 interface ProposedStep {
@@ -588,6 +630,70 @@ function substitute(token: string, manifest: Manifest): string {
   }
   if (packageName !== null) out = out.split(PACKAGE_NAME).join(packageName);
   return out;
+}
+
+/**
+ * Every distinct answer this manifest's own `scripts` block gives one step.
+ *
+ * A candidate script is one whose command has the SAME WORD COUNT and agrees
+ * with the step at every position except the ones where the pack wrote a whole
+ * token; those positions are the answer. The word-count equality is what keeps
+ * this from being a fuzzy match: `node {archiveScript}` matches `node
+ * scripts/build-resume-pdf.mjs` and matches nothing that merely mentions it,
+ * and a compound script (`a && b`) has more words than any single-step row and
+ * so matches none.
+ */
+function scriptAnswers(
+  step: ProposedStep,
+  manifest: Manifest,
+): readonly ReadonlyMap<string, string>[] {
+  const words = [step.exe, ...step.argv];
+  const found = new Map<string, ReadonlyMap<string, string>>();
+  for (const parts of manifest.scriptWords) {
+    if (parts.length !== words.length) continue;
+    const answer = new Map<string, string>();
+    let usable = true;
+    for (let index = 0; index < words.length; index += 1) {
+      const word = words[index] ?? "";
+      const part = parts[index] ?? "";
+      if (word === part) continue;
+      // ONLY A WHOLE TOKEN may differ. A word that merely CONTAINS a token
+      // (`--out={package}/dist`) is a shape this match cannot read the intent
+      // of, and reading it anyway is how a proposal acquires an argument
+      // nobody wrote.
+      if (!PACK_TOKEN_SET.has(word)) {
+        usable = false;
+        break;
+      }
+      const prior = answer.get(word);
+      if (prior !== undefined && prior !== part) {
+        usable = false;
+        break;
+      }
+      answer.set(word, part);
+    }
+    if (!usable || answer.size === 0) continue;
+    // TWO SCRIPTS GIVING THE SAME ANSWER ARE ONE ANSWER, not an ambiguity, so
+    // the map is keyed by the answer itself rather than by the script. The
+    // separator is the unit separator because it cannot appear in a shell word:
+    // a printable one would let `{a} = "x y"` and `{a} = "x", {b} = "y"` collide
+    // into one key and hide a real disagreement.
+    const key = [...answer.entries()]
+      .sort(([a], [b]): number => a.localeCompare(b))
+      .map(([token, value]): string => `${token}\u001f${value}`)
+      .join("\u001f");
+    if (!found.has(key)) found.set(key, answer);
+  }
+  return [...found.values()];
+}
+
+/** Whether the manifest declares this step, word for word, as one of its scripts. */
+function runsVerbatim(step: ProposedStep, manifest: Manifest): boolean {
+  const words = [step.exe, ...step.argv];
+  return manifest.scriptWords.some(
+    (parts): boolean =>
+      parts.length === words.length && parts.every((part, index): boolean => part === words[index]),
+  );
 }
 
 function stepsOfCell(cell: ProfileVerb): readonly ProposedStep[] {
@@ -693,6 +799,7 @@ function proposeVerbs(
   pack: ProfilesPack,
   profile: StackProfile,
   laneDirectory: string,
+  lane: string,
 ): ProposedVerbs {
   const manifest = readManifest(laneDirectory);
   const verbs: Record<string, unknown> = {};
@@ -723,12 +830,54 @@ function proposeVerbs(
       continue;
     }
 
-    const steps = stepsOfCell(cell).map(
+    const substituted = stepsOfCell(cell).map(
       (step): ProposedStep => ({
         exe: substitute(step.exe, manifest),
         argv: step.argv.map((token): string => substitute(token, manifest)),
       }),
     );
+
+    // The manifest's own `scripts` block, asked once per step for the tokens the
+    // fields above could not answer. TWO ANSWERS THAT DISAGREE END THE ROW: this
+    // file resolves no ambiguity, and one arriving from inside a single file is
+    // not a different kind of ambiguity.
+    const steps: ProposedStep[] = [];
+    let ambiguity: string | null = null;
+    for (const step of substituted) {
+      if (leftoverTokens([step]).length === 0) {
+        steps.push(step);
+        continue;
+      }
+      const answers = scriptAnswers(step, manifest);
+      if (answers.length > 1) {
+        ambiguity ??= `'${verb}' withheld: ${answers.length} of this lane's own scripts match its reference command '${[
+          step.exe,
+          ...step.argv,
+        ].join(" ")}' and they disagree about ${leftoverTokens([step]).join(", ")} (${answers
+          .map((answer): string =>
+            [...answer.entries()]
+              .sort(([a], [b]): number => a.localeCompare(b))
+              .map(([token, value]): string => `${token} = ${value}`)
+              .join(", "),
+          )
+          .join(
+            "; ",
+          )}). nen resolves no ambiguity, not even one that arrives from a single file: state the row this repository means.`;
+        steps.push(step);
+        continue;
+      }
+      const answer = answers[0];
+      if (answer === undefined) {
+        steps.push(step);
+        continue;
+      }
+      const apply = (token: string): string => answer.get(token) ?? token;
+      steps.push({ exe: apply(step.exe), argv: step.argv.map(apply) });
+    }
+    if (ambiguity !== null) {
+      notes.push(ambiguity);
+      continue;
+    }
 
     const leftover = leftoverTokens(steps);
     if (leftover.length > 0) {
@@ -749,13 +898,14 @@ function proposeVerbs(
     const unknownExe = steps.find(
       (step): boolean =>
         step.exe !== manifest.packageManager?.executable &&
-        !manifest.declares(step.exe),
+        !manifest.declares(step.exe) &&
+        !runsVerbatim(step, manifest),
     );
     if (unknownExe !== undefined) {
       notes.push(
         `'${verb}' withheld: it runs '${unknownExe.exe}', ${
           manifest.present
-            ? "which this lane's package.json neither declares as a dependency nor names as its packageManager"
+            ? "which this lane's package.json neither declares as a dependency, nor names as its packageManager, nor spells out verbatim as one of its own scripts"
             : "and this lane has no readable package.json to confirm the project carries it"
         }. A tool the project does not visibly carry is a warning, never a proposal.`,
       );
@@ -810,6 +960,25 @@ function proposeVerbs(
     );
   }
 
+  // WHAT NEN WILL NOT PROPOSE A PRECONDITION FOR, said out loud. A toolchain
+  // entry whose PROBE still carries a declaration-supplied token is a host fact
+  // whose value only the machine running the verb knows -- a binary somewhere on
+  // this disk, a workload id on this installation. A `path` precondition would
+  // pin one machine's location into a file every machine reads, and nen has no
+  // second kind to reach for unless the repository names one. So it proposes
+  // nothing and says which row it declined, which is the honest half of a
+  // constraint the pack states in prose.
+  for (const [tool, entry] of Object.entries(profile.toolchain)) {
+    const tokens = PACK_TOKENS.filter(
+      (token): boolean =>
+        DECLARATION_TOKENS.has(token) &&
+        entry.probe.some((word): boolean => word.includes(token)),
+    );
+    if (tokens.length === 0) continue;
+    notes.push(
+      `no precondition is proposed for the '${tool}' this stack's toolchain requires: its probe is '${entry.probe.join(" ")}', and ${tokens.join(", ")} is a value only the machine running the verb can answer. nen asserts a precondition of kind 'path' or 'env' and performs neither -- a 'path' here would pin one machine's install location into a file every machine reads, and the reference pack names no environment variable to assert instead, so nen proposes nothing rather than inventing one. If this repository has such a variable, state it yourself: {"kind": "env", "value": "<NAME>", "why": "..."} under project.preconditions.${lane}. The pack's own reason for the requirement: ${entry.why}`,
+    );
+  }
   // THERE IS DELIBERATELY NO LANE-LEVEL "no package.json" NOTE. An earlier
   // draft withheld the whole map with one such note, which was wrong twice: it
   // told a repository whose commands legitimately live elsewhere that its
@@ -860,7 +1029,7 @@ export function detect(repoRoot: string): DetectReport {
       taken.add(lane);
       const profile = profileById(pack, stack);
       profiles.set(lane, profile);
-      const proposed = proposeVerbs(pack, profile, directory);
+      const proposed = proposeVerbs(pack, profile, directory, lane);
       lanes.push({
         lane,
         stack,
