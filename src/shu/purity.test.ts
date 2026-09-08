@@ -27,6 +27,25 @@
 //   * `*.test.ts` and `fixtures/` are not shipped code. A test naming a tool is
 //     how the rule is PROVED (this file names twenty-six of them), and a
 //     fixture naming one is test data.
+//   * `install.ts` NAMES THE ONE INSTALLER NEN IMPLEMENTS, and it is the only
+//     exclusion added since this sweep was written. `nen shu tools --install`
+//     is the one verb in this family that spawns a program NEN chose rather
+//     than one a declaration named: a declaration names an installer ID out of
+//     ../schema/contract.ts's closed `INSTALLERS` set, and turning an id into a
+//     command is knowledge nen has to carry itself -- there is no declaration
+//     to read it from. Three things keep the exclusion narrow, and all three
+//     are ASSERTED below rather than promised here:
+//       1. every toolchain name that module carries is a member of that closed
+//          set. It may name an installer id; it may not name an argv nen chose.
+//       2. it BUILDS commands and runs none -- it imports no seam and no
+//          `child_process` -- so the sweep's real subject, what reaches a
+//          spawn, is still covered by the modules the sweep still reads:
+//          ./probe.ts is what spawns, and it is swept.
+//       3. the enabled set is exactly one id, so "the one installer" is a fact
+//          this file checks and not a sentence a header makes.
+//     An exclusion that only SUBTRACTS is one that widens silently the first
+//     time somebody adds a second name to the excluded file. This one adds
+//     three rules in exchange for the file it drops.
 //
 // Two other exclusions are outside this directory and stated here because a
 // reader will look for them: ../schema/contract.ts names the closed INSTALLER
@@ -51,16 +70,21 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLACEHOLDERS } from "../profiles/pack.js";
+import { INSTALLERS, type Installer } from "../schema/contract.js";
+import { ENABLED_INSTALLERS } from "./install.js";
 import { REFUSED_PLACEHOLDERS } from "./render.js";
 
 const SHU = join(process.cwd(), "src", "shu");
+
+/** The one module allowed to turn an installer id into a command. */
+const INSTALLER_MODULE = "install.ts";
 
 /**
  * Files under `src/shu/` that are NOT on the execution path, each for the
  * reason this file's header states. Every name here must exist, or the
  * exclusion is a typo silently widening the sweep's blind spot.
  */
-const NOT_EXECUTION_PATH: readonly string[] = ["detect.ts"];
+const NOT_EXECUTION_PATH: readonly string[] = ["detect.ts", INSTALLER_MODULE];
 
 /** The files a `nen shu` invocation goes through on its way to a subprocess. */
 const EXECUTION_PATH: readonly string[] = readdirSync(SHU)
@@ -159,6 +183,44 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
       });
     }
     expect(offences).toEqual([]);
+  });
+
+  // ── the one excluded module, held to three rules instead of none ─────────
+
+  it("names, in the installer module, only ids from the contract's closed set", () => {
+    // AN EXCLUSION THAT ONLY SUBTRACTS WIDENS SILENTLY. This is the positive
+    // half: whatever toolchain names that file carries, every one of them is an
+    // installer ID the contract already publishes -- a name nen refuses an
+    // unknown of, which is the opposite of a name nen decided to spawn.
+    const named = [
+      ...new Set(
+        readFileSync(join(SHU, INSTALLER_MODULE), "utf8")
+          .replace(/\r\n/g, "\n")
+          .split("\n")
+          .flatMap(toolsNamedIn)
+          .map((tool): string => tool.toLowerCase()),
+      ),
+    ].sort();
+    expect(named.filter((name): boolean => !INSTALLERS.includes(name as Installer))).toEqual([]);
+    // And it names some, so the exclusion is not quietly covering an empty file
+    // while the real names moved somewhere the sweep does read.
+    expect(named).toEqual(["corepack", "npx"]);
+  });
+
+  it("keeps the installer module a BUILDER: it imports no seam and no child_process", () => {
+    // The sweep's real subject is what reaches a spawn. This file is excluded
+    // from the name rule precisely because it cannot spawn: ./probe.ts is what
+    // runs an install plan, and ./probe.ts is swept like everything else.
+    const code = readFileSync(join(SHU, INSTALLER_MODULE), "utf8");
+    expect(code).not.toContain("seam/exec");
+    expect(code).not.toContain("child_process");
+  });
+
+  it("enables exactly one installer, which is what 'the one installer' means", () => {
+    expect(ENABLED_INSTALLERS).toEqual(["corepack"]);
+    // Every enabled id is a member of the contract's closed set -- an installer
+    // nen runs that the loader would refuse to read is not reachable at all.
+    expect(ENABLED_INSTALLERS.every((id): boolean => INSTALLERS.includes(id))).toBe(true);
   });
 
   // The counterpart assertion, without which the rule above could be satisfied

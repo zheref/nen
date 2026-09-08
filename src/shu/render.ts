@@ -157,7 +157,15 @@ export function resolveLane(project: ProjectBlock, requested: string | null): st
   );
 }
 
-function hostsFor(project: ProjectBlock, verb: string): readonly string[] | null {
+/**
+ * The platform allowlist that applies to one verb, or null for none.
+ *
+ * EXPORTED FOR `shu tools`, which checks the host BEFORE it spawns its first
+ * probe and does not otherwise go through `renderInvocation` -- its rows come
+ * from `project.toolchain`, not from `project.verbs`. One resolver, so the two
+ * paths cannot disagree about whether an exact key beats the wildcard.
+ */
+export function declaredHostsFor(project: ProjectBlock, verb: string): readonly string[] | null {
   // The exact verb wins over the wildcard, and neither is a default: a
   // declaration with no `hosts` block constrains nothing, because a repository
   // that said nothing about platforms has not said "darwin".
@@ -283,7 +291,7 @@ export function renderInvocation(
     );
   }
 
-  const declaredHosts = hostsFor(project, request.verb);
+  const declaredHosts = declaredHostsFor(project, request.verb);
   const supported = declaredHosts === null || declaredHosts.includes(request.platform);
   if (!supported) {
     throw new ShuRefusal(

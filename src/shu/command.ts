@@ -26,10 +26,31 @@
 import { resolveRepoRoot } from "../repo/root.js";
 import { emit, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { FlagSpec } from "../cli/args.js";
+import { commaList } from "../cli/comma.js";
+import { INSTALLERS, VERSION_FROM, type ProjectBlock } from "../schema/contract.js";
 import { PROGRAM } from "../version.js";
-import { EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
+import { openDeclaration } from "./declaration.js";
+import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import { detect, renderDetect, writeProposal } from "./detect.js";
-import { runVerb } from "./run.js";
+import { ENABLED_INSTALLERS } from "./install.js";
+import { probeTool, runInstallSteps } from "./probe.js";
+import { declaredHostsFor } from "./render.js";
+import { insideRepo, runVerb } from "./run.js";
+import { assess, type Observation } from "./toolchain.js";
+import {
+  actionable,
+  assembleToolsReport,
+  buildPlans,
+  narrowTo,
+  packMinimums,
+  refusedInstalls,
+  renderAdvice,
+  renderToolsReport,
+  toolsExitCode,
+  type AssessedTool,
+  type ToolPlan,
+  type ToolsMode,
+} from "./tools.js";
 
 /**
  * WHAT EACH SUBCOMMAND CONSUMES -- the one declaration both the parser's spec
@@ -48,7 +69,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   run: { values: ["lane"], booleans: ["dry-run"] },
   deploy: { values: ["lane", "target"], booleans: ["dry-run"] },
   coverage: { values: ["lane"], booleans: ["dry-run"] },
-  tools: { values: ["lane"], booleans: ["install"] },
+  tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane"], booleans: ["dry-run"] },
 };
 
@@ -92,9 +113,19 @@ export const EXECUTING_VERBS: readonly string[] = [
  * built this yet" would put a transient state into a published contract.
  */
 const NOT_YET: Readonly<Record<string, string>> = {
-  tools: "checks and installs the HOST toolchain a declaration pins. It is not implemented yet in this release: it is the one verb in this family whose blast radius is the developer's machine rather than a repository, and it ships on its own (zheref/nen#91's PR4) so its installer surface is settled while there is exactly one stack to get wrong.",
   warmup: "brings a working copy to a known state and then verifies it. It is not implemented yet in this release (zheref/nen#91's PR12).",
 };
+
+/**
+ * The installer ids `--install` acts on, INTERPOLATED rather than typed out.
+ *
+ * ./purity.test.ts forbids a toolchain name anywhere on the execution path, and
+ * this file is on it. The one installer nen implements is named in ./install.ts
+ * -- the single module that sweep excludes, by name and by argument -- so the
+ * help text reads the list from there instead of restating it, which also means
+ * a second enabled installer cannot arrive with a --help that still says one.
+ */
+const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
 const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
 
@@ -119,8 +150,15 @@ verbs:
   deploy      Send a build to a declared, NAMED target. --target is required
               and has no default, not even when exactly one target exists.
   coverage    Run the lane's coverage command.
-  tools       (not implemented yet -- zheref/nen#91's PR4) Check, and with
-              --install install, the host toolchain a declaration pins.
+  tools       Check the HOST toolchain this repository pins under
+              project.toolchain (and, from a dependency block, nen itself).
+              Read-only by default: it runs each declared version probe and
+              reports. Exit 5 when anything is missing or is not the pinned
+              version, naming per tool the exact command that fixes it.
+              --install acts, and only through the installer ids listed under
+              --install below; every other declared installer is verify-only in
+              this release. --dry-run prints every command -- probes included
+              -- and runs NOTHING.
   warmup      (not implemented yet -- zheref/nen#91's PR12) Bring a working
               copy to a known state, then verify it.
 
@@ -164,23 +202,67 @@ the declaration:
                         mere presence would make it a formality satisfied by
                         any word.
 
+  project.toolchain     { "<tool>": { version, probe, versionFrom, installer,
+                        why } } -- the HOST tools 'tools' checks. 'version' is
+                        required and is either an exact pin ("9.15.9") or a
+                        floor (">=20.19.0"): nen never certifies or installs
+                        "latest". 'probe' is argv. 'versionFrom' is one of
+                        ${VERSION_FROM.join(", ")} -- a closed set, deliberately
+                        not a regex, because a caller-supplied pattern is a
+                        caller-supplied program. 'installer' is one of
+                        ${INSTALLERS.join(", ")}; only ${ENABLED_INSTALLER_IDS} runs
+                        in this release and the rest are reported for a human.
+
 flags:
   --lane <name>    Which lane to run in. Defaults to project.defaultLane.
+                   OPTIONAL on 'tools', where a lane supplies only the probe's
+                   directory and the stack whose tested minimums are shown:
+                   project.toolchain hangs off the project, not off a lane.
   --dry-run        Print every step's exact argv, cwd and env NAMES, and run
                    nothing at all. The argv printed is the argv that would be
                    spawned, from the same rendering -- the thing you approve is
-                   the thing that runs.
+                   the thing that runs. On 'tools' this covers the version
+                   PROBES too: a dry run of that verb spawns nothing whatever,
+                   which is what makes it the one form of it a watcher can
+                   certify read-only.
+  --only <t[,t]>   'tools' only. Check (and install) just these tools, by the
+                   name the declaration gives them. A name it does not declare
+                   is exit 2 listing the ones it does -- an empty report is not
+                   an answer to a mistyped tool.
   --target <name>  'deploy' only. Must name a key of project.targets. Required,
                    with no default ever -- not even when there is exactly one.
                    It is checked BEFORE the lane and the verb, so a line that
                    gets both wrong is told about the target first.
   --write          'detect' only. Writes nen/contract.json when there is none.
                    There is no --force and no merge.
-  --install        'tools' only, and not implemented yet. It is the one flag in
-                   that verb that would change the host.
-  --json           The report as one object. Its keys, in order:
+  --install        'tools' only. THE ONE FLAG IN THIS FAMILY THAT CHANGES THE
+                   HOST rather than a repository. It acts only for entries whose
+                   declared installer is enabled in this release -- that is
+                   ${ENABLED_INSTALLER_IDS}, and nothing else -- and only at the
+                   version the declaration itself pins. Never sudo, never a
+                   PATH or shell-profile edit, never a URL nen invented, never
+                   a project's own dependency install (that is a precondition
+                   nen asserts and never performs). Every other declared
+                   installer is reported as work for a human, with the pin.
+                   What it installed is RE-PROBED afterwards: an installer that
+                   exited 0 has not said the tool is on this PATH.
+  --json           On every verb that executes one, the report as one object,
+                   keys in order:
                    { contract, lane, stack, verb, steps, cwd, env, host,
                      preconditions, exitCode, durationMs, artifacts, log }.
+                   On 'tools' it is a different, shorter contract
+                   ('nen.shu.tools/v0.1'), keys in order:
+                   { contract, lane, stack, mode, tools, exitCode }, where each
+                   tools[] row is
+                   { name, required, packMinimum, found, satisfied, state,
+                     installer, installCommand, why }.
+                   'state' is present-and-matching | present-but-wrong-version
+                   | missing | not-probed -- the last only under --dry-run,
+                   where nothing was looked at and 'satisfied' is null.
+                   'packMinimum' is ADVISORY: the version nen has been tested
+                   against, from the bundled profiles pack. It never moves the
+                   exit code. 'installCommand' is non-null only for an
+                   installer nen runs and only when there is something to do.
                    'env' is variable NAMES only, never values. 'steps[].exitCode'
                    is the TOOL's code and is null when nothing was run, which is
                    how a --json reader tells a dry run from a real one;
@@ -203,13 +285,25 @@ exit codes:
   2  usage: no declaration, no "project" block, an unknown --lane, a
      placeholder nen cannot substitute, a --target that names no declared
      target, --json on a long-running verb without --dry-run, a path that
-     resolves outside the repository, or a PRECONDITION that is not satisfied
+     resolves outside the repository, or a PRECONDITION that is not satisfied.
+     On 'tools' also: an --only naming a tool the declaration does not carry, a
+     'version' in a form nen cannot evaluate, and -- under --install -- a pin
+     this release will not act on (a range where the installer activates one
+     exact version, or a pin the lane's own manifest contradicts). Every one of
+     those is refused BEFORE anything is installed
   3  unsupported host -- the verb is real, this machine cannot run it
   4  unsupported verb for THIS LANE -- the declaration says so, in its own
      words. The invocation was correct; the answer is a fact about the repo.
-     'tools' and 'warmup' also answer 4 in this release, saying they are not
-     implemented yet and naming the PR each arrives in
-  5  the declared program could not be started at all
+     'warmup' also answers 4 in this release, saying it is not implemented yet
+     and naming the PR it arrives in
+  5  the declared program could not be started at all -- and, on 'tools', the
+     CHECK verdict for a host where anything is missing or is not the pinned
+     version. Never 1: a missing tool is not a failed build, and a caller that
+     retried a 1 would retry forever on a machine that is simply not set up.
+     Under --install the code is 0 when everything nen COULD install now
+     passes, even if verify-only tools are still absent -- otherwise the
+     install form is permanently red on a machine nen can never fix, and the
+     question "is this host ready" is what the CHECK and its 5 are for
 
   Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91).
 
@@ -287,6 +381,183 @@ function runDetect(context: CommandContext, repoRoot: string): number {
   return written.exitCode;
 }
 
+// ── `tools`: the join between the catalogue side and the host side ──────────
+//
+// WHY THE JOIN IS HERE, IN THE DISPATCHER, AND NOT IN EITHER HALF. `shu tools`
+// is split in two because of decision (e2): ./tools.ts reads the profiles pack
+// for one advisory column and spawns nothing, while ./probe.ts spawns and
+// cannot see the pack. ../profiles/inertness.test.ts computes the rule from the
+// SEAM -- a module that imports the runner must reach the pack at no depth --
+// so the half that spawns can never be the half that assembles the report, and
+// the join has to live in a module that imports no seam.
+//
+// This file is that module, and it already was one before this verb existed: it
+// joins ./detect.ts (which reads the pack) with ./run.ts (which spawns), and
+// has done since the family shipped. Putting the join anywhere else would add a
+// NEW module that reaches both halves and would have to be argued against the
+// same rule from scratch, to buy nothing. What crosses the seam here is a
+// STRING that lands in a report column and a `{exe, argv}` built from the
+// DECLARATION -- never the other way round: there is no parameter on any
+// function in ./probe.ts through which a catalogue value could reach an argv.
+
+interface ToolsOptions {
+  readonly lane: string | null;
+  readonly only: readonly string[];
+  readonly install: boolean;
+  readonly dryRun: boolean;
+}
+
+/**
+ * The host allowlist for `tools`, checked BEFORE the first probe.
+ *
+ * A verb the declaration restricts to one platform must refuse on the others
+ * without spawning anything -- otherwise a Windows-only toolchain check on
+ * macOS reports a screenful of missing tools that were never expected to be
+ * there, which is a false finding rather than a refusal.
+ */
+function refuseUnsupportedHost(project: ProjectBlock, platform: string): void {
+  const declared = declaredHostsFor(project, "tools");
+  if (declared === null || declared.includes(platform)) return;
+  throw new ShuRefusal(
+    EXIT_UNSUPPORTED_HOST,
+    `the declaration restricts this verb to ${declared.join(", ")}; this host is ${platform}. The host is checked BEFORE any probe runs, so nothing was spawned. nen/contract.json states the platforms under project.hosts.`,
+  );
+}
+
+/**
+ * The lane, or null.
+ *
+ * UNLIKE EVERY OTHER VERB IN THIS FAMILY, A LANE IS OPTIONAL HERE, and that is
+ * a property of what `toolchain` is: it hangs off `project`, not off a lane, so
+ * a repository with three unrelated builds still has ONE set of host tools. The
+ * lane contributes two things and neither is the subject -- the directory the
+ * probes run in, and the stack whose tested minimums are shown -- so refusing
+ * to answer "is this machine set up" until a caller picks one of three builds
+ * would be a refusal with nothing behind it. A named lane must still exist.
+ */
+function resolveToolsLane(project: ProjectBlock, requested: string | null): string | null {
+  if (requested === null) return project.defaultLane;
+  if (!Object.prototype.hasOwnProperty.call(project.lanes, requested)) {
+    throw new VerbUsageError(
+      `--lane '${requested}' is not a lane this repository declares. Declared: ${Object.keys(project.lanes).join(", ")}.`,
+    );
+  }
+  return requested;
+}
+
+/** Probe every row, or -- on a dry run -- probe none of them. */
+function assessAll(
+  context: CommandContext,
+  plans: readonly ToolPlan[],
+  cwd: string,
+  mode: ToolsMode,
+  minimums: Readonly<Record<string, string | null>>,
+): readonly AssessedTool[] {
+  return plans.map((plan): AssessedTool => {
+    // A DRY RUN SPAWNS NOTHING AT ALL -- not even a probe. That is this
+    // family's own rule for the flag (./run.ts's header) and it is what makes
+    // `--dry-run` the one form of this verb ../parse/izanami.ts can certify
+    // read-only: the probe argv comes from the target's declaration, so a form
+    // that runs it is a form nen cannot vouch for, however harmless a
+    // `--version` query looks.
+    const observation: Observation =
+      mode === "dry-run"
+        ? { kind: "not-probed" }
+        : probeTool(context.seams, plan.probe, cwd, plan.versionFrom);
+    return {
+      plan,
+      assessment: assess(observation, plan.versionFrom, plan.satisfiedBy),
+      packMinimum: minimums[plan.name] ?? null,
+      install: null,
+    };
+  });
+}
+
+/**
+ * Run what `--install` is allowed to run, then look again.
+ *
+ * IT RE-PROBES WHAT IT INSTALLED. An installer that exited 0 has said its own
+ * step worked; it has not said the tool is on this PATH at the pinned version,
+ * and reporting `ok` on the strength of an exit code would be certifying a
+ * check nobody made. So the row a caller reads after an install is the row a
+ * fresh CHECK would have produced.
+ */
+function performInstalls(
+  context: CommandContext,
+  assessed: readonly AssessedTool[],
+  cwd: string,
+): readonly AssessedTool[] {
+  // EVERY REFUSAL FIRES BEFORE THE FIRST INSTALL RUNS. A declaration nen will
+  // not act on stops the whole run rather than the tail of it: a host left
+  // half-installed is worse than one left alone, and the caller can fix the
+  // declaration and run the same line again.
+  const refused = refusedInstalls(assessed);
+  if (refused.length > 0) {
+    throw new VerbUsageError(
+      `nothing was installed. ${refused
+        .map((entry): string => `${entry.plan.name}: ${entry.plan.install.kind === "refused" ? entry.plan.install.why : ""}`)
+        .join(" ")}`,
+    );
+  }
+  const acting = new Set(actionable(assessed));
+  return assessed.map((entry): AssessedTool => {
+    if (!acting.has(entry) || entry.plan.install.kind !== "runnable") return entry;
+    const outcome = runInstallSteps(context.seams, entry.plan.install.steps, cwd);
+    if (!outcome.ok) return { ...entry, install: outcome };
+    const observation = probeTool(context.seams, entry.plan.probe, cwd, entry.plan.versionFrom);
+    return {
+      ...entry,
+      assessment: assess(observation, entry.plan.versionFrom, entry.plan.satisfiedBy),
+      install: outcome,
+    };
+  });
+}
+
+function runTools(context: CommandContext, repoRoot: string, options: ToolsOptions): number {
+  const opened = openDeclaration(repoRoot);
+  refuseUnsupportedHost(opened.project, context.seams.platform);
+
+  const lane = resolveToolsLane(opened.project, options.lane);
+  const declaredLane = lane === null ? undefined : opened.project.lanes[lane];
+  const stack = declaredLane?.stack ?? null;
+  const cwd =
+    declaredLane === undefined
+      ? repoRoot
+      : insideRepo(repoRoot, declaredLane.cwd, `project.lanes.${lane}.cwd`);
+
+  const plans = narrowTo(buildPlans(opened.contract, opened.project, cwd), options.only);
+  const mode: ToolsMode = options.dryRun ? "dry-run" : options.install ? "install" : "check";
+
+  if (plans.length === 0) {
+    emit(
+      context.io,
+      context.json,
+      assembleToolsReport([], lane, stack, mode, 0),
+      renderToolsReport([], lane, stack, mode),
+    );
+    context.io.err(
+      `nothing to check: ${opened.path} declares no project.toolchain and no dependency block, so this repository has not said which host tools it needs. Run '${PROGRAM} shu detect --repo ${repoRoot}' to see what is on disk, then write the toolchain entries by hand -- nen reports a pin a repository states and never invents one.`,
+    );
+    return 0;
+  }
+
+  const minimums = packMinimums(stack);
+  const checked = assessAll(context, plans, cwd, mode, minimums);
+  const assessed = mode === "install" ? performInstalls(context, checked, cwd) : checked;
+  const exitCode = toolsExitCode(assessed, mode);
+  emit(
+    context.io,
+    context.json,
+    assembleToolsReport(assessed, lane, stack, mode, exitCode),
+    renderToolsReport(assessed, lane, stack, mode),
+  );
+  if (exitCode !== 0) {
+    const invocation = `${PROGRAM} shu tools --repo ${repoRoot}${lane === null ? "" : ` --lane ${lane}`}`;
+    for (const line of renderAdvice(assessed, invocation)) context.io.err(line);
+  }
+  return exitCode;
+}
+
 export const shuCommand: Command = {
   name: "shu",
   summary: "Stack-aware developer verbs, from the target repo's own declaration.",
@@ -299,6 +570,14 @@ export const shuCommand: Command = {
 
     try {
       if (subcommand === "detect") return runDetect(context, repoRoot);
+      if (subcommand === "tools") {
+        return runTools(context, repoRoot, {
+          lane: context.args.values["lane"] ?? null,
+          only: commaList(context.args.values["only"]),
+          install: context.args.booleans.has("install"),
+          dryRun: context.args.booleans.has("dry-run"),
+        });
+      }
 
       const notYet = NOT_YET[subcommand];
       if (notYet !== undefined) {

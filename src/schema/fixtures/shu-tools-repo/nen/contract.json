@@ -1,0 +1,76 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the TOOLCHAIN repository, for `nen shu tools`. It carries a dependency block (so the nen row has somewhere to come from), and a project.toolchain that covers all four versionFrom members and four installers between them: one nen runs, one that is declared and not enabled in this release, one with nothing to install, and one verify-only. Its lane's stack is `nextjs` so the advisory packMinimum column has a profile to read. Not shipped; see ../../README.md.",
+
+  "dependency": {
+    "name": "nen",
+    "source": "zheref/nen",
+    "minimum": "0.3",
+    "minimum_semantics": "MAJOR.MINOR. While nen's line is 0.x this means >=0.3.0 <0.4.0 EXACTLY -- at major zero the MINOR is the breaking-change vehicle, so a higher minor is out of range in both directions.",
+    "pinned_ref": "v0.3.0",
+    "version_probe": ["nen", "--version"],
+    "version_probe_output": "a bare semver on stdout, e.g. '0.3.0' -- no 'v' prefix, no other text",
+    "bootstrap": {
+      "vendored": false,
+      "script_path_in_source": "bootstrap/nen.sh",
+      "url": "https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh",
+      "fetch_must_be_two_step": true,
+      "manifest_asset": "SHA256SUMS"
+    }
+  },
+
+  "project": {
+    "scenario": "react-uzf-v1",
+
+    "lanes": { "web": { "stack": "nextjs", "cwd": "." } },
+    "defaultLane": "web",
+
+    "toolchain": {
+      "node": {
+        "version": ">=20.19.0",
+        "probe": ["node", "--version"],
+        "versionFrom": "first-semver-on-stdout",
+        "installer": "verify-only",
+        "why": "engines.node in package.json. A runtime install is a system-wide decision with five common answers; nen probes and prints the pin."
+      },
+      "pnpm": {
+        "version": "9.15.9",
+        "probe": ["pnpm", "--version"],
+        "versionFrom": "whole-line-stdout",
+        "installer": "corepack",
+        "why": "packageManager in package.json -- the one install nen performs, at the version this repository itself pins."
+      },
+      "placeholder-jdk": {
+        "version": ">=17.0.0",
+        "probe": ["placeholder-jdk", "-version"],
+        "versionFrom": "first-semver-on-stderr",
+        "installer": "verify-only",
+        "why": "This toolchain prints its version on STDERR, which is why the closed versionFrom set has a member for it."
+      },
+      "placeholder-sdk": {
+        "version": "35.0.0",
+        "probe": ["placeholder-sdk-select", "-p"],
+        "versionFrom": "path-exists",
+        "installer": "sdkmanager",
+        "why": "The probe answers with a PATH rather than a version: presence is the whole check, which is what this member says."
+      },
+      "placeholder-wrapper": {
+        "version": "8.11",
+        "probe": ["placeholder-wrapper", "--version"],
+        "versionFrom": "first-semver-on-stdout",
+        "installer": "wrapper",
+        "why": "This lane resolves the tool through its own committed wrapper, so there is nothing to install."
+      }
+    },
+
+    "verbs": {
+      "web": {
+        "build": { "exe": "pnpm", "argv": ["run", "build"] }
+      }
+    },
+
+    "profiles": {},
+    "targets": {},
+    "hosts": {}
+  }
+}

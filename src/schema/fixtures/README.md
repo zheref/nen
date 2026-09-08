@@ -1,8 +1,8 @@
 # Test fixtures
 
-Four fake repository roots. Two carry a migrated `nen/` directory; the third
-deliberately still carries `schemas/`; the fourth carries only a contract, for
-the executor.
+Five fake repository roots. Two carry a migrated `nen/` directory; the third
+deliberately still carries `schemas/`; the last two carry only a contract — one
+for the executor, one for the toolchain check.
 
 These are **test data, not shipped code**. They deliberately contain concrete
 persona, label and check-name strings — that is the point of them: the loaders
@@ -45,6 +45,20 @@ different things.
   file the satisfied `path` precondition asserts — named `deps/` rather than the
   obvious name because the obvious name is in this repository's `.gitignore`,
   and a fixture that cannot be committed proves nothing.
+
+- `shu-tools-repo/nen/contract.json` — the repository `nen shu tools` is proved
+  against, and the reason it is not folded into `shu-repo`: that one declares
+  **no** `toolchain` and **no** `dependency`, which is what makes it the
+  "nothing to check" case this verb must answer for. This one carries both — a
+  `dependency` block for the `nen` row, and a `project.toolchain` covering all
+  four `versionFrom` members and four installers between them (one nen runs,
+  one declared and not enabled in this release, one with nothing to install,
+  one verify-only). Its lane's stack is `nextjs`, so the advisory `packMinimum`
+  column has a real profile to read; its `package.json` carries a
+  `packageManager` pin that **agrees** with the declaration, so the
+  cross-check has an agreeing case as well as the disagreeing one a test writes
+  itself; and `sdk-root/` exists so the `path-exists` member has a path that is
+  really there.
 
 The marker trees `nen shu detect` scans are a different kind of input and live
 separately, at `src/shu/fixtures/` — see that directory's own README.
