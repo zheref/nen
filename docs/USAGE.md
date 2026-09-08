@@ -43,13 +43,56 @@ a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`scaffold init`](#nen-scaffold-init),
 [`canon resolve`](#nen-canon-resolve) and
 [`parse futon`](#nen-parse-futon).
-A few verbs accept it and never read it at all
-([`issue search`](#nen-issue-search),
-[`issue chain-position`](#nen-issue-chain-position),
-[`canon mirror generate`](#nen-canon-mirror-generate)); their argument tables
-say so. Where a verb takes a path flag of its own (`--rows-from`,
-`--body-file`, `--gates`, `--changelog`, …), a relative value resolves against
-`--repo`'s root, not against the current directory.
+Thirty verbs accept it and never read it at all — they work entirely from the
+paths and slugs they are handed. Every verb of [`commit`](#family-commit),
+[`effort`](#family-effort), [`epic`](#family-epic), [`loop`](#family-loop),
+[`quality`](#family-quality), [`run`](#family-run), [`split`](#family-split),
+[`wake`](#family-wake) and [`watch`](#family-watch) is one; so are
+[`backlog fetch`](#nen-backlog-fetch),
+[`canon mirror generate`](#nen-canon-mirror-generate) and
+[`check`](#nen-canon-mirror-check), [`labels rename`](#nen-labels-rename),
+[`pr fetch`](#nen-pr-fetch), [`pr retarget`](#nen-pr-retarget),
+[`pr request-reviews`](#nen-pr-request-reviews),
+[`ref parse`](#nen-ref-parse), [`repo inventory`](#nen-repo-inventory),
+[`parse <skill>`](#nen-parse-skill), [`parse izanagi`](#nen-parse-izanagi),
+[`parse izanami`](#nen-parse-izanami), and six of the eight
+[`issue`](#family-issue) verbs — every one except
+[`issue file`](#nen-issue-file) and
+[`issue consolidate-close`](#nen-issue-consolidate-close). Their argument
+tables say so.
+
+#### Relative paths resolve against two different bases
+
+There is no single rule here, and the difference is worth knowing before it
+costs you a run. **Most** path flags resolve a relative value against
+`--repo`'s root (an absolute value is always used as-is): `--rows-from`,
+`--board-from`, `--gates`, `--changelog`, `--fragment-dir`, `--wakes-from`,
+`--body-from`, `--requirements-from`, `--ledger`, `--questions-from`,
+`--answers-from`, and every taxonomy file a verb opens for itself.
+
+**A closed set of own-path flags does not** — they are handed to
+`readFileSync`/`writeFileSync` unresolved, so a relative value resolves
+against the **process's current directory** and `--repo` is ignored:
+
+| Verb | Flags resolved against the process cwd |
+|---|---|
+| [`epic next-wave`](#nen-epic-next-wave) | `--body-file`, `--out` |
+| [`idea file`](#nen-idea-file) | `--body-file` |
+| [`issue comment`](#nen-issue-comment) | `--body-file` |
+| [`issue file`](#nen-issue-file) | `--body-file` — never read by nen at all; the path is handed to `gh` verbatim, so `gh`'s own cwd resolves it |
+| [`effort classify`](#nen-effort-classify) | `--input` |
+| [`loop slots`](#nen-loop-slots) | `--efforts` |
+| [`split verify`](#nen-split-verify) | `--original`, `--branches` |
+| [`quality tooling`](#nen-quality-tooling) | `--table` |
+| [`quality method-check`](#nen-quality-method-check) | `--input` |
+| [`canon mirror generate`](#nen-canon-mirror-generate) / [`check`](#nen-canon-mirror-check) | `--rules-dir`, `--canon-values`, `--out-dir`, `--mirror-dir`, `--markdown-out` |
+
+Every one of these verbs is also in the accept-but-never-read list above, so
+there is nothing inconsistent about a single invocation — but there IS an
+inconsistency across the surface, and it is tracked as
+[zheref/nen#100](https://github.com/zheref/nen/issues/100). Until it closes,
+the portable habit is to pass an absolute path to any of the flags in this
+table, or to run the verb from the directory those paths are relative to.
 
 ### `--target <owner/name>` names the GitHub repository
 
@@ -62,8 +105,9 @@ thing from the checkout on disk, so it gets a different flag. `--target
 [`issue`](#family-issue) family, [`idea file`](#nen-idea-file),
 [`labels sync`](#nen-labels-sync), [`labels rename`](#nen-labels-rename),
 [`repo inventory`](#nen-repo-inventory) and
-[`repo scenario`](#nen-repo-scenario) all take it. Four verbs spell the same
-idea differently, for reasons local to each: [`pr ready`](#nen-pr-ready) takes
+[`repo scenario`](#nen-repo-scenario) all take it. Four OTHER spellings cover
+ten more mentions across nine verbs (`release preflight` takes two of them),
+for reasons local to each: [`pr ready`](#nen-pr-ready) takes
 `--gh-repo` (only needed when the `<ref>` is a bare number);
 [`backlog fetch`](#nen-backlog-fetch), [`board build`](#nen-board-build),
 [`label apply`](#nen-label-apply), [`release preflight`](#nen-release-preflight)
@@ -118,8 +162,10 @@ relays the bootstrap script's own published codes unchanged (see [Getting the
 binary](#getting-the-binary)).
 
 One inconsistency is worth knowing before it surprises you: a missing
-`--target` exits `1` rather than `2` on several verbs. See the note under
-[`labels sync`](#nen-labels-sync).
+`--target` exits `1` rather than `2` on sixteen verbs — every verb routed
+through one of the four families' local `requireTarget()` helpers. See the
+note under [`labels sync`](#nen-labels-sync), and
+[zheref/nen#93](https://github.com/zheref/nen/issues/93).
 
 ### `--dry-run` discipline
 
@@ -390,7 +436,7 @@ nen pr ready 5 --gh-repo zheref/nen --reviewers alice --token-env NEN_TEST_DEFIN
 }
 ```
 exit 1 (no usable token, so GitHub could not be read — never read as ready)
-(from `src/pr/command.test.ts`'s "`--json` is the SAME invocation whether given before or after 'pr'" case, which asserts `verdict: "unevaluated"` at exit 1 with the named env var deliberately left unset — this verb reaches GitHub, so it was not run live here)
+(from a real run — the first four keys of an eleven-key document, elided at `...`. This verb normally reaches GitHub, but an unset `--token-env` short-circuits before the network, so the invocation as printed is fully offline-runnable and the `unevaluated` verdict is produced without a token. The same shape is asserted by `src/pr/command.test.ts`'s "`--json` is the SAME invocation whether given before or after 'pr'" case.)
 
 ### `nen pr staleness`
 
@@ -672,8 +718,8 @@ This verb reads no `--repo` — `gh pr edit` addresses the PR entirely via `--ta
 > `--reviewers` belongs to `pr ready` and `pr next-blocker`. The message
 > comes from `src/pr/reviewers.ts`, written against a `--reviewers`-named
 > flag and never updated. The behaviour is correct — nothing is requested
-> and the verb exits 1 — only the flag it names is wrong. No tracking issue
-> is open for this as of v0.2.0.
+> and the verb exits 1 — only the flag it names is wrong. Tracked as
+> [zheref/nen#95](https://github.com/zheref/nen/issues/95).
 
 **Output and exit codes** — human line: `requested <a>, <b> on
 <target>#<pr>`, or the refusal/failure message; `--json` top-level keys:
@@ -790,8 +836,13 @@ one line per `MISSING`/`DUPLICATED`/`ALTERED`/`EXTRA` hunk; `--json`
 top-level keys: `ok`, `filesInOriginal`, `filesInBranches`, `missing[]`,
 `duplicated[]`, `altered[]`, `extra[]`, `error`. Exit 0 when every hunk lands
 in exactly one branch, unaltered, with nothing extra; exit 1 on any missing,
-duplicated, altered or extra hunk, or an unreadable `--original`/branch file;
-exit 2 on a missing flag or an `--original` naming zero hunks.
+duplicated, altered or extra hunk, on an unreadable `--original`/branch file,
+and on an `--original` naming zero hunks — that last one is a refusal, not a
+usage error, because the flag was spelled correctly and the file was read: it
+just did not prove anything (`src/split/command.ts`; under `--json` the exit is
+`result.ok ? 0 : 1`, so the zero-hunk refusal is exit 1 there too, with the
+sentence in the `error` key). Exit 2 only on a missing `--original`/`--branches`
+or a `--branches` that names no paths at all.
 
 **Example**
 
@@ -1093,8 +1144,9 @@ nen board render --board-from <path>
 > 'row.refs.join(", ")', 'row.refs.join' is undefined)`. This is the
 > undesigned-crash class [zheref/nen#32](https://github.com/zheref/nen/issues/32)
 > fixed for `build` and only for `build`. Build boards with `board build`,
-> or validate the file yourself before rendering one. No tracking issue is
-> open for the `render`/`diff` half as of v0.2.0.
+> or validate the file yourself before rendering one. The `render`/`diff`
+> half is tracked as
+> [zheref/nen#92](https://github.com/zheref/nen/issues/92).
 
 **Output and exit codes** — same rendering as `board build`'s human output. `--json` echoes the Board
 back unchanged. Exit 0 on success; exit 2 if `--board-from` is missing or unreadable/not-JSON; exit 1
@@ -1357,7 +1409,7 @@ findings AND (the sweep was not requested, or it found no gaps); exit 1 otherwis
 **Example**
 
 ```bash
-nen warmup --repo . --current v0.12.0
+nen warmup --repo src/schema/fixtures/bankai-repo --current v0.12.0
 ```
 ```text
 4 stale pin(s):
@@ -1368,6 +1420,7 @@ nen warmup --repo . --current v0.12.0
 no unpinned consumers
 handbook-question sweep: NOT CHECKED (--questions-from was not supplied)
 ```
+exit 1 — stale pins were found, and a stale pin fails the run.
 (from a real run against `src/schema/fixtures/bankai-repo`)
 
 <a id="family-watch"></a>
@@ -1476,11 +1529,12 @@ object ref, a missing `--label`/`--repo-slug`, or an undeclared label.
 
 ```bash
 nen label apply BC-IS-#386 --label "bankai:stage/human-review" --repo-slug zheref/bankai-core \
-  --reason "watch classifier landed; needs maintainer review" --ledger label-ledger.jsonl
+  --repo src/schema/fixtures/bankai-repo \
+  --reason "watch classifier landed; needs maintainer review" --ledger /tmp/label-ledger.jsonl
 ```
 ```text
 (dry run) would apply 'bankai:stage/human-review' to BC-IS-#386
-ledger: /path/to/label-ledger.jsonl
+ledger: /tmp/label-ledger.jsonl
 ```
 (from a real run against `src/schema/fixtures/bankai-repo`, without `--run` — this verb reaches GitHub
 only when `--run` is given, which was not exercised live)
@@ -1514,18 +1568,33 @@ nen labels sync --target <owner/name> --repo <path> [--dry-run]
 | `--repo <path>` | yes | The checkout whose `schemas/labels.json` is the taxonomy being synced. | Listed unbracketed in usage; omitting it is refused BY NAME at exit 2 (issue #28) rather than silently defaulting to cwd. |
 | `--dry-run` | no (boolean) | Logs every label ("would sync: ...") without calling `gh` at all. | There is no separate `--run` flag here (unlike `label apply`): omitting `--dry-run` means this verb mutates immediately. |
 
-> **Note:** a missing `--target` exits 1 rather than 2 on four verbs.
-> `labels sync`, [`labels rename`](#nen-labels-rename),
-> [`repo inventory`](#nen-repo-inventory) and
-> [`repo scenario`](#nen-repo-scenario) each define their own local
-> `requireTarget()` helper that throws a plain `Error` instead of the
+> **Note:** a missing `--target` exits 1 rather than 2 on **sixteen**
+> verbs. Four families — `labels`, `repo`, `pr` and `issue` — each define
+> their own local `requireTarget()` helper (`src/labels/command.ts:10`,
+> `src/repo/command.ts:13`, `src/pr/command.ts:47`,
+> `src/issue/command.ts:293`) that throws a plain `Error` instead of the
 > `VerbUsageError` every other required flag on the surface throws — so
 > forgetting `--target` reports a usage message but exits with the failure
-> code, not the usage code. A caller that branches on `2` to mean "you
-> typed it wrong" will read a forgotten flag as a real failure on these
-> four. Confirmed by `src/labels/command.test.ts`'s `"requires --target"`
-> case, which asserts exit 1. No tracking issue is open for this as of
-> v0.2.0.
+> code, not the usage code. The sixteen are `labels sync`,
+> [`labels rename`](#nen-labels-rename),
+> [`repo inventory`](#nen-repo-inventory),
+> [`repo scenario`](#nen-repo-scenario), [`pr fetch`](#nen-pr-fetch),
+> [`pr next-blocker`](#nen-pr-next-blocker),
+> [`pr retarget`](#nen-pr-retarget),
+> [`pr request-reviews`](#nen-pr-request-reviews) and all eight `issue`
+> verbs ([`search`](#nen-issue-search),
+> [`open-pr-check`](#nen-issue-open-pr-check), [`file`](#nen-issue-file),
+> [`comment`](#nen-issue-comment), [`attach-sub`](#nen-issue-attach-sub),
+> [`consolidate-close`](#nen-issue-consolidate-close),
+> [`chain-position`](#nen-issue-chain-position) and
+> [`terminus`](#nen-issue-terminus)). The two verbs that take `--target`
+> and are NOT affected read it through `requireValue` and so exit 2 the
+> ordinary way: [`run rerun-failed`](#nen-run-rerun-failed) and
+> [`idea file`](#nen-idea-file). A caller that branches on `2` to mean "you
+> typed it wrong" will read a forgotten flag as a real failure on the
+> sixteen. Confirmed by `src/labels/command.test.ts`'s `"requires
+> --target"` case, which asserts exit 1, and by running all eighteen.
+> Tracked as [zheref/nen#93](https://github.com/zheref/nen/issues/93).
 
 **Output and exit codes** — human rendering is one line per label (`"would sync: <name> (#<color>) --
 <description>"` in dry-run, or the entry's own message otherwise), then, if any failed, a summary line
@@ -1568,7 +1637,7 @@ nen labels rename --target <owner/name> --map from=to,from2=to2 [--dry-run]
 |---|---|---|---|
 | `--target <owner/name>` | yes | The repository whose labels are renamed. | Missing -> exit 1 (same `requireTarget` inconsistency noted under `labels sync`). |
 | `--map from=to,from2=to2` | yes | Rename mapping, applied in the order given. | A chain (`a=b,b=c`) applies in one invocation; missing or naming no mappings -> exit 2. |
-| `--dry-run` | no (boolean) | Logs the `gh label edit` call it would make, per mapping. | This verb takes NO `--repo` flag at all — it never reads a local taxonomy. Even in `--dry-run`, it still calls `gh label list` live (to decide idempotence) before deciding what it "would" do — dry-run here is not fully side-effect-free of network access, only of mutation. |
+| `--dry-run` | no (boolean) | Logs the `gh label edit` call it would make, per mapping. | This verb accepts the global `--repo` and never reads it — the rename map comes from `--map`, not from a local taxonomy. Even in `--dry-run`, it still calls `gh label list` live (to decide idempotence) before deciding what it "would" do — dry-run here is not fully side-effect-free of network access, only of mutation. |
 
 **Output and exit codes** — human rendering is one line per mapping:
 `"<from> -> <to>: <status> -- <message>"` (`status` one of `renamed`, `already-done`, `would-rename`,
@@ -1677,7 +1746,7 @@ none of what's present is ranked); exit 2 for an undeclared `--category`.
 **Example**
 
 ```bash
-nen color status --repo . --present ready_g1,blocked --category status
+nen color status --repo src/schema/fixtures/bankai-repo --present ready_g1,blocked --category status
 ```
 ```text
 🔴  blocked  Blocked
@@ -1855,7 +1924,7 @@ unrecognized `--kind`, a non-numeric `--number`, or a `--code` the registry does
 **Example**
 
 ```bash
-nen ref format --repo . --code KP --kind PR --number 386 --state open
+nen ref format --repo src/schema/fixtures/bankai-repo --code KP --kind PR --number 386 --state open
 ```
 ```text
 🔀 KP-PR-#386
@@ -2130,7 +2199,14 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 **Output and exit codes** — human lines: `(no --write) would collate` or
 `collated <n> fragment(s) into <path> ### v<version> — <theme>`, then each
 fragment name; `--json` top-level keys: `version`, `theme`, `fragments[]`,
-`written`. Always exits 0; exit 2 on a missing required flag.
+`written`. Exit 0 on any completed run — there is no "drift" verdict here,
+only "wrote/didn't write". Exit 2 on a missing required flag. Exit 1 on an
+unreadable `--changelog`: the read at `src/changelog/command.ts:130` is
+unguarded, so the ENOENT escapes as a raw
+`nen changelog: ENOENT: no such file or directory, open '<resolved path>'`
+rather than the exit-2 named refusal a mistyped path deserves, in both text
+and `--json` mode. Tracked as
+[zheref/nen#101](https://github.com/zheref/nen/issues/101).
 
 **Example**
 
@@ -2727,8 +2803,8 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 > `FileRequest` exactly as [`issue file`](#nen-issue-file)'s is, so it
 > refuses a label whose family this invocation declared off-limits — but
 > neither `nen idea --help` nor the family's own `USAGE` constant mentions
-> it, so nothing outside the source tells a caller it exists. No tracking
-> issue is open for this as of v0.2.0.
+> it, so nothing outside the source tells a caller it exists. Tracked as
+> [zheref/nen#94](https://github.com/zheref/nen/issues/94).
 
 **Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches }`. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted.
 
@@ -2869,7 +2945,7 @@ nen canon mirror generate --rules-dir <dir> --canon-values <path>
 | `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2). |
 | `--repo <path>` | no | Not used -- this verb operates purely on the paths given. | |
 
-**Output and exit codes** -- prints `written: <list>`, `unchanged: <list>`, `deleted (orphaned): <list>` (each `(none)` when empty). `--json`: `{ written, unchanged, deleted }`. Exit 0 always on a completed run (there is no "drift" concept here, only "wrote/didn't write"); exit 2 on an unreadable `--canon-values`, a missing `--scenario`, or a rules-dir generation error.
+**Output and exit codes** -- prints `written: <list>`, `unchanged: <list>`, `deleted (orphaned): <list>` (each `(none)` when empty). `--json`: `{ written, unchanged, deleted }`. Exit 0 always on a completed run (there is no "drift" concept here, only "wrote/didn't write"); exit **1** on an unreadable `--canon-values` (`src/canon/command.ts:193-197` prints `nen: could not read --canon-values '<path>': <errno>` and returns 1, not the exit-2 named refusal a mistyped path deserves — tracked as [zheref/nen#101](https://github.com/zheref/nen/issues/101)); exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a rules-dir generation error.
 
 **Example**
 
@@ -2914,7 +2990,7 @@ nen canon mirror check --rules-dir <dir> --canon-values <path>
 | `--scenario <name>` | no | Same override as `generate`. | |
 | `--markdown-out <path>` | no | Also write the report as a markdown table. | Written regardless of `--json`. |
 
-**Output and exit codes** -- prints `ok: <n>`, `missing: <list>`, `extra: <list>`, `stale: <list>`, `hand-edited: <list>`. `--json`: the full report, same four buckets plus `ok`. Exit 0 when missing/extra/stale/hand-edited are all empty; exit 1 on any drift; exit 2 on an unreadable `--canon-values` or a regeneration error.
+**Output and exit codes** -- prints `ok: <n>`, `missing: <list>`, `extra: <list>`, `stale: <list>`, `hand-edited: <list>`. `--json`: the full report, same four buckets plus `ok`. Exit 0 when missing/extra/stale/hand-edited are all empty; exit 1 on any drift, and also on an unreadable `--canon-values` — the same shared reader `generate` uses (`src/canon/command.ts:193-197`) returns 1 rather than the exit-2 named refusal a mistyped path deserves, which means an unreadable values file and real drift are indistinguishable by exit code alone; read the stderr line, or `--json`'s absence, to tell them apart. Tracked as [zheref/nen#101](https://github.com/zheref/nen/issues/101). Exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a regeneration error.
 
 **Example**
 
@@ -2957,7 +3033,7 @@ nen quality tooling --table <path.json> --scenario <name>
 | `--table <path.json>` | yes | The scenario -> tooling manifest, as a JSON object. | Caller's own file; an array or scalar at the top level is refused. |
 | `--scenario <name>` | yes | Which entry to resolve. | |
 
-**Output and exit codes** -- prints `scenario: <name>` then `e2e`, `adversarial`, `not used`, `perf harness`, `perf diagnosis`, each `(none)` when absent. `--json`: `{ ok, scenario, tooling: { e2e, adversarial, notUsed, perfHarness, perfDiagnosis } }` or `{ ok: false, reason }`. Exit 0 when the scenario has an entry; exit 1 when it does not (or the table file could not be read).
+**Output and exit codes** -- prints `scenario: <name>` then `e2e`, `adversarial`, `not used`, `perf harness`, `perf diagnosis`, each `(none)` when absent. `--json`: `{ ok, scenario, tooling: { e2e, adversarial, notUsed, perfHarness, perfDiagnosis } }` or `{ ok: false, reason }`. Exit 0 when the scenario has an entry; exit 1 when it does not, or the table file could not be read; exit 2 when either `--table` or `--scenario` is missing (`quality tooling takes --table <path.json> and --scenario <name>.`).
 
 **Example**
 
@@ -3020,7 +3096,7 @@ nen quality method-check --input <path.json>
 |---|---|---|---|
 | `--input <path.json>` | yes | The method block, as JSON: `device`, `os`, `releaseConfig` (bool), `debuggerAttached` (bool), `sampleSize`, `firstDiscarded` (bool), `median`, `p90`, `thermalState`, `networkCondition`. | |
 
-**Output and exit codes** -- prints `OK -- method block is complete.` or one `gap: <reason>` line per missing item. `--json`: `{ ok, refusals }`. Exit 0 when complete; exit 1 on any gap (or an unreadable/malformed `--input`).
+**Output and exit codes** -- prints `OK -- method block is complete.` or one `gap: <reason>` line per missing item. `--json`: `{ ok, refusals }`. Exit 0 when complete; exit 1 on any gap, or an unreadable/malformed `--input`; exit 2 when `--input` is missing entirely (`quality method-check takes --input <path.json>.`).
 
 **Example**
 
@@ -3402,9 +3478,19 @@ nen wake verify --repo-slug zheref/bankai-core --now 2026-09-07T00:00:00Z \
 ```text
 scanned 4 PR(s)
 #63 run 998877: redrive -- swallowed 'action_required' on a redrivable event -- auto-redriving via 'gh run rerun 998877'
+```
+A sweep that found nothing prints the count and one more line instead, never
+alongside an action line -- `no swallowed wakes found` is emitted only when the
+action total is zero (`src/wake/command.ts:265`):
+```text
+scanned 4 PR(s)
 no swallowed wakes found
 ```
-(shape derived from `src/wake/detect.ts`'s `decideActions`/`PlannedAction` and `src/wake/command.test.ts` -- not run live, this reaches GitHub and mutates it under `--run`)
+(both captured from `runFamily` driven against `src/wake/command.test.ts`'s own
+stubbed `gh` seam -- four open PRs matching `--author-pattern`, one of them
+carrying an `action_required` run on a redrivable event -- since this verb
+reaches GitHub and mutates it under `--run`, it was not pointed at a live
+repository)
 
 ### `nen wake fire`
 
@@ -3485,11 +3571,11 @@ rungs 2-3 (OS notification, audible cue): not fired by nen -- only git/gh subpro
 see the table below. No banner above => nothing needs you right now.
 
 | Effort                     | Open issues & PRs | Status (gate)  | Thought flow                        | Session / lane         |
-| --------------------------- | ------------------ | ---------------- | ------------------------------------ | ------------------------- |
+| -------------------------- | ----------------- | -------------- | ----------------------------------- | ---------------------- |
 | issue comment verb         | #29, PR #75       | in review (G2) | wired the general comment primitive | p2/29-issue-comment    |
 | watch classifier allowlist | #31, PR #74       | merged (G2)    | closed the metachar guard gap       | p2/31-watch-classifier |
 ```
-(run for real, against a local efforts.md authored for this example)
+(run for real, against a local `efforts.md` authored for this example — the table above is the renderer's own padded output, byte for byte)
 
 ## Developer workflows
 
@@ -3749,16 +3835,18 @@ exposed here so you can run it first.
 
 ```bash
 # 3. File it — labels and assignee IN the create call, never a follow-up edit.
+#    --body-file is relative to THIS shell, not to --repo: see below.
 nen issue file --target zheref/nen --repo src/schema/fixtures/bankai-repo \
   --title "wake verify does not paginate PR comments past one page" \
-  --body-file body.md --label bankai:stage/idea,bankai:severity/medium \
+  --body-file ./body.md --label bankai:stage/idea,bankai:severity/medium \
   --assignee zheref --dry-run
 
 # An idea instead: same choreography, plus a read-back that diffs
-# title/body/labels against what was submitted.
+# title/body/labels against what was submitted. NOTE: no --dry-run exists
+# here — this one files for real.
 nen idea file --target zheref/nen --repo src/schema/fixtures/bankai-repo \
   --title "Consider a --paginate flag on wake verify's gh api reads" \
-  --body-file idea-body.md --label bankai:stage/idea --assignee zheref
+  --body-file ./idea-body.md --label bankai:stage/idea --assignee zheref
 ```
 
 `issue file --dry-run` prints the exact `gh issue create` argv and makes no
@@ -3766,7 +3854,18 @@ network call at all. There is no `--body`: a body typed on the command line is
 a body nobody reviewed. Every label is checked against `--repo`'s
 `schemas/labels.json` first, because GitHub would silently *create* an unknown
 label rather than refuse. `idea file` looks for `read-back OK`; any mismatch
-exits 1, and so does a read-back that lands on a pull request.
+exits 1, and so does a read-back that lands on a pull request — and it has no
+`--dry-run`, so run it only when you mean to file.
+
+Two different bases are in play in that block, which is why the body paths are
+spelled `./`. `--repo` points at the bundled fixture because that is where
+`schemas/labels.json` lives; `--body-file` does **not** resolve against it.
+`issue file` never opens the body at all — the path goes into the `gh issue
+create` argv verbatim, so `gh`'s own working directory resolves it (the
+dry-run above prints `--body-file ./body.md` unchanged) — and `idea file`
+reads it with a bare `readFileSync`, against this process's directory. See
+[Relative paths resolve against two different
+bases](#relative-paths-resolve-against-two-different-bases).
 
 ```bash
 # 4. Fold the neighbours in: attach, then close with a comment.
