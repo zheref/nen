@@ -75,7 +75,7 @@ The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declar
 
 | verb | command | why / source |
 | --- | --- | --- |
-| `detect` | declared-only | Detection is a marker match, not a spawned command: a `settings.gradle.kts` whose build applies `org.jetbrains.compose` with a `compose.desktop.application` block. *(source: markers)* |
+| `detect` | declared-only | Detection is a marker match, not a spawned command: this lane's own Gradle wrapper, its own settings file, and a build file carrying a `compose.desktop` block. *(source: markers)* |
 | `build` | unsupported | This lane has no CI, no Makefile and no documentation naming a command. Only `run` exists. *(source: KroAndroid/program/ (inventory sweep))* |
 | `test` | unsupported | This lane has no CI, no Makefile and no documentation naming a command. *(source: KroAndroid/program/ (inventory sweep))* |
 | `ui-test` | unsupported | This lane has no CI, no Makefile and no documentation naming a command. *(source: KroAndroid/program/ (inventory sweep))* |
@@ -99,8 +99,8 @@ The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declar
 
 | pattern | must contain | why |
 | --- | --- | --- |
-| `settings.gradle.kts` | `org.jetbrains.compose` | a Gradle build applying the Compose Multiplatform plugin. This lane is found by its OWN settings file, not the repository root's -- KroAndroid's `program/` is a wholly separate build inside an Android repository. |
-| `build.gradle.kts` | `compose.desktop.application` | the refinement that makes it desktop rather than Android: the `compose.desktop.application` block. |
+| `settings.gradle{,.kts}` |  | the lane's OWN settings file, not the repository root's -- KroAndroid's `program/` is a wholly separate build inside an Android repository, with its own wrapper and its own settings file (program/settings.gradle.kts). It carries no `contains`, and that is a CORRECTION: the Compose Multiplatform plugin id is applied in the build file, not in the settings file, so a `contains` here named a literal the observed lane's settings file does not have. |
+| `build.gradle{,.kts}` | `compose.desktop` | the refinement that makes it desktop rather than Android: the desktop packaging block. THE LITERAL IS THE BLOCK'S RECEIVER, `compose.desktop`, and not `compose.desktop.application`, which is the block's NAME and appears in no build file on earth -- the DSL spells it `compose.desktop { application { ... } }` (KroAndroid/program/build.gradle.kts), so the dotted form was a marker that could never match. |
 
 ### Toolchain minimums (advisory)
 
@@ -312,8 +312,8 @@ What nen has been *tested* against, never what it installs: the pin an install w
 | pattern | must contain | why |
 | --- | --- | --- |
 | `gradlew` |  | the repository's own wrapper. `{gw}` resolves to it -- `./gradlew` on POSIX, `gradlew.bat` on Windows -- and a lane without one is a finding, not an install. |
-| `settings.gradle.kts` |  | or `settings.gradle`. Present with the wrapper, this is a Gradle build; it is not yet an Android one. |
-| `*/build.gradle.kts` | `com.android.application` | the refinement that makes it THIS stack rather than a plain JVM build: a module applying the Android application plugin. |
+| `settings.gradle{,.kts}` |  | the lane's own settings file, in either spelling. Present with the wrapper, this is a Gradle build; it is not yet an Android one. Its `include(...)` lines are also the ONLY place the module names in this stack's `test` row can honestly come from -- they are that repository's words, not this stack's. |
+| `*/build.gradle{,.kts}` | `com.android.application` | the refinement that makes it THIS stack rather than a plain JVM build: a module applying the Android application plugin. Both spellings of the build file are named because both are observed -- KroAndroid's modules are Kotlin script (app/build.gradle.kts:4-13) and food-diary's Android lane is Groovy (android/build.gradle:16-19). |
 
 ### Toolchain minimums (advisory)
 
@@ -329,6 +329,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 ### Notes
 
 - `{gw}` is the ONE host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.
+- A CONFLICT THIS PACK RECORDS AND REFUSES TO RESOLVE. Two canonical sources disagree about this stack's unit-test task, and only one of them can be right: bankai-core's compose handbook binds its lint/test placeholder to `./gradlew :app:testDebugUnitTest`, while KroAndroid's own CI forbids exactly that task in the sentence quoted in the `test` row's `why` (build-test.yml:51-58). The pack states the task that is OBSERVED RUNNING, cited to the line that runs it, and states the disagreement HERE rather than encoding both -- a reference that carried the forbidden task in any row, even a commented one, is a reference that will eventually be pasted. Resolve it upstream in whichever source is wrong; nen reports it and changes neither.
 - PRECONDITIONS ASSERTED, NEVER PERFORMED: recursive submodules -- the root settings.gradle.kts:29-30 `includeBuild`s two sibling projects from a submodule, and without it nothing resolves; the two JDKs above; and a `local.properties` carrying the project's Supabase URL and anon key (app/build.gradle.kts:16-24).
 
 ---

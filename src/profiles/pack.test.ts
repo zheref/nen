@@ -13,6 +13,7 @@ import {
   parseProfile,
   PLACEHOLDERS,
   profileById,
+  spellOnHost,
   verbCell,
   type ProfileVerb,
 } from "./pack.js";
@@ -593,6 +594,62 @@ describe("placeholders", () => {
     ).toBe(1);
   });
 
+  // ── the host-conditional token's two spellings, as data ───────────────────
+  //
+  // They are the ONE value this file may contribute to a command, and only
+  // because they are not a value at all in the sense `kind` forbids: they are
+  // how one host spells a file the repository itself committed. `../shu/
+  // detect.ts` reads them so that the two spellings live in one place, cited,
+  // rather than being typed a second time into the module that substitutes
+  // them -- where they would be a build-system literal in the one file the
+  // family lets carry filesystem knowledge.
+
+  it("gives a spelling to EXACTLY the host-conditional tokens, and to no other", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      expect(placeholder.hostSpelling !== undefined, placeholder.token).toBe(
+        placeholder.kind === "host-conditional",
+      );
+    }
+  });
+
+  it("gives that spelling two different words and a source", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      const spelling = placeholder.hostSpelling;
+      if (spelling === undefined) continue;
+      // TWO DIFFERENT WORDS IS THE POINT. A `hostSpelling` whose halves agreed
+      // would be a token that is not host-conditional at all, and the one
+      // mutant a POSIX-only suite cannot see is exactly the one that makes them
+      // agree.
+      expect(spelling.posix, placeholder.token).not.toBe(spelling.win32);
+      for (const value of [spelling.posix, spelling.win32]) {
+        expect(value.length, placeholder.token).toBeGreaterThan(0);
+        // A spelling is a word to RUN, never a token to substitute again.
+        expect(value, placeholder.token).not.toMatch(/[{}]/);
+      }
+      expect(spelling.source.length, placeholder.token).toBeGreaterThan(20);
+      // And the meaning must still SAY both, because the rendered page shows
+      // the meaning and a reader of it never sees this field.
+      expect(placeholder.meaning, placeholder.token).toContain(spelling.posix);
+      expect(placeholder.meaning, placeholder.token).toContain(spelling.win32);
+    }
+  });
+
+  it("answers win32 with one spelling and every other platform with the other", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      const spelling = placeholder.hostSpelling;
+      if (spelling === undefined) {
+        expect(spellOnHost(placeholder, "linux"), placeholder.token).toBeNull();
+        continue;
+      }
+      expect(spellOnHost(placeholder, "win32")).toBe(spelling.win32);
+      // THE SPLIT IS WINDOWS VERSUS EVERYTHING ELSE, not a list of three names
+      // -- a list would answer nothing on the fourth platform Node reports.
+      for (const platform of ["darwin", "linux", "freebsd", "openbsd", "aix"]) {
+        expect(spellOnHost(placeholder, platform), platform).toBe(spelling.posix);
+      }
+    }
+  });
+
   it("refuses an unknown token in an argv, naming the file, the field and it", () => {
     const error = refusal(() =>
       parseProfile(AT, "example", VERBS, profile({
@@ -693,6 +750,65 @@ describe("placeholders", () => {
       markers: [{ pattern: "settings.gradle{,.kts}", contains: null, why: "the build file" }],
     }));
     expect(parsed.markers[0]?.pattern).toBe("settings.gradle{,.kts}");
+  });
+});
+
+describe("the bundled pack's two shipped conventions, pinned", () => {
+  const pack = loadProfilesPack();
+
+  /** Every word of every step of every command cell, keyed `<stack>/<verb>`. */
+  function rows(): readonly { stack: string; verb: string; words: readonly string[] }[] {
+    const out: { stack: string; verb: string; words: readonly string[] }[] = [];
+    for (const id of pack.ids) {
+      const profile = profileById(pack, id);
+      for (const verb of Object.keys(profile.verbs)) {
+        const cell = verbCell(profile, verb);
+        const invocation = cell.kind === "command" || cell.kind === "steps" ? cell.invocation : null;
+        if (invocation === null) continue;
+        if (invocation.kind === "command") {
+          out.push({ stack: id, verb, words: [invocation.exe, ...invocation.argv] });
+          continue;
+        }
+        if (invocation.kind === "steps") {
+          for (const step of invocation.steps) {
+            out.push({ stack: id, verb, words: [step.exe, ...step.argv] });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // `detect` answers `{unitTestTask}` as `<module>:<the verb the row is for>`,
+  // which couples the TASK NAME to the VERB NAME -- and that is only honest
+  // while the token appears in a row whose verb is the task. In a `lint` row it
+  // would silently produce `<module>:lint`, a task nothing observed and nothing
+  // cross-checks. The pack is where that constraint has to be pinned, because
+  // the pack is where a new row would be added.
+  it("uses {unitTestTask} in `test` rows and nowhere else", () => {
+    const carrying = rows().filter((row): boolean => row.words.includes("{unitTestTask}"));
+    expect(carrying.length, "the token must still be in use somewhere").toBeGreaterThan(0);
+    for (const row of carrying) {
+      expect(row.verb, `${row.stack}/${row.verb}`).toBe("test");
+    }
+  });
+
+  // `detect` honours a marker pattern's DIRECTORY PREFIX -- `*/build.gradle`
+  // never matches the lane's own build file -- and it reads that prefix as a
+  // shape rather than parsing a glob language. This is the assertion that makes
+  // reading a shape safe: `*/` is the only prefix the pack has, so a richer one
+  // arriving later fails here rather than being silently half-understood.
+  it("uses no marker directory prefix other than `*/`", () => {
+    let prefixed = 0;
+    for (const id of pack.ids) {
+      for (const marker of profileById(pack, id).markers) {
+        const at = marker.pattern.lastIndexOf("/");
+        if (at === -1) continue;
+        prefixed += 1;
+        expect(marker.pattern.slice(0, at + 1), `${id}: ${marker.pattern}`).toBe("*/");
+      }
+    }
+    expect(prefixed, "a prefix nothing uses is a rule nothing tests").toBeGreaterThan(0);
   });
 });
 

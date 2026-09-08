@@ -399,7 +399,7 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
 }
 
 function runDetect(context: CommandContext, repoRoot: string): number {
-  const report = detect(repoRoot);
+  const report = detect(repoRoot, context.seams.platform);
   let written = report;
   if (context.args.booleans.has("write")) {
     try {
