@@ -282,8 +282,16 @@ not carry them, so a repository that has not moved yet keeps working unchanged.
 `nen schema check` names every file it read from the legacy location, and fails
 on a *shadowed leftover* — a file present in both places with different bytes,
 where `nen/` wins and the copy somebody may still be editing is the one Nen
-ignores. Moving the four files into `nen/` is the whole migration. The fallback
-is removed in **v0.4.0**.
+ignores. Moving the four files into `nen/` is the whole migration — with one
+thing to check alongside it: **a path a caller pinned by hand does not move on
+its own.** The fallback only answers for paths Nen resolves itself, so CI that
+passes `nen pr ready --gates schemas/gates.json`, or `nen gate derive
+--policy-paths "schemas/,…"`, is naming a literal path and must be updated in
+the same change. `--gates` deliberately refuses rather than falling back: a flag
+that quietly read a different file than the one it was handed would be worse
+than an error. `nen/contract.json` has no legacy location at all — it is new in
+this line, so nothing under `schemas/` is ever read as one. The fallback is
+removed in **v0.4.0**.
 
 A repository that carries none of these files can still use Nen's
 repository-agnostic verbs (`nen commit format`, `nen ref format`, ...); a

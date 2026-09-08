@@ -218,8 +218,24 @@ to `schemas/` — and [`schema check`](#nen-schema-check) is where the migration
 state is reported: a file read from the legacy location gets a `warn` row naming
 the canonical path, and a file present in BOTH with different bytes is a
 *shadowed leftover* that fails the check, because `nen/` wins the read and the
-copy somebody may still be editing is the one nen ignores. A "no such file"
-refusal names both locations.
+copy somebody may still be editing is the one nen ignores. That comparison is
+**byte-exact**: two copies differing only in line endings (a CRLF/LF drift a
+checkout can produce on its own) count as different, because "identical" is
+what licenses deleting one of them. A "no such file" refusal names both
+locations.
+
+The fallback covers the four taxonomy files and nothing else. `nen/contract.json`
+is new in this line and has **no** legacy location — no released nen ever read
+one — so a repository's own unrelated file under `schemas/` is never claimed as
+a nen contract.
+
+**An explicitly pinned path does not move on its own.** The fallback answers only
+for paths nen resolves itself. A caller that hard-codes a location — `pr ready
+--gates schemas/gates.json`, or `gate derive --policy-paths "schemas/,…"` — is
+naming a path, and nen takes it literally: `--gates` deliberately does not fall
+back, since a flag that quietly read a different file than the one it was handed
+would be worse than a refusal. Move those pins along with the files, in the same
+change; `schema check` will not warn about them, because it never sees them.
 
 A repository carrying none of these can still use the repository-agnostic verbs
 ([`commit format`](#nen-commit-format), [`ref parse`](#nen-ref-parse),
@@ -1681,7 +1697,17 @@ location gets a `warn` row printed at the path it was actually read from, follow
 `^ legacy location…` line naming the canonical path and the v0.4.0 removal. A file present in BOTH
 places whose bytes DIFFER is a **shadowed leftover**: the row FAILS the report even though the file
 loaded, because `nen/` won the read and the copy somebody may still be editing is the one nen ignores.
-Identical bytes in both places is an `ok` row with a note saying the deletion is free.
+Identical bytes in both places is an `ok` row with a note saying the deletion is free. The comparison
+is **byte-exact** — a CRLF/LF drift between the two copies counts as different, since "identical" is
+the finding that licenses deleting one of them.
+
+A fourth state exists for the case where the comparison could not be made at all: both copies are
+present, and one of them will not open (`EACCES`, a symlink cycle). That row is an **unverified
+leftover**, and it fails the report for the same fail-closed reason — but it says so in its own words
+and names the errno, rather than asserting bytes it never compared. The distinction is not cosmetic:
+when it is the `nen/` copy that cannot be read, "the bytes differ, nen read the `nen/` one, delete the
+legacy copy" is three claims that are false and one instruction that would delete the only readable
+file the repository has left.
 
 **Usage**
 
@@ -1699,12 +1725,15 @@ nen schema check --repo <path> [--json]
 **Output and exit codes** — human rendering: `"repository: <root>"` then one line per file:
 `"  <ok|FAIL|warn>  <file, at the path it was read from>  <detail>"`, optionally followed by an
 indented `"        ^ <migration note>"` line. `--json` matches exactly: `{ root, ok, checks,
-deprecations }`, each check carrying `{ file, path, location, ok, detail, required, shadowed, note }` —
-`location` is `"nen"` or `"schemas"`, and `deprecations` lists every migration note in row order (empty
-for a fully migrated repository). Exit 0 when every REQUIRED file loaded and validated and nothing is
-shadowed; exit 1 when any required file failed (absent, unreadable, or invalid) or any file is shadowed
-by a different legacy copy — `gates.json` failing only because it is absent does not trip this, and
-neither does an absent `nen/contract.json`.
+deprecations }`, each check carrying `{ file, path, location, ok, detail, required, shadow, shadowed,
+note }` in that key order for every row — `location` is `"nen"` or `"schemas"`, `shadow` is
+`"none" | "identical" | "different" | "unknown"` (what the two copies had to say to each other, so a
+machine reader can tell "the bytes disagree" from "nen could not look"), `shadowed` is the boolean that
+fails the row, and `deprecations` lists every migration note in row order (empty for a fully migrated
+repository). Exit 0 when every REQUIRED file loaded and validated and nothing is shadowed; exit 1 when
+any required file failed (absent, unreadable, or invalid) or any file's legacy copy is unaccounted for
+— different bytes, or a comparison nen could not make — `gates.json` failing only because it is absent
+does not trip this, and neither does an absent `nen/contract.json`.
 
 **Example**
 
