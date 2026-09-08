@@ -214,7 +214,7 @@ verb does by default:
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr request-reviews`](#nen-pr-request-reviews), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
-| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu deploy`](#nen-shu-deploy), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. `deploy` additionally requires `--target <name>`, with no default ever. On `dev` and `run`, `--json` is **refused** without `--dry-run` |
+| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu deploy`](#nen-shu-deploy), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. `deploy` additionally requires `--target <name>`, with no default ever. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` additionally **parses** the report its run produced — and its `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
@@ -416,7 +416,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu dev`](#nen-shu-dev) | start a lane's DEBUG build; long-running, on this terminal | nen/contract.json (project block); inherits stdio unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu run`](#nen-shu-run) | start a lane's PRODUCTION build locally; long-running, on this terminal | nen/contract.json (project block); inherits stdio unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- --target is required and has no default | nen/contract.json (project block + targets); spawns the declared argv unless --dry-run | yes |
-| [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
+| [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
@@ -3445,6 +3445,14 @@ run — which is how a `--json` reader tells a dry run from a real one; `exitCod
 is nen's. Under `--json` a step's own output is relayed to **stderr**, so stdout
 stays exactly one document.
 
+[`shu coverage`](#nen-shu-coverage) is the one executing verb whose `--json`
+document is **not** that shape: it runs through the same executor and then
+parses the report the run produced, so its stdout carries
+`nen.shu.coverage/v0.1` — `{ contract, lane, stack, total, targets, threshold,
+report, exitCode }` — and the executor's own report is rendered to **stderr**
+instead, where every argv, duration and precondition row still is. Nothing is
+lost and stdout is still exactly one object.
+
 `--json` is **refused at exit 2** on [`shu dev`](#nen-shu-dev) and
 [`shu run`](#nen-shu-run) unless `--dry-run` is also given. Those two hand this
 terminal to the child, so stdout belongs to the child from the handover
@@ -3892,7 +3900,107 @@ goes.
 
 ### `nen shu coverage`
 
-Run the lane's coverage command. Same shape as `test`, same `dry-run-gated` classification — a coverage run writes its report tree by definition. Parsing the coverage report the declaration names (`verbs.<lane>.coverage.report`) and the never-a-gate `--threshold` arrive with a later PR of [zheref/nen#91](https://github.com/zheref/nen/issues/91); this release runs the declared command and reports the steps.
+Run the lane's coverage command — through the same executor as every other verb,
+with the same refusals and the same `--dry-run` — and then **parse the report
+that run produced** into one shape: a total, a row per target, and (with
+`--threshold`) whether the number cleared a bar. Same `dry-run-gated`
+classification as `test`: a coverage run writes its report tree by definition.
+
+**Usage**
+
+```text
+nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--lane <name>` | no | Which lane to measure. | Defaults to `project.defaultLane`, as everywhere else in this family. |
+| `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. |
+| `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. |
+
+**Where the report comes from — the verb's own `artifacts`.** nen parses the
+first path under `project.verbs.<lane>.coverage.artifacts` whose **format** it
+recognises, and it never searches a tree for one:
+
+```json
+"coverage": {
+  "exe": "pnpm", "argv": ["--filter", "@kro/core", "test:coverage"],
+  "artifacts": ["coverage/coverage-summary.json"]
+}
+```
+
+A lane that declares none — or declares only artifacts that are not reports — is
+**exit 1** naming the field to add, listing the formats nen reads, and quoting
+the reference pack's *advisory* location for that stack (`docs/STACK-MATRIX.md`
+carries the same line per stack). That advisory is printed and **never opened**:
+the pack is a catalogue, and a path nen went and read on a catalogue's say-so
+would be a path nobody declared.
+
+**Formats.** Chosen by file name first and confirmed against the bytes, so a
+report under an unfamiliar name is still read and a name that lies is still
+caught:
+
+| `report.format` | what it is | conventionally |
+|---|---|---|
+| `istanbul-summary` | the Istanbul/Vitest JSON summary; rows are files | `coverage-summary.json` |
+| `xccov-report` | the JSON an `xccov view --report --json` step writes to a file; rows are build targets, and there is **no branch figure** — the key is omitted rather than zeroed | no convention: name the path in the step, and in `artifacts` |
+| `cobertura` | Cobertura XML (coverlet and others); rows are packages | `coverage.cobertura.xml` |
+| `jacoco` | JaCoCo XML, and Kover's compatible form; rows are packages | the plugin's own path |
+| `lcov` | the LCOV tracefile, the common fallback; rows are files | `lcov.info` |
+
+A file in none of them is exit 1 listing exactly this table. `coverage-final.json`
+— Istanbul's *raw* per-statement map — is **not** one of them: ask the reporter
+for the summary, or for LCOV.
+
+**`--threshold` reports and never gates.** `met` is `true`, `false`, or `null`
+when there was no number to compare. The exit code is the **run's**, in both
+directions: coverage under the bar still exits 0 when the tool exited 0. nen does
+not decide whether a number is good enough — the policy that prompted this flag
+scopes its bar to *the files a pull request touched*, a git-diff-aware judgement
+no coverage report can answer. Read `met` and decide.
+
+**Output and exit codes** — `0`/`1`/`2`/`3`/`4`/`5` as the family's table above,
+plus: **exit 1** when the run succeeded and the report is missing, unreadable, in
+no format nen reads, or not declared at all. A run that did **not** succeed is
+not parsed at all — the file on disk may be a previous run's, and nen cannot tell
+by looking.
+
+**`--json`** is a different contract from the other executing verbs
+(`nen.shu.coverage/v0.1`), keys in order: `{ contract, lane, stack, total,
+targets, threshold, report, exitCode }`. `percent` is computed from the counts
+(two decimals) rather than read out of the file — three of the five formats carry
+a percentage of their own, rounded three different ways, one of them as a
+fraction — and it is `null` for a report about no code, because 0 of 0 is neither
+100% nor 0%. **A dry run is told by `exitCode: 0` with `total: null`**; nothing
+else produces that pair. The executor's own report goes to stderr in this mode.
+
+**Example**
+
+```bash
+nen shu coverage --threshold 80
+```
+```text
+lane:          web  (nextjs)
+verb:          coverage
+host:          darwin -- supported (declared: darwin, linux, win32)
+preconditions: (none declared)
+ran:           pnpm --filter @placeholder/core test:coverage  -- exit 0 in 0ms
+cwd:           /Users/…/shu-coverage-repo
+env:           (none added)
+artifacts:     coverage/coverage-summary.json
+log:           not captured to a file -- each step's own stdout and stderr were relayed as it finished. A .nen/logs/ transcript is not in this release (zheref/nen#91).
+report:        coverage/coverage-summary.json  (istanbul-summary)
+total:         lines 82.35% (14/17)   branches 75.00% (3/4)
+targets:
+  lines           branches      target
+  75.00% (3/4)    --            packages/app/src/main.ts
+  84.62% (11/13)  75.00% (3/4)  packages/core/src/index.ts
+threshold:     80% -- met. This is REPORTED and never enforced: nen exits 0 here, and the threshold moved that by nothing.
+```
+(run against this repository's own coverage fixture declaration; the same run
+with `--threshold 95` prints `95% -- NOT met` and still exits **0**)
 
 ### `nen shu tools`
 
