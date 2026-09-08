@@ -221,7 +221,15 @@ export interface RepositoryContract {
 // An argv list, with the two ways it is usually got wrong named separately: a
 // string (the shell form this family refuses) and an empty list (a probe that
 // runs nothing and reports no version).
-function requireArgv(path: string, pointer: string, value: unknown): readonly string[] {
+//
+// EXPORTED FOR THE PROFILES PACK (zheref/nen#111), and the three readers below
+// -- `requireArgv`, `requireEnum` and `parseInvocation` -- are exported for the
+// same one reason: the bundled pack states the SAME shapes this file validates,
+// in a different file, and a second copy of these rules is a second set of rules.
+// The pack's loader imports them rather than restating them, so a shape this
+// loader tightens tightens there too. Nothing else changed: the callers inside
+// this file are unaffected, and the pack passes its OWN path and pointers.
+export function requireArgv(path: string, pointer: string, value: unknown): readonly string[] {
   if (typeof value === "string") {
     throw new SchemaError(
       path,
@@ -242,7 +250,7 @@ function requireArgv(path: string, pointer: string, value: unknown): readonly st
   return value.map((item, index): string => requireString(path, `${pointer}[${index}]`, item));
 }
 
-function requireEnum<T extends string>(
+export function requireEnum<T extends string>(
   path: string,
   pointer: string,
   value: unknown,
@@ -330,7 +338,7 @@ function requireDeclaredLane(
   );
 }
 
-function parseInvocation(path: string, pointer: string, value: unknown): Invocation {
+export function parseInvocation(path: string, pointer: string, value: unknown): Invocation {
   const raw = requireRecord(path, pointer, value);
   const hasUnsupported = raw["unsupported"] !== undefined;
   const hasSteps = raw["steps"] !== undefined;
@@ -506,17 +514,45 @@ function parsePreconditions(
   return out;
 }
 
-function parseHosts(path: string, value: unknown): Record<string, readonly string[]> {
-  const record = requireRecord(path, "project.hosts", value);
+/**
+ * The platform names a `hosts` allowlist may contain: `process.platform`'s
+ * values for the three targets `bun build --compile` publishes a binary for.
+ *
+ * CLOSED, AND THAT IS THE POINT. `hosts` is an ALLOWLIST -- a verb runs when
+ * `process.platform` is in it -- so a typo does not fail loudly, it silently
+ * removes the verb from every host on earth. `"macos"`, `"windows"` and
+ * `"osx"` are all things a person writes and none of them is a value
+ * `process.platform` ever returns. Refusing them at the seam is the only place
+ * the mistake is visible; a run that "correctly" skipped a verb is not.
+ */
+export const HOST_PLATFORMS = ["darwin", "linux", "win32"] as const;
+
+/**
+ * Read a per-verb `hosts` allowlist. ONE IMPLEMENTATION, TWO CALLERS: the
+ * declaration's `project.hosts` and the profiles pack's `hosts` (src/profiles/
+ * pack.ts) state the same shape, and a second copy of these rules would be a
+ * second set of rules that drift toward whichever file was edited last. The
+ * pointer PREFIX is the only difference, so it is the only parameter.
+ *
+ * The pack wraps this to add the two refusals a CATALOGUE needs and a
+ * declaration does not (an empty list, an empty map); both are stated there,
+ * next to the reason they are catalogue rules.
+ */
+export function parseHosts(
+  path: string,
+  pointer: string,
+  value: unknown,
+): Record<string, readonly string[]> {
+  const record = requireRecord(path, pointer, value);
   const hosts: Record<string, readonly string[]> = {};
   for (const [verb, entry] of Object.entries(record)) {
     if (verb.startsWith("$")) continue;
-    const pointer = `project.hosts.${verb}`;
+    const at = `${pointer}.${verb}`;
     if (!Array.isArray(entry)) {
-      throw new SchemaError(path, pointer, `expected an array of platform names, got ${describeValue(entry)}`);
+      throw new SchemaError(path, at, `expected an array of platform names, got ${describeValue(entry)}`);
     }
     hosts[verb] = entry.map((item, index): string =>
-      requireString(path, `${pointer}[${index}]`, item),
+      requireEnum(path, `${at}[${index}]`, item, HOST_PLATFORMS),
     );
   }
   return hosts;
@@ -566,7 +602,10 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
         : parsePreconditions(path, raw["preconditions"], lanes),
     profiles: optionalRecord(path, "project.profiles", raw["profiles"]),
     targets: optionalRecord(path, "project.targets", raw["targets"]),
-    hosts: raw["hosts"] === undefined || raw["hosts"] === null ? {} : parseHosts(path, raw["hosts"]),
+    hosts:
+      raw["hosts"] === undefined || raw["hosts"] === null
+        ? {}
+        : parseHosts(path, "project.hosts", raw["hosts"]),
     raw,
   };
 }

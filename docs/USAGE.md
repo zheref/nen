@@ -4198,3 +4198,20 @@ The gap is tracked in [zheref/nen#91](https://github.com/zheref/nen/issues/91),
 for Xcode, Expo, Next.js and JVM/Kotlin/Android projects*. Until those land,
 these actions stay with each project's own toolchain — nen's job is the
 backlog, the readiness verdict and the release mechanics around them.
+
+**What those verbs will be able to run, per stack, is already written down.**
+[`docs/STACK-MATRIX.md`](STACK-MATRIX.md) is the full reference: seven stacks ×
+thirteen verbs, each cell either a command cited to the repository it was read
+from, `declared-only` (real for the stack, and the observed repositories
+disagree about what it means, so no default is proposed), or `unsupported` with
+the reason. It is **generated** from the bundled profiles pack
+(`profiles/*.json`) by `bun run matrix` and drift-checked in the suite, so it
+cannot go stale. It is reference material only: no verb reads the pack today,
+and a source-scan test keeps it that way.
+
+A command in that page is a **shape**, not a runnable line: `{project}`,
+`{scheme}`, `{pm}` and the rest are placeholders your own `nen/contract.json`
+substitutes, and the page's *Placeholders* section lists the closed set with
+what each one means. One of them — the Gradle wrapper — is resolved by nen from
+`process.platform`; every other value comes from your declaration and never
+from the pack. A token left unsubstituted is refused rather than run.

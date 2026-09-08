@@ -333,6 +333,15 @@ Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
+Stack-aware developer verbs (`nen shu build | test | lint | …`) are not in that
+list yet; what those verbs will be able to run per stack is already written down
+in [`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
+verbs, each cell either a reference command cited to the repository it came
+from or an `unsupported` with the reason, generated from the bundled profiles
+pack (`profiles/*.json`) by `bun run matrix` and drift-checked by the suite.
+The pack is a catalogue: nothing that spawns a process reads it, and a test
+fails the build if that stops being true.
+
 ## Working on Nen
 
 Requires [bun](https://bun.sh) 1.4.0 or newer, and nothing else. Identical

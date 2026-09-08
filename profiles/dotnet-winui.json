@@ -1,0 +1,112 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY -- and the one profile in the pack with no invocable command anywhere. `msbuild <solution> /p:Configuration=Release /p:Platform=x64` and `dotnet test` are what a .NET developer would type, and NEITHER STRING EXISTS IN THE REPOSITORY. Writing them here would be nen deciding this project's toolchain rather than reading it. The right output for this stack is a proposed declaration with every verb `unsupported` and its reason, and a maintainer filling in the two or three that matter.",
+  "id": "dotnet-winui",
+  "displayName": ".NET / WinUI 3",
+  "markers": [
+    {
+      "pattern": "*.csproj",
+      "contains": "<UseWinUI>true</UseWinUI>",
+      "why": "THE REFINEMENT IS THE MARKER. A `*.csproj` or `*.sln` alone identifies .NET, which is not this stack; `<UseWinUI>true</UseWinUI>` is what makes it WinUI 3."
+    },
+    {
+      "pattern": "*.sln",
+      "contains": null,
+      "why": "the solution, present but not sufficient: it must be refined by the WinUI property above."
+    }
+  ],
+  "hosts": {
+    "*": ["win32"]
+  },
+  "hostNote": "win32 only, and specifically Windows with Visual Studio 2022 (17.10+). The target framework needs the Windows 10 SDK 22621; `<UseWinUI>true</UseWinUI>` plus `<EnableMsixTooling>true</EnableMsixTooling>` need the Windows App SDK tooling; and the solution's deploy entries and MSIX launch profile are Visual Studio DEPLOYMENT GESTURES. Not cross-compilable from macOS or Linux.",
+  "scaffoldTemplate": null,
+  "scaffoldNote": "no template is proposed: a skeleton for a stack with no invocable command is one nen could not then run anything against.",
+  "verbs": {
+    "detect": {
+      "declaredOnly": "Detection is a marker match, not a spawned command: `*.sln` or `*.csproj`, refined to THIS stack only by `<UseWinUI>true</UseWinUI>`.",
+      "summary": "markers, no spawn",
+      "source": "KroWindows/KroWindows.csproj:13"
+    },
+    "build": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND. There is no Makefile, no `.cmd` / `.ps1` / `.sh`, no `global.json`, no `nuget.config`, no `Directory.Build.props`, and no `.github/` directory at all. Every action is a Visual Studio GUI gesture.",
+      "summary": "no command in the repo",
+      "source": "KroWindows/Properties/launchSettings.json:3-8; KroWindows.csproj:133"
+    },
+    "test": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND -- and specifically, no command anywhere invokes `dotnet test`, even though a test project exists.",
+      "summary": "no command in the repo",
+      "source": "KroWindows (inventory sweep)"
+    },
+    "ui-test": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND.",
+      "summary": "no command in the repo",
+      "source": "KroWindows (inventory sweep)"
+    },
+    "lint": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND.",
+      "summary": "no command in the repo",
+      "source": "KroWindows (inventory sweep)"
+    },
+    "archive": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND. Packaging is a Visual Studio gesture: `HasPackageAndPublishMenu true`, with an MSIX launch profile.",
+      "summary": "no command in the repo",
+      "source": "KroWindows/KroWindows.csproj:133; Properties/launchSettings.json:3-8"
+    },
+    "release": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND, and signing is disabled outright (`<AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>`).",
+      "summary": "no command in the repo",
+      "source": "KroWindows/KroWindows.csproj:17"
+    },
+    "dev": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND. Running is a Visual Studio launch profile.",
+      "summary": "no command in the repo",
+      "source": "KroWindows/Properties/launchSettings.json:3-8"
+    },
+    "run": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND.",
+      "summary": "no command in the repo",
+      "source": "KroWindows/Properties/launchSettings.json:3-8"
+    },
+    "deploy": {
+      "unsupported": "NOTHING IN THE REPOSITORY INVOKES A COMMAND. The solution's `.Deploy.0` entries are Visual Studio deployment gestures, not a command line.",
+      "summary": "no command in the repo",
+      "source": "KroWindows (solution deploy entries)"
+    },
+    "coverage": {
+      "unsupported": "Unsupported -- but NOT a pure invention like an msbuild line would be. The test project already references `coverlet.collector` (`Version=\"6.0.2\"`) as a real `PackageReference`, so the dependency `dotnet test --collect:\"XPlat Code Coverage\"` needs is already in the tree. Identically to every other verb in this stack, no command anywhere invokes `dotnet test` at all: real tooling, zero usage.",
+      "summary": "coverlet present, unused",
+      "source": "KroWindows/KroCoreTests/KroCoreTests.csproj"
+    },
+    "tools": {
+      "declaredOnly": "The only stack whose one installable entry is GATED, and whose IDE can never be installed. .NET SDK -- installer `dotnet-install` (POSIX/Windows script) or `winget install Microsoft.DotNet.SDK.<n> --version <pin>`; the ONLY installer in the whole set that fetches and executes vendor code, which is why it is gated by residual question (d) and ships verify-only in the first release. The complication this row must carry: THERE IS NO `global.json`, so the build floats on whatever SDK is installed and the declaration has to state a pin nothing in the repository states. Visual Studio 2022 + Windows App SDK -- verify-only; probe `vswhere -latest -products * -requires <workload>` and report the workload id. nen never `winget install`s a 40 GB IDE. Windows 10 SDK 22621 -- verify-only; it arrives with the VS workload, so the row points at the workload rather than at a separate install.",
+      "summary": "SDK gated, IDE never",
+      "source": "KroWindows/KroWindows.csproj:13, :133; no global.json in the tree"
+    },
+    "warmup": {
+      "declaredOnly": "The git steps run -- classify, discard, fetch and branch are stack-independent -- but build and test verification has nothing to delegate to, because every verb in this stack is unsupported. `warmup` reports that and stops there.",
+      "summary": "git half only",
+      "source": "this profile's own build and test rows (both unsupported)"
+    }
+  },
+  "toolchain": {
+    "dotnet-sdk": {
+      "minimum": null,
+      "probe": ["dotnet", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "dotnet-install",
+      "why": "THE ONLY INSTALLER IN THE SET THAT FETCHES AND EXECUTES VENDOR CODE, which is why it is gated by residual question (d) and ships VERIFY-ONLY in the first release. There is NO `global.json` in the repository, so no pin exists to carry and the pack states no minimum: the declaration must state one, and nen never installs \"latest\".",
+      "source": "KroWindows (no global.json; target framework net8.0-windows10.0.22621.0)"
+    },
+    "visual-studio": {
+      "minimum": "17.10",
+      "probe": ["vswhere", "-latest", "-products", "*", "-requires", "{workload}"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "Visual Studio 2022 17.10+ with the Windows App SDK tooling, which also brings the Windows 10 SDK 22621 -- so the row points at the WORKLOAD rather than at a separate SDK install. nen probes and reports the workload id a human installs; it never `winget install`s a 40 GB IDE.",
+      "source": "KroWindows/KroWindows.csproj:13 (UseWinUI), :133 (packaging menu)"
+    }
+  },
+  "notes": [
+    "PRECONDITIONS THIS STACK MUST ASSERT AND CANNOT FIX: a `ProjectReference` that ESCAPES THE REPOSITORY to a sibling clone of another project (KroCore/KroCore.csproj:10) -- no submodule, no NuGet package, no restore step fetches it, so the solution will not load unless that repository is cloned as a sibling directory, and nen never clones one; an `<AppInstallerUri>` hardcoding an absolute path on one machine (KroWindows.csproj:23); `<AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>` (:17), unsigned packaging, and signing is exactly the thing nen never touches; and a `<PublishProfile>` naming profiles that DO NOT EXIST (:12)."
+  ]
+}

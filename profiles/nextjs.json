@@ -1,0 +1,130 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. Both observed repositories route every verb through a Makefile and both make it authoritative -- and THE PACK PROPOSES THE LEAF COMMANDS, NEVER `make`. Whether a declaration routes through a Makefile is that repository's call, written into its own nen/contract.json.",
+  "id": "nextjs",
+  "displayName": "Next.js",
+  "markers": [
+    {
+      "pattern": "next.config.js",
+      "contains": null,
+      "why": "or `next.config.mjs` / `next.config.ts`. In a monorepo the config sits in the app workspace, and workspace members become lanes."
+    },
+    {
+      "pattern": "next.config.mjs",
+      "contains": null,
+      "why": "the ESM spelling."
+    },
+    {
+      "pattern": "next.config.ts",
+      "contains": null,
+      "why": "the TypeScript spelling."
+    }
+  ],
+  "hosts": {
+    "*": ["darwin", "linux", "win32"]
+  },
+  "hostNote": "any. Node >= 20.19 (kro-pwa) / >= 22 (GymKai), with pnpm activated by corepack. `ui-test` via Playwright additionally downloads a browser (~300 MB), which is part of that verb's own two-step form and not a host install.",
+  "scaffoldTemplate": "full",
+  "scaffoldNote": "this is the stack a template can carry end to end, and the only one a CI runner can exercise on all three platforms.",
+  "verbs": {
+    "detect": {
+      "declaredOnly": "Detection is a marker match, not a spawned command: `next.config.{js,mjs,ts}`. Workspace members become lanes, which is a shape the declaration states rather than one the pack guesses.",
+      "summary": "markers, no spawn",
+      "source": "markers"
+    },
+    "build": {
+      "exe": "{pm}",
+      "argv": ["turbo", "run", "build"],
+      "why": "Both repositories' own build target, which fans out to each workspace's `next build`. `{pm}` is the repository's package manager, from its own `packageManager` field.",
+      "source": "kro-pwa/Makefile:42 -> apps/web/package.json:7; GymKai/Makefile:36"
+    },
+    "test": {
+      "exe": "{pm}",
+      "argv": ["turbo", "run", "test"],
+      "why": "Fans out to `vitest run --coverage` (kro-pwa's web app) or `vitest run` (its packages, and GymKai).",
+      "source": "kro-pwa/Makefile:63 and apps/web/package.json:9; GymKai/Makefile:49"
+    },
+    "ui-test": {
+      "declaredOnly": "TWO OBSERVED MEANINGS, and neither is the other's default. (a) Playwright, as TWO steps: `{pm} --filter {app} exec playwright install --with-deps chromium`, then `{pm} --filter {app} run test:e2e` (kro-pwa/Makefile:78-79, apps/web/package.json:11). (b) A Storybook static build as the visual-evidence carrier: `{pm} --filter {app} build-storybook` (GymKai/Makefile:59). The declaration says which this repository means.",
+      "summary": "two meanings",
+      "source": "kro-pwa/Makefile:78-79; GymKai/Makefile:59"
+    },
+    "lint": {
+      "steps": [
+        { "exe": "{pm}", "argv": ["exec", "biome", "check", "."] },
+        { "exe": "{pm}", "argv": ["turbo", "run", "lint"] }
+      ],
+      "why": "TWO STEPS, IN ORDER, in both repositories: the formatter/linter pass over the whole tree first, then the per-workspace lint fan-out. Running only the second is a weaker check than either repository's own CI performs.",
+      "source": "kro-pwa/Makefile:46-47; GymKai/Makefile:39-40"
+    },
+    "archive": {
+      "declaredOnly": "kro-pwa has none. GymKai's nearest is `build-storybook` writing `packages/app/storybook-static`, uploaded as a 14-day CI artifact -- that is EVIDENCE, not a shippable app, and calling it this stack's archive would be the pack deciding what an archive is.",
+      "summary": "evidence, not an artifact",
+      "source": "GymKai/Makefile:59, .github/workflows/ci.yml:56-63"
+    },
+    "release": {
+      "unsupported": "One repository says so out loud, in its own Makefile: \"publish: n/a -- Kro Web is a PWA, there is no package or store pipeline.\"",
+      "summary": "declared n/a in the repo",
+      "source": "kro-pwa/Makefile:100-101"
+    },
+    "dev": {
+      "exe": "{pm}",
+      "argv": ["turbo", "run", "dev"],
+      "why": "Fans out to `next dev`. GymKai narrows the same command with a filter (`{pm} turbo run dev --filter @gymkai/web`), which is the declaration's argument to add, not the pack's.",
+      "source": "kro-pwa/Makefile:38; GymKai/Makefile:33"
+    },
+    "run": {
+      "exe": "next",
+      "argv": ["start"],
+      "why": "The production server, and it REQUIRES A PRIOR `build`. nen states that in the refusal rather than silently building -- a verb that quietly does a different verb's work is how a caller loses track of what ran.",
+      "source": "kro-pwa/apps/web/package.json:8; GymKai/apps/web/package.json:9"
+    },
+    "deploy": {
+      "declaredOnly": "THREE OBSERVED SHAPES, NONE A DEFAULT. (a) An explicit failing stub: `@echo \"deploy: no target is wired yet.\" ... @exit 1` (kro-pwa/Makefile:93-96). (b) NO COMMAND AT ALL -- the push to `main` IS the deploy, via the host's git integration (GymKai/Makefile:65, docs/Deployment.md:39-41). (c) Documented but unimplemented: `{pm} dlx vercel@latest deploy --prebuilt --prod --token=$VERCEL_TOKEN` (GymKai/docs/Deployment.md:65).",
+      "summary": "three shapes, no default",
+      "source": "kro-pwa/Makefile:93-96; GymKai/Makefile:65 and docs/Deployment.md:39-41, :65"
+    },
+    "coverage": {
+      "exe": "{pm}",
+      "argv": ["--filter", "{package}", "test:coverage"],
+      "why": "ONE TEMPLATED COMMAND, RUN ONCE PER PACKAGE -- and reading it as a single invocation is the one way to get this row wrong. Both repositories run this exact shape N times, once for each workspace package that declares a `test:coverage` script, and a declaration reproduces that as N steps (or as its own root target that fans out); the pack states the SHAPE because the package list is the repository's, not this stack's. AN EXISTING COMMAND, NOT A PROPOSAL: each invocation resolves to `vitest run --coverage` with a real `coverage: { provider: 'v8', reporter: ['text','lcov'] }` block. Cited verbatim: `{pm} --filter @kro/core test:coverage` then `{pm} --filter @kro/app test:coverage` -- two runs, one shape. GAP WORTH CARRYING: neither repository's `test-coverage` target reaches `apps/web`, whose own `test` script already bakes coverage in.",
+      "source": "kro-pwa/Makefile:71-73 (packages/core/package.json:19, packages/app/package.json:22); GymKai/Makefile:51-53"
+    },
+    "tools": {
+      "steps": [
+        { "exe": "corepack", "argv": ["enable"] },
+        { "exe": "corepack", "argv": ["prepare", "{packageManager}", "--activate"] }
+      ],
+      "why": "THE ONE INSTALL NEN PERFORMS, and the reason it is safe: corepack ships with Node, both repositories already run `corepack enable` as their own CI step (GymKai/.github/workflows/ci.yml:30; kro-pwa/Makefile:33-34), and kro-pwa/TOOLCHAIN.md:15-16 is explicit that it is the ONLY correct way here -- \"Never install pnpm globally for this repo and never run `npm install` in it.\" `{packageManager}` COMES FROM THE DECLARATION'S OWN `packageManager` PIN, NEVER FROM THIS PACK: the pack may say what nen was tested against and may never contribute a version to an install argv. Node itself is verify-only; turbo, biome, vitest and playwright are project devDependencies installed by the project's own dependency install, which is a precondition nen asserts and never performs.",
+      "source": "kro-pwa/package.json (`packageManager`, `engines`), TOOLCHAIN.md:15-16; GymKai/.github/workflows/ci.yml:30"
+    },
+    "warmup": {
+      "delegatesTo": ["build", "test"],
+      "why": "The git steps are stack-independent and run regardless. The verification half delegates to this profile's own `build` and `test` rows, both of which carry a command.",
+      "source": "this profile's own build and test rows"
+    }
+  },
+  "toolchain": {
+    "node": {
+      "minimum": "20.19.0",
+      "probe": ["node", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "kro-pwa's `engines.node` is `>=20.19.0`; GymKai's CI runs 22. A Node install is a system-wide decision with five common answers (nvm, fnm, asdf, a distro package, the vendor installer), and picking one is exactly the line nen does not cross: it probes and prints the pin.",
+      "source": "kro-pwa/package.json (`engines.node`); GymKai CI setup step"
+    },
+    "pnpm": {
+      "minimum": "9.15.9",
+      "probe": ["pnpm", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "corepack",
+      "why": "ADVISORY ONLY: this is the version nen has been TESTED against, and it never contributes to an install argv. IT IS THE ONE VERSION THE INVENTORY STATES: kro-pwa/package.json's `packageManager` field reads `pnpm@9.15.9`, and that is the whole evidence -- no repository in the inventory declares a `>= 9` range, an `engines.pnpm` floor, or any other pnpm version at all. An earlier draft wrote `9.0.0`, which was a floor nothing measured: rounding a measured version down to a plausible-looking major is exactly how an advisory column starts asserting things nobody checked. The pin that an `--install` would actually activate is the DECLARATION's `packageManager`, never this one.",
+      "source": "kro-pwa/package.json (`packageManager`)"
+    }
+  },
+  "notes": [
+    "PRECONDITIONS: `corepack enable` BEFORE the cached dependency install, as its own step; a frozen-lockfile install in CI (kro-pwa/.github/workflows/pr.yml); and an optional `cp .env.example apps/web/.env.local` (kro-pwa/TOOLCHAIN.md:23).",
+    "TWO EXTRA VERBS THE INVENTORY EVIDENCES BUT THE THIRTEEN DO NOT COVER, carried here so they are not lost: `typecheck` -- `{pm} -r exec tsc --noEmit` (kro-pwa/Makefile:55; GymKai/Makefile:46); and `analyze` -- `{pm} turbo run analyze`, resolving to `ANALYZE=true next build` (kro-pwa/Makefile:59, apps/web/package.json:13). A declaration may carry any verb name it likes; the pack's thirteen are the ones the matrix compares across stacks.",
+    "ON `make`: both repositories route every verb through a Makefile and both make it authoritative -- \"If a command here disagrees with something you read elsewhere, this file wins\" (kro-pwa/TOOLCHAIN.md:3-4), and CI runs the Makefile targets rather than the tools. The pack still proposes the LEAF commands, because a Makefile is a repository's own indirection and not this stack's."
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "$comment": "profiles/index.json -- the pack's own table of contents, and the ONE place the stack set and the verb set are written down. Both lists are DATA on purpose: src/dev/matrix.ts renders the page without a single stack id or verb name as a literal, and src/profiles/pack.ts refuses a profile whose verb map is not exactly `verbs` -- no extra verb, no missing one. Adding a stack is a file plus a line here; adding a verb is a line here plus that verb in all seven profiles, which is the point.",
+  "$order": "`profiles` is sorted; `verbs` is the family's own declared order (nen shu detect | build | test | ui-test | lint | archive | release | dev | run | deploy | coverage | tools | warmup) and is NOT sorted -- it is the order the matrix's columns are read in.",
+  "profiles": [
+    "compose-desktop",
+    "dotnet-winui",
+    "expo",
+    "gatsby",
+    "gradle-android",
+    "nextjs",
+    "xcode-ios"
+  ],
+  "$commandVerbs": "The subset of `verbs` that names a command a repository RUNS. The other three do not, and each for its own reason: `detect` is a marker match against a checkout and spawns nothing; `tools` is a toolchain REPORT whose few command cells install a package manager rather than build anything; `warmup` is version-control work plus a delegation to this same table's `build` and `test` rows. Counting those twenty-one cells in the headline ratio flatters it in both directions at once -- `detect`'s seven declared-only cells are not seven stacks with no answer, and `tools`'s two command cells are not two more builds. The list lives HERE, as data, for the same reason the stack set does: src/dev/matrix.ts contains no verb name, so this distinction is a line in this file rather than a branch in the renderer.",
+  "commandVerbs": [
+    "build",
+    "test",
+    "ui-test",
+    "lint",
+    "archive",
+    "release",
+    "dev",
+    "run",
+    "deploy",
+    "coverage"
+  ],
+  "verbs": [
+    "detect",
+    "build",
+    "test",
+    "ui-test",
+    "lint",
+    "archive",
+    "release",
+    "dev",
+    "run",
+    "deploy",
+    "coverage",
+    "tools",
+    "warmup"
+  ]
+}

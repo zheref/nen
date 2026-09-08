@@ -1,0 +1,129 @@
+{
+  "$schema": "nen.profile/v0.1",
+  "$comment": "A CATALOGUE ENTRY, NOT AN AUTHORITY. The single observed repository is a BARE workflow -- `ios/` and `android/` prebuild output committed -- so this profile is three lanes wearing one name, and its host note says so rather than flattening them.",
+  "id": "expo",
+  "displayName": "Expo",
+  "markers": [
+    {
+      "pattern": "app.json",
+      "contains": "expo",
+      "why": "the manifest, identified by its `expo` key -- `app.json` alone is far too common a filename to be a marker."
+    },
+    {
+      "pattern": "app.config.js",
+      "contains": "expo",
+      "why": "or `app.config.ts`: the dynamic manifest, same key."
+    },
+    {
+      "pattern": "eas.json",
+      "contains": null,
+      "why": "identifies an Expo project on its own. NOTE: no repository in the inventory has one, which is why `archive` is unsupported here."
+    },
+    {
+      "pattern": "ios",
+      "contains": null,
+      "why": "`ios/` AND `android/` both present means the BARE workflow -- prebuild output is committed, and the native lanes are real."
+    }
+  ],
+  "hosts": {
+    "*": ["darwin", "linux", "win32"]
+  },
+  "hostNote": "SPLIT BY LANE, and the single `hosts` row cannot say it: `expo start` and `expo lint` run anywhere; `expo run:ios` needs macOS with Xcode and CocoaPods; `expo run:android` needs a JDK, the Android SDK and `node` on PATH for the Gradle configuration. The declaration narrows `run` to `darwin` for the iOS lane; the pack refuses to narrow it for a verb whose android half runs everywhere.",
+  "scaffoldTemplate": "minimal",
+  "scaffoldNote": "`app.json`, `package.json`, an `app/` route skeleton and nen/contract.json. NATIVE DIRECTORIES ARE NOT TEMPLATED; an `expo prebuild` is a printed post-step.",
+  "verbs": {
+    "detect": {
+      "declaredOnly": "Detection is a marker match, not a spawned command: `app.json` / `app.config.{js,ts}` carrying an `expo` key, or an `eas.json`; `ios/` AND `android/` present means the bare workflow.",
+      "summary": "markers, no spawn",
+      "source": "markers"
+    },
+    "build": {
+      "unsupported": "UNSUPPORTED AS A DISTINCT VERB: `expo run:ios` / `expo run:android` build AND launch, there is no build-only invocation in the repository, and `expo start --web` is a dev server rather than an `expo export`. Conflating the two would make `nen shu build` launch an app.",
+      "summary": "run:* builds and launches",
+      "source": "food-diary/package.json:8-9, :11"
+    },
+    "test": {
+      "unsupported": "The repository has NO TEST RUNNER DEPENDENCY AT ALL: no jest, no `jest-expo`, no vitest.",
+      "summary": "no test runner at all",
+      "source": "food-diary/package.json:14-49"
+    },
+    "ui-test": {
+      "unsupported": "No Maestro, no Detox, nothing.",
+      "summary": "no UI runner at all",
+      "source": "food-diary (inventory sweep)"
+    },
+    "lint": {
+      "exe": "expo",
+      "argv": ["lint"],
+      "why": "Flat ESLint 9 with `eslint-config-expo/flat`, ignoring `dist/*`. `expo` is invoked through the project's own dependency, never a global install.",
+      "source": "food-diary/package.json:12; eslint.config.js:5-9"
+    },
+    "archive": {
+      "unsupported": "NO `eas.json` AND NO EAS PROJECT ID in `app.json`. The pack must not propose `eas build`: nothing in the seven repositories has ever run it.",
+      "summary": "no eas.json anywhere",
+      "source": "food-diary (inventory sweep)"
+    },
+    "release": {
+      "unsupported": "No `eas submit`, no fastlane.",
+      "summary": "no release lane at all",
+      "source": "food-diary (inventory sweep)"
+    },
+    "dev": {
+      "exe": "expo",
+      "argv": ["start"],
+      "why": "The Metro dev server. `expo start --web` is the same verb with the web target, and is the declaration's argument to add.",
+      "source": "food-diary/package.json:6, :11"
+    },
+    "run": {
+      "exe": "expo",
+      "argv": ["run:{platform}"],
+      "why": "The repository declares three forms: `expo run:ios`, `expo run:ios --device` and `expo run:android`. `{platform}` selects the lane and `--device` is the declaration's own extra argument; neither native lane is the other's default, so the pack templates rather than picks. THESE BUILD AND LAUNCH, which is why this profile has no `build` row.",
+      "source": "food-diary/package.json:9, :10, :8"
+    },
+    "deploy": {
+      "unsupported": "No deployment target of any kind.",
+      "summary": "no deploy target",
+      "source": "food-diary (inventory sweep)"
+    },
+    "coverage": {
+      "unsupported": "Same reason as `test`: no jest, no `jest-expo`, no vitest, and no `coverage` hit anywhere in the repository. There is nothing to instrument.",
+      "summary": "no tests to instrument",
+      "source": "food-diary/package.json:14-49"
+    },
+    "tools": {
+      "steps": [
+        { "exe": "corepack", "argv": ["enable"] },
+        { "exe": "corepack", "argv": ["prepare", "{packageManager}", "--activate"] }
+      ],
+      "why": "THE JS LANE ONLY, and it is the same one install nen performs anywhere: `{packageManager}` comes from the DECLARATION'S own `packageManager` pin, never from this pack. Everything else here is verify-only, and this row is the clearest case in the inventory for a per-lane toolchain. Node -- verify-only. Expo CLI -- installer `npx`, which installs NOTHING GLOBALLY: `expo` is invoked through the project's own dependency, and Expo itself warns against a global install; the row exists to say so rather than leave a reader guessing. iOS lane -- Xcode, simulator runtimes and CocoaPods, all verify-only, exactly as the xcode-ios profile. Android lane -- a JDK and Android SDK components as the gradle-android profile, PLUS `node` on PATH for a Gradle SYNC, which is a verify-only probe most readers would not expect.",
+      "source": "food-diary/package.json; start-ios.sh:5, :12; android/build.gradle:16-19"
+    },
+    "warmup": {
+      "declaredOnly": "The git steps run -- classify, discard, fetch and branch are stack-independent -- but the build-verification step reports `build` itself as unsupported for this lane: `expo run:*` builds AND launches, so there is nothing `warmup` can verify without also launching an app.",
+      "summary": "git half only",
+      "source": "this profile's own build row (unsupported)"
+    }
+  },
+  "toolchain": {
+    "expo-cli": {
+      "minimum": null,
+      "probe": ["expo", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "npx",
+      "why": "NOTHING TO INSTALL GLOBALLY. `expo` is invoked through the project's own dependency, and Expo itself warns against a global install; this entry exists to state that rather than leave a reader to discover it. The observed project is Expo SDK 53 with expo-router 5 on React Native 0.79.5, and the CLI version travels with the project, so the pack states no host minimum.",
+      "source": "food-diary/package.json (Expo SDK 53 / expo-router 5 / RN 0.79.5)"
+    },
+    "node": {
+      "minimum": null,
+      "probe": ["node", "--version"],
+      "versionFrom": "first-semver-on-stdout",
+      "installer": "verify-only",
+      "why": "The repository pins no `engines` range, so the pack states presence only. Node is verify-only here for the same reason it is everywhere: a Node install is a system-wide decision with five common answers. The Android lane additionally needs it ON PATH for the Gradle sync.",
+      "source": "food-diary/package.json (no `engines`); android/build.gradle:16-19"
+    }
+  },
+  "notes": [
+    "PRECONDITIONS ASSERTED, NEVER PERFORMED: `pod install` for the iOS lane; a JDK plus the Android SDK AND `node` on PATH for the Gradle lane; and a booted simulator. The repository's own helper hardcodes booting an `iPhone 16 Pro` (food-diary/start-ios.sh:5, :12) -- nen asserts a simulator exists and never boots one.",
+    "The native lanes' toolchains are the xcode-ios and gradle-android profiles' rows, not copies of them. Duplicating those entries here would create two places to fix the same fact."
+  ]
+}
