@@ -62,6 +62,7 @@ import {
 } from "../profiles/pack.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
 import { parseYaml } from "../schema/yaml.js";
+import { ASSERTABLE_KINDS } from "./run.js";
 
 /** Directories a marker scan never descends into. */
 const SKIP = new Set([
@@ -352,6 +353,35 @@ function dependsOn(packageJson: Record<string, unknown> | null, dependency: stri
   return false;
 }
 
+/**
+ * Whether the manifest declares a package that CARRIES this program.
+ *
+ * `dependsOn` compares names; this compares a name to a PROGRAM, and the one
+ * difference between the two is the scope. A tool published under a scope ships
+ * its binary under the unscoped tail -- `@biomejs/biome` is how you depend on
+ * `biome`, and every scoped tool in existence is spelled that way -- so an exact
+ * match alone would withhold a row whose tool the repository plainly declares.
+ * It is a WIDENING of the check and never a narrowing: nothing it accepts is
+ * absent from the manifest, and the scope belongs to the publisher rather than
+ * to the repository being read.
+ */
+function carriesDependency(
+  packageJson: Record<string, unknown> | null,
+  program: string,
+): boolean {
+  if (dependsOn(packageJson, program)) return true;
+  if (packageJson === null || program === "" || program.includes("/")) return false;
+  const tail = `/${program}`;
+  for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
+    const block = packageJson[field];
+    if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+    for (const name of Object.keys(block as Record<string, unknown>)) {
+      if (name.startsWith("@") && name.endsWith(tail)) return true;
+    }
+  }
+  return false;
+}
+
 /** Every directory with markers, deepest-last, root first. */
 function scan(repoRoot: string): readonly { directory: string; matches: readonly Match[] }[] {
   const out: { directory: string; matches: readonly Match[] }[] = [];
@@ -430,52 +460,85 @@ function laneName(cwd: string, stack: string, qualify: boolean, taken: ReadonlyS
 //      is withheld with the token named -- `{scheme}`, `{destination}` and the
 //      rest are facts only the repository knows, and nen guessing one is a
 //      different command.
-//   1b. A TOKEN THE MANIFEST'S OWN `scripts` ANSWERS. A step that matches a
-//      declared script's command word for word, differing only where the pack
-//      wrote a token, is answered from that script -- `node {archiveScript}`
-//      against `"resume:pdf": "node scripts/build-resume-pdf.mjs"` yields the
-//      path the repository itself runs. TWO MATCHES THAT DISAGREE ARE AN
-//      AMBIGUITY AND ARE WITHHELD, never resolved: rule 1 in this file's header
-//      is not suspended because the two candidates came from the same file.
-//      THE RULE IS OVER TOKENS, NOT OVER ONE TOKEN, and deliberately so: a
-//      manifest that spells the whole command out has stated something stronger
-//      about itself than any single field does, so a manager named in a script
-//      answers as well as one named in a field. What it may never do is answer
-//      a token from anywhere but this repository -- the pack contributes the
-//      SHAPE and never a value, which is the property the whole family rests on.
-//   2. THE EXECUTABLE. A step's `exe` must be the package manager the manifest
-//      names, or a package the manifest declares as a dependency, or -- the
-//      third route -- part of a step the manifest declares VERBATIM as one of
-//      its own scripts. Those are the only three ways `detect` can SEE that a
-//      repository carries a program, and "the marker matched so the tool must
-//      be here" is exactly the inference §2.6 calls a warning rather than a
-//      proposal. The third route is the strongest of the three and is why it
-//      exists: a manifest whose `scripts` block spells this exact command is
-//      the repository stating that it runs THIS LINE, which outranks a guess
-//      from a dependency list that the line merely might use.
-//   3. THE SCRIPT, in two shapes. An argv containing `run <task>` names a task
-//      the manifest must declare under `scripts` -- `<pm> run <script>`
-//      directly, and `<pm> <runner> run <task>` because a workspace task
-//      runner's task list is the manifest's scripts. AND, for a row nen
-//      answered `{package}` in from this manifest's own `name`, the element
-//      that FOLLOWS that package name is the task that package must declare:
-//      `{package}`'s documented meaning is "one workspace package the command
-//      runs for", so everything before it is the manager's own filter syntax
-//      and what comes after it is the task. This is the check whose absence
-//      made the header's "never proposes a command the repository cannot run"
-//      false: a manifest with `scripts: { lint: "…" }` and nothing else still
-//      got a proposed `build`. It is deliberately CONSERVATIVE about a task
-//      declared somewhere this reader cannot see (a workspace member, a runner's
-//      own config file), and the note says so, because withholding a row a
-//      human can add back beats proposing one that exits 1.
+//   1b. A TOKEN THE MANIFEST'S OWN `scripts` ANSWERS -- ARITY PLUS
+//      CORROBORATION. A step that matches a declared script's command word for
+//      word, differing only where the pack wrote a token, is answered from that
+//      script -- `node {archiveScript}` against `"resume:pdf": "node
+//      scripts/build-resume-pdf.mjs"` yields the path the repository itself
+//      runs. ARITY ALONE IS NOT ENOUGH, and that was a real defect: `node
+//      {archiveScript}` spells out ONE word and asks for one, so every
+//      one-argument `node` script in the manifest agreed with it, and a
+//      `"start": "node server.js"` answered the PDF-archive row. So a candidate
+//      whose literal words do not OUTNUMBER its token positions is answered
+//      only where the SCRIPT'S OWN KEY names the intent -- a word of the key
+//      appearing in the verb, in the token's name, or in the value that script
+//      would answer with, which is what makes `resume:pdf` -> `…-pdf.mjs`
+//      corroboration and `start` -> `server.js` a coincidence. `scriptAnswers`
+//      carries the full argument and the boundary case.
+//      TWO CORROBORATED MATCHES THAT DISAGREE ARE AN AMBIGUITY AND ARE
+//      WITHHELD, never resolved: rule 1 in this file's header is not suspended
+//      because the two candidates came from the same file. THE RULE IS OVER
+//      TOKENS, NOT OVER ONE TOKEN, and deliberately so: a manifest that spells
+//      the whole command out has stated something stronger about itself than
+//      any single field does, so a manager named in a script answers as well as
+//      one named in a field. What it may never do is answer a token from
+//      anywhere but this repository -- the pack contributes the SHAPE and never
+//      a value, which is the property the whole family rests on.
+//   2. THE EXECUTABLE, AND THE TOOL IT HANDS THE WORK TO. A step's `exe` must be
+//      the package manager the manifest names, or a package the manifest
+//      declares as a dependency, or -- the third route -- part of a step the
+//      manifest declares VERBATIM as one of its own scripts. Those are the only
+//      three ways `detect` can SEE that a repository carries a program, and "the
+//      marker matched so the tool must be here" is exactly the inference §2.6
+//      calls a warning rather than a proposal. The third route is the strongest
+//      of the three and is why it exists: a manifest whose `scripts` block
+//      spells this exact command is the repository stating that it runs THIS
+//      LINE, which outranks a guess from a dependency list that the line merely
+//      might use -- so a verbatim step skips this check and the task check both.
+//      AND THE CHECK FOLLOWS THE WORK ONE HOP FURTHER. `pnpm turbo run build`
+//      passes on `exe` the moment the manifest names pnpm, and says nothing
+//      about turbo, which is the program that has to be there; the same held for
+//      `pnpm exec biome check .`. So the three forms where a manager hands a step
+//      to something else -- `npx <tool>`, `<pm> exec <tool>`, `<pm> <tool> run
+//      <task>` -- are read one level in, and the tool must be a package the
+//      manifest declares. A scoped `@biomejs/biome` answers for `biome`: the
+//      scope is the publisher's, and matching only the exact string would
+//      withhold a row whose tool the repository plainly declares.
+//   3. THE TASK, AGAINST THE LIST ITS RUNNER WOULD ACTUALLY CONSULT. `run
+//      <task>` names a task, and WHO is being asked to run it is the word before
+//      `run`. `<pm> run <task>` asks the package manager, whose list is this
+//      manifest's `scripts`. `<pm> turbo run <task>` asks TURBO, whose list is
+//      its own `turbo.json` (`tasks`, or `pipeline` in turbo 1) -- a repository
+//      can declare the npm script and not the turbo task, or the reverse, and
+//      checking `scripts` for a turbo task validated the wrong list in both
+//      directions. Where nen cannot see the runner's list -- no `turbo.json`
+//      here, or a runner whose config filename nen does not know -- the row is
+//      WITHHELD saying which, because "nen could not check" must never render as
+//      "nen checked and it was fine". AND, for a row nen answered `{package}` in
+//      from this manifest's own `name`, the element that FOLLOWS that package
+//      name is the task that package must declare: `{package}`'s documented
+//      meaning is "one workspace package the command runs for", so everything
+//      before it is the manager's own filter syntax and what comes after it is
+//      the task. This is the check whose absence made the header's "never
+//      proposes a command the repository cannot run" false: a manifest with
+//      `scripts: { lint: "…" }` and nothing else still got a proposed `build`.
+//      It is deliberately CONSERVATIVE about a task declared somewhere this
+//      reader cannot see (a workspace member, a runner's own config file), and
+//      the note says so, because withholding a row a human can add back beats
+//      proposing one that exits 1.
 //
 // A WORKSPACE ROOT NEVER ANSWERS `{package}`. A manifest declaring `workspaces`
-// -- or sitting beside a `pnpm-workspace.yaml` -- is not itself the package a
-// per-package row runs for; it is the list of them. Substituting its own `name`
-// there would propose a command that runs the root against itself, which is a
-// different command from the N the repository actually runs, so the row is
-// withheld and the note NAMES THE MEMBERS nen could see, because "which of these,
-// and in what order" is the question the maintainer is being asked.
+// -- or sitting beside a `pnpm-workspace.yaml`, which is a FILENAME rather than
+// a tool this file has an opinion about, exactly as `next.config.mjs` is -- is
+// not itself the package a per-package row runs for; it is the list of them.
+// Substituting its own `name` there would propose a command that runs the root
+// against itself, which is a different command from the N the repository
+// actually runs, so the row is withheld and the note NAMES THE MEMBERS nen could
+// see, because "which of these, and in what order" is the question the
+// maintainer is being asked. The member list applies NEGATIONS after expansion
+// and names only directories that are there, because a list that includes the
+// one package the repository said to exclude, or one that names a directory the
+// tree does not have, is worse than no list at all.
 //
 // Every check that fails withholds ONE ROW and names it. Nothing here refuses
 // the scan, and nothing here writes.
@@ -496,11 +559,26 @@ const PACK_TOKEN_SET: ReadonlySet<string> = new Set(PACK_TOKENS);
  * The tokens whose value a DECLARATION supplies, as the pack itself classifies
  * them.
  *
- * Read off `PLACEHOLDERS[].kind` rather than listed here, because the one token
- * of the other kind (`host-conditional`) is one nen resolves for itself from
- * the platform it is running on -- so a probe naming it is not a probe nen has
- * to decline to propose a precondition for, and hard-coding either list here
- * would be this file re-deciding a classification the catalogue already makes.
+ * Read off `PLACEHOLDERS[].kind` rather than listed here, because hard-coding
+ * either list would be this file re-deciding a classification the catalogue
+ * already makes.
+ *
+ * IT DECIDES WORDING AND NOTHING ELSE, and that is a correction. It was a GATE:
+ * a toolchain probe naming the one `host-conditional` token, `{gw}`, was
+ * treated as a probe nen had no need to decline, on the strength of the pack's
+ * own prose calling it "THE ONE TOKEN NEN RESOLVES ITSELF". The program says
+ * otherwise -- ./render.ts lists `{gw}` in REFUSED_PLACEHOLDERS and ./purity.
+ * test.ts pins that list against `PLACEHOLDERS` in BOTH directions, so every
+ * token the pack has is a token the executor refuses, `{gw}` included. The
+ * effect of believing the prose was that `gradle-android` and `compose-desktop`
+ * -- the two stacks whose every command goes through that wrapper -- got no
+ * note at all about the one toolchain row nen was declining to propose a
+ * precondition for.
+ *
+ * THE RULE THIS FILE FOLLOWS, STATED ONCE: where the catalogue's prose and the
+ * executor's behaviour disagree about what nen does, the behaviour is the fact.
+ * A note is a promise to a reader, and it has to be checkable against the code
+ * that will run.
  */
 const DECLARATION_TOKENS: ReadonlySet<string> = new Set(
   PLACEHOLDERS.filter((placeholder): boolean => placeholder.kind === "declaration-supplied").map(
@@ -516,6 +594,14 @@ interface WorkspaceShape {
   readonly patterns: readonly string[];
   /** Every member nen could resolve and name, in pattern order. */
   readonly members: readonly string[];
+  /**
+   * The patterns nen could not expand, verbatim -- a `**`, a mid-segment glob.
+   * NAMED IN THE NOTE rather than silently dropped, because a pattern nen could
+   * not read is the difference between "these are the members" and "these are
+   * the members nen could see", and a NEGATION nen could not read is worse
+   * still: it means the member list may name a package the repository excludes.
+   */
+  readonly unread: readonly string[];
 }
 
 interface Manifest {
@@ -538,31 +624,79 @@ interface Manifest {
   readonly workspace: WorkspaceShape | null;
   readonly declares: (name: string) => boolean;
   readonly scripts: ReadonlySet<string>;
-  /** Each declared script's command, split on whitespace, in declared order. */
-  readonly scriptWords: readonly (readonly string[])[];
+  /**
+   * Each declared script, KEY INCLUDED, its command split on whitespace, in
+   * declared order. The key travels with the words because it is half the
+   * evidence: see `scriptAnswers`, where a script's own name is what
+   * corroborates a match a thin step could never corroborate by itself.
+   */
+  readonly scriptWords: readonly DeclaredScript[];
+  /** The task list of a non-manager runner, when nen can read one. */
+  readonly runnerTasks: (runner: string) => RunnerTasks;
 }
 
-/** `"packages/*"` -> every directory under `packages/`; a literal path -> itself. */
+interface DeclaredScript {
+  readonly key: string;
+  readonly words: readonly string[];
+}
+
+/**
+ * What nen can see of a task runner's own task list.
+ *
+ * `kind: "unknown"` is the honest answer for a runner whose config filename nen
+ * does not know, and `kind: "absent"` for one whose file is simply not here.
+ * Both withhold; neither pretends the package.json scripts are the list.
+ */
+type RunnerTasks =
+  | { readonly kind: "read"; readonly file: string; readonly tasks: ReadonlySet<string> }
+  | { readonly kind: "absent"; readonly file: string }
+  | { readonly kind: "unknown" };
+
+/**
+ * `"packages/*"` -> every directory under `packages/`; a literal path -> itself.
+ *
+ * ONLY A TRAILING `*` IS EXPANDED, and everything richer is left alone rather
+ * than half-understood: a `**` and a mid-segment glob each mean something a
+ * partial reader would get wrong. The leading `!` of a NEGATION is stripped by
+ * the caller before this is asked, because a negation is the same pattern
+ * language pointing the other way -- see `readWorkspace`.
+ */
 function expandWorkspacePattern(
   laneDirectory: string,
   pattern: string,
 ): readonly string[] {
-  // ONLY A TRAILING `*` IS EXPANDED, and everything richer is left alone rather
-  // than half-understood: `**`, a `!negation` and a mid-segment glob each mean
-  // something a partial reader would get wrong, and this list exists to be
-  // NAMED in a note, not to be authoritative.
+  if (!isReadablePattern(pattern)) return [];
   const segments = pattern.split("/");
-  const last = segments[segments.length - 1];
-  if (last === undefined || pattern.includes("**") || pattern.startsWith("!")) return [];
-  if (last !== "*") {
-    return pattern.includes("*") ? [] : [pattern];
-  }
+  if (segments[segments.length - 1] !== "*") return [pattern];
   const parent = segments.slice(0, -1).join("/");
-  if (parent === "" || parent.includes("*")) return [];
   return listDirectory(join(laneDirectory, ...segments.slice(0, -1)))
     .filter((entry): boolean => entry.directory && !SKIP.has(entry.name))
-    .map((entry): string => `${parent}/${entry.name}`)
-    .sort((a, b): number => a.localeCompare(b));
+    .map((entry): string => `${parent}/${entry.name}`);
+}
+
+/**
+ * Whether nen understands this pattern's SHAPE (the leading `!` already gone).
+ *
+ * Kept apart from the expansion because "nen cannot read this pattern" and
+ * "this pattern matched nothing on disk" are different facts and the note says
+ * only the first: an `apps/*` over an empty `apps/` was read perfectly well.
+ */
+function isReadablePattern(pattern: string): boolean {
+  if (pattern === "" || pattern.includes("**")) return false;
+  const segments = pattern.split("/");
+  if (segments[segments.length - 1] !== "*") return !pattern.includes("*");
+  const parent = segments.slice(0, -1).join("/");
+  return parent !== "" && !parent.includes("*");
+}
+
+/** Whether a resolved member path is a directory that is actually there. */
+function memberExists(laneDirectory: string, memberPath: string): boolean {
+  const segments = memberPath.split("/");
+  const name = segments[segments.length - 1];
+  if (name === undefined || name === "") return false;
+  return listDirectory(join(laneDirectory, ...segments.slice(0, -1))).some(
+    (entry): boolean => entry.directory && entry.name === name,
+  );
 }
 
 /** The name a resolved member states for itself, or its path when it states none. */
@@ -586,13 +720,51 @@ function readWorkspace(
   laneDirectory: string,
   document: Record<string, unknown> | null,
 ): WorkspaceShape | null {
-  const shape = (source: string, patterns: readonly string[]): WorkspaceShape => ({
-    source,
-    patterns,
-    members: patterns
-      .flatMap((pattern): readonly string[] => expandWorkspacePattern(laneDirectory, pattern))
-      .map((memberPath): string => memberName(laneDirectory, memberPath)),
-  });
+  // THE THREE THINGS THE MEMBER LIST IS FOR: it is printed in a note, it is the
+  // question the maintainer is being asked ("which of these, and in what
+  // order"), and it is therefore a list that must not name a package this
+  // repository does not have or has explicitly excluded.
+  //
+  //   * NEGATIONS ARE APPLIED AFTER EXPANSION, never skipped as unreadable. A
+  //     `!apps/legacy` is not a pattern nen cannot read -- it is the same
+  //     pattern language pointing the other way, and dropping it while still
+  //     expanding `apps/*` named the one package the repository had just said
+  //     to leave out.
+  //   * ONLY DIRECTORIES THAT EXIST ARE LISTED. A literal pattern is taken
+  //     verbatim, so `vendor/one` used to be reported as a member of a tree
+  //     with no `vendor/` at all -- nen reading a file back to the reader as
+  //     though it were a fact about the disk.
+  //   * A PATTERN NEN COULD NOT EXPAND IS NAMED, not silently dropped, and a
+  //     negation among them is the one that matters: it means this list may
+  //     still name something the repository excludes.
+  const shape = (source: string, patterns: readonly string[]): WorkspaceShape => {
+    const expand = (pattern: string): readonly string[] =>
+      expandWorkspacePattern(laneDirectory, pattern);
+    const negations = patterns.filter((pattern): boolean => pattern.startsWith("!"));
+    const excluded = new Set(
+      negations.flatMap((pattern): readonly string[] => expand(pattern.slice(1))),
+    );
+    const seen = new Set<string>();
+    const members: string[] = [];
+    for (const pattern of patterns) {
+      if (pattern.startsWith("!")) continue;
+      for (const memberPath of expand(pattern)) {
+        if (excluded.has(memberPath) || seen.has(memberPath)) continue;
+        if (!memberExists(laneDirectory, memberPath)) continue;
+        seen.add(memberPath);
+        members.push(memberName(laneDirectory, memberPath));
+      }
+    }
+    return {
+      source,
+      patterns,
+      members,
+      unread: patterns.filter(
+        (pattern): boolean =>
+          !isReadablePattern(pattern.startsWith("!") ? pattern.slice(1) : pattern),
+      ),
+    };
+  };
 
   const declared = document?.["workspaces"];
   const fromManifest = Array.isArray(declared)
@@ -640,10 +812,10 @@ function readManifest(laneDirectory: string): Manifest {
       ? (scriptBlock as Record<string, unknown>)
       : {};
   const scripts = new Set(Object.keys(scriptRecord));
-  const scriptWords = Object.values(scriptRecord)
-    .filter((command): command is string => typeof command === "string")
-    .map((command): readonly string[] => command.trim().split(/\s+/))
-    .filter((words): boolean => words.length > 0 && words[0] !== "");
+  const scriptWords = Object.entries(scriptRecord)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    .map(([key, command]): DeclaredScript => ({ key, words: command.trim().split(/\s+/) }))
+    .filter((script): boolean => script.words.length > 0 && script.words[0] !== "");
   const name = document?.["name"];
   // The EXECUTABLE is the pin with its trailing `@<version>` stripped, and the
   // PIN is the string verbatim -- the pack keeps the two apart because one of
@@ -665,10 +837,44 @@ function readManifest(laneDirectory: string): Manifest {
     packageManagerIssue,
     packageName: typeof name === "string" && name !== "" ? name : null,
     workspace: readWorkspace(laneDirectory, document),
-    declares: (dependency): boolean => dependsOn(document, dependency),
+    declares: (dependency): boolean => carriesDependency(document, dependency),
     scripts,
     scriptWords,
+    runnerTasks: (runner): RunnerTasks => readRunnerTasks(laneDirectory, runner),
   };
+}
+
+/**
+ * The config file a task runner keeps its task list in.
+ *
+ * A FILENAME, which is the one class of fact this module's header argues it may
+ * carry: `turbo.json` means the same thing in every repository on earth, the
+ * same way `next.config.mjs` does. What it may NOT carry is what the tasks
+ * should be -- those are read out of the repository's own file, or not read at
+ * all. A runner absent from this table gets `kind: "unknown"` and the row is
+ * withheld saying so, which is the honest answer rather than a silent pass.
+ */
+const RUNNER_CONFIG: Readonly<Record<string, string>> = { turbo: "turbo.json" };
+
+/**
+ * The tasks a runner's own config declares, when nen can read one.
+ *
+ * BOTH SPELLINGS OF THE SAME STATEMENT are read: `tasks` (turbo 2) and
+ * `pipeline` (turbo 1). A file that is present but unreadable answers `read`
+ * with an empty set rather than `absent`, because "the file is there and nen
+ * could not parse it" must not read as "this repository has no such runner".
+ */
+function readRunnerTasks(laneDirectory: string, runner: string): RunnerTasks {
+  const file = RUNNER_CONFIG[runner];
+  if (file === undefined) return { kind: "unknown" };
+  if (readText(join(laneDirectory, file)) === null) return { kind: "absent", file };
+  const document = readJson(join(laneDirectory, file));
+  const block = document?.["tasks"] ?? document?.["pipeline"];
+  const tasks =
+    typeof block === "object" && block !== null && !Array.isArray(block)
+      ? Object.keys(block as Record<string, unknown>)
+      : [];
+  return { kind: "read", file, tasks: new Set(tasks) };
 }
 
 interface ProposedStep {
@@ -692,24 +898,88 @@ function substitute(token: string, manifest: Manifest): string {
   return out;
 }
 
+/** Words a name is made of: separators and camel humps, lowercased, 3+ letters. */
+function wordsOf(text: string): readonly string[] {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word): boolean => word.length >= 3);
+}
+
+/** What `scriptAnswers` found: the answers it stands behind, and the near misses. */
+interface ScriptMatch {
+  /** Every distinct CORROBORATED answer, in declared order. */
+  readonly answers: readonly ReadonlyMap<string, string>[];
+  /**
+   * `'<key>': <command>` for every script that agreed by ARITY and was not
+   * corroborated. Named in the note, because "no script answers this" and "a
+   * script has the same shape and nothing backs it up" are different facts, and
+   * the second is the one a maintainer can act on in one edit.
+   */
+  readonly nearMisses: readonly string[];
+}
+
 /**
- * Every distinct answer this manifest's own `scripts` block gives one step.
+ * Every answer this manifest's own `scripts` block gives one step -- ARITY PLUS
+ * CORROBORATION, and the second half is the whole of this function's argument.
  *
- * A candidate script is one whose command has the SAME WORD COUNT and agrees
- * with the step at every position except the ones where the pack wrote a whole
- * token; those positions are the answer. The word-count equality is what keeps
- * this from being a fuzzy match: `node {archiveScript}` matches `node
- * scripts/build-resume-pdf.mjs` and matches nothing that merely mentions it,
- * and a compound script (`a && b`) has more words than any single-step row and
- * so matches none.
+ * A CANDIDATE is a script whose command has the same word count and agrees with
+ * the step at every position except the ones where the pack wrote a whole token;
+ * those positions are the answer. For a step that spells most of itself out that
+ * is a strong match: `{pm} turbo run build` states three words and asks for one,
+ * so a script agreeing with it has agreed about `turbo`, `run` and `build`.
+ *
+ * FOR A THIN STEP IT IS NOT A MATCH AT ALL, and this was a real defect rather
+ * than a hypothetical one. `node {archiveScript}` states ONE word and asks for
+ * one, so EVERY one-argument `node` script in the manifest agrees with it:
+ * against `scripts: { "start": "node server.js" }` the pack's PDF-archive row
+ * was answered `node server.js`, carrying the catalogue's own `why` about
+ * producing a PDF. Arity cannot tell that apart from the real thing.
+ *
+ * So a candidate must also be CORROBORATED, by one of two routes, and both take
+ * their evidence from THE REPOSITORY -- the pack contributes the shape and never
+ * a value, which is the property the whole family rests on:
+ *
+ *   1. THE STEP'S OWN SHAPE. Its literal words OUTNUMBER its token positions,
+ *      and there are at least two of them. The step has then said more about
+ *      itself than nen is asking for, and the agreement is about content.
+ *   2. THE SCRIPT'S KEY NAMES THE INTENT. A word of the script's own key (split
+ *      on `:`, `-`, `_`, `.` and camel humps, three letters or more) appears in
+ *      the step's vocabulary: the VERB being proposed, the words of a token the
+ *      step still carries, or the words of the value that script would answer
+ *      with. The last is the one that carries the real case --
+ *      `"resume:pdf": "node scripts/build-resume-pdf.mjs"` corroborates itself,
+ *      because this repository named the script after the file it runs, while
+ *      `"start": "node server.js"` says nothing that ties it to an archive.
+ *
+ * THE 1:1 SHAPE IS THE BOUNDARY, AND IT IS DELIBERATE. `node {archiveScript}`
+ * has one literal word and one token, so route 1 never saves it and route 2
+ * always decides it. A step with two literals and two tokens sits in the same
+ * place for the same reason: nen would be guessing as much as the repository
+ * stated.
+ *
+ * AND CORROBORATION IS PART OF BEING A CANDIDATE -- applied BEFORE the ambiguity
+ * test, not after it. That is the one place this could read as resolving an
+ * ambiguity and does not: a script nothing corroborates was never a competing
+ * answer, it was a collision of word counts. Two CORROBORATED candidates that
+ * disagree are still an ambiguity and are still withheld; rule 1 of this file's
+ * header is not suspended because both arrived from one file.
  */
-function scriptAnswers(
-  step: ProposedStep,
-  manifest: Manifest,
-): readonly ReadonlyMap<string, string>[] {
+function scriptAnswers(step: ProposedStep, manifest: Manifest, verb: string): ScriptMatch {
   const words = [step.exe, ...step.argv];
+  const tokenPositions = words.filter((word): boolean => PACK_TOKEN_SET.has(word)).length;
+  const literals = words.length - tokenPositions;
+  const shapeCorroborates = literals >= 2 && literals > tokenPositions;
+  const vocabulary = new Set([
+    ...wordsOf(verb),
+    ...words.flatMap((word): readonly string[] => (PACK_TOKEN_SET.has(word) ? wordsOf(word) : [])),
+  ]);
+
   const found = new Map<string, ReadonlyMap<string, string>>();
-  for (const parts of manifest.scriptWords) {
+  const nearMisses: string[] = [];
+  for (const script of manifest.scriptWords) {
+    const parts = script.words;
     if (parts.length !== words.length) continue;
     const answer = new Map<string, string>();
     let usable = true;
@@ -733,26 +1003,51 @@ function scriptAnswers(
       answer.set(word, part);
     }
     if (!usable || answer.size === 0) continue;
+    if (!shapeCorroborates && !keyCorroborates(script.key, answer, vocabulary)) {
+      nearMisses.push(`'${script.key}': ${parts.join(" ")}`);
+      continue;
+    }
     // TWO SCRIPTS GIVING THE SAME ANSWER ARE ONE ANSWER, not an ambiguity, so
     // the map is keyed by the answer itself rather than by the script. The
     // separator is the unit separator because it cannot appear in a shell word:
     // a printable one would let `{a} = "x y"` and `{a} = "x", {b} = "y"` collide
     // into one key and hide a real disagreement.
     const key = [...answer.entries()]
-      .sort(([a], [b]): number => a.localeCompare(b))
+      .sort(([a], [b]): number => compareBytes(a, b))
       .map(([token, value]): string => `${token}\u001f${value}`)
       .join("\u001f");
     if (!found.has(key)) found.set(key, answer);
   }
-  return [...found.values()];
+  return { answers: [...found.values()], nearMisses };
+}
+
+/**
+ * Route 2: a word of the script's KEY appears in the step's own vocabulary.
+ *
+ * The answer's own words are part of that vocabulary, which is what makes
+ * `resume:pdf` -> `scripts/build-resume-pdf.mjs` corroboration rather than
+ * coincidence: the repository stated the same word twice, in the name and in
+ * the path, and nen is reading its agreement with itself.
+ */
+function keyCorroborates(
+  key: string,
+  answer: ReadonlyMap<string, string>,
+  vocabulary: ReadonlySet<string>,
+): boolean {
+  const wanted = new Set([
+    ...vocabulary,
+    ...[...answer.values()].flatMap((value): readonly string[] => wordsOf(value)),
+  ]);
+  return wordsOf(key).some((word): boolean => wanted.has(word));
 }
 
 /** Whether the manifest declares this step, word for word, as one of its scripts. */
 function runsVerbatim(step: ProposedStep, manifest: Manifest): boolean {
   const words = [step.exe, ...step.argv];
   return manifest.scriptWords.some(
-    (parts): boolean =>
-      parts.length === words.length && parts.every((part, index): boolean => part === words[index]),
+    (script): boolean =>
+      script.words.length === words.length &&
+      script.words.every((part, index): boolean => part === words[index]),
   );
 }
 
@@ -775,13 +1070,73 @@ function leftoverTokens(steps: readonly ProposedStep[]): readonly string[] {
   return PACK_TOKENS.filter((token): boolean => text.includes(token));
 }
 
-/** The task an argv's `run <task>` names, or null when it names none. */
-function runTask(argv: readonly string[]): string | null {
-  const at = argv.indexOf("run");
+/** What a `run <task>` in a step names, and WHO is being asked to run it. */
+interface RunClause {
+  /** The program the task is handed to: the word before `run`. */
+  readonly runner: string;
+  readonly task: string;
+}
+
+/**
+ * The `<runner> run <task>` a step spells out, or null when it spells none.
+ *
+ * THE RUNNER IS READ, NOT ASSUMED, and that is the correction. The old check
+ * looked up every `run <task>` in `package.json`'s `scripts` -- which is right
+ * for `pnpm run build` and wrong for `pnpm turbo run build`, where `build` is a
+ * TURBO PIPELINE NAME and turbo would not look in `scripts` for it either. Two
+ * different lists, one syntax; reading the word before `run` is what tells them
+ * apart.
+ */
+function runClause(step: ProposedStep): RunClause | null {
+  const words = [step.exe, ...step.argv];
+  const at = words.indexOf("run");
   // `<tool> run` with nothing after it is a MODE, not a task -- a test runner
-  // told to run once instead of watching. There is nothing to look up.
-  if (at === -1 || at === argv.length - 1) return null;
-  return argv[at + 1] ?? null;
+  // told to run once instead of watching. There is nothing to look up. And a
+  // `run` in first position has no runner before it to read.
+  if (at < 1 || at === words.length - 1) return null;
+  const runner = words[at - 1] ?? "";
+  const task = words[at + 1] ?? "";
+  return runner === "" || task === "" ? null : { runner, task };
+}
+
+/**
+ * The TOOL a manager step hands the work to, or null when it hands it to none.
+ *
+ * WHY THE EXECUTABLE CHECK IS NOT ENOUGH ON ITS OWN. `pnpm turbo run build`
+ * passes it the moment `package.json` names pnpm as its `packageManager` -- and
+ * says nothing whatever about turbo, which is the program that has to be there.
+ * The same held for `pnpm exec biome check .`: both rows were proposed against a
+ * manifest declaring neither tool, and both exit non-zero the first time a human
+ * runs them. So the check follows the work one hop further, into the three forms
+ * a manager hands a step to something else:
+ *
+ *     npx <tool> …          <pm> exec <tool> …          <pm> <tool> run <task>
+ *
+ * and the tool must be a package the manifest declares (`carriesDependency`, so
+ * a scoped `@biomejs/biome` answers for `biome`).
+ *
+ * WHAT IT DELIBERATELY DOES NOT READ is the bare `<pm> <word>` form where the
+ * word is not a runner: `pnpm --filter <package> test:coverage` hands the work
+ * to the package's own script, and `pnpm install` names a subcommand. Reading
+ * either as a tool would require this file to carry a package manager's
+ * vocabulary -- a table that drifts and that no test could notice was stale --
+ * so it reads only the three shapes above, each of which is a form rather than
+ * a name.
+ */
+function managerTool(step: ProposedStep, manifest: Manifest): string | null {
+  const words = [step.exe, ...step.argv];
+  const manager = manifest.packageManager?.executable;
+  const isManager = step.exe === "npx" || (manager !== undefined && step.exe === manager);
+  if (!isManager) return null;
+  if (step.exe === "npx") {
+    return words.slice(1).find((word): boolean => !word.startsWith("-")) ?? null;
+  }
+  const handoff = words.findIndex((word): boolean => word === "exec" || word === "dlx");
+  if (handoff > 0) {
+    return words.slice(handoff + 1).find((word): boolean => !word.startsWith("-")) ?? null;
+  }
+  const clause = runClause(step);
+  return clause !== null && clause.runner !== step.exe ? clause.runner : null;
 }
 
 /**
@@ -800,9 +1155,72 @@ function packageTask(argv: readonly string[], packageName: string): string | nul
   return argv[at + 1] ?? null;
 }
 
+/**
+ * What is wrong with a `<runner> run <task>`, or null when nothing is.
+ *
+ * TWO LISTS, ONE SYNTAX, and confusing them is how the check validated the
+ * wrong thing. `pnpm run build` asks the PACKAGE MANAGER for a `build` script,
+ * so `package.json`'s `scripts` is the list. `pnpm turbo run build` asks TURBO
+ * for a `build` task, and turbo reads its own `turbo.json` -- a repository can
+ * have the script and not the task, or the task and not the script, and the old
+ * check passed the row either way by looking only at `scripts`.
+ *
+ * WHERE NEN CANNOT SEE THE LIST IT WITHHOLDS AND SAYS SO, in both shapes: a
+ * runner whose config file is simply not here (turbo would fail on this tree
+ * too), and a runner whose config file nen does not know how to find at all.
+ * "nen could not check" must never render as "nen checked and it was fine" --
+ * that is the same fail-closed rule the rest of this file is built on.
+ */
+function runnerTaskProblem(
+  clause: RunClause,
+  step: ProposedStep,
+  manifest: Manifest,
+): string | null {
+  const line = [step.exe, ...step.argv].join(" ");
+  if (clause.runner === step.exe) {
+    return manifest.scripts.has(clause.task)
+      ? null
+      : `its reference command runs the task '${clause.task}', and this lane's package.json declares no such script`;
+  }
+  const tasks = manifest.runnerTasks(clause.runner);
+  if (tasks.kind === "unknown") {
+    return `'${line}' hands the task '${clause.task}' to '${clause.runner}' rather than to the package manager, and nen does not know where '${clause.runner}' keeps its task list -- a '${clause.runner}' task is a name in that tool's own config, not a package.json script, so nen can confirm nothing here and withholds rather than checking the wrong list`;
+  }
+  if (tasks.kind === "absent") {
+    return `'${line}' hands the task '${clause.task}' to '${clause.runner}', whose task list lives in ${tasks.file} -- and this lane has none for nen to read. A '${clause.runner}' task is not a package.json script, so nen withholds rather than confirming this row against the wrong list`;
+  }
+  return tasks.tasks.has(clause.task)
+    ? null
+    : `'${line}' hands the task '${clause.task}' to '${clause.runner}', and this lane's ${tasks.file} declares no such task (${
+        tasks.tasks.size === 0
+          ? "it declares none nen could read"
+          : `it declares: ${[...tasks.tasks].sort(compareBytes).join(", ")}`
+      })`;
+}
+
 interface ProposedVerbs {
   readonly verbs: Readonly<Record<string, unknown>>;
   readonly notes: readonly string[];
+}
+
+/**
+ * A proposed seat's `unsupported` text: SELF-DESCRIBING, with the pack quoted.
+ *
+ * The executor prints an `unsupported` row back as "The declaration's own
+ * reason: <text>" (./render.ts), and for a row `detect` wrote that sentence is
+ * false twice over. The text is not the declaration's own reason -- it is a
+ * catalogue's observation about OTHER repositories, and attributing it to this
+ * maintainer is how a placeholder starts reading as a decision. And on its own
+ * it is circular: "no test script and no test-runner dependency" answers a
+ * question about somebody else's tree, in a file about this one.
+ *
+ * So the seat says what it is before it says anything else, names the program
+ * that wrote it and why, and marks the quoted half AS the quote. `PROPOSED SEAT
+ * -- replace it` is the first thing read in the file, in `--json`, and in the
+ * exit-4 refusal, which are the three places this string is ever seen.
+ */
+function seatReason(verb: string, stack: string, packReason: string): string {
+  return `PROPOSED SEAT -- replace it. nen shu detect wrote this row because the reference pack proposes no command for '${verb}' on ${stack}; nen never invents one. The pack's own reason: ${packReason}`;
 }
 
 /** The reason clause a leftover `{package}` earns, or "" when it earns none. */
@@ -815,7 +1233,11 @@ function packageReason(manifest: Manifest): string {
       workspace.members.length === 0
         ? "none nen could resolve (only a literal path and a trailing '*' are expanded)"
         : workspace.members.join(", ")
-    }. Which of them this repository means, and in what order, is a list only it can state`;
+    }. Which of them this repository means, and in what order, is a list only it can state${
+      workspace.unread.length === 0
+        ? ""
+        : `. nen could not read ${workspace.unread.join(", ")} -- only a literal path and a trailing '*' are expanded, so a member matched only by one of those is missing from that list, and a NEGATION among them means the list may still name a package this repository excludes`
+    }`;
   }
   return manifest.present
     ? " -- package.json states no 'name' of its own, which is where nen reads a single-package lane's package name from"
@@ -848,7 +1270,18 @@ function packageReason(manifest: Manifest): string {
  *   * The reason is QUOTED, never rewritten, so it is the catalogue's sentence
  *     a maintainer reads -- and the executor prints that same sentence back at
  *     exit 4, which is what makes an `unsupported` row a working answer rather
- *     than a silence.
+ *     than a silence. IT IS QUOTED INSIDE A SENTENCE OF NEN'S OWN, and that
+ *     wrapper is not decoration. ./render.ts prints an `unsupported` row as
+ *     "The declaration's own reason: <text>", which is true of a row a human
+ *     wrote and a lie about this one -- the quoted half is a THIRD PARTY's
+ *     observation about somebody else's repositories, and reading it back as
+ *     the maintainer's own reason is circular: the file says the verb is
+ *     unsupported because the file says so. So the row states, in this order,
+ *     WHAT IT IS ("PROPOSED SEAT -- replace it"), WHO WROTE IT and WHY (`nen
+ *     shu detect`, because the pack proposes no command for this verb on this
+ *     stack), and only then the pack's sentence, marked as the pack's. A
+ *     maintainer who replaces the row writes their own reason and the wrapper
+ *     goes with it, which is exactly the signal that the seat was taken.
  *   * A `declared-only` cell becomes `unsupported` TOO, because a declaration
  *     has three forms and none of them is "the reference disagrees with
  *     itself". The row is the visible seat for this repository's answer, the
@@ -873,20 +1306,23 @@ function proposeVerbs(
       noCommand.push(`${verb} (${cell.summary})`);
       if (cell.kind === "declared-only") declaredOnly.push(verb);
       verbs[verb] = {
-        unsupported:
+        unsupported: seatReason(
+          verb,
+          profile.id,
           cell.kind === "declared-only"
             ? cell.reason
             : /* c8 ignore next -- the pack's reader gives an `unsupported` cell an `unsupported` invocation */
               cell.invocation.kind === "unsupported"
               ? cell.invocation.reason
               : cell.summary,
+        ),
       };
       continue;
     }
     /* c8 ignore next 5 -- `delegated` never appears among the command verbs */
     if (cell.kind === "delegated") {
       noCommand.push(`${verb} (delegates to ${cell.delegatesTo.join(", ")})`);
-      verbs[verb] = { unsupported: cell.why };
+      verbs[verb] = { unsupported: seatReason(verb, profile.id, cell.why) };
       continue;
     }
 
@@ -898,25 +1334,27 @@ function proposeVerbs(
     );
 
     // The manifest's own `scripts` block, asked once per step for the tokens the
-    // fields above could not answer. TWO ANSWERS THAT DISAGREE END THE ROW: this
-    // file resolves no ambiguity, and one arriving from inside a single file is
-    // not a different kind of ambiguity.
+    // fields above could not answer -- ARITY PLUS CORROBORATION (`scriptAnswers`
+    // carries the argument). TWO CORROBORATED ANSWERS THAT DISAGREE END THE ROW:
+    // this file resolves no ambiguity, and one arriving from inside a single
+    // file is not a different kind of ambiguity.
     const steps: ProposedStep[] = [];
+    const nearMisses: string[] = [];
     let ambiguity: string | null = null;
     for (const step of substituted) {
       if (leftoverTokens([step]).length === 0) {
         steps.push(step);
         continue;
       }
-      const answers = scriptAnswers(step, manifest);
+      const { answers, nearMisses: missed } = scriptAnswers(step, manifest, verb);
       if (answers.length > 1) {
-        ambiguity ??= `'${verb}' withheld: ${answers.length} of this lane's own scripts match its reference command '${[
+        ambiguity ??= `'${verb}' withheld: ${answers.length} of this lane's own scripts share the shape of its reference command '${[
           step.exe,
           ...step.argv,
-        ].join(" ")}' and they disagree about ${leftoverTokens([step]).join(", ")} (${answers
+        ].join(" ")}' and corroborate it, and they disagree about ${leftoverTokens([step]).join(", ")} (${answers
           .map((answer): string =>
             [...answer.entries()]
-              .sort(([a], [b]): number => a.localeCompare(b))
+              .sort(([a], [b]): number => compareBytes(a, b))
               .map(([token, value]): string => `${token} = ${value}`)
               .join(", "),
           )
@@ -928,6 +1366,7 @@ function proposeVerbs(
       }
       const answer = answers[0];
       if (answer === undefined) {
+        nearMisses.push(...missed);
         steps.push(step);
         continue;
       }
@@ -948,6 +1387,13 @@ function proposeVerbs(
             : " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
           : "",
         leftover.includes(PACKAGE_NAME) ? packageReason(manifest) : "",
+        // THE NEAR MISS IS NAMED. A script that agreed by word count and that
+        // nothing corroborated is the most useful thing nen can say here: it is
+        // the row a maintainer either confirms in one edit or recognises as the
+        // coincidence it was.
+        nearMisses.length === 0
+          ? ""
+          : ` -- ${nearMisses.length === 1 ? "one script shares" : `${nearMisses.length} scripts share`} its shape (${nearMisses.join("; ")}) and nothing corroborates the match: a step this thin agrees with every script of the same length, so nen answers it only from a script whose own KEY names what the row is for`,
       ].join("");
       notes.push(
         `'${verb}' withheld: its reference command still names ${leftover.join(", ")}, which only this repository can answer${clauses}. nen never proposes an unsubstituted token: a guessed argument is a different command.`,
@@ -955,12 +1401,18 @@ function proposeVerbs(
       continue;
     }
 
-    const unknownExe = steps.find(
-      (step): boolean =>
-        step.exe !== manifest.packageManager?.executable &&
-        !manifest.declares(step.exe) &&
-        !runsVerbatim(step, manifest),
-    );
+    // THE EXECUTABLE CHECK, and then the same question one hop further in. A
+    // step the manifest spells out VERBATIM as one of its own scripts skips both
+    // and the task check below: that route is the repository stating it runs
+    // THIS LINE, which is stronger evidence than any list nen could consult
+    // about the line's parts.
+    const unconfirmed = steps.find((step): boolean => !runsVerbatim(step, manifest));
+    const unknownExe =
+      unconfirmed !== undefined &&
+      unconfirmed.exe !== manifest.packageManager?.executable &&
+      !manifest.declares(unconfirmed.exe)
+        ? unconfirmed
+        : undefined;
     if (unknownExe !== undefined) {
       notes.push(
         `'${verb}' withheld: it runs '${unknownExe.exe}', ${
@@ -971,23 +1423,48 @@ function proposeVerbs(
       );
       continue;
     }
+    const unknownTool = steps
+      .filter((step): boolean => !runsVerbatim(step, manifest))
+      .map((step): { step: ProposedStep; tool: string | null } => ({
+        step,
+        tool: managerTool(step, manifest),
+      }))
+      .find(({ tool }): boolean => tool !== null && !manifest.declares(tool));
+    if (unknownTool !== undefined && unknownTool.tool !== null) {
+      notes.push(
+        `'${verb}' withheld: '${[unknownTool.step.exe, ...unknownTool.step.argv].join(" ")}' asks the package manager to run '${unknownTool.tool}', and this lane's package.json declares no such dependency. The manager being present says nothing about the tool it hands the work to -- that is the program that has to be there, and a tool the project does not visibly carry is a warning, never a proposal.`,
+      );
+      continue;
+    }
 
-    // THE TASK CHECK, over both shapes an argv names a task in. The per-package
-    // one applies only where nen ANSWERED `{package}` from this manifest, so a
-    // lane that never carried the token is never asked about a task it has no
-    // reason to declare.
+    // THE TASK CHECK, over both shapes an argv names a task in, and against the
+    // list the RUNNER would actually consult. The per-package one applies only
+    // where nen ANSWERED `{package}` from this manifest, so a lane that never
+    // carried the token is never asked about a task it has no reason to declare.
     const answeredPackage = leftoverTokens(stepsOfCell(cell)).includes(PACKAGE_NAME)
       ? packageAnswer(manifest)
       : null;
-    const missingScript = steps
-      .flatMap((step): readonly (string | null)[] => [
-        runTask(step.argv),
-        answeredPackage === null ? null : packageTask(step.argv, answeredPackage),
-      ])
-      .find((task): boolean => task !== null && !manifest.scripts.has(task));
-    if (missingScript !== undefined && missingScript !== null) {
+    const taskProblem = steps
+      .filter((step): boolean => !runsVerbatim(step, manifest))
+      .flatMap((step): readonly string[] => {
+        const problems: string[] = [];
+        const clause = runClause(step);
+        if (clause !== null) {
+          const missing = runnerTaskProblem(clause, step, manifest);
+          if (missing !== null) problems.push(missing);
+        }
+        const task = answeredPackage === null ? null : packageTask(step.argv, answeredPackage);
+        if (task !== null && !manifest.scripts.has(task)) {
+          problems.push(
+            `its reference command asks the package '${answeredPackage}' for the task '${task}', and this lane's package.json declares no such script`,
+          );
+        }
+        return problems;
+      });
+    const missingTask = taskProblem[0];
+    if (missingTask !== undefined) {
       notes.push(
-        `'${verb}' withheld: its reference command runs the task '${missingScript}', and this lane's package.json declares no such script. If the task is declared somewhere nen does not read -- a workspace member, a task runner's own config -- add the row by hand; a verb the project does not visibly carry is a warning, never a proposal.`,
+        `'${verb}' withheld: ${missingTask}. If the task is declared somewhere nen does not read -- a workspace member, a task runner's own config -- add the row by hand; a verb the project does not visibly carry is a warning, never a proposal.`,
       );
       continue;
     }
@@ -1021,22 +1498,36 @@ function proposeVerbs(
   }
 
   // WHAT NEN WILL NOT PROPOSE A PRECONDITION FOR, said out loud. A toolchain
-  // entry whose PROBE still carries a declaration-supplied token is a host fact
-  // whose value only the machine running the verb knows -- a binary somewhere on
-  // this disk, a workload id on this installation. A `path` precondition would
-  // pin one machine's location into a file every machine reads, and nen has no
-  // second kind to reach for unless the repository names one. So it proposes
-  // nothing and says which row it declined, which is the honest half of a
-  // constraint the pack states in prose.
+  // entry whose PROBE still carries a pack token is one nen cannot turn into a
+  // precondition, and there are two ways to arrive there and one answer:
+  //
+  //   * A DECLARATION-SUPPLIED TOKEN is a fact only the repository or the
+  //     machine knows -- a binary somewhere on this disk, a workload id on this
+  //     installation.
+  //   * `{gw}`, THE ONE `host-conditional` TOKEN, is the one the pack's own
+  //     prose says nen resolves for itself. It gets a note all the same, and
+  //     that correction is the point of reading behaviour instead of prose:
+  //     ./render.ts REFUSES `{gw}` by name (REFUSED_PLACEHOLDERS, pinned
+  //     against the pack in ./purity.test.ts, in both directions), so a probe
+  //     naming it is a probe nen cannot perform either. Filtering on `kind`
+  //     here left `gradle-android` and `compose-desktop` silent about the one
+  //     toolchain row nen was declining -- the two stacks whose whole build
+  //     goes through that wrapper.
+  //
+  // So every such row gets a note naming what it declined, which is the honest
+  // half of a constraint the pack states in prose.
   for (const [tool, entry] of Object.entries(profile.toolchain)) {
-    const tokens = PACK_TOKENS.filter(
-      (token): boolean =>
-        DECLARATION_TOKENS.has(token) &&
-        entry.probe.some((word): boolean => word.includes(token)),
+    const tokens = PACK_TOKENS.filter((token): boolean =>
+      entry.probe.some((word): boolean => word.includes(token)),
     );
     if (tokens.length === 0) continue;
+    const resolvedByNen = tokens.filter((token): boolean => !DECLARATION_TOKENS.has(token));
     notes.push(
-      `no precondition is proposed for the '${tool}' this stack's toolchain requires: its probe is '${entry.probe.join(" ")}', and ${tokens.join(", ")} is a value only the machine running the verb can answer. nen asserts a precondition of kind 'path' or 'env' and performs neither -- a 'path' here would pin one machine's install location into a file every machine reads, and the reference pack names no environment variable to assert instead, so nen proposes nothing rather than inventing one. If this repository has such a variable, state it yourself: {"kind": "env", "value": "<NAME>", "why": "..."} under project.preconditions.${lane}. The pack's own reason for the requirement: ${entry.why}`,
+      `no precondition is proposed for the '${tool}' this stack's toolchain requires: its probe is '${entry.probe.join(" ")}', and ${tokens.join(", ")} is a value nen has nothing to read here. nen asserts a precondition of kind ${ASSERTABLE_KINDS.map((kind): string => `'${kind}'`).join(" or ")} and performs neither -- and 'path' is not merely a bad choice here, it is one nen REFUSES: every path a declaration states is resolved against the repository root and one that escapes it exits 2 by name, so an installed binary's absolute location cannot be written as a precondition at all. The reference pack names no environment variable to assert instead, so nen proposes nothing rather than inventing one. If this repository has such a variable, state it yourself: {"kind": "env", "value": "<NAME>", "why": "..."} under project.preconditions.${lane}.${
+        resolvedByNen.length === 0
+          ? ""
+          : ` (${resolvedByNen.join(", ")} is the token the pack says nen resolves for itself from the platform -- and nen's own executor refuses it by name all the same, so this row is no different from the others.)`
+      } The pack's own reason for the requirement: ${entry.why}`,
     );
   }
   // THERE IS DELIBERATELY NO LANE-LEVEL "no package.json" NOTE. An earlier
