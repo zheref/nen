@@ -597,8 +597,14 @@ describe("every bundled CI body", () => {
   });
 
   it("spells every workflow expression with spaces, so no token reads as a placeholder", () => {
-    // `${{env.X}}` matches this pack's own `{{token}}` grammar and would refuse
-    // the whole template for a token nen was never asked to fill.
+    // `${{env.X}}` does NOT match PLACEHOLDER (`{{` + `[A-Za-z][A-Za-z0-9]*` +
+    // `}}`, immediately closed -- src/scaffold/templates.ts): the `.` between
+    // `env` and `}}` breaks the token, so `substitute()` leaves it untouched
+    // rather than refusing the template. This is a readability guardrail, not a
+    // refusal check -- `${{env.X}}` sits one character from `{{token}}`, and a
+    // human skimming a generated workflow can misread which grammar they are
+    // looking at. So every bundled body spells the GitHub Actions expression
+    // with spaces (`${{ env.X }}`) to keep the two grammars visually apart.
     for (const body of bodies()) expect(body).not.toMatch(/\$\{\{[A-Za-z]/);
   });
 });
