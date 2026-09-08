@@ -267,6 +267,52 @@ export function requireEnum<T extends string>(
   return text as T;
 }
 
+/**
+ * THE SHAPE A TOOL NAME MAY TAKE, and why a KEY is validated at all.
+ *
+ * Every other rule in this loader is about a value; this one is about a map
+ * key, because this particular key does not stay in the file. `nen shu tools
+ * --install` renders `<tool>@<version>` into the one argv it is allowed to
+ * spawn, and `--only <name>` matches against it. A key of `--all` therefore
+ * becomes an ARGUMENT to the installer rather than a package to prepare, and a
+ * key carrying whitespace or an `@` splits into something the installer reads
+ * as two things. There is no shell anywhere on that path -- an argv is a list,
+ * always -- so this is not an injection into a command line; it is an injection
+ * into the ARGUMENT LIST, which is the one nen builds itself.
+ *
+ * REFUSED AT LOAD, in the loader, rather than at the point of use. The pin
+ * belongs to the declaration and so does its name, and a repository whose
+ * `project.toolchain` cannot be acted on should hear so when the file is read
+ * -- once, by pointer -- rather than from whichever verb happens to reach it
+ * first. It is also the only way a name reaches the pack's loader under the
+ * same rule: `nen shu detect` copies a pack entry into a proposed declaration,
+ * and a name THIS loader would refuse would make that proposal unreadable by
+ * the very program that wrote it.
+ *
+ * THE SHAPE IS npm's, WIDENED FOR CASE and NARROWED AT THE FIRST CHARACTER: an
+ * optional `@scope/`, then a name of letters, digits, `.`, `_`, `~` and `-`
+ * that may not START with `-`, `.` or `_`. That refuses a flag, a path
+ * traversal, a bare `@`, a space and every shell metacharacter, and accepts
+ * every real toolchain name in the bundled pack (`dotnet-sdk`, `expo-cli`,
+ * `visual-studio`, `placeholder-jdk`) plus the scoped form a package manager
+ * pins.
+ */
+const TOOL_NAME = /^(?:@[A-Za-z0-9~][A-Za-z0-9._~-]*\/)?[A-Za-z0-9~][A-Za-z0-9._~-]*$/;
+
+/**
+ * One `toolchain` key, checked. Exported for the profiles pack's own loader,
+ * which states the same block in a different file: a second copy of this rule
+ * would be a second rule.
+ */
+export function requireToolName(path: string, block: string, name: string): string {
+  if (TOOL_NAME.test(name)) return name;
+  throw new SchemaError(
+    path,
+    `${block}.${name}`,
+    `'${name}' is not a tool name nen can act on. A name becomes part of the argument list an installer is given ('<tool>@<version>'), so it is held to npm's package-name shape: an optional '@scope/', then letters, digits, '.', '_', '~' or '-', not starting with '-', '.' or '_'. A leading dash would be read as a FLAG by the program nen spawns, and whitespace or a second '@' splits one argument into something else`,
+  );
+}
+
 function parseBootstrap(path: string, value: unknown): BootstrapPin {
   const raw = requireRecord(path, "dependency.bootstrap", value);
   return {
@@ -451,6 +497,7 @@ function parseToolchain(path: string, value: unknown): Record<string, ToolchainE
   const toolchain: Record<string, ToolchainEntry> = {};
   for (const [tool, entry] of Object.entries(record)) {
     if (tool.startsWith("$")) continue;
+    requireToolName(path, "project.toolchain", tool);
     const pointer = `project.toolchain.${tool}`;
     const raw = requireRecord(path, pointer, entry);
     // `version` IS REQUIRED, and its absence is a refusal rather than a
