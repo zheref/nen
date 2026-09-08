@@ -189,11 +189,16 @@ function relayProse(context: CommandContext, lines: readonly string[]): void {
   for (const line of lines) context.io.err(line);
 }
 
-function renderInit(result: ScaffoldInitResult): readonly string[] {
+function renderInit(result: ScaffoldInitResult, dry: boolean): readonly string[] {
   const lines: string[] = [];
-  // The first three lines are v0.2.0's output, byte for byte, so a caller that
-  // greps them keeps working across this change.
-  lines.push(`created directories: ${result.createdDirectories.join(", ") || "(none -- all already existed)"}`);
+  // THE FIRST THREE LINES ARE v0.2.0's OUTPUT, BYTE FOR BYTE, so a caller that
+  // greps them keeps working across this change -- with one exception, and it
+  // is the honest direction: on a `--dry-run` the verb creates nothing, and a
+  // line reading "created directories: <paths>" about directories that are not
+  // there would be the one place in this report a preview lies. `--dry-run` is
+  // NEW here, so no v0.2.0 caller can be reading that spelling.
+  const created = `${dry ? "would create" : "created"} directories`;
+  lines.push(`${created}: ${result.createdDirectories.join(", ") || "(none -- all already existed)"}`);
   lines.push(`hook: ${result.hookOutcome} (${result.hookWritten})`);
   if (result.canonValuesWritten !== null) lines.push(`canon-values: ${result.canonValuesWritten}`);
   lines.push(`stack: ${result.stack ?? "(several -- see the lanes below)"}`);
@@ -297,7 +302,7 @@ function runInit(context: CommandContext): number {
       tools: result.tools?.report ?? null,
       exitCode: result.exitCode,
     },
-    renderInit(result),
+    renderInit(result, dryRun),
   );
   relayProse(context, [...result.notes, ...(result.tools?.lines ?? [])]);
   if (result.exitCode !== 0) {

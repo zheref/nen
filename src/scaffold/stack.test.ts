@@ -498,6 +498,11 @@ describe("--dry-run writes nothing and spawns nothing", () => {
     expect(tree(root)).toEqual(before);
     expect(result.out.join("\n")).toMatch(/would-create: nen\/contract\.json/);
     expect(result.out.join("\n")).toMatch(/would check/);
+    // Not one line of this report may claim a write happened -- including the
+    // directory line, which is v0.2.0's wording in every other form.
+    expect(result.out[0]).toMatch(/^would create directories: /);
+    expect(result.out.join("\n")).not.toMatch(/^created/m);
+    expect(result.out[1]).toMatch(/^hook: would-install /);
   });
 
   it("reports the toolchain step as 'would check' rather than checking", async () => {
