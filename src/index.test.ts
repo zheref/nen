@@ -161,6 +161,7 @@ describe("nen schema check", () => {
       "nen/repos.json",
       "nen/colors.yml",
       "nen/gates.json",
+      "nen/contract.json",
     ]);
     expect(checks.every((c): boolean => c.ok)).toBe(true);
     // A fully migrated repository says so in the machine-readable output as
@@ -211,6 +212,16 @@ describe("nen schema check", () => {
     expect(clean.code).toBe(0);
     expect(clean.out.join("\n")).toMatch(/ok {2}\s+nen\/labels\.json/);
     expect(clean.out.join("\n")).toContain("^ an identical copy is still at 'schemas/labels.json'");
+  });
+
+  it("carries a contract row: absent when there is none, validated when there is", async () => {
+    const migrated = await capture(["schema", "check", "--repo", BANKAI_REPO]);
+    expect(migrated.out.join("\n")).toMatch(
+      /ok {2}\s+nen\/contract\.json\s+dependency \(nen >= 0\.3, pinned v0\.3\.0\), project \(2 lanes/,
+    );
+
+    const none = await capture(["schema", "check", "--repo", LEGACY_REPO]);
+    expect(none.out.join("\n")).toMatch(/ok {2}\s+nen\/contract\.json\s+absent \(optional\)/);
   });
 
   // The owner/name-slug refusal is asserted in the exit-code block at the end of

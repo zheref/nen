@@ -73,6 +73,7 @@ describe("checkTaxonomy", () => {
       "nen/repos.json",
       "nen/colors.yml",
       "nen/gates.json",
+      "nen/contract.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
     expect(report.checks[0]?.detail).toMatch(/\d+ labels/);
@@ -82,11 +83,16 @@ describe("checkTaxonomy", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
     const report = checkTaxonomy({ repoFlag: root });
     expect(report.ok).toBe(false);
+    // Four, not five: the optional contract is the one row whose ABSENCE is a
+    // pass rather than a finding.
     expect(report.checks.filter((c): boolean => !c.ok).length).toBe(4);
-    for (const check of report.checks) {
+    for (const check of report.checks.filter((c): boolean => c.file !== "nen/contract.json")) {
       expect(check.detail).toMatch(/no such file/);
       expect(check.path).toContain(root);
     }
+    const contract = report.checks.find((c): boolean => c.file === "nen/contract.json");
+    expect(contract?.ok).toBe(true);
+    expect(contract?.detail).toBe("absent (optional)");
   });
 
   it("names BOTH locations in the not-found message, so a caller knows the fallback exists", () => {
@@ -255,4 +261,33 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     expect(check?.note).toContain("schemas/labels.json");
   });
 
+  it("reports the contract row: absent is ok, present is validated, broken FAILS", () => {
+    const absent = checkTaxonomy({ repoFlag: migrated() }).checks.at(-1);
+    expect(absent?.file).toBe("nen/contract.json");
+    expect(absent?.ok).toBe(true);
+    expect(absent?.required).toBe(false);
+    expect(absent?.detail).toBe("absent (optional)");
+
+    const present = checkTaxonomy({ repoFlag: BANKAI_REPO }).checks.at(-1);
+    expect(present?.ok).toBe(true);
+    expect(present?.detail).toContain("dependency (nen >= 0.3, pinned v0.3.0)");
+    expect(present?.detail).toContain("project (2 lanes: web, android");
+
+    // ALT_REPO carries the dependency-only shape, and the row says only that.
+    const alt = checkTaxonomy({ repoFlag: ALT_REPO }).checks.at(-1);
+    expect(alt?.ok).toBe(true);
+    expect(alt?.detail).toContain("dependency (nen >= 0.1, pinned v0.1.0)");
+    expect(alt?.detail).not.toContain("project (");
+
+    // Present and WRONG fails, exactly like a present-and-wrong gates.json --
+    // "optional" is about absence, never about being malformed.
+    const broken = migrated();
+    writeFileSync(join(broken, "nen", "contract.json"), '{"dependency":{"minimum":"0.3"}}');
+    const report = checkTaxonomy({ repoFlag: broken });
+    expect(report.ok).toBe(false);
+    const row = report.checks.at(-1);
+    expect(row?.ok).toBe(false);
+    expect(row?.required).toBe(true);
+    expect(row?.detail).toMatch(/pinned_ref/);
+  });
 });

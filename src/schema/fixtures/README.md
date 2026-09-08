@@ -13,13 +13,15 @@ different things.
   (`bankai:*` labels, the reviewer identities the CON-32 predicates were ported
   from). `src/gates/predicates.test.ts` runs the ported cases against it, so a
   behavioural divergence from the original shell/TypeScript gate shows up as a
-  failing test.
+  failing test. It also carries a `nen/contract.json` with **both** blocks —
+  `dependency` and `project` — using every field that schema declares.
 - `alt-repo/nen/` — a *different* vocabulary (`akatsuki:*` labels, different
   reviewer names, different check names, different colours). Nothing in the
   shipped tree knows any of these strings. Every accessor and predicate that
   works against `bankai-repo/` must work identically against this one; where a
   test asserts the same behaviour against both, that pair IS the proof that the
-  names are data.
+  names are data. Its `nen/contract.json` carries **`dependency` only** — the
+  shape a plugin repository has, and the proof the two blocks are independent.
 - `legacy-repo/schemas/` — **not migrated**, and nothing under `nen/`. A copy of
   `bankai-repo`'s four taxonomy files at the pre-v0.3 location, so the
   `schemas/` fallback is exercised by a real repository root rather than by a

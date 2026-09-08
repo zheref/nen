@@ -115,10 +115,10 @@ else.
 const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
 
 Load and validate the target repository's nen/ files -- nen/labels.json,
-nen/repos.json, nen/colors.yml, nen/gates.json -- and report each one's
-verdict: ok, or FAIL naming what is wrong. A file found only under the legacy
-schemas/ directory still loads and is reported as such; that fallback is
-removed in v0.4.0.
+nen/repos.json, nen/colors.yml, nen/gates.json and the optional
+nen/contract.json -- and report each one's verdict: ok, or FAIL naming what is
+wrong. A file found only under the legacy schemas/ directory still loads and is
+reported as such; that fallback is removed in v0.4.0.
 
   --repo <path>    The target repository's working-tree root. Defaults to the
                    current directory.

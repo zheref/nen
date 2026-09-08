@@ -21,12 +21,14 @@
 
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
+import { describeContract, loadContract } from "./contract.js";
 import { loadGateIdentities, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
 import {
   COLORS_FILE,
+  CONTRACT_FILE,
   GATES_FILE,
   LABELS_FILE,
   LEGACY_FALLBACK_REMOVED_IN,
@@ -201,6 +203,18 @@ function isAbsentFileError(error: unknown): boolean {
   return error instanceof SchemaError && error.message.includes(ABSENT_FILE_MARKER);
 }
 
+// The contract row, which is the one row whose ABSENCE is `ok`. `run` reports
+// every failure it is handed, so the absent case is turned into a summary here
+// rather than being suppressed inside `run` -- a present-but-invalid contract
+// still travels the ordinary failure path, marker and all.
+function contractCheck(root: string): SchemaCheck {
+  const check = run(CONTRACT_FILE, root, false, (): string =>
+    describeContract(loadContract(root)),
+  );
+  if (check.ok || !check.detail.includes(ABSENT_FILE_MARKER)) return check;
+  return { ...check, ok: true, detail: "absent (optional)" };
+}
+
 // Load every schema file and report each one's verdict, never stopping at the
 // first failure. Reporting one problem at a time is how a repository adopting
 // nen makes four round trips to learn four things it could have been told at
@@ -228,6 +242,14 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
       const gates = loadGateIdentities(root);
       return `${gates.reviewers.length} reviewer identities`;
     }),
+    // `nen/contract.json` IS OPTIONAL AND ITS ABSENCE IS AN `ok` ROW, not a
+    // warning -- unlike gates.json, whose absence is a warning because the
+    // readiness verbs are the reason most repositories adopt nen at all. A
+    // repository that declares no dependency pin and no stack is not
+    // mid-adoption; it is a repository this file has nothing to say about. What
+    // is NOT tolerated is a contract that is present and wrong, which fails
+    // exactly like a present-and-wrong gates.json.
+    contractCheck(root),
   ];
   return {
     root,

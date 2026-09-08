@@ -1,0 +1,67 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the DEPENDENCY-ONLY shape, the one a plugin repository carries: it declares what it needs FROM nen and no `project` block at all, because none of the stacks describes a tree of markdown, one shell script and one JSON contract. Adapted from the hatsu example in zheref/nen#91's proposal. Not shipped; see ../../README.md.",
+
+  "dependency": {
+    "contract_version": 1,
+    "decision": "D10",
+    "name": "nen",
+    "source": "zheref/nen",
+    "repository": "https://github.com/zheref/nen",
+
+    "minimum": "0.1",
+    "minimum_semantics": "MAJOR.MINOR, interpreted according to the major. See zero_major_caveat -- while nen's line is 0.x this means >=0.1.0 <0.2.0 EXACTLY.",
+    "zero_major_caveat": {
+      "applies_while": "the installed and pinned majors are both 0",
+      "rule": "minimum '0.1' resolves to the range >=0.1.0 <0.2.0. A DIFFERENT MINOR IS OUT OF RANGE IN BOTH DIRECTIONS -- 0.2.0 fails it exactly as 0.0.9 does.",
+      "why": "SemVer 2.0.0 clause 4: at major version zero the public API is unstable, so at 0.x the MINOR is the breaking-change vehicle.",
+      "on_a_higher_minor": "Out of range is out of range: re-pin to pinned_ref, exactly as for a lower minor."
+    },
+
+    "pinned_ref": "v0.1.0",
+    "pinned_ref_semantics": "The ref the bootstrap installs when the contract is unsatisfied. Never 'latest' -- an unpinned fetch converts a source-pinned supply chain into an unpinned one.",
+    "version_probe": ["nen", "--version"],
+    "version_probe_output": "A bare semver on stdout, e.g. '0.1.0' -- no 'v' prefix, no other text.",
+
+    "bootstrap": {
+      "vendored": false,
+      "vendoring_forbidden": "A vendored copy is a second, unreviewed supply chain that drifts from the manifest it verifies against.",
+      "script_path_in_source": "bootstrap/nen.sh",
+      "url": "https://raw.githubusercontent.com/zheref/nen/v0.1.0/bootstrap/nen.sh",
+      "fetch_must_be_two_step": {
+        "rule": "ALWAYS fetch to a file, then run that file. NEVER pipe the script into bash.",
+        "why": "The script runs under `set -u` and reads ${BASH_SOURCE[0]}; piped into `bash -s --` it dies with an unbound-variable error and exits 1 -- a code that appears in NO table here."
+      },
+      "flags": {
+        "--ref": "Required, no default. The tag to pin to.",
+        "--source": "owner/name to fetch release assets from.",
+        "--cache-dir": "Cache root."
+      },
+      "exit_codes": {
+        "0": "verified",
+        "2": "EXIT_USAGE",
+        "3": "EXIT_UNSUPPORTED_HOST",
+        "4": "EXIT_DOWNLOAD (the retryable one)",
+        "5": "EXIT_CHECKSUM (SECURITY)",
+        "6": "EXIT_MANIFEST"
+      },
+      "retry_policy": "Exit 4 may be retried once. Exits 5 and 6 are NEVER retried -- retrying a checksum failure is how a fail-closed guard becomes fail-open by attrition.",
+      "published_binaries": ["nen-linux-x64", "nen-darwin-arm64", "nen-windows-x64.exe"],
+      "manifest_asset": "SHA256SUMS"
+    },
+
+    "install_paths": {
+      "absent": "Fetch the bootstrap to a file and run it with --ref pinned_ref.",
+      "out_of_range": "`nen bootstrap --ref <pinned_ref>` from the existing checkout."
+    },
+    "halt": {
+      "rule": "An unsatisfied contract halts the caller. It does not proceed on the version it found."
+    },
+    "no_improvised_fallback": {
+      "rule": "There are two install paths and no third. Nothing is downloaded from anywhere else, ever."
+    },
+    "no_jq": {
+      "rule": "Read this file, take the literal values, and issue plain curl / bash / nen commands with those literals substituted in."
+    }
+  }
+}
