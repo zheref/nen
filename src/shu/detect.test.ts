@@ -3081,8 +3081,103 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
       );
       const note = iosNote(dir, "test");
       expect(note).toMatch(/could not read a native-target list out of Placeholder\.xcodeproj/);
+      // THE FILE IS NAMED, not just the bundle: `project.pbxproj` is what nen
+      // opened and what a maintainer has to go and look at.
+      expect(note).toContain("Placeholder.xcodeproj/project.pbxproj");
       expect(note).toMatch(/a cross-check nen could not perform is not one that passed/);
       expect(note).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+      // Nothing parsed, so there is no second half to this clause.
+      expect(note).not.toMatch(/did parse/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── the PARTIAL read, which is the hole the all-or-nothing union closes ────
+  //
+  // A lane may hold more than one `.xcodeproj`, and the first draft merged the
+  // ones that parsed and skipped the ones that did not (`if (declared === null)
+  // continue;`). That left `targets` non-null and INCOMPLETE, and an incomplete
+  // list is read downstream as licence to call a scheme broken: a scheme whose
+  // test target lives in the project nen could not read was reported as BROKEN
+  // ON A CLEAN CHECKOUT on the strength of a cross-check never performed.
+
+  /** A second `.xcodeproj` in the lane, declaring exactly `targets`. */
+  const addProject = (dir: string, name: string, targets: readonly string[] | null): void => {
+    const bundle = join(dir, "ios", `${name}.xcodeproj`);
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(
+      join(bundle, "project.pbxproj"),
+      targets === null
+        ? "// a format this reader does not know\n"
+        : [
+            "// !$*UTF8*$!",
+            "{",
+            "\tobjects = {",
+            "/* Begin PBXNativeTarget section */",
+            ...targets.flatMap((target, index): readonly string[] => [
+              `\t\tFEED000${index} /* ${target} */ = {`,
+              "\t\t\tisa = PBXNativeTarget;",
+              `\t\t\tname = ${target};`,
+              "\t\t};",
+            ]),
+            "/* End PBXNativeTarget section */",
+            "\t};",
+            "}",
+          ].join("\n"),
+      "utf8",
+    );
+  };
+
+  // MUTANT: restore `if (declared === null) continue;` in `readAppleLane` and
+  // this goes red -- `Placeholder.xcodeproj` parses, its lone target is
+  // `Placeholder`, and the scheme's `PlaceholderTests` gets called missing on a
+  // target list that never asked `Extra.xcodeproj` a thing.
+  it("withholds the whole cross-check when only SOME of the lane's projects parse", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-partial-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      addProject(dir, "Extra", null);
+      const note = iosNote(dir, "test");
+      // The finding is GONE, because it was never nen's to make.
+      expect(note, "a partial target list is not a cross-check").not.toMatch(
+        /BROKEN ON A CLEAN CHECKOUT/,
+      );
+      // And the note names the file that stopped it -- that one, not the lane.
+      expect(note).toContain("Extra.xcodeproj/project.pbxproj");
+      expect(note, "the readable project is not the unreadable one").not.toContain(
+        "Placeholder.xcodeproj/project.pbxproj",
+      );
+      expect(note).toMatch(/a cross-check nen could not perform is not one that passed/);
+      // The dropped half is stated out loud rather than left as silence a
+      // reader would take for "and Placeholder.xcodeproj checked out fine".
+      expect(note).toContain("Placeholder.xcodeproj did parse");
+      expect(note).toMatch(/WITHHELD ALL THE SAME/);
+      // The scheme is still NAMED. Withholding the target claim is not
+      // withholding what is plainly on disk.
+      expect(note).toMatch(/the shared scheme nen can see here is 'Placeholder'/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE UNION STILL WORKS. Withholding on ONE unreadable project must not
+  // become withholding whenever a lane has two projects: a target declared by
+  // the SECOND one answers the scheme just as well as the first.
+  it("answers the scheme from the second project when every project parses", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-union-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      addProject(dir, "Extra", ["PlaceholderTests"]);
+      const note = iosNote(dir, "test");
+      expect(note, "the target exists, in the other project").not.toMatch(
+        /BROKEN ON A CLEAN CHECKOUT/,
+      );
+      expect(note, "every project parsed, so nothing is withheld").not.toMatch(
+        /could not read a native-target list/,
+      );
+      // The row is still withheld for its tokens, which is a different reason.
+      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

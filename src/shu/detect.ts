@@ -2233,13 +2233,32 @@ interface AppleLane {
   readonly projects: readonly string[];
   readonly schemes: readonly SchemeFinding[];
   /**
-   * Every native target name nen could read, across every project in the lane.
-   * `null` means nen found a project and could NOT read a target list from it,
-   * which is a different fact from "the list is empty" and must never be
+   * Every native target name declared across EVERY project in the lane, or
+   * `null` when nen could not read even one of them.
+   *
+   * `null` is a different fact from "the list is empty" and must never be
    * reported as one -- a cross-check nen could not perform is not a cross-check
    * that passed, and it is not one that failed either.
+   *
+   * ALL OR NOTHING, AND THAT IS THE POINT. An earlier draft merged whatever
+   * projects happened to parse and left the rest out, which made a PARTIAL
+   * target list indistinguishable from a complete one: a lane holding a
+   * readable `A.xcodeproj` beside an unparsable `B.xcodeproj` reported every
+   * scheme whose test target lives in B as BROKEN ON A CLEAN CHECKOUT, on the
+   * strength of a list that never asked B a thing. One unreadable project
+   * withholds the whole cross-check, and `unreadableProjects` says which.
    */
   readonly targets: ReadonlySet<string> | null;
+  /**
+   * The `.xcodeproj` bundles whose target list nen could not read, byte-ordered
+   * (a filtered view of `projects`, which is already in that order).
+   *
+   * Non-empty exactly when `targets` is `null` and the lane has a project at
+   * all, and the note names these rather than every project in the lane: a
+   * maintainer sent to check three files when one is unreadable is a maintainer
+   * sent to the wrong two.
+   */
+  readonly unreadableProjects: readonly string[];
 }
 
 const BLUEPRINT_NAME = /BlueprintName\s*=\s*"([^"]*)"/g;
@@ -2308,13 +2327,23 @@ function readAppleLane(laneDirectory: string): AppleLane {
       schemes.push(readScheme(laneDirectory, container, entry.name));
     }
   }
-  let targets: Set<string> | null = null;
+  // THE UNION IS ALL OR NOTHING. Skipping the projects that would not parse
+  // and merging the rest builds a target list that LOOKS complete and is not,
+  // and `appleReason` reads a complete list as licence to call a scheme broken.
+  // So one unreadable project withholds the cross-check for the whole lane, and
+  // the names are kept so the note can say which file to go and look at.
+  let merged: Set<string> | null = null;
+  const unreadableProjects: string[] = [];
   for (const project of projects) {
     const declared = readTargets(laneDirectory, project);
-    if (declared === null) continue;
-    targets = new Set([...(targets ?? []), ...declared]);
+    if (declared === null) {
+      unreadableProjects.push(project);
+      continue;
+    }
+    merged = new Set([...(merged ?? []), ...declared]);
   }
-  return { workspaces, projects, schemes, targets };
+  const targets = unreadableProjects.length > 0 ? null : merged;
+  return { workspaces, projects, schemes, targets, unreadableProjects };
 }
 
 /** What a `run <task>` in a step names, and WHO is being asked to run it. */
@@ -2569,9 +2598,10 @@ function embeddedReason(
  *     project does not contain fails `test` on a CLEAN CHECKOUT, so the row is
  *     not one token away from working -- it is broken upstream of the token,
  *     and a note that named only the token would send a maintainer to fix the
- *     wrong thing. The claim is made only from a target list nen actually read:
- *     a project file nen cannot parse yields `targets: null` and this says so
- *     rather than reporting every scheme as broken.
+ *     wrong thing. The claim is made only from a COMPLETE target list: one
+ *     project file nen cannot parse yields `targets: null` for the whole lane,
+ *     and this names that file rather than reporting every scheme as broken
+ *     against the projects that happened to parse.
  *   * WHICH CONTAINER THE LANE IS, because the reference row's own flag is for
  *     a project and a CocoaPods lane is addressed as a workspace. That is the
  *     pack's own warning about the token, restated against what is here.
@@ -2599,10 +2629,27 @@ function appleReason(lane: AppleLane, leftover: readonly string[]): string {
 
   const targets = lane.targets;
   if (targets === null && lane.projects.length > 0) {
+    const unreadable = lane.unreadableProjects;
+    const readable = lane.projects.filter((project): boolean => !unreadable.includes(project));
     clauses.push(
-      ` -- nen could not read a native-target list out of ${lane.projects.join(
-        ", ",
-      )}, so it makes NO claim about whether this lane's schemes name targets that exist: a cross-check nen could not perform is not one that passed`,
+      ` -- nen could not read a native-target list out of ${unreadable
+        .map((project): string => `${project}/${PBXPROJ}`)
+        .join(
+          ", ",
+        )}, so it makes NO claim about whether this lane's schemes name targets that exist: a cross-check nen could not perform is not one that passed${
+        readable.length === 0
+          ? ""
+          : // THE PARTIAL READ IS THE INTERESTING CASE, so it says out loud that
+            // the readable projects were dropped ON PURPOSE. A maintainer who
+            // can see nen parsed A.xcodeproj would otherwise read the silence
+            // as "and A's targets checked out fine", which is the claim this
+            // whole clause exists to refuse.
+            `. ${readable.join(", ")} did parse, and ${
+              readable.length === 1 ? "its target list is" : "their target lists are"
+            } WITHHELD ALL THE SAME: a scheme's test target may live in the project nen could not read, so measuring these schemes against a target list missing ${
+              unreadable.length === 1 ? "one project" : "those projects"
+            } would report a working scheme as broken`
+      }`,
     );
   } else if (targets !== null) {
     const broken = lane.schemes
