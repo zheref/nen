@@ -96,7 +96,20 @@ import {
 // this module nor ../dev/matrix.ts branches on any of these strings; the loader
 // looks a filename up in this list and nothing reads the id. If that sweep is
 // extended, exempt THIS BLOCK by path and line, not the whole file: everything
-// below it should still be held to the rule.
+// below it should still be held to the rule --
+//
+// WITH ONE FURTHER EXEMPTION, ARGUED RATHER THAN ASSUMED, because the paragraph
+// above says "everything below" and this file now has an exception to that.
+// `PLACEHOLDERS`'s one `host-conditional` token carries its two SPELLINGS as
+// data (`hostSpelling`), and one of them is a build tool's wrapper script by
+// name. It is here for the same reason the specifiers above are: it has to be a
+// literal SOMEWHERE, and the alternatives are worse. The module that
+// substitutes it (../shu/detect.ts) is on no spawn path but IS the one module
+// the family lets carry filesystem knowledge, and putting the two words there
+// would make them a build-system literal in exactly the file whose discipline
+// is "filenames, never vocabulary". Here they are a catalogue row: cited,
+// rendered, and pinned in both directions against `kind` by ./pack.test.ts.
+// Nothing in this file or in ../dev/matrix.ts branches on either word.
 
 import composeDesktopDocument from "../../profiles/compose-desktop.json";
 import dotnetWinuiDocument from "../../profiles/dotnet-winui.json";
@@ -130,12 +143,45 @@ export const PACK_INDEX_FILE = "index.json";
  */
 export type PlaceholderKind = "host-conditional" | "declaration-supplied";
 
+/**
+ * The two spellings a `host-conditional` token resolves to, as DATA.
+ *
+ * WHY IT IS HERE AND NOT IN THE CODE THAT SUBSTITUTES IT. `./gradlew` and
+ * `gradlew.bat` are one fact about a build system wearing two spellings, and a
+ * reader of ../shu/detect.ts has to be able to see WHERE that fact came from:
+ * spelled into that file, it is a stack literal in the one module the family
+ * lets carry filesystem knowledge, and the next stack whose wrapper differs
+ * would be spelled in beside it. Spelled HERE it is a catalogue row like every
+ * other -- it cites its source, ../dev/matrix.ts can render it, and
+ * ./pack.test.ts can hold `kind` and this field to each other in both
+ * directions, so a token that gained one without the other fails the build.
+ *
+ * `posix` covers every platform `process.platform` reports that is not `win32`
+ * -- darwin, linux, and the BSDs -- rather than listing three of them: the
+ * split is between Windows and everything else, and a list would silently
+ * answer nothing on the fourth.
+ */
+export interface HostSpelling {
+  /** darwin, linux and every other non-Windows platform. */
+  readonly posix: string;
+  readonly win32: string;
+  /** `repo/path` or `repo/path:line`, the way a verb cell cites itself. */
+  readonly source: string;
+}
+
 export interface Placeholder {
   /** The token as it appears in the data, braces included. */
   readonly token: string;
   readonly kind: PlaceholderKind;
   /** One line. It is rendered into the page verbatim. */
   readonly meaning: string;
+  /**
+   * Set on EXACTLY the `host-conditional` tokens and on no other, which
+   * ./pack.test.ts pins in both directions. A `declaration-supplied` token
+   * carrying one would be the pack contributing a value into a command, which
+   * is the failure `kind`'s own doc names.
+   */
+  readonly hostSpelling?: HostSpelling;
 }
 
 /**
@@ -195,6 +241,12 @@ export const PLACEHOLDERS: readonly Placeholder[] = [
     kind: "host-conditional",
     meaning:
       "the repository's Gradle wrapper: `./gradlew` on darwin and linux, `gradlew.bat` on win32. THE ONE TOKEN NEN RESOLVES ITSELF, from `process.platform` -- a lane with no wrapper is a finding, never an install.",
+    hostSpelling: {
+      posix: "./gradlew",
+      win32: "gradlew.bat",
+      source:
+        "KroAndroid -- both spellings ship side by side in the tree, at the repository root and again in program/ (the two lanes' own wrappers). The relative `./` on the POSIX spelling is not decoration: it is what makes the wrapper the one in the lane rather than whatever PATH resolves.",
+    },
   },
   {
     token: "{name}",
@@ -272,6 +324,21 @@ export const PLACEHOLDERS: readonly Placeholder[] = [
 const PLACEHOLDER_TOKENS: ReadonlySet<string> = new Set(
   PLACEHOLDERS.map((placeholder): string => placeholder.token),
 );
+
+/**
+ * The spelling a host-conditional token takes on one platform, or null for a
+ * token that has none.
+ *
+ * THE WINDOWS/EVERYTHING-ELSE SPLIT LIVES HERE, ONCE. A caller asking "what is
+ * `{gw}` on this host" must not have to know that the answer is keyed on
+ * `win32` and not on a list of three platform names -- that is the difference
+ * between a lane proposing nothing on a BSD and proposing the right thing.
+ */
+export function spellOnHost(placeholder: Placeholder, platform: string): string | null {
+  const spelling = placeholder.hostSpelling;
+  if (spelling === undefined) return null;
+  return platform === "win32" ? spelling.win32 : spelling.posix;
+}
 
 // Matched braces only. An argv is data, not a template language: `{` with no
 // `}` is a literal brace some tool wanted, and refusing it would be this file

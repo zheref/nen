@@ -19,6 +19,8 @@ export const NEXTJS_WORKSPACES = join(FIXTURES, "nextjs-workspaces");
 export const NEXTJS_UNTOOLED = join(FIXTURES, "nextjs-untooled");
 export const GATSBY_SITE = join(FIXTURES, "gatsby-site");
 export const EMPTY_TREE = join(FIXTURES, "empty-tree");
+/** Two separate Gradle builds in one tree, the shape the inventory found. */
+export const KRO_SHAPED = join(FIXTURES, "kro-shaped");
 
 /** One marker tree per stack, by the stack id `detect` should answer with. */
 export const MARKERS = join(FIXTURES, "markers");

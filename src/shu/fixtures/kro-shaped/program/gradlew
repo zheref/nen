@@ -1,0 +1,5 @@
+#!/bin/sh
+# TEST FIXTURE -- this lane's OWN wrapper, a different one from the root's.
+# Never executed. Two wrappers in one tree is the whole argument for per-lane
+# toolchains, and it is also what stops the root's scan descending in here.
+exit 0

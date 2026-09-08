@@ -1,0 +1,3 @@
+#!/bin/sh
+# TEST FIXTURE -- the root lane's wrapper, never executed.
+exit 0

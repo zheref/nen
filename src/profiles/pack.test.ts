@@ -13,6 +13,7 @@ import {
   parseProfile,
   PLACEHOLDERS,
   profileById,
+  spellOnHost,
   verbCell,
   type ProfileVerb,
 } from "./pack.js";
@@ -591,6 +592,62 @@ describe("placeholders", () => {
     expect(
       PLACEHOLDERS.filter((placeholder): boolean => placeholder.kind === "host-conditional").length,
     ).toBe(1);
+  });
+
+  // ── the host-conditional token's two spellings, as data ───────────────────
+  //
+  // They are the ONE value this file may contribute to a command, and only
+  // because they are not a value at all in the sense `kind` forbids: they are
+  // how one host spells a file the repository itself committed. `../shu/
+  // detect.ts` reads them so that the two spellings live in one place, cited,
+  // rather than being typed a second time into the module that substitutes
+  // them -- where they would be a build-system literal in the one file the
+  // family lets carry filesystem knowledge.
+
+  it("gives a spelling to EXACTLY the host-conditional tokens, and to no other", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      expect(placeholder.hostSpelling !== undefined, placeholder.token).toBe(
+        placeholder.kind === "host-conditional",
+      );
+    }
+  });
+
+  it("gives that spelling two different words and a source", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      const spelling = placeholder.hostSpelling;
+      if (spelling === undefined) continue;
+      // TWO DIFFERENT WORDS IS THE POINT. A `hostSpelling` whose halves agreed
+      // would be a token that is not host-conditional at all, and the one
+      // mutant a POSIX-only suite cannot see is exactly the one that makes them
+      // agree.
+      expect(spelling.posix, placeholder.token).not.toBe(spelling.win32);
+      for (const value of [spelling.posix, spelling.win32]) {
+        expect(value.length, placeholder.token).toBeGreaterThan(0);
+        // A spelling is a word to RUN, never a token to substitute again.
+        expect(value, placeholder.token).not.toMatch(/[{}]/);
+      }
+      expect(spelling.source.length, placeholder.token).toBeGreaterThan(20);
+      // And the meaning must still SAY both, because the rendered page shows
+      // the meaning and a reader of it never sees this field.
+      expect(placeholder.meaning, placeholder.token).toContain(spelling.posix);
+      expect(placeholder.meaning, placeholder.token).toContain(spelling.win32);
+    }
+  });
+
+  it("answers win32 with one spelling and every other platform with the other", () => {
+    for (const placeholder of PLACEHOLDERS) {
+      const spelling = placeholder.hostSpelling;
+      if (spelling === undefined) {
+        expect(spellOnHost(placeholder, "linux"), placeholder.token).toBeNull();
+        continue;
+      }
+      expect(spellOnHost(placeholder, "win32")).toBe(spelling.win32);
+      // THE SPLIT IS WINDOWS VERSUS EVERYTHING ELSE, not a list of three names
+      // -- a list would answer nothing on the fourth platform Node reports.
+      for (const platform of ["darwin", "linux", "freebsd", "openbsd", "aix"]) {
+        expect(spellOnHost(placeholder, platform), platform).toBe(spelling.posix);
+      }
+    }
   });
 
   it("refuses an unknown token in an argv, naming the file, the field and it", () => {

@@ -55,7 +55,9 @@ import {
   loadProfilesPack,
   PLACEHOLDERS,
   profileById,
+  spellOnHost,
   verbCell,
+  type Placeholder,
   type ProfilesPack,
   type ProfileVerb,
   type StackProfile,
@@ -101,12 +103,7 @@ const APP_CONFIG = /^app\.config\.(js|mjs|cjs|ts)$/;
 const XCWORKSPACE = /\.xcworkspace$/;
 const XCODEPROJ = /\.xcodeproj$/;
 const CSPROJ = /\.csproj$/;
-const GRADLE_BUILD = /^build\.gradle(\.kts)?$/;
 
-/** The Android Gradle plugin's own id, as a build file applies it. */
-const AGP_MARKER = "com.android.application";
-/** The desktop packaging block a Compose Multiplatform desktop target declares. */
-const COMPOSE_DESKTOP_MARKER = "compose.desktop";
 /** The one element that separates a WinUI app from every other .NET project. */
 const WINUI_MARKER = "<UseWinUI>";
 /** The key an app manifest carries when the project is an Expo one. */
@@ -274,24 +271,192 @@ interface Match {
   readonly marker: string;
 }
 
-/** Whether any build file in or under this directory carries a text marker. */
-function buildFileCarries(directory: string, needle: string, depth: number): string | null {
+// ── the host-tool stacks, read off the catalogue ────────────────────────────
+//
+// TWO STACKS IN THIS PACK ARE FOUND BY A TOOL THE REPOSITORY SHIPS IN ITS OWN
+// TREE rather than by a config filename: a wrapper script beside a build file
+// that carries a plugin id. Everything about them below -- the tool's two
+// spellings, the build files to read, the literal each must carry -- is read
+// out of ../profiles, and the argument for that is not tidiness:
+//
+//   * THE TOOL'S TWO SPELLINGS ARE THE VALUE `{gw}` RESOLVES TO. The pack
+//     states them (`PLACEHOLDERS[].hostSpelling`, with its citation) because
+//     nen substitutes that token itself, from the host. Spelling them a second
+//     time HERE, to find the file, would be two copies of one fact in two
+//     files, and the copy in this one would be the stack literal §3 forbids --
+//     this module is allowed FILENAMES, and "the name of the wrapper this
+//     particular build system happens to use" is a fact about that build
+//     system, not about filesystems.
+//   * THE PLUGIN ID IS ALREADY DATA. Each profile's `markers[].contains` is
+//     documented as "a literal the matched file must contain", so reading it
+//     is reading the catalogue's own sentence rather than restating it. That
+//     also surfaced a marker that could never have matched: one profile's
+//     `contains` named a DSL block by its dotted name, which appears in no
+//     build file, and it is now the block's receiver, as written.
+//
+// A stack qualifies as one of these when its OWN rows go through the
+// host-conditional token -- a property of the catalogue, not a list here.
+
+/** A `host-conditional` token and the file its value names inside a lane. */
+interface HostToken {
+  readonly token: string;
+  readonly placeholder: Placeholder;
+}
+
+const HOST_TOKENS: readonly HostToken[] = PLACEHOLDERS.filter(
+  (placeholder): boolean => placeholder.hostSpelling !== undefined,
+).map((placeholder): HostToken => ({ token: placeholder.token, placeholder }));
+
+/**
+ * A value like `./gradlew` as the FILENAME it names inside a lane.
+ *
+ * The leading `./` is what makes the tool the lane's own rather than whatever
+ * the PATH resolves, and it is meaningful to the executor for exactly that
+ * reason -- but a directory listing has no `./` in it.
+ */
+function laneRelativeName(value: string): string {
+  const segments = value.split("/").filter((segment): boolean => segment !== "" && segment !== ".");
+  return segments[segments.length - 1] ?? value;
+}
+
+/** Every spelling of every host-conditional token, as a lane-relative filename. */
+const HOST_TOOL_FILES: ReadonlySet<string> = new Set(
+  HOST_TOKENS.flatMap((entry): readonly string[] => {
+    const spelling = entry.placeholder.hostSpelling;
+    /* c8 ignore next -- HOST_TOKENS is filtered on this field being present */
+    if (spelling === undefined) return [];
+    return [laneRelativeName(spelling.posix), laneRelativeName(spelling.win32)];
+  }),
+);
+
+/**
+ * `settings.gradle{,.kts}` -> `settings.gradle`, `settings.gradle.kts`.
+ *
+ * BRACE ALTERNATION IS THE ONE GLOB SHAPE MARKER PATTERNS USE, and the pack
+ * documents it as such (../profiles/pack.ts: marker patterns are brace globs,
+ * deliberately not held to the placeholder set they share a delimiter with).
+ * Expanding it here rather than teaching this file that one suffix is optional
+ * keeps the two spellings of a filename where the other filename facts are.
+ */
+function expandBraces(pattern: string): readonly string[] {
+  const open = pattern.indexOf("{");
+  const close = pattern.indexOf("}", open + 1);
+  if (open === -1 || close === -1) return [pattern];
+  const head = pattern.slice(0, open);
+  const tail = pattern.slice(close + 1);
+  return pattern
+    .slice(open + 1, close)
+    .split(",")
+    .flatMap((alternative): readonly string[] => expandBraces(`${head}${alternative}${tail}`));
+}
+
+/** The filenames a marker pattern names, its directory prefix dropped. */
+function markerFilenames(pattern: string): readonly string[] {
+  return expandBraces(pattern).map(laneRelativeName);
+}
+
+/** A marker that is a filename PLUS a literal the file must carry. */
+interface Refinement {
+  readonly files: ReadonlySet<string>;
+  readonly literal: string;
+}
+
+/** One stack whose lanes are found by a tool the repository ships. */
+interface HostToolStack {
+  readonly stack: string;
+  /**
+   * Every `contains` marker the profile states. ALL must match, which is the
+   * conservative reading of a marker list that reads "the wrapper, its settings
+   * file, and the module that makes it THIS stack".
+   */
+  readonly refinements: readonly Refinement[];
+  /**
+   * The marker filenames the profile states with no literal, minus the tool
+   * itself -- the settings file whose own contents a cross-check may read.
+   */
+  readonly contextFiles: ReadonlySet<string>;
+}
+
+/** Whether any of this profile's own rows or probes name this token. */
+function profileUses(profile: StackProfile, token: string): boolean {
+  const inRows = Object.values(profile.verbs).some((cell): boolean =>
+    stepsOfCell(cell).some((step): boolean =>
+      [step.exe, ...step.argv].some((word): boolean => word.includes(token)),
+    ),
+  );
+  const inProbes = Object.values(profile.toolchain).some((entry): boolean =>
+    entry.probe.some((word): boolean => word.includes(token)),
+  );
+  return inRows || inProbes;
+}
+
+/** The pack's host-tool stacks, in the pack's own id order. */
+function hostToolStacks(pack: ProfilesPack): readonly HostToolStack[] {
+  const out: HostToolStack[] = [];
+  for (const id of pack.ids) {
+    const profile = profileById(pack, id);
+    if (!HOST_TOKENS.some((entry): boolean => profileUses(profile, entry.token))) continue;
+    const refinements: Refinement[] = [];
+    const contextFiles = new Set<string>();
+    for (const marker of profile.markers) {
+      const files = markerFilenames(marker.pattern);
+      if (marker.contains !== null) {
+        refinements.push({ files: new Set(files), literal: marker.contains });
+        continue;
+      }
+      for (const file of files) {
+        if (!HOST_TOOL_FILES.has(file)) contextFiles.add(file);
+      }
+    }
+    out.push({ stack: id, refinements, contextFiles });
+  }
+  return out;
+}
+
+/** Whether this directory ships a host-conditional tool of its own. */
+function shipsHostTool(directory: string): boolean {
+  return listDirectory(directory).some(
+    (entry): boolean => !entry.directory && HOST_TOOL_FILES.has(entry.name),
+  );
+}
+
+/**
+ * The file in or under this directory that carries a refinement's literal.
+ *
+ * IT STOPS AT A NESTED LANE ROOT, and that is the whole of what makes a
+ * two-lane repository come out as two lanes. A directory shipping its own copy
+ * of the tool is its own build -- it has its own settings file, its own pinned
+ * tool version, and is included by nothing above it -- so a marker inside it is
+ * evidence about THAT lane. Without the stop, a repository whose root is one
+ * stack and whose subdirectory is another proposed the subdirectory's stack at
+ * the root as well: three lanes for two builds, one of them addressing a build
+ * file the root's tool would never read.
+ */
+function fileCarrying(directory: string, refinement: Refinement, depth: number): string | null {
   for (const entry of listDirectory(directory)) {
     const path = join(directory, entry.name);
     if (entry.directory) {
       if (depth === 0 || SKIP.has(entry.name)) continue;
-      const found = buildFileCarries(path, needle, depth - 1);
+      if (shipsHostTool(path)) continue;
+      const found = fileCarrying(path, refinement, depth - 1);
       if (found !== null) return found;
       continue;
     }
-    if (!GRADLE_BUILD.test(entry.name)) continue;
-    if ((readText(path) ?? "").includes(needle)) return path;
+    if (!refinement.files.has(entry.name)) continue;
+    if ((readText(path) ?? "").includes(refinement.literal)) return path;
   }
   return null;
 }
 
+/** How far below a lane root a refinement is looked for. */
+const REFINEMENT_DEPTH = 2;
+
 /** Every stack whose markers this ONE directory carries. */
-function matchesIn(repoRoot: string, directory: string): readonly Match[] {
+function matchesIn(
+  repoRoot: string,
+  directory: string,
+  hostStacks: readonly HostToolStack[],
+): readonly Match[] {
   const entries = listDirectory(directory);
   const names = entries.map((entry): string => entry.name);
   const found: Match[] = [];
@@ -326,11 +491,23 @@ function matchesIn(repoRoot: string, directory: string): readonly Match[] {
   if (workspace !== undefined) add("xcode-ios", join(directory, workspace));
   else if (project !== undefined) add("xcode-ios", join(directory, project));
 
-  if (names.includes("gradlew") || names.includes("gradlew.bat")) {
-    const agp = buildFileCarries(directory, AGP_MARKER, 2);
-    if (agp !== null) add("gradle-android", agp);
-    const desktop = buildFileCarries(directory, COMPOSE_DESKTOP_MARKER, 2);
-    if (desktop !== null) add("compose-desktop", desktop);
+  // The host-tool stacks: the tool the repository ships, plus every refinement
+  // its own profile states. EVERY refinement must be found, and the files that
+  // carried them are the markers -- a stack identified by a plugin id is
+  // identified by the file that applies it, not by the wrapper beside it.
+  if (names.some((name): boolean => HOST_TOOL_FILES.has(name))) {
+    for (const entry of hostStacks) {
+      const carriers: string[] = [];
+      for (const refinement of entry.refinements) {
+        const file = fileCarrying(directory, refinement, REFINEMENT_DEPTH);
+        if (file === null) {
+          carriers.length = 0;
+          break;
+        }
+        carriers.push(file);
+      }
+      for (const carrier of carriers) add(entry.stack, carrier);
+    }
   }
 
   for (const name of names) {
@@ -383,10 +560,13 @@ function carriesDependency(
 }
 
 /** Every directory with markers, deepest-last, root first. */
-function scan(repoRoot: string): readonly { directory: string; matches: readonly Match[] }[] {
+function scan(
+  repoRoot: string,
+  hostStacks: readonly HostToolStack[],
+): readonly { directory: string; matches: readonly Match[] }[] {
   const out: { directory: string; matches: readonly Match[] }[] = [];
   const walk = (directory: string, depth: number): void => {
-    const matches = matchesIn(repoRoot, directory);
+    const matches = matchesIn(repoRoot, directory, hostStacks);
     if (matches.length > 0) out.push({ directory, matches });
     if (depth === 0) return;
     for (const entry of listDirectory(directory)) {
@@ -547,6 +727,16 @@ function laneName(cwd: string, stack: string, qualify: boolean, taken: ReadonlyS
 const PM_EXECUTABLE = "{pm}";
 const PM_PIN = "{packageManager}";
 const PACKAGE_NAME = "{package}";
+
+/**
+ * The one declaration-supplied token a lane's own SETTINGS file can answer.
+ *
+ * Spelled here beside the three above for the same reason they are: a token is
+ * an interface the pack publishes, and naming one is naming a field, not a
+ * stack. What nen may never do is supply its VALUE, and it does not -- the
+ * value is read out of the repository being scanned.
+ */
+const UNIT_TEST_TASK = "{unitTestTask}";
 
 /** Every token the pack may use, so a leftover one can be named exactly. */
 const PACK_TOKENS: readonly string[] = PLACEHOLDERS.map(
@@ -887,7 +1077,224 @@ function packageAnswer(manifest: Manifest): string | null {
   return manifest.workspace === null ? manifest.packageName : null;
 }
 
-function substitute(token: string, manifest: Manifest): string {
+// ── what NEN answers, as opposed to what the manifest answers ───────────────
+//
+// Two tokens on this path are answered from something other than a
+// `package.json`, and they are answered in opposite ways:
+//
+//   * `{gw}`-SHAPED TOKENS -- the `host-conditional` ones -- are the only
+//     tokens nen resolves from the PLATFORM. The value is the pack's own
+//     spelling for this host, and nen writes it into the proposal so that the
+//     declaration a human ends up with carries a runnable word rather than a
+//     token: ./render.ts refuses every pack token by name at spawn time,
+//     `{gw}` included, so a declaration still carrying one is exit 2 the first
+//     time anybody runs it. RESOLVING IT IS NOT THE SAME AS ASSUMING IT: the
+//     spelling names a file in the lane, and nen writes the value only when
+//     that file is there. A lane carrying the other host's spelling and not
+//     this one's is withheld saying exactly that -- which is the pack's own
+//     sentence, "a repo without one is a finding, not an install".
+//   * `{unitTestTask}` is a DECLARATION-SUPPLIED token that this lane's own
+//     settings file can nonetheless answer, and §2.6 names the cross-check by
+//     hand: "a scheme, target or task a marker implies but the project does
+//     not contain is a WARNING, never a proposal -- detect cross-checks ... a
+//     Gradle settings file's `include`s ... before proposing any verb that
+//     names one". NEITHER HALF OF THE ANSWER IS NEN'S: the module comes from
+//     the repository's own `include(...)`, and the task is the VERB the row is
+//     for. Where the repository names no single library module, the row is
+//     withheld with every module it does name.
+
+/** What nen could answer for one lane, and what it tried to and could not. */
+interface LaneAnswers {
+  /** token -> the value nen wrote. */
+  readonly answered: ReadonlyMap<string, string>;
+  /** token -> why nen wrote none, ready to append to a withholding note. */
+  readonly refused: ReadonlyMap<string, string>;
+  /**
+   * Every value nen wrote that a step may use as its `exe`.
+   *
+   * THE EXECUTABLE CHECK IS ABOUT WHAT THE PROJECT VISIBLY CARRIES, and for
+   * these values nen has just looked: the file is in the lane. Sending them
+   * through the manifest check instead would withhold every row of a stack
+   * that has no `package.json` at all, for a reason that is not true of it.
+   */
+  readonly exes: ReadonlySet<string>;
+}
+
+/**
+ * The host-conditional tokens, answered from the platform AND from the lane.
+ *
+ * The reason names the platform, the spelling it implies and what the lane
+ * carries instead, because those are the three things a maintainer needs to
+ * tell "wrong host" from "no wrapper committed" from "committed under the
+ * other name".
+ */
+function hostAnswers(
+  laneDirectory: string,
+  platform: string,
+  answered: Map<string, string>,
+  refused: Map<string, string>,
+  exes: Set<string>,
+): void {
+  const present = new Set(
+    listDirectory(laneDirectory)
+      .filter((entry): boolean => !entry.directory)
+      .map((entry): string => entry.name),
+  );
+  for (const entry of HOST_TOKENS) {
+    const value = spellOnHost(entry.placeholder, platform);
+    /* c8 ignore next -- HOST_TOKENS is filtered on the spelling being present */
+    if (value === null) continue;
+    const wanted = laneRelativeName(value);
+    if (present.has(wanted)) {
+      answered.set(entry.token, value);
+      exes.add(value);
+      continue;
+    }
+    const spelling = entry.placeholder.hostSpelling;
+    /* c8 ignore next -- same filter */
+    if (spelling === undefined) continue;
+    const others = [spelling.posix, spelling.win32]
+      .map(laneRelativeName)
+      .filter((name): boolean => name !== wanted && present.has(name));
+    refused.set(
+      entry.token,
+      ` -- nen resolves ${entry.token} from the HOST and this host is ${platform}, whose spelling is '${value}'; this lane has no '${wanted}'${
+        others.length === 0
+          ? ""
+          : `, though it does carry '${others.join("', '")}' -- the other host's spelling, which nen will not run here`
+      }. A lane without its own wrapper is a FINDING, never an install: nen proposes no row it cannot see the tool for, and installs nothing`,
+    );
+  }
+}
+
+/** `include(":app", ":KroCore")` -> `:app`, `:KroCore`, in declared order. */
+const INCLUDE_CALL = /\binclude(?![A-Za-z0-9_])\s*(\([^)]*\)|[^\n]*)/g;
+const QUOTED = /["']([^"'\n]+)["']/g;
+
+/**
+ * The modules a settings file includes, normalised to a leading `:`.
+ *
+ * BOTH SPELLINGS OF THE ONE STATEMENT are read -- the parenthesised call and
+ * the bare argument list -- because the two script languages a settings file is
+ * written in differ there and nowhere that matters here. `includeBuild` and
+ * `includeFlat` are deliberately NOT read: the first names a whole separate
+ * build (a submodule, in the observed repository) and the second a directory
+ * outside the tree, and neither is a module whose tasks this lane runs.
+ */
+function includedModules(text: string): readonly string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const source = text
+    .split("\n")
+    .map((line): string => {
+      const comment = line.indexOf("//");
+      return comment === -1 ? line : line.slice(0, comment);
+    })
+    .join("\n");
+  for (const call of source.matchAll(INCLUDE_CALL)) {
+    for (const quoted of (call[1] ?? "").matchAll(QUOTED)) {
+      const raw = (quoted[1] ?? "").trim();
+      if (raw === "") continue;
+      const module = raw.startsWith(":") ? raw : `:${raw}`;
+      if (seen.has(module)) continue;
+      seen.add(module);
+      out.push(module);
+    }
+  }
+  return out;
+}
+
+/** Whether a module's own build file carries one of the stack's refinements. */
+function moduleCarriesRefinement(
+  laneDirectory: string,
+  module: string,
+  refinements: readonly Refinement[],
+): boolean {
+  const segments = module.split(":").filter((segment): boolean => segment !== "");
+  const directory = join(laneDirectory, ...segments);
+  return refinements.some(
+    (refinement): boolean => fileCarrying(directory, refinement, 0) !== null,
+  );
+}
+
+/**
+ * `{unitTestTask}`, answered from this lane's own settings file or withheld
+ * with every module that file names.
+ *
+ * ONE LIBRARY MODULE OR NOTHING. A module whose own build file applies the
+ * plugin that identified this lane is the APPLICATION module -- the row it
+ * would name is the one the pack's `why` exists to forbid -- so it is removed
+ * from the candidates rather than being one of them. What is left is either
+ * exactly one module, which the repository has effectively named, or a choice,
+ * and nen resolves no choice: rule 1 of this file's header.
+ */
+function unitTestAnswers(
+  laneDirectory: string,
+  stack: HostToolStack | undefined,
+  verb: string,
+  answered: Map<string, string>,
+  refused: Map<string, string>,
+): void {
+  if (stack === undefined) return;
+  const names = [...stack.contextFiles].sort(compareBytes);
+  const settings = listDirectory(laneDirectory).find(
+    (entry): boolean => !entry.directory && stack.contextFiles.has(entry.name),
+  );
+  if (settings === undefined) {
+    refused.set(
+      UNIT_TEST_TASK,
+      ` -- nen answers this token only from this lane's own settings file, and there is none here to read (nen looks for ${names.join(", ")}). The module a repository runs its JVM unit tests in is that repository's word, and the settings file is where it says it`,
+    );
+    return;
+  }
+  const file = join(laneDirectory, settings.name);
+  const modules = includedModules(readText(file) ?? "");
+  const libraries = modules.filter(
+    (module): boolean => !moduleCarriesRefinement(laneDirectory, module, stack.refinements),
+  );
+  const only = libraries.length === 1 ? libraries[0] : undefined;
+  if (only !== undefined) {
+    // The MODULE is the repository's word and the TASK is the caller's: the
+    // token sits in this verb's row, so the task nen names is that module's
+    // task of this verb's own name. nen contributes neither half.
+    answered.set(UNIT_TEST_TASK, `${only}:${verb}`);
+    return;
+  }
+  refused.set(
+    UNIT_TEST_TASK,
+    ` -- ${settings.name} ${
+      modules.length === 0
+        ? "declares no `include(...)` nen could read, so it names no module for this row"
+        : `includes ${modules.join(", ")}, of which ${
+            libraries.length === 0
+              ? "every one applies the plugin that identified this lane -- they are application modules, and the row this token fills is the JVM unit-test one"
+              : `${libraries.length} are library modules (${libraries.join(", ")}), and which of them carries this repository's JVM unit tests is a choice only it can make`
+          }`
+    }. nen answers this token only where the settings file names a single library module`,
+  );
+}
+
+/** Everything nen itself can answer for one lane, computed once per verb. */
+function laneAnswers(
+  laneDirectory: string,
+  platform: string,
+  stack: HostToolStack | undefined,
+  verb: string,
+  wanted: ReadonlySet<string>,
+): LaneAnswers {
+  const answered = new Map<string, string>();
+  const refused = new Map<string, string>();
+  const exes = new Set<string>();
+  if (HOST_TOKENS.some((entry): boolean => wanted.has(entry.token))) {
+    hostAnswers(laneDirectory, platform, answered, refused, exes);
+  }
+  if (wanted.has(UNIT_TEST_TASK)) {
+    unitTestAnswers(laneDirectory, stack, verb, answered, refused);
+  }
+  return { answered, refused, exes };
+}
+
+function substitute(token: string, manifest: Manifest, answers: LaneAnswers): string {
   const pm = manifest.packageManager;
   const packageName = packageAnswer(manifest);
   let out = token;
@@ -895,6 +1302,9 @@ function substitute(token: string, manifest: Manifest): string {
     out = out.split(PM_EXECUTABLE).join(pm.executable).split(PM_PIN).join(pm.pin);
   }
   if (packageName !== null) out = out.split(PACKAGE_NAME).join(packageName);
+  for (const [answeredToken, value] of answers.answered) {
+    out = out.split(answeredToken).join(value);
+  }
   return out;
 }
 
@@ -1293,6 +1703,8 @@ function proposeVerbs(
   profile: StackProfile,
   laneDirectory: string,
   lane: string,
+  platform: string,
+  hostStack: HostToolStack | undefined,
 ): ProposedVerbs {
   const manifest = readManifest(laneDirectory);
   const verbs: Record<string, unknown> = {};
@@ -1326,10 +1738,21 @@ function proposeVerbs(
       continue;
     }
 
+    // WHAT NEN ITSELF CAN ANSWER, ASKED BEFORE THE MANIFEST IS. It is scoped to
+    // the tokens THIS row actually names, so a stack that never mentions a
+    // wrapper never reads a directory looking for one, and a row that never
+    // mentions a task never reads a settings file.
+    const answers = laneAnswers(
+      laneDirectory,
+      platform,
+      hostStack,
+      verb,
+      new Set(leftoverTokens(stepsOfCell(cell))),
+    );
     const substituted = stepsOfCell(cell).map(
       (step): ProposedStep => ({
-        exe: substitute(step.exe, manifest),
-        argv: step.argv.map((token): string => substitute(token, manifest)),
+        exe: substitute(step.exe, manifest, answers),
+        argv: step.argv.map((token): string => substitute(token, manifest, answers)),
       }),
     );
 
@@ -1394,6 +1817,10 @@ function proposeVerbs(
         nearMisses.length === 0
           ? ""
           : ` -- ${nearMisses.length === 1 ? "one script shares" : `${nearMisses.length} scripts share`} its shape (${nearMisses.join("; ")}) and nothing corroborates the match: a step this thin agrees with every script of the same length, so nen answers it only from a script whose own KEY names what the row is for`,
+        // A TOKEN NEN TRIED TO ANSWER AND COULD NOT gets the reason it could
+        // not, in the token's own terms. "only this repository can answer" is
+        // true and useless for a wrapper nen looked for and did not find.
+        ...leftover.map((token): string => answers.refused.get(token) ?? ""),
       ].join("");
       notes.push(
         `'${verb}' withheld: its reference command still names ${leftover.join(", ")}, which only this repository can answer${clauses}. nen never proposes an unsubstituted token: a guessed argument is a different command.`,
@@ -1409,6 +1836,10 @@ function proposeVerbs(
     const unconfirmed = steps.find((step): boolean => !runsVerbatim(step, manifest));
     const unknownExe =
       unconfirmed !== undefined &&
+      // A value NEN wrote is one nen has just seen on disk in this lane -- see
+      // `LaneAnswers.exes`. Asking a package.json to confirm it would withhold
+      // every row of a stack that legitimately has no package.json at all.
+      !answers.exes.has(unconfirmed.exe) &&
       unconfirmed.exe !== manifest.packageManager?.executable &&
       !manifest.declares(unconfirmed.exe)
         ? unconfirmed
@@ -1530,6 +1961,22 @@ function proposeVerbs(
       } The pack's own reason for the requirement: ${entry.why}`,
     );
   }
+  // THE CATALOGUE'S OWN NOTES ON THIS STACK, CARRIED THROUGH VERBATIM.
+  //
+  // They were being dropped, and what was dropped was the half of the pack a
+  // proposal cannot express as a row: the preconditions this stack asserts and
+  // never performs, the extra verbs an inventory found that the thirteen do not
+  // cover, and -- the one that made this a defect rather than a tidiness --
+  // a CONFLICT the catalogue records between two sources that disagree about
+  // what a verb should run. A conflict is exactly the thing that must never be
+  // encoded as a command: nen states one side, cites it, and reports that the
+  // other exists, so the maintainer resolves it upstream instead of finding out
+  // from a green build that overwrote a golden. A note is the only shape that
+  // says that, and a note nobody prints says nothing.
+  for (const note of profile.notes) {
+    notes.push(`the reference pack's own note on ${profile.id}: ${note}`);
+  }
+
   // THERE IS DELIBERATELY NO LANE-LEVEL "no package.json" NOTE. An earlier
   // draft withheld the whole map with one such note, which was wrong twice: it
   // told a repository whose commands legitimately live elsewhere that its
@@ -1548,11 +1995,22 @@ function hostSignature(hosts: Readonly<Record<string, readonly string[]>>): stri
   );
 }
 
-/** Scan, cross-check and assemble the proposal. Writes nothing. */
-export function detect(repoRoot: string): DetectReport {
+/**
+ * Scan, cross-check and assemble the proposal. Writes nothing.
+ *
+ * THE PLATFORM IS A PARAMETER, NOT A READ, and it is the one input here that
+ * is about the machine rather than about the tree. `{gw}` resolves to a
+ * different word on Windows, so the proposal a caller gets differs by host --
+ * and a test that read `process.platform` could only ever prove that on the
+ * host it happened to run on, which is the same argument ../seam/exec.ts makes
+ * for every other platform decision in this repository. ./command.ts passes
+ * `context.seams.platform`.
+ */
+export function detect(repoRoot: string, platform: NodeJS.Platform): DetectReport {
   const pack = loadProfilesPack();
+  const hostStacks = hostToolStacks(pack);
   const resolved = resolveSchemaFile(repoRoot, CONTRACT_FILE);
-  const found = scan(repoRoot);
+  const found = scan(repoRoot, hostStacks);
   const lanes: DetectedLane[] = [];
   const profiles = new Map<string, StackProfile>();
   const taken = new Set<string>();
@@ -1580,7 +2038,14 @@ export function detect(repoRoot: string): DetectReport {
       taken.add(lane);
       const profile = profileById(pack, stack);
       profiles.set(lane, profile);
-      const proposed = proposeVerbs(pack, profile, directory, lane);
+      const proposed = proposeVerbs(
+        pack,
+        profile,
+        directory,
+        lane,
+        platform,
+        hostStacks.find((entry): boolean => entry.stack === stack),
+      );
       lanes.push({
         lane,
         stack,
