@@ -1,11 +1,12 @@
 {
   "$schema": "nen.contract/v0.1",
-  "$comment": "TEST FIXTURE -- the EXECUTOR's repository. Shaped after the Next.js product repo in zheref/nen#91's design (its two-step lint, its multi-package coverage, its unsupported archive/release/deploy), with this fixture's own placeholder workspace names: nothing here is any real project's identity. Not shipped; see ../../README.md. The `web` lane is the one stack this release runs end to end; `native` exists so the unsupported-verb, host, placeholder and cannot-assert refusals each have a lane to be proved against.",
+  "$comment": "TEST FIXTURE -- the EXECUTOR's repository. Shaped after the Next.js product repo in zheref/nen#91's design (its two-step lint, its multi-package coverage, its unsupported archive/release/deploy), with this fixture's own placeholder workspace names: nothing here is any real project's identity. Not shipped; see ../../README.md. The `web` lane is the one stack this release runs end to end; `native` exists so the unsupported-verb, host, placeholder and cannot-assert refusals each have a lane to be proved against; `pages` is the one lane that CAN deploy, so that `--target` has somewhere to land -- `web`'s deploy is a SEAT on purpose, and the pair is what proves the order (a seat answers 4 whatever --target says; a runnable row asks for the destination).",
 
   "project": {
     "lanes": {
       "web": { "stack": "nextjs", "cwd": "." },
-      "native": { "stack": "xcode-ios", "cwd": "native" }
+      "native": { "stack": "xcode-ios", "cwd": "native" },
+      "pages": { "stack": "gatsby", "cwd": "." }
     },
     "defaultLane": "web",
 
@@ -100,11 +101,39 @@
           "why": "A placeholder from the reference pack's own closed set, which this release cannot substitute -- the refusal is exit 2 naming it."
         },
         "archive": { "unsupported": "signing material is a human's, and nen never synthesises it." }
+      },
+      "pages": {
+        "build": { "exe": "placeholder-site-tool", "argv": ["build"] },
+        "deploy": {
+          "exe": "placeholder-deploy-tool",
+          "argv": ["publish", "--dir", "public"],
+          "env": { "PLACEHOLDER_DEPLOY_CHANNEL": "a declared value no output may carry" },
+          "why": "The one lane here that CAN deploy. Its argv names no destination -- that is what `targets` is for -- and its declared env VALUE exists so the rule that only NAMES are ever reported has a deploy to be proved against."
+        }
       }
     },
 
     "profiles": {},
-    "targets": {},
+
+    "$targets": "DELIBERATELY OUT OF BYTE ORDER in this file, so that a listing nen prints in byte order is provably sorted rather than provably echoed.",
+    "targets": {
+      "staging": {
+        "args": ["--env", "staging"],
+        "requiresEnv": ["PLACEHOLDER_DEPLOY_TOKEN"],
+        "why": "Appends two arguments to the lane's declared deploy argv and requires one variable to be SET. Nen asserts the NAME and never reads the value."
+      },
+      "production": {
+        "args": ["--env", "production"],
+        "requiresEnv": ["PLACEHOLDER_DEPLOY_TOKEN", "PLACEHOLDER_DEPLOY_ORG"],
+        "why": "Two required variables, declared out of byte order on purpose: the report sorts them."
+      },
+      "preview": {
+        "why": "A NAME-ONLY target: it appends nothing and requires nothing, so `--target preview` runs the lane's declared argv exactly as written. Naming it is still mandatory -- nen never picks a destination."
+      },
+      "provider-integration": {
+        "unsupported": "the push to the default branch IS the deploy here, through the hosting provider's git integration. There is no command line for nen to run, and inventing one that looked plausible is the failure this row exists to refuse."
+      }
+    },
     "hosts": { "*": ["darwin", "linux", "win32"], "release": ["darwin"] }
   }
 }

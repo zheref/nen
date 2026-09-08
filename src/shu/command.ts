@@ -75,7 +75,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   release: { values: ["lane"], booleans: ["dry-run"] },
   dev: { values: ["lane"], booleans: ["dry-run"] },
   run: { values: ["lane"], booleans: ["dry-run"] },
-  deploy: { values: ["lane", "target"], booleans: ["dry-run"] },
+  deploy: { values: ["lane", "target"], booleans: ["dry-run", "run"] },
   coverage: { values: ["lane", "threshold"], booleans: ["dry-run"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
@@ -149,8 +149,11 @@ verbs:
   dev         Start the lane's DEBUG build. Long-running: nen inherits this
               terminal and hands it to the child.
   run         Start the lane's PRODUCTION build, locally. Also long-running.
-  deploy      Send a build to a declared, NAMED target. --target is required
-              and has no default, not even when exactly one target exists.
+  deploy      Send a build to a declared, NAMED target: --target <name> [--run].
+              --target is required and has no default, not even when exactly
+              one target exists. Bare, this is a safe, exit-0 plan -- the
+              destination substituted into the argv, every precondition
+              asserted, nothing sent -- and --run is what acts.
   coverage    Run the lane's coverage command, then PARSE the report it
               produced into one shape: a total, a row per target, and -- with
               --threshold -- whether the number cleared a bar. The report is
@@ -213,11 +216,26 @@ the declaration:
   project.hosts         { "<verb>|*": ["darwin","linux","win32"] }, compared
                         against this host. An exact verb key wins over "*", and
                         a declaration with no hosts block constrains nothing.
-  project.targets       { "<name>": ... }, the deploy destinations. --target
-                        must name a key of it. A --target that names none is
-                        exit 2 listing what IS declared -- accepting the flag's
-                        mere presence would make it a formality satisfied by
-                        any word.
+  project.targets       { "<name>": { args, requiresEnv, unsupported, why } },
+                        the deploy destinations. --target must name a key of
+                        it. A --target that names none is exit 2 listing what
+                        IS declared -- accepting the flag's mere presence would
+                        make it a formality satisfied by any word. The COMMAND
+                        stays in project.verbs.<lane>.deploy, where every other
+                        verb's command is; a target says where that command
+                        sends it:
+                          args         appended to that argv, in order. Refused
+                                       on a multi-step row: which step reaches
+                                       the destination is a guess.
+                          requiresEnv  variable NAMES that must be SET,
+                                       asserted exactly as a precondition of
+                                       kind 'env' is -- the value is never
+                                       read, compared, logged or printed. A
+                                       credential belongs in the environment;
+                                       one written here would be in git.
+                          unsupported  this destination has no command line at
+                                       all (a provider's git integration, a CI
+                                       action). Exit 4, in the repo's words.
 
   project.toolchain     { "<tool>": { version, probe, versionFrom, installer,
                         why } } -- the HOST tools 'tools' checks. 'version' is
@@ -249,7 +267,9 @@ flags:
                    the thing that runs. On 'tools' this covers the version
                    PROBES too: a dry run of that verb spawns nothing whatever,
                    which is what makes it the one form of it a watcher can
-                   certify read-only. On 'warmup' it prints every git command
+                   certify read-only. On 'deploy' it is the EXPLICIT spelling
+                   of what that verb does anyway without --run, and giving both
+                   --run and --dry-run is exit 2. On 'warmup' it prints every git command
                    AND every delegated toolchain command, in order, and runs
                    none of them -- not even the fetch. That form still
                    classifies MUTATING in izanami's table, unlike the other
@@ -298,9 +318,34 @@ flags:
                    test suite is the slow half and a warm-up is the fast one.
   --target <name>  'deploy' only. Must name a key of project.targets. Required,
                    with no default ever -- not even when there is exactly one.
-                   It is checked BEFORE the lane and the verb, so a line that
-                   gets both wrong is told about the target first.
-  --write          'detect' only. Writes nen/contract.json when there is none.
+                   It is resolved AFTER the lane, the verb, the host and the
+                   placeholders, and before the preconditions: a lane whose
+                   'deploy' the declaration seats as unsupported answers exit 4
+                   with its own reason whatever --target says, because that is
+                   true however the line is retyped, while a missing or unknown
+                   target is exit 2 naming what IS declared. A target may add
+                   'args' (appended to the lane's declared deploy argv, and
+                   refused on a multi-step row -- nen will not guess which step
+                   reaches the destination), 'requiresEnv' (variable NAMES nen
+                   asserts are SET, never reading or printing a value) and
+                   'unsupported' (a destination with no command line at all --
+                   a provider's git integration, a CI action -- which is exit 4
+                   in the repository's own words).
+                   IT DOES NOT MEAN "SEND IT": see --run.
+  --run            'deploy' only, and REQUIRED before anything is sent. Without
+                   it the verb prints the fully resolved plan -- the
+                   destination substituted into the argv, the preconditions
+                   asserted, every step as 'would run:' -- and starts nothing,
+                   at exit 0, exactly as --dry-run does. This is the same
+                   dry-run-first gate '${PROGRAM} label apply --run' and
+                   '${PROGRAM} wake fire --run' carry, on the one verb in this
+                   family whose blast radius is other people's users: every
+                   other verb here spawns something inside a directory and can
+                   be undone by running it again, and a deploy cannot.
+                   --target and --run are INDEPENDENT and both required to act:
+                   one says where, the other says now. Giving --run and
+                   --dry-run together is exit 2 rather than a guess about which
+                   of two contradicting instructions was meant.
                    There is no --force and no merge.
   --install        'tools' only. THE ONE FLAG IN THIS FAMILY THAT CHANGES THE
                    HOST rather than a repository. It acts only for entries whose
@@ -329,8 +374,12 @@ flags:
                    are still missing that nen will not install.
   --json           On every verb that executes one, the report as one object,
                    keys in order:
-                   { contract, lane, stack, verb, steps, cwd, env, host,
-                     preconditions, exitCode, durationMs, artifacts, log }.
+                   { contract, lane, stack, verb, target, steps, cwd, env,
+                     host, preconditions, exitCode, durationMs, artifacts,
+                     log }. 'target' is null on every verb but 'deploy', where
+                   it is { name, args, requiresEnv } -- the destination that
+                   was resolved, what it appended to the argv, and the
+                   variable NAMES it requires. Never a value of one.
                    On 'warmup' it is a different contract again
                    ('${WARMUP_CONTRACT}'), keys in order:
                    { contract, repo, trunk, remote, branch, discard, steps,
@@ -427,8 +476,9 @@ exit codes:
      and in the sentence on stderr
   2  usage: no declaration, no "project" block, an unknown --lane, a
      placeholder nen cannot substitute, a --target that names no declared
-     target, --json on a long-running verb without --dry-run, a path that
-     resolves outside the repository, or a PRECONDITION that is not satisfied.
+     target, --run given together with --dry-run, --json on a long-running verb
+     without --dry-run, a path that resolves outside the repository, or a
+     PRECONDITION that is not satisfied.
      On 'tools' also: an --only naming a tool the declaration does not carry, a
      'version' in a form nen cannot evaluate, and -- under --install -- a pin
      this release will not act on (a range where the installer activates one
@@ -794,22 +844,22 @@ export const shuCommand: Command = {
         );
       }
 
-      if (subcommand === "deploy") {
-        // NEVER A DEFAULT TARGET, not even when there is exactly one. A deploy
-        // that picks its own destination is the one mistake in this family
-        // whose blast radius is other people's users.
-        requireValue(
-          context.args,
-          "target",
-          "'shu deploy' sends a build to a NAMED target from project.targets, and there is no default -- one entry does not make it one.",
-        );
-      }
-
+      // NEVER A DEFAULT TARGET, not even when there is exactly one -- a deploy
+      // that picks its own destination is the one mistake in this family whose
+      // blast radius is other people's users. THE REQUIREMENT IS NOT CHECKED
+      // HERE, though it used to be: a usage gate in front of the declaration
+      // made a written `deploy` seat unreachable, because a lane that will
+      // never deploy answered "--target is required" instead of its own reason.
+      // ./run.ts's `runVerb` header carries the order and the argument.
       return runVerb(context, repoRoot, {
         verb: subcommand,
         lane: context.args.values["lane"] ?? null,
         dryRun: context.args.booleans.has("dry-run"),
         target: context.args.values["target"] ?? null,
+        // AND NEVER AN IMPLIED --run. `refuseForeignFlags` above has already
+        // refused this flag on every verb but 'deploy', so reading it
+        // unconditionally here cannot turn another verb's line into an action.
+        run: context.args.booleans.has("run"),
       });
     } catch (error) {
       // This family's own codes (3/4/5) are returned, not thrown past

@@ -69,7 +69,7 @@ import {
 import { containedPath } from "../repo/contain.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
 import { parseYaml } from "../schema/yaml.js";
-import { ASSERTABLE_KINDS } from "./render.js";
+import { ASSERTABLE_KINDS, TARGETED_VERBS } from "./render.js";
 
 /**
  * Directories NOTHING IN THIS FILE ever descends into -- one set, for every
@@ -5204,6 +5204,51 @@ function seatReason(verb: string, stack: string, packReason: string): string {
   return `PROPOSED SEAT -- replace it. nen shu detect wrote this row because the reference pack proposes no command for '${verb}' on ${stack}; nen never invents one. The pack's own reason: ${packReason}`;
 }
 
+/**
+ * The catalogue's own word on one cell, whichever of the four shapes it is.
+ *
+ * It exists for the `targets` note below: that note quotes the pack on `deploy`
+ * for this stack, and the sentence lives in a different field per kind -- a
+ * declared-only cell's `reason`, an unsupported cell's `reason`, a command
+ * cell's `why`. Reading the shape here keeps the note one line and keeps this
+ * file's other readers of a cell (`proposeVerbs`) unchanged.
+ */
+function packWord(cell: ProfileVerb): string {
+  if (cell.kind === "declared-only") return cell.reason;
+  if (cell.kind === "unsupported") {
+    /* c8 ignore next -- the pack's reader gives an `unsupported` cell an `unsupported` invocation */
+    return cell.invocation.kind === "unsupported" ? cell.invocation.reason : cell.summary;
+  }
+  /* c8 ignore next -- `delegated` never appears among the command verbs */
+  if (cell.kind === "delegated") return cell.why;
+  /* c8 ignore next 2 -- the two remaining kinds both carry an invocation with a `why`, which ../profiles/pack.ts requires of every command cell */
+  return cell.invocation.kind === "unsupported" ? "" : (cell.invocation.why ?? "");
+}
+
+/**
+ * The note that travels with the EMPTY `targets` block this verb writes.
+ *
+ * WHY EVERY LANE GETS ONE, INCLUDING THE LANES WHOSE `deploy` IS A SEAT. The
+ * block is written whatever the tree contains, because nen will never propose a
+ * destination from any tree: `targets` is the one field in the proposal whose
+ * emptiness is a fact about NEN rather than about this repository. A maintainer
+ * meeting an empty block with no sentence beside it has been handed a key with
+ * no lock -- and the sentence they need differs per stack, which is why it is a
+ * lane note carrying the reference pack's own word on `deploy` rather than one
+ * project-level line that could only speak for whichever stack was first.
+ *
+ * IT NAMES WHAT MUST NEVER GO IN. `requiresEnv` names variables; a value would
+ * be a credential in a file that is committed, and the one place this rule can
+ * be read at the moment somebody is writing the block is here.
+ */
+function targetsNote(profile: StackProfile, verb: string): string {
+  const cell = verbCell(profile, verb);
+  // The pack's sentences end in a full stop and this one continues afterwards,
+  // so the borrowed one loses its own rather than printing "run.. A".
+  const word = packWord(cell).replace(/\.$/, "");
+  return `'targets' is proposed EMPTY and nen will never fill it in: a deploy DESTINATION is not a fact any tree carries, so 'nen shu ${verb}' requires --target <name> naming a key of project.targets, with no default ever -- not even when exactly one is declared. The reference pack's own word on '${verb}' for ${profile.id} (${cell.source}): ${word}. A destination is written {"targets": {"<name>": {"args": ["<argument>"], "requiresEnv": ["<VARIABLE_NAME>"], "why": "<what this destination is>"}}} -- 'args' are appended to this lane's own '${verb}' argv (and refused on a multi-step row: which step reaches the destination is a guess), 'requiresEnv' names variables nen asserts are SET and never reads, compares or prints the value of, and a destination with NO COMMAND LINE AT ALL -- a hosting provider's git integration, a CI action -- is written {"unsupported": "<why>"} rather than given an invented command. Never a credential VALUE: this file is committed.`;
+}
+
 /** The reason clause a leftover `{package}` earns, or "" when it earns none. */
 function packageReason(manifest: Manifest): string {
   const workspace = manifest.workspace;
@@ -6160,6 +6205,11 @@ function proposeVerbs(
     );
   }
 
+  // THE EMPTY `targets` BLOCK, EXPLAINED WHERE IT IS WRITTEN. One note per
+  // verb that takes a destination -- the executor's own list, so a second such
+  // verb arrives here without an edit and this file still names no verb.
+  for (const targeted of TARGETED_VERBS) notes.push(targetsNote(profile, targeted));
+
   // WHAT NEN WILL NOT PROPOSE A PRECONDITION FOR, said out loud. A toolchain
   // entry whose PROBE still carries a pack token is one nen cannot turn into a
   // precondition, and there are two ways to arrive there and one answer:
@@ -6600,6 +6650,19 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
             defaultLane: lanes.length === 1 ? (lanes[0]?.lane ?? null) : null,
             verbs: Object.fromEntries(lanes.map((lane): [string, unknown] => [lane.lane, lane.verbs])),
             hosts,
+            // WRITTEN EMPTY, AND ALWAYS -- which is the opposite of what
+            // `toolchain` below does, so the difference is worth stating.
+            //
+            // An empty `toolchain` would be a CLAIM ("this repository needs no
+            // host tools") that this verb never made. An empty `targets` is not
+            // a claim about the repository at all: it is a statement about
+            // NEN -- a deploy destination is not a fact any tree carries, so
+            // `detect` will never propose one, however much of the repository
+            // it reads. The empty block is the seat that says so, in the file
+            // where the answer goes, and `nen shu deploy` refuses at 2 naming
+            // it until a human writes one. Every lane's note carries the
+            // reference pack's own word on `deploy` for that stack beside it.
+            targets: {},
             // ADDED ONLY WHEN THIS TREE ANSWERED SOMETHING. An empty block is
             // not a neutral one: `project.toolchain: {}` reads as "this
             // repository needs no tools", which is a claim, and every existing

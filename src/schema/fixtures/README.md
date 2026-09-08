@@ -36,10 +36,24 @@ different things.
   repository in [zheref/nen#91](https://github.com/zheref/nen/issues/91)'s
   design — a two-step lint, a multi-package coverage run, `unsupported`
   archive/release/deploy — using this fixture's own placeholder workspace names.
-  Two lanes on different stacks, preconditions in all four states (satisfied
+  Three lanes on different stacks, preconditions in all four states (satisfied
   path, satisfiable env, absent path, a kind nen cannot assert), one per-verb
   host restriction, one unsubstitutable placeholder, and one declared env value
-  that must never appear in any output nen produces. It carries no taxonomy
+  that must never appear in any output nen produces. The third lane, `pages`,
+  is the one that CAN deploy, and it exists so that `--target` has somewhere to
+  land: `web`'s `deploy` is an `unsupported` SEAT on purpose, and the pair is
+  what proves the order the executor resolves a destination in — a seat answers
+  exit 4 with its own reason whatever `--target` says, while a runnable row with
+  no target is exit 2 naming what is declared. Its `targets` block carries all
+  four shapes and is written **out of byte order**, so a listing nen prints
+  sorted is provably sorted rather than provably echoed: a target that appends
+  arguments and requires one variable, one that requires two (declared out of
+  order, so the report's sort shows), a name-only one that appends nothing, and
+  one that is `unsupported` because that destination has no command line at all.
+  The variables its targets require are named and never valued anywhere in the
+  file — the declared env VALUE on the deploy row is a separate, non-credential
+  setting, so "a value never appears in any output" and "a credential is never
+  in the declaration" are two facts a test can tell apart. It carries no taxonomy
   files: a fixture that also had to be a valid taxonomy root would couple two
   suites that have nothing to do with each other. Its `deps/INSTALLED` is the
   file the satisfied `path` precondition asserts — named `deps/` rather than the

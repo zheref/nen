@@ -417,7 +417,9 @@ function delegate(
   let code: number;
   let refusal: string | null = null;
   try {
-    code = runVerb(sub, repoRoot, { verb, lane, dryRun, target: null });
+    // `target`/`run` are `deploy`'s and this verb delegates only 'build' and
+    // 'test': a warm-up verifies a working copy and never sends one anywhere.
+    code = runVerb(sub, repoRoot, { verb, lane, dryRun, target: null, run: false });
   } catch (error) {
     // The family's own codes come back as themselves; a usage refusal is 2, as
     // it is everywhere else. Anything else -- a malformed declaration, say --

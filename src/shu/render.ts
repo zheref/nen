@@ -46,6 +46,25 @@ import type { Invocation, ProjectBlock } from "../schema/contract.js";
  */
 export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
 
+/**
+ * The verbs that send something SOMEWHERE, and therefore require `--target`.
+ *
+ * HERE FOR THE REASON ABOVE, WORD FOR WORD. Two files say this list: ./run.ts
+ * resolves a destination for exactly these verbs, and ./detect.ts names them in
+ * the note that travels with the empty `targets` block it proposes -- so a
+ * `"deploy"` literal in `detect` would be a sentence that goes stale the day a
+ * second verb with a destination lands, and importing the list from ./run.ts
+ * would give `detect` the import edge ../profiles/inertness.test.ts reads as
+ * "this module can spawn".
+ *
+ * It is a LIST for the reason `INTERACTIVE_VERBS` is one: a second such verb is
+ * a line here rather than a new branch, and a reader looking for "which verbs
+ * take a target" finds a list rather than an `=== "deploy"` inside a condition.
+ * ./command.ts's flag table is the other half -- `--target` is refused outright
+ * on every verb that is not in it.
+ */
+export const TARGETED_VERBS: readonly string[] = ["deploy"];
+
 /** One command, as it will be spawned: exe apart from argv, never a string. */
 export interface RenderedStep {
   readonly exe: string;
@@ -57,6 +76,30 @@ export interface RenderedPrecondition {
   readonly kind: string;
   readonly value: string | readonly string[];
   readonly why: string | null;
+  /**
+   * Where the ASSERTED VALUE lives in the declaration, e.g.
+   * `project.preconditions.web[1].value` or
+   * `project.targets.staging.requiresEnv[0]`.
+   *
+   * ALWAYS THE LEAF, never the row that carries it -- the two examples above
+   * look different only because the two rows ARE shaped differently in the
+   * file (a lane precondition is `{ kind, value, why }`; a target's
+   * `requiresEnv` entry is the string itself), and a caller asserting the
+   * value reads this pointer as-is, with nothing appended.
+   *
+   * IT IS CARRIED RATHER THAN RECOMPUTED because two blocks now contribute
+   * rows to one list. ./run.ts's assertion refuses a `path` that escapes the
+   * repository BY POINTER, and it used to build that pointer from the row's
+   * index into the merged list -- so every row a TARGET contributed was
+   * reported as `project.preconditions.<lane>[<i>]`, an address that does not
+   * exist in the file. A refusal naming a place a reader cannot find is a
+   * refusal they cannot act on. A later revision then had ./run.ts append
+   * `.value` to this field to fix that -- correct for a lane row, but it made
+   * the SAME mistake for a target row, whose pointer was already the leaf:
+   * `project.targets.staging.requiresEnv[0].value` names nothing. The fix is
+   * this field being the leaf itself, always, so nothing downstream appends.
+   */
+  readonly pointer: string;
 }
 
 export interface HostVerdict {
@@ -67,10 +110,37 @@ export interface HostVerdict {
   readonly declared: readonly string[] | null;
 }
 
+/**
+ * The destination a `deploy` resolved to, as the report prints it.
+ *
+ * NAMES ONLY, ALWAYS. `requiresEnv` is a list of variable NAMES nen asserts are
+ * set; no value of one is read, compared or rendered anywhere -- the same rule
+ * `RenderedInvocation.env` follows one field up, for the same reason.
+ */
+export interface ResolvedTarget {
+  readonly name: string;
+  /** What this destination appended to the lane's declared argv, in order. */
+  readonly args: readonly string[];
+  /**
+   * Variable NAMES this destination requires, byte-ordered and DE-DUPLICATED.
+   * Never values.
+   *
+   * IT IS THE WHOLE LIST, including a variable the lane's own preconditions
+   * already declare -- this is what the DESTINATION requires, which is a fact
+   * about the destination whoever else also happens to require it. The
+   * assertion is what de-overlaps: `resolveTarget` appends only the names the
+   * lane does not already state, so one variable is one row in the table and
+   * "2 preconditions are not satisfied" never means one variable counted twice.
+   */
+  readonly requiresEnv: readonly string[];
+}
+
 export interface RenderedInvocation {
   readonly lane: string;
   readonly stack: string;
   readonly verb: string;
+  /** The destination, on a verb that takes one. Null on every other verb. */
+  readonly target: ResolvedTarget | null;
   /** Repo-relative, forward-slashed -- the lane's own `cwd`. */
   readonly cwdRelative: string;
   readonly steps: readonly RenderedStep[];
@@ -258,7 +328,15 @@ function artifactsOf(raw: Readonly<Record<string, unknown>>, pointer: string): r
   });
 }
 
-function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb: string): void {
+/**
+ * Every refused placeholder token in a set of steps, de-duplicated, in order.
+ *
+ * SPLIT OUT FROM THE REFUSAL BELOW because two callers ask the same question of
+ * two different sources and owe a caller two different pointers: the lane's own
+ * argv (`renderInvocation`) and the argv a TARGET composed onto it
+ * (`resolveTarget`). One scanner, two sentences.
+ */
+function unsubstituted(steps: readonly RenderedStep[]): readonly string[] {
   const found: string[] = [];
   for (const step of steps) {
     for (const token of [step.exe, ...step.argv]) {
@@ -267,10 +345,19 @@ function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb:
       }
     }
   }
-  if (found.length === 0) return;
-  const unique = [...new Set(found)];
+  return [...new Set(found)];
+}
+
+/** The half of the sentence both refusals end with: what is refused, and why. */
+function placeholderRule(unique: readonly string[]): string {
+  return `${unique.join(", ")}. Placeholder substitution is not in this release (zheref/nen#91). Nen will not guess what a placeholder stands for -- a guessed argument is a different command. (Only the reference pack's own tokens are refused -- ${REFUSED_PLACEHOLDERS.join(", ")}; every other braced argument is passed to the child exactly as written.)`;
+}
+
+function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb: string): void {
+  const unique = unsubstituted(steps);
+  if (unique.length === 0) return;
   throw new VerbUsageError(
-    `'${verb}' on lane '${lane}' names ${unique.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute: ${unique.join(", ")}. Placeholder substitution is not in this release (zheref/nen#91): write the literal argv this lane runs, or run the verb on a lane whose declaration carries none. Nen will not guess what a placeholder stands for -- a guessed argument is a different command. (Only the reference pack's own tokens are refused -- ${REFUSED_PLACEHOLDERS.join(", ")}; every other braced argument is passed to the child exactly as written.)`,
+    `'${verb}' on lane '${lane}' names ${unique.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute: ${placeholderRule(unique)} Write the literal argv this lane runs under project.verbs.${lane}.${verb}, or run the verb on a lane whose declaration carries none.`,
   );
 }
 
@@ -325,15 +412,237 @@ export function renderInvocation(
     lane,
     stack: declaredLane.stack,
     verb: request.verb,
+    // A PLAN IS TARGETLESS UNTIL A TARGET IS RESOLVED ONTO IT (`resolveTarget`
+    // below). Rendering the lane's verb and choosing the destination are two
+    // decisions, and the second one is refused in more ways than the first.
+    target: null,
     cwdRelative: declaredLane.cwd,
     steps,
     env: envOf(invocation.raw, pointer),
     host: { platform: request.platform, supported: true, declared: declaredHosts },
-    preconditions: (project.preconditions[lane] ?? []).map(
-      (entry): RenderedPrecondition => ({ kind: entry.kind, value: entry.value, why: entry.why }),
-    ),
+    preconditions: lanePreconditions(project, lane),
     artifacts: artifactsOf(invocation.raw, pointer),
     why: invocation.why,
+  };
+}
+
+/**
+ * The lane's own preconditions, each carrying the address it came from.
+ *
+ * Split out only so the pointer is built beside the index it is built from --
+ * ./run.ts used to build it from the index into the MERGED list, which is the
+ * defect `RenderedPrecondition.pointer` exists to close.
+ *
+ * THE POINTER NAMES THE VALUE, `.value` AND ALL -- `project.preconditions.
+ * <lane>[<i>].value`, not the row that carries it -- because that is the leaf
+ * ./run.ts's `assertPreconditions` asserts, and a target-contributed row
+ * (`project.targets.<name>.requiresEnv[<i>]`, built in `resolveTarget` below)
+ * already points at its own leaf directly. One field, one meaning: whatever a
+ * `RenderedPrecondition.pointer` says IS where the asserted value lives, and a
+ * caller never appends anything to find it.
+ */
+function lanePreconditions(
+  project: ProjectBlock,
+  lane: string,
+): readonly RenderedPrecondition[] {
+  return (project.preconditions[lane] ?? []).map(
+    (entry, index): RenderedPrecondition => ({
+      kind: entry.kind,
+      value: entry.value,
+      why: entry.why,
+      pointer: `project.preconditions.${lane}[${index}].value`,
+    }),
+  );
+}
+
+/**
+ * The block a repository with no destinations pastes, and then edits.
+ *
+ * IT IS PART OF THE REFUSAL, not documentation the refusal points at. "declare
+ * a target" is advice a reader has to go and look up the shape of; the shape
+ * itself is four keys long and fits on the line that refused.
+ */
+const TARGETS_STUB =
+  '"targets": { "<name>": { "args": ["<argument appended to the deploy argv>"], "requiresEnv": ["<VARIABLE_NAME>"], "why": "<what this destination is>" } }';
+
+/** Byte order, the same order every listing in this family is printed in. */
+function byteOrder(names: readonly string[]): readonly string[] {
+  return [...names].sort((a, b): number => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * The lane's declared argv with the destination's arguments on the end.
+ *
+ * NEN DOES NOT GUESS WHICH STEP REACHES THE DESTINATION. Appending to the LAST
+ * step of a multi-step row would be an inference about somebody else's command
+ * line -- the publishing step is usually the last one, and "usually" is exactly
+ * the word this family refuses -- so a target that appends onto a multi-step
+ * verb is refused with both facts and the two ways out.
+ */
+function appendArgs(
+  plan: RenderedInvocation,
+  args: readonly string[],
+  target: string,
+): readonly RenderedStep[] {
+  if (args.length === 0) return plan.steps;
+  const first = plan.steps[0];
+  /* c8 ignore next -- `stepsOf` never returns an empty list for a runnable row */
+  if (plan.steps.length !== 1 || first === undefined) {
+    // QUOTED THE SAME WAY run.ts's `target:` LINE QUOTES ITS OWN TAIL --
+    // `renderArgv` implements the project's one quoting rule, and a target's
+    // appended args are argv tokens like any other. `args.join(" ")` here
+    // would silently un-quote a token that carries whitespace or a quote (an
+    // `args: ["--branch", "two words"]` target reads as THREE arguments
+    // instead of two), so this reuses `renderArgv` rather than growing a
+    // second, looser rendering of the same tokens. `exe` takes the first
+    // token because `renderArgv` quotes it exactly as it quotes every `argv`
+    // element -- there is no seam here for a real executable to reach, and
+    // `firstArg` is never actually undefined because `args.length === 0`
+    // already returned above.
+    const [firstArg, ...restArgs] = args;
+    throw new VerbUsageError(
+      `target '${target}' appends ${args.length} argument${args.length === 1 ? "" : "s"} (${
+        /* c8 ignore next -- args.length === 0 already returned above */
+        firstArg === undefined ? "" : renderArgv({ exe: firstArg, argv: restArgs })
+      }), and '${plan.verb}' on lane '${plan.lane}' declares ${plan.steps.length} steps. nen will not guess which of them reaches the destination: write the destination's arguments into the step that does, under project.verbs.${plan.lane}.${plan.verb}, and drop this target's 'args' -- or declare a single-step ${plan.verb} row.`,
+    );
+  }
+  return [{ exe: first.exe, argv: [...first.argv, ...args] }];
+}
+
+/**
+ * Resolve `--target` onto a rendered plan, or refuse.
+ *
+ * WHY THIS RUNS AFTER `renderInvocation` AND NOT BEFORE IT. The order used to
+ * be the other way round -- `--target` was a usage gate checked before the lane
+ * and the verb were read -- and the consequence was that a lane whose `deploy`
+ * is an `unsupported` SEAT could never say so: `nen shu deploy --lane app` on a
+ * lane that will never deploy answered "no targets declared" (exit 2), which
+ * sends a maintainer to write a `targets` block that cannot make the row
+ * runnable. Two facts were competing and the WEAKER one was winning:
+ *
+ *   * the seat is TERMINAL. "This lane has no deploy, in the repository's own
+ *     words" is true whatever the command line says, and acting on the other
+ *     refusal's advice does not change it.
+ *   * a missing or unknown `--target` is a fact about the COMMAND LINE, which
+ *     the caller fixes by typing something else.
+ *
+ * A refusal that sends someone to do work that cannot help is worse than one
+ * that costs them a retype, so the terminal fact goes first -- and every
+ * refusal `renderInvocation` makes (an undeclared lane, a seat, a host, an
+ * unsubstituted placeholder) is a fact about the repository or the machine.
+ * Once a plan EXISTS, the destination is the last thing decided before the
+ * preconditions are asserted, and nothing has spawned either way.
+ *
+ * THE ONE THING THIS ORDER COSTS is that `--target typo` on a lane whose deploy
+ * is a seat is answered with the seat rather than with the typo. That is the
+ * right trade: the typo is invisible to a repository that will never deploy
+ * that lane at all.
+ */
+export function resolveTarget(
+  project: ProjectBlock,
+  plan: RenderedInvocation,
+  requested: string | null,
+): RenderedInvocation {
+  const declared = byteOrder(Object.keys(project.targets));
+  if (requested === null) {
+    throw new VerbUsageError(
+      `'${plan.verb}' on lane '${plan.lane}' (${plan.stack}) needs --target, and there is no default -- not even when exactly one target is declared. nen never chooses where a build goes. ${
+        declared.length === 0
+          ? `This repository declares no targets at all, so there is nothing --target could name yet: add one to nen/contract.json under project.targets -- ${TARGETS_STUB} -- where 'args' and 'requiresEnv' are both optional and 'requiresEnv' names variables nen asserts are SET and never reads the value of.`
+          : `Declared under project.targets: ${declared.join(", ")}.`
+      }`,
+    );
+  }
+  const target = Object.prototype.hasOwnProperty.call(project.targets, requested)
+    ? project.targets[requested]
+    : undefined;
+  if (target === undefined) {
+    // A TARGET THAT IS NOT DECLARED IS NOT A TARGET. Accepting the flag's mere
+    // presence would make `--target` a formality a caller satisfies with any
+    // word, which is the same as having no requirement -- and the requirement
+    // exists because nen must never choose where a build goes.
+    throw new VerbUsageError(
+      `--target '${requested}' is not declared under project.targets. ${
+        declared.length === 0
+          ? `This repository declares no targets at all; add one before asking nen to deploy to it -- ${TARGETS_STUB}.`
+          : `Declared: ${declared.join(", ")}.`
+      }`,
+    );
+  }
+  if (target.unsupported !== null) {
+    // THE OTHER TERMINAL FACT, and it is the destination's rather than the
+    // lane's: a hosting provider's git integration and a CI action are both
+    // real deploys with NO COMMAND LINE for nen to run. Exit 4 with the
+    // repository's own sentence, exactly as an unsupported verb row answers.
+    throw new ShuRefusal(
+      EXIT_UNSUPPORTED_VERB,
+      `target '${requested}' has no command line at all, so there is nothing for nen to run on lane '${plan.lane}' (${plan.stack}). The declaration's own reason: ${target.unsupported}`,
+    );
+  }
+  const steps = appendArgs(plan, target.args, requested);
+  // THE SAME GUARD THE LANE'S OWN ARGV GETS, over the CONCATENATION. The lane's
+  // half was checked in `renderInvocation`, before this target existed; a
+  // target's `args` had never been checked at all, so `"args": ["-destination",
+  // "{destination}"]` composed cleanly and handed the seam a literal
+  // `{destination}` -- exit 0, and a token the pack publishes as a placeholder
+  // reaching a real command line. The whole concatenation is re-scanned rather
+  // than just `target.args`, because what must not carry an unsubstituted token
+  // is the argv that spawns, and re-scanning tokens already proven clean costs
+  // one pass over a list nen just built.
+  const composed = unsubstituted(steps);
+  if (composed.length > 0) {
+    throw new VerbUsageError(
+      `target '${requested}' composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this destination needs under project.targets.${requested}.args -- a destination is a fact this repository states, and nen substitutes nothing into it.`,
+    );
+  }
+  // DE-DUPLICATED FIRST, AND THE REPORT CARRIES THE DE-DUPLICATED LIST. A
+  // declaration repeating a name -- by hand, or by a generator -- printed the
+  // row once per occurrence and counted each in "N preconditions are not
+  // satisfied", so one unset variable was reported as three problems.
+  const required = byteOrder([...new Set(target.requiresEnv)]);
+  // AND A VARIABLE THE LANE ALREADY DECLARES IS ASSERTED ONCE. The two blocks
+  // are different statements about the same fact -- the lane says "this build
+  // needs it", the target says "this destination needs it" -- and both are
+  // true, so `target.requiresEnv` above still lists it. What must not happen is
+  // the ASSERTION running twice: two identical `FAIL env X` rows, in a table
+  // whose only distinguishing column is the one the report does not print, is a
+  // reader wondering which of the two Xs they failed to set.
+  const laneEnv = new Set(
+    plan.preconditions.flatMap((entry): readonly string[] =>
+      entry.kind === "env" && typeof entry.value === "string" ? [entry.value] : [],
+    ),
+  );
+  return {
+    ...plan,
+    target: {
+      name: requested,
+      args: target.args,
+      requiresEnv: required,
+    },
+    steps,
+    // ASSERTED THROUGH THE MACHINERY THAT ALREADY EXISTS. A destination's
+    // required variables are preconditions of kind `env` -- ./run.ts asserts
+    // that kind by checking the name is SET and never reading the value -- so
+    // they are appended to the lane's own list rather than given a second
+    // assertion path that would have to make the same promise twice. They come
+    // AFTER the lane's, byte-ordered, each carrying its own pointer, and the
+    // report's `target.requiresEnv` says which variables arrived this way.
+    preconditions: [
+      ...plan.preconditions,
+      ...required
+        .filter((name): boolean => !laneEnv.has(name))
+        .map(
+          (name): RenderedPrecondition => ({
+            kind: "env",
+            value: name,
+            why: `required by the deploy target '${requested}'. nen asserts the variable is SET and never reads, compares or prints its value.`,
+            // The index into what the FILE says, not into the sorted list a
+            // reader never saw: a pointer is an address somebody opens.
+            pointer: `project.targets.${requested}.requiresEnv[${target.requiresEnv.indexOf(name)}]`,
+          }),
+        ),
+    ],
   };
 }
 

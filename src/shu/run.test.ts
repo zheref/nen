@@ -18,7 +18,8 @@ import { runFamily } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
-import { INTERACTIVE_VERBS } from "./run.js";
+import { assertPreconditions, INTERACTIVE_VERBS } from "./run.js";
+import { renderArgv, type RenderedInvocation, type RenderedPrecondition } from "./render.js";
 
 const TOKEN = "PLACEHOLDER_LANE_TOKEN";
 /** The one value the fixture declares for a child's environment. */
@@ -348,6 +349,7 @@ describe("--json -- the pinned key order", () => {
       "lane",
       "stack",
       "verb",
+      "target",
       "steps",
       "cwd",
       "env",
@@ -612,6 +614,74 @@ describe("nothing steps outside the tree --repo names", () => {
   });
 });
 
+// ── (c3) assertPreconditions asserts the pointer AS GIVEN ─────────────────
+//
+// A DIRECT UNIT TEST OF ./run.ts's `assertPreconditions`, not driven through
+// `withDeclaration` -- unlike everywhere else in this file. The contract this
+// pins ("whatever `RenderedPrecondition.pointer` says IS the value pointer,
+// and this function appends nothing to it") has no real declaration that
+// exercises the target-row half of it: `resolveTarget` in ./render.ts only
+// ever hands `assertPreconditions` an `env`-kind row for a target's
+// `requiresEnv`, and `env` never reaches `insideRepo` -- the one place a
+// pointer is rendered into a message -- so a real `nen shu deploy` can never
+// show the difference. Constructing a `path`-kind row shaped the way a target
+// row IS ADDRESSED (`project.targets.<name>.requiresEnv[<i>]`, already the
+// leaf) is the only way to prove `assertPreconditions` never appends `.value`
+// to a pointer that is already one.
+
+function planWith(preconditions: readonly RenderedPrecondition[]): RenderedInvocation {
+  return {
+    lane: "only",
+    stack: "placeholder-stack",
+    verb: "deploy",
+    target: null,
+    cwdRelative: ".",
+    steps: [],
+    env: {},
+    host: { platform: "linux", supported: true, declared: null },
+    preconditions,
+    artifacts: [],
+    why: null,
+  };
+}
+
+describe("assertPreconditions asserts entry.pointer verbatim", () => {
+  it("a lane-shaped pointer, which already carries '.value'", () => {
+    const plan = planWith([
+      {
+        kind: "path",
+        value: "../../etc/passwd",
+        why: null,
+        // What ./render.ts's `lanePreconditions` now builds: the leaf itself.
+        pointer: "project.preconditions.only[0].value",
+      },
+    ]);
+    expect(() => assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).toThrow(
+      /^project\.preconditions\.only\[0\]\.value names '\.\.\/\.\.\/etc\/passwd'/,
+    );
+  });
+
+  it("a target-shaped pointer, appending nothing -- the regression this pins", () => {
+    // No real declaration produces a `path`-kind row at this address (a
+    // target's `requiresEnv` is always `env`-kind); this constructs the shape
+    // directly to prove the function's own contract, independent of what
+    // today's callers happen to pass it.
+    const plan = planWith([
+      {
+        kind: "path",
+        value: "../../etc/passwd",
+        why: null,
+        // What ./render.ts's `resolveTarget` builds for a `requiresEnv` row:
+        // already the leaf, with NO '.value' to append.
+        pointer: "project.targets.production.requiresEnv[0]",
+      },
+    ]);
+    expect(() => assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).toThrow(
+      /^project\.targets\.production\.requiresEnv\[0\] names '\.\.\/\.\.\/etc\/passwd'/,
+    );
+  });
+});
+
 // ── (d) the refusals, one per exit code ────────────────────────────────────
 
 describe("refusals", () => {
@@ -675,7 +745,7 @@ describe("refusals", () => {
   it("exit 2 naming every declared lane when --lane is unknown", async () => {
     const result = await capture(["build", "--lane", "nope"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/Declared: web, native/);
+    expect(result.err.join("\n")).toMatch(/Declared: web, native, pages\./);
   });
 
   it("exit 4 listing the lane's declared verbs when it declares no such verb", async () => {
@@ -815,16 +885,536 @@ describe("refusals", () => {
     expect(out).not.toMatch(/exit null/);
   });
 
-  it("refuses a --target that names no declared target, rather than accepting any word", async () => {
-    const result = await capture(["deploy", "--target", "anything"]);
+  it("exit 2 naming every declared lane when --lane is unknown, even on the verb with a destination", async () => {
+    // THE LANE STILL COMES FIRST. `deploy`'s destination is resolved after the
+    // lane and the verb, which is what makes a seat reachable -- but "after the
+    // lane" has to mean the LANE's refusal wins when the lane is the thing that
+    // is wrong, or the new order would have traded one unreachable refusal for
+    // another.
+    const result = await capture(["deploy", "--lane", "nope", "--target", "preview"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/declares no targets at all/);
+    expect(result.err.join("\n")).toMatch(/--lane 'nope' is not a lane this repository declares/);
+  });
+});
+
+// ── (d.1) `deploy`: the destination, and the order it is resolved in ────────
+//
+// THE FIXTURE CARRIES BOTH HALVES OF THE ORDER ON PURPOSE. `web`'s `deploy` is
+// an `unsupported` SEAT and `pages`'s is a runnable row, so every assertion
+// below about "which fact answers first" is made against a declaration rather
+// than against a mock.
+
+/** The environment a real deploy needs, with values no output may carry. */
+const DEPLOY_ENV: Readonly<Record<string, string>> = {
+  [TOKEN]: "a value no output may carry",
+  PLACEHOLDER_DEPLOY_TOKEN: "TOKEN-VALUE-THAT-MUST-NEVER-BE-PRINTED",
+  PLACEHOLDER_DEPLOY_ORG: "ORG-VALUE-THAT-MUST-NEVER-BE-PRINTED",
+};
+
+/** The declaration's own env value for the `pages` lane's deploy row. */
+const DECLARED_DEPLOY_VALUE = "a declared value no output may carry";
+
+interface TargetReport {
+  readonly target: { readonly name: string; readonly args: readonly string[]; readonly requiresEnv: readonly string[] } | null;
+}
+
+describe("nen shu deploy -- the seat, the destination, and which answers first", () => {
+  it("answers a SEAT at exit 4 with the declaration's own reason, whatever --target says", async () => {
+    // THE FINDING THIS ORDER EXISTS FOR. `--target` used to be a usage gate in
+    // front of the declaration, so a lane whose `deploy` the repository seats
+    // as unsupported could never say so: every form of the line answered "no
+    // targets declared", which sends a maintainer to write a `targets` block
+    // that cannot make the row runnable. Three forms, one answer.
+    for (const argv of [
+      ["deploy"],
+      ["deploy", "--target", "preview"],
+      ["deploy", "--target", "not-a-declared-target"],
+    ]) {
+      const result = await capture(argv);
+      expect(result.code, argv.join(" ")).toBe(4);
+      expect(result.err.join("\n"), argv.join(" ")).toContain(
+        "no target is wired. Declare one under `targets` before nen will run this.",
+      );
+      expect(result.seams.calls, argv.join(" ")).toEqual([]);
+    }
   });
 
-  it("refuses 'deploy' with no --target at all -- there is never a default", async () => {
-    const result = await capture(["deploy"]);
+  it("answers the SEAT even when the TARGET is the one with no command line", async () => {
+    // THE PAIR THE WHOLE ORDER ARGUMENT RESTS ON, and both halves are exit 4:
+    // the lane's seat and the destination's `unsupported` are each terminal, so
+    // whichever answers, a caller learns a fact that no retype changes. The
+    // LANE's is the one that must win -- it is true of every destination, while
+    // the target's is true of this one -- so the sentence a reader gets is the
+    // lane's own.
+    const result = await capture(["deploy", "--target", "provider-integration"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain(
+      "no target is wired. Declare one under `targets` before nen will run this.",
+    );
+    // And NOT the destination's, which would send a maintainer to fix the one
+    // target instead of the lane that cannot deploy at all.
+    expect(result.err.join("\n")).not.toContain("hosting provider's git integration");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("answers the HOST at 3 before a --target that names nothing", async () => {
+    // The other unpinned pair: `project.hosts` is a fact about this MACHINE and
+    // the destination is a fact about the command line, so the machine answers
+    // first -- retyping the target on a host the declaration excludes could not
+    // have helped, and exit 3 is the code a caller routes to another runner on.
+    const result = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { prod: {} },
+        hosts: { deploy: ["darwin"] },
+      }),
+      ["deploy", "--target", "not-a-declared-target"],
+      { platform: "linux" },
+    );
+    expect(result.code).toBe(3);
+    expect(result.err.join("\n")).toMatch(
+      /'deploy' on lane 'only' \(placeholder-stack\) is declared for darwin; this host is linux/,
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("asks for the destination -- byte-ordered -- once the lane HAS a deploy to send", async () => {
+    const result = await capture(["deploy", "--lane", "pages"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/--target is required/);
+    // Byte order, not declaration order: the fixture writes them staging,
+    // production, preview, provider-integration.
+    expect(result.err.join("\n")).toMatch(
+      /Declared under project\.targets: preview, production, provider-integration, staging\./,
+    );
+    expect(result.err.join("\n")).toMatch(/there is no default -- not even when exactly one target/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses a --target that names no declared target, rather than accepting any word", async () => {
+    const result = await capture(["deploy", "--lane", "pages", "--target", "anything"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(
+      /--target 'anything' is not declared under project\.targets\. Declared: preview, production, provider-integration, staging\./,
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses a --target naming an inherited object member as the undeclared target it is", async () => {
+    // `project.targets["constructor"]` is a function on any ordinary object, so
+    // a lookup asking `!== undefined` would accept this, read `args` off a
+    // function and deploy. The map is prototype-less AND the lookup uses
+    // hasOwnProperty; this pins the answer a caller gets either way.
+    for (const inherited of ["constructor", "toString", "__proto__"]) {
+      const result = await capture(["deploy", "--lane", "pages", "--target", inherited]);
+      expect(result.code, inherited).toBe(2);
+      expect(result.err.join("\n"), inherited).toContain(
+        `--target '${inherited}' is not declared under project.targets.`,
+      );
+      expect(result.seams.calls, inherited).toEqual([]);
+    }
+  });
+
+  it("prints the block to paste when the repository declares no targets at all", async () => {
+    const result = await withDeclaration(
+      oneLane({ verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } } }),
+      ["deploy"],
+    );
+    expect(result.code).toBe(2);
+    const message = result.err.join("\n");
+    expect(message).toMatch(/declares no targets at all/);
+    // THE SHAPE IS IN THE REFUSAL, not in a document it points at: "declare a
+    // target" is advice a reader then has to go and look up.
+    expect(message).toContain('"targets": { "<name>": { "args": ["<argument appended to the deploy argv>"], "requiresEnv": ["<VARIABLE_NAME>"], "why": "<what this destination is>" } }');
+    expect(message).toMatch(/never reads the value of/);
+  });
+
+  it("refuses a destination that has NO COMMAND LINE at all at exit 4, in the repo's words", async () => {
+    const result = await capture(["deploy", "--lane", "pages", "--target", "provider-integration"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain(
+      "the push to the default branch IS the deploy here, through the hosting provider's git integration.",
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("appends the target's args to the lane's declared argv, and spawns exactly that", async () => {
+    const argv = "placeholder-deploy-tool publish --dir public --env staging";
+    const dry = await capture(["deploy", "--lane", "pages", "--target", "staging", "--dry-run"], {
+      env: DEPLOY_ENV,
+    });
+    expect(dry.code).toBe(0);
+    expect(wouldRun(dry.out)).toEqual([argv]);
+    // A DRY RUN SPAWNS NOTHING -- the whole reason izanami certifies this one
+    // form of a verb that otherwise writes to somebody else's infrastructure.
+    expect(dry.seams.calls).toEqual([]);
+    const wet = await capture(["deploy", "--lane", "pages", "--target", "staging", "--run"], {
+      env: DEPLOY_ENV,
+      script: [ok(argv)],
+    });
+    expect(wet.code).toBe(0);
+    expect(spawned(wet.seams)).toEqual([argv]);
+    // The thing you approve is the thing that runs, for this verb too.
+    expect(wouldRun(dry.out)).toEqual(spawned(wet.seams));
+  });
+
+  it("changes the argv with the destination -- two targets are not one command", async () => {
+    const staging = await capture(["deploy", "--lane", "pages", "--target", "staging", "--dry-run"], {
+      env: DEPLOY_ENV,
+    });
+    const production = await capture(
+      ["deploy", "--lane", "pages", "--target", "production", "--dry-run"],
+      { env: DEPLOY_ENV },
+    );
+    expect(wouldRun(staging.out)).toEqual([
+      "placeholder-deploy-tool publish --dir public --env staging",
+    ]);
+    expect(wouldRun(production.out)).toEqual([
+      "placeholder-deploy-tool publish --dir public --env production",
+    ]);
+  });
+
+  it("runs a name-only target's row exactly as declared, and still demands the name", async () => {
+    const result = await capture(["deploy", "--lane", "pages", "--target", "preview", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual(["placeholder-deploy-tool publish --dir public"]);
+  });
+
+  it("refuses a target that appends onto a MULTI-STEP row rather than guessing the step", async () => {
+    const result = await withDeclaration(
+      oneLane({
+        verbs: {
+          only: {
+            deploy: {
+              steps: [
+                { exe: "placeholder-site-tool", argv: ["build"] },
+                { exe: "placeholder-deploy-tool", argv: ["publish"] },
+              ],
+            },
+          },
+        },
+        targets: { prod: { args: ["--prod"] } },
+      }),
+      ["deploy", "--target", "prod", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(
+      /appends 1 argument \(--prod\), and 'deploy' on lane 'only' declares 2 steps/,
+    );
+    expect(result.err.join("\n")).toMatch(/will not guess which of them reaches the destination/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  // THE SAME RISK AS THE `target:` LINE, ONE LAYER UP. This refusal printed a
+  // target's appended args with `args.join(" ")` too -- the exact un-quoted
+  // join the `target:` line's `(appends: ...)` tail was fixed away from. A
+  // target whose args carry a space -- `["--branch", "two words"]` -- read as
+  // THREE arguments instead of two. The expected quoting is computed from
+  // `renderArgv` itself rather than hand-typed, so this cannot drift from
+  // what the fix actually calls; no shell ever sees this string (it is a
+  // message, not a spawned argv), so the same single-quote escaping is
+  // correct on Windows and POSIX alike.
+  it("quotes a target's appended args in the multi-step refusal too", async () => {
+    const result = await withDeclaration(
+      oneLane({
+        verbs: {
+          only: {
+            deploy: {
+              steps: [
+                { exe: "placeholder-site-tool", argv: ["build"] },
+                { exe: "placeholder-deploy-tool", argv: ["publish"] },
+              ],
+            },
+          },
+        },
+        targets: { prod: { args: ["--branch", "two words"] } },
+      }),
+      ["deploy", "--target", "prod", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    const quoted = renderArgv({ exe: "--branch", argv: ["two words"] });
+    expect(err).toContain(`appends 2 arguments (${quoted})`);
+    // The space-carrying argument survives as ONE quoted element.
+    expect(quoted).toContain("'two words'");
+    // The un-quoted join this test guards against would print exactly this
+    // substring -- three bare tokens where the destination declared two.
+    expect(err).not.toContain("(--branch two words)");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("runs a multi-step deploy when the target appends nothing -- the refusal is about the args", async () => {
+    const result = await withDeclaration(
+      oneLane({
+        verbs: {
+          only: {
+            deploy: {
+              steps: [
+                { exe: "placeholder-site-tool", argv: ["build"] },
+                { exe: "placeholder-deploy-tool", argv: ["publish"] },
+              ],
+            },
+          },
+        },
+        targets: { prod: { why: "the one destination this row already names" } },
+      }),
+      ["deploy", "--target", "prod", "--dry-run"],
+    );
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual([
+      "placeholder-site-tool build",
+      "placeholder-deploy-tool publish",
+    ]);
+  });
+
+  // ── the destination's environment: NAMES, asserted; values, never ─────────
+
+  it("asserts a target's requiresEnv as env preconditions, byte-ordered, and refuses at 2", async () => {
+    const result = await capture(["deploy", "--lane", "pages", "--target", "production"], {
+      env: { [TOKEN]: "x" },
+    });
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/FAIL {2}env {2}PLACEHOLDER_DEPLOY_ORG -- not set in this environment/);
+    expect(out).toMatch(/FAIL {2}env {2}PLACEHOLDER_DEPLOY_TOKEN -- not set in this environment/);
+    // Byte order: the declaration writes TOKEN first and ORG second.
+    expect(out.indexOf("PLACEHOLDER_DEPLOY_ORG")).toBeLessThan(out.indexOf("PLACEHOLDER_DEPLOY_TOKEN"));
+  });
+
+  it("passes when the variables are set -- and never reads, compares or prints a value", async () => {
+    const argv = "placeholder-deploy-tool publish --dir public --env production";
+    const result = await capture(
+      ["deploy", "--lane", "pages", "--target", "production", "--run", "--json"],
+      { env: DEPLOY_ENV, script: [ok(argv)] },
+    );
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual([argv]);
+    const everything = [...result.out, ...result.err].join("\n");
+    // The two the TARGET requires, and the one the DECLARATION supplies to the
+    // child: three values, three ways for one of them to leak, none of them.
+    expect(everything).not.toContain("MUST-NEVER-BE-PRINTED");
+    expect(everything).not.toContain(DECLARED_DEPLOY_VALUE);
+    expect(everything).toContain("PLACEHOLDER_DEPLOY_TOKEN");
+    expect(everything).toContain("PLACEHOLDER_DEPLOY_CHANNEL");
+  });
+
+  it("keeps the declared env VALUE out of the dry run and out of the refusals too", async () => {
+    const dry = await capture(["deploy", "--lane", "pages", "--target", "staging", "--dry-run"], {
+      env: DEPLOY_ENV,
+    });
+    const refused = await capture(["deploy", "--lane", "pages", "--target", "staging"], {
+      env: { [TOKEN]: "x" },
+    });
+    for (const result of [dry, refused]) {
+      const everything = [...result.out, ...result.err].join("\n");
+      expect(everything).not.toContain(DECLARED_DEPLOY_VALUE);
+      expect(everything).not.toContain("MUST-NEVER-BE-PRINTED");
+    }
+  });
+
+  // ── the report ───────────────────────────────────────────────────────────
+
+  it("names the destination in --json, with its own pinned key order", async () => {
+    const result = await capture(
+      ["deploy", "--lane", "pages", "--target", "production", "--dry-run", "--json"],
+      { env: DEPLOY_ENV },
+    );
+    const report = JSON.parse(result.out.join("\n")) as TargetReport;
+    expect(Object.keys(report.target ?? {})).toEqual(["name", "args", "requiresEnv"]);
+    expect(report.target).toEqual({
+      name: "production",
+      args: ["--env", "production"],
+      // Byte-ordered, unlike the declaration.
+      requiresEnv: ["PLACEHOLDER_DEPLOY_ORG", "PLACEHOLDER_DEPLOY_TOKEN"],
+    });
+  });
+
+  it("carries target: null on every verb that has no destination", async () => {
+    for (const verb of ["build", "test", "lint"]) {
+      const result = await capture([verb, "--dry-run", "--json"]);
+      expect((JSON.parse(result.out.join("\n")) as TargetReport).target, verb).toBeNull();
+    }
+  });
+
+  it("prints the destination above the argv in the human rendering", async () => {
+    const result = await capture(["deploy", "--lane", "pages", "--target", "staging", "--dry-run"], {
+      env: DEPLOY_ENV,
+    });
+    const out = result.out.join("\n");
+    expect(out).toMatch(
+      /target: {8}staging {2}\(appends: --env staging\) {2}requires env: PLACEHOLDER_DEPLOY_TOKEN/,
+    );
+    expect(out.indexOf("target:")).toBeLessThan(out.indexOf("would run:"));
+    // A destination that adds nothing says so rather than printing an empty
+    // pair of brackets a reader has to interpret.
+    const bare = await capture(["deploy", "--lane", "pages", "--target", "preview", "--dry-run"]);
+    expect(bare.out.join("\n")).toMatch(/target: {8}preview {2}\(appends no argument\)/);
+  });
+
+  // THE RISK THIS TEST PINS: `report.target.args.join(" ")` reads back
+  // cleanly for `--env staging` above only because none of ITS tokens carry a
+  // space or a quote. A target whose args do -- `["--note", "two words",
+  // "it's"]` -- is exactly the case `renderArgv` exists for: `join(" ")`
+  // would print `--note two words it's`, which a reader re-splits into FOUR
+  // arguments instead of three. So this pins the `target:` line's quoted
+  // tail against the SAME quoted tail the `would run:` line prints for the
+  // identical tokens, rather than hand-typing an expected string that could
+  // drift from `renderArgv`'s own escaping.
+  it("quotes a target's appended args in the report exactly as the would-run line does", async () => {
+    const project = oneLane({
+      verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+      targets: { prod: { args: ["--note", "two words", "it's"] } },
+    });
+    const result = await withDeclaration(project, ["deploy", "--target", "prod", "--dry-run"]);
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    const appended = /\(appends: ([^)]+)\)/.exec(out);
+    expect(appended).not.toBeNull();
+    const quotedTail = appended?.[1] ?? "";
+    // The middle argument carries a space, so it must survive as ONE quoted
+    // element -- the un-quoted join this test guards against would print it
+    // as two.
+    expect(quotedTail).toContain("'two words'");
+    expect(quotedTail).not.toBe(["--note", "two words", "it's"].join(" "));
+    // Same substring, same place, in the `would run:` line -- the target's
+    // args are the tail of that argv, quoted by the very same `renderArgv`.
+    expect(wouldRun(result.out)).toEqual([`placeholder-deploy-tool publish ${quotedTail}`]);
+    // `--json` is unaffected: it already carries the raw, unquoted array.
+    const json = await withDeclaration(project, ["deploy", "--target", "prod", "--dry-run", "--json"]);
+    const report = JSON.parse(json.out.join("\n")) as TargetReport;
+    expect(report.target?.args).toEqual(["--note", "two words", "it's"]);
+  });
+
+  it("prints NO document on stdout for any of its refusals under --json", async () => {
+    const refusals: readonly (readonly string[])[] = [
+      ["deploy", "--json"],
+      ["deploy", "--lane", "pages", "--json"],
+      ["deploy", "--lane", "pages", "--target", "anything", "--json"],
+      ["deploy", "--lane", "pages", "--target", "provider-integration", "--json"],
+    ];
+    for (const argv of refusals) {
+      const result = await capture(argv);
+      expect(result.code, argv.join(" ")).not.toBe(0);
+      expect(result.out, argv.join(" ")).toEqual([]);
+    }
+  });
+});
+
+// ── (d.2) `deploy --run`: the second gate, and the one that decides ─────────
+//
+// `--target` says WHERE and `--run` says NOW, and NEITHER IMPLIES THE OTHER.
+// Every other verb in this family spawns something inside a directory the
+// caller is standing in and can be undone by running it again; this one puts
+// bytes on somebody else's infrastructure, where "run it again" is not a
+// repair. So it is dry-run-first, exactly as `nen label apply --run` and `nen
+// wake fire --run` are.
+
+describe("nen shu deploy --run -- nothing is sent without it", () => {
+  const PLAN = "placeholder-deploy-tool publish --dir public --env staging";
+  const GATED = ["deploy", "--lane", "pages", "--target", "staging"] as const;
+
+  it("prints the FULLY RESOLVED plan and spawns nothing, at exit 0", async () => {
+    const result = await capture([...GATED], { env: DEPLOY_ENV });
+    expect(result.code).toBe(0);
+    // The destination is substituted into the argv -- this is the resolved
+    // plan, not a template a reader has to finish in their head.
+    expect(wouldRun(result.out)).toEqual([PLAN]);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/target: {8}staging {2}\(appends: --env staging\)/);
+    // The preconditions are ASSERTED, not skipped: the report says ok, which is
+    // the fact a reader is checking before they add --run.
+    expect(out).toMatch(/ok {4}env {2}PLACEHOLDER_DEPLOY_TOKEN/);
+    // NOTHING WAS STARTED. ScriptedSeams throws on an unscripted call, so an
+    // empty script is half the assertion and the empty call list is the rest.
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(
+      /nothing was sent: 'deploy' acts only with --run\./,
+    );
+  });
+
+  it("sends exactly what the gated form printed, once --run is given", async () => {
+    const gated = await capture([...GATED], { env: DEPLOY_ENV });
+    const sent = await capture([...GATED, "--run"], { env: DEPLOY_ENV, script: [ok(PLAN)] });
+    expect(sent.code).toBe(0);
+    // The thing you approve is the thing that runs -- the same property the
+    // whole family's `--dry-run` carries, now on the default form of this verb.
+    expect(spawned(sent.seams)).toEqual(wouldRun(gated.out));
+    expect(sent.err.join("\n")).not.toMatch(/nothing was sent/);
+  });
+
+  it("says nothing about --run on the verbs that have no destination", async () => {
+    // The gate is TARGETED_VERBS', not the family's: `build` still spawns on a
+    // bare line, and a sentence about a flag it does not read would be noise.
+    const result = await capture(["build"], { script: [ok("pnpm turbo run build")] });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual(["pnpm turbo run build"]);
+    expect(result.err.join("\n")).not.toMatch(/--run/);
+  });
+
+  it("refuses --run together with --dry-run at 2, before it reads anything", async () => {
+    for (const argv of [
+      ["deploy", "--lane", "pages", "--target", "staging", "--run", "--dry-run"],
+      ["deploy", "--run", "--dry-run"],
+      // A declaration this repository does not have: the pair is a fact about
+      // the command line, so it answers before the file is even opened.
+      ["deploy", "--run", "--dry-run", "--repo", tmpdir()],
+    ]) {
+      const result = await capture(argv, { env: DEPLOY_ENV });
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n"), argv.join(" ")).toMatch(
+        /was given both --run and --dry-run/,
+      );
+      expect(result.seams.calls, argv.join(" ")).toEqual([]);
+      expect(result.out, argv.join(" ")).toEqual([]);
+    }
+  });
+
+  it("refuses --run on every verb in the family that is not 'deploy'", async () => {
+    // ./command.ts's per-subcommand flag table, so `nen shu build --run` cannot
+    // parse cleanly and be silently ignored -- and cannot be read as an action.
+    for (const verb of ["build", "test", "lint", "coverage", "detect", "tools"]) {
+      const result = await capture([verb, "--run"]);
+      expect(result.code, verb).toBe(2);
+      expect(result.err.join("\n"), verb).toMatch(/--run is not read by 'shu /);
+      expect(result.seams.calls, verb).toEqual([]);
+    }
+  });
+
+  it("is ONE json document and no more, with the advisory on stderr", async () => {
+    const result = await capture([...GATED, "--json"], { env: DEPLOY_ENV });
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as {
+      readonly steps: readonly { readonly exitCode: number | null }[];
+      readonly log: { readonly mode: string };
+    };
+    // "Was anything executed" is told the way it is told everywhere in this
+    // report: a null step exit code and the log mode. There is no `dryRun`
+    // boolean, and there is no second one for `--run` either.
+    expect(report.steps.map((step): number | null => step.exitCode)).toEqual([null]);
+    expect(report.log.mode).toBe("dry-run");
+    expect(result.err.join("\n")).toMatch(/nothing was sent/);
+  });
+
+  it("still refuses an unmet precondition at 2 -- the gate is not a way past it", async () => {
+    const result = await capture([...GATED], { env: { [TOKEN]: "x" } });
+    expect(result.code).toBe(2);
+    expect(result.out.join("\n")).toMatch(/FAIL {2}env {2}PLACEHOLDER_DEPLOY_TOKEN/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("answers the SEAT and the destination before it ever looks at --run", async () => {
+    // The gate is the LAST thing decided, so `--run` never turns a refusal into
+    // a different refusal -- and never into a run.
+    for (const argv of [
+      ["deploy", "--run"],
+      ["deploy", "--lane", "pages", "--run"],
+      ["deploy", "--lane", "pages", "--target", "nope", "--run"],
+      ["deploy", "--lane", "pages", "--target", "provider-integration", "--run"],
+    ]) {
+      const result = await capture(argv, { env: DEPLOY_ENV });
+      expect([2, 4], argv.join(" ")).toContain(result.code);
+      expect(result.seams.calls, argv.join(" ")).toEqual([]);
+    }
   });
 });
 

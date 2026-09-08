@@ -16,7 +16,8 @@
 // for this one, and the message IS the product here.
 //
 // WHAT IT DOES NOT DO: no short-flag clustering (`-abc`), no negation
-// (`--no-json`), no repeated flags collapsing into arrays. Each of those is a
+// (`--no-json`), no repeated VALUE flags -- neither collapsing into an array
+// nor last-one-wins: a second occurrence is a usage error. Each of those is a
 // convention with a surprising edge; none is needed by any verb, and adding one
 // later is a reviewable diff rather than a silent behaviour change.
 
@@ -118,6 +119,31 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
     }
 
     if (valueFlags.has(name)) {
+      // A VALUE FLAG GIVEN TWICE IS A USAGE ERROR, NOT LAST-ONE-WINS.
+      //
+      // The silent reading is the dangerous one, and it is the same failure
+      // this whole file exists for: `--repo a --repo b` ran against `b` and
+      // reported a taxonomy from a repository the caller had also named. On
+      // `nen shu deploy --target preview --target production` the last-wins
+      // reading sends a build to production because of argv ORDER, on the one
+      // verb in this CLI whose blast radius is other people's users -- and
+      // both spellings look deliberate, so nothing on screen says which one
+      // nen took. Collapsing into a list would be worse again: no verb here
+      // reads a list, so the second value would be dropped by the CALLER
+      // instead, one layer further from the mistake.
+      //
+      // FAMILY-WIDE RATHER THAN JUST `--target`, because no flag in this CLI
+      // is declared to repeat -- multi-valued flags are spelled as one
+      // comma-separated value (`--only a,b`, `--children 1,2`, ../cli/comma.ts)
+      // -- so the rule costs nothing and a future flag that WANTS repetition
+      // is a reviewable diff here rather than a silent behaviour it inherited.
+      // Booleans are deliberately untouched: `--json --json` is a Set, means
+      // exactly what it says, and cannot silently be two different answers.
+      if (Object.prototype.hasOwnProperty.call(values, name)) {
+        throw new UsageError(
+          `--${name} is given more than once (already '${values[name]}'). This reader neither collects repeated flags into a list nor silently takes the last one: which value applied would then depend on the ORDER of the arguments, and nothing in the output would say which. State it once -- a flag that takes several values takes them as one comma-separated value.`,
+        );
+      }
       if (inlineValue !== null) {
         values[name] = inlineValue;
         continue;

@@ -772,6 +772,10 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
     "epic next-wave": "nen epic next-wave --body-file b.md",
     "shu detect": "nen shu detect",
+    // `--target` is mandatory on this verb, so the base line carries it: a
+    // base that could never run would prove the coupling against a command
+    // nobody types.
+    "shu deploy": "nen shu deploy --target production",
     // The one `dry-run-only` row, so its base is the form that IS certified:
     // this row's bare invocation classifies `unknown` by design, and the
     // coupling below needs a base that classifies read-only before it appends
@@ -1599,11 +1603,63 @@ describe("NEN_VERB_TABLE -- the shu family, every verb classified", () => {
     expect(Object.keys(shu?.subcommands ?? {}).sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 
-  it("gives every EXECUTING verb the dry-run gate, and no other kind", () => {
+  it("gives every EXECUTING verb but 'deploy' the dry-run gate, and no other kind", () => {
     for (const verb of EXECUTING_VERBS) {
+      // `deploy` is the one exception and has its own row below: it carries a
+      // `--run` gate, so it has no form that spawns on the strength of the
+      // target repository's argv alone -- which is the whole reason the other
+      // nine cannot be certified without `--dry-run`.
+      if (verb === "deploy") continue;
       expect(shu?.subcommands[verb]?.kind, verb).toBe("dry-run-gated");
       expect(classifyCommand(`nen shu ${verb}`).classification, verb).toBe("mutating");
       expect(classifyCommand(`nen shu ${verb} --dry-run`).classification, verb).toBe("read-only");
+    }
+  });
+
+  it("gates 'deploy' on --run, so its bare form is a report and is classified as one", () => {
+    // THE ONE VERB IN THIS FAMILY WHOSE BLAST RADIUS IS OTHER PEOPLE'S USERS,
+    // pinned with the flags a real line carries: `--target` is mandatory on it,
+    // so a table that classified the bare `nen shu deploy` correctly and lost
+    // the classification the moment a caller typed the flag it REQUIRES would
+    // be right about a command nobody runs.
+    //
+    // AND THE BARE FORM IS A READ, not an unwatched write: ../shu/run.ts
+    // requires `--run` before this verb spawns anything at all, so the line
+    // without it renders a plan and starts nothing -- a property of nen, which
+    // is the standard every row in this table is held to.
+    expect(shu?.subcommands["deploy"]?.kind).toBe("write-flag-gated");
+    for (const line of [
+      "nen shu deploy --run",
+      "nen shu deploy --target production --run",
+      "nen shu deploy --repo /tmp/x --lane web --target production --run",
+      // One dash or two is the same flag to ../cli/args.ts, so it is the same
+      // flag here.
+      "nen shu deploy --target production -run",
+    ]) {
+      expect(classifyCommand(line).classification, line).toBe("mutating");
+    }
+    for (const line of [
+      "nen shu deploy",
+      "nen shu deploy --target production",
+      "nen shu deploy --dry-run --target production",
+      "nen shu deploy --target production --dry-run",
+      "nen shu deploy --repo /tmp/x --lane web --target production --dry-run --json",
+    ]) {
+      expect(classifyCommand(line).classification, line).toBe("read-only");
+    }
+  });
+
+  it("refuses a 'deploy' line whose --run the scan cannot prove absent", () => {
+    // The stricter side of this module's asymmetry, on the verb that most
+    // needs it: a read-only verdict that rests on a flag's ABSENCE is only
+    // worth anything on a line whose tokens are provably its argv.
+    for (const line of [
+      `nen shu deploy --target production '--run'`,
+      `nen shu deploy --target production \\--run`,
+    ]) {
+      const result = classifyCommand(line);
+      expect(result.classification, line).not.toBe("read-only");
+      expect(result.reason, line).toMatch(/--run/);
     }
   });
 

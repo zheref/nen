@@ -62,6 +62,7 @@
 import {
   describeValue,
   optionalString,
+  requireArray,
   requireRecord,
   requireString,
   SchemaError,
@@ -183,6 +184,52 @@ export interface Precondition {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * One DEPLOY DESTINATION, by the name `--target` takes.
+ *
+ * WHY THIS IS THE SMALLEST SHAPE, AND WHY IT IS NOT AN INVOCATION. The command
+ * a deploy runs lives where every other verb's command lives --
+ * `project.verbs.<lane>.deploy` -- and this map says WHERE that command sends
+ * it. A second invocation here would be a second place a deploy argv can come
+ * from, and a lane row that is silently ignored for one target and honoured for
+ * another is the failure mode this family least wants: the one verb whose blast
+ * radius is other people's users must have exactly one command, in one place,
+ * that a reader can find.
+ *
+ * So a target contributes three things and nothing else:
+ *
+ *   * `args` -- appended to the lane's declared `deploy` argv, in order. This
+ *     is the whole of what "which destination" means on a command line for the
+ *     shapes the inventory found (a `--prod` flag; a branch name), and it is
+ *     APPEND-ONLY because nen composes nothing it cannot print: the resolved
+ *     argv is one concatenation a `--dry-run` shows in full. A row with more
+ *     than one step plus a target that appends is refused at the executor
+ *     rather than resolved here -- "which step reaches the destination" is a
+ *     guess, and nen does not make one.
+ *   * `requiresEnv` -- variable NAMES this destination needs SET. nen asserts
+ *     them exactly as it asserts a `preconditions` entry of kind `env`: the
+ *     name is checked, the VALUE is never read, compared, logged or printed.
+ *     A credential belongs in the environment; a declaration that carried one
+ *     would put it in git.
+ *   * `unsupported` -- the destination that has no command line at all. Two of
+ *     the seven repositories the inventory read deploy through a hosting
+ *     provider's git integration or a CI action, and the honest rendering of
+ *     that is a sentence, not an invented command. It refuses at exit 4 with
+ *     the repository's own words, exactly as an `unsupported` verb row does.
+ */
+export interface DeployTarget {
+  readonly name: string;
+  /** Appended to the lane's declared `deploy` argv, in order. Never an exe. */
+  readonly args: readonly string[];
+  /** Variable NAMES that must be SET. Values are never read or printed. */
+  readonly requiresEnv: readonly string[];
+  /** This destination has no command line at all, in the repo's own words. */
+  readonly unsupported: string | null;
+  readonly why: string | null;
+  /** The entry exactly as the file states it, every key preserved. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface ProjectBlock {
   /** The review stack recorded for this repo, for cross-checking the registry. */
   readonly scenario: string | null;
@@ -194,7 +241,8 @@ export interface ProjectBlock {
   readonly preconditions: Readonly<Record<string, readonly Precondition[]>>;
   /** Shapes nen does not yet read, preserved verbatim. */
   readonly profiles: Readonly<Record<string, unknown>>;
-  readonly targets: Readonly<Record<string, unknown>>;
+  /** The deploy destinations `--target` names. No default, ever. */
+  readonly targets: Readonly<Record<string, DeployTarget>>;
   /** Per-verb allowlist of `process.platform` values; `*` means every verb. */
   readonly hosts: Readonly<Record<string, readonly string[]>>;
   /** The block exactly as the file states it, every key preserved. */
@@ -298,6 +346,36 @@ export function requireEnum<T extends string>(
  * pins.
  */
 const TOOL_NAME = /^(?:@[A-Za-z0-9~][A-Za-z0-9._~-]*\/)?[A-Za-z0-9~][A-Za-z0-9._~-]*$/;
+
+/**
+ * What an environment variable NAME may be, and the one place the rule lives.
+ *
+ * IT IS A SHELL IDENTIFIER, WHICH IS WHAT `process.env` KEYS ACTUALLY ARE: a
+ * letter or `_`, then letters, digits and `_`. Two blocks in this schema name
+ * variables nen then asserts are SET -- `project.preconditions.<lane>[]` of
+ * kind `env`, and `project.targets.<name>.requiresEnv` -- and neither has any
+ * way to be satisfied by a name a shell could not export. `path=evil`,
+ * `--flag`, `A B`, `1ABC` and `lower-case` are each a row that is guaranteed to
+ * report FAIL for as long as the declaration says it, which is a refusal
+ * disguised as a check: nen would tell a maintainer their environment is wrong
+ * about a variable no environment could ever carry.
+ *
+ * SHARED WITH `nen scaffold init`, whose `--marker-env` asks the same question
+ * of a name a FLAG states (../scaffold/command.ts). One rule, one regex: a
+ * second copy is a second rule, and the two would drift the first time either
+ * is widened.
+ */
+export const ENV_VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** One environment variable NAME a declaration states, checked. */
+function requireEnvName(path: string, pointer: string, name: string): string {
+  if (ENV_VAR_NAME.test(name)) return name;
+  throw new SchemaError(
+    path,
+    pointer,
+    `'${name}' is not a name an environment variable can have. nen asserts that this NAME is set -- it never reads, compares or prints the value -- and a name outside a shell identifier ([A-Za-z_][A-Za-z0-9_]*) can never be set at all, so the row could only ever report FAIL. State the variable's name alone: not 'NAME=value', not a flag, not a path`,
+  );
+}
 
 /**
  * One `toolchain` key, checked. Exported for the profiles pack's own loader,
@@ -550,8 +628,20 @@ function parsePreconditions(
       const parsedValue: string | readonly string[] = Array.isArray(rawValue)
         ? requireArgv(path, `${at}.value`, rawValue)
         : requireString(path, `${at}.value`, rawValue);
+      const kind = requireString(path, `${at}.kind`, raw["kind"]);
+      // THE ONE KIND WHOSE VALUE THIS LOADER CAN CHECK, and it checks it here
+      // rather than at the assertion for the reason every other shape in this
+      // file is refused at load: a `{"kind": "env", "value": "PATH=evil"}` row
+      // is not a check that fails, it is a check that CANNOT pass, and a
+      // repository learns that on the run that loads the file rather than on
+      // the run that was about to deploy. A LIST value is left alone -- the
+      // executor already reports an assertable kind given a list as "cannot
+      // assert" rather than guessing which element was meant.
+      if (kind === "env" && typeof parsedValue === "string") {
+        requireEnvName(path, `${at}.value`, parsedValue);
+      }
       return {
-        kind: requireString(path, `${at}.kind`, raw["kind"]),
+        kind,
         value: parsedValue,
         why: optionalString(path, `${at}.why`, raw["why"]),
         raw,
@@ -614,6 +704,162 @@ function optionalRecord(
   return requireRecord(path, pointer, value);
 }
 
+/** A list of strings, or an empty list when the key is absent. */
+function optionalStrings(path: string, pointer: string, value: unknown): readonly string[] {
+  if (value === undefined || value === null) return [];
+  return requireArray(path, pointer, value).map((item, index): string =>
+    requireString(path, `${pointer}[${index}]`, item),
+  );
+}
+
+/** The four keys `project.targets.<name>` is made of. Nen's, not the repo's. */
+const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "why"];
+
+/**
+ * True when one insertion, deletion or substitution turns `a` into `b`.
+ *
+ * BOUNDED AT ONE ON PURPOSE, rather than a full edit distance with a threshold.
+ * Distance 1 is the typo a human makes and a reader does not see -- a dropped
+ * letter (`arg`, `requireEnv`), a doubled one, a case slip (`Args`), an
+ * adjacent-key slip (`whx`) -- and it is short enough that no real, deliberate
+ * key falls inside it: `host`, `region`, `branch`, `url` and every other field
+ * a repository might legitimately park here are three or more edits away from
+ * all four names. Widening the radius would start refusing keys somebody meant.
+ */
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  let i = 0;
+  let j = 0;
+  let edited = false;
+  while (i < shorter.length && j < longer.length) {
+    if (shorter[i] === longer[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    if (edited) return false;
+    edited = true;
+    // Same length: the mismatch is a substitution, so both walk on. Different
+    // lengths: it is an insertion in the longer string, so only that one does.
+    if (shorter.length === longer.length) i += 1;
+    j += 1;
+  }
+  return true;
+}
+
+/**
+ * A key that is one typo away from one of the four, refused by the name it meant.
+ *
+ * THIS IS THE HALF THAT WAS MISSING, and the header below promised it. Refusing
+ * a wrong TYPE catches `"args": "--prod"`; it does not catch `"arg": ["--prod"]`,
+ * which is a perfectly-shaped list under a key nothing reads -- so the flag was
+ * accepted, the destination's arguments were not appended, and a DIFFERENT
+ * command deployed while nen printed exit 0. That is the exact silence this
+ * block was parsed to prevent, and a key nobody reads cannot produce it loudly.
+ *
+ * UNKNOWN KEYS ARE STILL PRESERVED, which is this schema's convention
+ * everywhere and is not in tension with the above: `{"host": "a"}`,
+ * `{"region": "eu"}` and `{"$note": "..."}` are keys a repository MEANT, kept
+ * verbatim on `raw` for a later release to read. The line between the two is
+ * distance 1 from a key nen acts on -- close enough that no reader would spot
+ * it, far enough that nothing deliberate lands there.
+ */
+function refuseNearMissKey(
+  path: string,
+  pointer: string,
+  raw: Readonly<Record<string, unknown>>,
+): void {
+  for (const key of Object.keys(raw)) {
+    if (key.startsWith("$") || TARGET_KEYS.includes(key)) continue;
+    const meant = TARGET_KEYS.find((known): boolean => withinOneEdit(key, known));
+    if (meant === undefined) continue;
+    throw new SchemaError(
+      path,
+      `${pointer}.${key}`,
+      `is one letter away from '${meant}', which is a key nen reads, and is not a key nen reads. A target's four keys are ${TARGET_KEYS.join(
+        ", ",
+      )}; every OTHER key is preserved verbatim for a later release, and that is exactly why this one cannot be: '${key}' would be kept, read by nobody, and this destination would deploy with '${meant}' silently unset. Fix the spelling, or rename the key to something that is not a near-miss of one of the four`,
+    );
+  }
+}
+
+/**
+ * `project.targets` -- the deploy destinations, PARSED rather than preserved.
+ *
+ * IT USED TO BE AN OPAQUE RECORD, and everything nen did with it was ask
+ * whether a key existed. That was honest while nothing read the values; the
+ * moment a target contributes arguments to a spawned argv and environment
+ * NAMES to an assertion, an unparsed map means a typo reaches a deploy as
+ * SILENCE -- the flag was accepted, the destination's arguments were not
+ * appended, and the command that ran is a different command.
+ *
+ * TWO SHAPES OF TYPO, AND BOTH ARE REFUSED HERE, at load, by pointer:
+ *
+ *   * a wrong TYPE under a right key (`"args": "--prod"`, a string where the
+ *     list belongs) -- the readers below;
+ *   * a right type under a WRONG key one letter out (`"arg"`, `"requireEnv"`)
+ *     -- `refuseNearMissKey` above, which names the key it was one edit from.
+ *
+ * `$`-prefixed keys are metadata and are skipped, as everywhere in this schema;
+ * every other key -- every key that is not one of the four and not a near-miss
+ * of one -- preserves its whole entry on `raw`.
+ */
+function parseTargets(path: string, value: unknown): Record<string, DeployTarget> {
+  if (value === undefined || value === null) return {};
+  const record = requireRecord(path, "project.targets", value);
+  // `Object.create(null)`, NOT `{}`, AND THE REASON IS A TARGET NAMED
+  // `__proto__`. Assigning that key on an ordinary object literal sets the
+  // prototype instead of adding an own property: the target vanishes from the
+  // map AND from `Object.keys`, so `--target __proto__` is refused as
+  // undeclared and the refusal LISTS a set that does not include it -- nen
+  // telling a maintainer their own file does not say what it plainly says. A
+  // prototype-less map has no such key to hit, and every reader of this map
+  // already goes through `Object.keys` or `hasOwnProperty`.
+  const targets: Record<string, DeployTarget> = Object.create(null) as Record<string, DeployTarget>;
+  for (const [name, entry] of Object.entries(record)) {
+    if (name.startsWith("$")) continue;
+    const pointer = `project.targets.${name}`;
+    const raw = requireRecord(path, pointer, entry);
+    refuseNearMissKey(path, pointer, raw);
+    const unsupported =
+      raw["unsupported"] === undefined || raw["unsupported"] === null
+        ? null
+        : // THE SENTENCE IS REQUIRED, NOT JUST THE KEY -- the same rule
+          // `parseInvocation` applies to an `unsupported` VERB row, in the same
+          // words, because this key answers at the same exit code. `""` read as
+          // a reason gave a caller `exit 4` with nothing after the colon; `""`
+          // read as "not unsupported" would be worse still, running a
+          // destination the declaration was trying to close.
+          requireString(path, `${pointer}.unsupported`, raw["unsupported"]);
+    const args = optionalStrings(path, `${pointer}.args`, raw["args"]);
+    if (unsupported !== null && args.length > 0) {
+      // A DESTINATION IS EITHER REACHABLE BY A COMMAND OR IT IS NOT. Both keys
+      // at once says "there is no command line for this, and here are its
+      // arguments" -- and whichever half this loader chose to honour would be a
+      // choice about somebody else's infrastructure.
+      throw new SchemaError(
+        path,
+        pointer,
+        "declares both 'unsupported' and 'args'. A destination that has no command line has no arguments either; state one or the other",
+      );
+    }
+    targets[name] = {
+      name,
+      args,
+      requiresEnv: optionalStrings(path, `${pointer}.requiresEnv`, raw["requiresEnv"]).map(
+        (variable, index): string =>
+          requireEnvName(path, `${pointer}.requiresEnv[${index}]`, variable),
+      ),
+      unsupported,
+      why: optionalString(path, `${pointer}.why`, raw["why"]),
+      raw,
+    };
+  }
+  return targets;
+}
+
 export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
   const raw = requireRecord(path, "project", value);
   if (raw["lanes"] === undefined) {
@@ -648,7 +894,7 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
         ? {}
         : parsePreconditions(path, raw["preconditions"], lanes),
     profiles: optionalRecord(path, "project.profiles", raw["profiles"]),
-    targets: optionalRecord(path, "project.targets", raw["targets"]),
+    targets: parseTargets(path, raw["targets"]),
     hosts:
       raw["hosts"] === undefined || raw["hosts"] === null
         ? {}
