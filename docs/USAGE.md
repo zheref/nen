@@ -211,7 +211,7 @@ verb does by default:
 | [`pr retarget`](#nen-pr-retarget), [`pr request-reviews`](#nen-pr-request-reviews), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu deploy`](#nen-shu-deploy), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. `deploy` additionally requires `--target <name>`, with no default ever. On `dev` and `run`, `--json` is **refused** without `--dry-run` |
-| [`shu tools`](#nen-shu-tools) | yes | `--install` | not implemented yet — it refuses at exit 4. When it lands, the check form probes and reports; `--install` is the one flag that changes the host |
+| [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`shu warmup`](#nen-shu-warmup) | no | — | not implemented yet — it refuses at exit 4. It is classified **mutating in every form**, dry run included: even a dry run fetches, and nobody watches a warm-up |
 
 "Still reads GitHub" matters in CI: a dry run of those three needs a token even
@@ -412,7 +412,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu run`](#nen-shu-run) | start a lane's PRODUCTION build locally; long-running, on this terminal | nen/contract.json (project block); inherits stdio unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- --target is required and has no default | nen/contract.json (project block + targets); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
-| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check (and with --install, install) the host toolchain a declaration pins -- NOT IMPLEMENTED YET, refuses at exit 4 | nothing yet | yes |
+| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | bring a working copy to a known state, then verify it -- NOT IMPLEMENTED YET, refuses at exit 4 | nothing yet | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
@@ -3261,9 +3261,17 @@ mechanics around one. Every verb in this family runs what the **target
 repository declares** in its own `nen/contract.json`, under a `project` block:
 its lanes, its per-verb argv, its preconditions, its platforms. Nen carries no
 build system, no package manager and no test runner, and knows the name of
-none — `src/shu/render.ts` and `src/shu/run.ts` contain zero toolchain names,
-and a test in `src/shu/purity.test.ts` fails the build if that ever stops being
-true.
+none — every module on the execution path contains zero toolchain names, and a
+test in `src/shu/purity.test.ts` fails the build if that ever stops being true.
+It sweeps the directory rather than a list of filenames, so a module added later
+cannot quietly land outside the rule. Two files are excluded, each by argument
+and each with assertions of its own in exchange: `detect.ts`, which reads
+*filenames* (a universal fact, unlike an argv, which is a repository's own
+vocabulary), and `install.ts`, the one module that turns an installer **id** —
+from the contract's own closed set — into a command, because
+[`shu tools --install`](#nen-shu-tools) is the one verb with no declaration to
+take a program name from. That file is held to naming only ids from that set,
+and to importing no subprocess seam at all.
 
 `detect` is the one verb that reads the filesystem rather than the declaration,
 and it **proposes**: it writes nothing without `--write`, and never overwrites
@@ -3320,8 +3328,8 @@ more. See also the [Exit codes](#exit-codes) convention.
 | `1` | the tool ran and failed. Nen exits 1 whatever the tool's own code was; the tool's code is in `steps[].exitCode`. A `nen/contract.json` that is **present and malformed** is also 1 — the file is there and says something nen cannot read, which is a repository defect rather than a mistyped invocation, and it is the code every family in this CLI answers an unreadable schema file with. The refusal names the file, the pointer and the expectation |
 | `2` | usage: **no** declaration, no `project` block, an unknown `--lane`, a placeholder nen cannot substitute, a `--target` that names no declared target, `--json` on a long-running verb without `--dry-run`, a path that resolves outside the repository, or a precondition that is not satisfied |
 | `3` | **unsupported host** — the verb is real, this machine cannot run it. Never 1 (a retry wrapper would retry forever) and never 2 (the invocation was correct) |
-| `4` | **unsupported verb for this lane** — the declaration says so, in its own words. The invocation was correct; the answer is a fact about the repository. Across the seven stacks this family is designed for, it is the majority case. `shu tools` and `shu warmup` also answer 4 in this release, saying they are not implemented yet and naming the PR each arrives in |
-| `5` | the declared program could not be started at all — not installed, or not on `PATH` |
+| `4` | **unsupported verb for this lane** — the declaration says so, in its own words. The invocation was correct; the answer is a fact about the repository. Across the seven stacks this family is designed for, it is the majority case. `shu warmup` also answers 4 in this release, saying it is not implemented yet and naming the PR it arrives in |
+| `5` | the declared program could not be started at all — not installed, or not on `PATH`. On [`shu tools`](#nen-shu-tools) it is also the CHECK verdict for a host where anything is missing or is not the pinned version |
 
 **`--json`**, on every verb that executes one, is one object with these keys, in
 this order: `{ contract, lane, stack, verb, steps, cwd, env, host,
@@ -3612,7 +3620,136 @@ Run the lane's coverage command. Same shape as `test`, same `dry-run-gated` clas
 
 ### `nen shu tools`
 
-**Not implemented yet in this release.** It will check — and with `--install` install — the host toolchain a declaration pins under `project.toolchain`. It refuses at exit 4 saying so, and names the PR it arrives in: it is the one verb in this family whose blast radius is the developer's machine rather than a repository, so it ships on its own, after the reference pack and before any stack beyond `nextjs`.
+Check the **host** toolchain this repository pins, and — only with `--install`,
+and only through one installer — install what nen is allowed to install. It is
+the one verb in this family whose blast radius is the developer's machine rather
+than a repository, which is why every rule below is stated as a refusal.
+
+**Usage**
+
+```text
+nen shu tools [--repo <path>] [--lane <name>] [--only <tool[,tool]>] [--json]
+nen shu tools --install [--only <tool[,tool]>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--lane <name>` | no | Which lane's directory the probes run in, and whose stack supplies the advisory column. | **Optional here, unlike every other verb in this family**: `project.toolchain` hangs off the *project*, not off a lane, so a repository with three unrelated builds still has one set of host tools. With no `--lane` and no `defaultLane` the report has no lane, the probes run at the repository root, and the advisory column is empty. A named lane must still be declared (exit 2). |
+| `--only <tool[,tool]>` | no | Check (and install) just these tools, by the name the declaration gives them. | A name the declaration does not carry is exit 2 listing the ones it does — an empty report is not an answer to a mistyped tool. |
+| `--install` | no | Act. **The one flag in this family that changes the host.** | See the eight rules below. |
+| `--dry-run` | no | Print every command — **probes included** — and run nothing whatever. | This is the only form izanami certifies read-only. |
+
+**What it reads** — `project.toolchain`, `{ "<tool>": { version, probe, versionFrom, installer, why } }`:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `version` | **yes** | The pin. Either an exact version (`"9.15.9"`) or a floor (`">=20.19.0"`) — the two forms nen can evaluate. There is no caret, no tilde, no two-sided range and no dist-tag; one of those is exit 2 naming the pointer and both forms. **No entry may omit it**: nen never certifies or installs `latest`, and the loader refuses an entry that tries. |
+| `probe` | **yes** | Argv, never a string. There is no shell. |
+| `versionFrom` | **yes** | One of `first-semver-on-stdout`, `first-semver-on-stderr`, `whole-line-stdout`, `path-exists`. **Deliberately not a regex** — a caller-supplied pattern is a caller-supplied program, and a ReDoS surface `src/schema/pattern.ts` exists to guard. |
+| `installer` | **yes** | One of `verify-only`, `corepack`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. Only **`corepack`** runs in this release. |
+| `why` | no | Where the pin comes from, in the repository's own words. Printed verbatim; never nen's. |
+
+The **`nen` row** comes from the `dependency` block instead, when there is one:
+its `version_probe` argv, compared against `minimum` under the contract's own
+**zero-major rule** — at major zero the MINOR is the breaking-change vehicle, so
+`0.3` means `>=0.3.0 <0.4.0` *exactly*, out of range in both directions; above
+zero the vehicle moves one component up, so `1.4` means `>=1.4.0 <2.0.0`. It is
+always `verify-only`: re-pinning nen is [`nen bootstrap`](#family-bootstrap)'s job
+and the consuming repository's decision, and the row prints the `pinned_ref` its
+bootstrap would install. A `project.toolchain` entry of the same name wins, and
+the row is then not synthesised.
+
+**The four row states**
+
+| State | Meaning | Exit 5? |
+|---|---|---|
+| `present-and-matching` | Found, and it satisfies the declaration's pin. For a `path-exists` entry: the probe named a path and the path is there — presence is the whole check that member asks for. | no |
+| `present-but-wrong-version` | Found, and it does not satisfy the pin. **Also** the case where the probe ran and no `versionFrom` member could read a version out of what it printed — rendered `unknown`, and never satisfied: a comparison nobody made must not render as one that came back clean. | **yes** |
+| `missing` | The probe could not be started at all (the seam's `spawnFailed`), or a `path-exists` probe named nothing that is there. | **yes** |
+| `not-probed` | **Only under `--dry-run`**, where nothing was looked at. `satisfied` is `null`. A tool nobody looked for is not a tool that is absent. | no |
+
+**The advisory `packMinimum` column** is the version nen has been *tested*
+against, from the bundled profiles pack
+([`docs/STACK-MATRIX.md`](STACK-MATRIX.md) renders it). It is printed as
+`(tested minimum X)` beside each row and **never moves the exit code** — the
+pack is a catalogue, and a catalogue that failed a build would be an authority.
+It is the only reason this verb reads the pack at all, and it does so from a
+module that cannot reach the subprocess seam (`src/shu/tools.ts`), while the
+module that spawns (`src/shu/probe.ts`) cannot reach the pack. A source-scan
+test computes that rule from the seam rather than from a list of names.
+
+**What `--install` will and will not do**
+
+| Installer | `--install` runs | Why |
+|---|---|---|
+| `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` | The one install nen performs. The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. |
+| `verify-only` | nothing | Reported with the pin and the sentence *"install by hand"*. A system-wide install with five common answers is exactly the choice nen does not make for you. |
+| `wrapper`, `npx` | nothing | There is nothing to install: the repository's own committed wrapper, or its own dependency graph, resolves the tool. |
+| `sdkmanager`, `dotnet-install`, `winget` | nothing | Declared, and **not enabled in this release**: every installer that fetches and executes vendor code, or writes into an SDK root, ships behind its own explicit decision. The row names the tool, the pin and the installer a human runs. |
+
+**Eight fail-closed rules.** (1) Check is the default and `--install` is the
+only way to act — no field, env var or declaration key flips it. (2) `--dry-run`
+prints every command and runs nothing, probes included. (3) **Never `sudo`**,
+never elevation; a test sweeps every rendered install plan for `sudo`, `runas`,
+`pkexec` and `Start-Process -Verb RunAs`. (4) Never an installer the declaration
+does not name. (5) **Never a version the declaration does not pin** — a range
+pin is refused rather than resolved to "the newest thing that satisfies it", and
+a pin the lane's own `package.json` `packageManager` field contradicts is
+refused rather than silently preferred. Both refusals fire *before* anything is
+installed. (6) Never a URL nen invented. (7) Never edits `PATH`, a shell profile
+or an environment — and what it installed is **re-probed** afterwards, because
+an installer that exited 0 has not said the tool is on this `PATH`. (8) Never
+installs a project's dependencies: that is a precondition nen asserts and never
+performs.
+
+**Output and exit codes** — the table above on stdout; the summary and the two
+lines that fix it on stderr. Exit **0** when every tool passes, when a dry run
+rendered, or when the repository declares no `toolchain` and no `dependency`
+(*"nothing to check"*, pointing at [`shu detect`](#nen-shu-detect)). Exit **5**
+when the CHECK found anything missing or not the pinned version — never 1: a
+missing tool is not a failed build, and a caller retrying a 1 would retry
+forever on a machine that is simply not set up. Exit **2** for an `--only` that
+names an undeclared tool, a `version` in a form nen cannot evaluate, or a pin
+`--install` will not act on. Exit **3** when `project.hosts` does not name this
+platform — checked **before any probe runs**, so nothing is spawned.
+
+**Under `--install` the code is 0 when everything nen *could* install now
+passes**, even if verify-only tools are still absent. That split is deliberate:
+the alternative makes the install form permanently red on a machine nen can
+never fix, and "is this host ready" is the question the CHECK and its exit 5
+answer.
+
+**`--json`** is a different, shorter contract from the rest of the family:
+`{ contract, lane, stack, mode, tools, exitCode }` with `contract` =
+`nen.shu.tools/v0.1` and `mode` one of `check` / `install` / `dry-run`. Each
+`tools[]` row is `{ name, required, packMinimum, found, satisfied, state,
+installer, installCommand, why }`, in that order. `installCommand` is a list of
+rendered command lines, and is non-null only for an installer nen runs and only
+when there is something to do; every other row's way out is prose the text
+rendering builds from `installer` and `why`.
+
+**Example**
+
+```bash
+nen shu tools --repo ./web-app
+```
+```text
+lane:          web  (nextjs)
+mode:          check
+  ok       node    22.11.0  pinned >=20.19.0  (tested minimum 20.19.0)
+  MISSING  pnpm    --       pinned 9.15.9     (tested minimum 9.15.9)
+                            install: corepack enable
+                                     corepack prepare pnpm@9.15.9 --activate
+```
+```text
+1 of 2 declared tools are missing or not the pinned version. nen can install 1 of them (pnpm):
+  nen shu tools --repo ./web-app --lane web --install --dry-run   # see the commands
+  nen shu tools --repo ./web-app --lane web --install             # run them
+```
+
+(exit 5; the summary and the two lines are on stderr)
 
 ### `nen shu warmup`
 
@@ -4622,12 +4759,12 @@ project, an MSBuild project file. See [per-stack notes](#nen-shu-detect) under
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
 | deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`. There is no default target, ever — and `--target` is checked **before** the lane and the verb, so a proposal with no `targets` block answers that first. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. |
 | coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s row names a result bundle nen cannot know and is withheld with the token named. Parsing the report the declaration names, and the never-a-gate `--threshold`, arrive with a later PR. |
-| host toolchain | **no** | — | [`shu tools`](#nen-shu-tools) is declared, documented and refuses at exit 4: it is the one verb whose blast radius is the developer's machine, and it ships on its own (PR 4 of #91). [`shu warmup`](#nen-shu-warmup) refuses at 4 for the same kind of reason and arrives in PR 12. |
+| host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. [`shu warmup`](#nen-shu-warmup) still refuses at 4 and arrives in PR 12. |
 
 The remaining work is tracked in
 [zheref/nen#91](https://github.com/zheref/nen/issues/91), *stack-aware developer
-verbs*: `shu tools`, stack-aware scaffolding, `coverage`'s report parsing and
-the deploy targets. Until each lands, those actions stay with each project's own
+verbs*: stack-aware scaffolding, `coverage`'s report parsing, the deploy targets
+and `shu warmup`. Until each lands, those actions stay with each project's own
 toolchain — and a repository that writes its own `nen/contract.json` can drive
 any stack through `nen shu` today.
 

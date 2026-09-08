@@ -237,9 +237,9 @@ flags:
                    There is no --force and no merge.
   --install        'tools' only. THE ONE FLAG IN THIS FAMILY THAT CHANGES THE
                    HOST rather than a repository. It acts only for entries whose
-                   declared installer is enabled in this release -- that is
-                   ${ENABLED_INSTALLER_IDS}, and nothing else -- and only at the
-                   version the declaration itself pins. Never sudo, never a
+                   declared installer is enabled in this release (${ENABLED_INSTALLER_IDS})
+                   and nothing else, and only at the version the declaration
+                   itself pins. Never sudo, never an elevation, never a
                    PATH or shell-profile edit, never a URL nen invented, never
                    a project's own dependency install (that is a precondition
                    nen asserts and never performs). Every other declared

@@ -140,6 +140,15 @@ shown in full under [Try it](#try-it) above:
 nen schema check --repo /path/to/repo
 ```
 
+If the repository declares a toolchain, check that **this machine** can build it
+— exit 5 with the install command per tool when anything is missing or is the
+wrong version, and `--install` (corepack only, in this release) to fix what nen
+is allowed to fix:
+
+```bash
+nen shu tools --repo /path/to/repo
+```
+
 Preview the label set, then drop `--dry-run` to push it. `--dry-run` makes no
 `gh` call at all; without it one bad label never aborts the run — every other
 good label lands, and the failures are named at the end (exit 1):
@@ -338,11 +347,14 @@ root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
 `nen shu` runs those verbs today, against any repository that declares them.
-Eleven of the thirteen execute — `nen shu build --dry-run` prints the exact
+Twelve of the thirteen execute — `nen shu build --dry-run` prints the exact
 argv, cwd and environment *names* it would spawn and spawns nothing; `nen shu
 detect` proposes a `nen/contract.json` project block from the markers on disk
-and never writes one without `--write`. `shu tools` and `shu warmup` are
-declared, documented, and refuse at exit 4 naming the release they arrive in.
+and never writes one without `--write`; `nen shu tools` checks the **host**
+toolchain the declaration pins, exits 5 naming the install command per tool, and
+installs only through `corepack` with `--install` — every other declared
+installer is verify-only in this release. `shu warmup` is declared, documented,
+and refuses at exit 4 naming the release it arrives in.
 
 What each verb can run **per stack** is written down in
 [`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
