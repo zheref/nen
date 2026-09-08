@@ -1,0 +1,39 @@
+{
+  "$schema": "nen.scaffold.template/v0.1",
+  "$comment": "templates/full/template.json -- the template the pack names `full`: a stack whose whole tree nen can honestly write, because every file in it is a config nen can state completely rather than a binary, a wrapper or an IDE document. Read every byte below before scaffolding with it; that is the point of a template being data.",
+  "name": "full",
+  "why": "the pack's `scaffoldTemplate: \"full\"` -- a stack whose skeleton is text nen can write in full, and whose CI a runner can exercise on any platform.",
+  "ci": {
+    "path": ".github/workflows/nen-shu.yml",
+    "body": "# .github/workflows/nen-shu.yml -- written by `nen scaffold`.\n#\n# Every step below is `nen shu <verb>`, and every argv those verbs run comes\n# from THIS repository's own nen/contract.json. Nothing in this file names a\n# build tool, a package manager or a test runner, and nothing in it should:\n# to change what CI runs, change the declaration.\nname: nen shu\n\non:\n  pull_request:\n  push:\n    branches: [main]\n\njobs:\n  shu:\n    runs-on: {{runner}}\n    steps:\n      - uses: actions/checkout@v4\n\n      # Pinned by ref. Re-pinning this repository is this one value; the\n      # bootstrap verifies the binary it fetches against the release manifest.\n      - name: nen\n        env:\n          NEN_REF: {{nenRef}}\n        run: |\n          curl -fsSL \"https://raw.githubusercontent.com/zheref/nen/${NEN_REF}/bootstrap/nen.sh\" -o nen-bootstrap.sh\n          echo \"NEN=$(bash nen-bootstrap.sh --ref \"${NEN_REF}\")\" >> \"${GITHUB_ENV}\"\n\n      # Read-only: reports what this runner has against what the declaration\n      # pins, and installs nothing. Exit 5 is \"a pinned tool is missing\".\n      - name: toolchain\n        run: |\n          \"${NEN}\" shu tools --repo .\n\n      # --dry-run FIRST on every verb. It prints the argv the declaration\n      # states and spawns nothing, so a declaration that drifted fails here\n      # rather than half-way through a real build.\n      - name: build / test / lint\n        run: |\n          set +e\n          for verb in build test lint; do\n            # The empty second form is deliberately unquoted: it must vanish.\n            for form in \"--dry-run\" \"\"; do\n              \"${NEN}\" shu \"${verb}\" --repo . ${form}\n              status=$?\n              [ \"${status}\" -eq 0 ] && continue\n              # 4 is \"this lane declares no such verb\" -- a fact about the\n              # repository, not a failure of the run.\n              [ \"${status}\" -eq 4 ] && { echo \"shu ${verb}: not declared for this lane\"; break; }\n              exit \"${status}\"\n            done\n          done\n"
+  },
+  "shared": {
+    ".gitignore": "# Written by `nen scaffold new`. nen/ holds committed configuration;\n# .nen/ is where every nen verb writes generated output, and it is never\n# committed -- the one-character difference is what keeps a build log out of\n# a review.\n.nen/\n"
+  },
+  "stacks": {
+    "gatsby": {
+      "runner": "ubuntu-latest",
+      "noFreshTree": null,
+      "files": {
+        "package.json": "{\n  \"name\": \"{{name}}\",\n  \"private\": true,\n  \"version\": \"0.0.0\"\n}\n",
+        "gatsby-config.ts": "// Written by `nen scaffold new`. It carries the site title and nothing\n// else: every plugin, every option and every dependency is yours to add.\n// This file is also this tree's stack MARKER -- `nen shu detect` reads it.\nconst config = {\n  siteMetadata: { title: \"{{name}}\" },\n  plugins: [],\n};\n\nexport default config;\n"
+      },
+      "postSteps": [
+        "name the package manager in package.json's \"packageManager\" field. nen never picks one, so until it is there every declared row that needs it stays a withheld seat",
+        "add the framework and its dependencies to package.json, then install them"
+      ]
+    },
+    "nextjs": {
+      "runner": "ubuntu-latest",
+      "noFreshTree": null,
+      "files": {
+        "package.json": "{\n  \"name\": \"{{name}}\",\n  \"private\": true,\n  \"version\": \"0.0.0\"\n}\n",
+        "next.config.ts": "// Written by `nen scaffold new`. It carries no options at all: every\n// one of them is yours to add. This file is also this tree's stack MARKER\n// -- `nen shu detect` reads it, and `nen/contract.json` was proposed from it.\nconst nextConfig = {};\n\nexport default nextConfig;\n"
+      },
+      "postSteps": [
+        "name the package manager in package.json's \"packageManager\" field. nen never picks one, so until it is there every declared row that needs it stays a withheld seat",
+        "add the framework and its dependencies to package.json, then install them"
+      ]
+    }
+  }
+}
