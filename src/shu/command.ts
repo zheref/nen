@@ -1,14 +1,18 @@
 // src/shu/command.ts -- `nen shu ...`, the stack-aware developer verbs.
 //
-// THIRTEEN VERBS FROM DAY ONE, AND ONLY SOME OF THEM DO SOMETHING. That looks
-// like the thing ../cli/registry.ts's header forbids ("a family is not listed
-// until it does something"), and it is the opposite of it: the family DOES
-// something -- `detect` proposes a declaration, and ten verbs execute one -- and
-// the two that do not (`tools`, `warmup`) refuse by name with the release they
-// arrive in. The alternative is worse in the exact way the registry rule is
-// about: a verb that is absent today and appears later changes `nen shu --help`
-// underneath every skill that read it, while a verb that refuses with a reason
-// is a contract a caller can already write against.
+// THIRTEEN VERBS, AND ALL THIRTEEN DO SOMETHING NOW. The family was declared
+// whole from day one -- `detect` proposing a declaration, ten verbs executing
+// one, and `tools` and `warmup` refusing by name with the release they arrived
+// in -- for ../cli/registry.ts's reason: a verb that is absent today and
+// appears later changes `nen shu --help` underneath every skill that read it,
+// while a verb that refuses with a reason is a contract a caller can already
+// write against. Both of those two have since landed, and the mechanism they
+// needed is gone rather than left standing empty.
+//
+// ONE OF THE THIRTEEN MUTATES GIT STATE, and it is the only one: `warmup`
+// (./warmup.ts). Every other verb here either reads, or spawns what the target
+// repository declared inside a directory. That asymmetry is why `warmup` alone
+// requires `--repo` rather than defaulting to the caller's directory.
 //
 // WHAT THE FAMILY IS. Every verb below runs what the TARGET REPOSITORY declares
 // in its own `nen/contract.json`, under `project`. Nen carries no build system,
@@ -23,19 +27,20 @@
 // --write` would otherwise parse cleanly and be silently ignored -- and `--write`
 // is the ONE flag in this family that decides whether anything is written.
 
-import { resolveRepoRoot } from "../repo/root.js";
-import { emit, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
+import { emit, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { FlagSpec } from "../cli/args.js";
 import { commaList } from "../cli/comma.js";
 import { INSTALLERS, VERSION_FROM, type ProjectBlock } from "../schema/contract.js";
 import { PROGRAM } from "../version.js";
 import { openDeclaration } from "./declaration.js";
-import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
+import { EXIT_UNSUPPORTED_HOST, ShuRefusal } from "./exit.js";
 import { detect, renderDetect, writeProposal } from "./detect.js";
 import { ENABLED_INSTALLERS } from "./install.js";
 import { probeTool, runInstallSteps } from "./probe.js";
 import { declaredHostsFor } from "./render.js";
 import { insideRepo, runVerb } from "./run.js";
+import { DEFAULT_TRUNK, runWarmup, WARMUP_CONTRACT, WARMUP_REMOTE } from "./warmup.js";
 import { assess, type Observation } from "./toolchain.js";
 import {
   actionable,
@@ -71,7 +76,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   deploy: { values: ["lane", "target"], booleans: ["dry-run"] },
   coverage: { values: ["lane"], booleans: ["dry-run"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
-  warmup: { values: ["lane"], booleans: ["dry-run"] },
+  warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
 };
 
 /** The thirteen, in the order the design lists them (not alphabetical). */
@@ -104,18 +109,6 @@ export const EXECUTING_VERBS: readonly string[] = [
   "deploy",
   "coverage",
 ];
-
-/**
- * The two that are declared, documented and not yet implemented, with the issue
- * that brings each one.
- *
- * THEY REFUSE WITH 4, the same code an undeclared verb gets, and the message
- * says which of the two facts is true. Inventing a sixth code for "nen has not
- * built this yet" would put a transient state into a published contract.
- */
-const NOT_YET: Readonly<Record<string, string>> = {
-  warmup: "brings a working copy to a known state and then verifies it. It is not implemented yet in this release (zheref/nen#91's PR12).",
-};
 
 /**
  * The installer ids `--install` acts on, INTERPOLATED rather than typed out.
@@ -160,8 +153,16 @@ verbs:
               --install below; every other declared installer is verify-only in
               this release. --dry-run prints every command -- probes included
               -- and runs NOTHING.
-  warmup      (not implemented yet -- zheref/nen#91's PR12) Bring a working
-              copy to a known state, then verify it.
+  warmup      Warm a WORKING COPY for iteration, in this order: check it is
+              clean, fetch, fast-forward the trunk, cut the branch you name
+              from its fresh tip, then verify the declared build (and, with
+              --tests, the declared tests). THE ONLY VERB IN THIS FAMILY THAT
+              MUTATES GIT STATE, so --repo is required and every step refuses
+              rather than guessing: a dirty tree, an absent '${WARMUP_REMOTE}', a
+              diverged trunk, a name that already exists or that git will not
+              accept are each exit 2 with the evidence. Nothing is rolled back.
+              NOT '${PROGRAM} warmup', which sweeps a REGISTRY for stale pins and
+              unanswered handbook questions and reads only.
 
 the declaration:
   <repo>/nen/contract.json, "project" block. Absent, or present with no
@@ -233,11 +234,36 @@ flags:
                    the thing that runs. On 'tools' this covers the version
                    PROBES too: a dry run of that verb spawns nothing whatever,
                    which is what makes it the one form of it a watcher can
-                   certify read-only.
+                   certify read-only. On 'warmup' it prints every git command
+                   AND every delegated toolchain command, in order, and runs
+                   none of them -- not even the fetch. That form still
+                   classifies MUTATING in izanami's table, unlike the other
+                   verbs' dry runs, and deliberately: a warm-up is not a thing
+                   anyone watches, so the fail-closed answer costs nothing.
+                   Because it reads no git state, two of its lines say what a
+                   real run would do differently.
   --only <t[,t]>   'tools' only. Check (and install) just these tools, by the
                    name the declaration gives them. A name it does not declare
                    is exit 2 listing the ones it does -- an empty report is not
                    an answer to a mistyped tool.
+  --branch <name>  'warmup' only. The branch to cut from the freshly-fetched
+                   trunk. REQUIRED, with no default: nen never invents a branch
+                   name. It is validated with git's own 'check-ref-format
+                   --branch' and refused at 2 if it already exists locally or on
+                   ${WARMUP_REMOTE} -- never reused, reset or force-moved.
+  --from <trunk>   'warmup' only. The LOCAL trunk to fast-forward, and what
+                   --branch is cut from (as ${WARMUP_REMOTE}/<trunk>). Defaults to
+                   '${DEFAULT_TRUNK}' WHEN THAT LOCAL BRANCH EXISTS, and refuses at 2
+                   naming this flag when it does not -- nen infers a trunk from
+                   no remote HEAD and from no lone branch.
+  --discard        'warmup' only. Throw away uncommitted work instead of
+                   refusing it: 'git checkout -- .' then 'git clean -fd', in
+                   that order, with the exact list printed first. NEVER 'git
+                   clean -x': an ignored file is the developer's own cache, and
+                   this verb does not delete one.
+  --tests          'warmup' only. Also run the lane's declared 'test' after the
+                   build, through the same executor. Off by default, because a
+                   test suite is the slow half and a warm-up is the fast one.
   --target <name>  'deploy' only. Must name a key of project.targets. Required,
                    with no default ever -- not even when there is exactly one.
                    It is checked BEFORE the lane and the verb, so a line that
@@ -273,6 +299,19 @@ flags:
                    keys in order:
                    { contract, lane, stack, verb, steps, cwd, env, host,
                      preconditions, exitCode, durationMs, artifacts, log }.
+                   On 'warmup' it is a different contract again
+                   ('${WARMUP_CONTRACT}'), keys in order:
+                   { contract, repo, trunk, remote, branch, discard, steps,
+                     lane, exitCode }, where each steps[] row is
+                   { kind, argv, exitCode, durationMs, note } and 'kind' is
+                   git | build | test. 'argv' is the WHOLE command line,
+                   executable first. 'exitCode' and 'durationMs' are null
+                   exactly when nothing was run -- a dry run, or a step the run
+                   never reached -- and 'lane' is null when the repository
+                   carries no declaration, which is reported and is not a
+                   failure. A git that could not be STARTED is not a row of
+                   nulls: it is the exit-1 'install it, or put it on PATH'
+                   refusal, with no document at all.
                    On 'tools' it is a different contract
                    ('nen.shu.tools/v0.1'), keys in order:
                    { contract, lane, stack, mode, summary, tools, exitCode },
@@ -322,7 +361,9 @@ exit codes:
      there and says something nen cannot read, which is a repository defect
      rather than a mistyped invocation, and it is the code every family in this
      CLI answers an unreadable schema file with. The refusal names the file,
-     the pointer and the expectation
+     the pointer and the expectation. On 'warmup', a git step that RAN and
+     failed is 1 too, naming it -- and nothing is rolled back: the working copy
+     is left exactly as that run reached it, and the report says what did run
   2  usage: no declaration, no "project" block, an unknown --lane, a
      placeholder nen cannot substitute, a --target that names no declared
      target, --json on a long-running verb without --dry-run, a path that
@@ -331,12 +372,17 @@ exit codes:
      'version' in a form nen cannot evaluate, and -- under --install -- a pin
      this release will not act on (a range where the installer activates one
      exact version, or a pin the lane's own manifest contradicts). Every one of
-     those is refused BEFORE anything is installed
+     those is refused BEFORE anything is installed.
+     On 'warmup' also: a dirty working copy without --discard (listing every
+     path that would be lost), no '${WARMUP_REMOTE}' remote, a --from that is not a
+     local branch, a local trunk that has DIVERGED from ${WARMUP_REMOTE}'s, a
+     --branch that git will not accept, and a --branch that already exists
+     locally or on ${WARMUP_REMOTE}. Every one of them prints its evidence on
+     stderr and NO document on stdout
   3  unsupported host -- the verb is real, this machine cannot run it
   4  unsupported verb for THIS LANE -- the declaration says so, in its own
      words. The invocation was correct; the answer is a fact about the repo.
-     'warmup' also answers 4 in this release, saying it is not implemented yet
-     and naming the PR it arrives in
+     'warmup' passes this through from the build (or test) it delegates
   5  the declared program could not be started at all -- and, on 'tools', the
      CHECK verdict for a host where anything is missing or is not the pinned
      version. Never 1: a missing tool is not a failed build, and a caller that
@@ -624,9 +670,36 @@ export const shuCommand: Command = {
         });
       }
 
-      const notYet = NOT_YET[subcommand];
-      if (notYet !== undefined) {
-        throw new ShuRefusal(EXIT_UNSUPPORTED_VERB, `'${subcommand}' ${notYet}`);
+      if (subcommand === "warmup") {
+        // `--repo` IS REQUIRED HERE AND NOWHERE ELSE IN THIS FAMILY, because
+        // this is the one verb that mutates git state. Every other `shu` verb
+        // spawns something inside a directory and can honestly default to the
+        // one the caller is standing in; this one fetches into a repository,
+        // moves a branch ref and checks out a new branch, and a verb that does
+        // that to "wherever this process happens to be" is a verb that will
+        // eventually do it to the wrong checkout (zheref/nen#28's rule, applied
+        // where the blast radius is largest).
+        return runWarmup(
+          context,
+          assertRepoRoot({
+            repoFlag: requireRepoFlag(
+              context,
+              "It names the working copy this verb cleans, fetches into and cuts a branch in. There is no default: the one verb in this family that mutates git state never picks a repository for you.",
+            ),
+          }),
+          {
+            branch: requireValue(
+              context.args,
+              "branch",
+              "'shu warmup' cuts the branch YOU name, from the trunk's fresh tip. Nen never invents a branch name.",
+            ),
+            from: context.args.values["from"] ?? null,
+            discard: context.args.booleans.has("discard"),
+            tests: context.args.booleans.has("tests"),
+            lane: context.args.values["lane"] ?? null,
+            dryRun: context.args.booleans.has("dry-run"),
+          },
+        );
       }
 
       if (subcommand === "deploy") {

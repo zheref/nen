@@ -48,7 +48,10 @@ describe("the family's registration", () => {
     expect(Object.keys(SHU_SUBCOMMAND_FLAGS).sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 
-  it("splits the thirteen into detect, the ten that execute, and the two that do not", () => {
+  it("splits the thirteen into the ten that execute a lane's invocation, and three that do not", () => {
+    // `detect` reads markers, `tools` probes the host, and `warmup` mutates git
+    // state and then DELEGATES to the ten. None of the three goes through
+    // ./run.ts's runVerb directly, which is what EXECUTING_VERBS names.
     expect([...EXECUTING_VERBS, "detect", "tools", "warmup"].sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 
