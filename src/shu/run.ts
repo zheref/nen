@@ -36,7 +36,13 @@ import { containedPath } from "../repo/contain.js";
 import type { Seams } from "../seam/exec.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
-import { renderArgv, renderInvocation, type HostVerdict, type RenderedInvocation } from "./render.js";
+import {
+  ASSERTABLE_KINDS,
+  renderArgv,
+  renderInvocation,
+  type HostVerdict,
+  type RenderedInvocation,
+} from "./render.js";
 
 /**
  * The two long-running verbs. They go through the interactive seam -- stdio
@@ -48,18 +54,10 @@ import { renderArgv, renderInvocation, type HostVerdict, type RenderedInvocation
  */
 export const INTERACTIVE_VERBS: readonly string[] = ["dev", "run"];
 
-/**
- * The precondition kinds this release can assert. Everything else refuses.
- *
- * EXPORTED BECAUSE ./detect.ts HAS TO SAY THE SAME TWO WORDS. Its note about a
- * toolchain row it will not propose a precondition for names the kinds nen can
- * assert, and a hand-typed "'path' or 'env'" over there is a sentence that goes
- * stale the day a third kind lands here, silently, with no test able to notice.
- * The import direction is safe and deliberately one-way: `detect` reads this
- * module, never the reverse, so nothing on the spawning path acquires an edge
- * to the profiles pack (../profiles/inertness.test.ts sweeps for exactly that).
- */
-export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
+// The precondition kinds this release can assert now live in ./render.ts --
+// the pure half -- because ./detect.ts has to say the same two words and must
+// not acquire an import edge to this module to do it. See that constant's own
+// comment; ../profiles/inertness.test.ts is what the move is for.
 
 export interface AssertedPrecondition {
   readonly kind: string;
@@ -337,12 +335,36 @@ function assemble(
   };
 }
 
+/** Where a run's report goes when it is not going straight to the terminal. */
+export type ReportSink = (report: ShuReport) => void;
+
 export interface RunOptions {
   readonly verb: string;
   readonly lane: string | null;
   readonly dryRun: boolean;
   /** `deploy`'s mandatory `--target`. Null for every other verb. */
   readonly target: string | null;
+  /**
+   * A SINK FOR THE REPORT INSTEAD OF PRINTING IT. Absent -- every verb but one
+   * -- and the report is emitted here, as text or as the one JSON document on
+   * stdout, exactly as it always was.
+   *
+   * `coverage` PASSES ONE, AND IT IS THE ONLY CALLER THAT DOES. That verb runs
+   * through this executor like any other and then does a SECOND thing: it parses
+   * the report the run produced. Its `--json` answer therefore has to be one
+   * document carrying both halves, and an executor that had already printed a
+   * document of its own would make `nen shu coverage --json | jq .` two objects
+   * on one stream -- which is not a document, and is the exact contract
+   * `refuseImpossibleFlags` above refuses `dev --json` to protect.
+   *
+   * WHAT IT IS NOT: a way to run a verb quietly. Nothing here changes -- the
+   * same refusals fire in the same order, the same steps spawn, the same exit
+   * code comes back, and a step's own stdout is still relayed as it finishes.
+   * Only the assembled REPORT is handed to the caller rather than printed, and
+   * ./coverage.ts prints it (through the same `renderReport`) as the first half
+   * of its own output.
+   */
+  readonly sink?: ReportSink;
 }
 
 /**
@@ -423,7 +445,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     const steps = plan.steps.map(
       (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
     );
-    emitReport(context, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
+    emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
     const cannot = unmet.filter((entry): boolean => entry.satisfied === null);
     context.io.err(
       `${unmet.length} precondition${unmet.length === 1 ? "" : "s"} on lane '${plan.lane}' ${unmet.length === 1 ? "is" : "are"} not satisfied${
@@ -437,17 +459,25 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     const steps = plan.steps.map(
       (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
     );
-    emitReport(context, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
+    emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
     return 0;
   }
 
   if (INTERACTIVE_VERBS.includes(plan.verb)) {
-    return runInteractively(context, plan, cwd, repoRoot, preconditions);
+    return runInteractively(context, plan, cwd, repoRoot, preconditions, options.sink);
   }
-  return runCaptured(context, plan, cwd, repoRoot, preconditions);
+  return runCaptured(context, plan, cwd, repoRoot, preconditions, options.sink);
 }
 
-function emitReport(context: CommandContext, report: ShuReport): void {
+function emitReport(context: CommandContext, sink: ReportSink | undefined, report: ShuReport): void {
+  // ONE PLACE DECIDES, so a verb with a sink cannot print a document from one
+  // arm of this file and hand it over from another -- which is how a caller
+  // ends up with two JSON objects on one stream in exactly the failure mode
+  // nobody tests for (a precondition refusal, a spawn failure).
+  if (sink !== undefined) {
+    sink(report);
+    return;
+  }
   emit(context.io, context.json, report, renderReport(report));
 }
 
@@ -473,6 +503,7 @@ function runCaptured(
   cwd: string,
   repoRoot: string,
   preconditions: readonly AssertedPrecondition[],
+  sink: ReportSink | undefined,
 ): number {
   const started = context.seams.now().getTime();
   const steps: ShuStepReport[] = [];
@@ -504,6 +535,7 @@ function runCaptured(
       // precisely so a caller here does not have to guess.
       emitReport(
         context,
+        sink,
         assemble(plan, cwd, repoRoot, preconditions, steps, EXIT_TOOL_NOT_INSTALLED, context.seams.now().getTime() - started, "streamed"),
       );
       throw new ShuRefusal(
@@ -514,6 +546,7 @@ function runCaptured(
     if (result.code !== 0) {
       emitReport(
         context,
+        sink,
         assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed"),
       );
       context.io.err(
@@ -524,6 +557,7 @@ function runCaptured(
   }
   emitReport(
     context,
+    sink,
     assemble(plan, cwd, repoRoot, preconditions, steps, 0, context.seams.now().getTime() - started, "streamed"),
   );
   return 0;
@@ -542,11 +576,12 @@ function runInteractively(
   cwd: string,
   repoRoot: string,
   preconditions: readonly AssertedPrecondition[],
+  sink: ReportSink | undefined,
 ): number {
   const steps = plan.steps.map(
     (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
   );
-  emitReport(context, assemble(plan, cwd, repoRoot, preconditions, steps, null, null, "interactive"));
+  emitReport(context, sink, assemble(plan, cwd, repoRoot, preconditions, steps, null, null, "interactive"));
 
   let code = 0;
   for (const [index, step] of plan.steps.entries()) {

@@ -30,3 +30,13 @@ export const KRO_SHAPED = join(FIXTURES, "kro-shaped");
 /** One marker tree per stack, by the stack id `detect` should answer with. */
 export const MARKERS = join(FIXTURES, "markers");
 export const markerTree = (name: string): string => join(MARKERS, name);
+
+/**
+ * The coverage REPORT fixtures -- one per format, plus each format's empty and
+ * malformed shapes. They are reports, not marker trees: nothing detects
+ * anything about them, they are read as text and handed to a parser.
+ * `coverage/README.md` says what each one is for and why every happy fixture
+ * states the same 14-of-17 lines.
+ */
+export const COVERAGE_REPORTS = join(FIXTURES, "coverage");
+export const coverageReport = (name: string): string => join(COVERAGE_REPORTS, name);

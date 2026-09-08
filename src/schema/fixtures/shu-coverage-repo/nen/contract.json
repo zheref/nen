@@ -1,0 +1,63 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the COVERAGE verb's repository. Five lanes, one per answer this verb has to have: a report it parses, a lane that declares no artifact at all, a lane whose artifact is not a report, a lane whose declared report is not on disk, and a lane that declares TWO artifacts of which only the second is a report. Separate from shu-repo because that one is the EXECUTOR's fixture and deliberately declares no coverage artifacts -- folding the two together would delete the 'declares none' case. Not shipped; see ../../README.md.",
+
+  "project": {
+    "lanes": {
+      "web": { "stack": "nextjs", "cwd": "." },
+      "core": { "stack": "nextjs", "cwd": "." },
+      "native": { "stack": "xcode-ios", "cwd": "." },
+      "gone": { "stack": "gatsby", "cwd": "." },
+      "mixed": { "stack": "nextjs", "cwd": "." }
+    },
+    "defaultLane": "web",
+
+    "preconditions": {},
+
+    "verbs": {
+      "web": {
+        "coverage": {
+          "exe": "pnpm",
+          "argv": ["--filter", "@placeholder/core", "test:coverage"],
+          "artifacts": ["coverage/coverage-summary.json"],
+          "why": "The lane the parse is proved on end to end. `artifacts` names the file the tool writes; nen parses the FIRST entry whose format it recognises and never searches for one."
+        }
+      },
+      "core": {
+        "coverage": {
+          "exe": "pnpm",
+          "argv": ["--filter", "@placeholder/app", "test:coverage"],
+          "why": "DECLARES NO ARTIFACTS. The run succeeds and nen has nothing to parse: the refusal names the field to declare and quotes the reference pack's advisory location for this stack, which it never opens."
+        }
+      },
+      "native": {
+        "coverage": {
+          "exe": "placeholder-build-tool",
+          "argv": ["test", "-enableCodeCoverage", "YES"],
+          "artifacts": ["coverage/notes.md"],
+          "why": "An artifact that is real and is not a coverage report in any format nen reads. The refusal lists the formats rather than guessing at this file."
+        }
+      },
+      "gone": {
+        "coverage": {
+          "exe": "npm",
+          "argv": ["run", "coverage"],
+          "artifacts": ["coverage/gone/coverage-summary.json"],
+          "why": "A declared report that is not on disk after a successful run: exit 1 naming the path, because the tool wrote it somewhere else or wrote nothing."
+        }
+      },
+      "mixed": {
+        "coverage": {
+          "exe": "npm",
+          "argv": ["run", "coverage:all"],
+          "artifacts": ["coverage/notes.md", "coverage/lcov.info"],
+          "why": "THE ORDINARY SHAPE: a coverage verb writes several things, and only one of them is a machine-readable report. nen takes the FIRST entry whose format it recognises -- not the first entry -- so the notes file is passed over and the tracefile is parsed. A reader of the first artifact alone would report 'nen recognises none of them' for a lane that declares one."
+        }
+      }
+    },
+
+    "profiles": {},
+    "targets": {},
+    "hosts": { "*": ["darwin", "linux", "win32"] }
+  }
+}

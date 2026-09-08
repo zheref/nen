@@ -122,6 +122,12 @@
       "source": "kro-pwa/package.json (`packageManager`)"
     }
   },
+  "reportDefault": {
+    "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
+    "path": "packages/core/coverage/lcov.info",
+    "why": "REPO-ROOT-RELATIVE, AND THAT IS WHY IT NAMES A PACKAGE. The observed configuration writes the `text` and `lcov` reporters, so the machine-readable file this stack produces today is an LCOV tracefile in the package's OWN `coverage/` directory -- and the coverage command fans out over the workspace members that declare a `test:coverage` script, so there is one such file per member, none of them at the repository root. `artifacts` is resolved against the repository root, so a bare `coverage/lcov.info` pasted from here would be a path nothing writes: the one recorded is the first member's, written out in full, and a declaration names each member's file it wants parsed. A `json-summary` reporter would write `coverage-summary.json` beside it, and nen reads either.",
+    "source": "this profile's own `coverage` row (kro-pwa packages/core/package.json:19 and packages/app/package.json:22, each `vitest run --coverage` with `coverage: { provider: 'v8', reporter: ['text','lcov'] }`; kro-pwa/Makefile:71-73). NOT apps/web: that package's own `test` script bakes coverage in and the `test-coverage` target does not reach it, which this profile's `coverage` row already records as a gap."
+  },
   "notes": [
     "PRECONDITIONS: `corepack enable` BEFORE the cached dependency install, as its own step; a frozen-lockfile install in CI (kro-pwa/.github/workflows/pr.yml); and an optional `cp .env.example apps/web/.env.local` (kro-pwa/TOOLCHAIN.md:23).",
     "TWO EXTRA VERBS THE INVENTORY EVIDENCES BUT THE THIRTEEN DO NOT COVER, carried here so they are not lost: `typecheck` -- `{pm} -r exec tsc --noEmit` (kro-pwa/Makefile:55; GymKai/Makefile:46); and `analyze` -- `{pm} turbo run analyze`, resolving to `ANALYZE=true next build` (kro-pwa/Makefile:59, apps/web/package.json:13). A declaration may carry any verb name it likes; the pack's thirteen are the ones the matrix compares across stacks.",

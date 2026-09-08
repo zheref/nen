@@ -135,6 +135,26 @@ const NEXTJS_GOLDENS: Readonly<Record<string, readonly string[]>> = {
   run: ["pnpm exec next start"],
 };
 
+/**
+ * The one verb that RUNS like every other and then does one more thing.
+ *
+ * `nen shu coverage` goes through this executor unchanged -- same refusals,
+ * same order, same spawned argv, same `--dry-run` -- and then parses the report
+ * the run produced (../shu/coverage.ts). Two consequences show up below, and
+ * both are stated rather than skipped, because the half this file is about is
+ * IDENTICAL for it: the argv goldens and the dry-run parity hold verbatim.
+ *
+ *   1. its exit code after a successful run is the PARSE's. This fixture's
+ *      coverage row declares no `artifacts`, so there is no report to read and
+ *      the answer is 1 naming the field to declare -- ./coverage.test.ts pins
+ *      that from both sides, on a fixture that does declare one.
+ *   2. its `--json` document is its own contract (`{contract, lane, stack,
+ *      total, targets, threshold, report, exitCode}`), not this one, so there
+ *      are no `steps` in it to compare. The executor's report is rendered to
+ *      STDERR in that mode instead, which is where the argv still is.
+ */
+const PARSES_A_REPORT: readonly string[] = ["coverage"];
+
 describe("nen shu -- argv goldens for every verb the nextjs lane declares", () => {
   for (const [verb, argvs] of Object.entries(NEXTJS_GOLDENS)) {
     it(`renders '${verb}' exactly as the declaration states it`, async () => {
@@ -149,7 +169,11 @@ describe("nen shu -- argv goldens for every verb the nextjs lane declares", () =
 
     it(`spawns '${verb}' exactly as the dry run printed it`, async () => {
       const result = await capture([verb], { script: argvs.map(ok) });
-      expect(result.code).toBe(0);
+      // The tool exited 0 in every case; `coverage` then answers for its
+      // second step, which this fixture gives it no report for (see
+      // `PARSES_A_REPORT`). What this assertion is about -- the argv -- is the
+      // line below, and it is the same line for all seven verbs.
+      expect(result.code).toBe(PARSES_A_REPORT.includes(verb) ? 1 : 0);
       expect(spawned(result.seams)).toEqual(argvs);
     });
   }
@@ -168,6 +192,11 @@ describe("--dry-run parity -- the thing you approve is the thing that runs", () 
     // child), so there is no second document to compare against. Their argv
     // parity is proved by the text assertion above, over the same two runs.
     if (INTERACTIVE_VERBS.includes(verb)) continue;
+    // And `coverage`, whose --json document is a different contract with no
+    // `steps` in it at all. Its argv parity is proved by the text assertion
+    // directly above, over the same two runs -- the same way the two
+    // long-running verbs' is.
+    if (PARSES_A_REPORT.includes(verb)) continue;
 
     it(`'${verb}': --json's steps are byte-identical between the two modes`, async () => {
       const dry = JSON.parse((await capture([verb, "--dry-run", "--json"])).out.join("\n")) as {

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<report name="placeholder">
+  <package name="io/placeholder/core">
+    <counter type="LINE" missed="2" covered="11" />
+  </package>
+  <counter type="INSTRUCTION" missed="3" covered="20" />
+  <counter type="COMPLEXITY" missed="2" covered="5" />
+</report>

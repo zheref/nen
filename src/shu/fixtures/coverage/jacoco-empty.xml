@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<report name="placeholder">
+  <sessioninfo id="placeholder-host" start="1767225600000" dump="1767225601000" />
+  <counter type="INSTRUCTION" missed="0" covered="0" />
+  <counter type="LINE" missed="0" covered="0" />
+</report>

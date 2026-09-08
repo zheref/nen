@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A Cobertura report whose ROOT COUNTS AND ROW SUM DISAGREE, which is the
+     only kind of file that can tell nen's rule from its opposite.
+
+     The root states 14 of 17 lines. The packages below account for 13 of them:
+     `Placeholder.Generated` is present with an EMPTY <classes/>, which is what
+     a writer emits for a package it summarised but did not enumerate -- a
+     merged report, or one whose filters dropped the class list and not the
+     totals. nen reports the WRITER'S OWN total (14/17) rather than re-deriving
+     11/13 out of the rows it can see: the writer did the arithmetic over its
+     own model of the tree, and a total nen derived differently would disagree
+     with every other number the same tool prints.
+
+     The happy fixture beside this one (`coverage.cobertura.xml`) has rows that
+     sum exactly to its root, which is what a healthy report looks like -- and
+     is exactly why it cannot prove which of the two numbers nen used. -->
+<coverage line-rate="0.8235" branch-rate="0.75" version="1.9" timestamp="1767225600" lines-covered="14" lines-valid="17" branches-covered="3" branches-valid="4">
+  <sources>
+    <source>/repo</source>
+  </sources>
+  <packages>
+    <package name="Placeholder.Core" line-rate="0.8461" branch-rate="0.75" complexity="4">
+      <classes>
+        <class name="Placeholder.Core.Store" filename="Core/Store.cs" line-rate="0.8461" branch-rate="0.75">
+          <lines>
+            <line number="10" hits="3" branch="false" />
+            <line number="11" hits="1" branch="false" />
+            <line number="12" hits="2" branch="true" condition-coverage="75% (3/4)" />
+            <line number="13" hits="1" branch="false" />
+            <line number="14" hits="1" branch="false" />
+            <line number="15" hits="1" branch="false" />
+            <line number="16" hits="0" branch="false" />
+            <line number="17" hits="4" branch="false" />
+            <line number="18" hits="1" branch="false" />
+            <line number="19" hits="1" branch="false" />
+            <line number="20" hits="0" branch="false" />
+            <line number="21" hits="1" branch="false" />
+            <line number="22" hits="1" branch="false" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+    <package name="Placeholder.Generated" line-rate="0.75" branch-rate="1" complexity="0">
+      <classes />
+    </package>
+  </packages>
+</coverage>

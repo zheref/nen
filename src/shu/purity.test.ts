@@ -67,8 +67,8 @@
 // its own, and two scanners are two chances to disagree about what a comment is.
 
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { PLACEHOLDERS } from "../profiles/pack.js";
 import { INSTALLERS, type Installer } from "../schema/contract.js";
 import { ENABLED_INSTALLERS } from "./install.js";
@@ -86,13 +86,33 @@ const INSTALLER_MODULE = "install.ts";
  */
 const NOT_EXECUTION_PATH: readonly string[] = ["detect.ts", INSTALLER_MODULE];
 
-/** The files a `nen shu` invocation goes through on its way to a subprocess. */
-const EXECUTION_PATH: readonly string[] = readdirSync(SHU)
-  .filter(
-    (entry): boolean =>
-      entry.endsWith(".ts") && !entry.endsWith(".test.ts") && !NOT_EXECUTION_PATH.includes(entry),
-  )
-  .sort();
+/**
+ * The files a `nen shu` invocation goes through on its way to a subprocess.
+ *
+ * IT WALKS SUBDIRECTORIES, and that is not a detail. The sweep read
+ * `readdirSync(SHU)` and nothing under it, which was correct for exactly as
+ * long as this family was flat: the day `src/shu/coverage/` arrived -- five
+ * report parsers, on the path a `nen shu coverage` invocation takes -- a
+ * one-level sweep would have gone on passing while covering none of them, which
+ * is the same silent narrowing the header above rejects a hand-typed file list
+ * for. `fixtures/` is skipped (test data, and it names tools on purpose), as are
+ * `*.test.ts`.
+ */
+function shuModules(directory: string, found: string[] = []): string[] {
+  for (const entry of readdirSync(directory).sort()) {
+    const path = join(directory, entry);
+    if (statSync(path).isDirectory()) {
+      if (entry !== "fixtures") shuModules(path, found);
+      continue;
+    }
+    if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) continue;
+    const name = relative(SHU, path).split(sep).join("/");
+    if (!NOT_EXECUTION_PATH.includes(name)) found.push(name);
+  }
+  return found;
+}
+
+const EXECUTION_PATH: readonly string[] = shuModules(SHU);
 
 /**
  * Toolchain EXECUTABLES. The match is a WHOLE TOKEN inside a quoted literal,
@@ -164,6 +184,9 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
     // fewer than the header says.
     expect(EXECUTION_PATH).toContain("run.ts");
     expect(EXECUTION_PATH).toContain("render.ts");
+    // And the nested half, which a one-level sweep would have missed entirely.
+    expect(EXECUTION_PATH).toContain("coverage/parse.ts");
+    expect(EXECUTION_PATH.filter((file): boolean => file.includes("/")).length).toBeGreaterThan(3);
     expect(EXECUTION_PATH.length).toBeGreaterThan(3);
     const present = readdirSync(SHU);
     for (const excluded of NOT_EXECUTION_PATH) expect(present).toContain(excluded);

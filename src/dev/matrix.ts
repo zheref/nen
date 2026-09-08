@@ -254,6 +254,15 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
     "",
     `**Scaffold template:** ${profile.scaffoldTemplate === null ? "none" : code(profile.scaffoldTemplate)} -- ${profile.scaffoldNote}`,
     "",
+    // ADVISORY, AND THE PAGE HAS TO SAY SO IN THE SAME BREATH. `nen shu
+    // coverage` parses the report a DECLARATION names under the coverage verb's
+    // `artifacts`; this line is what its refusal quotes when a lane names none,
+    // and nen never opens it. A row rendered without the qualifier would read
+    // as a path nen looks in.
+    `**Coverage report (advisory, never opened):** ${
+      profile.reportDefault.path === null ? "none recorded" : code(profile.reportDefault.path)
+    } -- ${profile.reportDefault.why} (${profile.reportDefault.source})`,
+    "",
     "### Verbs",
     "",
     ...table(["verb", "command", "why / source"], verbRows),

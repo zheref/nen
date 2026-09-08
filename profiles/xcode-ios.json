@@ -156,6 +156,12 @@
       "source": "KroApple/docs/ci.md:84-86"
     }
   },
+  "reportDefault": {
+    "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
+    "path": null,
+    "why": "The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is no shell in this family and therefore no redirection. A lane that wants this parsed states a step that writes the JSON to a path and names that path under the verb's `artifacts`. The `.xcresult` bundle itself is not a format nen reads.",
+    "source": "this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209)"
+  },
   "notes": [
     "PRECONDITIONS THIS STACK ASSERTS AND NEVER PERFORMS (all from KroApple): a per-runner simulator created and booted by UDID (tests.yml:99-160, including the explicit prohibition on `xcrun simctl shutdown all` at :81-98); a gitignored `Kro/Config.xcconfig` written from secrets (:174-179); `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES` (:186-188, and the whole of ci_scripts/ci_post_clone.sh:2); and, for food-diary, `pod install` plus an Expo prebuild.",
     "None of those preconditions becomes a `tools --install` action. They are assertions; `shu tools` installs host toolchains only."

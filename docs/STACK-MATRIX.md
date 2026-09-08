@@ -71,6 +71,8 @@ The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declar
 
 **Scaffold template:** none -- no template is proposed: one observed lane and one observed command is not enough evidence for one.
 
+**Coverage report (advisory, never opened):** none recorded -- No test command exists to instrument, so nothing writes a report. The JVM convention, once one does, is a JaCoCo XML under the module's own build tree -- named by the declaration, because the module layout is the repository's. (this profile's own `coverage` row (KroAndroid/program/, inventory sweep))
+
 ### Verbs
 
 | verb | command | why / source |
@@ -122,6 +124,8 @@ What nen has been *tested* against, never what it installs: the pin an install w
 **Host:** win32 only, and specifically Windows with Visual Studio 2022 (17.10+). The target framework needs the Windows 10 SDK 22621; `<UseWinUI>true</UseWinUI>` plus `<EnableMsixTooling>true</EnableMsixTooling>` need the Windows App SDK tooling; and the solution's deploy entries and MSIX launch profile are Visual Studio DEPLOYMENT GESTURES. Not cross-compilable from macOS or Linux.
 
 **Scaffold template:** none -- no template is proposed: a skeleton for a stack with no invocable command is one nen could not then run anything against.
+
+**Coverage report (advisory, never opened):** none recorded -- The collector this test project already references writes `TestResults/<run guid>/coverage.cobertura.xml` -- a directory named after a fresh GUID per run, so there is no fixed path to record and the declaration names the one its own run produces (or the results directory it pins). The FORMAT is Cobertura XML, which nen reads. (this profile's own `coverage` row (KroWindows/KroCoreTests/KroCoreTests.csproj, `coverlet.collector` 6.0.2))
 
 ### Verbs
 
@@ -206,6 +210,8 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Scaffold template:** `minimal` -- `app.json`, `package.json`, an `app/` route skeleton and nen/contract.json. NATIVE DIRECTORIES ARE NOT TEMPLATED; an `expo prebuild` is a printed post-step.
 
+**Coverage report (advisory, never opened):** none recorded -- Nothing to instrument, so no report exists to locate: no jest, no `jest-expo`, no vitest, and no `coverage` hit anywhere in the repository. (this profile's own `coverage` row (food-diary/package.json:14-49))
+
 ### Verbs
 
 | verb | command | why / source |
@@ -262,6 +268,8 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Scaffold template:** `full` -- a static-site skeleton a template can carry end to end.
 
+**Coverage report (advisory, never opened):** none recorded -- Nothing writes a coverage report: there is no test script and no test-runner dependency. If one is added, the convention in this ecosystem is `coverage/lcov.info` under the package that runs the tests -- and which package that is is the repository's fact, so the declaration states it. (this profile's own `coverage` row (zheref.io/package.json))
+
 ### Verbs
 
 | verb | command | why / source |
@@ -314,6 +322,8 @@ What nen has been *tested* against, never what it installs: the pin an install w
 **Host:** any -- Gradle, the JDK and the Android SDK are all cross-platform, and the repository says so itself: "The Gradle toolchain is platform-agnostic" (KroAndroid/.github/workflows/build-test.yml:171-173). CI routes to a self-hosted Mac for BILLING, not because macOS is required.
 
 **Scaffold template:** `minimal` -- wrapper, `settings.gradle.kts`, one module, nen/contract.json.
+
+**Coverage report (advisory, never opened):** none recorded -- No coverage plugin is declared -- neither JaCoCo nor Kover is applied -- so there is no report and no path to record. With a plugin applied the location is the plugin's own (a JaCoCo report task writes under the module's `build/reports` tree, and its XML output is off by default), and the declaration states it: this repository's checklist already names a `jacocoTestReport` task that does not exist on a clean checkout, and recording a plausible path here would repeat that mistake in nen's own voice. (this profile's own `coverage` row (KroAndroid/build.gradle.kts:2-15, app/build.gradle.kts:4-13))
 
 ### Verbs
 
@@ -372,6 +382,8 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Scaffold template:** `full` -- this is the stack a template can carry end to end, and the only one a CI runner can exercise on all three platforms.
 
+**Coverage report (advisory, never opened):** `packages/core/coverage/lcov.info` -- REPO-ROOT-RELATIVE, AND THAT IS WHY IT NAMES A PACKAGE. The observed configuration writes the `text` and `lcov` reporters, so the machine-readable file this stack produces today is an LCOV tracefile in the package's OWN `coverage/` directory -- and the coverage command fans out over the workspace members that declare a `test:coverage` script, so there is one such file per member, none of them at the repository root. `artifacts` is resolved against the repository root, so a bare `coverage/lcov.info` pasted from here would be a path nothing writes: the one recorded is the first member's, written out in full, and a declaration names each member's file it wants parsed. A `json-summary` reporter would write `coverage-summary.json` beside it, and nen reads either. (this profile's own `coverage` row (kro-pwa packages/core/package.json:19 and packages/app/package.json:22, each `vitest run --coverage` with `coverage: { provider: 'v8', reporter: ['text','lcov'] }`; kro-pwa/Makefile:71-73). NOT apps/web: that package's own `test` script bakes coverage in and the `test-coverage` target does not reach it, which this profile's `coverage` row already records as a gap.)
+
 ### Verbs
 
 | verb | command | why / source |
@@ -426,6 +438,8 @@ What nen has been *tested* against, never what it installs: the pin an install w
 **Host:** darwin only -- `xcodebuild`, `xcrun` and CocoaPods exist nowhere else. KroApple further requires Xcode 26.5 with the iOS 26.5 simulator runtime and an `iPhone 17 Pro` device type (KroApple/docs/ci.md:84-86).
 
 **Scaffold template:** `minimal` -- a project skeleton plus nen/contract.json. nen never generates a `.pbxproj`.
+
+**Coverage report (advisory, never opened):** none recorded -- The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is no shell in this family and therefore no redirection. A lane that wants this parsed states a step that writes the JSON to a path and names that path under the verb's `artifacts`. The `.xcresult` bundle itself is not a format nen reads. (this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209))
 
 ### Verbs
 

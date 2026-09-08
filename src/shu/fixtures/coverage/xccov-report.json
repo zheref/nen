@@ -1,0 +1,39 @@
+{
+  "coveredLines": 14,
+  "executableLines": 17,
+  "lineCoverage": 0.8235294117647058,
+  "targets": [
+    {
+      "name": "PlaceholderCore.framework",
+      "buildProductPath": "/Build/Products/Debug-iphonesimulator/PlaceholderCore.framework/PlaceholderCore",
+      "coveredLines": 3,
+      "executableLines": 4,
+      "lineCoverage": 0.75,
+      "files": [
+        {
+          "name": "Store.swift",
+          "path": "/repo/Core/Store.swift",
+          "coveredLines": 3,
+          "executableLines": 4,
+          "lineCoverage": 0.75
+        }
+      ]
+    },
+    {
+      "name": "PlaceholderApp.app",
+      "buildProductPath": "/Build/Products/Debug-iphonesimulator/PlaceholderApp.app/PlaceholderApp",
+      "coveredLines": 11,
+      "executableLines": 13,
+      "lineCoverage": 0.8461538461538461,
+      "files": [
+        {
+          "name": "AppModel.swift",
+          "path": "/repo/App/AppModel.swift",
+          "coveredLines": 11,
+          "executableLines": 13,
+          "lineCoverage": 0.8461538461538461
+        }
+      ]
+    }
+  ]
+}

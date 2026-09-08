@@ -126,12 +126,43 @@ function dataNodes(): readonly string[] {
 //                            that can reach a spawn are two files, and the
 //                            reachability rule below is what holds them apart
 //                            when somebody later merges them for tidiness.
+//   * `src/shu/coverage-defaults.ts`
+//                         -- the SAME narrowing, for the same kind of column.
+//                            `nen shu coverage` parses the report a DECLARATION
+//                            names under the verb's `artifacts`; when a lane
+//                            names none, this module supplies the sentence the
+//                            refusal quotes -- where that stack's tooling
+//                            conventionally writes one. That path is PRINTED and
+//                            never resolved, opened or spawned: the module that
+//                            can spawn (`src/shu/coverage.ts`, through
+//                            `src/shu/run.ts`) takes it as a PARAMETER from
+//                            `src/shu/command.ts` and formats it with
+//                            `src/shu/coverage/advisory.ts`, which reads
+//                            nothing. `coverage.ts` therefore reaches no pack
+//                            node at all, and the rule below is what says so --
+//                            rather than this comment, which is what the same
+//                            claim in that file's header was before the seam
+//                            side of the rule became transitive. The one module
+//                            that reaches both sides is the join, and it is
+//                            named in `JOINS` with its own argument.
 const ALLOWED_IMPORTERS: readonly string[] = [
   "src/dev/matrix.ts",
   "src/scaffold/templates.ts",
+  "src/shu/coverage-defaults.ts",
   "src/shu/detect.ts",
   "src/shu/tools.ts",
 ];
+
+/**
+ * The coverage PARSERS: on neither side, by construction.
+ *
+ * They read a file somebody else's build tool wrote and turn it into numbers.
+ * They must not reach the pack (a parser that took a path from the catalogue
+ * would be nen opening a file nobody declared) and they must not reach the seam
+ * (a parser that could spawn is not a parser). Both directions are one
+ * assertion below, over the same resolved graph every other rule here uses.
+ */
+const COVERAGE_PARSERS = "src/shu/coverage/";
 
 // The module every spawn in this repository goes through, and the node builtins
 // it is the only legitimate user of. A module that reaches any of these is a
@@ -170,8 +201,31 @@ const CHILD_PROCESS: readonly string[] = ["child_process", "node:child_process"]
  * A test below asserts the cut is neither vacuous (the registry really does have
  * many out-edges) nor load-bearing at the cut point (the registry itself reaches
  * no pack node).
+ *
+ * THE SECOND CUT: `src/cli/command.ts`, THE COMMAND SCAFFOLDING, and it exists
+ * because the seam in this program is INJECTED rather than imported. Nothing in
+ * `src/shu/` calls `../seam/exec.ts`; every family is handed a
+ * `CommandContext`, whose `seams` field it calls -- so the import that marks a
+ * module as one that can spawn is `import type { Seams }`, and the module that
+ * DEFINES `CommandContext` carries exactly that import. Without this cut, the
+ * reachability rule reads: every command module in this CLI reaches the seam
+ * through the type of its own argument, therefore no command module may ever
+ * read the pack -- which is the same "only satisfying assignment is nobody,
+ * ever" the registry cut rejects, and this file's own allowlist again names
+ * four modules that could not then exist. An edge to this module means "this
+ * is a command", not "this module went and got the seam".
+ *
+ * IT IS THE NARROWEST CUT THAT SAYS THAT, and the test below pins the premise
+ * rather than trusting it: `src/cli/command.ts`'s only reference to the seam
+ * must be a TYPE-ONLY import. The day it calls one, the cut stops being true
+ * and the assertion fails -- which is the whole difference between a cut and an
+ * exemption. Modules that reach the seam any OTHER way -- `src/shu/coverage.ts`
+ * through `src/shu/run.ts`, which names `Seams` itself -- are unaffected by it.
  */
-const DISPATCH: readonly string[] = ["src/cli/registry.ts"];
+const DISPATCH: readonly string[] = ["src/cli/registry.ts", "src/cli/command.ts"];
+
+/** The scaffolding cut, named for the assertion that keeps it honest. */
+const SCAFFOLD = "src/cli/command.ts";
 
 // ── the tokenizer ───────────────────────────────────────────────────────────
 //
@@ -625,17 +679,93 @@ function isPack(name: string): boolean {
   );
 }
 
-/** A module that can spawn: it imports the seam, or a `child_process`. */
-function spawns(graph: Graph, name: string): boolean {
-  return (graph.edges.get(name) ?? []).some(
-    (edge): boolean => edge === SEAM || CHILD_PROCESS.includes(edge),
-  );
+/** True for the seam itself, or for a `child_process` builtin. */
+function isSeam(name: string): boolean {
+  return name === SEAM || CHILD_PROCESS.includes(name);
 }
+
+/**
+ * A module that can spawn: it REACHES the seam, at any depth.
+ *
+ * TRANSITIVE, LIKE THE PACK SIDE ALREADY WAS, and the asymmetry it replaces was
+ * a hole rather than a nuance. The pack side asks "can this module GET to the
+ * catalogue, through however many hops"; the seam side asked "does this module
+ * IMPORT the seam", one edge. So a module one hop from the seam -- `src/shu/
+ * coverage.ts` imports `src/shu/run.ts`, which is where every `nen shu` verb's
+ * subprocess comes from -- was not "a module that can spawn" as far as this
+ * file was concerned, and could import the catalogue with nothing failing. It
+ * could, and it did: the header of that file claimed this test would fail the
+ * build for it, and this test would not have. Both halves of the rule now mean
+ * the same word by "reaches".
+ *
+ * A CUT POINT IS NOT A SPAWNER IN ITS OWN RIGHT, for the same reason it is not
+ * a path THROUGH: `src/cli/registry.ts` holds `Command` objects and runs
+ * nothing, and `src/cli/command.ts` declares the type of the argument every
+ * command is handed. See `DISPATCH`.
+ */
+function spawns(graph: Graph, name: string): boolean {
+  if (DISPATCH.includes(name)) return false;
+  return [...reachableFrom(graph, name)].some(isSeam);
+}
+
+/**
+ * THE JOINS: the modules that legitimately reach both sides.
+ *
+ * BOTH ARE A FAMILY'S `command.ts`, AND THAT IS NOT A COINCIDENCE. A value that
+ * comes out of a catalogue and lands in a report has to be read somewhere and
+ * handed over somewhere, and where a family reads its flags is the one place
+ * both halves are already in scope. Anything else that reached both sides would
+ * be a module doing two jobs.
+ *
+ * `src/shu/command.ts` is where the two halves of `nen shu tools` and `nen shu
+ * coverage` meet. It imports the catalogue readers (`src/shu/tools.ts`,
+ * `src/shu/coverage-defaults.ts`) and it imports the verbs that execute
+ * (`src/shu/coverage.ts` -> `src/shu/run.ts`), so under a rule that means
+ * REACHES on both sides it is an offender by construction.
+ *
+ * `src/scaffold/command.ts` is the same shape for `nen scaffold`. It imports
+ * the catalogue reader (`src/scaffold/templates.ts` -- `resolveStackId`, and
+ * the stack ids its help text lists) and it ends `init` by dispatching into
+ * `shuCommand`, the closing `nen shu tools` CHECK, which is where that verb's
+ * probes are spawned. It arrived with #131, one release after the seam side of
+ * this rule became transitive; it is a name argued onto this list rather than a
+ * rule relaxed to fit it.
+ *
+ * WHAT MAKES THEM SAFE IS NOT THIS LIST, IT IS THE SHAPE, and the shape is
+ * asserted rather than described, of every entry:
+ *
+ *   1. IT SPAWNS NOTHING ITSELF. Neither names a seam or a `child_process`;
+ *      the reach is entirely through the verb modules they dispatch to. The
+ *      test below asserts that of each name, so a `run(...)` added to either
+ *      fails the build even though the name is on this list.
+ *   2. WHAT CROSSES NEVER BECOMES AN ARGV. In `shu`, `coverageAdvisories()`
+ *      returns paths-as-sentences and `advisoryFor` formats them; the executing
+ *      half takes them as a parameter it only ever prints, and there is no
+ *      parameter on `runCoverage` through which a catalogue value could become
+ *      an argv or a path that is opened -- `src/shu/coverage.ts` reaches
+ *      neither the pack nor `src/profiles/`, which the rule above still holds
+ *      it to. In `scaffold`, the only argvs this family builds are the two
+ *      literals `["shu", "tools"]` and `["shu", "tools", "--install"]`: a
+ *      resolved stack id is a filename lookup in the bundled template table and
+ *      a `hosts` map written into a proposal for a human to read, and every
+ *      command in a generated CI file is `nen shu <verb>`, resolved at run time
+ *      on another machine out of the SCAFFOLDED repository's own declaration.
+ *   3. IT IS A SHORT, EXACT LIST. The test below pins the CONTENTS rather than
+ *      the length: a third join is the review conversation this file exists to
+ *      force, not a line to add.
+ *
+ * IT IS NOT THE `ALLOWED_IMPORTERS` LIST AND MUST NOT BE FOLDED INTO IT. That
+ * one answers "who may read the catalogue"; this one answers "who may read it
+ * while also being able to reach a subprocess". Two questions, two lists, and
+ * the second is deliberately harder to get onto.
+ */
+const JOINS: readonly string[] = ["src/scaffold/command.ts", "src/shu/command.ts"];
 
 /** Every `<offender> -> ... -> <pack>` path the graph admits, as strings. */
 function offences(graph: Graph): string[] {
   const found: string[] = [];
   for (const module of graph.modules) {
+    if (JOINS.includes(module.name)) continue;
     if (!spawns(graph, module.name)) continue;
     const reached = [...reachableFrom(graph, module.name)].filter(isPack).sort();
     for (const target of reached) found.push(`${module.name} -> ${target}`);
@@ -858,12 +988,125 @@ describe("the profiles pack is inert", () => {
     expect(importers.filter((name): boolean => !ALLOWED_IMPORTERS.includes(name))).toEqual([]);
   });
 
+  it("gives every allowed importer the property the list is granted on: it cannot spawn", () => {
+    // THE OTHER HALF OF WHAT BEING ON THAT LIST MEANS, and it is stated here
+    // rather than left to `offences` because the two failures read differently.
+    // `offences` says "the pack is reachable from a spawner" and prints a path;
+    // this says "a module that is allowed to READ the catalogue has acquired a
+    // route to a subprocess", which is the sentence a reviewer needs when the
+    // edge that did it is one word in an import list somewhere else.
+    //
+    // THIS IS HOW #132 BROKE IT AND HOW IT WAS FIXED. `src/shu/detect.ts` was
+    // moved off `./run.js` by this PR precisely so it would stop reaching the
+    // seam -- and then acquired `insideRepo` from that same module, one hop from
+    // every `nen shu` subprocess, for a containment answer it discards the
+    // message of. It asks `../repo/contain.ts` instead, which is the module that
+    // exists to be asked by both families and deliberately throws nothing. The
+    // fix was an edge removed, not a name added.
+    //
+    // A module that needs BOTH belongs in `JOINS`, argued, and never here.
+    const spawners = ALLOWED_IMPORTERS.filter((name): boolean => spawns(GRAPH, name));
+    expect(spawners).toEqual([]);
+    expect(ALLOWED_IMPORTERS.filter((name): boolean => JOINS.includes(name))).toEqual([]);
+  });
+
   it("is reachable from no module that can spawn a process, at any depth", () => {
     // THE RULE THE INVARIANT IS ACTUALLY ABOUT. Not "does a spawning module
     // import the pack" -- "can a spawning module get to it", through however
     // many hops and through an allowlisted importer just the same. It is
     // COMPUTED from the seam, so widening the allowlist does not widen it.
     expect(offences(GRAPH)).toEqual([]);
+  });
+
+  it("means REACHES on the seam side too, so one hop from the executor counts", () => {
+    // THE ASYMMETRY THIS FILE SHIPPED WITH. `spawns` looked at DIRECT edges
+    // while the pack side was already transitive, so `src/shu/coverage.ts` --
+    // which imports `src/shu/run.ts`, where every `nen shu` subprocess comes
+    // from -- was not a module that can spawn as far as this file was
+    // concerned. It is one, and it is now read as one.
+    expect(spawns(GRAPH, "src/shu/run.ts")).toBe(true);
+    expect(spawns(GRAPH, "src/shu/coverage.ts")).toBe(true);
+    // Which is what makes the coverage verb's split load-bearing rather than
+    // decorative: the executing half must reach no pack node at all, because
+    // there is no list it could be added to.
+    expect([...reachableFrom(GRAPH, "src/shu/coverage.ts")].filter(isPack)).toEqual([]);
+    expect(JOINS).not.toContain("src/shu/coverage.ts");
+  });
+
+  describe("the cuts and the join, each held to what it claims", () => {
+    it("cuts only nodes that are real, busy, and pack-free", () => {
+      const names = new Set(SHIPPED.map((module): string => module.name));
+      for (const cut of DISPATCH) {
+        // Real: a cut naming a module that does not exist cuts nothing and
+        // hides that it cuts nothing.
+        expect(names, cut).toContain(cut);
+        // Not vacuous: it really is a hub, or it did not need cutting.
+        expect((GRAPH.edges.get(cut) ?? []).length, cut).toBeGreaterThan(2);
+        // Not load-bearing at the cut point: what a cut buys is that the sweep
+        // does not walk THROUGH it, and it would be an exemption instead if the
+        // node itself imported the pack -- so that stays forbidden here, in the
+        // one place a reader checking the cut is looking.
+        expect((GRAPH.edges.get(cut) ?? []).filter(isPack), cut).toEqual([]);
+      }
+    });
+
+    it("keeps the scaffolding cut true: its only seam reference is a TYPE", () => {
+      // THE PREMISE OF THE SECOND CUT, CHECKED RATHER THAN ASSERTED. The seam
+      // in this program is injected -- `CommandContext.seams` -- so the module
+      // that declares that type names `../seam/exec.js` while calling nothing
+      // in it. That is why an edge to it means "this is a command" rather than
+      // "this module went and got the seam". The day it imports a VALUE from
+      // the seam, the cut is no longer true and this fails.
+      const source = readSource(join(ROOT, ...SCAFFOLD.split("/")));
+      const seamLines = source
+        .split("\n")
+        .filter((line): boolean => line.includes("seam/exec.js") && line.includes("import"));
+      expect(seamLines.length).toBe(1);
+      expect(seamLines[0]?.trimStart().startsWith("import type ")).toBe(true);
+    });
+
+    it("names exactly these two joins, and neither spawns anything itself", () => {
+      // THE CONTENTS, NOT THE LENGTH. A list pinned by length is a list a third
+      // name joins by deleting one, and the two that are on it are on it for
+      // reasons written above rather than for being two.
+      expect([...JOINS].sort()).toEqual(["src/scaffold/command.ts", "src/shu/command.ts"]);
+      for (const join_ of JOINS) {
+        expect(SHIPPED.map((module): string => module.name), join_).toContain(join_);
+        // Non-vacuous: without the entry this really would be an offence -- it
+        // reaches both sides. A join that had stopped reaching one of them would
+        // be a list entry nobody needed and nobody would notice.
+        expect(spawns(GRAPH, join_), join_).toBe(true);
+        expect([...reachableFrom(GRAPH, join_)].filter(isPack).length, join_).toBeGreaterThan(0);
+        // And the property each entry is argued on: it hands values across, it
+        // does not run programs. A `run(...)` added here fails HERE, list or no
+        // list.
+        expect((GRAPH.edges.get(join_) ?? []).filter(isSeam), join_).toEqual([]);
+      }
+    });
+  });
+
+  it("keeps the coverage parsers off both sides: no pack, no seam, at any depth", () => {
+    // A DIRECTORY RULE RATHER THAN A FILE LIST, so a sixth format module joins
+    // it by existing. The two halves of `nen shu coverage` meet only in
+    // `src/shu/command.ts`, which spawns nothing itself; everything under
+    // `src/shu/coverage/` is pure computation over text, and this is what says
+    // so about the real graph rather than about the headers.
+    const modules = SHIPPED.filter((module): boolean => module.name.startsWith(COVERAGE_PARSERS));
+    expect(modules.length).toBeGreaterThan(3);
+    const offending: string[] = [];
+    for (const module of modules) {
+      for (const reached of reachableFrom(GRAPH, module.name)) {
+        if (isPack(reached)) offending.push(`${module.name} -> ${reached} (the pack)`);
+        if (reached === SEAM || CHILD_PROCESS.includes(reached)) {
+          offending.push(`${module.name} -> ${reached} (the seam)`);
+        }
+      }
+    }
+    expect(offending.sort()).toEqual([]);
+    // And the advisory half is the mirror image: it reads the pack and can
+    // never spawn. (The `offences` rule above would catch it too -- this states
+    // it where a reader is looking for it.)
+    expect(spawns(GRAPH, "src/shu/coverage-defaults.ts")).toBe(false);
   });
 
   it("is not read by path from any shipped module", () => {
