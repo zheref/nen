@@ -379,6 +379,32 @@ describe("the XML reader", () => {
     expect(decodeEntities("&#65;&#x42;&unknown;")).toBe("AB&unknown;");
   });
 
+  it("decodes decimal and hex numeric entities by their own digit sets, and leaves the rest alone", () => {
+    // A single shared `#x?[0-9a-fA-F]+` pattern let a decimal reference like
+    // `&#1a;` match too -- `Number.parseInt("1a", 10)` silently returns 1,
+    // decoding to U+0001 instead of being left alone as the comment above
+    // `decodeEntities` promises. Splitting decimal and hex into their own
+    // digit sets closes that: `&#1a;` matches neither alternative, so
+    // `replace` never touches it.
+    expect(decodeEntities("&#1a;")).toBe("&#1a;");
+    expect(decodeEntities("&#65;")).toBe("A");
+    expect(decodeEntities("&#x41;")).toBe("A");
+    expect(decodeEntities("&#X41;")).toBe("A");
+    // A lone surrogate and NUL are not valid Unicode scalar values on their
+    // own -- `String.fromCodePoint` would still hand one back for either --
+    // so both are left alone rather than "decoded" into something no reader
+    // downstream wants to see.
+    expect(decodeEntities("&#xD800;")).toBe("&#xD800;");
+    expect(decodeEntities("&#0;")).toBe("&#0;");
+    // An unrecognised named entity is left alone, same as a malformed
+    // numeric one: this reader expands five names and nothing else.
+    expect(decodeEntities("&nbsp;")).toBe("&nbsp;");
+    // Exactly one decoding pass runs over the original text, so the `&lt;`
+    // produced by decoding `&amp;` is not itself re-scanned and decoded a
+    // second time into `<`.
+    expect(decodeEntities("&amp;lt;")).toBe("&lt;");
+  });
+
   it("ignores an unbalanced close tag rather than losing the rest of the file", () => {
     const elements = scanXml("<a><b/></c><d/></a>");
     expect(elements.map((element): string => element.name)).toEqual(["a", "b", "d"]);

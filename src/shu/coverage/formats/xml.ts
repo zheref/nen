@@ -39,12 +39,26 @@ const ENTITIES: Readonly<Record<string, string>> = {
 
 /** The five named entities plus numeric ones. Everything else is left alone. */
 export function decodeEntities(text: string): string {
-  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, body: string): string => {
+  // The decimal and hex branches match their OWN digit sets rather than
+  // sharing one greedy `#x?[0-9a-fA-F]+`: that shared pattern let a decimal
+  // reference absorb hex digits (`&#1a;` matched, and `Number.parseInt("1a",
+  // 10)` silently parsed just the "1"), decoding to the wrong code point
+  // instead of being left alone as this comment promises. Splitting the
+  // alternatives means `&#1a;` matches neither and is left untouched by
+  // `replace` itself -- no special-casing needed. The hex branch also takes
+  // `X` as well as `x`, matching the case the code below has always checked.
+  return text.replace(/&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, body: string): string => {
     if (body.startsWith("#")) {
-      const code = body.startsWith("#x") || body.startsWith("#X")
-        ? Number.parseInt(body.slice(2), 16)
-        : Number.parseInt(body.slice(1), 10);
-      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+      const isHex = body[1] === "x" || body[1] === "X";
+      const code = Number.parseInt(body.slice(isHex ? 2 : 1), isHex ? 16 : 10);
+      // Code 0 and the surrogate range (0xD800-0xDFFF) are not valid Unicode
+      // scalar values on their own -- `String.fromCodePoint` would still
+      // hand back a NUL or a lone surrogate for them -- so both are left
+      // alone rather than "decoded" into something no reader wants.
+      const isSurrogate = code >= 0xd800 && code <= 0xdfff;
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff && !isSurrogate
+        ? String.fromCodePoint(code)
+        : whole;
     }
     return ENTITIES[body.toLowerCase()] ?? whole;
   });
