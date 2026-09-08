@@ -7,6 +7,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 ### Fixed
 
 - **board** — `nen board render` and `nen board diff` validate the board file at the read seam and refuse a malformed board at exit 2 naming the file, row and field, instead of crashing with a raw `TypeError` (render) or silently diffing the string `"undefined"` (diff). Undeclared top-level board fields are now dropped from their `--json` output, as `build` already did for rows ([#99](https://github.com/zheref/nen/pull/99), closes #92)
+- **epic** — `nen epic next-wave` treats every ref spelling inside a `blocked by` / `blocks` clause (bare `#N`, `owner/repo#N`, a markdown link) as an edge, never the line's identity, and finds the clause even when a prose `blocked by` precedes it; a line whose only ref sits inside a clause is reported as unparsed instead of becoming a phantom child ([#PR](link), closes #97)
 
 ### Added
 
