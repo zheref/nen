@@ -25,3 +25,16 @@ export const ALT_REPO = join(FIXTURES, "alt-repo");
  * v0.4.0 together with the legacy map in ../source.ts.
  */
 export const LEGACY_REPO = join(FIXTURES, "legacy-repo");
+
+/**
+ * A repository whose `nen/contract.json` carries a `project` block rich enough
+ * to drive `nen shu` end to end: two lanes on different stacks, single- and
+ * multi-step verbs, `unsupported` rows, preconditions in all four states, a
+ * per-verb host restriction, an unsubstitutable placeholder, and one declared
+ * env value that must never appear in any output.
+ *
+ * It carries no taxonomy files: it exists for the executor, and a fixture that
+ * also had to be a valid taxonomy root would couple two suites that have
+ * nothing to do with each other.
+ */
+export const SHU_REPO = join(FIXTURES, "shu-repo");

@@ -1,7 +1,8 @@
 # Test fixtures
 
-Three fake repository roots. Two carry a migrated `nen/` directory; the third
-deliberately still carries `schemas/`.
+Four fake repository roots. Two carry a migrated `nen/` directory; the third
+deliberately still carries `schemas/`; the fourth carries only a contract, for
+the executor.
 
 These are **test data, not shipped code**. They deliberately contain concrete
 persona, label and check-name strings — that is the point of them: the loaders
@@ -29,6 +30,24 @@ different things.
   old layout alive, which is what makes the v0.4.0 removal a deletion of one
   directory and one map in `src/schema/source.ts` — with a test that goes red if
   anything else still depends on it.
+
+- `shu-repo/nen/contract.json` — a **`project`-only** contract, and the one the
+  `nen shu` executor is proved against. It is shaped after the Next.js product
+  repository in [zheref/nen#91](https://github.com/zheref/nen/issues/91)'s
+  design — a two-step lint, a multi-package coverage run, `unsupported`
+  archive/release/deploy — using this fixture's own placeholder workspace names.
+  Two lanes on different stacks, preconditions in all four states (satisfied
+  path, satisfiable env, absent path, a kind nen cannot assert), one per-verb
+  host restriction, one unsubstitutable placeholder, and one declared env value
+  that must never appear in any output nen produces. It carries no taxonomy
+  files: a fixture that also had to be a valid taxonomy root would couple two
+  suites that have nothing to do with each other. Its `deps/INSTALLED` is the
+  file the satisfied `path` precondition asserts — named `deps/` rather than the
+  obvious name because the obvious name is in this repository's `.gitignore`,
+  and a fixture that cannot be committed proves nothing.
+
+The marker trees `nen shu detect` scans are a different kind of input and live
+separately, at `src/shu/fixtures/` — see that directory's own README.
 
 Nothing under this directory is linted (`eslint.config.js` ignores
 `**/fixtures/**`) or type-checked, and the taxonomy-purity sweep in

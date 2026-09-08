@@ -1015,6 +1015,66 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
   scaffold: { subcommands: { init: MUT("creates directories, a commit-msg hook and a template file") } },
+  // THE `shu` FAMILY'S ROWS, AND WHY EVERY EXECUTING VERB IS `dry-run-gated`.
+  //
+  // Everything this family spawns comes out of a file in the TARGET repository
+  // (`nen/contract.json`), which is the whole reason these rows cannot be read
+  // off the verb names the way every other family's can. A READ-ONLY row for
+  // `shu test` would certify, sight unseen, whatever argv that file happens to
+  // carry -- and a test task that writes is not hypothetical: the ecosystem
+  // this family was designed against contains a golden-image task one
+  // keystroke from its recording sibling, a formatter whose check mode has a
+  // `--write` twin, a static-site build that writes a directory, and a
+  // coverage run that writes a report tree.
+  //
+  // SO THE BARE FORM IS MUTATING AND THE `--dry-run` FORM IS READ-ONLY, which
+  // is exactly what `DRY` encodes. An earlier draft left `test`, `ui-test`,
+  // `lint` and `coverage` OUT of this map instead, so that they classified
+  // `unknown`. That was fail-closed and it was also WRONG in a way the docs
+  // then repeated: `unknown` refuses in EVERY form, so `nen shu lint
+  // --dry-run` was refused too, and the sentence "--dry-run is the form a
+  // watcher can use" was false for the four verbs it was written about. `DRY`
+  // refuses the bare form for the same reason the absence did -- the argv is
+  // the repository's -- and admits the one form whose read-only-ness is a
+  // property of NEN rather than a claim about that argv: a dry run renders and
+  // spawns nothing, which ../shu/run.test.ts pins per verb from both sides.
+  //
+  // THE TWO NON-EXECUTING VERBS KEEP THEIR OWN GATES, and `warmup` stays
+  // MUTATING in every form: even its dry run fetches, and nobody watches a
+  // warm-up.
+  //
+  // AND THERE IS NO `"*"` KEY. NenFamilyEntry's own doc comment says the
+  // wildcard covers a family whose flags select the behaviour or whose every
+  // subcommand shares one policy; this family's emphatically do not -- three
+  // of the thirteen are not `DRY` -- and a `"*"` row would swallow them.
+  // ../parse/izanami.test.ts asserts exactly which keys are here, and which
+  // policy each carries, so a row's kind cannot change by accident.
+  shu: {
+    subcommands: {
+      detect: GATED(["--write"], "reads markers and proposes a declaration; only --write writes one"),
+      // TODO(zheref/nen#91, PR4): re-open this row when `shu tools` is built.
+      // It is classified read-only-until-`--install` on the strength of a verb
+      // that does not exist yet, and the check form will spawn VERSION PROBES
+      // WHOSE ARGV COMES FROM THE TARGET'S OWN DECLARATION -- the same
+      // provenance that makes every executing row above `DRY` rather than
+      // `RO`. A probe is not a build and `--version` is not a write, but that
+      // is a claim about what a declaration ought to contain, and this table's
+      // whole discipline is not making those. Decide it against the
+      // implementation, not against this comment.
+      tools: GATED(["--install"], "the check form spawns declared version probes and writes nothing; --install is the one write flag"),
+      build: DRY("spawns the lane's declared build unless --dry-run is given"),
+      test: DRY("spawns the lane's declared test command unless --dry-run is given -- and a declared test task may write (a golden-image recorder, a coverage tree), so the bare form is never certified"),
+      "ui-test": DRY("spawns the lane's declared UI/E2E command unless --dry-run is given -- commonly a multi-step form that also downloads a browser"),
+      lint: DRY("spawns the lane's declared lint command unless --dry-run is given -- a check mode and its --write twin differ by one flag in the declaration, not here"),
+      archive: DRY("spawns the lane's declared packaging step unless --dry-run is given"),
+      release: DRY("spawns the lane's declared publication step unless --dry-run is given"),
+      deploy: DRY("sends a build to a declared target unless --dry-run is given"),
+      dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given"),
+      run: DRY("starts a long-running production process on this terminal unless --dry-run is given"),
+      coverage: DRY("spawns the lane's declared coverage command unless --dry-run is given -- a coverage run writes its report tree by definition"),
+      warmup: MUT("brings a working copy to a known state -- even its dry run fetches, and nobody watches a warm-up"),
+    },
+  },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },
   stage: { subcommands: { triage: RO("reads 'git status --porcelain'; stages nothing") } },
   stop: { subcommands: { "*": RO("renders the gate-stop banner; fires nothing itself") } },

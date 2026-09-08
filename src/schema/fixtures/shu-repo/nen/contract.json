@@ -1,0 +1,109 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the EXECUTOR's repository. Shaped after the Next.js product repo in zheref/nen#91's design (its two-step lint, its multi-package coverage, its unsupported archive/release/deploy), with this fixture's own placeholder workspace names: nothing here is any real project's identity. Not shipped; see ../../README.md. The `web` lane is the one stack this release runs end to end; `native` exists so the unsupported-verb, host, placeholder and cannot-assert refusals each have a lane to be proved against.",
+
+  "project": {
+    "lanes": {
+      "web": { "stack": "nextjs", "cwd": "." },
+      "native": { "stack": "xcode-ios", "cwd": "native" }
+    },
+    "defaultLane": "web",
+
+    "preconditions": {
+      "web": [
+        {
+          "kind": "path",
+          "value": "deps",
+          "why": "The dependency install has been run. Nen ASSERTS it and never performs it: an install executes this project's own postinstall scripts. (The fixture carries deps/INSTALLED so this one is satisfied.)"
+        },
+        {
+          "kind": "env",
+          "value": "PLACEHOLDER_LANE_TOKEN",
+          "why": "Set by this project's own shell profile. Nen checks that the NAME is set and never reads, compares or prints the value."
+        }
+      ],
+      "native": [
+        {
+          "kind": "path",
+          "value": "native/deps",
+          "why": "Deliberately absent in this fixture: the unsatisfied-path refusal needs a lane to be proved against."
+        },
+        {
+          "kind": "command",
+          "value": ["placeholder-probe", "--version"],
+          "why": "A kind this release cannot assert. It is reported as 'cannot assert' and refused -- never silently passed."
+        }
+      ]
+    },
+
+    "verbs": {
+      "web": {
+        "build": {
+          "exe": "pnpm",
+          "argv": ["turbo", "run", "build"],
+          "artifacts": ["packages/app/.output"],
+          "why": "The workspace-aware build."
+        },
+        "test": { "exe": "pnpm", "argv": ["exec", "vitest", "run"] },
+        "ui-test": {
+          "steps": [
+            { "exe": "pnpm", "argv": ["--filter", "@placeholder/web", "exec", "playwright", "install", "--with-deps", "chromium"] },
+            { "exe": "pnpm", "argv": ["--filter", "@placeholder/web", "run", "test:e2e"] }
+          ],
+          "why": "Step 1 downloads a browser. It is part of the verb, not a precondition, because this project runs it every time."
+        },
+        "lint": {
+          "steps": [
+            { "exe": "pnpm", "argv": ["exec", "biome", "check", "."] },
+            { "exe": "pnpm", "argv": ["turbo", "run", "lint"] }
+          ],
+          "why": "Two commands, in order. The second alone misses the repo-wide format check."
+        },
+        "coverage": {
+          "steps": [
+            { "exe": "pnpm", "argv": ["--filter", "@placeholder/core", "test:coverage"] },
+            { "exe": "pnpm", "argv": ["--filter", "@placeholder/app", "test:coverage"] }
+          ],
+          "report": { "kind": "path", "value": "packages/core/coverage/coverage-final.json", "format": "v8-json" }
+        },
+        "dev": { "exe": "pnpm", "argv": ["exec", "next", "dev"] },
+        "run": {
+          "exe": "pnpm",
+          "argv": ["exec", "next", "start"],
+          "env": { "PLACEHOLDER_PORT": "4173" },
+          "why": "The production serve, locally. Its env VALUE is declared here and must never appear in any output nen produces."
+        },
+        "archive": { "unsupported": "no packaging step exists; this lane ships as a web application." },
+        "release": { "unsupported": "there is no package or store pipeline for this lane." },
+        "deploy": { "unsupported": "no target is wired. Declare one under `targets` before nen will run this." },
+        "storybook": {
+          "exe": "pnpm",
+          "argv": ["run", "storybook"],
+          "why": "An UNKNOWN verb name, preserved rather than rejected -- the ecosystem's verbs are the repository's to name. `nen shu` has no such subcommand, so nothing here can reach it."
+        }
+      },
+      "native": {
+        "build": {
+          "exe": "placeholder-build-tool",
+          "argv": ["-workspace", "Placeholder.xcworkspace", "-scheme", "Placeholder App", "build"],
+          "why": "One argv element carries whitespace, so the dry run's quoting is proved against a declaration rather than a synthetic string."
+        },
+        "release": {
+          "exe": "placeholder-publish-tool",
+          "argv": ["upload"],
+          "why": "Declared, and restricted to one platform under `hosts` -- the exit-3 refusal needs a verb that is real everywhere except the host."
+        },
+        "test": {
+          "exe": "placeholder-build-tool",
+          "argv": ["test", "-scheme", "{scheme}"],
+          "why": "A placeholder from the reference pack's own closed set, which this release cannot substitute -- the refusal is exit 2 naming it."
+        },
+        "archive": { "unsupported": "signing material is a human's, and nen never synthesises it." }
+      }
+    },
+
+    "profiles": {},
+    "targets": {},
+    "hosts": { "*": ["darwin", "linux", "win32"], "release": ["darwin"] }
+  }
+}

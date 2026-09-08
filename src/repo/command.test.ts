@@ -26,7 +26,15 @@ async function capture(
       err.push(line);
     },
   };
-  const seams: Seams = { run, now: (): Date => new Date("2026-01-01T00:00:00Z"), env: {} };
+  const seams: Seams = {
+    run,
+    now: (): Date => new Date("2026-01-01T00:00:00Z"),
+    env: {},
+    runInteractive: (): never => {
+      throw new Error("this verb has no interactive form");
+    },
+    platform: "linux",
+  };
   const code = await runFamily(repoCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }

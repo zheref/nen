@@ -308,10 +308,10 @@ exercises all three platforms on every change for exactly this reason.
 
 ## The verb surface
 
-`nen --help` lists every command family (34 as of v0.2.0); each
+`nen --help` lists every command family (35 as of v0.2.0); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-70 verbs outside the binary — each one's purpose, arguments, exit codes and
+83 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -325,6 +325,10 @@ they compose into. The families group roughly as:
 - **Release mechanics** — `release`, `changelog`, `tag`, `fanout`, `run`
 - **Issue & idea filing** — `issue`, `idea`
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`
+- **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,
+  `ui-test`, `lint`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
+  `tools`, `warmup`), which run what a *target project* declares in its own
+  `nen/contract.json` — never anything Nen decided
 - **This repository's own dev loop** — `dev` (`test`, `lint`, `replay`)
 - **Skill-grammar parsing** — `parse`
 - **Supply** — `bootstrap`, `wake`, `stop`
@@ -333,14 +337,23 @@ Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
-Stack-aware developer verbs (`nen shu build | test | lint | …`) are not in that
-list yet; what those verbs will be able to run per stack is already written down
-in [`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
+`nen shu` runs those verbs today, against any repository that declares them.
+Eleven of the thirteen execute — `nen shu build --dry-run` prints the exact
+argv, cwd and environment *names* it would spawn and spawns nothing; `nen shu
+detect` proposes a `nen/contract.json` project block from the markers on disk
+and never writes one without `--write`. `shu tools` and `shu warmup` are
+declared, documented, and refuse at exit 4 naming the release they arrive in.
+
+What each verb can run **per stack** is written down in
+[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
 verbs, each cell either a reference command cited to the repository it came
-from or an `unsupported` with the reason, generated from the bundled profiles
-pack (`profiles/*.json`) by `bun run matrix` and drift-checked by the suite.
-The pack is a catalogue: nothing that spawns a process reads it, and a test
-fails the build if that stops being true.
+from, a `declared-only` (real for the stack, and the observed repositories
+disagree about what it means), or an `unsupported` with the reason. It is
+generated from the bundled profiles pack (`profiles/*.json`) by `bun run
+matrix` and drift-checked by the suite. The pack is a **catalogue, not an
+authority**: `nen shu detect` reads it to write a proposal a human edits, and
+an import-graph test fails the build if anything that can spawn a process ever
+reaches it — the executor included.
 
 ## Working on Nen
 

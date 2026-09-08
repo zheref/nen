@@ -29,6 +29,10 @@ async function capture(
     },
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
+    runInteractive: (): never => {
+      throw new Error("this verb has no interactive form");
+    },
+    platform: "linux",
   };
   const code = await runFamily(canonCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };

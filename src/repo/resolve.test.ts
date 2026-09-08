@@ -141,7 +141,17 @@ describe("resolve", () => {
   it("resolves the token when one is given, without touching git", () => {
     const result = resolve({
       registry: registry(),
-      seams: { run: (): never => { throw new Error("must not be called"); }, now: (): Date => new Date(), env: {} },
+      seams: {
+        run: (): never => {
+          throw new Error("must not be called");
+        },
+        now: (): Date => new Date(),
+        env: {},
+        runInteractive: (): never => {
+          throw new Error("resolve makes no interactive subprocess call");
+        },
+        platform: "linux",
+      },
       token: "KP",
       cwd: "/anywhere",
     });
@@ -161,6 +171,10 @@ describe("resolve", () => {
         }),
         now: (): Date => new Date(),
         env: {},
+        runInteractive: (): never => {
+          throw new Error("resolve makes no interactive subprocess call");
+        },
+        platform: "linux",
       },
       token: null,
       cwd: "/somewhere",
@@ -183,6 +197,10 @@ describe("resolve", () => {
         }),
         now: (): Date => new Date(),
         env: {},
+        runInteractive: (): never => {
+          throw new Error("resolve makes no interactive subprocess call");
+        },
+        platform: "linux",
       },
       token: null,
       cwd: "/the-registrys-own-checkout",
@@ -204,6 +222,10 @@ describe("resolve", () => {
         }),
         now: (): Date => new Date(),
         env: {},
+        runInteractive: (): never => {
+          throw new Error("resolve makes no interactive subprocess call");
+        },
+        platform: "linux",
       },
       token: null,
       cwd: "/a-pending-consumers-checkout",
@@ -224,6 +246,10 @@ describe("resolve", () => {
           }),
           now: (): Date => new Date(),
           env: {},
+          runInteractive: (): never => {
+            throw new Error("resolve makes no interactive subprocess call");
+          },
+          platform: "linux",
         },
         token: null,
         cwd: "/somewhere",

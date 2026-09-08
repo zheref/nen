@@ -10,7 +10,7 @@
 // answered every unknown call with `{code: 0, stdout: ""}` would let a verb
 // make an extra `gh` call -- a second create, a stray label -- and still
 // pass, which is exactly the class of defect these verbs exist to prevent.
-import type { CommandResult, Runner, Seams } from "./exec.js";
+import type { CommandResult, InteractiveResult, InteractiveRunner, Runner, Seams } from "./exec.js";
 
 export interface ScriptedCall {
   readonly match: string;
@@ -20,37 +20,116 @@ export interface ScriptedCall {
 export interface RecordedRun {
   readonly command: string;
   readonly args: readonly string[];
+  /**
+   * Which seam took the call. Present on every recorded run so a test can
+   * assert that a long-running verb went through `runInteractive` and a
+   * captured one did not -- the distinction ../seam/exec.ts's header exists
+   * for, which a single flat list of argv would erase.
+   */
+  readonly interactive: boolean;
+  /**
+   * The working directory the caller asked for, or null when it asked for
+   * none (the child then inherits this process's own).
+   *
+   * RECORDED BECAUSE THE SCRIPT CANNOT MATCH ON IT. `find` keys on the command
+   * plus its argv, so a verb that resolved a lane's `cwd` wrongly -- against
+   * the process's directory instead of `--repo`, say -- produced a call this
+   * seam happily answered and no test could see. `nen shu` runs every step in
+   * a directory the declaration names, so "which directory" is half of what
+   * it does.
+   */
+  readonly cwd: string | null;
+  /**
+   * The extra environment the caller passed to the child, or null for none.
+   *
+   * THE VALUES ARE HERE ON PURPOSE, and they are the only place in a test run
+   * where they legitimately appear: a declaration's `env` value must reach the
+   * CHILD and must never reach a report, a log line or a refusal. Asserting
+   * "the value is in no output" proves half of that; the other half needs
+   * somewhere the value is supposed to be.
+   */
+  readonly env: Readonly<Record<string, string | undefined>> | null;
 }
 
 export class ScriptedSeams implements Seams {
   readonly calls: RecordedRun[] = [];
   readonly now: () => Date;
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly platform: NodeJS.Platform;
   private readonly script: readonly ScriptedCall[];
 
   constructor(
     script: readonly ScriptedCall[],
-    options: { now?: () => Date; env?: Readonly<Record<string, string | undefined>> } = {},
+    options: {
+      now?: () => Date;
+      env?: Readonly<Record<string, string | undefined>>;
+      /**
+       * The host this invocation should believe it is on. Defaults to the REAL
+       * platform so every existing test keeps the behaviour it was written
+       * against; a test about a host refusal states the platform it means, and
+       * therefore proves the same thing on all three CI lanes.
+       */
+      platform?: NodeJS.Platform;
+    } = {},
   ) {
     this.script = [...script];
     this.now = options.now ?? ((): Date => new Date("2026-01-01T00:00:00Z"));
     this.env = options.env ?? {};
+    this.platform = options.platform ?? process.platform;
   }
 
-  run: Runner = (command, args): CommandResult => {
-    this.calls.push({ command, args });
+  private find(command: string, args: readonly string[], what: string): Partial<CommandResult> {
     const key = [command, ...args].join(" ");
     const found = this.script.find((entry): boolean => entry.match === key);
     if (found === undefined) {
       throw new Error(
-        `unscripted subprocess: '${key}'. Add it to the script, or fix the caller that made it -- an unexpected call is the finding, not the fixture's gap.`,
+        `unscripted ${what}: '${key}'. Add it to the script, or fix the caller that made it -- an unexpected call is the finding, not the fixture's gap.`,
       );
     }
+    return found.result;
+  }
+
+  run: Runner = (command, args, options = {}): CommandResult => {
+    this.calls.push({
+      command,
+      args,
+      interactive: false,
+      cwd: options.cwd ?? null,
+      env: options.env ?? null,
+    });
+    const found = this.find(command, args, "subprocess");
     return {
-      code: found.result.code ?? 0,
-      stdout: found.result.stdout ?? "",
-      stderr: found.result.stderr ?? "",
-      spawnFailed: found.result.spawnFailed ?? false,
+      code: found.code ?? 0,
+      stdout: found.stdout ?? "",
+      stderr: found.stderr ?? "",
+      spawnFailed: found.spawnFailed ?? false,
+    };
+  };
+
+  /**
+   * The recorded long-running child. It answers from the SAME script as `run`,
+   * keyed the same way, because a test's fixture should not have to know which
+   * seam a verb chose -- and an unscripted call throws here for the same reason
+   * it throws there: a verb that spawned something nobody expected is the
+   * finding.
+   *
+   * `stdout`/`stderr` in a script entry are IGNORED here rather than returned,
+   * which is the point of the seam: an interactive child's output went to the
+   * terminal and nen never saw it.
+   */
+  runInteractive: InteractiveRunner = (command, args, options = {}): InteractiveResult => {
+    this.calls.push({
+      command,
+      args,
+      interactive: true,
+      cwd: options.cwd ?? null,
+      env: options.env ?? null,
+    });
+    const found = this.find(command, args, "interactive subprocess");
+    return {
+      code: found.code ?? 0,
+      signal: null,
+      spawnFailed: found.spawnFailed ?? false,
     };
   };
 }

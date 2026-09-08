@@ -23,6 +23,10 @@ async function capture(argv: readonly string[]): Promise<{ code: number; out: st
     },
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
+    runInteractive: (): never => {
+      throw new Error("this verb has no interactive form");
+    },
+    platform: "linux",
   };
   const code = await runFamily(loopCommand, argv, null, false, io, seams);
   return { code, out, err };

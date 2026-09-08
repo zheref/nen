@@ -5,6 +5,7 @@ import { COMMANDS, findCommand } from "../cli/registry.js";
 import { devLintArgv } from "../dev/lint.js";
 import { devTestArgv } from "../dev/test.js";
 import { reviewsArgv } from "../pr/fetch.js";
+import { EXECUTING_VERBS, SHU_SUBCOMMANDS } from "../shu/command.js";
 import {
   classifyCommand,
   classifyInvocation,
@@ -729,6 +730,8 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "canon mirror check": "nen canon mirror check --rules-dir r",
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
     "epic next-wave": "nen epic next-wave --body-file b.md",
+    "shu detect": "nen shu detect",
+    "shu tools": "nen shu tools",
     "wake fire": "nen wake fire --repo-slug o/r --ref XX-PR-#1 --label wake",
     "wake verify": "nen wake verify --repo-slug o/r --now 2026-01-01T00:00:00Z --author-pattern x",
   };
@@ -1426,6 +1429,72 @@ describe("NEN_VERB_TABLE -- exhaustive over the real verb registry", () => {
         }
       }
     }
+  });
+});
+
+// THE EXHAUSTIVENESS TEST ABOVE IS REGISTRY-KEYED, NOT SUBCOMMAND-KEYED, and
+// that asymmetry is the reason this block exists. A new FAMILY missing from the
+// table goes red; a new SUBCOMMAND on an existing family falls through to
+// `unknown` and refuses -- fail-closed, but INVISIBLE. So `shu`'s thirteen are
+// enumerated here with the policy each one carries, and the reason the
+// executing ten carry `dry-run-gated` rather than `read-only`: the argv they
+// run comes out of a file in the TARGET repository, and a read-only row would
+// certify it sight unseen.
+//
+// AN EARLIER DRAFT LEFT FOUR OF THEM OUT, so that `shu test`, `ui-test`, `lint`
+// and `coverage` classified `unknown`. That was fail-closed and also wrong:
+// `unknown` refuses in EVERY form, so `nen shu lint --dry-run` was refused too,
+// while the docs (and this file) said `--dry-run` was the form a watcher could
+// use. `dry-run-gated` says the true thing -- the bare form is not certified,
+// the dry run is -- and the dry run's read-only-ness is a property of nen
+// rather than a claim about somebody's argv.
+describe("NEN_VERB_TABLE -- the shu family, every verb classified", () => {
+  const shu = NEN_VERB_TABLE["shu"];
+
+  it("classifies exactly the thirteen subcommands the family has, and no others", () => {
+    expect(Object.keys(shu?.subcommands ?? {}).sort()).toEqual([...SHU_SUBCOMMANDS].sort());
+  });
+
+  it("gives every EXECUTING verb the dry-run gate, and no other kind", () => {
+    for (const verb of EXECUTING_VERBS) {
+      expect(shu?.subcommands[verb]?.kind, verb).toBe("dry-run-gated");
+      expect(classifyCommand(`nen shu ${verb}`).classification, verb).toBe("mutating");
+      expect(classifyCommand(`nen shu ${verb} --dry-run`).classification, verb).toBe("read-only");
+    }
+  });
+
+  it("so the four that used to be unclassified are now watchable with --dry-run", () => {
+    // The regression this row exists for, stated in the terms the review found
+    // it in: these four were absent, so BOTH forms refused.
+    for (const verb of ["test", "ui-test", "lint", "coverage"]) {
+      expect(classifyCommand(`nen shu ${verb}`).classification, verb).toBe("mutating");
+      expect(classifyCommand(`nen shu ${verb} --dry-run`).classification, verb).toBe("read-only");
+    }
+  });
+
+  it("gates detect on --write and tools on --install", () => {
+    expect(classifyCommand("nen shu detect").classification).toBe("read-only");
+    expect(classifyCommand("nen shu detect --write").classification).toBe("mutating");
+    expect(classifyCommand("nen shu tools").classification).toBe("read-only");
+    expect(classifyCommand("nen shu tools --install").classification).toBe("mutating");
+  });
+
+  it("refuses `shu warmup` in EVERY form, dry run included", () => {
+    expect(classifyCommand("nen shu warmup").classification).toBe("mutating");
+    expect(classifyCommand("nen shu warmup --dry-run").classification).toBe("mutating");
+  });
+
+  it("still refuses a subcommand this family does not have", () => {
+    // The fail-closed floor is unchanged: only the thirteen are classified, and
+    // a fourteenth arriving without a row here classifies `unknown`.
+    expect(classifyCommand("nen shu invented").classification).toBe("unknown");
+  });
+
+  // NenFamilyEntry's own doc comment reserves "*" for a family whose flags
+  // select the behaviour or whose every subcommand shares one policy. Three of
+  // these thirteen are not `dry-run-gated`, so a "*" row would certify them.
+  it("carries no wildcard row", () => {
+    expect(Object.keys(shu?.subcommands ?? {})).not.toContain("*");
   });
 });
 

@@ -9,6 +9,10 @@ class QueueSeams implements Seams {
   calls = 0;
   readonly now = (): Date => new Date("2026-01-01T00:00:00Z");
   readonly env = {};
+  readonly platform: NodeJS.Platform = "linux";
+  runInteractive: Seams["runInteractive"] = (): never => {
+    throw new Error("watch until never spawns an interactive child -- it observes");
+  };
   constructor(queue: readonly CommandResult[]) {
     this.queue = [...queue];
   }

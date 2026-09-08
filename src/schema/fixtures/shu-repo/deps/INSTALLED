@@ -1,0 +1,9 @@
+This directory stands in for whatever a project's dependency install produces.
+
+`nen/contract.json` declares `{ "kind": "path", "value": "deps" }` as a
+precondition of the `web` lane, so this file existing is what makes that
+assertion pass -- and deleting it is what makes the refusal provable.
+
+It is called `deps/` rather than the obvious name because the obvious name is
+in this repository's `.gitignore`, and a fixture that cannot be committed
+proves nothing.

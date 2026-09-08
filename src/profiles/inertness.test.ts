@@ -64,8 +64,8 @@ const PACK_DATA_DIRECTORY = "profiles";
 //
 //   * `src/dev/matrix.ts` -- the generator. It renders a page and spawns
 //                            nothing.
-//   * `src/shu/detect.ts` -- (not yet written) proposes a DECLARATION a human
-//                            reads and edits. It writes a file; it runs no verb.
+//   * `src/shu/detect.ts` -- proposes a DECLARATION a human reads and edits. It
+//                            writes a file; it runs no verb.
 //   * `src/shu/tools.ts`  -- (not yet written) reports an advisory `packMinimum`
 //                            column beside what it probed. The probe argv and
 //                            any install argv come from the DECLARATION; the
@@ -84,6 +84,40 @@ const ALLOWED_IMPORTERS: readonly string[] = [
 // module that can run a program.
 const SEAM = "src/seam/exec.ts";
 const CHILD_PROCESS: readonly string[] = ["child_process", "node:child_process"];
+
+/**
+ * A DISPATCH TABLE: reached by the sweep, never traversed through.
+ *
+ * WHY THIS EXISTS, AND WHY IT IS NOT A HOLE. `src/cli/registry.ts` imports EVERY
+ * family by construction -- that is the entire content of the file, one line per
+ * family -- and `src/index.ts` imports the registry and the seam. So without
+ * this, the reachability rule below says: index.ts can spawn, index.ts reaches
+ * the registry, the registry reaches every family, therefore NO FAMILY MAY EVER
+ * READ THE PACK. That is not the invariant anybody meant, and this same file
+ * says so three screens up: `ALLOWED_IMPORTERS` names two `src/shu/` modules as
+ * legitimate readers, and under the unrefined rule neither could ever exist.
+ * A rule whose only satisfying assignment is "nobody, ever" stops being a rule
+ * and becomes a thing somebody deletes.
+ *
+ * WHAT AN EDGE THROUGH THE REGISTRY MEANS is "this program has that family",
+ * and nothing else: the registry holds `Command` objects, `src/index.ts` calls
+ * `command.run(context)`, and no value crosses from one family to another
+ * through either. That is what makes cutting it safe where cutting an ordinary
+ * import would not be.
+ *
+ * IT IS NOT AN EXEMPTION FROM THE RULES, ONLY FROM BEING A PATH. The registry is
+ * still swept as an ordinary module: it may not import the pack (the direct-
+ * importer rule), and it is still a node every other rule sees. And the modules
+ * it dispatches to are each held to the whole set in their own right -- which is
+ * why `src/shu/detect.ts` may read the pack (nothing that spawns reaches it, and
+ * it imports no seam) while `src/shu/render.ts`, which builds the argv
+ * `src/shu/run.ts` spawns, may not.
+ *
+ * A test below asserts the cut is neither vacuous (the registry really does have
+ * many out-edges) nor load-bearing at the cut point (the registry itself reaches
+ * no pack node).
+ */
+const DISPATCH: readonly string[] = ["src/cli/registry.ts"];
 
 // ── the tokenizer ───────────────────────────────────────────────────────────
 //
@@ -520,6 +554,8 @@ function reachableFrom(graph: Graph, start: string): Set<string> {
   while (queue.length > 0) {
     const current = queue.shift();
     if (current === undefined) continue;
+    // A DISPATCH TABLE IS REACHED, NEVER TRAVERSED. See `DISPATCH` below.
+    if (current !== start && DISPATCH.includes(current)) continue;
     for (const next of graph.edges.get(current) ?? []) {
       if (seen.has(next)) continue;
       seen.add(next);
