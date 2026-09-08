@@ -3533,6 +3533,20 @@ interface TreeFile {
    * file format nobody thought of.
    */
   readonly script: () => string | null;
+  /**
+   * THE BYTES AS THEY ARE ON DISK, memoised the same way, for the readers whose
+   * file is in NEITHER of those two languages.
+   *
+   * The alias CATALOGUE is the one that needed it. It is TOML -- `#` to end of
+   * line, and no block comment at all -- and running the build-script stripper
+   * over it is not a near miss but a silent emptying: a catalogue whose first
+   * line is `# see the docs /* here` opens a block comment that never closes,
+   * every entry after it disappears, and the lane reads as one whose aliases
+   * resolve to nothing while the note names the file it "read". So the raw text
+   * is handed to the stripper that belongs to the file's own format, next to
+   * the reader that knows what format that is.
+   */
+  readonly text: () => string | null;
 }
 
 /**
@@ -3555,6 +3569,7 @@ function walkLaneFiles(repoRoot: string, laneDirectory: string): readonly TreeFi
       }
       let markup: string | null | undefined;
       let script: string | null | undefined;
+      let raw: string | null | undefined;
       files.push({
         name: entry.name,
         directory,
@@ -3564,6 +3579,7 @@ function walkLaneFiles(repoRoot: string, laneDirectory: string): readonly TreeFi
           markup === undefined ? (markup = readMarkup(absolute)) : markup,
         script: (): string | null =>
           script === undefined ? (script = readScript(absolute)) : script,
+        text: (): string | null => (raw === undefined ? (raw = readText(absolute)) : raw),
       });
     }
   };
@@ -3633,10 +3649,12 @@ function literalPattern(text: string): string {
 //     that may not exist. It is withheld either way -- and the reason says
 //     which of the two it was, because a maintainer fixes them differently.
 //
-// EVERY STRING THIS READER LOOKS FOR IS THE PACK'S. The plugin id is the
-// markers' own `contains`, the catalogue filename and the build-logic directory
-// are `crossChecks[].plugin`'s, and ./detect.test.ts holds this module to
-// spelling none of them.
+// EVERY NAME THIS READER LOOKS FOR IS THE PACK'S. The plugin id is the markers'
+// own `contains`, the catalogue's path and filename and the build-logic
+// directories are `crossChecks[].plugin`'s, and ./detect.test.ts holds this
+// module to spelling none of them. What is NOT the pack's is the SYNTAX -- the
+// shape of an application, of an alias, of a catalogue entry -- which is this
+// reader's own and is why the rule states which languages it can read.
 
 /** What this lane says about the plugin a gated row's task comes from. */
 type PluginVerdict =
@@ -3649,12 +3667,85 @@ type PluginVerdict =
 const PLUGIN_ALIAS = /\balias\s*\(\s*([A-Za-z0-9_.]+)\s*\)/g;
 
 /**
+ * A build file APPLYING one plugin id, in the three spellings that name it.
+ *
+ * A SUBSTRING WAS THE SAME DEFECT ONE INDIRECTION IN, and this predicate is
+ * what closes it. `text.includes(id)` is true of three shapes that apply
+ * nothing whatever:
+ *
+ *   * A DEPENDENCY COORDINATE. `testImplementation("<id>:<artifact>:<version>")`
+ *     is how a module declares this family of plugin's ANNOTATIONS artifact,
+ *     and a module that declares it is very often a module that does not apply
+ *     the plugin -- the annotations are compiled against, the plugin is applied
+ *     in the module that runs the task.
+ *   * BUILD LOGIC'S OWN DEPENDENCIES. A `buildSrc/build.gradle.kts` naming the
+ *     plugin's GRADLE-PLUGIN artifact is a repository compiling a convention
+ *     plugin that MIGHT apply it; that is the third value, not evidence. (It is
+ *     also excluded from the candidates outright -- see `pluginVerdict`.)
+ *   * A RAW STRING. A build file quoting the id in a `"""..."""` -- a
+ *     generator, a doc block, an error message -- is text about the plugin.
+ *
+ * Each of those proposed a task the build has not got, which is the bug this
+ * whole gate exists to close, arriving through the gate itself.
+ *
+ * SO THE ID MUST BE QUOTED AND THE QUOTE MUST BE AN APPLICATION'S ARGUMENT.
+ * Three spellings do that and they are the three the pack names: `id("<id>")`,
+ * `id '<id>'` and `apply plugin: '<id>'`, in either quote. The fourth way a
+ * build applies a plugin -- `alias(...)` -- names no id at all and is followed
+ * separately, through the catalogue.
+ *
+ * AND `apply false` IS NOT AN APPLICATION WHEREVER IT IS WRITTEN. The marker's
+ * directory prefix already keeps the ROOT's `plugins` block out of this
+ * reading, which is where that clause almost always sits -- but it is legal in
+ * a module's block too, and it means there exactly what it means at the root:
+ * resolve this plugin, make its version available, apply it to nothing.
+ *
+ * WHAT IT STILL CANNOT SEE, stated as the bound it is: a build script that
+ * WRITES another build script, quoting a whole `id("...")` inside a raw string,
+ * reads as an application here. The id really is being applied to something and
+ * nothing in the text says to which build -- and `unknown` is not available,
+ * because this predicate is asked yes or no about one file. A tree shaped like
+ * that gets a row it must correct, which is why it is written down.
+ */
+function appliesPlugin(text: string, id: string): boolean {
+  return new RegExp(
+    `(?:\\bid\\s*[(\\s]\\s*|\\bapply\\s+plugin\\s*:\\s*)["']${literalPattern(id)}["'](?![^\\n]*\\bapply\\s+false\\b)`,
+  ).test(text);
+}
+
+/**
  * A plugin application whose id nen cannot resolve -- `OPAQUE_PLUGIN` WITHOUT
  * the alias clause, because an alias is the one of those this reader CAN
  * follow, and reporting a resolved one as unreadable would withhold every
  * modern build.
  */
 const UNRESOLVABLE_PLUGIN = /\bapply\s*\(|\bapply\s+from\s*:|\bid\s*\(\s*[^"'\s)]/;
+
+/**
+ * WHAT A ROOT BUILD FILE CAN DO THAT NO MODULE'S FILE RECORDS, as data.
+ *
+ * THE ROOT IS READ FOR THIS SIGNAL AND FOR NOTHING ELSE. The marker's `*\/`
+ * prefix says the plugin's ID is a MODULE's word -- a root `plugins` block
+ * naming it `apply false` declares a version for the modules and applies it
+ * nowhere -- and that rule stands. But a root that configures its modules from
+ * the top can apply a plugin to every one of them without any module's file
+ * saying so, and reading `absent` off the modules alone made the seat assert
+ * something false: "nothing in this lane's own build applies the plugin", on a
+ * tree whose root applies it to all of them.
+ *
+ * So the root's contribution is exactly one thing: nen CANNOT TELL. The verdict
+ * goes to `unknown`, the reason names the file and the construct, and the id is
+ * still never taken from the root.
+ */
+const ROOT_SIGNALS: readonly { readonly probe: RegExp; readonly what: string }[] = [
+  { probe: /\ballprojects\s*\{/, what: "an `allprojects {` block" },
+  { probe: /\bsubprojects\s*\{/, what: "a `subprojects {` block" },
+  { probe: /\bapply\s*\(/, what: "an `apply(...)`" },
+  { probe: /\bapply\s+from\s*:/, what: "an `apply from:`" },
+];
+
+/** A `versionCatalogs { ... }` block: this lane declaring catalogues of its own. */
+const VERSION_CATALOGS = /\bversionCatalogs\s*\{/;
 
 /** A `[section]` header, and one `key = value` line inside it. */
 const TOML_SECTION = /^\s*\[([^\]\n]+)\]/;
@@ -3666,23 +3757,86 @@ const CATALOGUE_ID = /\bid\s*=\s*["']([^"'\n]+)["']/;
 const CATALOGUE_SHORTHAND = /^["']([^"':\n]+)(?::[^"'\n]*)?["']\s*$/;
 
 /**
- * The alias catalogue's plugin section, as accessor tail -> plugin id.
+ * A TOML document with its comments removed -- THE THIRD STRIPPER.
  *
- * THE KEY IS NOT THE ACCESSOR. A catalogue key is spelled with `-` or `_` and
- * the generated accessor spells those as `.`, so a key written `a-b-c` is used
- * as `<catalogue>.<section>.a.b.c` in the build file that references it.
- * Normalising here is what lets the use site be compared as written.
+ * IT IS NOT THE PACK'S CHOICE, AND THAT IS THE DISTINCTION THIS FUNCTION
+ * EXISTS FOR. `crossChecks[].plugin.syntax` names the comment language of the
+ * BUILD FILES a rule reads, because that is a fact about an ecosystem's scripts
+ * that only the pack knows. The alias catalogue is not one of those files: a
+ * version catalogue is TOML whatever language the build scripts beside it are
+ * written in, so its comment form travels with the READER rather than with the
+ * rule, and ../profiles/pack.ts says so where `syntax` is declared.
+ *
+ * Running the script stripper over TOML is not a near miss but a silent
+ * emptying: a catalogue whose first line is `# see the docs /* here` opens a
+ * block comment that never closes, every entry below it vanishes, and the lane
+ * reads as one whose aliases resolve to nothing -- while the seat names the
+ * file it "read".
+ *
+ * `#` TO END OF LINE, OUTSIDE QUOTES, and quotes are the whole of the rest of
+ * the language this knows: a `#` inside `id = "com.example#thing"` is not a
+ * comment. A string never crosses a newline in the shapes this reader accepts
+ * (one entry per line, below), so an unterminated quote ends at the line ending
+ * rather than swallowing the file.
+ */
+export function stripTomlComments(text: string): string {
+  let out = "";
+  let index = 0;
+  let quote: string | null = null;
+  while (index < text.length) {
+    const character = text[index] ?? "";
+    if (quote !== null) {
+      if (character === "\\" && quote === '"' && index + 1 < text.length) {
+        out += character + (text[index + 1] ?? "");
+        index += 2;
+        continue;
+      }
+      if (character === quote || character === "\n") quote = null;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (character === "#") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      continue;
+    }
+    out += character;
+    index += 1;
+  }
+  return out;
+}
+
+/**
+ * The alias catalogue's plugin section, as the catalogue's OWN key -> plugin id.
+ *
+ * THE KEY IS NOT THE ACCESSOR, and it is kept here as the catalogue spells it.
+ * A catalogue key is written with `-` or `_` and the accessor Gradle generates
+ * for it spells those as `.`, so a key written `a-b-c` is used as
+ * `<catalogue>.<section>.a.b.c`. Normalising at the USE SITE rather than here
+ * is what lets `resolveAlias` say which key answered and pick between two that
+ * normalise alike; normalising into the map lost that, last writer winning in
+ * file order.
  *
  * ONE ENTRY PER LINE, WHICH IS A BOUND AND IS STATED AS ONE: an inline table
  * split across lines is not read, and an alias nen did not read resolves to
- * nothing -- which is the `unknown` verdict, not a silent absence. A `#` at the
- * start of a line never matches the entry shape, so a commented-out alias is
- * not one either.
+ * nothing -- which is the `unknown` verdict, not a silent absence.
+ *
+ * LINE ENDINGS ARE EITHER OF THE TWO. `split("\n")` left a `\r` at the end of
+ * every line, `TOML_ENTRY`'s `(.*)$` excludes `\r` in JavaScript, and a CRLF
+ * catalogue therefore read EMPTY -- on Windows, which this pack declares as a
+ * host and whose wrapper spelling it resolves per host. Every alias in the tree
+ * fell to `unknown` and the seat named the catalogue that answers them.
  */
 function cataloguePlugins(text: string): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   let inside = false;
-  for (const line of text.split("\n")) {
+  for (const line of stripTomlComments(text).split(/\r?\n/)) {
     const section = TOML_SECTION.exec(line);
     if (section !== null) {
       inside = (section[1] ?? "").trim() === CATALOGUE_PLUGINS;
@@ -3694,9 +3848,167 @@ function cataloguePlugins(text: string): ReadonlyMap<string, string> {
     const value = (entry[2] ?? "").trim();
     const id = CATALOGUE_ID.exec(value)?.[1] ?? CATALOGUE_SHORTHAND.exec(value)?.[1];
     if (id === undefined || id === "") continue;
-    out.set((entry[1] ?? "").replace(/[-_]/g, "."), id);
+    out.set(entry[1] ?? "", id);
   }
   return out;
+}
+
+/** One version catalogue: the NAME a build file addresses it by, and its plugins. */
+interface AliasCatalogue {
+  /** Gradle's default naming: the catalogue file's own stem. */
+  readonly name: string;
+  readonly path: string;
+  /** The catalogue's own keys -> plugin id, unnormalised. */
+  readonly plugins: ReadonlyMap<string, string>;
+}
+
+/**
+ * The name a catalogue is addressed by: the part of its filename the pattern's
+ * own wildcard stands for.
+ *
+ * GRADLE'S DEFAULT RULE, READ OUT OF THE PACK'S PATTERN RATHER THAN HARDCODED.
+ * Every `<name>.versions.toml` in the build's `gradle/` directory is registered
+ * as a catalogue called `<name>`, which is why `libs.versions.toml` is
+ * addressed as `libs` -- there is nothing special about that word, and a
+ * repository with a second catalogue names it in the same shape. A pattern with
+ * no wildcard names one fixed file, and its stem is what comes before the first
+ * `.`.
+ */
+function catalogueName(pattern: string, name: string): string {
+  for (const spelling of markerSpellings(pattern)) {
+    if (!matchesSpelling(spelling, name)) continue;
+    if (spelling.startsWith("*")) return name.slice(0, name.length - spelling.length + 1);
+  }
+  return name.split(".")[0] ?? name;
+}
+
+/**
+ * Whether this file is the catalogue the pattern names, IN THE DIRECTORY IT
+ * NAMES, relative to the lane root.
+ *
+ * THE DIRECTORY IS PART OF THE STATEMENT AND WAS BEING DROPPED. Matching the
+ * filename anywhere under the lane merged every catalogue in the tree into one
+ * flat map: a `features/gradle/libs.versions.toml` belonging to a nested
+ * sample, or a fixture's, answered an alias used in a module three directories
+ * away -- and answered it with an id that build never sees. Gradle registers
+ * the catalogues in the BUILD's own `gradle/` directory and no others, so that
+ * is the one place this looks.
+ */
+function isCatalogueFile(pattern: string, file: TreeFile): boolean {
+  if (!matchesPattern(pattern, file.name)) return false;
+  const at = pattern.lastIndexOf("/");
+  const directory = at === -1 ? "" : pattern.slice(0, at);
+  return file.laneRelative === (directory === "" ? file.name : `${directory}/${file.name}`);
+}
+
+/** What one `alias(...)` accessor resolved to, or the reason it did not. */
+type AliasOutcome =
+  | { readonly kind: "id"; readonly id: string }
+  | { readonly kind: "unresolved"; readonly why: string };
+
+/**
+ * `alias(testLibs.plugins.compose-screenshots)` -> the id THAT catalogue gives it.
+ *
+ * TWO HALVES OF THE ACCESSOR WERE BEING IGNORED, and each was a false
+ * `applied` of its own:
+ *
+ *   * THE CATALOGUE'S NAME. The first segment IS the catalogue -- `testLibs`
+ *     and `libs` are two different files -- and resolving against a flat map of
+ *     every catalogue found let `libs`'s entry answer an accessor that names a
+ *     catalogue the lane may not even have.
+ *   * THE WHOLE KEY. Matching the accessor's TAIL (`endsWith(".screenshots")`)
+ *     made `compose.screenshots` resolve to the `screenshots` entry, which is a
+ *     DIFFERENT plugin with a different id: two keys, one answer, and the
+ *     answer was the one the reader hoped for. The match is exact, against the
+ *     accessor Gradle would generate for the key.
+ *
+ * A TIE IS BROKEN IN BYTE ORDER AND CANNOT ARISE FROM A CATALOGUE GRADLE
+ * ACCEPTS: two keys collide here only when they differ solely in `-` versus
+ * `_`, which generates the same accessor twice and is a catalogue Gradle itself
+ * refuses. Choosing deterministically rather than "whichever was read last"
+ * keeps the verdict a property of the tree instead of of the file order.
+ */
+function resolveAlias(accessor: string, catalogues: readonly AliasCatalogue[]): AliasOutcome {
+  const at = accessor.indexOf(".");
+  const name = at === -1 ? accessor : accessor.slice(0, at);
+  const rest = at === -1 ? "" : accessor.slice(at + 1);
+  const catalogue = catalogues.find((entry): boolean => entry.name === name);
+  if (catalogue === undefined) {
+    return {
+      kind: "unresolved",
+      why:
+        catalogues.length === 0
+          ? `it names a catalogue '${name}' and this lane has no catalogue at all for nen to look in`
+          : `it names a catalogue '${name}', and the ${catalogues.length === 1 ? "one this lane has is" : "ones this lane has are"} ${catalogues
+              .map((entry): string => `'${entry.name}' (${entry.path})`)
+              .join(", ")}`,
+    };
+  }
+  const prefix = `${CATALOGUE_PLUGINS}.`;
+  if (!rest.startsWith(prefix)) {
+    return {
+      kind: "unresolved",
+      why: `it does not address ${catalogue.path}'s '[${CATALOGUE_PLUGINS}]' section, which is the only section a plugin id can come from`,
+    };
+  }
+  const wanted = rest.slice(prefix.length);
+  const keys = [...catalogue.plugins.keys()]
+    .filter((key): boolean => key.replace(/[-_]/g, ".") === wanted)
+    .sort(compareBytes);
+  const key = keys[0];
+  if (key === undefined) {
+    return {
+      kind: "unresolved",
+      why: `${catalogue.path} declares no '[${CATALOGUE_PLUGINS}]' entry whose key generates '${wanted}'`,
+    };
+  }
+  return { kind: "id", id: catalogue.plugins.get(key) ?? "" };
+}
+
+/**
+ * The lane-relative directory of every module this build CONFIGURES, `""` for
+ * the root project itself.
+ *
+ * A MODULE GRADLE NEVER CONFIGURES CREATES NO TASK, whatever its build file
+ * applies -- and a build file in a directory nothing includes is a very common
+ * thing to have: a retired module somebody stopped including, a sample, a
+ * template. Reading one as evidence proposed the row on the strength of a
+ * plugin applied to nothing.
+ *
+ * THE SETTINGS FILE IS THE ONLY PLACE THAT LIST HONESTLY EXISTS, and it is the
+ * same reader `{unitTestTask}` answers from -- `include(...)`, both spellings,
+ * comments stripped, with `project(...).projectDir` remaps honoured because a
+ * module's name is not its path once a settings file says otherwise. Its bound
+ * is stated where it is used: a module a settings file adds by SCRIPT is
+ * invisible here, and the note says so rather than implying the tree has none.
+ */
+function includedDirectories(text: string): ReadonlySet<string> {
+  const out = new Set<string>([""]);
+  const remaps = projectDirectories(text);
+  for (const module of includedModules(text)) {
+    const remap = remaps.get(module);
+    const path =
+      remap === undefined
+        ? module.slice(1).split(":").filter((segment): boolean => segment !== "").join("/")
+        : remap
+            .split(/[\\/]/)
+            .filter((segment): boolean => segment !== "" && segment !== ".")
+            .join("/");
+    if (path !== "") out.add(path);
+  }
+  return out;
+}
+
+/** The lane-relative directory a file sits in: `app/build.gradle.kts` -> `app`. */
+function directoryOf(laneRelative: string): string {
+  const at = laneRelative.lastIndexOf("/");
+  return at === -1 ? "" : laneRelative.slice(0, at);
+}
+
+/** Whether this file lives inside one of the named lane-root directories. */
+function insideAny(file: TreeFile, names: readonly string[]): boolean {
+  const first = file.laneRelative.split("/")[0] ?? "";
+  return file.laneRelative.includes("/") && names.includes(first);
 }
 
 /**
@@ -3744,11 +4056,43 @@ function pluginCandidates(
   );
 }
 
+/** One alias accessor a build file states, and what stopped nen resolving it. */
+interface UnresolvedAlias {
+  readonly accessor: string;
+  readonly why: string;
+}
+
 /** One reason `unknown` was the answer, in the terms the file states it. */
-function unresolvableReason(file: TreeFile, aliases: readonly string[]): string {
-  return aliases.length === 0
-    ? `${file.laneRelative} applies a plugin nen cannot resolve to an id from this file alone -- an apply(...) can name one at runtime and an apply from: reads another script entirely, so the plugin this row needs may be arriving through it`
-    : `${file.laneRelative} applies ${aliases.map((alias): string => `'${alias}'`).join(", ")}, ${aliases.length === 1 ? "an alias" : "aliases"} nen could not resolve to a plugin id`;
+function unresolvableReason(file: TreeFile): string {
+  return `${file.laneRelative} applies a plugin nen cannot resolve to an id from this file alone -- an apply(...) can name one at runtime and an apply from: reads another script entirely, so the plugin this row needs may be arriving through it`;
+}
+
+/**
+ * The same, for an `alias(...)` -- WITH THE HALF THAT SAYS WHAT TO FIX.
+ *
+ * "an alias nen could not resolve" is true of four different trees and
+ * actionable for none of them: a catalogue that is not there, a catalogue under
+ * another name, a key that is spelled differently, and a settings file that
+ * builds its catalogues itself. Each accessor carries its own answer.
+ */
+function aliasReason(file: TreeFile, unresolved: readonly UnresolvedAlias[]): string {
+  return `${file.laneRelative} applies ${unresolved
+    .map((alias): string => `'${alias.accessor}'`)
+    .join(", ")}, ${unresolved.length === 1 ? "an alias" : "aliases"} nen could not resolve to a plugin id (${unresolved
+    .map((alias): string => `${alias.accessor}: ${alias.why}`)
+    .join("; ")})`;
+}
+
+/** The root build file's signal, named -- see `ROOT_SIGNALS`. */
+function rootReason(file: TreeFile, signals: readonly string[]): string {
+  return `${file.laneRelative} is this lane's own ROOT build file and it states ${signals.join(
+    ", ",
+  )}, ${signals.length === 1 ? "which" : "any of which"} can apply a plugin to every module without that module's own build file naming it -- so nen cannot tell from the modules alone. nen reads the root for THAT SIGNAL ONLY and never for the plugin's id, because a root plugins block naming a plugin 'apply false' declares a version for the modules and applies it nowhere`;
+}
+
+/** A lane that builds its own catalogues: the alias route cannot be trusted. */
+function declaredCataloguesReason(settings: string, catalogue: string): string {
+  return `${settings} declares catalogues of its own with a 'versionCatalogs {' block, which nen does not follow -- a catalogue created there can carry any name and read any file, including one that REPLACES the ${catalogue} this rule resolves aliases through, so no alias in this lane can be answered from that file alone`;
 }
 
 /**
@@ -3764,8 +4108,14 @@ interface PluginReading {
   readonly ignored: readonly string[];
   /** Candidate files nen did open, in byte order. */
   readonly read: readonly string[];
-  /** Alias catalogues nen found in this lane, in byte order. */
+  /** Alias catalogues nen found in this lane, named and located, in byte order. */
   readonly catalogues: readonly string[];
+  /** Candidate files in a directory this lane's settings file does not include. */
+  readonly outside: readonly string[];
+  /** The settings file that answered which modules are in the build, if any. */
+  readonly settings: string | null;
+  /** The lane's own root build file, opened for `ROOT_SIGNALS` alone, if any. */
+  readonly root: string | null;
 }
 
 /**
@@ -3801,52 +4151,123 @@ function pluginVerdict(
     .filter(([file]): boolean => pluginCandidates([file], markers).length > 0)
     .map(([file, under]): string => `${file.laneRelative} (inside '${under}')`)
     .sort(compareBytes);
-  const catalogue = new Map<string, string>();
-  const catalogueFiles: string[] = [];
-  const catalogueName = rule.catalogue;
-  if (catalogueName !== null) {
+
+  // WHICH MODULES THIS BUILD CONFIGURES, from the file that says so. A lane
+  // whose settings file nen cannot find restricts nothing -- there is no list
+  // to restrict by, and inventing one would withhold every row of a build whose
+  // shape nen simply did not read.
+  const settings =
+    context === null
+      ? undefined
+      : files.find(
+          (file): boolean =>
+            !file.laneRelative.includes("/") && anySpellingMatches(context, file.name),
+        );
+  const settingsText = settings === undefined ? "" : (settings.text() ?? "");
+  const included = settings === undefined ? null : includedDirectories(settingsText);
+
+  // THE CANDIDATES, WITH BUILD LOGIC TAKEN OUT BEFORE ANYTHING IS READ. A
+  // `buildSrc/build.gradle.kts` matches the marker's pattern like any other
+  // module file, and it is the one file in the tree GUARANTEED to name the
+  // plugin's own artifact without applying it to this build -- that is what
+  // compiling a convention plugin looks like. Read as a candidate it returned
+  // `applied` before the rule below could say `unknown`, and the seat that
+  // never got written would have contradicted itself anyway: "whose plugins nen
+  // does not read", beside "it opened buildSrc/build.gradle.kts".
+  const inBuild: TreeFile[] = [];
+  const outside: string[] = [];
+  for (const file of pluginCandidates(files, markers)) {
+    if (insideAny(file, rule.ownBuildLogic)) continue;
+    if (included === null || included.has(directoryOf(file.laneRelative))) inBuild.push(file);
+    else outside.push(file.laneRelative);
+  }
+  outside.sort(compareBytes);
+
+  const cataloguePattern = rule.catalogue;
+  const catalogues: AliasCatalogue[] = [];
+  if (cataloguePattern !== null) {
     for (const file of files) {
-      if (!matchesPattern(catalogueName, file.name)) continue;
-      catalogueFiles.push(file.laneRelative);
-      for (const [alias, id] of cataloguePlugins(read(file))) catalogue.set(alias, id);
+      if (!isCatalogueFile(cataloguePattern, file)) continue;
+      catalogues.push({
+        name: catalogueName(cataloguePattern, file.name),
+        path: file.laneRelative,
+        plugins: cataloguePlugins(file.text() ?? ""),
+      });
     }
   }
-  catalogueFiles.sort(compareBytes);
+  catalogues.sort((a, b): number => compareBytes(a.path, b.path));
+  const catalogueFiles = catalogues.map((entry): string => `${entry.name} (${entry.path})`);
+  // A LANE THAT BUILDS ITS OWN CATALOGUES IS ONE WHOSE ALIASES NEN CANNOT
+  // ANSWER, and this is the one place where finding the file is not enough:
+  // `versionCatalogs { create("libs") { from(files("...")) } }` REPLACES the
+  // default of that name with another file. Following it is a second parser
+  // over a builder DSL; saying so is one sentence, and `unknown` is the honest
+  // verdict for a build whose catalogue nen may be reading the wrong copy of.
+  const declared =
+    settings !== undefined && VERSION_CATALOGS.test(stripScriptComments(settingsText))
+      ? settings.laneRelative
+      : null;
+
   const unknown: string[] = [];
   const seen: string[] = [];
-  const applied: PluginReading = {
-    verdict: { kind: "applied" },
+  const base = {
     ignored,
-    read: seen,
     catalogues: catalogueFiles,
+    outside,
+    settings: settings === undefined ? null : settings.laneRelative,
   };
-  for (const file of pluginCandidates(files, markers)) {
+  const applied: PluginReading = { verdict: { kind: "applied" }, read: seen, root: null, ...base };
+  for (const file of inBuild) {
     const text = read(file);
     seen.push(file.laneRelative);
-    if (ids.some((id): boolean => text.includes(id))) return applied;
+    if (ids.some((id): boolean => appliesPlugin(text, id))) return applied;
     const used = [...text.matchAll(PLUGIN_ALIAS)].map((match): string => match[1] ?? "");
-    const unresolved: string[] = [];
+    const unresolved: UnresolvedAlias[] = [];
     for (const accessor of used) {
-      const alias = [...catalogue.keys()].find(
-        (name): boolean => accessor === name || accessor.endsWith(`.${name}`),
-      );
-      if (alias === undefined) {
-        unresolved.push(accessor);
+      const found =
+        declared === null
+          ? resolveAlias(accessor, catalogues)
+          : ({
+              kind: "unresolved",
+              why: declaredCataloguesReason(declared, cataloguePattern ?? ""),
+            } as const);
+      if (found.kind === "unresolved") {
+        unresolved.push({ accessor, why: found.why });
         continue;
       }
-      const id = catalogue.get(alias) ?? "";
-      if (ids.includes(id)) return applied;
+      if (ids.includes(found.id)) return applied;
     }
     if (unresolved.length > 0) {
-      unknown.push(unresolvableReason(file, unresolved));
+      unknown.push(aliasReason(file, unresolved));
       continue;
     }
-    if (UNRESOLVABLE_PLUGIN.test(text)) unknown.push(unresolvableReason(file, []));
+    if (UNRESOLVABLE_PLUGIN.test(text)) unknown.push(unresolvableReason(file));
   }
+
+  // THE ROOT BUILD FILE, FOR ONE SIGNAL AND NEVER FOR THE ID -- see
+  // `ROOT_SIGNALS`. It is read last because it can only ever produce `unknown`:
+  // a module that PROVES the plugin makes the question moot.
+  const roots = files.filter(
+    (file): boolean =>
+      !file.laneRelative.includes("/") &&
+      markers.some((marker): boolean => matchesPattern(marker.pattern, file.name)),
+  );
+  for (const file of roots) {
+    const text = read(file);
+    const signals = ROOT_SIGNALS.filter((signal): boolean => signal.probe.test(text)).map(
+      (signal): string => signal.what,
+    );
+    if (signals.length > 0) unknown.push(rootReason(file, signals));
+  }
+
   // A REPOSITORY THAT COMPILES ITS OWN PLUGINS CAN APPLY THIS ONE UNDER A NAME
   // OF ITS OWN INVENTION, and nen reads no compiled build logic. That is the
   // convention-plugin case, and reading it as absence would tell a maintainer
-  // their tree has no plugin when what is true is that nen cannot see.
+  // their tree has no plugin when what is true is that nen cannot see. It holds
+  // for a build-logic directory that is a whole BUILD of its own too -- one
+  // with its own settings file is pruned from the walk above, and a pruned
+  // directory whose name the pack states is still a directory whose plugins may
+  // be applying this one.
   for (const name of rule.ownBuildLogic) {
     const present = listDirectory(laneDirectory).some(
       (entry): boolean => entry.directory && entry.name === name,
@@ -3858,9 +4279,9 @@ function pluginVerdict(
   }
   return {
     verdict: unknown.length > 0 ? { kind: "unknown", why: unknown } : { kind: "absent" },
-    ignored,
     read: seen.slice().sort(compareBytes),
-    catalogues: catalogueFiles,
+    root: roots.length === 0 ? null : roots.map((file): string => file.laneRelative).join(", "),
+    ...base,
   };
 }
 
@@ -3884,30 +4305,56 @@ function pluginReason(
     rule.catalogue === null
       ? ""
       : reading.catalogues.length === 0
-        ? `, and for an ALIAS resolved through a ${rule.catalogue}, of which this lane has none`
+        ? `, and for an ALIAS resolved through '${rule.catalogue}', of which this lane has none`
         : `, and for an ALIAS resolved to the same id through ${reading.catalogues.join(", ")}`;
   // WHAT NEN OPENED, BY NAME, and the empty case said out loud. "no plugin
   // found" and "no file to look in" are different findings with different
   // fixes, and a reason that named only the pattern read as the first while
   // being the second.
   const opened =
-    reading.read.length === 0
-      ? "and it opened NONE: this lane has no file matching that pattern at all, so the absence is of a build file rather than of a plugin"
-      : `and it opened ${reading.read.join(", ")} with COMMENTS STRIPPED -- a commented-out plugin application is not one`;
+    reading.read.length > 0
+      ? `and it opened ${reading.read.join(", ")} with COMMENTS STRIPPED -- a commented-out plugin application is not one`
+      : reading.outside.length > 0
+        ? "and it opened NONE OF THEM: every file matching that pattern is in a directory this lane's own settings file does not include, so none of them is part of this build"
+        : "and it opened NONE: this lane has no file matching that pattern at all, so the absence is of a build file rather than of a plugin";
   const looked = `nen looked for ${describeMarkers(check.markers)}${catalogue}, ${opened}`;
+  // A MODULE THE BUILD NEVER CONFIGURES IS NOT EVIDENCE AND IS NOT SILENCE
+  // EITHER: the file is there, it may well apply the plugin, and it applies it
+  // to nothing this lane's commands run. Naming it is what tells a maintainer
+  // whose tree has one that the fix is an `include(...)` rather than a plugin.
+  const notIncluded =
+    reading.outside.length === 0
+      ? ""
+      : ` ${
+          reading.outside.length === 1
+            ? "One further file was NOT read"
+            : `${reading.outside.length} further files were NOT read`
+        }: ${reading.outside.join(", ")} -- ${
+          reading.settings ?? "this lane's settings file"
+        } does not include ${reading.outside.length === 1 ? "that directory" : "those directories"} as a module of this build, and a module Gradle never configures creates no task whatever its build file applies. nen reads the include(...) statements and nothing else, so a module a settings file adds by script is invisible here.`;
   const skipped =
     reading.ignored.length === 0
       ? ""
       : ` ${reading.ignored.length === 1 ? "One further file was NOT read" : `${reading.ignored.length} further files were NOT read`}: ${reading.ignored.join(
           ", ",
         )} -- a directory shipping its own wrapper or its own settings file is a build of its OWN, and a plugin applied in there is applied to a build this lane's commands never run.`;
+  // THE ROOT FILE IS IN THE OPENED LIST BECAUSE NEN OPENED IT, and it is in a
+  // sentence of its own because what nen read it FOR is one signal rather than
+  // the plugin: a reader who saw it listed beside the modules would think the
+  // id had been looked for there, which is exactly the rule the `*/` prefix
+  // exists to keep.
+  const rootOpened =
+    reading.root === null
+      ? ""
+      : ` It also opened this lane's own root build file (${reading.root}), for ONE signal and never for the plugin's id: whether the root applies plugins to its modules from up there.`;
+  const context = `${looked}.${notIncluded}${skipped}${rootOpened}`;
   const head =
     verdict.kind === "unknown"
       ? `nen cannot tell whether this lane applies the plugin whose task this row runs, so it withholds rather than guess: ${verdict.why
           .slice()
           .sort(compareBytes)
-          .join("; ")}. ${looked}.${skipped} A row proposed on a maybe is a command that fails the first time anybody runs it`
-      : `nothing in this lane's own build applies the plugin whose task this row runs. ${looked}.${skipped} A task the project does not contain is a warning, never a proposal`;
+          .join("; ")}. ${context} A row proposed on a maybe is a command that fails the first time anybody runs it`
+      : `nothing in this lane's own build applies the plugin whose task this row runs. ${context} A task the project does not contain is a warning, never a proposal`;
   return `${head}. What to write instead: ${rule.alternative} The pack's own reason for the gate: ${check.why} How the reading works: ${rule.why}`;
 }
 
@@ -5404,9 +5851,23 @@ function proposeVerbs(
         .sort(([a], [b]): number => compareBytes(a, b))
         .map(([token, value]): string => `${token} = ${value}`);
       const clauses = [
+        // "AND NOTHING ELSE" IS A CLAIM ABOUT THE WHOLE ROW, and it was false
+        // wherever the pack's own evidence withheld the same one. This branch
+        // runs BEFORE the per-row evidence below, so a row stopped by a token
+        // never reached the cross-check's reason at all -- and the sentence
+        // then told a maintainer that filling the token in makes the row run,
+        // on a row nen would have withheld anyway. The claim is dropped and the
+        // other reason stated in the same breath: both are true, neither
+        // implies the other, and a row short of two different things has to say
+        // both or say neither.
         resolved.length === 0
           ? ""
-          : ` -- nen DID answer ${resolved.join(", ")} from this lane's own files, so what this row still needs stated is ${leftover.join(", ")} and nothing else`,
+          : ` -- nen DID answer ${resolved.join(", ")} from this lane's own files, so what this row still needs stated is ${leftover.join(
+              ", ",
+            )}${reading.withheld.has(verb) ? "" : " and nothing else"}`,
+        reading.withheld.has(verb)
+          ? ` -- and independently: ${reading.withheld.get(verb) ?? ""}`
+          : "",
         leftover.includes(PM_EXECUTABLE) || leftover.includes(PM_PIN)
           ? manifest.packageManagerIssue !== null
             ? ` -- ${manifest.packageManagerIssue}`

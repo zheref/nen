@@ -12,6 +12,7 @@ import {
   parsePackIndex,
   parseProfile,
   PLACEHOLDERS,
+  PLUGIN_SYNTAXES,
   profileById,
   spellOnHost,
   verbCell,
@@ -970,6 +971,56 @@ describe("the two fields that widen what `detect` will propose", () => {
     expect(error.pointer).toBe("crossChecks[0].plugin.syntax");
     expect(error.message).toContain("CLOSED set");
     expect(error.message).toContain("markup, script");
+  });
+
+  // THE SET ITSELF, BY VALUE. The assertion above reads a SUBSTRING of a
+  // refusal message, so a third member appended to the enum leaves it green
+  // while ../shu/detect.ts has no stripper for it -- and a rule stating that
+  // syntax then reads a build file through the wrong scanner, which is the
+  // exact defect the field exists to prevent. The closed set is closed here.
+  it("keeps the syntax set to the two strippers, by value", () => {
+    expect([...PLUGIN_SYNTAXES]).toEqual(["markup", "script"]);
+  });
+
+  // A PATH-SHAPED BUILD-LOGIC ENTRY IS REFUSED RATHER THAN SILENTLY DEAD.
+  // These are compared as directory NAMES against the lane root's own
+  // directories, so `build-logic/` matches nothing at all -- and a rule whose
+  // build-logic clause never fires reports a tree nen cannot see into as one
+  // with no plugin, which is the `absent` verdict on the `unknown` case.
+  for (const shape of ["build-logic/", "gradle/build-logic", String.raw`a\b`, ".."]) {
+    it(`refuses the path-shaped ownBuildLogic entry '${shape}'`, () => {
+      const error = refusal(() =>
+        parseProfile(AT, "example", VERBS, withPlugin({ ...PLUGIN, ownBuildLogic: [shape] })),
+      );
+      expect(error.pointer).toBe("crossChecks[0].plugin.ownBuildLogic[0]");
+      expect(error.message).toContain("which is a PATH");
+    });
+  }
+
+  // THE CATALOGUE PATTERN IS READ AS `<directory>/<filename glob>` RELATIVE TO
+  // THE LANE ROOT, and `detect` splits it on the last `/`. A pattern with a
+  // richer prefix would be read as a literal directory that is not there and
+  // resolve no alias in silence, so the pack's own value is pinned to the
+  // shape that reader understands.
+  it("states every catalogue pattern as one directory and one filename glob", () => {
+    const pack = loadProfilesPack();
+    let stated = 0;
+    for (const id of pack.ids) {
+      for (const check of profileById(pack, id).crossChecks) {
+        const pattern = check.plugin?.catalogue;
+        if (pattern === undefined || pattern === null) continue;
+        stated += 1;
+        const segments = pattern.split("/");
+        expect(segments.length, `${id}: ${pattern}`).toBeLessThanOrEqual(2);
+        for (const segment of segments.slice(0, -1)) {
+          expect(segment, `${id}: ${pattern}`).toMatch(/^[A-Za-z0-9_.-]+$/);
+        }
+        expect(segments[segments.length - 1], `${id}: ${pattern}`).toMatch(
+          /^(\*[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)$/,
+        );
+      }
+    }
+    expect(stated, "a pattern nothing states is a rule nothing tests").toBeGreaterThan(0);
   });
 
   it("refuses a marker with no 'contains', because that is where the plugin id lives", () => {

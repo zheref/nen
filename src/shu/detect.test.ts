@@ -2000,7 +2000,11 @@ describe("nen shu detect -- {unitTestTask}, answered only from the lane's own se
         'rootProject.name = "placeholder"\nincludeBuild("bankai/PlaceholderCore")\n',
       );
       const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
-      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      // `ui-test` goes with it, and for a reason this suite is not about: the
+      // module that carries the screenshot plugin is no longer INCLUDED by the
+      // settings file this test rewrote, so #128's gate reads a build that
+      // configures no such module. See that suite for the rule.
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint"]);
       expect(lane?.notes.join("\n")).toMatch(
         /settings\.gradle\.kts declares no `include\(\.\.\.\)` nen could read/,
       );
@@ -2044,7 +2048,10 @@ describe("nen shu detect -- {unitTestTask}, answered only from the lane's own se
       cpSync(KRO_SHAPED, dir, { recursive: true });
       writeFileSync(join(dir, "settings.gradle.kts"), 'include(":app")\n');
       const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
-      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      // `ui-test` too, for the other suite's reason: the settings file this
+      // test rewrote no longer includes the module carrying the screenshot
+      // plugin, and a module the build does not configure creates no task.
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint"]);
       expect(lane?.notes.join("\n")).toMatch(
         /every one applies the plugin that identified this lane -- they are application modules/,
       );
@@ -2090,6 +2097,12 @@ describe("nen shu detect -- a module nen cannot classify is never named", () => 
     );
   }
 
+  // THE SETTINGS FILE THIS HELPER WRITES DOES NOT INCLUDE THE MODULE THAT
+  // CARRIES THE SCREENSHOT PLUGIN, so every case below is also a lane whose
+  // `ui-test` #128's gate seats -- correctly, and for a reason this suite is
+  // not about: a module the build never configures creates no task. The rows
+  // asserted here are `build` and `lint`.
+
   // THE BLOCKER THIS KILLS, and it is the whole of B1. `moduleCarriesRefinement`
   // returned false for BOTH "this module is a library" and "nen could not
   // tell", and `libraries` read both as library -- so an application module
@@ -2102,7 +2115,7 @@ describe("nen shu detect -- a module nen cannot classify is never named", () => 
     try {
       withIndirectApp(dir, 'plugins {\n    id("myapp.android.application")\n}\n');
       const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
-      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint"]);
       const notes = lane?.notes.join("\n") ?? "";
       expect(notes).toMatch(/'test' withheld: its reference command still names \{unitTestTask\}/);
       expect(notes).toContain("nen could not classify :app");
@@ -2120,7 +2133,7 @@ describe("nen shu detect -- a module nen cannot classify is never named", () => 
     try {
       withIndirectApp(dir, "plugins {\n    alias(libs.plugins.androidApplication)\n}\n");
       const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
-      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint"]);
       const notes = lane?.notes.join("\n") ?? "";
       expect(notes).toContain("nen could not classify :app");
       expect(notes).toContain("reads its id out of a version catalogue");
@@ -2207,7 +2220,10 @@ describe("nen shu detect -- a module the project does not contain is a warning",
         'include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("../shared")\n',
       );
       const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
-      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      // `ui-test` as well, and not for this rule: the settings file each case
+      // in this suite writes drops the module that carries the screenshot
+      // plugin, which is #128's gate rather than this one.
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint"]);
       const notes = lane?.notes.join("\n") ?? "";
       expect(notes).toContain("nen could not classify :shared");
       expect(notes).toContain("resolves outside this repository");
@@ -2224,9 +2240,14 @@ describe("nen shu detect -- a module the project does not contain is a warning",
     try {
       cpSync(KRO_SHAPED, dir, { recursive: true });
       mkdirSync(join(dir, "libs", "shared"), { recursive: true });
-      writeFileSync(
+      // THE FIXTURE'S OWN LIBRARY MODULE, MOVED WHERE THE REMAP POINTS. Copying
+      // it rather than writing a build file keeps this test from spelling any
+      // plugin id -- and it keeps the screenshot evidence #128's gate needs
+      // inside a module the settings file includes, which is the same remap
+      // read by a second reader.
+      cpSync(
+        join(KRO_SHAPED, "PlaceholderCore", "build.gradle.kts"),
         join(dir, "libs", "shared", "build.gradle.kts"),
-        'plugins {\n    id("org.jetbrains.kotlin.jvm")\n}\n',
       );
       writeFileSync(
         join(dir, "settings.gradle.kts"),
@@ -2276,7 +2297,7 @@ describe("nen shu detect -- a module the project does not contain is a warning",
           `include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("${value}")\n`,
         );
         const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
-        expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+        expect(commandRows(lane?.verbs)).toEqual(["build", "lint"]);
         const notes = lane?.notes.join("\n") ?? "";
         expect(notes).toContain("nen could not classify :shared");
         // The remap is quoted VERBATIM, so the reader can see the statement nen
@@ -2300,9 +2321,9 @@ describe("nen shu detect -- a module the project does not contain is a warning",
     try {
       cpSync(KRO_SHAPED, dir, { recursive: true });
       mkdirSync(join(dir, "libs", "shared"), { recursive: true });
-      writeFileSync(
+      cpSync(
+        join(KRO_SHAPED, "PlaceholderCore", "build.gradle.kts"),
         join(dir, "libs", "shared", "build.gradle.kts"),
-        'plugins {\n    id("org.jetbrains.kotlin.jvm")\n}\n',
       );
       writeFileSync(
         join(dir, "settings.gradle.kts"),
@@ -2329,7 +2350,7 @@ describe("nen shu detect -- a module the project does not contain is a warning",
         'include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("${rootDir}/shared")\n',
       );
       const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
-      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint"]);
       const notes = lane?.notes.join("\n") ?? "";
       expect(notes).toContain("nen could not classify :shared");
       expect(notes).toContain("${rootDir}/shared");
@@ -2759,6 +2780,20 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
     return detect(tree).lanes.find((lane): boolean => lane.stack === "gradle-android");
   }
 
+  /**
+   * The files a seat SAYS nen opened, read back out of the sentence.
+   *
+   * ASSERTED AS A WHOLE LIST RATHER THAN BY `toContain`, because the claim the
+   * seat makes is a closed one: these files and no others were read. A file
+   * nen deliberately did not open -- build logic, a module the build does not
+   * configure, a nested build -- has its own sentence, and a reader who found
+   * it in this list would draw the opposite conclusion from the true one.
+   */
+  function openedBy(seat: string): readonly string[] {
+    const opened = /it opened ([^:]*?) with COMMENTS STRIPPED/.exec(seat);
+    return opened === null ? [] : (opened[1] ?? "").split(", ");
+  }
+
   const JVM = 'id("org.jetbrains.kotlin.jvm")';
 
   // ── the four spellings a build script applies a plugin with ──────────────
@@ -2940,8 +2975,364 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
       const seat = reasonOf(androidLane(dir)?.verbs, "ui-test");
       expect(seat).toContain("nothing in this lane's own build applies the plugin");
       expect(seat).not.toContain("nen cannot tell whether this lane applies the plugin");
-      // And the catalogue it read is named, so the claim is checkable.
-      expect(seat).toContain("gradle/libs.versions.toml");
+      // And the catalogue it read is named AND LOCATED, so the claim is
+      // checkable. Asserting the bare filename passed vacuously: the pack's own
+      // `why`, quoted into every one of these seats, spells that file too. The
+      // clause is what has content -- and its NEGATIVE is the mutant: a reader
+      // that wrote "of which this lane has none" whatever it found said the
+      // opposite of what it had just done.
+      expect(seat).toContain("resolved to the same id through libs (gradle/libs.versions.toml)");
+      expect(seat).not.toContain("of which this lane has none");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── the id MENTIONED is not the id APPLIED (#128, one indirection in) ────
+  //
+  // THE MUTANT THIS KILLS: `text.includes(id)`, which is what this gate
+  // shipped with. Every body below contains the plugin's id VERBATIM in a file
+  // matching the marker's pattern, and not one of them applies it -- so a
+  // substring reader proposes the same broken row the gate exists to withhold,
+  // through the gate. What is looked for is the QUOTED ARGUMENT of an
+  // application: `id("<id>")`, `id '<id>'`, `apply plugin: '<id>'`.
+  const MENTIONED: readonly { name: string; body: string }[] = [
+    {
+      name: "a DEPENDENCY coordinate on the plugin's own artifacts",
+      body: `plugins {\n    ${JVM}\n}\ndependencies {\n    testImplementation("${PLUGIN_ID}:annotations:1.3.1")\n}\n`,
+    },
+    {
+      name: "a RAW STRING that quotes the id",
+      body: `plugins {\n    ${JVM}\n}\nval note = """\n    this module used ${PLUGIN_ID} until we moved it\n"""\n`,
+    },
+    {
+      name: "a bare mention in a string property",
+      body: `plugins {\n    ${JVM}\n}\nextra["migratedFrom"] = "${PLUGIN_ID}"\n`,
+    },
+  ];
+
+  for (const { name, body } of MENTIONED) {
+    it(`withholds ui-test where the only occurrence of the id is ${name}`, () => {
+      const dir = laneWith(body);
+      try {
+        const lane = androidLane(dir);
+        expect(commandRows(lane?.verbs)).not.toContain("ui-test");
+        const seat = reasonOf(lane?.verbs, "ui-test");
+        expect(seat).toContain("nothing in this lane's own build applies the plugin");
+        // The file WAS opened: this is a reading of it, not a file nen missed.
+        expect(openedBy(seat)).toContain("PlaceholderCore/build.gradle.kts");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // `apply false` MEANS THE SAME THING IN A MODULE AS AT THE ROOT: resolve the
+  // plugin, publish its version, apply it to nothing. The marker's `*/` prefix
+  // keeps the root's block out of this reading, which is where the clause
+  // almost always sits -- and a module that writes it is saying exactly what
+  // the root says, so the row it would license is exactly as absent.
+  it("withholds ui-test where a MODULE names the plugin `apply false`", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n    id("${PLUGIN_ID}") apply false\n}\n`);
+    try {
+      expect(commandRows(androidLane(dir)?.verbs)).not.toContain("ui-test");
+      expect(reasonOf(androidLane(dir)?.verbs, "ui-test")).toContain(
+        "nothing in this lane's own build applies the plugin",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE THIRD SHAPE, AND THE ONE THAT NEEDED A SECOND FIX. A `buildSrc/`
+  // build file naming the plugin's GRADLE-PLUGIN artifact is a repository
+  // compiling a convention plugin that may or may not apply it -- the third
+  // value, exactly. As a candidate it returned `applied` before the
+  // build-logic rule below could ever run, and the seat it skipped would have
+  // contradicted itself: "whose plugins nen does not read", beside "it opened
+  // buildSrc/build.gradle.kts".
+  it("never reads build logic as a module, and says it cannot see through it", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n}\n`);
+    try {
+      mkdirSync(join(dir, "buildSrc"), { recursive: true });
+      writeFileSync(
+        join(dir, "buildSrc", "build.gradle.kts"),
+        `plugins {\n    \`kotlin-dsl\`\n}\ndependencies {\n    implementation("${PLUGIN_ID}:${PLUGIN_ID}.gradle.plugin:1.3.1")\n}\n`,
+      );
+      const lane = androidLane(dir);
+      expect(commandRows(lane?.verbs)).not.toContain("ui-test");
+      const seat = reasonOf(lane?.verbs, "ui-test");
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("compiles build logic of its own in 'buildSrc'");
+      expect(openedBy(seat)).not.toContain("buildSrc/build.gradle.kts");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A BUILD-LOGIC DIRECTORY THAT IS A WHOLE BUILD OF ITS OWN -- the modern
+  // replacement for `buildSrc`, and the shape that reached `absent`: it ships
+  // its own settings file, so the walk prunes it as a nested build, and a
+  // pruned directory contributed nothing at all. The pack names it, so nen
+  // cannot see into it, so the answer is the third value.
+  it("reads a pruned build-logic build as UNKNOWN rather than as absence", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n}\n`);
+    try {
+      mkdirSync(join(dir, "build-logic"), { recursive: true });
+      writeFileSync(join(dir, "build-logic", "settings.gradle.kts"), 'rootProject.name = "bl"\n');
+      writeFileSync(
+        join(dir, "build-logic", "build.gradle.kts"),
+        `plugins {\n    \`kotlin-dsl\`\n}\ndependencies {\n    implementation("${PLUGIN_ID}:${PLUGIN_ID}.gradle.plugin:1.3.1")\n}\n`,
+      );
+      const seat = reasonOf(androidLane(dir)?.verbs, "ui-test");
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("compiles build logic of its own in 'build-logic'");
+      expect(openedBy(seat)).not.toContain("build-logic/build.gradle.kts");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── a module the build does not configure is not the build's evidence ────
+  it("never takes a module the settings file does not include as evidence", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n    id("${PLUGIN_ID}")\n}\n`);
+    try {
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'rootProject.name = "placeholder"\ninclude(":app")\n',
+      );
+      const lane = androidLane(dir);
+      expect(commandRows(lane?.verbs)).not.toContain("ui-test");
+      const seat = reasonOf(lane?.verbs, "ui-test");
+      expect(seat).toContain("nothing in this lane's own build applies the plugin");
+      // NAMED, so a maintainer whose tree is this shape can see that the fix is
+      // an include and not a plugin.
+      expect(seat).toContain("PlaceholderCore/build.gradle.kts");
+      expect(seat).toContain("does not include that directory as a module of this build");
+      expect(openedBy(seat)).toEqual(["app/build.gradle.kts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE MUTANT THIS KILLS: listing files nen did not open, or omitting one it
+  // did. The seat's whole claim rests on that list, and each of the three
+  // exclusions below has a DIFFERENT reason a maintainer acts on differently.
+  it("names exactly the files it opened, and none of the three it did not", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n}\n`);
+    try {
+      mkdirSync(join(dir, "buildSrc"), { recursive: true });
+      writeFileSync(join(dir, "buildSrc", "build.gradle.kts"), "plugins {\n    `kotlin-dsl`\n}\n");
+      mkdirSync(join(dir, "attic"), { recursive: true });
+      writeFileSync(
+        join(dir, "attic", "build.gradle.kts"),
+        `plugins {\n    ${JVM}\n    id("${PLUGIN_ID}")\n}\n`,
+      );
+      const seat = reasonOf(androidLane(dir)?.verbs, "ui-test");
+      expect(openedBy(seat)).toEqual([
+        "PlaceholderCore/build.gradle.kts",
+        "app/build.gradle.kts",
+      ]);
+      // Each of the three, with its own sentence.
+      expect(seat).toContain("attic/build.gradle.kts");
+      expect(seat).toContain("does not include that directory as a module of this build");
+      expect(seat).toContain("program/build.gradle.kts (inside 'program')");
+      expect(seat).toContain("compiles build logic of its own in 'buildSrc'");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── the catalogue: which file, under which name, keyed how ───────────────
+  const ALIAS_BODY = `plugins {\n    ${JVM}\n    alias(libs.plugins.screenshots)\n}\n`;
+  const ENTRY = `[plugins]\nscreenshots = { id = "${PLUGIN_ID}", version.ref = "x" }\n`;
+
+  /** Writes one catalogue into the lane's own `gradle/` directory. */
+  function writeCatalogue(dir: string, name: string, body: string): void {
+    mkdirSync(join(dir, "gradle"), { recursive: true });
+    writeFileSync(join(dir, "gradle", `${name}.versions.toml`), body);
+  }
+
+  it("resolves an alias in the catalogue its own first segment NAMES", () => {
+    // `testLibs.` is not `libs.`: an accessor is answered by the file it asks
+    // for, and by a catalogue this lane has not got it is not answered at all.
+    const dir = laneWith(`plugins {\n    ${JVM}\n    alias(testLibs.plugins.screenshots)\n}\n`);
+    try {
+      writeCatalogue(dir, "libs", ENTRY);
+      const seat = reasonOf(androidLane(dir)?.verbs, "ui-test");
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("it names a catalogue 'testLibs'");
+      expect(seat).toContain("'libs' (gradle/libs.versions.toml)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a SECOND catalogue in the same directory, under its own name", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n    alias(testLibs.plugins.screenshots)\n}\n`);
+    try {
+      writeCatalogue(dir, "libs", '[plugins]\nscreenshots = { id = "org.example.other" }\n');
+      writeCatalogue(dir, "testLibs", ENTRY);
+      expect(commandRows(androidLane(dir)?.verbs)).toContain("ui-test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches the WHOLE key an accessor names, never its tail", () => {
+    const both = `[plugins]\nscreenshots = { id = "${PLUGIN_ID}", version.ref = "x" }\ncompose-screenshots = { id = "org.example.other", version.ref = "y" }\n`;
+    const other = laneWith(`plugins {\n    ${JVM}\n    alias(libs.plugins.compose.screenshots)\n}\n`);
+    try {
+      writeCatalogue(other, "libs", both);
+      const seat = reasonOf(androidLane(other)?.verbs, "ui-test");
+      // The catalogue ANSWERED it -- with a different plugin. Absent, not
+      // unknown, and certainly not applied.
+      expect(commandRows(androidLane(other)?.verbs)).not.toContain("ui-test");
+      expect(seat).toContain("nothing in this lane's own build applies the plugin");
+      expect(seat).not.toContain("nen cannot tell whether this lane applies the plugin");
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+    // THE MUTANT THIS HALF KILLS, and it is the one the tail match shipped as:
+    // with NO entry generating this accessor, a reader comparing suffixes finds
+    // `screenshots` at the end of `compose.screenshots` and answers a question
+    // the catalogue did not answer -- an alias for a plugin this lane never
+    // named, read as this plugin being applied.
+    const tail = laneWith(`plugins {\n    ${JVM}\n    alias(libs.plugins.compose.screenshots)\n}\n`);
+    try {
+      writeCatalogue(tail, "libs", `[plugins]\nscreenshots = { id = "${PLUGIN_ID}" }\n`);
+      expect(commandRows(androidLane(tail)?.verbs)).not.toContain("ui-test");
+      const seat = reasonOf(androidLane(tail)?.verbs, "ui-test");
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("whose key generates 'compose.screenshots'");
+    } finally {
+      rmSync(tail, { recursive: true, force: true });
+    }
+    const mine = laneWith(ALIAS_BODY);
+    try {
+      writeCatalogue(mine, "libs", both);
+      expect(commandRows(androidLane(mine)?.verbs)).toContain("ui-test");
+    } finally {
+      rmSync(mine, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a HYPHENATED key as the dotted accessor Gradle generates for it", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n    alias(libs.plugins.screenshot.verifier)\n}\n`);
+    try {
+      writeCatalogue(dir, "libs", `[plugins]\nscreenshot-verifier = { id = "${PLUGIN_ID}" }\n`);
+      expect(commandRows(androidLane(dir)?.verbs)).toContain("ui-test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads no catalogue outside the lane's own catalogue directory", () => {
+    const dir = laneWith(ALIAS_BODY);
+    try {
+      mkdirSync(join(dir, "features", "gradle"), { recursive: true });
+      writeFileSync(join(dir, "features", "gradle", "libs.versions.toml"), ENTRY);
+      const seat = reasonOf(androidLane(dir)?.verbs, "ui-test");
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("this lane has no catalogue at all");
+      expect(seat).toContain("of which this lane has none");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("follows no alias at all in a lane that BUILDS its catalogues itself", () => {
+    const dir = laneWith(ALIAS_BODY);
+    try {
+      writeCatalogue(dir, "libs", ENTRY);
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'rootProject.name = "placeholder"\ninclude(":app")\ninclude(":PlaceholderCore")\ndependencyResolutionManagement {\n    versionCatalogs {\n        create("libs") { from(files("deps/libs.toml")) }\n    }\n}\n',
+      );
+      const lane = androidLane(dir);
+      expect(commandRows(lane?.verbs)).not.toContain("ui-test");
+      const seat = reasonOf(lane?.verbs, "ui-test");
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("declares catalogues of its own");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a catalogue written with CRLF line endings", () => {
+    // ON WINDOWS THIS IS THE ORDINARY CASE, and this pack declares Windows as a
+    // host -- `{gw}` resolves `gradlew.bat` there. `split("\n")` left a `\r` on
+    // every line, the entry pattern's `$` excludes it, and the catalogue read
+    // EMPTY: every alias in the tree fell to `unknown` while the seat named the
+    // file that answers them.
+    const dir = laneWith(ALIAS_BODY);
+    try {
+      writeCatalogue(
+        dir,
+        "libs",
+        `[plugins]\r\nscreenshots = { id = "${PLUGIN_ID}", version.ref = "x" }\r\n`,
+      );
+      expect(commandRows(androidLane(dir)?.verbs)).toContain("ui-test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips a catalogue's comments with TOML's rule and not a build script's", () => {
+    // A `#` LINE THAT OPENS A BLOCK COMMENT IN THE OTHER LANGUAGE. Run through
+    // the script stripper, `/*` here swallows the rest of the file and the
+    // catalogue reads empty -- while the seat names the file it "read".
+    const dir = laneWith(ALIAS_BODY);
+    try {
+      writeCatalogue(dir, "libs", `# see the docs /* here\n${ENTRY}`);
+      expect(commandRows(androidLane(dir)?.verbs)).toContain("ui-test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // And the comments really are gone: an entry behind a `#` is not an entry.
+    const off = laneWith(ALIAS_BODY);
+    try {
+      writeCatalogue(off, "libs", `[plugins]\n# screenshots = { id = "${PLUGIN_ID}" }\n`);
+      expect(commandRows(androidLane(off)?.verbs)).not.toContain("ui-test");
+    } finally {
+      rmSync(off, { recursive: true, force: true });
+    }
+  });
+
+  // ── the root build file: one signal, never the id ────────────────────────
+  it("reads the ROOT for the one thing a module's file cannot record", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n}\n`);
+    try {
+      writeFileSync(
+        join(dir, "build.gradle.kts"),
+        `subprojects {\n    apply(plugin = "${PLUGIN_ID}")\n}\n`,
+      );
+      const lane = androidLane(dir);
+      expect(commandRows(lane?.verbs)).not.toContain("ui-test");
+      const seat = reasonOf(lane?.verbs, "ui-test");
+      // NOT the absent sentence, which is what it used to be: "nothing in this
+      // lane's own build applies the plugin" was false on this tree.
+      expect(seat).toContain("nen cannot tell whether this lane applies the plugin");
+      expect(seat).toContain("build.gradle.kts is this lane's own ROOT build file");
+      expect(seat).toContain("a `subprojects {` block");
+      expect(seat).not.toContain("nothing in this lane's own build applies the plugin");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // APPLIED IS THE ONLY VERDICT THAT IS PROVED, so it outranks the other two:
+  // one module spelling the id is a fact about the build whatever the module
+  // beside it is doing, and a lane whose every other build file is unreadable
+  // still has the task this row runs.
+  it("lets one module that PROVES the plugin outweigh another nen cannot read", () => {
+    const dir = laneWith(`plugins {\n    ${JVM}\n    id("${PLUGIN_ID}")\n}\n`);
+    try {
+      writeFileSync(
+        join(dir, "app", "build.gradle.kts"),
+        'plugins {\n    id("com.android.application")\n}\napply(plugin = pluginIdFromSomewhere)\n',
+      );
+      expect(commandRows(androidLane(dir)?.verbs)).toContain("ui-test");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2959,6 +3350,14 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
         `plugins {\n    id("com.android.application") apply false\n    id("${PLUGIN_ID}") apply false\n}\n`,
       );
       expect(commandRows(androidLane(dir)?.verbs)).not.toContain("ui-test");
+      // AND IT IS STILL PLAIN ABSENCE. The root is opened for one signal (see
+      // the test below), and a root that states none of them adds nothing: the
+      // literal is never taken from the root, so `apply false` neither licenses
+      // the row nor clouds the verdict into `unknown`.
+      const seat = reasonOf(androidLane(dir)?.verbs, "ui-test");
+      expect(seat).toContain("nothing in this lane's own build applies the plugin");
+      expect(seat).toContain("It also opened this lane's own root build file (build.gradle.kts)");
+      expect(openedBy(seat)).not.toContain("build.gradle.kts");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2986,8 +3385,16 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
   });
 
   it("names the build files it OPENED, so 'no plugin' is not read as 'no file'", () => {
-    const seat = reasonOf(androidLane(markerTree("gradle-android"))?.verbs, "ui-test");
-    expect(seat).toContain("it opened app/build.gradle.kts");
+    const dir = laneWith(`plugins {\n    ${JVM}\n}\n`);
+    try {
+      const seat = reasonOf(androidLane(dir)?.verbs, "ui-test");
+      // BOTH INCLUDED MODULES, and nothing else: the list is what nen read.
+      expect(seat).toContain("it opened PlaceholderCore/build.gradle.kts");
+      expect(seat).toContain("app/build.gradle.kts");
+      expect(seat).toContain("COMMENTS STRIPPED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // ── the fixtures, as goldens ─────────────────────────────────────────────
@@ -3016,6 +3423,25 @@ describe("nen shu detect -- gradle-android's screenshot rows are gated on the pl
       const row = lane?.verbs[verb] as { argv?: readonly string[] };
       expect(row.argv ?? [], verb).not.toContain("verifyPaparazziDebug");
     }
+  });
+
+  // A ROW SHORT OF TWO DIFFERENT THINGS SAYS BOTH. `test` on this tree stops at
+  // an unanswered token BEFORE the gate is consulted, and the note that branch
+  // writes used to end "what this row still needs stated is {unitTestTask} and
+  // nothing else" -- which was false here, and false in the most expensive
+  // direction: a maintainer who answers the token gets the row withheld again,
+  // for a reason nen had already computed and thrown away.
+  it("gives expo-bare's test row BOTH reasons: the token and the plugin", () => {
+    const lane = detect(EXPO_BARE).lanes.find((entry): boolean => entry.lane === "android");
+    const note = (lane?.notes ?? []).find((line): boolean => line.startsWith("'test' withheld"));
+    expect(note).toBeDefined();
+    expect(note ?? "").toContain("{unitTestTask}");
+    expect(note ?? "").toContain("and independently:");
+    expect(note ?? "").toContain("nothing in this lane's own build applies the plugin");
+    // AND THE CLAIM THAT WOULD BE FALSE IS GONE from this row. It is still made
+    // on rows nothing else withholds -- the xcode suite pins that -- so this is
+    // a clause that knows when it is true rather than a clause deleted.
+    expect(note ?? "").not.toContain("and nothing else");
   });
 
   // ── the rule the pack has to keep ────────────────────────────────────────

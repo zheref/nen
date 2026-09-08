@@ -521,16 +521,30 @@ export interface ProfileCrossCheck {
  */
 export interface ProfilePluginRule {
   /**
-   * The comment syntax the evidence files use. A CLOSED SET OF TWO, because
-   * those are the two this reader implements -- and stating it is not
-   * decoration: a reader that strips the wrong syntax reads a commented-out
-   * plugin application as an applied plugin, which is the exact defect
+   * The comment syntax THE BUILD FILES use. A CLOSED SET OF TWO, because those
+   * are the two this reader implements -- and stating it is not decoration: a
+   * reader that strips the wrong syntax reads a commented-out plugin
+   * application as an applied plugin, which is the exact defect
    * ../shu/detect.ts's two strippers exist for.
+   *
+   * IT SAYS NOTHING ABOUT THE CATALOGUE, and that boundary is the field's, not
+   * a detail of the reader. A version catalogue is TOML whatever language the
+   * build scripts beside it are written in, so its comment form is a property
+   * of the FILE FORMAT rather than of the ecosystem -- ../shu/detect.ts strips
+   * it with a reader of its own, and a pack that tried to state it here would
+   * be stating a fact it does not own.
    */
   readonly syntax: PluginSyntax;
   /**
    * The file an ALIAS is resolved to an id through, or null where the
-   * ecosystem has none. Matched as a marker pattern, anywhere under the lane.
+   * ecosystem has none.
+   *
+   * MATCHED AS A MARKER PATTERN, AND ITS DIRECTORY PREFIX IS PART OF THE
+   * STATEMENT: `gradle/*.versions.toml` names every catalogue in the LANE's own
+   * `gradle/` directory and no other, which is where the ecosystem's own
+   * default rule registers them. A bare filename names that file at the lane
+   * root. Matching the name anywhere under the lane -- which is what this used
+   * to mean -- merged a nested sample's catalogue into the build's own.
    */
   readonly catalogue: string | null;
   /**
@@ -541,6 +555,9 @@ export interface ProfilePluginRule {
    * own invention, and nen cannot see through it. That is not "absent" and it
    * is not "applied" -- it is the third value, and naming the directory is what
    * turns a silent guess into a sentence a maintainer can act on.
+   *
+   * EACH IS ONE DIRECTORY NAME AT THE LANE ROOT, and a path-shaped entry is
+   * refused rather than never matching -- see `parsePluginRule`.
    */
   readonly ownBuildLogic: readonly string[];
   /** The row a tree WITHOUT this plugin would honestly declare. Quoted into the seat. */
@@ -941,9 +958,21 @@ function parsePluginRule(
   return {
     syntax: requireEnum(path, `${pointer}.syntax`, raw["syntax"], PLUGIN_SYNTAXES),
     catalogue: optionalString(path, `${pointer}.catalogue`, raw["catalogue"]),
-    ownBuildLogic: logic.map((entry, at): string =>
-      requireString(path, `${pointer}.ownBuildLogic[${at}]`, entry),
-    ),
+    ownBuildLogic: logic.map((entry, at): string => {
+      const name = requireString(path, `${pointer}.ownBuildLogic[${at}]`, entry);
+      // A FOURTH REFUSAL, AND THE SAME ARGUMENT AS THE OTHER THREE. These are
+      // compared as DIRECTORY NAMES at the lane root, so `build-logic/` or
+      // `gradle/build-logic` is an entry that can never match -- and an entry
+      // that never matches switches this half of the reading off in silence:
+      // the lane reads as one with no build logic of its own, which is the
+      // `absent` verdict on a tree nen cannot see into.
+      if (!/[\\/]/.test(name) && name !== "." && name !== "..") return name;
+      throw new SchemaError(
+        path,
+        `${pointer}.ownBuildLogic[${at}]`,
+        `states '${name}', which is a PATH. Every entry here is one directory NAME, matched against the lane root's own directories, so a path-shaped entry matches nothing and silently disables the reading it was written to switch on -- the lane then reads as one with no build logic of its own`,
+      );
+    }),
     alternative: requireString(path, `${pointer}.alternative`, raw["alternative"]),
     why: requireString(path, `${pointer}.why`, raw["why"]),
   };
