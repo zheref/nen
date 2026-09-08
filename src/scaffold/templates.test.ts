@@ -495,7 +495,12 @@ describe("templates/index.json's minimumNenRef", () => {
   // same reason ../cli/surface.test.ts does.
   const CHANGELOG = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8").replace(/\r\n/g, "\n");
 
-  /** Every released heading, newest first. `## vX.Y.Z -- <date>`. */
+  /**
+   * Every released heading, newest first. Headings read `## vX.Y.Z — <date>`
+   * (an em dash, not `--`, separates the version from the date), but the
+   * regex below keys only on the `## vX.Y.Z` prefix -- what follows it,
+   * separator included, is not part of what this parses.
+   */
   const released = [...CHANGELOG.matchAll(/^## (v\d+\.\d+\.\d+)/gm)].map(
     (match): string => match[1] as string,
   );
@@ -564,7 +569,16 @@ describe("templates/index.json's minimumNenRef", () => {
     expect(earliest.title, "the family must be announced under a release, not `Unreleased`").toMatch(
       /^v\d+\.\d+\.\d+/,
     );
-    expect(earliest.title.startsWith(`${minimumNenRef().ref} `)).toBe(true);
+    // Only the heading's version token has to equal the minimum -- not the
+    // whole `## vX.Y.Z — <date>` shape, which is incidental formatting the
+    // parser above does not depend on either. `startsWith(`${ref} `)` would
+    // reject a dateless `## vX.Y.Z` heading outright; comparing tokens does
+    // not.
+    const versionToken = (title: string): string => title.split(/\s+/)[0] ?? "";
+    expect(versionToken(earliest.title)).toBe(minimumNenRef().ref);
+    // A dateless heading -- `## vX.Y.Z` with nothing after it -- must satisfy
+    // the same check.
+    expect(versionToken(minimumNenRef().ref)).toBe(minimumNenRef().ref);
     // ...and nowhere in a section OLDER than that one, which is what makes "this
     // is the first release carrying these verbs" an observation, not a claim.
     const older = sections.slice(sections.indexOf(earliest) + 1);
