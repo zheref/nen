@@ -1077,8 +1077,7 @@ result as one shape, rendering it, and diffing two snapshots of it.
 
 Assembles a `Board` from rows the caller has already computed — nothing here derives a gate or a
 colour. It validates every row at the JSON boundary (issue #32): a `refs` field sent as one
-pre-joined string instead of an array is refused by name, naming the row and the field, rather than
-being cast through and crashing three calls later inside `board render`.
+pre-joined string instead of an array is refused by name, naming the row and the field.
 
 **Usage**
 
@@ -1131,27 +1130,12 @@ nen board render --board-from <path>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--board-from <path>` | yes | A Board JSON document (a `board build --json` result) to render. | The row shape is **not** re-validated here — see the note below. |
+| `--board-from <path>` | yes | A Board JSON document (a `board build --json` result) to render. | The row shape is validated the same way as `board build` — a malformed board is refused by name (see the exit codes below). |
 | `--repo <path>` | no | Resolves `--board-from`'s path when relative. | Defaults to cwd. |
 
-> **Note:** a malformed board file crashes rather than being refused by
-> name. Unlike [`board build`](#nen-board-build), `render` (and
-> [`board diff`](#nen-board-diff)) trusts that the file it is given is
-> already a real Board. Hand it a `refs` field as a joined string — the
-> exact shape `build` refuses by name — and it exits 1 with a raw
-> `row.refs.join is not a function` TypeError instead of the named usage
-> error at exit 2: `nen board: row.refs.join is not a function. (In
-> 'row.refs.join(", ")', 'row.refs.join' is undefined)`. This is the
-> undesigned-crash class [zheref/nen#32](https://github.com/zheref/nen/issues/32)
-> fixed for `build` and only for `build`. Build boards with `board build`,
-> or validate the file yourself before rendering one. The `render`/`diff`
-> half is tracked as
-> [zheref/nen#92](https://github.com/zheref/nen/issues/92).
-
 **Output and exit codes** — same rendering as `board build`'s human output. `--json` echoes the Board
-back unchanged. Exit 0 on success; exit 2 if `--board-from` is missing or unreadable/not-JSON; exit 1
-on a Board whose rows do not actually match the declared shape (see discrepancy above — no field
-validation here).
+back unchanged. Exit 0 on success; exit 2 if `--board-from` is missing, unreadable/not-JSON, or a row
+fails the shape check (malformed `refs`, etc.) — fixed in #99 (issue #92).
 
 **Example**
 
@@ -1184,15 +1168,15 @@ nen board diff --before <path> --after <path>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--before <path>` | yes | The earlier Board snapshot. | Same lack of shape validation as `board render` — see the discrepancy noted there; `diffBoards` also calls `row.refs.join(",")` unguarded. |
+| `--before <path>` | yes | The earlier Board snapshot. | Validated the same way as `board render` (issue #92 fixed in #99). |
 | `--after <path>` | yes | The later Board snapshot. | |
 | `--repo <path>` | no | Resolves both paths when relative. | Defaults to cwd. |
 
 **Output and exit codes** — human rendering is one line per changed/added/removed row:
 `"changed  <id>: <field> '<before>' -> '<after>', ..."`, `"added  <id>"`, `"removed  <id>"`, or the
 single line `"no change"` when nothing differs. `--json` top-level keys: `rows`, `changed`. Exit 0 on
-a normal diff (whether or not anything changed); exit 2 for a missing/unreadable path; exit 1 on a
-malformed snapshot (see `board render`'s discrepancy).
+a normal diff (whether or not anything changed); exit 2 for a missing/unreadable path or a malformed
+snapshot (wrong row shape).
 
 **Example**
 
@@ -3921,9 +3905,8 @@ nen board diff --before board-before.json --after board.json
 `next-wave` reports unparsed checkbox lines loudly and refuses outright on a
 duplicate child id — it never writes `--out` when it refuses. `backlog fetch`
 paginates past GitHub's 100-row page clamp and always reports a `--limit` cap
-as `TRUNCATED`. `board build` validates every row at the JSON boundary (`refs`
-must be an array); `render` and `diff` do not — see the note under
-[`board render`](#nen-board-render).
+as `TRUNCATED`. `board build`, `render`, and `diff` all validate every row at the
+JSON boundary (`refs` must be an array) — fixed in #99 (issue #92).
 
 ```bash
 # 7. Classify the efforts, then check whether there is room to start another.
