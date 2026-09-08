@@ -186,6 +186,74 @@ function readJson(path: string): Record<string, unknown> | null {
   }
 }
 
+/**
+ * A build script with its comments removed, so a LITERAL is read as code.
+ *
+ * EVERY MATCH THIS FILE MAKES AGAINST A BUILD SCRIPT GOES THROUGH HERE, and it
+ * is one function rather than three because the three were drifting: the
+ * settings file's `include(...)` reader stripped `//` and not `/* *\/`, and the
+ * marker `contains` check stripped nothing at all. The consequences were the
+ * same shape in both directions -- a `/* include(":retired") *\/` proposed a
+ * module the build does not have, and a `// TODO: id("com.android.application")`
+ * proposed a whole LANE out of a line somebody wrote to remind themselves. A
+ * commented-out fact is not a fact about the project, and §2.6's rule is that a
+ * thing the project does not contain is a warning and never a proposal.
+ *
+ * QUOTED STRINGS ARE STEPPED OVER, because a `//` inside one is not a comment:
+ * `url = "https://example.invalid/x"` would otherwise lose the rest of its line
+ * and take a real literal with it. The scanner is deliberately small -- it knows
+ * quotes, escapes and the two comment forms, and nothing else about Kotlin or
+ * Groovy -- and newlines inside a block comment are kept so that nothing
+ * downstream reading line by line sees the file shrink.
+ */
+export function stripScriptComments(text: string): string {
+  let out = "";
+  let index = 0;
+  let quote: string | null = null;
+  while (index < text.length) {
+    const character = text[index] ?? "";
+    if (quote !== null) {
+      if (character === "\\" && index + 1 < text.length) {
+        out += character + (text[index + 1] ?? "");
+        index += 2;
+        continue;
+      }
+      if (character === quote) quote = null;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      out += character;
+      index += 1;
+      continue;
+    }
+    if (character === "/" && text[index + 1] === "/") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+      continue;
+    }
+    if (character === "/" && text[index + 1] === "*") {
+      index += 2;
+      while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) {
+        if (text[index] === "\n") out += "\n";
+        index += 1;
+      }
+      index += 2;
+      continue;
+    }
+    out += character;
+    index += 1;
+  }
+  return out;
+}
+
+/** A build script read from disk with its comments gone, or "" when unreadable. */
+function readScript(path: string): string | null {
+  const text = readText(path);
+  return text === null ? null : stripScriptComments(text);
+}
+
 export interface Entry {
   readonly name: string;
   readonly directory: boolean;
@@ -355,10 +423,35 @@ function markerFilenames(pattern: string): readonly string[] {
   return expandBraces(pattern).map(laneRelativeName);
 }
 
+/**
+ * Whether a pattern names a file BELOW the lane root rather than in it.
+ *
+ * THE PREFIX IS PART OF THE PATTERN AND IS NOW HONOURED. `*\/build.gradle{,.kts}`
+ * was being reduced to its filenames and matched against the lane's OWN build
+ * file too, which made the pack say one thing and the code do another: the
+ * profile's `why` reads "a MODULE applying the Android application plugin", and
+ * a root build file naming that plugin `apply false` -- the ordinary Android
+ * root convention, and the fixture in this repository -- is not a module and is
+ * not applying it. A tree with such a root and no module at all was proposed as
+ * an Android lane on the strength of a line that switches the plugin OFF.
+ *
+ * `*\/` IS READ AS "NOT THE LANE'S OWN FILE", not as "exactly one level down",
+ * and the difference is deliberate: how far down the search goes is
+ * `REFINEMENT_DEPTH`'s job, it is documented as a bound, and making the prefix
+ * a second, silent bound would hide a real module behind a rule nothing states.
+ * The pack uses exactly one directory prefix and ../profiles/pack.test.ts pins
+ * that, so this reads a shape rather than parses a glob language.
+ */
+function isNestedPattern(pattern: string): boolean {
+  return pattern.includes("/");
+}
+
 /** A marker that is a filename PLUS a literal the file must carry. */
 interface Refinement {
   readonly files: ReadonlySet<string>;
   readonly literal: string;
+  /** True when the pattern carried a directory prefix -- see `isNestedPattern`. */
+  readonly nested: boolean;
 }
 
 /** One stack whose lanes are found by a tool the repository ships. */
@@ -371,9 +464,21 @@ interface HostToolStack {
    */
   readonly refinements: readonly Refinement[];
   /**
-   * The marker filenames the profile states with no literal, minus the tool
-   * itself -- the settings file whose own contents a cross-check may read.
+   * ONE SET PER NO-LITERAL MARKER, minus the tool itself: the alternative
+   * spellings of one required file. At least one name from EVERY group must be
+   * in a directory before this stack matches there.
+   *
+   * THEY WERE COMPUTED AND NEVER REQUIRED, and that is what let a nested build
+   * be attributed to its parent. `compose-desktop`'s first marker is "the
+   * lane's OWN settings file, not the repository root's" -- the pack says so in
+   * the marker's own `why` -- and with the requirement missing, a tree whose
+   * root carried a wrapper and whose `program/` carried a settings file and a
+   * `compose.desktop` block came out as TWO lanes both at cwd `.`, the second
+   * of them proposing the ROOT wrapper against a build that wrapper never
+   * reads. A marker the code does not check is documentation, not a marker.
    */
+  readonly contextGroups: readonly ReadonlySet<string>[];
+  /** The union of the groups above -- the files a cross-check may then read. */
   readonly contextFiles: ReadonlySet<string>;
 }
 
@@ -397,26 +502,44 @@ function hostToolStacks(pack: ProfilesPack): readonly HostToolStack[] {
     const profile = profileById(pack, id);
     if (!HOST_TOKENS.some((entry): boolean => profileUses(profile, entry.token))) continue;
     const refinements: Refinement[] = [];
+    const contextGroups: ReadonlySet<string>[] = [];
     const contextFiles = new Set<string>();
     for (const marker of profile.markers) {
       const files = markerFilenames(marker.pattern);
       if (marker.contains !== null) {
-        refinements.push({ files: new Set(files), literal: marker.contains });
+        refinements.push({
+          files: new Set(files),
+          literal: marker.contains,
+          nested: isNestedPattern(marker.pattern),
+        });
         continue;
       }
-      for (const file of files) {
-        if (!HOST_TOOL_FILES.has(file)) contextFiles.add(file);
-      }
+      const group = new Set(files.filter((file): boolean => !HOST_TOOL_FILES.has(file)));
+      if (group.size === 0) continue;
+      contextGroups.push(group);
+      for (const file of group) contextFiles.add(file);
     }
-    out.push({ stack: id, refinements, contextFiles });
+    out.push({ stack: id, refinements, contextGroups, contextFiles });
   }
   return out;
 }
 
-/** Whether this directory ships a host-conditional tool of its own. */
-function shipsHostTool(directory: string): boolean {
+/**
+ * Whether this directory is a BUILD OF ITS OWN rather than part of the one above.
+ *
+ * TWO PIECES OF EVIDENCE, EITHER OF WHICH IS ENOUGH, and the second was
+ * missing. A directory shipping its own copy of the tool is plainly its own
+ * build -- and so is one carrying its own SETTINGS file, which is the file that
+ * declares where a build begins and what it contains. Only the first was
+ * checked, so a nested build with a settings file and no wrapper of its own had
+ * its build files read as evidence about the lane ABOVE it: the parent was
+ * proposed a command naming its own wrapper against a build that wrapper does
+ * not read, which is a row that exits non-zero the first time anybody runs it.
+ */
+function isOwnBuildRoot(directory: string, context: ReadonlySet<string>): boolean {
   return listDirectory(directory).some(
-    (entry): boolean => !entry.directory && HOST_TOOL_FILES.has(entry.name),
+    (entry): boolean =>
+      !entry.directory && (HOST_TOOL_FILES.has(entry.name) || context.has(entry.name)),
   );
 }
 
@@ -432,33 +555,74 @@ function shipsHostTool(directory: string): boolean {
  * the root as well: three lanes for two builds, one of them addressing a build
  * file the root's tool would never read.
  */
-function fileCarrying(directory: string, refinement: Refinement, depth: number): string | null {
+function fileCarrying(
+  directory: string,
+  refinement: Refinement,
+  depth: number,
+  context: ReadonlySet<string>,
+  atLaneRoot: boolean,
+  nestedBuilds: Set<string>,
+): string | null {
   for (const entry of listDirectory(directory)) {
     const path = join(directory, entry.name);
     if (entry.directory) {
       if (depth === 0 || SKIP.has(entry.name)) continue;
-      if (shipsHostTool(path)) continue;
-      const found = fileCarrying(path, refinement, depth - 1);
+      if (isOwnBuildRoot(path, context)) {
+        nestedBuilds.add(path);
+        continue;
+      }
+      const found = fileCarrying(path, refinement, depth - 1, context, false, nestedBuilds);
       if (found !== null) return found;
       continue;
     }
+    // The pattern's own directory prefix, honoured: a marker written
+    // `<dir>/<file>` is never satisfied by the lane's own `<file>`.
+    if (atLaneRoot && refinement.nested) continue;
     if (!refinement.files.has(entry.name)) continue;
-    if ((readText(path) ?? "").includes(refinement.literal)) return path;
+    if ((readScript(path) ?? "").includes(refinement.literal)) return path;
   }
   return null;
 }
 
-/** How far below a lane root a refinement is looked for. */
-const REFINEMENT_DEPTH = 2;
+/**
+ * How far below a lane root a refinement is looked for.
+ *
+ * A SECOND BOUND BESIDE `MAX_DEPTH`, and it is the one that decides whether a
+ * MODULE is seen: the scan finds lane roots down to `MAX_DEPTH`, and from each
+ * one this decides how deep the module carrying the plugin may sit. A module at
+ * `a/b/c/` under a lane root is invisible to it, exactly as a lane four
+ * directories down is invisible to the other -- and for the same reason, which
+ * is that an unbounded walk of a large checkout is slow and a build file deep
+ * inside somebody's fixture tree is far likelier to be test data than a module.
+ * Both numbers are named in `renderDetect`'s "no lane detected" prose and in
+ * docs/USAGE.md, because a bound nobody states is a bug report.
+ */
+export const REFINEMENT_DEPTH = 2;
+
+/** What one directory answered: its stacks, and the nested builds it hid. */
+interface DirectoryMatches {
+  readonly matches: readonly Match[];
+  /**
+   * Absolute paths of subdirectories the refinement search STOPPED at because
+   * they are builds of their own. Reported as a finding when none of them
+   * became a lane -- a build nen can see and cannot address is exactly the
+   * "warning, never a proposal" case, and silence about it reads as absence.
+   */
+  readonly nestedBuilds: readonly string[];
+}
 
 /** Every stack whose markers this ONE directory carries. */
 function matchesIn(
   repoRoot: string,
   directory: string,
   hostStacks: readonly HostToolStack[],
-): readonly Match[] {
+): DirectoryMatches {
   const entries = listDirectory(directory);
   const names = entries.map((entry): string => entry.name);
+  const files = new Set(
+    entries.filter((entry): boolean => !entry.directory).map((entry): string => entry.name),
+  );
+  const nestedBuilds = new Set<string>();
   const found: Match[] = [];
   const add = (stack: string, marker: string): void => {
     found.push({ stack, marker: relativePath(repoRoot, marker) });
@@ -491,15 +655,29 @@ function matchesIn(
   if (workspace !== undefined) add("xcode-ios", join(directory, workspace));
   else if (project !== undefined) add("xcode-ios", join(directory, project));
 
-  // The host-tool stacks: the tool the repository ships, plus every refinement
-  // its own profile states. EVERY refinement must be found, and the files that
-  // carried them are the markers -- a stack identified by a plugin id is
+  // The host-tool stacks: the tool the repository ships, plus every context
+  // file and every refinement its own profile states. THE TOOL AND THE CONTEXT
+  // FILES MUST BE FILES -- a directory named `gradlew` is not a wrapper, and a
+  // marker scan that reads a listing rather than a file type would propose a
+  // lane out of one. EVERY refinement must then be found, and the files that
+  // carried them are the markers: a stack identified by a plugin id is
   // identified by the file that applies it, not by the wrapper beside it.
-  if (names.some((name): boolean => HOST_TOOL_FILES.has(name))) {
+  if ([...files].some((name): boolean => HOST_TOOL_FILES.has(name))) {
     for (const entry of hostStacks) {
+      const context = entry.contextGroups.every((group): boolean =>
+        [...group].some((name): boolean => files.has(name)),
+      );
+      if (!context) continue;
       const carriers: string[] = [];
       for (const refinement of entry.refinements) {
-        const file = fileCarrying(directory, refinement, REFINEMENT_DEPTH);
+        const file = fileCarrying(
+          directory,
+          refinement,
+          REFINEMENT_DEPTH,
+          entry.contextFiles,
+          true,
+          nestedBuilds,
+        );
         if (file === null) {
           carriers.length = 0;
           break;
@@ -517,7 +695,7 @@ function matchesIn(
     }
   }
 
-  return found;
+  return { matches: found, nestedBuilds: [...nestedBuilds].sort(compareBytes) };
 }
 
 function dependsOn(packageJson: Record<string, unknown> | null, dependency: string): boolean {
@@ -559,14 +737,19 @@ function carriesDependency(
   return false;
 }
 
+interface Scan {
+  readonly found: readonly { directory: string; matches: readonly Match[] }[];
+  /** Every nested build the refinement search stopped at, absolute, byte-ordered. */
+  readonly nestedBuilds: readonly string[];
+}
+
 /** Every directory with markers, deepest-last, root first. */
-function scan(
-  repoRoot: string,
-  hostStacks: readonly HostToolStack[],
-): readonly { directory: string; matches: readonly Match[] }[] {
+function scan(repoRoot: string, hostStacks: readonly HostToolStack[]): Scan {
   const out: { directory: string; matches: readonly Match[] }[] = [];
+  const nested = new Set<string>();
   const walk = (directory: string, depth: number): void => {
-    const matches = matchesIn(repoRoot, directory, hostStacks);
+    const { matches, nestedBuilds } = matchesIn(repoRoot, directory, hostStacks);
+    for (const build of nestedBuilds) nested.add(build);
     if (matches.length > 0) out.push({ directory, matches });
     if (depth === 0) return;
     for (const entry of listDirectory(directory)) {
@@ -578,7 +761,7 @@ function scan(
     }
   };
   walk(repoRoot, MAX_DEPTH);
-  return out;
+  return { found: out, nestedBuilds: [...nested].sort(compareBytes) };
 }
 
 /**
@@ -1184,13 +1367,10 @@ const QUOTED = /["']([^"'\n]+)["']/g;
 function includedModules(text: string): readonly string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const source = text
-    .split("\n")
-    .map((line): string => {
-      const comment = line.indexOf("//");
-      return comment === -1 ? line : line.slice(0, comment);
-    })
-    .join("\n");
+  // BOTH COMMENT FORMS, through the one stripper -- a `/* include(":retired")
+  // *\/` is not an include, and reading it as one proposed a module the build
+  // has not had since somebody commented it out.
+  const source = stripScriptComments(text);
   for (const call of source.matchAll(INCLUDE_CALL)) {
     for (const quoted of (call[1] ?? "").matchAll(QUOTED)) {
       const raw = (quoted[1] ?? "").trim();
@@ -1204,17 +1384,149 @@ function includedModules(text: string): readonly string[] {
   return out;
 }
 
-/** Whether a module's own build file carries one of the stack's refinements. */
-function moduleCarriesRefinement(
+/**
+ * `project(":shared").projectDir = file("../shared")` -> `:shared` -> `../shared`.
+ *
+ * A MODULE'S NAME IS NOT ITS PATH once a settings file says otherwise, and
+ * every reading of that name as a directory was wrong for a remapped one --
+ * silently, because the directory the name implies simply is not there. Both
+ * script languages spell the statement the same way up to the assignment; the
+ * PATH is the last quoted string on the right-hand side, which reads
+ * `file("../shared")` and `new File(rootDir, "../shared")` alike.
+ */
+const PROJECT_DIR =
+  /\bproject\s*\(\s*["']([^"'\n]+)["']\s*\)\s*\.\s*projectDir\s*=\s*([^\n]*)/g;
+
+/** Every remap a settings file states, module -> the path it names, in order. */
+function projectDirectories(text: string): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  for (const statement of stripScriptComments(text).matchAll(PROJECT_DIR)) {
+    const raw = (statement[1] ?? "").trim();
+    if (raw === "") continue;
+    const module = raw.startsWith(":") ? raw : `:${raw}`;
+    const quoted = [...(statement[2] ?? "").matchAll(QUOTED)];
+    const path = quoted[quoted.length - 1]?.[1];
+    if (path === undefined || path === "") continue;
+    out.set(module, path);
+  }
+  return out;
+}
+
+/**
+ * What nen could establish about one included module, and it is THREE-VALUED.
+ *
+ * THE TWO-VALUED VERSION WAS THE BLOCKER. It asked "does this module's build
+ * file carry the plugin literal?" and read `false` as "library" -- collapsing
+ * "nen looked and this module applies something else" together with "nen could
+ * not tell". The second is the common case in a modern Android build: a module
+ * applying the plugin through a CONVENTION PLUGIN (`id("myapp.android.
+ * application")`) or a VERSION CATALOGUE ALIAS (`alias(libs.plugins.
+ * androidApplication)`) never spells the plugin's own id anywhere in its file.
+ * Read as a library, the application module became the one candidate the
+ * settings file "named", and `{unitTestTask}` was answered `:app:test` -- the
+ * aggregate the pack's own `why` exists to forbid, written into a declaration
+ * with that `why` sitting beside it.
+ *
+ * SO THE CLASSIFICATION PROVES ONE DIRECTION AND WITHHOLDS ON THE OTHER:
+ *
+ *   * `application` -- the module's own build file carries the refinement
+ *     literal. Provable, and proved.
+ *   * `library` -- nen read the file, every plugin application in it is a
+ *     literal id it can compare, none of them is the refinement, and none of
+ *     them ends in the refinement's own last dotted segment (which is how a
+ *     convention plugin wrapping it is spelled).
+ *   * `unknown` -- everything else: no directory, no build file, an unreadable
+ *     one, a file that applies no plugin nen can see, an `alias(...)` or a
+ *     dynamic `apply(...)`, or a look-alike id. nen names the module and says
+ *     which, and answers nothing.
+ */
+type ModuleClass = "application" | "library" | "unknown";
+
+interface ModuleFinding {
+  readonly module: string;
+  readonly kind: ModuleClass;
+  /** Why nen could not classify it, for the note. Empty unless `unknown`. */
+  readonly why: string;
+}
+
+/** A plugin application spelled as a literal id: `id("x")`, `apply plugin: "x"`. */
+const PLUGIN_ID = /\b(?:id|kotlin)\s*[(\s]\s*["']([^"'\n]+)["']|\bplugin\s*[:=]\s*["']([^"'\n]+)["']/g;
+/** A plugin application whose id nen cannot resolve from this file alone. */
+const OPAQUE_PLUGIN = /\balias\s*\(|\bapply\s*\(|\bapply\s+from\s*:|\bid\s*\(\s*[^"'\s)]/;
+
+/** The last dotted segment of a plugin id: `com.android.application` -> `application`. */
+function lastSegment(literal: string): string {
+  return literal.split(".").pop() ?? literal;
+}
+
+/** Where a module's directory is, honouring a `projectDir` remap. */
+function moduleDirectory(
   laneDirectory: string,
   module: string,
+  remaps: ReadonlyMap<string, string>,
+): string {
+  const remapped = remaps.get(module);
+  if (remapped !== undefined) return join(laneDirectory, ...remapped.split("/"));
+  return join(laneDirectory, ...module.split(":").filter((segment): boolean => segment !== ""));
+}
+
+function classifyModule(
+  repoRoot: string,
+  laneDirectory: string,
+  module: string,
+  remaps: ReadonlyMap<string, string>,
   refinements: readonly Refinement[],
-): boolean {
-  const segments = module.split(":").filter((segment): boolean => segment !== "");
-  const directory = join(laneDirectory, ...segments);
-  return refinements.some(
-    (refinement): boolean => fileCarrying(directory, refinement, 0) !== null,
+): ModuleFinding {
+  const unknown = (why: string): ModuleFinding => ({ module, kind: "unknown", why });
+  const directory = moduleDirectory(laneDirectory, module, remaps);
+  const remapped = remaps.get(module);
+  // A REMAP THAT ESCAPES THE REPOSITORY IS NOT A CANDIDATE. nen reads only the
+  // tree it was pointed at -- every other path in this family is resolved
+  // against the repository root and one that leaves it is refused by name --
+  // so a module living outside it is one nen cannot see, let alone classify.
+  if (relative(repoRoot, directory).split(sep)[0] === "..") {
+    return unknown(
+      `its projectDir is remapped to '${remapped ?? ""}', which resolves outside this repository -- nen reads only the tree it was given`,
+    );
+  }
+  const buildFiles = new Set(refinements.flatMap((entry): readonly string[] => [...entry.files]));
+  const present = listDirectory(directory).filter(
+    (entry): boolean => !entry.directory && buildFiles.has(entry.name),
   );
+  const build = present[0];
+  if (build === undefined) {
+    return unknown(
+      remapped === undefined
+        ? `there is no ${[...buildFiles].sort(compareBytes).join(" or ")} at '${module.slice(1).split(":").join("/")}' for nen to read`
+        : `its projectDir is remapped to '${remapped}', where there is no ${[...buildFiles].sort(compareBytes).join(" or ")} for nen to read`,
+    );
+  }
+  const text = readScript(join(directory, build.name));
+  /* c8 ignore next -- `listDirectory` just named the file; an unreadable one is a race */
+  if (text === null) return unknown(`nen could not read its ${build.name}`);
+  const refinement = refinements.find((entry): boolean => text.includes(entry.literal));
+  if (refinement !== undefined) return { module, kind: "application", why: "" };
+  if (OPAQUE_PLUGIN.test(text)) {
+    return unknown(
+      `its ${build.name} applies a plugin nen cannot resolve to an id from this file alone -- an alias(...) reads its id out of a version catalogue, and an apply(...) can name one at runtime, so the plugin that identifies this lane may be arriving through it`,
+    );
+  }
+  const ids = [...text.matchAll(PLUGIN_ID)].map(
+    (match): string => match[1] ?? match[2] ?? "",
+  );
+  if (ids.length === 0) {
+    return unknown(
+      `its ${build.name} applies no plugin nen can see, so nen cannot tell whether this module is an application module or a library one`,
+    );
+  }
+  const tails = new Set(refinements.map((entry): string => lastSegment(entry.literal)));
+  const lookAlike = ids.find((id): boolean => tails.has(lastSegment(id)));
+  if (lookAlike !== undefined) {
+    return unknown(
+      `its ${build.name} applies '${lookAlike}', which ends in the same word as the plugin that identifies this lane -- that is how a CONVENTION PLUGIN wrapping it is spelled, and nen cannot see what it applies`,
+    );
+  }
+  return { module, kind: "library", why: "" };
 }
 
 /**
@@ -1229,6 +1541,7 @@ function moduleCarriesRefinement(
  * and nen resolves no choice: rule 1 of this file's header.
  */
 function unitTestAnswers(
+  repoRoot: string,
   laneDirectory: string,
   stack: HostToolStack | undefined,
   verb: string,
@@ -1240,6 +1553,10 @@ function unitTestAnswers(
   const settings = listDirectory(laneDirectory).find(
     (entry): boolean => !entry.directory && stack.contextFiles.has(entry.name),
   );
+  /* c8 ignore next 8 -- `matchesIn` requires a context file before the stack
+     matches at all, so a lane reaching this function has one. The branch stays
+     because the requirement and this reader are two places, and a lane whose
+     settings file vanished between them must refuse rather than throw. */
   if (settings === undefined) {
     refused.set(
       UNIT_TEST_TASK,
@@ -1248,11 +1565,38 @@ function unitTestAnswers(
     return;
   }
   const file = join(laneDirectory, settings.name);
-  const modules = includedModules(readText(file) ?? "");
-  const libraries = modules.filter(
-    (module): boolean => !moduleCarriesRefinement(laneDirectory, module, stack.refinements),
+  const text = readText(file) ?? "";
+  const modules = includedModules(text);
+  const remaps = projectDirectories(text);
+  const findings = modules.map(
+    (module): ModuleFinding =>
+      classifyModule(repoRoot, laneDirectory, module, remaps, stack.refinements),
   );
-  const only = libraries.length === 1 ? libraries[0] : undefined;
+  const of = (kind: ModuleClass): readonly ModuleFinding[] =>
+    findings.filter((finding): boolean => finding.kind === kind);
+  const unknown = of("unknown");
+  const libraries = of("library");
+
+  // A MODULE NEN COULD NOT CLASSIFY ENDS THE ROW, and it ends it even when a
+  // single library module is standing right beside it. Both ways of arriving
+  // here are the same mistake seen from two sides: an unclassifiable module may
+  // BE the JVM one this row wants, and it may equally be an application module
+  // wearing a convention plugin -- so treating it as neither and answering from
+  // what is left is nen choosing, which is rule 1 of this file's header. §2.6
+  // is the other half: a task the project does not contain is a warning and
+  // never a proposal, and `:ghost:test` for an `include(":ghost")` with no
+  // directory is exactly that task.
+  if (unknown.length > 0) {
+    refused.set(
+      UNIT_TEST_TASK,
+      ` -- ${settings.name} includes ${modules.join(", ")}, and nen could not classify ${unknown
+        .map((finding): string => `${finding.module} (${finding.why})`)
+        .join("; ")}. A module nen cannot classify may be the JVM one this row wants or an application module applying the plugin indirectly, and nen answers no row it would have to choose for`,
+    );
+    return;
+  }
+
+  const only = libraries.length === 1 ? libraries[0]?.module : undefined;
   if (only !== undefined) {
     // The MODULE is the repository's word and the TASK is the caller's: the
     // token sits in this verb's row, so the task nen names is that module's
@@ -1268,7 +1612,9 @@ function unitTestAnswers(
         : `includes ${modules.join(", ")}, of which ${
             libraries.length === 0
               ? "every one applies the plugin that identified this lane -- they are application modules, and the row this token fills is the JVM unit-test one"
-              : `${libraries.length} are library modules (${libraries.join(", ")}), and which of them carries this repository's JVM unit tests is a choice only it can make`
+              : `${libraries.length} are library modules (${libraries
+                  .map((finding): string => finding.module)
+                  .join(", ")}), and which of them carries this repository's JVM unit tests is a choice only it can make`
           }`
     }. nen answers this token only where the settings file names a single library module`,
   );
@@ -1276,6 +1622,7 @@ function unitTestAnswers(
 
 /** Everything nen itself can answer for one lane, computed once per verb. */
 function laneAnswers(
+  repoRoot: string,
   laneDirectory: string,
   platform: string,
   stack: HostToolStack | undefined,
@@ -1289,9 +1636,99 @@ function laneAnswers(
     hostAnswers(laneDirectory, platform, answered, refused, exes);
   }
   if (wanted.has(UNIT_TEST_TASK)) {
-    unitTestAnswers(laneDirectory, stack, verb, answered, refused);
+    unitTestAnswers(repoRoot, laneDirectory, stack, verb, answered, refused);
   }
   return { answered, refused, exes };
+}
+
+/**
+ * WHOSE TASKS THE PACK'S ROWS NAME: this lane's build, or a module of it.
+ *
+ * A marker pattern with a directory prefix says the carrier is a MODULE and the
+ * rows are the BUILD's own root tasks -- `{gw} assembleDebug` is what the
+ * observed repository runs, from the root, with the application module one
+ * level down. A pattern with NO prefix says the carrier IS this lane's own
+ * build file; when nen instead found it in a subdirectory, that subdirectory is
+ * the build the pack's rows describe, and running them at the lane root runs
+ * the wrong project. So the module's own path prefixes each task, which is the
+ * spelling Gradle itself uses and the one the observed lane's IDE run
+ * configuration would carry if the build were nested that way.
+ *
+ * AND WHERE NEN CANNOT ADDRESS IT AT ALL, EVERY ROW GOES. A carrier in a
+ * subdirectory the lane's settings file does not include is a build this lane's
+ * tool cannot reach: not a module of it, and not a build of its own (a build of
+ * its own would have stopped the search). Proposing the root's tasks for it
+ * would be the exact defect this whole seam exists to remove.
+ */
+type LaneScope =
+  | { readonly kind: "root" }
+  | { readonly kind: "module"; readonly module: string }
+  | { readonly kind: "unaddressable"; readonly why: string };
+
+function laneScope(
+  repoRoot: string,
+  laneDirectory: string,
+  stack: HostToolStack | undefined,
+): LaneScope {
+  if (stack === undefined) return { kind: "root" };
+  const sink = new Set<string>();
+  for (const refinement of stack.refinements) {
+    if (refinement.nested) continue;
+    const carrier = fileCarrying(
+      laneDirectory,
+      refinement,
+      REFINEMENT_DEPTH,
+      stack.contextFiles,
+      true,
+      sink,
+    );
+    if (carrier === null) continue;
+    const within = relativePath(laneDirectory, dirname(carrier));
+    if (within === ".") continue;
+    const module = `:${within.split("/").join(":")}`;
+    const settings = listDirectory(laneDirectory).find(
+      (entry): boolean => !entry.directory && stack.contextFiles.has(entry.name),
+    );
+    const text = settings === undefined ? "" : (readText(join(laneDirectory, settings.name)) ?? "");
+    const remaps = projectDirectories(text);
+    const declared = includedModules(text).find(
+      (candidate): boolean =>
+        relativePath(laneDirectory, moduleDirectory(laneDirectory, candidate, remaps)) === within,
+    );
+    if (declared === undefined) {
+      return {
+        kind: "unaddressable",
+        why: `this stack's marker was found at ${relativePath(repoRoot, carrier)}, one directory below the lane, and ${
+          settings === undefined ? "this lane has no settings file" : `this lane's ${settings.name}`
+        } includes no module there. That build is neither a module this lane's tool can address ('${module}:<task>') nor a build of its own -- a build of its own carries its own wrapper or settings file, and the scan stops at one. nen proposes no row it cannot address`,
+      };
+    }
+    return { kind: "module", module: declared };
+  }
+  return { kind: "root" };
+}
+
+/**
+ * A bare task word, as opposed to a flag, a path, or an already-qualified task.
+ *
+ * Deliberately narrow: only a word nen is SURE is a task name gets a module
+ * prefix. A `--stacktrace` is a flag, a `:app:lintDebug` already says which
+ * project it means, and anything carrying a `/` or a `.` is a path or a
+ * property rather than a task. Everything else is left exactly as the pack
+ * wrote it.
+ */
+function isBareTask(word: string): boolean {
+  return (
+    word !== "" &&
+    !word.startsWith("-") &&
+    !word.includes(":") &&
+    !word.includes("/") &&
+    !word.includes(".") &&
+    // A word still carrying a token is not yet a task name; the row it is in is
+    // about to be withheld for that reason, and prefixing it would only make
+    // the token harder to read back in the note.
+    !word.includes("{")
+  );
 }
 
 function substitute(token: string, manifest: Manifest, answers: LaneAnswers): string {
@@ -1613,6 +2050,22 @@ interface ProposedVerbs {
   readonly notes: readonly string[];
 }
 
+/** Every word a proposed row would spawn, in both of the row's two shapes. */
+function wordsOfRow(row: unknown): readonly string[] {
+  const value = row as {
+    exe?: unknown;
+    argv?: unknown;
+    steps?: readonly { exe?: unknown; argv?: unknown }[];
+  };
+  const words = (exe: unknown, argv: unknown): readonly string[] => [
+    ...(typeof exe === "string" ? [exe] : []),
+    ...(Array.isArray(argv) ? argv.filter((word): word is string => typeof word === "string") : []),
+  ];
+  return Array.isArray(value.steps)
+    ? value.steps.flatMap((step): readonly string[] => words(step.exe, step.argv))
+    : words(value.exe, value.argv);
+}
+
 /**
  * A proposed seat's `unsupported` text: SELF-DESCRIBING, with the pack quoted.
  *
@@ -1701,6 +2154,7 @@ function packageReason(manifest: Manifest): string {
 function proposeVerbs(
   pack: ProfilesPack,
   profile: StackProfile,
+  repoRoot: string,
   laneDirectory: string,
   lane: string,
   platform: string,
@@ -1711,6 +2165,8 @@ function proposeVerbs(
   const notes: string[] = [];
   const noCommand: string[] = [];
   const declaredOnly: string[] = [];
+  const scope = laneScope(repoRoot, laneDirectory, hostStack);
+  const hostResolved = new Map<string, string>();
 
   for (const verb of pack.commandVerbs) {
     const cell = verbCell(profile, verb);
@@ -1742,17 +2198,38 @@ function proposeVerbs(
     // the tokens THIS row actually names, so a stack that never mentions a
     // wrapper never reads a directory looking for one, and a row that never
     // mentions a task never reads a settings file.
+    // A LANE WHOSE BUILD NEN CANNOT ADDRESS PROPOSES NOTHING, and it says which
+    // build and why once per row rather than once per lane, so that the reason
+    // travels with the row a maintainer is reading.
+    if (scope.kind === "unaddressable") {
+      notes.push(
+        `'${verb}' withheld: ${scope.why}. A command the repository cannot run is a warning, never a proposal.`,
+      );
+      continue;
+    }
+
     const answers = laneAnswers(
+      repoRoot,
       laneDirectory,
       platform,
       hostStack,
       verb,
       new Set(leftoverTokens(stepsOfCell(cell))),
     );
+    for (const [token, value] of answers.answered) {
+      if (HOST_TOKENS.some((entry): boolean => entry.token === token)) {
+        hostResolved.set(token, value);
+      }
+    }
+    // The module prefix, where the pack's rows describe a build one directory
+    // down -- `run` becomes `:desktop:run`, and a flag or an already-qualified
+    // task is left exactly as the pack wrote it.
+    const qualify = (word: string): string =>
+      scope.kind === "module" && isBareTask(word) ? `${scope.module}:${word}` : word;
     const substituted = stepsOfCell(cell).map(
       (step): ProposedStep => ({
         exe: substitute(step.exe, manifest, answers),
-        argv: step.argv.map((token): string => substitute(token, manifest, answers)),
+        argv: step.argv.map((token): string => qualify(substitute(token, manifest, answers))),
       }),
     );
 
@@ -1918,6 +2395,40 @@ function proposeVerbs(
           };
   }
 
+  // WHERE THE PACK'S TASKS WERE RE-ADDRESSED, said out loud. A reader comparing
+  // the proposal against docs/STACK-MATRIX.md must be able to see why the argv
+  // is not the catalogue's verbatim word, and the answer is a fact about THIS
+  // tree rather than a decision of nen's.
+  if (scope.kind === "module") {
+    notes.push(
+      `this lane's marker was found in a subdirectory that this lane's own settings file includes as the module '${scope.module}', so every bare task the reference pack names is proposed as '${scope.module}:<task>'. The pack's rows describe that build, and running its task name at the lane root would run the ROOT project's task of the same name instead -- a different command with the same spelling. If this build is meant to be a lane of its own, give it its own wrapper and settings file: the scan stops at either, and proposes it as a separate lane.`,
+    );
+  }
+
+  // WHAT A DECLARATION CANNOT CARRY: the host it was written on. `{gw}` is the
+  // one token nen resolves for itself, and it resolves it to a DIFFERENT word
+  // per platform -- so a file written on one host carries one spelling, and a
+  // teammate on the other host reads a word their machine has no file for.
+  //
+  // `hosts` IS DELIBERATELY NOT NARROWED FOR IT, and that is the whole reason
+  // this is a note rather than a code change: the pack states this stack runs
+  // on every platform and cites the repository saying so, the wrapper ships
+  // under BOTH names in the tree, and narrowing `hosts` per spelling would turn
+  // "this word needs re-resolving" into exit 3 "unsupported host" -- a refusal
+  // that is false about the stack and that hides the one-word fix. The longer
+  // term answer is for the executor to substitute a host-conditional token at
+  // spawn time rather than at proposal time; that is a change to ./render.ts's
+  // refusal list and is not this verb's to make.
+  const proposedWords = Object.values(verbs).flatMap((row): readonly string[] =>
+    isUnsupportedRow(row) ? [] : wordsOfRow(row),
+  );
+  for (const [token, value] of hostResolved) {
+    if (!proposedWords.includes(value)) continue;
+    notes.push(
+      `${token} in this lane's proposed rows was resolved for ${platform}: nen wrote '${value}'. A teammate on the other host must re-run \`nen shu detect\` or hand-edit the spelling -- the wrapper is committed under both names, but a declaration carries one. 'hosts' is NOT narrowed for it: this stack runs on every platform the pack states, and only this one word differs.`,
+    );
+  }
+
   if (noCommand.length > 0) {
     notes.push(
       `the reference pack proposes no command for ${noCommand.join(", ")}. That is the pack DECLINING to choose for you rather than a gap in this proposal -- docs/STACK-MATRIX.md carries each one's full reason, and the declaration is where this repository's answer goes. Each is proposed as an explicit {"unsupported": "<the pack's own reason>"} row rather than left out, because a lane whose verb map is empty is a declaration nen's own reader refuses, and because a row a maintainer can SEE is a row they can replace.${
@@ -2010,7 +2521,7 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
   const pack = loadProfilesPack();
   const hostStacks = hostToolStacks(pack);
   const resolved = resolveSchemaFile(repoRoot, CONTRACT_FILE);
-  const found = scan(repoRoot, hostStacks);
+  const { found, nestedBuilds } = scan(repoRoot, hostStacks);
   const lanes: DetectedLane[] = [];
   const profiles = new Map<string, StackProfile>();
   const taken = new Set<string>();
@@ -2041,6 +2552,7 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
       const proposed = proposeVerbs(
         pack,
         profile,
+        repoRoot,
         directory,
         lane,
         platform,
@@ -2067,6 +2579,23 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
       `${lanes.length} lanes were found, so defaultLane is null and --lane is required. nen will not pick one: a repository with several builds in one tree has not said which one 'nen shu build' means.`,
     );
   }
+  // A NESTED BUILD NEN STOPPED AT AND THEN COULD NOT PROPOSE. The refinement
+  // search stops at a directory carrying its own wrapper or its own settings
+  // file, because a marker inside one is evidence about THAT build; usually
+  // that directory then becomes a lane of its own. When it does not -- a
+  // settings file with no wrapper beside it -- the honest answer is a FINDING:
+  // nen saw a build, cannot address it with any tool it can see, and says so
+  // rather than attributing its build files to the lane above (which is what it
+  // used to do, proposing the parent's wrapper against a build that wrapper
+  // never reads).
+  const laneDirectories = new Set(found.map((entry): string => entry.directory));
+  const orphaned = nestedBuilds.filter((build): boolean => !laneDirectories.has(build));
+  for (const build of orphaned) {
+    notes.push(
+      `${relativePath(repoRoot, build)} carries its own build settings, so the scan stopped there and read nothing inside it as evidence about the directory above -- and it ships no build wrapper of its own, so nen proposes no lane for it either. That is a finding, not a proposal: give it its own wrapper to have it detected as a lane, or state the lane by hand.`,
+    );
+  }
+
   const makefile = found.some((entry): boolean =>
     listDirectory(entry.directory).some((file): boolean => file.name === "Makefile"),
   );
@@ -2175,7 +2704,7 @@ export function renderDetect(report: DetectReport): readonly string[] {
       "no lane detected. Nen proposes a lane only from a marker it can see -- a framework config, a workspace, a wrapper plus its plugin, a project file. If this repository has a build nen should know about, write the project block by hand: `nen shu --help` names the fields.",
     );
     lines.push(
-      `the scan is bounded, and both bounds can hide a real lane: it descends at most ${MAX_DEPTH} directories below --repo, and it never enters ${[...SKIP].sort().join(", ")} -- so a lane living in a directory named like build output is invisible to it by design.`,
+      `the scan is bounded, and every bound can hide a real lane: it descends at most ${MAX_DEPTH} directories below --repo, from each lane root it looks at most ${REFINEMENT_DEPTH} directories down for the module that carries a stack's plugin, and it never enters ${[...SKIP].sort().join(", ")} -- so a lane living in a directory named like build output, or one whose application module sits deeper than ${REFINEMENT_DEPTH} directories inside it, is invisible to it by design.`,
     );
     return lines;
   }

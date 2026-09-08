@@ -21,6 +21,8 @@ import {
   MARKER_STACKS,
   MAX_DEPTH,
   renderDetect,
+  REFINEMENT_DEPTH,
+  stripScriptComments,
   type Entry,
 } from "./detect.js";
 import {
@@ -611,13 +613,15 @@ describe("nen shu detect -- one marker per stack", () => {
       expect(commandRows(lane?.verbs)).toEqual([...proposed]);
       expect(lane?.notes.length, "a withheld map with no reason is the failure").toBeGreaterThan(0);
       for (const note of lane?.notes ?? []) {
-        // Four shapes of note, and each is something a maintainer acts on: a
-        // row withheld, the pack declining to choose, a toolchain requirement
-        // nen will not turn into a precondition it would have to invent a value
-        // for, and the catalogue's own prose about this stack -- the
-        // preconditions and the recorded conflicts a verb row cannot carry.
+        // Six shapes of note, and each is something a maintainer acts on: a row
+        // withheld, the pack declining to choose, a toolchain requirement nen
+        // will not turn into a precondition it would have to invent a value
+        // for, the catalogue's own prose about this stack (the preconditions
+        // and the recorded conflicts a verb row cannot carry), the host a
+        // host-conditional token was resolved for, and the module the pack's
+        // tasks were re-addressed to.
         expect(note).toMatch(
-          /withheld|proposes no command|no precondition is proposed|the reference pack's own note/,
+          /withheld|proposes no command|no precondition is proposed|the reference pack's own note|was resolved for |includes as the module /,
         );
       }
     });
@@ -689,6 +693,12 @@ describe("nen shu detect -- what the scan deliberately does not see", () => {
       const rendered = renderDetect(report).join("\n");
       expect(rendered).toMatch(/descends at most 3 directories/);
       expect(rendered).toMatch(/node_modules/);
+      // BOTH BOUNDS ARE NAMED, not just the one. A lane whose application
+      // module sits deeper than REFINEMENT_DEPTH inside it is missed for a
+      // second, independent reason, and a reader told only about the first
+      // spends the afternoon moving the lane up one directory.
+      expect(REFINEMENT_DEPTH).toBe(2);
+      expect(rendered).toMatch(/at most 2 directories down for the module/);
     } finally {
       rmSync(found, { recursive: true, force: true });
       rmSync(missed, { recursive: true, force: true });
@@ -1852,22 +1862,41 @@ describe("nen shu detect -- {gw} is resolved from the host, into the proposal", 
     }
   });
 
+  // THE MUTANT THIS KILLS: reading a directory LISTING for the wrapper instead
+  // of asking whether the entry is a FILE. A directory named `gradlew` used to
+  // satisfy the marker and propose a whole lane -- every row withheld, so it
+  // was safe, but the lane itself was fiction and the "proposes no lane it
+  // cannot see the tool for" claim was not true as written.
   it("does not accept a DIRECTORY named like the wrapper as the wrapper", () => {
-    // The marker scan reads a directory LISTING, so a directory named like the
-    // tool satisfies it; the row does not, because a row needs something to
-    // run. The lane is proposed, every command row is withheld, and the note
-    // names no other spelling because there is none to name.
     const dir = mkdtempSync(join(tmpdir(), "nen-detect-wrapper-dir-"));
     try {
       cpSync(markerTree("gradle-android"), dir, { recursive: true });
       rmSync(join(dir, "gradlew"));
       mkdirSync(join(dir, "gradlew"));
-      const lane = detect(dir, "linux").lanes[0];
-      expect(lane?.stack).toBe("gradle-android");
-      expect(commandRows(lane?.verbs)).toEqual([]);
-      const notes = lane?.notes.join("\n") ?? "";
-      expect(notes).toMatch(/this lane has no 'gradlew'\. A lane without its own wrapper/);
-      expect(notes).not.toMatch(/the other host's spelling/);
+      const report = detect(dir, "linux");
+      expect(report.lanes).toEqual([]);
+      expect(report.exitCode).toBe(1);
+      // And the same tree WITH the file is a lane, so the assertion above is
+      // about the file type and not about the fixture being empty.
+      rmSync(join(dir, "gradlew"), { recursive: true });
+      writeFileSync(join(dir, "gradlew"), "#!/bin/sh\nexit 0\n");
+      expect(detect(dir, "linux").lanes.map((lane): string => lane.stack)).toEqual([
+        "gradle-android",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE SAME RULE FOR THE CONTEXT FILE, which is the other half of M2: a
+  // directory named `settings.gradle.kts` is not a settings file either.
+  it("does not accept a DIRECTORY named like the settings file as the settings file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-settings-dir-"));
+    try {
+      cpSync(markerTree("gradle-android"), dir, { recursive: true });
+      rmSync(join(dir, "settings.gradle.kts"));
+      mkdirSync(join(dir, "settings.gradle.kts"));
+      expect(detect(dir, "linux").lanes).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1933,12 +1962,31 @@ describe("nen shu detect -- {unitTestTask}, answered only from the lane's own se
     }
   });
 
-  it("withholds it, naming the files it looked for, when there is no settings file", () => {
+  it("withholds it, saying so, when the settings file names no module at all", () => {
     const lane = detect(markerTree("gradle-android")).lanes[0];
     expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
     expect(lane?.notes.join("\n")).toMatch(
-      /there is none here to read \(nen looks for settings\.gradle, settings\.gradle\.kts\)/,
+      /settings\.gradle\.kts declares no `include\(\.\.\.\)` nen could read/,
     );
+  });
+
+  // THE MUTANT THIS KILLS: dropping the context-file requirement from
+  // `matchesIn`. The pack states the lane's own settings file as a marker with
+  // no `contains`, and it was computed and never required -- so a directory
+  // with a wrapper and no settings file was a Gradle lane, and (the case that
+  // made it a defect) a nested build carrying only a settings file had its
+  // build files read as evidence about the lane ABOVE it.
+  it("proposes no lane at all when the lane's own settings file is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-no-settings-"));
+    try {
+      cpSync(markerTree("gradle-android"), dir, { recursive: true });
+      rmSync(join(dir, "settings.gradle.kts"));
+      const report = detect(dir);
+      expect(report.lanes).toEqual([]);
+      expect(report.exitCode).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("withholds it when every included module is an application module", () => {
@@ -1964,6 +2012,440 @@ describe("nen shu detect -- {unitTestTask}, answered only from the lane's own se
       writeFileSync(join(dir, "settings.gradle"), "include ':app', ':PlaceholderCore'\n");
       const row = detect(dir).lanes[0]?.verbs["test"] as { argv?: string[] };
       expect(row?.argv).toContain(":PlaceholderCore:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- a module nen cannot classify is never named", () => {
+  /**
+   * A KRO_SHAPED copy whose `:app` module applies the plugin INDIRECTLY.
+   *
+   * The lane still matches, because `:legacy` applies the plugin the old way
+   * and the marker is a file carrying the literal -- which is exactly the shape
+   * of a repository mid-migration to convention plugins, and exactly the shape
+   * the two-valued classification got wrong.
+   */
+  function withIndirectApp(dir: string, appBuild: string): void {
+    cpSync(KRO_SHAPED, dir, { recursive: true });
+    writeFileSync(join(dir, "app", "build.gradle.kts"), appBuild);
+    mkdirSync(join(dir, "legacy"));
+    writeFileSync(
+      join(dir, "legacy", "build.gradle.kts"),
+      'plugins {\n    id("com.android.application")\n}\n',
+    );
+    writeFileSync(
+      join(dir, "settings.gradle.kts"),
+      'include(":app")\ninclude(":legacy")\n',
+    );
+  }
+
+  // THE BLOCKER THIS KILLS, and it is the whole of B1. `moduleCarriesRefinement`
+  // returned false for BOTH "this module is a library" and "nen could not
+  // tell", and `libraries` read both as library -- so an application module
+  // applying AGP through a CONVENTION PLUGIN became the single library module
+  // the settings file "named", and `{unitTestTask}` was answered `:app:test`.
+  // That is the aggregate the pack's own `why` exists to forbid, written into a
+  // declaration with that `why` sitting beside it.
+  it("withholds rather than calling a CONVENTION-PLUGIN module a library", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-convention-"));
+    try {
+      withIndirectApp(dir, 'plugins {\n    id("myapp.android.application")\n}\n');
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/'test' withheld: its reference command still names \{unitTestTask\}/);
+      expect(notes).toContain("nen could not classify :app");
+      expect(notes).toContain("myapp.android.application");
+      expect(notes).toContain("that is how a CONVENTION PLUGIN wrapping it is spelled");
+      // And the forbidden row is nowhere in the proposal, in any spelling.
+      expect(JSON.stringify(lane?.verbs)).not.toContain(":app:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds rather than calling a VERSION-CATALOGUE ALIAS module a library", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-alias-"));
+    try {
+      withIndirectApp(dir, "plugins {\n    alias(libs.plugins.androidApplication)\n}\n");
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toContain("nen could not classify :app");
+      expect(notes).toContain("reads its id out of a version catalogue");
+      expect(JSON.stringify(lane?.verbs)).not.toContain(":app:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds a module whose build file applies no plugin nen can see", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-no-plugin-"));
+    try {
+      withIndirectApp(dir, 'android {\n    namespace = "placeholder"\n}\n');
+      const notes =
+        detect(dir)
+          .lanes.find((entry): boolean => entry.stack === "gradle-android")
+          ?.notes.join("\n") ?? "";
+      expect(notes).toContain("applies no plugin nen can see");
+      expect(notes).toContain("nen could not classify :app");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The other direction, so the rule above is a classification and not a
+  // blanket refusal: a module that plainly applies something else IS a library,
+  // and the answer still comes out.
+  it("still answers from a module that plainly applies a different plugin", () => {
+    const row = detect(KRO_SHAPED).lanes[0]?.verbs["test"] as { argv?: string[] };
+    expect(row?.argv).toEqual(["verifyPaparazziDebug", ":PlaceholderCore:test", "--stacktrace"]);
+  });
+});
+
+describe("nen shu detect -- a module the project does not contain is a warning", () => {
+  // §2.6: "a scheme, target or task a marker implies but the project does not
+  // contain is a WARNING, never a proposal". Each case below used to end in a
+  // proposal naming a module that is not there.
+
+  it("never reads a BLOCK-COMMENTED include as a module", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-block-comment-"));
+    try {
+      cpSync(KRO_SHAPED, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'include(":app")\n/* include(":retired") */\ninclude(":PlaceholderCore")\n',
+      );
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
+      // Only `//` was stripped, so `:retired` was a module -- with no directory
+      // and therefore no plugin, it counted as a SECOND library and the row was
+      // withheld naming a module that has not existed since somebody commented
+      // it out.
+      expect((lane?.verbs["test"] as { argv?: string[] }).argv).toContain(":PlaceholderCore:test");
+      expect(lane?.notes.join("\n")).not.toContain(":retired");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds, naming it, for an include with no directory at all", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-ghost-"));
+    try {
+      cpSync(KRO_SHAPED, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'include(":app", ":PlaceholderCore", ":ghost")\n',
+      );
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toContain("nen could not classify :ghost");
+      expect(notes).toContain("there is no build.gradle or build.gradle.kts at 'ghost'");
+      expect(JSON.stringify(lane?.verbs)).not.toContain(":ghost:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds a module whose projectDir is remapped OUT of the repository", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-remap-out-"));
+    try {
+      cpSync(KRO_SHAPED, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("../shared")\n',
+      );
+      const lane = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android");
+      expect(commandRows(lane?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toContain("nen could not classify :shared");
+      expect(notes).toContain("resolves outside this repository");
+      expect(JSON.stringify(lane?.verbs)).not.toContain(":shared:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A REMAP INSIDE THE TREE IS READ AND FOLLOWED, so the rule above is about
+  // where the directory ends up and not about the statement existing.
+  it("follows a projectDir remap that stays inside the repository", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-remap-in-"));
+    try {
+      cpSync(KRO_SHAPED, dir, { recursive: true });
+      mkdirSync(join(dir, "libs", "shared"), { recursive: true });
+      writeFileSync(
+        join(dir, "libs", "shared", "build.gradle.kts"),
+        'plugins {\n    id("org.jetbrains.kotlin.jvm")\n}\n',
+      );
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'include(":app")\ninclude(":shared")\nproject(":shared").projectDir = file("libs/shared")\n',
+      );
+      const row = detect(dir).lanes.find((entry): boolean => entry.stack === "gradle-android")
+        ?.verbs["test"] as { argv?: string[] };
+      expect(row?.argv).toContain(":shared:test");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("stripScriptComments -- the one reader every build-script match goes through", () => {
+  it("removes both comment forms and keeps the code around them", () => {
+    expect(stripScriptComments('a // b\nc\n')).toBe("a \nc\n");
+    expect(stripScriptComments("a /* b */ c")).toBe("a  c");
+  });
+
+  it("keeps the LINE COUNT of a block comment, so a line-wise reader sees no shift", () => {
+    expect(stripScriptComments("a\n/* x\ny\n*/\nb").split("\n")).toHaveLength(5);
+  });
+
+  it("steps over a quoted string, in both quote styles and through an escape", () => {
+    expect(stripScriptComments('url = "https://x/y" // gone')).toBe('url = "https://x/y" ');
+    expect(stripScriptComments("id = 'a/*b*/c'")).toBe("id = 'a/*b*/c'");
+    expect(stripScriptComments('s = "a\\"// still a string" // gone')).toBe(
+      's = "a\\"// still a string" ',
+    );
+  });
+});
+
+describe("nen shu detect -- a commented-out marker is not a marker", () => {
+  // THE MUTANT THIS KILLS: matching `contains` against the raw file. A `// TODO`
+  // and a `/* */` block are somebody's note to themselves, and a whole LANE was
+  // being proposed out of one -- with every row cross-checked and proposed,
+  // because the wrapper really is there.
+  const CASES: readonly { name: string; text: string }[] = [
+    { name: "a line comment", text: '// TODO: id("com.android.application")\n' },
+    { name: "a block comment", text: '/*\n  id("com.android.application")\n*/\n' },
+  ];
+  for (const { name, text } of CASES) {
+    it(`proposes no lane from a plugin id inside ${name}`, () => {
+      const dir = mkdtempSync(join(tmpdir(), "nen-detect-commented-"));
+      try {
+        cpSync(markerTree("gradle-android"), dir, { recursive: true });
+        writeFileSync(join(dir, "app", "build.gradle.kts"), text);
+        expect(detect(dir).lanes).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("still reads a literal that shares a line with a URL in a string", () => {
+    // The stripper steps over quoted strings, so a `//` inside one is not a
+    // comment and does not eat the rest of the line with it.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-url-"));
+    try {
+      cpSync(markerTree("gradle-android"), dir, { recursive: true });
+      writeFileSync(
+        join(dir, "app", "build.gradle.kts"),
+        'val docs = "https://example.invalid/agp"; id("com.android.application")\n',
+      );
+      expect(detect(dir).lanes.map((lane): string => lane.stack)).toEqual(["gradle-android"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- a marker pattern's directory prefix is honoured", () => {
+  // THE MUTANT THIS KILLS: dropping `*/` from `*/build.gradle{,.kts}`. The
+  // pack's own `why` reads "a MODULE applying the Android application plugin",
+  // and an Android ROOT build file names that plugin `apply false` as a matter
+  // of convention -- a line that switches it OFF. A tree with such a root and
+  // no module was proposed as a whole Android lane.
+  it("never matches the LANE's own build file for a `*/`-prefixed marker", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-root-apply-false-"));
+    try {
+      writeFileSync(join(dir, "gradlew"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(dir, "settings.gradle.kts"), 'rootProject.name = "placeholder"\n');
+      writeFileSync(
+        join(dir, "build.gradle.kts"),
+        'plugins {\n    id("com.android.application") apply false\n}\n',
+      );
+      expect(detect(dir).lanes).toEqual([]);
+      // And a MODULE applying it IS the marker, so the assertion above is about
+      // the prefix rather than about the literal.
+      mkdirSync(join(dir, "app"));
+      writeFileSync(
+        join(dir, "app", "build.gradle.kts"),
+        'plugins {\n    id("com.android.application")\n}\n',
+      );
+      const lane = detect(dir).lanes[0];
+      expect(lane?.stack).toBe("gradle-android");
+      expect(lane?.markers).toEqual(["app/build.gradle.kts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The compose marker carries NO prefix, which is the pack saying the carrier
+  // is the lane's own build file -- so that one still matches at the root.
+  it("matches the lane's own build file for a marker with no prefix", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-compose-root-"));
+    try {
+      writeFileSync(join(dir, "gradlew"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(dir, "settings.gradle.kts"), 'rootProject.name = "desktop"\n');
+      writeFileSync(
+        join(dir, "build.gradle.kts"),
+        "compose.desktop {\n    application {\n    }\n}\n",
+      );
+      const lane = detect(dir).lanes[0];
+      expect(lane?.stack).toBe("compose-desktop");
+      expect(lane?.markers).toEqual(["build.gradle.kts"]);
+      expect(lane?.verbs["run"]).toMatchObject({ exe: "./gradlew", argv: ["run"] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- a nested build is attributed to itself, never to its parent", () => {
+  /** Root wrapper, root settings, and a `program/` that is a build of its own. */
+  function nestedBuild(dir: string, ownWrapper: boolean): void {
+    writeFileSync(join(dir, "gradlew"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(dir, "settings.gradle.kts"), 'rootProject.name = "placeholder"\n');
+    mkdirSync(join(dir, "program"));
+    writeFileSync(
+      join(dir, "program", "settings.gradle.kts"),
+      'rootProject.name = "placeholder-desktop"\n',
+    );
+    writeFileSync(
+      join(dir, "program", "build.gradle.kts"),
+      "compose.desktop {\n    application {\n    }\n}\n",
+    );
+    if (ownWrapper) writeFileSync(join(dir, "program", "gradlew"), "#!/bin/sh\nexit 0\n");
+  }
+
+  // THE MUTANT THIS KILLS: stopping the refinement descent only at a directory
+  // that ships its own WRAPPER. A nested build with its own settings file and
+  // no wrapper had its build files read as evidence about the root, and the
+  // root was proposed a `compose-desktop` lane at cwd `.` whose `./gradlew run`
+  // pointed the ROOT wrapper at a build that wrapper never reads.
+  it("proposes exactly one lane for a root wrapper plus a nested settings file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-nested-settings-"));
+    try {
+      nestedBuild(dir, false);
+      mkdirSync(join(dir, "app"));
+      writeFileSync(
+        join(dir, "app", "build.gradle.kts"),
+        'plugins {\n    id("com.android.application")\n}\n',
+      );
+      const report = detect(dir);
+      expect(report.lanes).toHaveLength(1);
+      expect(report.lanes[0]?.stack).toBe("gradle-android");
+      expect(report.lanes[0]?.cwd).toBe(".");
+      // And the build nen stopped at and could not address is a FINDING, said
+      // out loud -- a silent drop reads exactly like an empty tree.
+      expect(report.notes.join("\n")).toContain(
+        "program carries its own build settings, so the scan stopped there",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes it as its OWN lane once it ships its own wrapper, with no finding", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-nested-wrapper-"));
+    try {
+      nestedBuild(dir, true);
+      const report = detect(dir);
+      expect(report.lanes.map((lane): string => lane.cwd)).toEqual(["program"]);
+      expect(report.lanes[0]?.stack).toBe("compose-desktop");
+      expect(report.notes.join("\n")).not.toContain("carries its own build settings");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A build the LANE'S SETTINGS FILE INCLUDES is addressable, and the pack's
+  // bare task names are that module's: `run` at the root would run the ROOT
+  // project's `run`, which is a different command with the same spelling.
+  it("qualifies every bare task with the module a nested carrier is included as", () => {
+    const lane = detect(markerTree("compose-desktop")).lanes[0];
+    expect(lane?.cwd).toBe(".");
+    expect(lane?.verbs["run"]).toMatchObject({ exe: "./gradlew", argv: [":desktop:run"] });
+    expect(lane?.notes.join("\n")).toContain("includes as the module ':desktop'");
+  });
+
+  // ...and where it is included under a DIFFERENT name, that name is the one
+  // proposed, because the module path is the repository's word and not nen's.
+  it("uses the module name the settings file states, not the directory name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-remapped-module-"));
+    try {
+      cpSync(markerTree("compose-desktop"), dir, { recursive: true });
+      writeFileSync(
+        join(dir, "settings.gradle.kts"),
+        'include(":ui")\nproject(":ui").projectDir = file("desktop")\n',
+      );
+      expect(detect(dir).lanes[0]?.verbs["run"]).toMatchObject({ argv: [":ui:run"] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // AND WHERE IT IS INCLUDED NOWHERE, NOTHING IS PROPOSED. The build is neither
+  // a module this lane's wrapper can address nor a build of its own, so every
+  // row goes rather than one naming a project Gradle would not resolve.
+  it("withholds every row when the carrier is in a directory no module names", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-unaddressable-"));
+    try {
+      cpSync(markerTree("compose-desktop"), dir, { recursive: true });
+      writeFileSync(join(dir, "settings.gradle.kts"), 'rootProject.name = "placeholder"\n');
+      const lane = detect(dir).lanes[0];
+      expect(lane?.stack).toBe("compose-desktop");
+      expect(commandRows(lane?.verbs)).toEqual([]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toContain("includes no module there");
+      expect(notes).toContain("nen proposes no row it cannot address");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- the host a {gw} was resolved for is written down", () => {
+  // THE MUTANT THIS KILLS: resolving `{gw}` and saying nothing about it. The
+  // declaration is committed and read by a whole team; the word inside it is
+  // true for exactly the host that ran `detect`, and a teammate on the other
+  // host gets exit 5 "the declared program could not be started" for a wrapper
+  // that IS in the tree, under the other name.
+  for (const { platform, exe } of [
+    { platform: "linux", exe: "./gradlew" },
+    { platform: "win32", exe: "gradlew.bat" },
+  ] as const) {
+    it(`names the platform and the spelling it wrote, on ${platform}`, () => {
+      const report = detect(KRO_SHAPED, platform);
+      for (const lane of report.lanes) {
+        const notes = lane.notes.join("\n");
+        expect(notes, lane.lane).toContain(`{gw} in this lane's proposed rows was resolved for ${platform}`);
+        expect(notes, lane.lane).toContain(`nen wrote '${exe}'`);
+        expect(notes, lane.lane).toContain("must re-run `nen shu detect` or hand-edit the spelling");
+      }
+      // AND `hosts` IS NOT NARROWED. Narrowing per spelling would turn a
+      // one-word edit into exit 3 "unsupported host", which is false about a
+      // stack the pack states runs everywhere.
+      expect((report.proposal as unknown as Proposal).project.hosts).toEqual({
+        "*": ["darwin", "linux", "win32"],
+      });
+    });
+  }
+
+  it("says nothing about a host token no proposed row carries", () => {
+    // A lane whose every row was withheld has no resolved spelling to warn
+    // about, and a note that fires anyway is noise on the one output where a
+    // reader is already being asked to read several.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-no-host-note-"));
+    try {
+      cpSync(KRO_SHAPED, dir, { recursive: true });
+      rmSync(join(dir, "gradlew"));
+      const lane = detect(dir, "linux").lanes.find(
+        (entry): boolean => entry.stack === "gradle-android",
+      );
+      expect(commandRows(lane?.verbs)).toEqual([]);
+      expect(lane?.notes.join("\n")).not.toContain("was resolved for linux");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
