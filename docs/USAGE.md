@@ -3398,15 +3398,44 @@ stand behind, naming the row and the reason:
 
 | Check | A row is withheld when |
 |---|---|
-| **placeholders** | it still carries a pack token after substitution. Exactly two are substituted, both from the lane's own `package.json`: `{pm}` (the `packageManager` field with its version stripped) and `{packageManager}` (that field verbatim). `{scheme}`, `{destination}`, `{package}` and the rest are facts only your repository knows, and a guessed argument is a different command |
-| **the executable** | its `exe` is neither the package manager that `package.json` names nor a package it declares as a dependency. Those are the only two ways `detect` can *see* that a repository carries a program |
-| **the script** | its argv runs `run <task>` and `package.json` declares no such script. If the task lives somewhere `detect` does not read — a workspace member, a task runner's own config — the note says so and the row is yours to add by hand |
+| **placeholders** | it still carries a pack token after substitution. Four are answered, all of them from the lane's own `package.json`: `{pm}` (the `packageManager` field with its version stripped), `{packageManager}` (that field verbatim), `{package}` (the manifest's own `name`, and **only** when the manifest is not a workspace root), and any token a declared **script** answers — a step matching a script's command word for word, differing only where the pack wrote a token, takes the value from that script. `{scheme}`, `{destination}`, `{resultBundle}` and the rest are facts only your repository knows, and a guessed argument is a different command |
+| **the executable** | its `exe` is neither the package manager that `package.json` names, nor a package it declares as a dependency, nor part of a step the manifest spells out **verbatim** as one of its own scripts. Those are the only three ways `detect` can *see* that a repository carries a program, and the third is the strongest: a manifest whose `scripts` block contains this exact line is the repository saying it runs *this line* |
+| **the script** | its argv runs `run <task>` and `package.json` declares no such script — or, for a row `{package}` was answered in, the element *after* the package name is a task it does not declare. If the task lives somewhere `detect` does not read — a workspace member, a task runner's own config — the note says so and the row is yours to add by hand |
+| **ambiguity** | two of the lane's own scripts answer the same token differently. `detect` resolves no ambiguity, and one arriving from inside a single file is not a different kind of ambiguity: both candidates are named and the row is yours to state |
 
 A proposal you paste and then discover is fiction is worse than an empty map
-with a reason. `detect` also names the cells the **pack itself** proposes no
-command for — `declared-only` and `unsupported` rows — because "the pack
-declined to choose for you" and "this proposal has a gap" are different facts
-and a reader who cannot tell them apart writes the row nen was avoiding.
+with a reason.
+
+**A cell the pack has no command for becomes an explicit seat, not a hole.**
+`declared-only` and `unsupported` rows are proposed as
+`{"unsupported": "<the pack's own reason, quoted>"}`, and three things follow
+from that. The declaration nen writes **loads**: a lane whose verb map is empty
+is a file nen's own reader refuses, so a tree whose every command row was
+withheld used to get a proposal the very next `nen shu build` rejected. The
+reason you read in the file is the same sentence the executor prints back at
+exit 4, because it *is* that repository's reason once the file is yours. And
+the note tells you which seats are `declared-only` — the pack **has** observed
+commands and declines to pick one, so those are the rows to replace first —
+because "the pack declined to choose for you" and "this proposal has a gap" are
+different facts and a reader who cannot tell them apart writes the row nen was
+avoiding. The text output prints the two kinds on separate lines for the same
+reason; `--json` is unchanged, and the split is read off each row's own shape.
+
+**And a precondition nen would have to invent a value for is never proposed.**
+Where a stack's toolchain entry probes for something only the machine can
+name — an installed browser binary, a Visual Studio workload — `detect` says so
+in a note, quotes the pack's reason, and proposes nothing. A `path` precondition
+would pin one machine's install location into a file every machine reads, and
+`detect` names no environment variable the reference does not cite. If your
+repository has one, state it yourself:
+`{"kind": "env", "value": "<NAME>"}` under `project.preconditions.<lane>`.
+
+**Per-stack notes.** The two stacks `detect` proposes end to end:
+
+| Stack | What it proposes | What it withholds, and why |
+|---|---|---|
+| `nextjs` | `build`, `test`, `dev` (`<pm> turbo run <task>`), `run` (`next start`), `lint` (**two steps, in order** — the repo-wide format check, then the per-workspace fan-out), and `coverage` (`<pm> --filter <package> test:coverage`) where the lane resolves to one package that declares the task. Every workspace member carrying a `next.config.*` becomes its own lane, plus the root when the root has one, with `defaultLane: null` and `--lane` required. Seats for `ui-test`, `archive`, `deploy` (all `declared-only`) and `release` (`unsupported` — one observed repository says so in its own Makefile). | `coverage` on a **workspace root** — the root is the *list* of packages, not one of them, so answering `{package}` with its own name would propose a command the repository never runs; the note names every member it found. `coverage` on a lane with no `test:coverage` script, naming the task. Any row whose `{pm}` cannot be read, because `package.json` states no `packageManager` (or states one with no `@version` to split). |
+| `gatsby` | `build` (`gatsby build`), `dev` (`gatsby develop`), `run` (`gatsby serve`), `archive` (`node <the script your package.json names>`) and the two-step `deploy` (that same archive step, then the pages push the pack cites). Seats for `test`, `ui-test`, `lint`, `release` and `coverage`, each with the pack's sentence — *"no test script and no test-runner dependency"*, *"NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."* `hosts` is every platform. | `archive` and `deploy` when no declared script names the archive path — `{archiveScript}` is a path, and the one place `detect` can see a path this repository actually runs is its own `scripts` block; two scripts that disagree are an ambiguity, not a choice. `build`/`dev`/`run` when `gatsby` is not a declared dependency: a marker match is not evidence a tool is installed. And **no precondition for the locally installed browser** `archive` and `deploy` need — the reference probes for it *by path* and cites no environment variable, so `detect` reports the requirement in a note rather than inventing a name for it. |
 
 The scan is bounded, and both bounds can hide a real lane: it descends at most
 **three** directories below `--repo`, and it never enters `.git`, `.gradle`,
@@ -3434,11 +3463,13 @@ declaration: /Users/…/two-app-monorepo/nen/contract.json  (absent)
   web  (nextjs)  cwd web
         marker: web/next.config.js
         verbs:  build, dev, lint, run, test
-        ^ 'coverage' withheld: its reference command still names {package}, which only this repository can answer. nen never proposes an unsubstituted token: a guessed argument is a different command.
-        ^ the reference pack proposes no command for ui-test (two meanings), archive (evidence, not an artifact), release (declared n/a in the repo), deploy (three shapes, no default). …
+        unsupported (the pack's reason, yours to replace):  archive, deploy, release, ui-test
+        ^ 'coverage' withheld: its reference command runs the task 'test:coverage', and this lane's package.json declares no such script. If the task is declared somewhere nen does not read -- a workspace member, a task runner's own config -- add the row by hand; a verb the project does not visibly carry is a warning, never a proposal.
+        ^ the reference pack proposes no command for ui-test (two meanings), archive (evidence, not an artifact), release (declared n/a in the repo), deploy (three shapes, no default). … ui-test, archive, deploy are declared-only rather than unsupported: the pack HAS observed commands for them and declines to pick one, so those rows are the first to replace.
   admin  (nextjs)  cwd admin
         marker: admin/next.config.js
         verbs:  build, dev, lint, run, test
+        unsupported (the pack's reason, yours to replace):  archive, deploy, release, ui-test
         ^ … (the same two notes)
 
 note: a lane's NAME is proposed from the directory it lives in (or from the stack id at the repository root) and is yours to change -- it is the token '--lane' takes, and nothing in nen reads meaning into it.
@@ -4548,18 +4579,28 @@ declines to (`declared-only`, `unsupported`), and `detect` withholds anything it
 cannot cross-check against the repository's own `package.json`.
 [`docs/STACK-MATRIX.md`](STACK-MATRIX.md) is the cell-by-cell answer.
 
+**Two stacks are proposed end to end today: `nextjs` and `gatsby`.** For those,
+`detect` fills every row of the declaration — a command where the repository's
+own manifest confirms one, and an explicit `{"unsupported": "<the pack's
+reason>"}` seat where the pack has none, so the file it writes is one the
+executor loads with no hand edit. The other five stacks get the same lane,
+the same `hosts` block and the same seats; their command rows are withheld with
+a reason each, because a `package.json` is the only thing `detect` can
+cross-check an argv against and those stacks do not have one. See
+[per-stack notes](#nen-shu-detect) under `shu detect`.
+
 | Action | Exists today? | Verb | Scope |
 |---|---|---|---|
 | build | **yes — any lane that declares one** | [`shu build`](#nen-shu-build) | Runs the `build` invocation the lane declares, in the lane's `cwd`, with `--dry-run` printing every step first. Nen's own binaries are still cross-compiled by `bun run build:<target>`, which is a package script, not a nen verb. |
 | test | **yes — any lane that declares one** | [`shu test`](#nen-shu-test), [`dev test`](#nen-dev-test) | `shu test` runs a *target project's* declared test invocation; `dev test` still spawns `bun run test` in *this* checkout. |
-| ui-test | **the verb exists; no stack ships a reference row** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form — but the pack proposes no default for any stack, because the observed repositories disagree about what this verb even means (a browser suite, or a static visual build). `detect` says so and withholds; the declaration decides. Nen runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
+| ui-test | **the verb exists; no stack ships a reference row** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form — but the pack proposes no default for any stack, because the observed repositories disagree about what this verb even means (a browser suite, or a static visual build). `detect` proposes the row as an `unsupported` **seat** carrying that reason, and the declaration decides; `nextjs` is the declined-to-choose case and `gatsby` the nothing-observed one. Nen runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
 | lint | **yes — any lane that declares one** | [`shu lint`](#nen-shu-lint), [`dev lint`](#nen-dev-lint) | `shu lint` runs a *target project's* declared lint invocation (commonly two steps, in order); `dev lint` still spawns `bun run lint` in *this* checkout. |
-| archive | **the verb exists; no stack ships a reference row** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. Most lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. No signing material is ever synthesised. |
+| archive | **yes on `gatsby`; a seat elsewhere** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. `gatsby` is the one stack whose archive produces a real artifact, and `detect` proposes it — `node <the script your package.json names>` — reading the path out of the repository's own `scripts` block rather than guessing one. Most other lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. No signing material is ever synthesised. |
 | release | **mechanics, plus the verb** | [`shu release`](#nen-shu-release), [`release resolve-target`](#nen-release-resolve-target), [`release preflight`](#nen-release-preflight), [`release self-check`](#nen-release-self-check), [`changelog collate`](#nen-changelog-collate), [`changelog completeness`](#nen-changelog-completeness), [`tag cut`](#nen-tag-cut), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record) | `shu release` runs a lane's declared publication step where it has one. The rest is unchanged: preconditions, the changelog, the annotated tag, the consumer fan-out — a tag is not a release. |
 | dev (debug run) | **yes — any lane that declares one** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
-| deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`. There is no default target, ever. No stack ships a reference deploy row. |
-| coverage | **the verb exists; the reference rows are templated** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack's rows for it name a workspace or a result bundle nen cannot know, so `detect` withholds them with the token named and the declaration supplies it. Parsing the report the declaration names, and the never-a-gate `--threshold`, arrive with a later PR. |
+| deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`. There is no default target, ever — and `--target` is checked **before** the lane and the verb, so a proposal with no `targets` block answers that first. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. |
+| coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s row names a result bundle nen cannot know and is withheld with the token named. Parsing the report the declaration names, and the never-a-gate `--threshold`, arrive with a later PR. |
 | host toolchain | **no** | — | [`shu tools`](#nen-shu-tools) is declared, documented and refuses at exit 4: it is the one verb whose blast radius is the developer's machine, and it ships on its own (PR 4 of #91). [`shu warmup`](#nen-shu-warmup) refuses at 4 for the same kind of reason and arrives in PR 12. |
 
 The remaining work is tracked in
