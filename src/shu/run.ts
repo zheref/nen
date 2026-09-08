@@ -1,0 +1,492 @@
+// src/shu/run.ts -- the executor: assert what the declaration says must already
+// be true, then run what it says to run, in order, and report both.
+//
+// ZERO TOOLCHAIN NAMES, ENFORCED (./purity.test.ts). Everything spawned here
+// comes out of the target repository's `nen/contract.json`. This file does not
+// know what a package manager, a build system, a linter or a test runner is
+// called, and the moment it does, the claim that `nen shu` follows a
+// repository's own declaration stops being true for whichever stack it learned.
+//
+// PRECONDITIONS ARE ASSERTED AND NEVER PERFORMED. This is the family's sharpest
+// line and it is worth stating where the code is: a declaration saying
+// `{"kind": "path", "value": "node_modules"}` is telling nen that a dependency
+// install has already happened. nen CHECKS that and refuses when it has not. It
+// does not run the install -- a dependency install executes the project's own
+// postinstall scripts, which is arbitrary code nen would be running on a
+// developer's machine because a JSON file asked it to. The same rule covers
+// every other precondition shape: no simulator boot, no submodule update, no
+// sibling clone.
+//
+// A KIND NEN CANNOT ASSERT IS A REFUSAL, NOT A PASS. `preconditions[].kind` is
+// deliberately open in the schema -- it is the repository's own word for what
+// must be true -- so a declaration may state a kind this release cannot check.
+// Reporting that as satisfied would be the exact failure `nen warmup` was fixed
+// for (zheref/nen#83): "a check that could not be performed must never render as
+// one that came back clean". So it reports `satisfied: null`, says "cannot
+// assert", and exits 2.
+//
+// `--dry-run` PRINTS AND RUNS NOTHING, and the argv it prints is the argv the
+// real run spawns -- the same rendering function, from the same rendered plan.
+// ./run.test.ts pins that from both sides: the `would run:` lines of a dry run
+// equal the calls a scripted seam records for the same invocation.
+
+import { lstatSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
+import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
+import type { Seams } from "../seam/exec.js";
+import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
+import { openDeclaration } from "./declaration.js";
+import { renderArgv, renderInvocation, type HostVerdict, type RenderedInvocation } from "./render.js";
+
+/**
+ * The two long-running verbs. They go through the interactive seam -- stdio
+ * inherited, nothing captured -- because a dev server that never exits would
+ * otherwise print nothing until it was killed. §2.9 of zheref/nen#91's design:
+ * `dev` starts a debug build for local iteration, `run` starts a production or
+ * staging build locally; the distinguishing property is the build
+ * configuration, and both are long-running.
+ */
+export const INTERACTIVE_VERBS: readonly string[] = ["dev", "run"];
+
+/** The precondition kinds this release can assert. Everything else refuses. */
+const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
+
+export interface AssertedPrecondition {
+  readonly kind: string;
+  readonly value: string | readonly string[];
+  /** true, false, or null for "nen cannot assert this kind". */
+  readonly satisfied: boolean | null;
+}
+
+export interface ShuStepReport {
+  readonly exe: string;
+  readonly argv: readonly string[];
+  readonly cwd: string;
+  /** The TOOL's own exit code, verbatim. `null` when nothing was run. */
+  readonly exitCode: number | null;
+  readonly durationMs: number | null;
+}
+
+export interface ShuLogReport {
+  readonly mode: "dry-run" | "streamed" | "interactive";
+  readonly captured: boolean;
+  readonly path: string | null;
+  readonly why: string;
+}
+
+export interface ShuArtifactReport {
+  readonly kind: "path";
+  readonly value: string;
+  readonly exists: boolean;
+}
+
+/**
+ * The one value both renderings come from (../cli/command.ts's `emit`).
+ *
+ * KEY ORDER IS PART OF THE CONTRACT and ./run.test.ts pins it, so a field
+ * inserted in the middle is a visible decision rather than a silent reshuffle of
+ * somebody's golden file.
+ *
+ * A DRY RUN IS TOLD BY `steps[].exitCode === null` AND BY `log.mode`. There is
+ * deliberately no top-level `dryRun` boolean: the fact a machine reader needs is
+ * "was anything executed", and two fields that could disagree about it is one
+ * field too many.
+ */
+export interface ShuReport {
+  readonly contract: string;
+  readonly lane: string;
+  readonly stack: string;
+  readonly verb: string;
+  readonly steps: readonly ShuStepReport[];
+  readonly cwd: string;
+  /**
+   * Environment variable NAMES this verb adds, sorted. Never values: a
+   * declaration's env value can be a token, and a token in a log or a `--json`
+   * blob is a leaked token.
+   */
+  readonly env: readonly string[];
+  readonly host: HostVerdict;
+  readonly preconditions: readonly AssertedPrecondition[];
+  /** NEN's exit code, not the tool's. `null` on an interactive pre-flight. */
+  readonly exitCode: number | null;
+  readonly durationMs: number | null;
+  readonly artifacts: readonly ShuArtifactReport[];
+  readonly log: ShuLogReport;
+}
+
+/** `nen.shu.<verb>/v0.1` -- one versioned contract string per verb. */
+export function contractName(verb: string): string {
+  return `nen.shu.${verb}/v0.1`;
+}
+
+// "Is something there?" -- `lstatSync`, not `existsSync`, and not `statSync`.
+// The reasons are ../schema/source.ts's, and they apply here for the same
+// reason: an EACCES on a parent directory is not an absence, and a DANGLING
+// symlink at a declared precondition path is a repository problem that must be
+// reported as present-and-broken rather than silently as "not built yet".
+function entryExists(path: string): boolean {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * A repo-relative path resolved against the root, refusing one that escapes it.
+ *
+ * A declaration is the repository's own file, so this is not a trust boundary in
+ * the usual sense -- but a `cwd` or a precondition path of `../../etc` is a
+ * mistake whose only symptom would otherwise be a verb quietly running
+ * somewhere else, and a refusal that names the path costs nothing.
+ */
+function insideRepo(repoRoot: string, value: string, pointer: string): string {
+  const absolute = resolve(repoRoot, value);
+  const rel = relative(repoRoot, absolute);
+  // `..` covers the ordinary escape; `isAbsolute` covers the Windows case where
+  // the two paths are on different drives and `relative` cannot express the
+  // step at all -- a platform-conditional hole this repository's CI matrix
+  // exists to catch.
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new VerbUsageError(
+      `${pointer} names '${value}', which resolves outside the repository at ${repoRoot}. Every path a declaration states is relative to the repository root, and nen will not step outside the tree --repo pointed it at.`,
+    );
+  }
+  return absolute;
+}
+
+/**
+ * Assert every precondition the lane declares. Nothing is performed.
+ *
+ * `path` is repo-root-relative, NOT lane-relative, and that is what the
+ * declarations in the field already assume: a lane whose `cwd` is `android`
+ * states its wrapper as `android/gradlew`, because a precondition is a fact
+ * about the repository rather than about the directory a verb happens to run in.
+ */
+export function assertPreconditions(
+  plan: RenderedInvocation,
+  repoRoot: string,
+  seams: Seams,
+): readonly AssertedPrecondition[] {
+  return plan.preconditions.map((entry, index): AssertedPrecondition => {
+    const pointer = `project.preconditions.${plan.lane}[${index}].value`;
+    if (!ASSERTABLE_KINDS.includes(entry.kind)) {
+      return { kind: entry.kind, value: entry.value, satisfied: null };
+    }
+    if (Array.isArray(entry.value)) {
+      // An assertable kind given the wrong value SHAPE is also "cannot assert":
+      // a path is one string, and a list of them is a declaration nen cannot
+      // read the intent of without guessing which element it meant.
+      return { kind: entry.kind, value: entry.value, satisfied: null };
+    }
+    const value = entry.value as string;
+    if (entry.kind === "path") {
+      return { kind: entry.kind, value, satisfied: entryExists(insideRepo(repoRoot, value, pointer)) };
+    }
+    // `env`: the NAME is the value, and the variable's own value is never read,
+    // compared or reported -- presence is the whole assertion.
+    return { kind: entry.kind, value, satisfied: seams.env[value] !== undefined };
+  });
+}
+
+function describePrecondition(entry: AssertedPrecondition): string {
+  const mark = entry.satisfied === true ? "ok  " : entry.satisfied === false ? "FAIL" : "????";
+  const value = Array.isArray(entry.value) ? entry.value.join(" ") : String(entry.value);
+  const tail =
+    entry.satisfied === true
+      ? ""
+      : entry.satisfied === false
+        ? entry.kind === "env"
+          ? " -- not set in this environment"
+          : " -- not present"
+        : ` -- nen cannot assert a precondition of kind '${entry.kind}' in this release (it asserts: ${ASSERTABLE_KINDS.join(", ")}). An unperformed check is never reported as a clean one`;
+  return `  ${mark}  ${entry.kind.padEnd(5)} ${value}${tail}`;
+}
+
+const LABEL_WIDTH = 15;
+
+function labelled(label: string, value: string): string {
+  return `${`${label}:`.padEnd(LABEL_WIDTH)}${value}`;
+}
+
+/** The human rendering, derived from the same report `--json` prints. */
+export function renderReport(report: ShuReport): readonly string[] {
+  const lines: string[] = [];
+  lines.push(labelled("lane", `${report.lane}  (${report.stack})`));
+  lines.push(labelled("verb", report.verb));
+  lines.push(
+    labelled(
+      "host",
+      `${report.host.platform} -- ${report.host.supported ? "supported" : "UNSUPPORTED"}${
+        report.host.declared === null
+          ? " (the declaration constrains no platform)"
+          : ` (declared: ${report.host.declared.join(", ")})`
+      }`,
+    ),
+  );
+  lines.push(
+    report.preconditions.length === 0
+      ? labelled("preconditions", "(none declared)")
+      : "preconditions:",
+  );
+  for (const entry of report.preconditions) lines.push(describePrecondition(entry));
+  const verbPrefix = report.log.mode === "dry-run" ? "would run" : "ran";
+  for (const step of report.steps) {
+    const argv = renderArgv({ exe: step.exe, argv: step.argv });
+    lines.push(
+      labelled(
+        verbPrefix,
+        step.exitCode === null ? argv : `${argv}  -- exit ${step.exitCode} in ${step.durationMs}ms`,
+      ),
+    );
+  }
+  lines.push(labelled("cwd", report.cwd));
+  lines.push(labelled("env", report.env.length === 0 ? "(none added)" : report.env.join(", ")));
+  lines.push(
+    report.artifacts.length === 0
+      ? labelled("artifacts", "(none declared)")
+      : labelled(
+          "artifacts",
+          report.artifacts
+            .map((entry): string => `${entry.value}${entry.exists ? "" : " (absent)"}`)
+            .join(", "),
+        ),
+  );
+  lines.push(labelled("log", report.log.why));
+  return lines;
+}
+
+const LOG: Readonly<Record<ShuLogReport["mode"], string>> = {
+  "dry-run":
+    "dry run -- nothing was executed, so there is no output to capture and no tool exit code to report.",
+  streamed:
+    "not captured to a file -- each step's own stdout and stderr were relayed as it finished. A .nen/logs/ transcript is not in this release (zheref/nen#91).",
+  interactive:
+    "not captured -- an interactive verb hands this terminal to the child, so nen never sees its output. This object is the pre-flight, printed before the handover.",
+};
+
+function logReport(mode: ShuLogReport["mode"]): ShuLogReport {
+  return { mode, captured: false, path: null, why: LOG[mode] };
+}
+
+function artifactReports(
+  plan: RenderedInvocation,
+  repoRoot: string,
+): readonly ShuArtifactReport[] {
+  return plan.artifacts.map((value, index): ShuArtifactReport => {
+    const absolute = insideRepo(repoRoot, value, `project.verbs.${plan.lane}.${plan.verb}.artifacts[${index}]`);
+    return { kind: "path", value, exists: entryExists(absolute) };
+  });
+}
+
+function assemble(
+  plan: RenderedInvocation,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+  steps: readonly ShuStepReport[],
+  exitCode: number | null,
+  durationMs: number | null,
+  mode: ShuLogReport["mode"],
+): ShuReport {
+  return {
+    contract: contractName(plan.verb),
+    lane: plan.lane,
+    stack: plan.stack,
+    verb: plan.verb,
+    steps,
+    cwd,
+    env: Object.keys(plan.env).sort(),
+    host: plan.host,
+    preconditions,
+    exitCode,
+    durationMs,
+    artifacts: artifactReports(plan, repoRoot),
+    log: logReport(mode),
+  };
+}
+
+export interface RunOptions {
+  readonly verb: string;
+  readonly lane: string | null;
+  readonly dryRun: boolean;
+  /** `deploy`'s mandatory `--target`. Null for every other verb. */
+  readonly target: string | null;
+}
+
+/**
+ * One verb, from declaration to exit code.
+ *
+ * The refusals it can raise, and their codes, are ./exit.ts's subject; this
+ * function's own contribution is the ORDER, which is: the declaration must
+ * exist, then the lane, then the verb, then the host, then the preconditions,
+ * and only then does anything spawn.
+ */
+export function runVerb(context: CommandContext, repoRoot: string, options: RunOptions): number {
+  const { project } = openDeclaration(repoRoot);
+  if (options.target !== null && !Object.prototype.hasOwnProperty.call(project.targets, options.target)) {
+    // A TARGET THAT IS NOT DECLARED IS NOT A TARGET. Accepting the flag's mere
+    // presence would make `--target` a formality a caller satisfies with any
+    // word, which is the same as having no requirement -- and the requirement
+    // exists because nen must never choose where a build goes.
+    const declared = Object.keys(project.targets).filter((key): boolean => !key.startsWith("$"));
+    throw new VerbUsageError(
+      `--target '${options.target}' is not declared under project.targets. ${
+        declared.length === 0
+          ? "This repository declares no targets at all; add one before asking nen to deploy to it."
+          : `Declared: ${declared.join(", ")}.`
+      }`,
+    );
+  }
+  const plan = renderInvocation(project, {
+    lane: options.lane,
+    verb: options.verb,
+    platform: context.seams.platform,
+  });
+  const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
+  const preconditions = assertPreconditions(plan, repoRoot, context.seams);
+
+  const unmet = preconditions.filter((entry): boolean => entry.satisfied !== true);
+  if (unmet.length > 0) {
+    // THE REPORT IS STILL EMITTED, with the failing rows in it. A caller
+    // debugging "why will this not run" needs the table more here than
+    // anywhere, and a refusal that printed only prose would make `--json`
+    // useless in the one case it is most wanted.
+    const steps = plan.steps.map(
+      (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+    );
+    emitReport(context, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
+    const cannot = unmet.filter((entry): boolean => entry.satisfied === null);
+    context.io.err(
+      `${unmet.length} precondition${unmet.length === 1 ? "" : "s"} on lane '${plan.lane}' ${unmet.length === 1 ? "is" : "are"} not satisfied${
+        cannot.length === 0 ? "" : ` (${cannot.length} nen cannot assert)`
+      }. nen ASSERTS a precondition and never performs it: satisfy ${unmet.length === 1 ? "it" : "them"} with this repository's own tooling, then run this again.`,
+    );
+    return 2;
+  }
+
+  if (options.dryRun) {
+    const steps = plan.steps.map(
+      (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+    );
+    emitReport(context, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
+    return 0;
+  }
+
+  if (INTERACTIVE_VERBS.includes(plan.verb)) {
+    return runInteractively(context, plan, cwd, repoRoot, preconditions);
+  }
+  return runCaptured(context, plan, cwd, repoRoot, preconditions);
+}
+
+function emitReport(context: CommandContext, report: ShuReport): void {
+  emit(context.io, context.json, report, renderReport(report));
+}
+
+/**
+ * Relay a step's own output.
+ *
+ * IN `--json` MODE IT GOES TO STDERR, so stdout stays exactly one JSON document
+ * -- the contract every machine reader of this CLI depends on -- while the
+ * diagnostic a failing build actually needs is still on screen.
+ */
+function relay(context: CommandContext, stdout: string, stderr: string): void {
+  for (const line of stdout.split("\n")) {
+    if (line !== "") (context.json ? context.io.err : context.io.out)(line);
+  }
+  for (const line of stderr.split("\n")) {
+    if (line !== "") context.io.err(line);
+  }
+}
+
+function runCaptured(
+  context: CommandContext,
+  plan: RenderedInvocation,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+): number {
+  const started = context.seams.now().getTime();
+  const steps: ShuStepReport[] = [];
+  for (const [index, step] of plan.steps.entries()) {
+    const stepStarted = context.seams.now().getTime();
+    const result = context.seams.run(step.exe, step.argv, {
+      cwd,
+      ...(Object.keys(plan.env).length === 0 ? {} : { env: plan.env }),
+    });
+    const durationMs = context.seams.now().getTime() - stepStarted;
+    relay(context, result.stdout, result.stderr);
+    steps.push({ exe: step.exe, argv: step.argv, cwd, exitCode: result.code, durationMs });
+
+    if (result.spawnFailed) {
+      // NOT exit 1. "the tool is not installed" and "the tool ran and said no"
+      // want different reactions, and ../seam/exec.ts keeps them apart
+      // precisely so a caller here does not have to guess.
+      emitReport(
+        context,
+        assemble(plan, cwd, repoRoot, preconditions, steps, EXIT_TOOL_NOT_INSTALLED, context.seams.now().getTime() - started, "streamed"),
+      );
+      throw new ShuRefusal(
+        EXIT_TOOL_NOT_INSTALLED,
+        `step ${index + 1} of ${plan.steps.length} could not be started: '${step.exe}'. This repository's declaration names it for '${plan.verb}' on lane '${plan.lane}'; install it, or put it on PATH. nen never installs a toolchain on a repository's say-so.`,
+      );
+    }
+    if (result.code !== 0) {
+      emitReport(
+        context,
+        assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed"),
+      );
+      context.io.err(
+        `step ${index + 1} of ${plan.steps.length} failed: ${renderArgv(step)} -- exited ${result.code}. nen exits 1 whatever the tool's own code was; the tool's code is in the report above.`,
+      );
+      return 1;
+    }
+  }
+  emitReport(
+    context,
+    assemble(plan, cwd, repoRoot, preconditions, steps, 0, context.seams.now().getTime() - started, "streamed"),
+  );
+  return 0;
+}
+
+/**
+ * A long-running verb: print the pre-flight, then hand over the terminal.
+ *
+ * THE REPORT COMES FIRST AND CARRIES NULLS, because there is no honest way to
+ * report an exit code for a process that has not started and may not stop for
+ * hours. A caller that wants the argv without the handover has `--dry-run`.
+ */
+function runInteractively(
+  context: CommandContext,
+  plan: RenderedInvocation,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+): number {
+  const steps = plan.steps.map(
+    (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+  );
+  emitReport(context, assemble(plan, cwd, repoRoot, preconditions, steps, null, null, "interactive"));
+
+  let code = 0;
+  for (const [index, step] of plan.steps.entries()) {
+    const result = context.seams.runInteractive(step.exe, step.argv, {
+      cwd,
+      ...(Object.keys(plan.env).length === 0 ? {} : { env: plan.env }),
+    });
+    if (result.spawnFailed) {
+      throw new ShuRefusal(
+        EXIT_TOOL_NOT_INSTALLED,
+        `step ${index + 1} of ${plan.steps.length} could not be started: '${step.exe}'. This repository's declaration names it for '${plan.verb}' on lane '${plan.lane}'; install it, or put it on PATH.`,
+      );
+    }
+    if (result.code !== 0) {
+      context.io.err(
+        `${renderArgv(step)} exited ${result.code}${result.signal === null ? "" : ` (${result.signal})`}.`,
+      );
+      code = 1;
+      break;
+    }
+  }
+  return code;
+}

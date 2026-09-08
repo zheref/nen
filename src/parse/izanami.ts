@@ -1015,6 +1015,40 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
   scaffold: { subcommands: { init: MUT("creates directories, a commit-msg hook and a template file") } },
+  // THE `shu` FAMILY'S ROWS, AND THE FOUR THAT ARE DELIBERATELY ABSENT.
+  //
+  // Everything this family spawns comes out of a file in the TARGET repository
+  // (`nen/contract.json`), which is the whole reason the rows below cannot be
+  // read off the verb names the way every other family's can. A read-only row
+  // for `shu test` would certify, sight unseen, whatever argv that file
+  // happens to carry -- and a test task that writes is not hypothetical: the
+  // ecosystem this family was designed against contains a golden-image task
+  // one keystroke from its recording sibling, a formatter whose check mode has
+  // a `--write` twin, a static-site build that writes a directory, and a
+  // coverage run that writes a report tree. So `test`, `ui-test`, `lint` and
+  // `coverage` are ABSENT from this map on purpose and classify `unknown`,
+  // which refuses; `--dry-run` is the form a watcher or an izanami loop can
+  // use, and it is provably read-only because nen renders and spawns nothing.
+  //
+  // AND THERE IS NO `"*"` KEY. NenFamilyEntry's own doc comment says the
+  // wildcard covers a family whose flags select the behaviour or whose every
+  // subcommand shares one policy; this family's emphatically do not, and a
+  // `"*"` row would swallow the four deliberate absences above and certify
+  // them. ../parse/izanami.test.ts asserts exactly which keys are here, so
+  // "deliberately unclassified" and "somebody forgot" stop looking identical.
+  shu: {
+    subcommands: {
+      detect: GATED(["--write"], "reads markers and proposes a declaration; only --write writes one"),
+      tools: GATED(["--install"], "the check form spawns declared version probes and writes nothing; --install is the one write flag"),
+      build: DRY("spawns the lane's declared build unless --dry-run is given"),
+      archive: DRY("spawns the lane's declared packaging step unless --dry-run is given"),
+      release: DRY("spawns the lane's declared publication step unless --dry-run is given"),
+      deploy: DRY("sends a build to a declared target unless --dry-run is given"),
+      dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given"),
+      run: DRY("starts a long-running production process on this terminal unless --dry-run is given"),
+      warmup: MUT("brings a working copy to a known state -- even its dry run fetches, and nobody watches a warm-up"),
+    },
+  },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },
   stage: { subcommands: { triage: RO("reads 'git status --porcelain'; stages nothing") } },
   stop: { subcommands: { "*": RO("renders the gate-stop banner; fires nothing itself") } },

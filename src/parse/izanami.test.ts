@@ -729,6 +729,8 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "canon mirror check": "nen canon mirror check --rules-dir r",
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
     "epic next-wave": "nen epic next-wave --body-file b.md",
+    "shu detect": "nen shu detect",
+    "shu tools": "nen shu tools",
     "wake fire": "nen wake fire --repo-slug o/r --ref XX-PR-#1 --label wake",
     "wake verify": "nen wake verify --repo-slug o/r --now 2026-01-01T00:00:00Z --author-pattern x",
   };
@@ -1428,6 +1430,7 @@ describe("NEN_VERB_TABLE -- exhaustive over the real verb registry", () => {
     }
   });
 });
+
 
 // TABLE-VS-REALITY (#31's review blocker, fixed module-wide by zheref/nen#19):
 // the table's read-only rows for `pr fetch`/`pr next-blocker` certify
