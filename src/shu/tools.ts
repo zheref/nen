@@ -343,6 +343,40 @@ export function narrowTo(
   return plans.filter((plan): boolean => only.includes(plan.name));
 }
 
+/**
+ * `--install --only <tools nen installs none of>`: refused, not a no-op.
+ *
+ * A CALLER WHO NAMES THE TOOLS AND ASKS FOR AN INSTALL HAS MADE A CLAIM, and
+ * the claim is wrong: this run would probe those rows, install nothing, and
+ * exit 0 with `satisfied: false` sitting in the report -- a green exit for a
+ * line that did exactly nothing it was asked to do. `--only` is what makes this
+ * a refusal rather than the general rule: a full `--install` legitimately exits
+ * 0 while verify-only tools are absent, because it installed everything it
+ * could and the CHECK is what answers "is this host ready". A NARROWED install
+ * that can install nothing has no such half to succeed at.
+ *
+ * IT FIRES BEFORE THE FIRST PROBE, because nothing about it depends on the
+ * host: it is a property of the declaration and of the flags on the line. And
+ * it CARRIES EACH ROW'S OWN REASON, because a refusal that only says "nen
+ * cannot" sends a reader back to run a second command to find out why -- the
+ * reasons are already written, one per plan kind, and this is the one place a
+ * caller sees no table.
+ */
+export function refuseUnactionableNarrowing(
+  plans: readonly ToolPlan[],
+  only: readonly string[],
+): void {
+  if (only.length === 0 || plans.some((plan): boolean => isRunnable(plan.install))) return;
+  const reasons = plans
+    .map((plan): string =>
+      `${plan.name} (${plan.installer}): ${plan.install.kind === "runnable" ? "" : plan.install.why}`,
+    )
+    .join("  |  ");
+  throw new VerbUsageError(
+    `--install --only ${only.join(", ")} narrows this run to ${plans.length === 1 ? "a tool" : "tools"} ${PROGRAM} installs none of, so it would exit 0 having done nothing it was asked to do. Each row, with its own way out -- ${reasons}. The CHECK is what answers "is this host ready": run the same line without --install, which exits 5 when anything is missing or is not the pinned version and prints what to do about every row.`,
+  );
+}
+
 /** The rows `--install` would act on: not satisfied, and nen runs the installer. */
 export function actionable(assessed: readonly AssessedTool[]): readonly AssessedTool[] {
   return assessed.filter(
@@ -628,7 +662,29 @@ export function renderToolsReport(report: ToolsReport): readonly string[] {
     const failure = row.install?.failure ?? null;
     if (failure !== null) lines.push(`${indent}${failure}`);
   }
+  lines.push(...stillMissing(report));
   return lines;
+}
+
+/**
+ * THE FOOTER THAT EXPLAINS AN EXIT CODE, under `--install` and only there.
+ *
+ * `--install` exits 0 when everything nen COULD install now passes, even with
+ * tools still absent that nen will never install -- the alternative makes the
+ * install form permanently red on a machine nen can never fix. The cost of that
+ * rule is a green exit beside a host that is not ready, and the answer to the
+ * cost is to say so in a line rather than leave a reader to count rows: the
+ * same number `summary.notInstallable` carries.
+ */
+function stillMissing(report: ToolsReport): readonly string[] {
+  if (report.mode !== "install" || report.summary.notInstallable === 0) return [];
+  const names = report.tools
+    .filter((row): boolean => row.satisfied !== true && row.installCommand === null)
+    .map((row): string => row.name);
+  return [
+    "",
+    `note: ${names.length} declared tool${names.length === 1 ? " is" : "s are"} still missing or not the pinned version, and ${PROGRAM} installs ${names.length === 1 ? "it" : "none of them"} in this release (${names.join(", ")}). Each row above says what to do instead. This run's code reports only what ${PROGRAM} could install; the CHECK -- the same line without --install -- is what answers "is this host ready", and it exits 5.`,
+  ];
 }
 
 /**

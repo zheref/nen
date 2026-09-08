@@ -790,23 +790,94 @@ describe("--install -- the one installer nen runs, at the version the declaratio
     const script: readonly ScriptedCall[] = [
       { match: "placeholder-sdk-select -p", result: { stdout: "no-such-directory\n" } },
     ];
-    const json = await capture(["--install", "--only", "placeholder-sdk", "--json"], { script });
+    const json = await capture(["--only", "placeholder-sdk", "--json"], { script });
     // Only the probe ran. An unscripted install call would have thrown.
     expect(spawned(json.seams)).toEqual(["placeholder-sdk-select -p"]);
     expect(row(json, "placeholder-sdk").installCommand).toBeNull();
 
-    const text = await capture(["--install", "--only", "placeholder-sdk"], { script });
+    const text = await capture(["--only", "placeholder-sdk"], { script });
     expect(text.out.join("\n")).toMatch(/sdkmanager: not enabled in this release/);
     expect(text.out.join("\n")).toMatch(/Install placeholder-sdk 35\.0\.0 with 'sdkmanager' by hand/);
+
+    // AND UNDER `--install` IT IS A REFUSAL, not a run that does nothing: see
+    // the narrowing cases below.
+    const asked = await capture(["--install", "--only", "placeholder-sdk"], { script });
+    expect(asked.code).toBe(2);
+    expect(asked.seams.calls).toEqual([]);
   });
 
   it("names the manual way out for a verify-only row and installs nothing", async () => {
-    const result = await capture(["--install", "--only", "node"], {
+    const result = await capture(["--only", "node"], {
       script: [{ match: "node --version", result: { spawnFailed: true, code: -1 } }],
     });
     expect(spawned(result.seams)).toEqual(["node --version"]);
     expect(result.out.join("\n")).toMatch(/verify-only: install by hand/);
     expect(result.out.join("\n")).toMatch(/Install node >=20\.19\.0/);
+  });
+
+  // ── --install --only <nothing nen installs>: refused, not a green no-op ───
+
+  it("REFUSES --install --only when nothing in the narrowed set is installable", async () => {
+    // The old answer was exit 0 with `satisfied: false` in the report -- a
+    // green exit for a line that did nothing it was asked to do.
+    const result = await capture(["--install", "--only", "node,placeholder-sdk"], {
+      script: ALL_PRESENT,
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/narrows this run to tools nen installs none of/);
+    expect(result.err.join("\n")).toMatch(/node \(verify-only\): /);
+    expect(result.err.join("\n")).toMatch(/placeholder-sdk \(sdkmanager\): /);
+    expect(result.err.join("\n")).toMatch(/run the same line without --install/);
+    // BEFORE THE FIRST PROBE: nothing about the refusal depends on the host.
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("does not refuse when the narrowed set has one installable row", async () => {
+    const result = await capture(["--install", "--only", "node,pnpm", "--json"], {
+      script: [NODE_OK, PM_OK],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual(["node --version", "pnpm --version"]);
+  });
+
+  it("keeps the exit-0 rule for a FULL --install, and says what stays missing", async () => {
+    // The general rule is deliberate: exiting 5 because a vendor IDE is absent
+    // makes the install form permanently red on a machine nen can never fix.
+    // The cost is a green exit beside a host that is not ready, and the answer
+    // to the cost is the count -- in the summary and in a footer.
+    const result = await capture(["--install", "--json"], {
+      script: [
+        NEN_OK,
+        { match: "node --version", result: { spawnFailed: true, code: -1 } },
+        PM_OK,
+        JDK_OK,
+        SDK_OK,
+        WRAPPER_OK,
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(report(result).summary.notInstallable).toBe(1);
+
+    const text = await capture(["--install"], {
+      script: [
+        NEN_OK,
+        { match: "node --version", result: { spawnFailed: true, code: -1 } },
+        PM_OK,
+        JDK_OK,
+        SDK_OK,
+        WRAPPER_OK,
+      ],
+    });
+    expect(text.out.join("\n")).toMatch(
+      /note: 1 declared tool is still missing .* installs it in this release \(node\)/,
+    );
+    expect(text.out.join("\n")).toMatch(/the CHECK -- the same line without --install/);
+  });
+
+  it("prints no such footer when the install left nothing behind", async () => {
+    const result = await capture(["--install"], { script: ALL_PRESENT });
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).not.toMatch(/still missing/);
   });
 
   it("says there is nothing to install for a wrapper row", async () => {
@@ -1518,15 +1589,29 @@ describe("the install plan is decided against the HOST, and the host is injected
   }
 
   it("refuses --install on win32 before anything is installed, and says how to do it", async () => {
-    const result = await capture(["--install", "--only", "pnpm"], {
+    // `--only pnpm` narrows to one row whose plan is refused on this host, so
+    // the narrowing refusal answers first -- BEFORE any probe -- and carries
+    // that row's own reason, commands and all.
+    const narrowed = await capture(["--install", "--only", "pnpm"], {
       platform: "win32",
       script: [{ match: "pnpm --version", result: { spawnFailed: true, code: -1 } }],
     });
-    expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/nothing was installed/);
-    expect(result.err.join("\n")).toMatch(/corepack enable && corepack prepare pnpm@9\.15\.9/);
-    // The probe ran (assessment precedes the install); no installer did.
-    expect(spawned(result.seams)).toEqual(["pnpm --version"]);
+    expect(narrowed.code).toBe(2);
+    expect(narrowed.err.join("\n")).toMatch(/narrows this run to a tool nen installs none of/);
+    expect(narrowed.err.join("\n")).toMatch(/corepack enable && corepack prepare pnpm@9\.15\.9/);
+    expect(narrowed.seams.calls).toEqual([]);
+
+    // The whole declaration under --install: the probes run (an assessment
+    // precedes any install), and then the refusal stops the run before the
+    // first installer -- with the same reason.
+    const whole = await capture(["--install"], {
+      platform: "win32",
+      script: withProbe("pnpm --version", { spawnFailed: true, code: -1 }),
+    });
+    expect(whole.code).toBe(2);
+    expect(whole.err.join("\n")).toMatch(/nothing was installed/);
+    expect(whole.err.join("\n")).toMatch(/corepack enable && corepack prepare pnpm@9\.15\.9/);
+    expect(spawned(whole.seams).some((call): boolean => call.startsWith("corepack"))).toBe(false);
   });
 
   it("still CHECKS on win32, and prints the refusal as that row's way out", async () => {

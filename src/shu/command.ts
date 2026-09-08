@@ -43,6 +43,7 @@ import {
   buildPlans,
   narrowTo,
   packMinimums,
+  refuseUnactionableNarrowing,
   refusedInstalls,
   renderAdvice,
   renderToolsReport,
@@ -261,6 +262,13 @@ flags:
                    runtime that starts it anyway starts it through the command
                    interpreter, which re-parses the argv nen assembled. nen will
                    not guess which; the CHECK is unaffected on every host.
+                   WITH --only IT REFUSES AT 2 when the narrowed set has no
+                   installer nen runs -- before any probe, quoting each row's
+                   own way out: that line would otherwise exit 0 having done
+                   nothing it was asked to. A FULL --install still exits 0 when
+                   everything nen could install passes, and the report's
+                   summary.notInstallable (plus a footer) says how many tools
+                   are still missing that nen will not install.
   --json           On every verb that executes one, the report as one object,
                    keys in order:
                    { contract, lane, stack, verb, steps, cwd, env, host,
@@ -567,6 +575,9 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
     options.only,
   );
   const mode: ToolsMode = options.dryRun ? "dry-run" : options.install ? "install" : "check";
+  // BEFORE THE FIRST PROBE: a narrowed install that can install nothing is a
+  // line whose claim is wrong, and nothing about that depends on the host.
+  if (mode === "install") refuseUnactionableNarrowing(plans, options.only);
 
   if (plans.length === 0) {
     const empty = assembleToolsReport([], lane, stack, mode, 0);

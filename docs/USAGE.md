@@ -3727,7 +3727,17 @@ platform — checked **before any probe runs**, so nothing is spawned.
 passes**, even if verify-only tools are still absent. That split is deliberate:
 the alternative makes the install form permanently red on a machine nen can
 never fix, and "is this host ready" is the question the CHECK and its exit 5
-answer.
+answer. The cost of the rule is a green exit beside a host that is not ready, so
+the run *says so*: `summary.notInstallable` counts those rows and the table
+prints a footer naming them.
+
+**`--install --only <tools nen installs none of>` is exit 2, not a green
+no-op** — refused *before the first probe*, with each row's own way out quoted.
+A caller who names the tools and asks for an install has made a claim, and the
+claim is wrong: that run would have probed, installed nothing and exited 0 with
+`satisfied: false` in the report. The general rule above survives because a full
+`--install` has a half that succeeds — it installed everything it could — and a
+narrowed one that can install nothing has none.
 
 **`--json`** is a different contract from the rest of the family:
 `{ contract, lane, stack, mode, summary, tools, exitCode }` with `contract` =
