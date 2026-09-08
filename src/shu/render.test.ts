@@ -301,6 +301,21 @@ describe("resolveTarget", () => {
     expect(() => resolveTarget(block, plan(block), null)).toThrow(/there is no default/);
   });
 
+  it("refuses a missing --target EVEN WHEN exactly one target is declared", () => {
+    // THE SENTENCE THE WHOLE VERB IS BUILT AROUND. One entry does not make it a
+    // default: a second destination arriving later must not silently change
+    // where a scripted `nen shu deploy` sends a build -- the same argument
+    // `resolveLane` makes about a lone lane, one blast radius further out.
+    const block = deployable({ production: {} });
+    expect(() => resolveTarget(block, plan(block), null)).toThrow(VerbUsageError);
+    expect(() => resolveTarget(block, plan(block), null)).toThrow(
+      /there is no default -- not even when exactly one target is declared/,
+    );
+    expect(() => resolveTarget(block, plan(block), null)).toThrow(
+      /Declared under project\.targets: production\./,
+    );
+  });
+
   it("refuses an undeclared --target at 2 rather than accepting any word", () => {
     const block = deployable({ staging: {} });
     expect(() => resolveTarget(block, plan(block), "prod")).toThrow(
