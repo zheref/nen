@@ -3973,8 +3973,11 @@ stated as a refusal.
 **Usage**
 
 ```text
-nen shu deploy --target <name> --run [--repo <path>] [--lane <name>] [--dry-run] [--json]
+nen shu deploy --target <name> [--run] [--repo <path>] [--lane <name>] [--dry-run] [--json]
 ```
+
+Bare, this is a safe, exit-0 plan -- the target resolved, every precondition
+asserted, nothing sent -- and `--run` is what acts.
 
 **Two flags, and no single-flag path to acting.** `--target` says *where* and
 `--run` says *now*, and neither implies the other:

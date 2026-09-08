@@ -149,12 +149,11 @@ verbs:
   dev         Start the lane's DEBUG build. Long-running: nen inherits this
               terminal and hands it to the child.
   run         Start the lane's PRODUCTION build, locally. Also long-running.
-  deploy      Send a build to a declared, NAMED target. TWO flags, and no
-              single-flag path to acting: --target is required and has no
-              default, not even when exactly one target exists, and --run is
-              required before anything is sent. Without --run it prints the
-              fully resolved plan -- the destination substituted into the argv,
-              every precondition asserted -- and spawns nothing, at exit 0.
+  deploy      Send a build to a declared, NAMED target: --target <name> [--run].
+              --target is required and has no default, not even when exactly
+              one target exists. Bare, this is a safe, exit-0 plan -- the
+              destination substituted into the argv, every precondition
+              asserted, nothing sent -- and --run is what acts.
   coverage    Run the lane's coverage command, then PARSE the report it
               produced into one shape: a total, a row per target, and -- with
               --threshold -- whether the number cleared a bar. The report is
