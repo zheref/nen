@@ -57,16 +57,37 @@ import {
   profileById,
   spellOnHost,
   verbCell,
+  type PackMinimum,
   type Placeholder,
+  type ProfileCrossCheck,
+  type ProfileMarker,
   type ProfilesPack,
   type ProfileVerb,
   type StackProfile,
 } from "../profiles/pack.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
 import { parseYaml } from "../schema/yaml.js";
-import { ASSERTABLE_KINDS } from "./run.js";
+import { ASSERTABLE_KINDS, insideRepo } from "./run.js";
 
-/** Directories a marker scan never descends into. */
+/**
+ * Directories NOTHING IN THIS FILE ever descends into -- one set, for every
+ * walk.
+ *
+ * IT WAS TWO SETS AND THAT WAS A DEFECT, not a nuance. The project walk skipped
+ * `bin` and `obj` -- output directories where a build leaves a COPY of the
+ * project file it built -- and the lane scan did not, so a `bin/Sub/App.csproj`
+ * became a lane called `Sub` and an `obj/App.csproj` became a lane called
+ * `obj`: a lane proposed out of build output, addressing a file the next clean
+ * deletes. Two lists that must agree and are spelled twice agree only until
+ * somebody edits one, and the disagreement is invisible because both readings
+ * "work".
+ *
+ * They are output directories on the same evidence as `build`, `dist` and `out`
+ * above them, and the cost of the wider set is stated with the other bounds:
+ * `renderDetect`'s "no lane detected" prose names every one of these, because a
+ * lane living in a directory named like build output is invisible by design and
+ * a bound nobody states is a bug report.
+ */
 const SKIP = new Set([
   ".git",
   ".next",
@@ -74,8 +95,10 @@ const SKIP = new Set([
   ".idea",
   ".nen",
   "node_modules",
+  "bin",
   "build",
   "dist",
+  "obj",
   "out",
   "vendor",
   "Pods",
@@ -102,11 +125,8 @@ const GATSBY_CONFIG = /^gatsby-config\.(js|mjs|cjs|ts)$/;
 const APP_CONFIG = /^app\.config\.(js|mjs|cjs|ts)$/;
 const XCWORKSPACE = /\.xcworkspace$/;
 const XCODEPROJ = /\.xcodeproj$/;
-const CSPROJ = /\.csproj$/;
 const XCSCHEME = /\.xcscheme$/;
 
-/** The one element that separates a WinUI app from every other .NET project. */
-const WINUI_MARKER = "<UseWinUI>";
 /** The key an app manifest carries when the project is an Expo one. */
 const EXPO_MANIFEST_KEY = "expo";
 
@@ -141,6 +161,29 @@ const SHARED_SCHEMES: readonly string[] = ["xcshareddata", "xcschemes"];
 
 /** The file an `.xcodeproj` bundle keeps its target list in. */
 const PBXPROJ = "project.pbxproj";
+/**
+ * The stacks whose marker match is READ FROM THE PACK rather than spelled as a
+ * pattern above.
+ *
+ * WHY THIS LIST IS SHORT RATHER THAN COMPLETE. This file's header argues that a
+ * FILENAME is a universal fact and may live in code -- and `*.csproj` plus a
+ * property inside it is that same class of fact, so either home is defensible.
+ * What decides it here is that this stack's detection is not a filename at all:
+ * the pattern is a wildcard, the refinement is a literal string the pack states
+ * word for word, and a SECOND marker (the solution) is recorded only as
+ * corroboration. Three pieces of one statement, all of them already written
+ * down in `profiles/dotnet-winui.json` and rendered into `docs/STACK-MATRIX.md`
+ * -- restating them here would be two copies of one rule with nothing to keep
+ * them equal.
+ *
+ * The other six stay above because moving one is a behaviour change with its
+ * own goldens: `settings.gradle{,.kts}` and `next.config.{js,mjs,cjs,ts,mts,
+ * cts}` are BRACE GLOBS the matcher below deliberately does not read, and the
+ * Expo and Apple rules are not a pattern match at all (a key inside a document,
+ * a workspace PREFERRED over a project). A stack joins this list when its rule
+ * is genuinely pattern-plus-literal and its own tests move with it.
+ */
+export const PACK_MATCHED_STACKS: readonly string[] = ["dotnet-winui"];
 
 /**
  * Every stack id `matchesIn` below can answer with.
@@ -298,6 +341,64 @@ export function stripScriptComments(text: string): string {
 function readScript(path: string): string | null {
   const text = readText(path);
   return text === null ? null : stripScriptComments(text);
+}
+
+/**
+ * MARKUP with its comments removed -- the XML twin of `stripScriptComments`.
+ *
+ * IT EXISTS FOR THE SAME DEFECT IN THE OTHER SYNTAX, and the three shapes it
+ * closes are the three questions this file asks a project file. A commented
+ * `<!-- <UseWinUI>true</UseWinUI> -->` qualified a whole LANE off a line
+ * somebody wrote to switch a property off; a commented-out `<ProjectReference>`
+ * withheld a build over a dependency the project does not have; and a
+ * `<!-- we deleted xunit -->` made a documentation project the tree's test
+ * project. A commented-out fact is not a fact about the project, and §2.6's
+ * rule is that a thing the project does not contain is a warning and never a
+ * proposal.
+ *
+ * CDATA IS STEPPED OVER RATHER THAN SCANNED, because a `<!--` inside one is
+ * character data and not a comment -- the same argument the script scanner
+ * makes for a `//` inside a quoted string, and the reason both are one function
+ * rather than a regex. Newlines inside a comment are kept, so that nothing
+ * downstream reading line by line sees the file shrink.
+ */
+export function stripMarkupComments(text: string): string {
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    if (text.startsWith("<![CDATA[", index)) {
+      const end = text.indexOf("]]>", index);
+      if (end === -1) {
+        out += text.slice(index);
+        break;
+      }
+      out += text.slice(index, end + 3);
+      index = end + 3;
+      continue;
+    }
+    if (text.startsWith("<!--", index)) {
+      const end = text.indexOf("-->", index + 4);
+      // AN UNTERMINATED COMMENT SWALLOWS THE REST OF THE FILE, which is what
+      // every XML reader does with one: a file nen cannot parse is a file nen
+      // reads nothing out of, and half-reading it is how a marker inside a
+      // comment gets believed.
+      const stop = end === -1 ? text.length : end + 3;
+      for (let at = index; at < stop; at += 1) {
+        if (text[at] === "\n") out += "\n";
+      }
+      index = stop;
+      continue;
+    }
+    out += text[index] ?? "";
+    index += 1;
+  }
+  return out;
+}
+
+/** A markup file read from disk with its comments gone, or null when unreadable. */
+function readMarkup(path: string): string | null {
+  const text = readText(path);
+  return text === null ? null : stripMarkupComments(text);
 }
 
 export interface Entry {
@@ -476,9 +577,59 @@ function expandBraces(pattern: string): readonly string[] {
     .flatMap((alternative): readonly string[] => expandBraces(`${head}${alternative}${tail}`));
 }
 
-/** The filenames a marker pattern names, its directory prefix dropped. */
-function markerFilenames(pattern: string): readonly string[] {
+/**
+ * The filename SPELLINGS a marker pattern names, its directory prefix dropped.
+ *
+ * EXPORTED FOR ./detect.test.ts, which holds every pattern in every profile to
+ * a shape this reader understands -- a sweep that has to enumerate the
+ * alternatives to build a sample out of each.
+ */
+export function markerSpellings(pattern: string): readonly string[] {
   return expandBraces(pattern).map(laneRelativeName);
+}
+
+/**
+ * ONE SPELLING against one filename: an exact name, or a `*<suffix>` glob.
+ *
+ * A RICHER SHAPE NEVER MATCHES, and that is a blind spot rather than a silent
+ * pass -- ../profiles/pack.test.ts pins every pattern in the pack to the two
+ * shapes this reads, so a `**`, a mid-name wildcard or a character class fails
+ * the build rather than shipping as a stack nothing detects. Reading half of a
+ * pattern language is the one outcome worse than reading none of it: it matches
+ * the wrong files confidently.
+ */
+function matchesSpelling(spelling: string, name: string): boolean {
+  if (!spelling.startsWith("*")) return spelling === name;
+  const suffix = spelling.slice(1);
+  // A bare `*`, or a second wildcard, is a shape this does not read. And the
+  // name must be LONGER than the suffix: `.csproj` itself is a dotfile, not a
+  // project called nothing.
+  if (suffix === "" || suffix.includes("*")) return false;
+  return name.length > suffix.length && name.endsWith(suffix);
+}
+
+/**
+ * A PACK MARKER PATTERN AGAINST ONE FILENAME -- the file's ONE pattern reader.
+ *
+ * THREE DIALECTS ARRIVED IN THREE PULL REQUESTS AND THIS IS THE ONE THEY
+ * BECAME. `*.csproj` is a suffix glob, `settings.gradle{,.kts}` is a brace
+ * alternation, and `*\/build.gradle{,.kts}` carries a directory prefix that
+ * `isNestedPattern` reads separately; a second reader for any of them would
+ * have drifted the first time either was fixed, and the drift is invisible
+ * because a pattern that reads as "no match" proposes nothing rather than
+ * failing. So the prefix is dropped, the braces are expanded, and every
+ * alternative goes through one predicate.
+ */
+export function matchesPattern(pattern: string, name: string): boolean {
+  return markerSpellings(pattern).some((spelling): boolean => matchesSpelling(spelling, name));
+}
+
+/** Whether any spelling in this set matches the name. */
+function anySpellingMatches(spellings: ReadonlySet<string>, name: string): boolean {
+  for (const spelling of spellings) {
+    if (matchesSpelling(spelling, name)) return true;
+  }
+  return false;
 }
 
 /**
@@ -563,7 +714,7 @@ function hostToolStacks(pack: ProfilesPack): readonly HostToolStack[] {
     const contextGroups: ReadonlySet<string>[] = [];
     const contextFiles = new Set<string>();
     for (const marker of profile.markers) {
-      const files = markerFilenames(marker.pattern);
+      const files = markerSpellings(marker.pattern);
       if (marker.contains !== null) {
         refinements.push({
           files: new Set(files),
@@ -597,7 +748,8 @@ function hostToolStacks(pack: ProfilesPack): readonly HostToolStack[] {
 function isOwnBuildRoot(directory: string, context: ReadonlySet<string>): boolean {
   return listDirectory(directory).some(
     (entry): boolean =>
-      !entry.directory && (HOST_TOOL_FILES.has(entry.name) || context.has(entry.name)),
+      !entry.directory &&
+      (HOST_TOOL_FILES.has(entry.name) || anySpellingMatches(context, entry.name)),
   );
 }
 
@@ -636,10 +788,103 @@ function fileCarrying(
     // The pattern's own directory prefix, honoured: a marker written
     // `<dir>/<file>` is never satisfied by the lane's own `<file>`.
     if (atLaneRoot && refinement.nested) continue;
-    if (!refinement.files.has(entry.name)) continue;
+    if (!anySpellingMatches(refinement.files, entry.name)) continue;
     if ((readScript(path) ?? "").includes(refinement.literal)) return path;
   }
   return null;
+}
+
+/**
+ * The pack's markers for one stack, against one directory.
+ *
+ * A REFINED MARKER QUALIFIES THE STACK; AN UNREFINED ONE ONLY CORROBORATES IT.
+ * That is the pack's own sentence made operational: a `*.csproj` is .NET until
+ * a property inside it says which kind, and a `*.sln` is "present but not
+ * sufficient". So a directory carrying only unrefined matches is NOT this
+ * stack -- proposing the narrower stack from the broader marker would be nen
+ * deciding what kind of application this is -- while a directory that qualifies
+ * records every matched file, refined and unrefined alike, in byte order.
+ *
+ * A PROFILE STATING NO REFINED MARKER AT ALL has nothing to be refined by, so
+ * every one of its markers qualifies. That branch is unused by today's pack and
+ * is the honest reading of the rule rather than a special case: "must be
+ * refined" is a claim only a profile that states a refinement can make.
+ */
+function packMarkersIn(
+  repoRoot: string,
+  directory: string,
+  names: readonly string[],
+  markers: readonly ProfileMarker[],
+): PackMarkerMatches {
+  const found: string[] = [];
+  let qualifies = !markers.some((marker): boolean => marker.contains !== null);
+  for (const name of names) {
+    const marker = markers.find((entry): boolean => fileCarriesMarker(directory, name, entry));
+    if (marker === undefined) continue;
+    found.push(join(directory, name));
+    if (marker.contains !== null) qualifies = true;
+  }
+  if (qualifies) return { markers: found, nearMisses: [] };
+  return { markers: [], nearMisses: nearMissesIn(repoRoot, directory, names, markers) };
+}
+
+/**
+ * `<UseWinUI>true</UseWinUI>` -> `UseWinUI`, when the literal is ONE WHOLE
+ * ELEMENT and nothing else.
+ *
+ * READ OFF THE PACK'S OWN LITERAL rather than stated here, which is what keeps
+ * this file free of the stack: nen does not know what the element MEANS, only
+ * that the catalogue wrote a complete element and that a file spelling the same
+ * element with attributes is a near miss rather than a coincidence.
+ */
+function markerElement(contains: string): string | null {
+  return /^<([A-Za-z_][\w.-]*)>[^<>]*<\/\1>$/.exec(contains)?.[1] ?? null;
+}
+
+/**
+ * A file that ALMOST carries a refined marker, and the sentence that says so.
+ *
+ * THE SILENT NON-DETECTION THIS EXISTS TO END. `<UseWinUI Condition="'$(Config)'
+ * == 'Release'">true</UseWinUI>` is a real project of this stack, written the
+ * way MSBuild lets you write it, and it matched no marker at all -- so the tree
+ * came back "no lane detected", which is the same answer an empty directory
+ * gets. nen does not evaluate conditions and should not start; what it can do is
+ * refuse to be silent about the one shape it knows it is declining.
+ *
+ * IT IS A NEAR MISS AND NOT A MATCH, deliberately: an attribute can switch the
+ * element OFF as easily as on, and proposing a lane from a line nen cannot
+ * evaluate is exactly the guess §2.6 forbids.
+ */
+function nearMissesIn(
+  repoRoot: string,
+  directory: string,
+  names: readonly string[],
+  markers: readonly ProfileMarker[],
+): readonly string[] {
+  const out: string[] = [];
+  for (const marker of markers) {
+    const literal = marker.contains;
+    if (literal === null) continue;
+    const element = markerElement(literal);
+    if (element === null) continue;
+    for (const name of names) {
+      if (!matchesPattern(marker.pattern, name)) continue;
+      const text = readMarkup(join(directory, name));
+      if (text === null || text.includes(literal)) continue;
+      if (!new RegExp(`<${literalPattern(element)}\\s[^>]*>`).test(text)) continue;
+      out.push(
+        `${relativePath(repoRoot, join(directory, name))} spells <${element}> WITH ATTRIBUTES, and the reference pack's marker for this stack is the literal '${literal}'. nen does not evaluate a condition -- an attribute can switch the element off as easily as on, and a lane proposed from a line nen cannot read would be a guess. So this tree is NOT proposed as that stack, and the reason is here rather than in the silence a missing marker otherwise leaves. Write the unconditional form, or state the lane by hand.`,
+      );
+    }
+  }
+  return out;
+}
+
+/** Whether this file both matches a marker's pattern and carries its literal. */
+function fileCarriesMarker(directory: string, name: string, marker: ProfileMarker): boolean {
+  if (!matchesPattern(marker.pattern, name)) return false;
+  if (marker.contains === null) return true;
+  return (readMarkup(join(directory, name)) ?? "").includes(marker.contains);
 }
 
 /**
@@ -667,6 +912,18 @@ interface DirectoryMatches {
    * "warning, never a proposal" case, and silence about it reads as absence.
    */
   readonly nestedBuilds: readonly string[];
+  /**
+   * Files that ALMOST carried a pack-matched stack's refined marker -- see
+   * `nearMissesIn`. Reported as findings, because a real project nen declines
+   * to read looks exactly like an empty directory from the outside.
+   */
+  readonly nearMisses: readonly string[];
+}
+
+/** One pack-matched stack's answer for one directory. */
+interface PackMarkerMatches {
+  readonly markers: readonly string[];
+  readonly nearMisses: readonly string[];
 }
 
 /** Every stack whose markers this ONE directory carries. */
@@ -674,6 +931,7 @@ function matchesIn(
   repoRoot: string,
   directory: string,
   hostStacks: readonly HostToolStack[],
+  packMarkers: readonly PackMarkers[],
 ): DirectoryMatches {
   const entries = listDirectory(directory);
   const names = entries.map((entry): string => entry.name);
@@ -681,6 +939,7 @@ function matchesIn(
     entries.filter((entry): boolean => !entry.directory).map((entry): string => entry.name),
   );
   const nestedBuilds = new Set<string>();
+  const nearMisses: string[] = [];
   const found: Match[] = [];
   const add = (stack: string, marker: string): void => {
     found.push({ stack, marker: relativePath(repoRoot, marker), identifying: true });
@@ -735,7 +994,7 @@ function matchesIn(
   if ([...files].some((name): boolean => HOST_TOOL_FILES.has(name))) {
     for (const entry of hostStacks) {
       const context = entry.contextGroups.every((group): boolean =>
-        [...group].some((name): boolean => files.has(name)),
+        [...files].some((name): boolean => anySpellingMatches(group, name)),
       );
       if (!context) continue;
       const carriers: string[] = [];
@@ -758,14 +1017,30 @@ function matchesIn(
     }
   }
 
-  for (const name of names) {
-    if (!CSPROJ.test(name)) continue;
-    if ((readText(join(directory, name)) ?? "").includes(WINUI_MARKER)) {
-      add("dotnet-winui", join(directory, name));
-    }
+  for (const { stack, markers } of packMarkers) {
+    const answer = packMarkersIn(repoRoot, directory, names, markers);
+    for (const marker of answer.markers) add(stack, marker);
+    nearMisses.push(...answer.nearMisses);
   }
 
-  return { matches: found, nestedBuilds: [...nestedBuilds].sort(compareBytes) };
+  return {
+    matches: found,
+    nestedBuilds: [...nestedBuilds].sort(compareBytes),
+    nearMisses,
+  };
+}
+
+/** One pack-matched stack and the markers the pack states for it. */
+interface PackMarkers {
+  readonly stack: string;
+  readonly markers: readonly ProfileMarker[];
+}
+
+/** The marker tables `matchesIn` reads out of the pack, resolved once per scan. */
+function packMarkersOf(pack: ProfilesPack): readonly PackMarkers[] {
+  return PACK_MATCHED_STACKS.map(
+    (stack): PackMarkers => ({ stack, markers: profileById(pack, stack).markers }),
+  );
 }
 
 function dependsOn(packageJson: Record<string, unknown> | null, dependency: string): boolean {
@@ -811,15 +1086,28 @@ interface Scan {
   readonly found: readonly { directory: string; matches: readonly Match[] }[];
   /** Every nested build the refinement search stopped at, absolute, byte-ordered. */
   readonly nestedBuilds: readonly string[];
+  /** Every near-miss sentence the scan collected, byte-ordered. */
+  readonly nearMisses: readonly string[];
 }
 
 /** Every directory with markers, deepest-last, root first. */
-function scan(repoRoot: string, hostStacks: readonly HostToolStack[]): Scan {
+function scan(
+  repoRoot: string,
+  hostStacks: readonly HostToolStack[],
+  packMarkers: readonly PackMarkers[],
+): Scan {
   const out: { directory: string; matches: readonly Match[] }[] = [];
   const nested = new Set<string>();
+  const misses = new Set<string>();
   const walk = (directory: string, depth: number): void => {
-    const { matches, nestedBuilds } = matchesIn(repoRoot, directory, hostStacks);
+    const { matches, nestedBuilds, nearMisses } = matchesIn(
+      repoRoot,
+      directory,
+      hostStacks,
+      packMarkers,
+    );
     for (const build of nestedBuilds) nested.add(build);
+    for (const miss of nearMisses) misses.add(miss);
     if (matches.length > 0) out.push({ directory, matches });
     if (depth === 0) return;
     for (const entry of listDirectory(directory)) {
@@ -831,7 +1119,11 @@ function scan(repoRoot: string, hostStacks: readonly HostToolStack[]): Scan {
     }
   };
   walk(repoRoot, MAX_DEPTH);
-  return { found: out, nestedBuilds: [...nested].sort(compareBytes) };
+  return {
+    found: out,
+    nestedBuilds: [...nested].sort(compareBytes),
+    nearMisses: [...misses].sort(compareBytes),
+  };
 }
 
 /**
@@ -1729,7 +2021,7 @@ function unitTestAnswers(
   if (stack === undefined) return;
   const names = [...stack.contextFiles].sort(compareBytes);
   const settings = listDirectory(laneDirectory).find(
-    (entry): boolean => !entry.directory && stack.contextFiles.has(entry.name),
+    (entry): boolean => !entry.directory && anySpellingMatches(stack.contextFiles, entry.name),
   );
   /* c8 ignore next 8 -- `matchesIn` requires a context file before the stack
      matches at all, so a lane reaching this function has one. The branch stays
@@ -1865,7 +2157,8 @@ function laneScope(
     if (within === ".") continue;
     const module = `:${within.split("/").join(":")}`;
     const settings = listDirectory(laneDirectory).find(
-      (entry): boolean => !entry.directory && stack.contextFiles.has(entry.name),
+      (entry): boolean =>
+        !entry.directory && anySpellingMatches(stack.contextFiles, entry.name),
     );
     const text = settings === undefined ? "" : (readText(join(laneDirectory, settings.name)) ?? "");
     const remaps = projectDirectories(text);
@@ -1911,7 +2204,12 @@ function isBareTask(word: string): boolean {
   );
 }
 
-function substitute(token: string, manifest: Manifest, answers: LaneAnswers): string {
+function substitute(
+  token: string,
+  manifest: Manifest,
+  answers: LaneAnswers,
+  layer: TokenLayer,
+): string {
   const pm = manifest.packageManager;
   const packageName = packageAnswer(manifest);
   let out = token;
@@ -1922,6 +2220,11 @@ function substitute(token: string, manifest: Manifest, answers: LaneAnswers): st
   for (const [answeredToken, value] of answers.answered) {
     out = out.split(answeredToken).join(value);
   }
+  // THE PROJECT READER'S ANSWERS, from the same repository and under the same
+  // rule: the pack states which file answers the token, and the VALUE is this
+  // tree's own path. A stack that states no `answers` rule contributes nothing
+  // here, which is every stack but one today.
+  for (const [answered, value] of layer.answers) out = out.split(answered).join(value);
   return out;
 }
 
@@ -2561,9 +2864,900 @@ function runnerTaskProblem(
       })`;
 }
 
+// ── the second cross-check family: what a PROJECT FILE says ─────────────────
+//
+// EVERYTHING ABOVE READS A `package.json`, AND THAT IS AN ECOSYSTEM'S ANSWER
+// RATHER THAN EVERY ECOSYSTEM'S. A stack whose builds are described by project
+// files has no manifest to be cross-checked against, and the old behaviour was
+// exactly right for it and exactly useless: every row withheld, "this lane has
+// no readable package.json", forever, for the absence of a file that ecosystem
+// does not have.
+//
+// SO THE SECOND FAMILY READS THE PACK RATHER THAN CARRYING A TABLE. Four
+// optional fields, each of them a fact about a FILE FORMAT that
+// `profiles/*.json` already states and `docs/STACK-MATRIX.md` already renders:
+//
+//   * `answers`   -- which file of the target tree answers which token, as an
+//                    ORDERED candidate list. Exactly one match at a rank
+//                    answers; several are an ambiguity naming them; none falls
+//                    through to the next rank.
+//   * `references` -- the element and attribute one project file points at
+//                    another path with. A reference that leaves the repository
+//                    is the finding this exists for.
+//   * `crossChecks` -- per-verb evidence: the row is proposed only where the
+//                    tree carries the thing it would run against.
+//   * `toolchain[].versionFile` / `hostTool` -- where the REPOSITORY states its
+//                    own pin, and whether the program a row runs is the host
+//                    SDK rather than a package a manifest could declare.
+//
+// A PROFILE STATING NONE OF THEM READS NOTHING AND CHANGES NOTHING. That is the
+// whole of the containment: `EMPTY_READING` below is what every other stack
+// gets, the tree is not even walked for them, and every existing proposal is
+// byte for byte what it was.
+//
+// AND NONE OF IT LETS THE PACK CONTRIBUTE A VALUE. The pack states WHERE to
+// look; every string that reaches a proposed row is read out of the target
+// repository's own bytes, which is the same rule `{pm}` has always followed.
+
+/** One file under a lane, in the three spellings the notes and rows need. */
+interface TreeFile {
+  readonly name: string;
+  readonly directory: string;
+  /** Lane-relative, forward-slashed: the value a proposed row is answered with. */
+  readonly laneRelative: string;
+  /** Repo-relative, forward-slashed: what a note and a precondition name. */
+  readonly repoRelative: string;
+  /**
+   * This file's markup, COMMENTS ALREADY GONE, READ AT MOST ONCE.
+   *
+   * THE STRIPPING IS HERE RATHER THAN AT THE FIVE CALL SITES, and that is the
+   * point of putting it on the file instead of beside each question. Every
+   * question this reader asks a project file -- the two `answers` ranks, the
+   * four test-evidence markers, the reference rule -- is a question about what
+   * the project CONTAINS, and a commented-out element is exactly what it does
+   * not contain. One of the five forgetting to strip is a defect nothing
+   * fails: it reads a fact that is not there and proposes a row from it.
+   *
+   * Lazy rather than eager, and memoised rather than lazy-and-repeated. Eager
+   * would read every asset in the tree to answer a question about project
+   * files; repeated would read (and re-strip) each project file once per
+   * marker, and this stack asks seven questions of the same `*.csproj`. One
+   * read each is the only version that is neither.
+   */
+  readonly markup: () => string | null;
+}
+
+/**
+ * Every file under a lane, bounded exactly as the marker scan is.
+ *
+ * THE SAME DEPTH BOUND, AND FOR THE SAME REASON: a project eight directories
+ * down inside somebody's fixture tree is far more likely to be test data than a
+ * build. The bound is a real blind spot and the withholding notes say so, the
+ * way `renderDetect`'s "no lane detected" prose already does for the scan.
+ */
+function walkLaneFiles(repoRoot: string, laneDirectory: string): readonly TreeFile[] {
+  const files: TreeFile[] = [];
+  const walk = (directory: string, depth: number): void => {
+    for (const entry of listDirectory(directory)) {
+      const absolute = join(directory, entry.name);
+      if (entry.directory) {
+        if (depth === 0 || SKIP.has(entry.name)) continue;
+        walk(absolute, depth - 1);
+        continue;
+      }
+      let text: string | null | undefined;
+      files.push({
+        name: entry.name,
+        directory,
+        laneRelative: relativePath(laneDirectory, absolute),
+        repoRelative: relativePath(repoRoot, absolute),
+        markup: (): string | null => (text === undefined ? (text = readMarkup(absolute)) : text),
+      });
+    }
+  };
+  walk(laneDirectory, MAX_DEPTH);
+  return files;
+}
+
+/**
+ * Every file in the lane that matches ANY of these markers' patterns AND
+ * carries that marker's literal.
+ *
+ * VARIADIC BECAUSE A RANK CAN BE A LIST. One marker is the ordinary call; the
+ * agreement check below asks it about every LOWER rank at once, which is one
+ * question ("what would the next rank have answered?") rather than several.
+ */
+function filesCarrying(files: readonly TreeFile[], ...markers: readonly ProfileMarker[]): readonly TreeFile[] {
+  return files.filter((file): boolean =>
+    markers.some(
+      (marker): boolean =>
+        matchesPattern(marker.pattern, file.name) &&
+        (marker.contains === null || (file.markup() ?? "").includes(marker.contains)),
+    ),
+  );
+}
+
+/** A pattern list, for a note that has to say what nen looked for. */
+function describeMarkers(markers: readonly ProfileMarker[]): string {
+  return markers
+    .map(
+      (marker): string =>
+        marker.contains === null ? `'${marker.pattern}'` : `'${marker.pattern}' carrying '${marker.contains}'`,
+    )
+    .join(", ");
+}
+
+/** A pack-supplied name, made safe to build a pattern out of. */
+function literalPattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Whether a reference is absolute in ANY of the three ways a path can be.
+ *
+ * `path.isAbsolute` ANSWERS FOR THE HOST NEN IS RUNNING ON, and this reader is
+ * asked about a file written for another one: a `C:/…` reference is absolute on
+ * the machine the project came from and merely a strange relative segment to a
+ * POSIX `resolve`, which would silently join it under the repository root and
+ * report a path that escapes nothing. The three forms are checked by shape --
+ * a POSIX root, a UNC root, a drive letter -- so the answer is the same on
+ * every platform this binary is compiled for.
+ */
+function isAbsoluteReference(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+/**
+ * The shapes a reference value can have that are NOT A PATH AT ALL, each with
+ * the sentence a maintainer needs to see.
+ *
+ * A REFERENCE NEN CANNOT RESOLVE IS UNANSWERABLE, AND UNANSWERABLE IS NOT THE
+ * SAME AS ABSENT. Every one of these used to be resolved as a LITERAL path --
+ * `$(SolutionDir)Core\Core.csproj` became a directory named `$(SolutionDir)Core`
+ * -- written into the declaration as a `path` precondition and proposed with a
+ * command beside it. That row exits 2 forever, on a tree that builds perfectly,
+ * over a file that was never missing. The same property fails the other way
+ * when the separators fall differently: `$(MSBuildThisFileDirectory)/../../x`
+ * carries a `..`, so it was reported as an ESCAPE and the rows refused. One
+ * property, a false proposal or a false refusal depending on punctuation.
+ *
+ * So nen says what it can see and stops: the rows are withheld, the value is
+ * quoted verbatim, and NO precondition is written -- an assertion nen cannot
+ * evaluate is worse than none, because a maintainer reads it as checked.
+ */
+const UNRESOLVABLE_SHAPES: readonly { readonly probe: string; readonly what: string }[] = [
+  {
+    probe: "$(",
+    what: "an MSBuild PROPERTY, whose value lives outside the text nen reads -- nen expands none, so the file this names is not knowable from this file",
+  },
+  { probe: "%(", what: "an ITEM METADATA reference, whose value is computed while the build runs" },
+  { probe: "*", what: "a WILDCARD, which names a SET of files rather than one" },
+  { probe: "?", what: "a WILDCARD, which names a SET of files rather than one" },
+  { probe: ";", what: "a ';'-SEPARATED LIST, which names several files in one attribute" },
+  { probe: "&", what: "an XML ENTITY, which nen does not expand" },
+];
+
+/** What one path walk found at its last segment. */
+type TreeLookup =
+  | { readonly kind: "file" }
+  | { readonly kind: "directory" }
+  | { readonly kind: "missing" }
+  /** Present under a DIFFERENT spelling; `actual` is the one on disk. */
+  | { readonly kind: "case"; readonly actual: string };
+
+/**
+ * Whether this repo-relative path names a file in the tree, BYTE FOR BYTE.
+ *
+ * `existsSync` IS THE WRONG QUESTION ON TWO OF THE THREE HOSTS. macOS and
+ * Windows answer from a case-insensitive filesystem, so a `core\core.csproj`
+ * naming a `Core/Core.csproj` on disk "exists" there and does not on the Linux
+ * runner that has to build it -- a precondition that passes on the machine that
+ * wrote it and fails in CI, which is the worst shape a check can have. So the
+ * walk compares each segment against that directory's own listing exactly, and
+ * where only a case-folded match is there it says so and names BOTH spellings,
+ * which is the one fact that makes the fix a one-character edit.
+ */
+function lookInTree(repoRoot: string, repoRelative: string): TreeLookup {
+  const segments = repoRelative.split("/").filter((segment): boolean => segment !== "");
+  /* c8 ignore next -- a reference resolving to the repository root itself is
+     refused by `insideRepo` before this is asked */
+  if (segments.length === 0) return { kind: "directory" };
+  let directory = repoRoot;
+  const walked: string[] = [];
+  // THE WALK CONTINUES THROUGH A FOLDED SEGMENT rather than stopping at it, so
+  // the spelling reported is the whole path as this tree writes it. Stopping at
+  // the first difference reported `Core/core.csproj` for a tree containing
+  // `Core/Core.csproj`, which is a third spelling that exists nowhere.
+  let folded = false;
+  for (let index = 0; index < segments.length; index += 1) {
+    const wanted = segments[index] ?? "";
+    const entries = listDirectory(directory);
+    let match = entries.find((entry): boolean => entry.name === wanted);
+    if (match === undefined) {
+      match = entries.find((entry): boolean => entry.name.toLowerCase() === wanted.toLowerCase());
+      if (match === undefined) return { kind: "missing" };
+      folded = true;
+    }
+    walked.push(match.name);
+    if (index === segments.length - 1) {
+      if (!match.directory && folded) return { kind: "case", actual: walked.join("/") };
+      return { kind: match.directory ? "directory" : "file" };
+    }
+    if (!match.directory) return { kind: "missing" };
+    directory = join(directory, match.name);
+  }
+  /* c8 ignore next -- the loop returns on its final iteration */
+  return { kind: "missing" };
+}
+
+/** What nen could make of ONE reference value. */
+type ReferenceVerdict =
+  /** Not a path nen can resolve at all: withhold, quote it, assert nothing. */
+  | { readonly kind: "unresolvable"; readonly why: string }
+  /** A path that leaves the repository: withhold, and say where it lands. */
+  | { readonly kind: "escape"; readonly resolved: string; readonly why: string }
+  /** Inside the tree under a DIFFERENT spelling: withhold, naming both. */
+  | { readonly kind: "case"; readonly resolved: string; readonly actual: string }
+  /** Inside the tree and NOT THERE: a note, and no precondition. */
+  | { readonly kind: "missing"; readonly resolved: string }
+  /** Inside the tree and there today: the one shape a precondition is written for. */
+  | { readonly kind: "file"; readonly resolved: string };
+
+/** Every verdict but `file` and `missing` -- the ones that end a row. */
+function blocks(verdict: ReferenceVerdict): boolean {
+  return verdict.kind === "unresolvable" || verdict.kind === "escape" || verdict.kind === "case";
+}
+
+/** One reference, the file that states it, and what nen could make of it. */
+interface ReadReference {
+  /** The file that states it, repo-relative. */
+  readonly from: string;
+  /** The attribute value verbatim, as the project file spells it. */
+  readonly value: string;
+  /** `<Element Attribute="...">`, so a note names the rule it read. */
+  readonly rule: string;
+  readonly verdict: ReferenceVerdict;
+}
+
+/**
+ * ONE reference value, classified -- the single place the refusals are decided.
+ *
+ * THE ORDER IS THE ARGUMENT. A value that is not a path cannot be asked whether
+ * it leaves the tree, and a path that leaves the tree cannot be asked whether it
+ * is there: each question is meaningful only once the one before it is
+ * answered. Reversing any pair is how one MSBuild property produced a false
+ * refusal on one machine and a false proposal on another.
+ */
+function classifyReference(repoRoot: string, file: TreeFile, raw: string): ReferenceVerdict {
+  const shape = UNRESOLVABLE_SHAPES.find((entry): boolean => raw.includes(entry.probe));
+  if (shape !== undefined) return { kind: "unresolvable", why: shape.what };
+  // A PROJECT FILE IS WRITTEN FOR ONE PLATFORM AND READ ON THREE. The separator
+  // is normalised before anything resolves it, because a backslash is a legal
+  // filename character on POSIX and a `..\..\x` would otherwise resolve to a
+  // single file named `..\..\x` sitting safely inside the tree -- an escape
+  // reported as a local path.
+  const normalised = raw.split("\\").join("/");
+  if (isAbsoluteReference(normalised)) {
+    return {
+      kind: "escape",
+      resolved: normalised,
+      why: "it is an ABSOLUTE path, naming a location on one machine rather than a file in this repository",
+    };
+  }
+  const repoRelative = relativePath(repoRoot, join(file.directory, ...normalised.split("/")));
+  try {
+    // THE EXECUTOR'S OWN FUNCTION, ASKED RATHER THAN RESTATED. `./run.ts`'s
+    // `insideRepo` is what a declared path is resolved through at run time, and
+    // it refuses one that leaves the tree by name at exit 2 -- so a reference it
+    // would refuse is a precondition that could never hold. A second copy of the
+    // rule here would drift the first time either was fixed.
+    insideRepo(repoRoot, repoRelative, `project.preconditions (from ${file.repoRelative})`);
+  } catch {
+    return {
+      kind: "escape",
+      resolved: repoRelative,
+      why: "it resolves OUTSIDE the repository",
+    };
+  }
+  const found = lookInTree(repoRoot, repoRelative);
+  if (found.kind === "case") return { kind: "case", resolved: repoRelative, actual: found.actual };
+  if (found.kind !== "file") return { kind: "missing", resolved: repoRelative };
+  return { kind: "file", resolved: repoRelative };
+}
+
+interface ReferenceReading {
+  /** Every reference every matching file states, in walk order. */
+  readonly all: readonly ReadReference[];
+  /** Repo-relative path -> the files that point at it, both byte-sorted. */
+  readonly byTarget: ReadonlyMap<string, readonly string[]>;
+}
+
+/** The reference values ONE file states, per the pack's own element/attribute rules. */
+function referencesIn(
+  profile: StackProfile,
+  repoRoot: string,
+  file: TreeFile,
+): readonly ReadReference[] {
+  const out: ReadReference[] = [];
+  for (const rule of profile.references) {
+    if (!matchesPattern(rule.pattern, file.name)) continue;
+    const pattern = new RegExp(
+      `<${literalPattern(rule.element)}\\b[^>]*?\\b${literalPattern(rule.attribute)}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
+      "g",
+    );
+    const label = `<${rule.element} ${rule.attribute}="...">`;
+    const text = file.markup();
+    if (text === null) continue;
+    for (const match of text.matchAll(pattern)) {
+      const raw = (match[1] ?? match[2] ?? "").trim();
+      if (raw === "") continue;
+      out.push({
+        from: file.repoRelative,
+        value: raw,
+        rule: label,
+        verdict: classifyReference(repoRoot, file, raw),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every OTHER file this one names that is itself a file the reference rules
+ * read -- how an AGGREGATE's list becomes an edge without teaching this file
+ * what an aggregate is.
+ *
+ * A SOLUTION IS A LIST OF PROJECTS, AND NOTHING HERE KNOWS THE WORD "SOLUTION".
+ * What it knows is the shape the pack already states: `references[].pattern`
+ * says which files carry a project graph, so a quoted value that resolves to
+ * one of THOSE is this file naming a member of the graph. A quoted value that
+ * resolves to a source file, a GUID, a configuration name or nothing at all is
+ * not, and is dropped without a word -- this is a reader of edges, not a parser
+ * of somebody's file format, and the difference matters because the format is
+ * theirs to change.
+ */
+function listedProjects(
+  profile: StackProfile,
+  repoRoot: string,
+  file: TreeFile,
+): readonly string[] {
+  const text = file.markup();
+  if (text === null) return [];
+  const out: string[] = [];
+  for (const match of text.matchAll(/"([^"\n]{1,400})"|'([^'\n]{1,400})'/g)) {
+    const raw = (match[1] ?? match[2] ?? "").trim();
+    if (raw === "") continue;
+    if (!profile.references.some((rule): boolean => matchesPattern(rule.pattern, laneRelativeName(raw.split("\\").join("/"))))) {
+      continue;
+    }
+    const verdict = classifyReference(repoRoot, file, raw);
+    if (verdict.kind === "file") out.push(verdict.resolved);
+  }
+  return out;
+}
+
+/**
+ * Every path this lane's project files point at, and which of them the graph
+ * NEN IS ADDRESSING can actually reach.
+ *
+ * REACHABILITY IS THE WHOLE OF THIS FUNCTION AND IT USED TO BE ABSENT. The
+ * reader globbed every file in the lane matching the rule's pattern, so an
+ * escaping reference in `third_party/Vendor/Vendor.csproj` -- a checked-in
+ * vendor drop the application references nowhere -- withheld the lane's `build`,
+ * with a note claiming it was "this lane's project graph". It was a file in the
+ * same directory tree, which is a different statement. What a build resolves is
+ * the graph reachable from the file it is pointed at, so that is what is walked:
+ * the answered project, the projects an aggregate lists, and every reference
+ * edge out of each. Anything outside that set is reported and blocks nothing.
+ */
+function walkGraph(
+  profile: StackProfile,
+  repoRoot: string,
+  files: readonly TreeFile[],
+  roots: readonly TreeFile[],
+): ReferenceReading {
+  const byPath = new Map<string, TreeFile>(
+    files.map((file): [string, TreeFile] => [file.repoRelative, file]),
+  );
+  const seen = new Set<string>();
+  const all: ReadReference[] = [];
+  const byTarget = new Map<string, Set<string>>();
+  const queue: TreeFile[] = [];
+  const push = (file: TreeFile | undefined): void => {
+    if (file === undefined || seen.has(file.repoRelative)) return;
+    seen.add(file.repoRelative);
+    queue.push(file);
+  };
+  for (const root of roots) push(root);
+  while (queue.length > 0) {
+    const file = queue.shift();
+    /* c8 ignore next -- the loop condition guarantees one */
+    if (file === undefined) continue;
+    for (const reference of referencesIn(profile, repoRoot, file)) {
+      all.push(reference);
+      if (reference.verdict.kind !== "file") continue;
+      // EVERY referrer is kept, not the first one the walk happened to reach:
+      // two project files naming one shared library is the ordinary case, and a
+      // precondition's reason crediting whichever of them the directory listing
+      // returned first is a sentence that changes when a file is renamed.
+      const referrers = byTarget.get(reference.verdict.resolved) ?? new Set<string>();
+      referrers.add(file.repoRelative);
+      byTarget.set(reference.verdict.resolved, referrers);
+      push(byPath.get(reference.verdict.resolved));
+    }
+    for (const listed of listedProjects(profile, repoRoot, file)) push(byPath.get(listed));
+  }
+  return {
+    all,
+    byTarget: new Map(
+      [...byTarget.entries()]
+        .sort(([a], [b]): number => compareBytes(a, b))
+        .map(([path, from]): [string, readonly string[]] => [path, [...from].sort(compareBytes)]),
+    ),
+  };
+}
+
+/** One layer of token answers: what was read, and what could not be. */
+interface TokenLayer {
+  readonly answers: ReadonlyMap<string, string>;
+  readonly unanswered: ReadonlyMap<string, string>;
+}
+
+/** What a stack's own files answered, and what they refused to answer. */
+interface StackReading {
+  /** Token -> the value read out of this repository's tree, for every verb. */
+  readonly answers: ReadonlyMap<string, string>;
+  /** Token -> why this tree could not answer it. Named in the withheld note. */
+  readonly unanswered: ReadonlyMap<string, string>;
+  /**
+   * Per-verb OVERRIDES of the two maps above, from a cross-check that also
+   * answers -- the case where the file a row must address is not the file the
+   * lane's general rule chose. Empty for every stack that states none.
+   */
+  readonly perVerb: ReadonlyMap<string, TokenLayer>;
+  /** Verb -> why a cross-check withholds it whatever else is true. */
+  readonly withheld: ReadonlyMap<string, string>;
+  /** Executables a `hostTool` toolchain entry confirms, so no manifest need. */
+  readonly confirmed: ReadonlySet<string>;
+  /** The `project.toolchain` rows this reading proposes. */
+  readonly toolchain: Readonly<Record<string, unknown>>;
+  /** The `project.preconditions.<lane>` rows this reading proposes. */
+  readonly preconditions: readonly unknown[];
+  readonly notes: readonly string[];
+}
+
+const EMPTY_READING: StackReading = {
+  answers: new Map(),
+  unanswered: new Map(),
+  perVerb: new Map(),
+  withheld: new Map(),
+  confirmed: new Set(),
+  toolchain: {},
+  preconditions: [],
+  notes: [],
+};
+
+/**
+ * The token layer ONE verb reads through: its own overrides over the lane's.
+ *
+ * A per-verb ANSWER also clears that token's lane-wide REASON, and the reverse,
+ * because the two maps are one statement read from two directions -- leaving a
+ * stale reason behind would withhold a row nen had just answered, or answer one
+ * it had just refused.
+ */
+function layerFor(reading: StackReading, verb: string): TokenLayer {
+  const own = reading.perVerb.get(verb);
+  if (own === undefined) return { answers: reading.answers, unanswered: reading.unanswered };
+  const answers = new Map(reading.answers);
+  const unanswered = new Map(reading.unanswered);
+  for (const [token, value] of own.answers) {
+    answers.set(token, value);
+    unanswered.delete(token);
+  }
+  for (const [token, reason] of own.unanswered) {
+    unanswered.set(token, reason);
+    answers.delete(token);
+  }
+  return { answers, unanswered };
+}
+
+/**
+ * The program ONE toolchain entry lets a row skip the manifest check for.
+ *
+ * A SET RATHER THAN A BOOLEAN AT THE CALL SITE, because this is the exemption
+ * itself and it is worth being able to look at. It is EMPTY unless the pack
+ * says otherwise: `hostTool` is false by default and false for every tool a
+ * repository could also declare as a dependency, so the ordinary answer here is
+ * "nothing", and a mutant that turned it on everywhere would erase the
+ * executable check for every stack that states any toolchain at all.
+ * ./detect.test.ts pins it against the pack in both directions.
+ */
+export function hostToolPrograms(entry: PackMinimum): ReadonlySet<string> {
+  const program = entry.probe[0];
+  if (!entry.hostTool || program === undefined) return new Set();
+  return new Set([program]);
+}
+
+/** Whether this profile states anything the project reader could act on. */
+function statesProjectRules(profile: StackProfile): boolean {
+  return (
+    profile.answers.length > 0 ||
+    profile.references.length > 0 ||
+    profile.crossChecks.length > 0 ||
+    Object.values(profile.toolchain).some(
+      (entry): boolean => entry.versionFile !== null || entry.hostTool,
+    )
+  );
+}
+
+/** A JSON document's value at a key path, when every step is a plain object. */
+function valueAtPath(document: Record<string, unknown>, path: readonly string[]): unknown {
+  let current: unknown = document;
+  for (const key of path) {
+    if (typeof current !== "object" || current === null || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+/**
+ * The version file this lane sits under, searched from the lane UP to the
+ * repository root.
+ *
+ * UPWARDS, because that is how the files this reads actually apply: a pin at
+ * the repository root governs every project beneath it, and a reader that only
+ * looked in the lane would report "no pin" for a tree that states one two
+ * directories up. It stops AT the root and never above it, for the same reason
+ * every other path in this family does.
+ */
+function findVersionFile(repoRoot: string, laneDirectory: string, file: string): string | null {
+  let directory = laneDirectory;
+  for (;;) {
+    const candidate = join(directory, file);
+    if (readText(candidate) !== null) return candidate;
+    if (relativePath(repoRoot, directory) === ".") return null;
+    const parent = dirname(directory);
+    /* c8 ignore next -- the root check above ends the walk before this can */
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+/**
+ * Read everything this stack's own files can say about this lane.
+ *
+ * ORDER MATTERS IN ONE PLACE AND IT IS ARGUED WHERE IT HAPPENS: a reference
+ * that escapes the repository makes every token this block would answer
+ * unanswerABLE, because the row it would fill in addresses a project graph that
+ * does not resolve. Reporting an ambiguity between two solutions to somebody
+ * whose build cannot load either would be the less useful of two true things.
+ */
+function readStack(
+  profile: StackProfile,
+  repoRoot: string,
+  laneDirectory: string,
+): StackReading {
+  if (!statesProjectRules(profile)) return EMPTY_READING;
+
+  const files = walkLaneFiles(repoRoot, laneDirectory);
+  const answers = new Map<string, string>();
+  const unanswered = new Map<string, string>();
+  const perVerb = new Map<string, TokenLayer>();
+  /** Each cross-check's own layer, held until the graph says whether it stands. */
+  const perVerbEvidence = new Map<ProfileCrossCheck, TokenLayer>();
+  const withheld = new Map<string, string>();
+  const confirmed = new Set<string>();
+  const toolchain: Record<string, unknown> = {};
+  const preconditions: unknown[] = [];
+  const notes: string[] = [];
+
+  // ── 1. WHICH FILE THIS LANE'S ROWS ADDRESS ─────────────────────────────────
+  //
+  // ANSWERED BEFORE THE REFERENCES ARE READ, and the order is now the other way
+  // round from the first draft. The graph a build resolves is the graph
+  // reachable FROM the file it is pointed at, so nen cannot know which
+  // references matter until it knows which file that is. Reading the references
+  // first is what let a vendored project nothing points at withhold a lane.
+  const roots: TreeFile[] = [];
+  for (const rule of profile.answers) {
+    let answered: TreeFile | null = null;
+    let ambiguity: string | null = null;
+    for (const candidate of rule.from) {
+      const hits = filesCarrying(files, candidate);
+      if (hits.length === 0) continue;
+      if (hits.length > 1) {
+        // BYTE ORDER, like every other list this file prints: the walk's own
+        // order is deterministic but depth-first, and a note that reads
+        // `Nested/B.sln, A.sln` for a tree whose files are A and B is a note
+        // that looks like a bug.
+        ambiguity = `${hits.length} files in this lane match ${describeMarkers([candidate])} (${hits
+          .map((file): string => file.laneRelative)
+          .sort(compareBytes)
+          .join(", ")}), and nen resolves no ambiguity: naming one of them would be nen choosing which of these this repository builds. State the row this repository means. ${rule.why}`;
+        break;
+      }
+      const hit = hits[0];
+      /* c8 ignore next -- `hits.length === 1` is the only way here */
+      if (hit === undefined) continue;
+      // AN AGGREGATE MUST AGREE WITH WHAT IT AGGREGATES, or it does not answer.
+      // A candidate at a HIGHER rank wins because it is the repository's own
+      // list of what a build addresses -- and a list that does not name the file
+      // the next rank would have answered with is not a list of THIS lane: an
+      // unrelated `samples/Unrelated.sln`, a zero-byte one, one still naming
+      // projects that were deleted. All three used to beat the project file
+      // beside them, because nothing ever opened them. So the check is that it
+      // NAMES the thing it claims to aggregate, and a candidate that fails it is
+      // reported by name and stands aside rather than answering.
+      const subordinate = rule.from.slice(rule.from.indexOf(candidate) + 1);
+      const named = subordinate.length === 0 ? null : filesCarrying(files, ...subordinate);
+      if (named !== null && named.length > 0) {
+        const listed = new Set(listedProjects(profile, repoRoot, hit));
+        const agrees = named.some((file): boolean => listed.has(file.repoRelative));
+        if (!agrees) {
+          notes.push(
+            `${hit.laneRelative} matches ${describeMarkers([candidate])} and does NOT answer ${rule.token}: it names none of this lane's own ${describeMarkers(subordinate)} (${named
+              .map((file): string => file.laneRelative)
+              .sort(compareBytes)
+              .join(", ")}). A file that aggregates others is the repository's list of what a build addresses, and one naming none of them is a list of something else -- unrelated, empty, or left behind by a project that was deleted. nen reads the next rank instead, and says so here rather than silently preferring a file it could not corroborate.`,
+          );
+          continue;
+        }
+      }
+      // A row is answered with the LANE-RELATIVE path, because a verb runs in
+      // the lane's own `cwd` and a repo-relative argument would miss by exactly
+      // that many directories.
+      answers.set(rule.token, hit.laneRelative);
+      answered = hit;
+      break;
+    }
+    if (answered !== null) {
+      roots.push(answered);
+      continue;
+    }
+    unanswered.set(
+      rule.token,
+      ambiguity ??
+        `no file in this lane matches ${describeMarkers(rule.from)}, which is where the reference reads this value from -- and the scan is bounded to ${MAX_DEPTH} directories below the lane and never enters ${[...SKIP].sort().join(", ")}, so a project file below that bound is invisible to it. ${rule.why}`,
+    );
+  }
+
+  // ── 2. THE PER-ROW EVIDENCE, AND THE FILE EACH GATED ROW ADDRESSES ─────────
+  //
+  // BEFORE THE GRAPH WALK, because a cross-check that ANSWERS a token names a
+  // SECOND file this lane's rows address -- the project carrying the tests is
+  // not the application -- and the graph the gated row resolves starts there.
+  // Reading it after would walk the graph of the build and then propose a row
+  // addressing a file outside it.
+  const evidenceRoots: TreeFile[] = [];
+  for (const check of profile.crossChecks) {
+    // ONE FILE MAY CARRY SEVERAL OF THE MARKERS -- a test project referencing
+    // both a test SDK and a framework matches twice and is ONE piece of
+    // evidence, not two, so the evidence is a SET of files keyed by path.
+    const evidence = new Map<string, TreeFile>();
+    for (const marker of check.markers) {
+      for (const file of filesCarrying(files, marker)) evidence.set(file.laneRelative, file);
+    }
+    if (evidence.size === 0) {
+      for (const verb of check.verbs) {
+        withheld.set(
+          verb,
+          `no file in this lane carries the evidence this row needs (${describeMarkers(check.markers)}). The pack's own reason: ${check.why} If this repository has one somewhere nen does not read, add the row by hand -- a verb the project does not visibly carry is a warning, never a proposal.`,
+        );
+      }
+      continue;
+    }
+    const token = check.answers;
+    if (token === null) continue;
+    const paths = [...evidence.keys()].sort(compareBytes);
+    if (paths.length === 1) {
+      const only = evidence.get(paths[0] ?? "");
+      /* c8 ignore next -- `paths` is keyed off `evidence` */
+      if (only !== undefined) evidenceRoots.push(only);
+      perVerbEvidence.set(check, {
+        answers: new Map([[token, paths[0] ?? ""]]),
+        unanswered: new Map(),
+      });
+      continue;
+    }
+    perVerbEvidence.set(check, {
+      answers: new Map(),
+      unanswered: new Map([
+        [
+          token,
+          `${paths.length} files in this lane carry the evidence this row needs (${paths.join(", ")}), and nen resolves no ambiguity: which of them this row means, and in what order, is a list only this repository can state. ${check.why}`,
+        ],
+      ]),
+    });
+  }
+
+  // ── 3. THE GRAPH THOSE ANSWERS REACH ───────────────────────────────────────
+  const references = walkGraph(profile, repoRoot, files, [...roots, ...evidenceRoots]);
+  const blocking = references.all.filter((reference): boolean => blocks(reference.verdict));
+  const describeBlocking = (reference: ReadReference): string => {
+    const verdict = reference.verdict;
+    /* c8 ignore next -- `blocking` is filtered on exactly the three below */
+    if (verdict.kind === "file" || verdict.kind === "missing") return "";
+    if (verdict.kind === "unresolvable") {
+      return `${reference.from} states ${reference.rule} '${reference.value}', which is ${verdict.why}`;
+    }
+    if (verdict.kind === "case") {
+      return `${reference.from} states ${reference.rule} '${reference.value}', which resolves to ${verdict.resolved} -- this tree spells that file ${verdict.actual}, and the two differ only in case. A case-insensitive host builds it and a case-sensitive one does not, so nen asserts neither spelling`;
+    }
+    return `${reference.from} states ${reference.rule} '${reference.value}', which lands at ${verdict.resolved}, and ${verdict.why}`;
+  };
+  // EVERY blocking reference is named, in byte order, not the first the walk
+  // reached. A maintainer who fixes the one nen happened to print runs `detect`
+  // again to be told about the next one, which is the shape of a tool that
+  // knows more than it says.
+  const blockingSentences = blocking
+    .map(describeBlocking)
+    .sort(compareBytes)
+    .join("; ");
+  const escapeReason =
+    blocking.length === 0
+      ? null
+      : `${blocking.length === 1 ? "a reference in this lane's project graph is one nen cannot assert" : `${blocking.length} references in this lane's project graph are ones nen cannot assert`} -- ${blockingSentences}. Every path a declaration states is resolved against the repository root, and one nen cannot resolve, or that escapes the tree, exits 2 by name -- so a row depending on it would be proposed with a precondition that can never hold, or with none at all and a build that fails later. Nothing here clones, fetches or vendors a sibling checkout. Make the dependency one this tree contains, spell it as this tree spells it, or state the row by hand, and run detect again`;
+  // ── 4. WHAT A BLOCKING REFERENCE TAKES WITH IT ─────────────────────────────
+  //
+  // EVERY TOKEN, LANE-WIDE AND PER-VERB ALIKE. A row addressing a graph that
+  // does not resolve is a row nen already knows will not start, and reporting
+  // an ambiguity between two solutions to somebody whose build cannot load
+  // either would be the less useful of two true things.
+  if (escapeReason !== null) {
+    for (const token of [...answers.keys()]) {
+      answers.delete(token);
+      unanswered.set(token, escapeReason);
+    }
+  }
+  for (const [check, layer] of perVerbEvidence) {
+    const token = check.answers;
+    /* c8 ignore next -- only checks that answer a token are recorded */
+    if (token === null) continue;
+    const resolved: TokenLayer =
+      escapeReason === null
+        ? layer
+        : { answers: new Map(), unanswered: new Map([[token, escapeReason]]) };
+    for (const verb of check.verbs) perVerb.set(verb, resolved);
+  }
+
+  for (const [tool, entry] of Object.entries(profile.toolchain)) {
+    // A PROBE THAT STILL NAMES A PACK TOKEN IS NOT ONE NEN CAN PROPOSE. That
+    // row already gets its own note further down (`proposeVerbs`), and this
+    // reader adds nothing to it: a toolchain entry whose probe carries a brace
+    // is one the executor refuses rather than runs.
+    if (PACK_TOKENS.some((token): boolean => entry.probe.some((word): boolean => word.includes(token)))) {
+      continue;
+    }
+    for (const program of hostToolPrograms(entry)) confirmed.add(program);
+    const versionFile = entry.versionFile;
+    if (versionFile === null) continue;
+    const found = findVersionFile(repoRoot, laneDirectory, versionFile.file);
+    const document = found === null ? null : readJson(found);
+    const stated = document === null ? undefined : valueAtPath(document, versionFile.path);
+    if (typeof stated === "string" && stated !== "") {
+      const at = relativePath(repoRoot, found ?? "");
+      // WHAT ELSE THE PIN'S OWN BLOCK SAYS, because a version alone is not the
+      // whole statement. A `global.json` stating `"rollForward": "latestFeature"`
+      // beside its `"version"` is declaring a FLOOR -- any SDK in that band
+      // satisfies it -- and nen's toolchain check compares versions EXACTLY, so
+      // a host with a newer SDK in the same band is reported as a mismatch
+      // against a pin the repository never meant as exact. nen still proposes
+      // the version and nothing else (a `version` is what the declaration's own
+      // reader accepts, and there is no field for a policy), but it says so
+      // rather than dropping the sentence: a pin whose meaning nen cannot carry
+      // is a pin whose meaning a maintainer has to be told about.
+      const block = valueAtPath(document ?? {}, versionFile.path.slice(0, -1));
+      const key = versionFile.path[versionFile.path.length - 1];
+      const siblings =
+        typeof block === "object" && block !== null && !Array.isArray(block)
+          ? Object.entries(block as Record<string, unknown>)
+              .filter(([name, value]): boolean => name !== key && typeof value !== "object")
+              .map(([name, value]): string => `${name} = ${JSON.stringify(value)}`)
+              .sort(compareBytes)
+          : [];
+      const policy =
+        siblings.length === 0
+          ? ""
+          : ` ${at} also states ${siblings.join(", ")} at ${versionFile.path.slice(0, -1).join(".") || "(root)"}, which nen's toolchain block has no field for: it means the pin is a FLOOR or a policy rather than an exact requirement, and 'nen shu tools' compares versions EXACTLY -- so a host inside the band this repository accepts can still be reported as a mismatch. Narrow it by hand, or read that report with this in mind.`;
+      toolchain[tool] = {
+        version: stated,
+        probe: entry.probe,
+        versionFrom: entry.versionFrom,
+        installer: entry.installer,
+        // THE PACK'S SENTENCE IS ABOUT THE REPOSITORY THE CATALOGUE OBSERVED,
+        // not about this one, and splicing it in unlabelled produced a
+        // declaration that contradicted itself: the reason quoted here begins
+        // "There is NO global.json in the repository" on a tree whose pin nen
+        // has just read out of one.
+        why: `${at} states this pin at ${versionFile.path.join(".")}, and nen proposes that and nothing else.${policy} The reference pack requires this tool for a reason written against the repository the catalogue observed rather than this one: ${entry.why}`,
+      };
+      notes.push(
+        `'${tool}' is proposed under project.toolchain with version ${stated}, read from ${at} (${versionFile.path.join(".")}) -- this repository's own statement about itself, never the pack's.${policy} Its installer is '${entry.installer}', and 'nen shu tools' reports what is on the host rather than installing it unless the installer is one this release runs.`,
+      );
+      continue;
+    }
+    notes.push(
+      `'${tool}' is NOT proposed under project.toolchain, and its version is withheld: ${
+        found === null
+          ? `this tree states none -- there is no ${versionFile.file} in the lane or above it, up to the repository root`
+          : `${relativePath(repoRoot, found)} is there but states nothing readable at ${versionFile.path.join(".")}`
+      }. Assert the version CI would need and nen will use it; nen will not invent one, because a toolchain entry with no 'version' is one nen's own reader refuses and a pin nen chose is a pin that pins nothing. State it yourself: {"version": "<the SDK CI would need>", "probe": ${JSON.stringify(entry.probe)}, "versionFrom": "${entry.versionFrom}", "installer": "${entry.installer}"} under project.toolchain.${tool}. ${versionFile.why}`,
+    );
+  }
+
+  // ── 3. WHAT THE GRAPH LETS NEN ASSERT ──────────────────────────────────────
+  //
+  // A `path` PRECONDITION IS WRITTEN FOR ONE SHAPE ONLY: a reference that
+  // resolves, stays inside the tree, and names a file that is there TODAY. Not
+  // for a property nen cannot expand, not for a path that leaves the tree, and
+  // not for a file the tree does not contain -- that last one is the case that
+  // reads most like a feature and is not: `<ProjectReference Include="Core\Core.csproj" />`
+  // pointing at a directory somebody deleted became `FAIL path Core/Core.csproj
+  // -- not present` on every verb of the lane, forever, for a build that had
+  // already been fixed some other way. nen states what it CHECKED, and a file
+  // it could not find is a finding.
+  for (const [path, from] of references.byTarget) {
+    preconditions.push({
+      kind: "path",
+      value: path,
+      why: `${from.join(", ")} point${from.length === 1 ? "s" : ""} this lane's project graph at it, and the build does not resolve without it. nen ASSERTS a precondition of kind ${ASSERTABLE_KINDS.map((kind): string => `'${kind}'`).join(" or ")} and performs neither: it will not create, fetch or vendor what is missing.`,
+    });
+  }
+  if (preconditions.length > 0) {
+    notes.push(
+      `${preconditions.length} path precondition${preconditions.length === 1 ? " is" : "s are"} proposed under project.preconditions from this lane's own project references (${[...references.byTarget.keys()].join(", ")}). Each is a fact nen CHECKS before a verb runs and never one it performs.`,
+    );
+  }
+  const missing = references.all.filter((reference): boolean => reference.verdict.kind === "missing");
+  if (missing.length > 0) {
+    notes.push(
+      `${missing.length === 1 ? "one reference in this lane's project graph names a file that is NOT in the tree" : `${missing.length} references in this lane's project graph name files that are NOT in the tree`}: ${missing
+        .map(
+          (reference): string =>
+            `${reference.from} states ${reference.rule} '${reference.value}' (${reference.verdict.kind === "missing" ? reference.verdict.resolved : ""})`,
+        )
+        .sort(compareBytes)
+        .join("; ")}. No precondition is proposed for ${missing.length === 1 ? "it" : "them"}: nen asserts what it CHECKED, and a precondition naming a file that is not there would fail every verb of this lane on a tree whose build a maintainer may already have fixed another way. Restore the file, delete the reference, or state the precondition by hand.`,
+    );
+  }
+  if (escapeReason !== null) {
+    notes.push(
+      `no precondition is proposed for ${blocking.length === 1 ? "the reference nen cannot assert" : "the references nen cannot assert"}: ${escapeReason}. ${blocking.length === 1 ? "It is" : "They are"} named here rather than written into the file because a declaration cannot state ${blocking.length === 1 ? "it" : "them"} at all.`,
+    );
+  }
+  // A BLOCKING REFERENCE THE ANSWERED PROJECT CANNOT REACH IS A FINDING, NOT A
+  // WITHHOLDING -- and saying nothing about it would be the other error. A
+  // vendored drop under `third_party/` with an absolute reference in it is real,
+  // and it is also not in the graph this lane's `build` resolves; a maintainer
+  // who adds a reference to it tomorrow should have been told today.
+  const reached = new Set(references.all.map((reference): string => reference.from));
+  const outside = files
+    .filter(
+      (file): boolean =>
+        !reached.has(file.repoRelative) &&
+        profile.references.some((rule): boolean => matchesPattern(rule.pattern, file.name)),
+    )
+    .flatMap((file): readonly ReadReference[] => referencesIn(profile, repoRoot, file))
+    .filter((reference): boolean => blocks(reference.verdict));
+  if (outside.length > 0) {
+    notes.push(
+      `${outside.length === 1 ? "one project file this lane's answered graph does not reach states a reference nen could not assert" : `${outside.length} references live in project files this lane's answered graph does not reach`}: ${outside
+        .map(describeBlocking)
+        .sort(compareBytes)
+        .join("; ")}. ${outside.length === 1 ? "It withholds" : "They withhold"} nothing, because a build resolves the graph reachable from the file it is pointed at and nothing in that graph names ${outside.length === 1 ? "this file" : "these files"} -- but a reference added to ${outside.length === 1 ? "it" : "them"} tomorrow would.`,
+    );
+  }
+
+  return { answers, unanswered, perVerb, withheld, confirmed, toolchain, preconditions, notes };
+}
+
 interface ProposedVerbs {
   readonly verbs: Readonly<Record<string, unknown>>;
   readonly notes: readonly string[];
+  /** The `project.toolchain` rows this lane's own files answered. */
+  readonly toolchain: Readonly<Record<string, unknown>>;
+  /** The `project.preconditions.<lane>` rows this lane's own files answered. */
+  readonly preconditions: readonly unknown[];
 }
 
 /** Every word a proposed row would spawn, in both of the row's two shapes. */
@@ -2847,6 +4041,7 @@ function proposeVerbs(
   hostStack: HostToolStack | undefined,
 ): ProposedVerbs {
   const manifest = readManifest(laneDirectory);
+  const reading = readStack(profile, repoRoot, laneDirectory);
   const verbs: Record<string, unknown> = {};
   const notes: string[] = [];
   const noCommand: string[] = [];
@@ -2917,10 +4112,15 @@ function proposeVerbs(
     // task is left exactly as the pack wrote it.
     const qualify = (word: string): string =>
       scope.kind === "module" && isBareTask(word) ? `${scope.module}:${word}` : word;
+    // THE PROJECT READER'S OWN LAYER for this verb, over the lane's: a stack
+    // that states no `answers` rule contributes an empty one.
+    const layer = layerFor(reading, verb);
     const substituted = stepsOfCell(cell).map(
       (step): ProposedStep => ({
-        exe: substitute(step.exe, manifest, answers),
-        argv: step.argv.map((token): string => qualify(substitute(token, manifest, answers))),
+        exe: substitute(step.exe, manifest, answers, layer),
+        argv: step.argv.map((token): string =>
+          qualify(substitute(token, manifest, answers, layer)),
+        ),
       }),
     );
 
@@ -2996,10 +4196,41 @@ function proposeVerbs(
         // not, in the token's own terms. "only this repository can answer" is
         // true and useless for a wrapper nen looked for and did not find.
         ...leftover.map((token): string => answers.refused.get(token) ?? ""),
+        // A TOKEN THE PROJECT READER TRIED AND COULD NOT ANSWER says far more
+        // than "only this repository can answer it": it says nen looked in the
+        // file the pack names, and what it found there instead.
+        ...leftover.map((token): string => {
+          const reason = layer.unanswered.get(token);
+          return reason === undefined ? "" : ` -- ${token}: ${reason}`;
+        }),
       ].join("");
       notes.push(
         `'${verb}' withheld: its reference command still names ${leftover.join(", ")}, which only this repository can answer${clauses}. nen never proposes an unsubstituted token: a guessed argument is a different command.`,
       );
+      continue;
+    }
+
+    // THE PACK'S OWN PER-ROW EVIDENCE, checked AFTER the tokens and before the
+    // manifest. After, because a token nen could not answer is a fact about the
+    // whole lane and blocks every row that carries it, while this is a fact
+    // about ONE row -- telling a maintainer their tree has no test project,
+    // when nothing in it resolves to a buildable project at all, answers the
+    // smaller question first. Before the manifest checks, because a stack that
+    // states evidence of its own is one whose rows a `package.json` was never
+    // going to confirm.
+    const missingEvidence = reading.withheld.get(verb);
+    if (missingEvidence !== undefined) {
+      notes.push(`'${verb}' withheld: ${missingEvidence}`);
+      // AND IT IS SEATED, not deleted -- the same argument `proposeVerbs`'s
+      // header makes for the pack's own `unsupported` cells, one layer in. A
+      // row that is simply absent makes `nen shu test` answer "this lane
+      // declares no 'test'", which is true of the FILE and says nothing about
+      // the tree: the maintainer is told the declaration is incomplete rather
+      // than that their repository has no test project. A row a maintainer can
+      // SEE is a row they can replace, and the reason travels inside it.
+      verbs[verb] = {
+        unsupported: `PROPOSED SEAT -- replace it once this repository can answer it. nen shu detect withheld the reference pack's command for '${verb}' on ${profile.id}: ${missingEvidence}`,
+      };
       continue;
     }
 
@@ -3008,6 +4239,14 @@ function proposeVerbs(
     // and the task check below: that route is the repository stating it runs
     // THIS LINE, which is stronger evidence than any list nen could consult
     // about the line's parts.
+    // A FOURTH ROUTE, and the pack has to ASK for it: an executable a
+    // `hostTool` toolchain entry probes for is confirmed by that entry rather
+    // than by a manifest. It exists because a stack whose driver is an SDK on
+    // the machine has none of the other three -- no manifest in that ecosystem
+    // can declare it -- and requiring one would withhold every row of that
+    // stack forever for the absence of a file it does not have. It is OFF by
+    // default and off for every tool a repository could also declare as a
+    // dependency; ../profiles/pack.ts's `hostTool` carries the full argument.
     const unconfirmed = steps.find((step): boolean => !runsVerbatim(step, manifest));
     const unknownExe =
       unconfirmed !== undefined &&
@@ -3016,6 +4255,7 @@ function proposeVerbs(
       // every row of a stack that legitimately has no package.json at all.
       !answers.exes.has(unconfirmed.exe) &&
       unconfirmed.exe !== manifest.packageManager?.executable &&
+      !reading.confirmed.has(unconfirmed.exe) &&
       !manifest.declares(unconfirmed.exe)
         ? unconfirmed
         : undefined;
@@ -3127,6 +4367,23 @@ function proposeVerbs(
     );
   }
 
+  // THE PROSE A `hosts` MAP CANNOT CARRY, carried beside it. `hosts` is a list
+  // of `process.platform` values and nothing else, so everything that makes a
+  // platform constraint actionable -- which IDE, which SDK, which formats are
+  // per-host, what a teammate on the other machine sees -- lived only in the
+  // pack and in docs/STACK-MATRIX.md. A maintainer reading `"hosts": {"*":
+  // ["win32"]}` in their own declaration was told WHAT nen refuses and never
+  // why, and the exit-3 message says less still. It is emitted wherever a
+  // `hosts` block is proposed at all: a stack running everywhere still has
+  // something to say about per-format and per-lane splits.
+  if (Object.keys(profile.hosts).length > 0 && profile.hostNote !== "") {
+    notes.push(
+      `the platforms in 'hosts' are ${Object.entries(profile.hosts)
+        .map(([verb, platforms]): string => `${verb}: ${platforms.join(", ")}`)
+        .join("; ")}, and the reference pack's own note on what that means in practice -- which a 'hosts' map cannot carry and an exit-3 refusal does not print -- is: ${profile.hostNote}`,
+    );
+  }
+
   if (noCommand.length > 0) {
     notes.push(
       `the reference pack proposes no command for ${noCommand.join(", ")}. That is the pack DECLINING to choose for you rather than a gap in this proposal -- docs/STACK-MATRIX.md carries each one's full reason, and the declaration is where this repository's answer goes. Each is proposed as an explicit {"unsupported": "<the pack's own reason>"} row rather than left out, because a lane whose verb map is empty is a declaration nen's own reader refuses, and because a row a maintainer can SEE is a row they can replace.${
@@ -3192,7 +4449,8 @@ function proposeVerbs(
   // manifest was the problem, and it hid WHICH rows the manifest would have
   // answered. Every withheld row now carries its own reason, and a row that
   // never needed a manifest never mentions one.
-  return { verbs, notes };
+  notes.push(...reading.notes);
+  return { verbs, notes, toolchain: reading.toolchain, preconditions: reading.preconditions };
 }
 
 /**
@@ -3365,11 +4623,18 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
   const pack = loadProfilesPack();
   const hostStacks = hostToolStacks(pack);
   const resolved = resolveSchemaFile(repoRoot, CONTRACT_FILE);
-  const { found, nestedBuilds } = scan(repoRoot, hostStacks);
+  const { found, nestedBuilds, nearMisses } = scan(repoRoot, hostStacks, packMarkersOf(pack));
   const lanes: DetectedLane[] = [];
   const profiles = new Map<string, StackProfile>();
   const taken = new Set<string>();
   const notes: string[] = [];
+  // KEPT OUT OF `DetectedLane` ON PURPOSE. Both blocks are per-LANE facts that
+  // belong in the proposed document, and both are empty for every stack that
+  // states no project rules -- putting them on the public per-lane shape would
+  // add two always-empty fields to every `--json` reader in exchange for
+  // nothing a caller of this function could not read off `proposal`.
+  const toolchains = new Map<string, Readonly<Record<string, unknown>>>();
+  const preconditions = new Map<string, readonly unknown[]>();
 
   for (const { directory, matches } of found) {
     const cwd = relativePath(repoRoot, directory);
@@ -3403,6 +4668,8 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
         hostStacks.find((entry): boolean => entry.stack === stack),
       );
       const found = byStack.get(stack) ?? [];
+      if (Object.keys(proposed.toolchain).length > 0) toolchains.set(lane, proposed.toolchain);
+      if (proposed.preconditions.length > 0) preconditions.set(lane, proposed.preconditions);
       lanes.push({
         lane,
         stack,
@@ -3461,6 +4728,15 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
     );
   }
 
+  // A PROJECT NEN DECLINED TO READ IS NOT AN EMPTY DIRECTORY, and from the
+  // outside they used to look identical. `nearMissesIn` carries the whole
+  // argument; these are the sentences it produced, reported whether or not a
+  // lane was found -- a tree with one lane and a second, conditional project is
+  // exactly the case where the silence is most expensive.
+  for (const miss of nearMisses) {
+    notes.push(`a project file nen did NOT read as a marker: ${miss}`);
+  }
+
   const makefile = found.some((entry): boolean =>
     listDirectory(entry.directory).some((file): boolean => file.name === "Makefile"),
   );
@@ -3510,6 +4786,42 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
     );
   }
 
+  // `project.toolchain` IS PER PROJECT AND `project.preconditions` IS PER LANE,
+  // which is the declaration's own shape and not this file's choice -- so two
+  // lanes answering the SAME tool with different versions is an ambiguity, and
+  // this file resolves none: neither is proposed, and the note names both.
+  const toolchain: Record<string, unknown> = {};
+  // WHICH LANE PUT EACH ENTRY THERE, kept alongside it. Without it the note
+  // below could only name the lanes that ARRIVED SECOND -- "(program among
+  // them)" for a disagreement between `app` and `program` -- which names one
+  // side of a two-sided fact and leaves the maintainer to find the other. Both
+  // sides, always, byte-ordered.
+  const owner = new Map<string, string>();
+  const contested = new Map<string, Set<string>>();
+  for (const [lane, entries] of toolchains) {
+    for (const [tool, entry] of Object.entries(entries)) {
+      const prior = toolchain[tool];
+      if (prior !== undefined && JSON.stringify(prior) !== JSON.stringify(entry)) {
+        const involved = contested.get(tool) ?? new Set<string>();
+        const first = owner.get(tool);
+        /* c8 ignore next -- an entry is in `toolchain` only via `owner` */
+        if (first !== undefined) involved.add(first);
+        involved.add(lane);
+        contested.set(tool, involved);
+        continue;
+      }
+      toolchain[tool] = entry;
+      owner.set(tool, lane);
+    }
+  }
+  for (const [tool, lanesInvolved] of contested) {
+    delete toolchain[tool];
+    const named = [...lanesInvolved].sort(compareBytes);
+    notes.push(
+      `no project.toolchain entry is proposed for '${tool}': ${named.length} lanes state a version for it and they disagree (${named.join(", ")}), and project.toolchain is ONE block for the whole project rather than one per lane. nen resolves no ambiguity -- state the version this repository means.`,
+    );
+  }
+
   const proposal =
     lanes.length === 0
       ? null
@@ -3522,6 +4834,14 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
             defaultLane: lanes.length === 1 ? (lanes[0]?.lane ?? null) : null,
             verbs: Object.fromEntries(lanes.map((lane): [string, unknown] => [lane.lane, lane.verbs])),
             hosts,
+            // ADDED ONLY WHEN THIS TREE ANSWERED SOMETHING. An empty block is
+            // not a neutral one: `project.toolchain: {}` reads as "this
+            // repository needs no tools", which is a claim, and every existing
+            // proposal would have grown one.
+            ...(Object.keys(toolchain).length === 0 ? {} : { toolchain }),
+            ...(preconditions.size === 0
+              ? {}
+              : { preconditions: Object.fromEntries(preconditions) }),
           },
         };
 

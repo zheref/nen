@@ -812,6 +812,102 @@ describe("the bundled pack's two shipped conventions, pinned", () => {
   });
 });
 
+describe("the two fields that widen what `detect` will propose", () => {
+  function withToolchain(overrides: Record<string, unknown>): Record<string, unknown> {
+    return profile({
+      toolchain: {
+        node: {
+          minimum: null,
+          probe: ["node", "--version"],
+          versionFrom: "first-semver-on-stdout",
+          installer: "verify-only",
+          why: "w",
+          source: "s",
+          ...overrides,
+        },
+      },
+    });
+  }
+
+  it("reads an ABSENT hostTool as false, which is the exemption being off", () => {
+    const parsed = parseProfile(AT, "example", VERBS, withToolchain({}));
+    expect(parsed.toolchain["node"]?.hostTool).toBe(false);
+  });
+
+  it("reads a stated hostTool as the boolean it is, in both directions", () => {
+    expect(
+      parseProfile(AT, "example", VERBS, withToolchain({ hostTool: true })).toolchain["node"]
+        ?.hostTool,
+    ).toBe(true);
+    expect(
+      parseProfile(AT, "example", VERBS, withToolchain({ hostTool: false })).toolchain["node"]
+        ?.hostTool,
+    ).toBe(false);
+  });
+
+  // THE MUTANT THIS KILLS: `raw["hostTool"] === true`. Under it every value
+  // below loads as FALSE, which silently re-arms the executable check and
+  // withholds every command row of the stack that wrote them -- a catalogue
+  // typo that costs a whole stack its proposal and says nothing.
+  for (const value of ["true", 1, "yes", null, {}] as readonly unknown[]) {
+    it(`refuses hostTool: ${JSON.stringify(value)} rather than reading it as false`, () => {
+      const error = refusal(() =>
+        parseProfile(AT, "example", VERBS, withToolchain({ hostTool: value })),
+      );
+      expect(error.path).toBe(AT);
+      expect(error.pointer).toBe("toolchain.node.hostTool");
+      expect(error.message).toContain("expected a boolean");
+    });
+  }
+
+  // N9: `crossChecks[].answers` was held to the GLOBAL placeholder set and to
+  // nothing else, so a token no row of this profile spells loaded clean and
+  // produced a rule that could never fire.
+  function withCrossCheck(answers: unknown, argv: readonly string[]): Record<string, unknown> {
+    return profile({
+      verbs: {
+        build: { exe: "example", argv: ["build"], why: "w", source: "s" },
+        test: { exe: "example", argv: [...argv], why: "w", source: "s" },
+      },
+      crossChecks: [
+        {
+          verbs: ["test"],
+          markers: [{ pattern: "*.csproj", contains: "xunit", why: "the framework" }],
+          answers,
+          why: "the evidence file is what the row addresses",
+        },
+      ],
+    });
+  }
+
+  it("accepts an answered token the gated row actually carries", () => {
+    const parsed = parseProfile(AT, "example", VERBS, withCrossCheck("{project}", ["{project}"]));
+    expect(parsed.crossChecks[0]?.answers).toBe("{project}");
+  });
+
+  it("refuses an answered token no row it gates spells, naming the verbs it checked", () => {
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, withCrossCheck("{scheme}", ["{project}"])),
+    );
+    expect(error.path).toBe(AT);
+    expect(error.message).toContain("{scheme}");
+    expect(error.message).toContain("test");
+    expect(error.message).toContain("can never fire");
+  });
+
+  it("still refuses a token that is not in the closed set at all", () => {
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, withCrossCheck("{nope}", ["{project}"])),
+    );
+    expect(error.message).toContain("{nope}");
+  });
+
+  it("leaves a cross-check that answers NOTHING alone", () => {
+    const parsed = parseProfile(AT, "example", VERBS, withCrossCheck(null, ["run"]));
+    expect(parsed.crossChecks[0]?.answers).toBeNull();
+  });
+});
+
 describe("profileById", () => {
   it("names every id it does carry when asked for one it does not", () => {
     const pack = loadProfilesPack();

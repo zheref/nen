@@ -105,6 +105,71 @@ describe("renderStackMatrix", () => {
     }
   });
 
+  // THE FOUR PACK FIELDS THE PAGE USED TO DROP. Every one of them changes what
+  // `nen shu detect` proposes, and a matrix that renders only the ones a stack
+  // happened to have first is a matrix that stops being the cell-by-cell answer
+  // the moment a field is added. Each assertion below is "the pack states it,
+  // therefore the page shows it" -- not a hard-coded string.
+  it("renders every `answers` rule, its RANK ORDER included", () => {
+    const text = renderStackMatrix(pack);
+    let ranks = 0;
+    for (const id of pack.ids) {
+      for (const rule of pack.profiles[id]?.answers ?? []) {
+        expect(text, `${id}: ${rule.token}`).toContain(`### How \`${rule.token}\` is answered`);
+        expect(text, `${id}: ${rule.token}`).toContain(rule.why);
+        rule.from.forEach((marker, index): void => {
+          ranks += 1;
+          // The rank NUMBER is the content: `from` is tried in order, and a
+          // reader who cannot see the order cannot predict the proposed row.
+          expect(text, `${id}: ${rule.token}[${index}]`).toContain(
+            `| ${index + 1} | \`${marker.pattern}\` |`,
+          );
+          expect(text, `${id}: ${rule.token}[${index}]`).toContain(marker.why);
+        });
+      }
+    }
+    expect(ranks, "a section nothing reaches is a section nothing tests").toBeGreaterThan(0);
+  });
+
+  it("renders every `references` rule, element and attribute", () => {
+    const text = renderStackMatrix(pack);
+    let rules = 0;
+    for (const id of pack.ids) {
+      for (const rule of pack.profiles[id]?.references ?? []) {
+        rules += 1;
+        expect(text, id).toContain("### Project references");
+        expect(text, id).toContain(`\`<${rule.element}>\``);
+        expect(text, id).toContain(`\`${rule.attribute}\``);
+        expect(text, id).toContain(rule.why);
+      }
+    }
+    expect(rules).toBeGreaterThan(0);
+  });
+
+  it("renders every toolchain entry's `versionFile` and `hostTool`", () => {
+    const text = renderStackMatrix(pack);
+    let pins = 0;
+    let exemptions = 0;
+    for (const id of pack.ids) {
+      for (const entry of Object.values(pack.profiles[id]?.toolchain ?? {})) {
+        if (entry.versionFile !== null) {
+          pins += 1;
+          expect(text, `${id}: ${entry.tool}`).toContain(
+            `\`${entry.versionFile.file}\` at \`${entry.versionFile.path.join(".")}\``,
+          );
+        }
+        if (entry.hostTool) exemptions += 1;
+      }
+    }
+    expect(text).toContain("| pin read from | host tool |");
+    expect(pins, "a column nothing fills is a column nothing tests").toBeGreaterThan(0);
+    expect(exemptions).toBeGreaterThan(0);
+    // OFF is rendered too, not merely omitted -- the reader comparing stacks is
+    // asking which ones have it, and a blank cell answers neither way.
+    expect(text).toContain("| **yes** |");
+    expect(text).toContain("| no |");
+  });
+
   it("carries every cell's citation into the page", () => {
     // The whole value of this artifact is that no cell is unattributed.
     const text = renderStackMatrix(pack);
@@ -235,6 +300,9 @@ describe("renderStackMatrix", () => {
           id: "only",
           displayName: "Only",
           markers: [{ pattern: "only.json", contains: null, why: "the marker" }],
+          crossChecks: [],
+          answers: [],
+          references: [],
           hosts: { "*": ["linux"] },
           hostNote: "linux",
           scaffoldTemplate: null,
