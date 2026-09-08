@@ -1431,6 +1431,69 @@ describe("NEN_VERB_TABLE -- exhaustive over the real verb registry", () => {
   });
 });
 
+// THE EXHAUSTIVENESS TEST ABOVE IS REGISTRY-KEYED, NOT SUBCOMMAND-KEYED, and
+// that asymmetry is the reason this block exists. A new FAMILY missing from the
+// table goes red; a new SUBCOMMAND on an existing family falls through to
+// `unknown` and refuses -- fail-closed, but INVISIBLE. `shu` is the first
+// family where being absent from the map is a DECISION rather than an
+// oversight, so the decision is written down here: these four are absent
+// because the argv they would run comes out of a file in the TARGET repository,
+// and a read-only row would certify it sight unseen.
+describe("NEN_VERB_TABLE -- the shu family's deliberate absences", () => {
+  const shu = NEN_VERB_TABLE["shu"];
+
+  it("classifies exactly these nine subcommands, and no others", () => {
+    expect(Object.keys(shu?.subcommands ?? {}).sort()).toEqual([
+      "archive",
+      "build",
+      "deploy",
+      "detect",
+      "dev",
+      "release",
+      "run",
+      "tools",
+      "warmup",
+    ]);
+  });
+
+  it("leaves test / ui-test / lint / coverage OUT, on purpose", () => {
+    for (const verb of ["test", "ui-test", "lint", "coverage"]) {
+      expect(shu?.subcommands[verb], `'shu ${verb}' must stay unclassified`).toBeUndefined();
+    }
+  });
+
+  it("so `nen shu test` classifies unknown and a watcher refuses it", () => {
+    for (const verb of ["test", "ui-test", "lint", "coverage"]) {
+      expect(classifyCommand(`nen shu ${verb}`).classification, verb).toBe("unknown");
+    }
+  });
+
+  it("and `--dry-run` is the form a loop CAN watch", () => {
+    for (const verb of ["build", "archive", "release", "deploy", "dev", "run"]) {
+      expect(classifyCommand(`nen shu ${verb}`).classification, verb).toBe("mutating");
+      expect(classifyCommand(`nen shu ${verb} --dry-run`).classification, verb).toBe("read-only");
+    }
+  });
+
+  it("gates detect on --write and tools on --install", () => {
+    expect(classifyCommand("nen shu detect").classification).toBe("read-only");
+    expect(classifyCommand("nen shu detect --write").classification).toBe("mutating");
+    expect(classifyCommand("nen shu tools").classification).toBe("read-only");
+    expect(classifyCommand("nen shu tools --install").classification).toBe("mutating");
+  });
+
+  it("refuses `shu warmup` in EVERY form, dry run included", () => {
+    expect(classifyCommand("nen shu warmup").classification).toBe("mutating");
+    expect(classifyCommand("nen shu warmup --dry-run").classification).toBe("mutating");
+  });
+
+  // NenFamilyEntry's own doc comment reserves "*" for a family whose flags
+  // select the behaviour or whose every subcommand shares one policy. A "*"
+  // row here would swallow the four absences above and certify them.
+  it("carries no wildcard row", () => {
+    expect(Object.keys(shu?.subcommands ?? {})).not.toContain("*");
+  });
+});
 
 // TABLE-VS-REALITY (#31's review blocker, fixed module-wide by zheref/nen#19):
 // the table's read-only rows for `pr fetch`/`pr next-blocker` certify
