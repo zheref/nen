@@ -3715,10 +3715,13 @@ darwin) and `android` (`gradle-android`) as lanes of their own with those
 stacks' rows. **The Android half is not a marker-only lane**, and it is where
 the two stacks meet: `gradle-android`'s tool is a file the repository *commits*,
 and `expo prebuild` writes it — so the wrapper and the lane's own
-`settings.gradle` are both right there, `build`, `ui-test` and `lint` arrive as
-**commands** with `{gw}` resolved for this host, and only `test` is withheld,
-because `include ':app'` names the application module rather than the library
-`{unitTestTask}` needs. `defaultLane` is `null`, and **no `hosts` block is
+`settings.gradle` are both right there, `build` and `lint` arrive as
+**commands** with `{gw}` resolved for this host, and the other two are withheld
+by two *different* readers, neither of them Node-shaped: `test` by the settings
+reader, because `include ':app'` names the application module rather than the
+library `{unitTestTask}` needs, and `ui-test` by the **plugin gate**, because
+nothing in this lane applies the screenshot plugin whose task both of those rows
+run. `defaultLane` is `null`, and **no `hosts` block is
 proposed**: the Apple lane runs on darwin alone and the other two run anywhere,
 and `hosts` is keyed by *verb* rather than by lane, so a union would let
 `nen shu test --lane ios` start on linux. A note relates the three — the `expo`
