@@ -740,6 +740,37 @@ describe("nen issue comment -- the general comment primitive", () => {
     expect(readFileSync(path, "utf8")).toBe(raw);
   });
 
+  // zheref/nen#75's review: every --body-file test above uses an ABSOLUTE temp
+  // path, so nothing pinned how a RELATIVE one resolves. command.ts's own call
+  // reads `readTextFile(bodyFile, process.cwd(), ..., true)` -- the SAME base
+  // `gh --body-file rel.md` itself would use, never `--repo` (the flag `issue
+  // file`'s schema read uses `--repo` for, for an unrelated purpose). Pin it
+  // with two files of the same relative name in two different directories, so
+  // a future refactor that resolved against --repo instead would read the
+  // WRONG one and this test would see the decoy's text.
+  it("resolves a RELATIVE --body-file against process.cwd(), never against --repo", async () => {
+    const cwdDir = mkdtempSync(join(tmpdir(), "nen-issue-cwd-"));
+    const repoDir = mkdtempSync(join(tmpdir(), "nen-issue-repo-"));
+    writeFileSync(join(cwdDir, "rel.md"), "the cwd file's own words\n", "utf8");
+    // A decoy at the SAME relative name under --repo: if resolution ever
+    // switched its base to --repo, this is the file that would be read.
+    writeFileSync(join(repoDir, "rel.md"), "the decoy under --repo\n", "utf8");
+    const previous = process.cwd();
+    try {
+      process.chdir(cwdDir);
+      const result = await capture(
+        ["issue", "comment", "--target", "o/n", "--issue", "12", "--body-file", "rel.md", "--dry-run"],
+        [],
+        { repoFlag: repoDir, json: true },
+      );
+      expect(result.code).toBe(0);
+      const parsed = JSON.parse(result.out.join("\n")) as { body: string };
+      expect(parsed.body).toBe("the cwd file's own words\n");
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
   it("--dry-run --json carries the argv and the resolved body as a stable contract", async () => {
     const result = await capture(
       ["issue", "comment", "--target", "o/n", "--issue", "12", "--body", "hi", "--dry-run"],

@@ -675,9 +675,32 @@ const SHELL_METACHARS = /[|;&<>()%`\n\r]/;
  * command -- and a refusal a caller does not believe is a refusal they route
  * around. The CR and LF that are themselves in the set are rendered as `\r`
  * and `\n` rather than pasted, so the reason stays one readable line.
+ *
+ * A LITERAL SINGLE QUOTE in the line gets the same treatment (zheref/nen#76
+ * review), for the same reason: rendered unescaped, it closes this message's
+ * OWN wrapping quote early -- `cat 'a.txt' | tee b.txt` produced `...so 'cat
+ * 'a.txt' | tee b.txt' is no longer...`, which reads as three quoted spans
+ * rather than one line. Escaped to `\'`, alongside `\r`/`\n` above, so a quote
+ * in the caller's own line can never be mistaken for this message's wrapping.
+ *
+ * A LITERAL BACKSLASH gets escaped FIRST, before any of the above (zheref/nen
+ * #98 adversarial review of #76's fix): the quote-escaping step above turns
+ * every `'` into `\'`, but a line that already carried its OWN backslash
+ * right before a quote -- `cat 'C:\foo\' > log.txt`, a Windows path with a
+ * trailing backslash inside the quotes -- left that pre-existing `\` sitting
+ * right next to the escape this function inserts, rendering as `\\'` with no
+ * way to tell the caller's own backslash apart from this function's escape.
+ * Doubling every backslash to `\\` before the quote pass restores the usual
+ * escaping invariant (`\\` is always one literal backslash, `\'` is always
+ * one literal quote), so the two-character groups never collide regardless
+ * of what precedes a quote in the caller's line.
  */
 function shellMetacharRefusal(command: string): string {
-  const shown = command.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  const shown = command
+    .replace(/\\/g, "\\\\")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/'/g, "\\'");
   return `a shell metacharacter (>, >>, |, ;, &, <, (, ), %, a backtick, a newline or a CR) hands part of this line to the SHELL rather than to the command it starts with, so '${shown}' is no longer the single command any row could vouch for. Watch the bare read, and run the redirection or the second command yourself.`;
 }
 
@@ -1339,12 +1362,27 @@ function evaluateNenPolicy(
   tokens: readonly string[],
   lineFaithful: boolean,
 ): ClassifyResult {
+  // A verb that is MUTATING IN EVERY FORM answers before the passthrough `--`
+  // guard below (zheref/nen#74's review): nothing a `--` could forward to
+  // another tool changes an already-mutating verdict -- this arm's answer
+  // never depended on `tokens` or `lineFaithful` in the first place, only on
+  // `policy.why` -- so letting the guard's generic "unknown" pre-empt it lost
+  // a more specific classification and reason for no safety benefit. The
+  // refusal is identical either way (neither is "read-only"); only the label
+  // and the reason text improve, e.g. `nen tag cut --name x --at y -- z` now
+  // answers "mutating" instead of "unknown".
+  if (policy.kind === "mutating") {
+    return { classification: "mutating", reason: `${label} -- ${policy.why}` };
+  }
+
   // A passthrough `--` hands everything after it to an underlying tool
   // (../cli/args.ts), and what THAT tool does with it is not provable from
   // here -- `nen dev test -- -u` would have vitest rewriting snapshot files
   // under a verb this table calls a checker. Refused as unknown for every
-  // policy, including "read-only": the table vouches for nen's verbs, not
-  // for arbitrary arguments forwarded through them.
+  // OTHER policy, including "read-only": the table vouches for nen's verbs,
+  // not for arbitrary arguments forwarded through them. ("mutating" is
+  // handled above, unconditionally, because forwarding cannot make an
+  // already-mutating verb any less mutating.)
   //
   // THIS CHECK IS ITSELF A SCAN, and its negative result is only worth
   // anything on a scan-faithful line -- which is why the two policies whose
@@ -1381,8 +1419,7 @@ function evaluateNenPolicy(
       }
       return { classification: "read-only", reason: `${label} -- ${policy.why}` };
     }
-    case "mutating":
-      return { classification: "mutating", reason: `${label} -- ${policy.why}` };
+    // "mutating" is handled above, before the `--` guard -- see that comment.
     case "dry-run-gated": {
       // The verb WRITES by default; only an explicit `--dry-run` argument
       // makes it a read. Both halves must hold: the exact token is present,

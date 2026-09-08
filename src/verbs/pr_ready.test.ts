@@ -151,6 +151,18 @@ describe("resolveRef", () => {
     expect(ref).toMatchObject({ owner: "someone", repo: "else", number: 7 });
   });
 
+  // zheref/nen#72's own review: --gh-repo bypasses the registry lookup
+  // entirely (the `explicit !== null` early return above), but it still goes
+  // through the SAME shorthand split as the registry path -- so the #26 bug
+  // (one greedy regex handing the digit group exactly one trailing digit) was
+  // reachable here too: a caller naming an unregistered code with --gh-repo
+  // and a no-'#' multi-digit number would have gotten 'ZZ92' + 5 instead of
+  // 'ZZ' + 925. This never depends on 'ZZ' resolving through the registry.
+  it("an explicit --gh-repo bypasses the registry but still uses the longest-trailing-digit-run split (no-# multi-digit)", () => {
+    const ref = resolveRef("ZZ925", "someone/else", registry);
+    expect(ref).toMatchObject({ owner: "someone", repo: "else", number: 925 });
+  });
+
   it("an unknown code is an error that NAMES the known ones", () => {
     expect(() => resolveRef("ZZ#1", undefined, registry)).toThrow(/Known codes: BC, KA, KP/);
   });
