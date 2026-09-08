@@ -473,6 +473,81 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
     expect(text.out.join("\n")).toMatch(/verify-only: install by hand -- the bootstrap/);
   });
 
+  // ── the renamed block, and the collision it used to produce ──────────────
+  //
+  // `dependency.name` is optional and defaults to nen's own program name, and
+  // the collision guard tested THAT default while the row was named from the
+  // field. Two declarations broke on the difference, in opposite directions,
+  // and both are pinned here.
+
+  /** A dependency block, renamed, beside one toolchain entry. */
+  function renamedDependency(
+    name: string,
+    tool: string,
+  ): Readonly<Record<string, unknown>> {
+    return {
+      $schema: "nen.contract/v0.1",
+      dependency: {
+        name,
+        minimum: "0.3",
+        pinned_ref: "v0.3.0",
+        version_probe: [name, "--version"],
+        bootstrap: {
+          url: "https://example.invalid/nen.sh",
+          script_path_in_source: "bootstrap/nen.sh",
+        },
+      },
+      project: {
+        lanes: { only: { stack: "nextjs", cwd: "." } },
+        defaultLane: "only",
+        toolchain: {
+          [tool]: {
+            version: "1.0.0",
+            probe: [tool, "--version"],
+            versionFrom: "first-semver-on-stdout",
+            installer: "verify-only",
+          },
+        },
+        verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] } } },
+      },
+    };
+  }
+
+  it("emits ONE row when the renamed block collides with a declared tool", async () => {
+    // `dependency.name: "foo"` beside `toolchain.foo`: the explicit entry wins
+    // and the dependency row is not synthesised. Two rows of one name would be
+    // a report that contradicts itself -- and `--only foo` would return both.
+    const result = await withDeclaration(renamedDependency("foo", "foo"), ["--json"], {
+      script: [{ match: "foo --version", result: { stdout: "1.0.0\n" } }],
+    });
+    expect(result.code).toBe(0);
+    expect(report(result).tools.map((entry): string => entry.name)).toEqual(["foo"]);
+    // The surviving row is the TOOLCHAIN entry's -- an exact pin, not the
+    // dependency block's zero-major range.
+    expect(row(result, "foo").installer).toBe("verify-only");
+    expect(spawned(result.seams)).toEqual(["foo --version"]);
+  });
+
+  it("still checks a renamed block when a DIFFERENT tool is declared", async () => {
+    // `dependency.name: "nenx"` beside `toolchain.nen`: the old guard tested
+    // the default name, found the `nen` entry, and dropped the nenx row -- so
+    // the version the block exists to check was never checked at all.
+    const result = await withDeclaration(renamedDependency("nenx", "nen"), ["--json"], {
+      script: [
+        { match: "nenx --version", result: { stdout: "0.9.0\n" } },
+        { match: "nen --version", result: { stdout: "1.0.0\n" } },
+      ],
+    });
+    expect(report(result).tools.map((entry): string => entry.name)).toEqual(["nenx", "nen"]);
+    // And it was JUDGED: 0.9.0 is outside `>=0.3.0 <0.4.0`, so the run is 5.
+    expect(row(result, "nenx")).toMatchObject({
+      state: "present-but-wrong-version",
+      found: "0.9.0",
+      satisfied: false,
+    });
+    expect(result.code).toBe(5);
+  });
+
   it("omits the row entirely when there is no dependency block", async () => {
     const result = await withDeclaration(
       oneTool({

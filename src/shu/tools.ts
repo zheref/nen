@@ -182,6 +182,16 @@ export function packMinimums(stack: string | null): Readonly<Record<string, stri
  * then not synthesised: an explicit entry is the repository saying it wants
  * this tool checked its own way, and two rows with one name would be a report
  * that contradicts itself.
+ *
+ * "THE SAME NAME" IS THE NAME THIS ROW WOULD ACTUALLY CARRY, read once into
+ * `dependencyName` and used for both the collision test and the row. The block
+ * may rename itself (`dependency.name`), and testing one name while naming the
+ * row another produced two failures in one line: `dependency.name: "foo"` beside
+ * a `toolchain.foo` entry emitted TWO rows called foo (and `--only foo` returned
+ * both), while `dependency.name: "nenx"` beside a `toolchain.nen` entry
+ * suppressed the nenx row entirely -- so the version the dependency block exists
+ * to check was never checked, silently, which is the failure mode this whole
+ * verb is written against.
  */
 export function buildPlans(
   contract: RepositoryContract,
@@ -191,12 +201,16 @@ export function buildPlans(
   const plans: ToolPlan[] = [];
   const dependency = contract.dependency;
   const declared = project.toolchain;
-  if (dependency !== null && !Object.prototype.hasOwnProperty.call(declared, PROGRAM)) {
+  const dependencyName = dependency?.name ?? PROGRAM;
+  if (dependency !== null && !Object.prototype.hasOwnProperty.call(declared, dependencyName)) {
     const floor = parseMinimum(dependency.minimum, "dependency.minimum");
     plans.push({
-      name: dependency.name ?? PROGRAM,
+      name: dependencyName,
       required: true,
-      probe: { exe: dependency.versionProbe[0] ?? PROGRAM, argv: dependency.versionProbe.slice(1) },
+      probe: {
+        exe: dependency.versionProbe[0] ?? dependencyName,
+        argv: dependency.versionProbe.slice(1),
+      },
       // The block states the shape of its own answer -- a bare version on
       // stdout -- rather than carrying a `versionFrom` field, so this is the
       // member that reads it, not a default nen fell back to.
@@ -206,7 +220,7 @@ export function buildPlans(
       satisfiedBy: (found): boolean => satisfiesMinimum(floor, found),
       install: {
         kind: "by-hand",
-        why: `the bootstrap this repository pins installs ${dependency.pinnedRef}. Re-pinning ${PROGRAM} is the bootstrap's job and this repository's decision; this verb reports the version and never changes it.`,
+        why: `the bootstrap this repository pins installs ${dependency.pinnedRef}. Re-pinning ${dependencyName} is the bootstrap's job and this repository's decision; this verb reports the version and never changes it.`,
       },
       why: dependency.raw["minimum_semantics"] === undefined ? null : String(dependency.raw["minimum_semantics"]),
     });
