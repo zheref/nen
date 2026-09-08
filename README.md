@@ -149,6 +149,15 @@ is allowed to fix:
 nen shu tools --repo /path/to/repo
 ```
 
+Then start a piece of work in one line — refuse (or `--discard`) uncommitted
+changes, fetch, fast-forward the trunk, cut the branch **you** name from its
+fresh tip, and prove the declared build still passes; `--dry-run` prints every
+git and toolchain command and runs none of them:
+
+```bash
+nen shu warmup --repo /path/to/repo --branch my-idea --dry-run
+```
+
 Preview the label set, then drop `--dry-run` to push it. `--dry-run` makes no
 `gh` call at all; without it one bad label never aborts the run — every other
 good label lands, and the failures are named at the end (exit 1):
@@ -328,7 +337,8 @@ they compose into. The families group roughly as:
   next-blocker, cascade-main, retarget, request-reviews), `gate`, `split`,
   `wc`, `stage`
 - **Backlog & boards** — `backlog`, `board`, `epic`, `effort`, `loop`,
-  `warmup`, `watch`
+  `warmup` (a *registry* stale-pin sweep — not `shu warmup`, below, which warms
+  a working copy), `watch`
 - **Labels, issues & taxonomy** — `label`, `labels`, `schema check`, `color`,
   `repo`, `ref`
 - **Release mechanics** — `release`, `changelog`, `tag`, `fanout`, `run`
@@ -347,14 +357,17 @@ root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
 `nen shu` runs those verbs today, against any repository that declares them.
-Twelve of the thirteen execute — `nen shu build --dry-run` prints the exact
-argv, cwd and environment *names* it would spawn and spawns nothing; `nen shu
-detect` proposes a `nen/contract.json` project block from the markers on disk
-and never writes one without `--write`; `nen shu tools` checks the **host**
-toolchain the declaration pins, exits 5 naming the install command per tool, and
-installs only through `corepack` with `--install` — every other declared
-installer is verify-only in this release. `shu warmup` is declared, documented,
-and refuses at exit 4 naming the release it arrives in.
+All thirteen execute — `nen shu build --dry-run` prints the exact argv, cwd and
+environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
+a `nen/contract.json` project block from the markers on disk and never writes
+one without `--write`; `nen shu tools` checks the **host** toolchain the
+declaration pins, exits 5 naming the install command per tool, and installs only
+through `corepack` with `--install` — every other declared installer is
+verify-only in this release. `nen shu warmup` is the one verb in the family that
+mutates git state: it warms a **working copy** (clean → fetch → fast-forward the
+trunk → cut your branch → verify the declared build), refusing at exit 2 rather
+than guessing at every step, and it is *not* the top-level `nen warmup`, which
+sweeps a **registry** for stale pins and reads only.
 
 What each verb can run **per stack** is written down in
 [`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
