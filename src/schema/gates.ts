@@ -1,5 +1,5 @@
 // src/schema/gates.ts -- the REVIEWER IDENTITIES the readiness predicates are
-// parameterised by, read from the TARGET repository's `schemas/gates.json`.
+// parameterised by, read from the TARGET repository's `nen/gates.json`.
 //
 // WHY THIS FILE EXISTS AT ALL. bankai-core's `cli/src/gates/predicates.ts`
 // decides CON-32 readiness against identities written into the source: a
@@ -57,7 +57,7 @@
 // reads ready where the original does not. Neither is acceptable, so the file
 // says which reviewer it means.
 //
-// It stays at `version: 1`. No repository ships `schemas/gates.json` yet -- the
+// It stays at `version: 1`. No repository ships `nen/gates.json` yet -- the
 // schema is introduced by this migration and read only by builds that already
 // understand the flag -- so the version's job (stopping an older nen from
 // silently applying a SUBSET of a newer file's reviewer rules) has no older
@@ -349,7 +349,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   // over an empty approver set -- deliberately, because it reproduces jq's `all`
   // over an empty list and because owed rounds are still enforced elsewhere. The
   // consequence of pairing that with a silent `[]` here is that a
-  // `schemas/gates.json` which simply forgets the key leaves CON-32(b)'s APPROVE
+  // `nen/gates.json` which simply forgets the key leaves CON-32(b)'s APPROVE
   // LIMB OPEN, and the gate reports ready with nobody having approved anything.
   //
   // The vacuous reading stays -- a caller that passes an explicitly empty list

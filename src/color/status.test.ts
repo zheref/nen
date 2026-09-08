@@ -29,7 +29,7 @@ function vocab(precedence: string[], valueNames: string[]): ColorVocabulary {
   };
   const categories = [category];
   return {
-    path: "schemas/colors.yml",
+    path: "nen/colors.yml",
     version: 1,
     categories,
     category: (name): typeof category | undefined => (name === "status" ? category : undefined),

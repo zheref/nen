@@ -32,14 +32,14 @@
 //
 //   1. `--gates <path>`      an explicit gates file. It exists because the
 //                            schema is NEW: no repository ships
-//                            `schemas/gates.json` yet, and the shadow window has
+//                            `nen/gates.json` yet, and the shadow window has
 //                            to be able to state the identities the shell gate
 //                            decides with in order to compare verdicts at all.
 //                            A RELATIVE path is resolved against the `--repo`
 //                            ROOT, not the current directory -- see
 //                            `resolveIdentities` for the rule and why it is that
 //                            way round (zheref/nen#8 item 4).
-//   2. `schemas/gates.json`  under the target repo root (`--repo`, else cwd).
+//   2. `nen/gates.json`  under the target repo root (`--repo`, else cwd).
 //                            The steady state.
 //   3. `--reviewers a,b,c`   the shell gate's own flag, mirrored. The named
 //                            reviewers get the ORIGINAL's `default:` reading and
@@ -57,7 +57,7 @@
 //
 // ── THE REF GRAMMAR, DELIBERATELY SMALL ─────────────────────────────────────
 //
-// `<CODE>#<N>` resolved through the target repo's `schemas/repos.json`
+// `<CODE>#<N>` resolved through the target repo's `nen/repos.json`
 // `product_codes` (case-insensitive, the `#` optional), or a bare `<N>` with an
 // explicit `--gh-repo owner/name`. A BARE NUMBER WITH NO REPO IS AN ERROR rather
 // than an assumption that it means the current directory's repository -- the
@@ -66,7 +66,7 @@
 // internal and simple so that it can be REPLACED by that engine rather than
 // competed with.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { evaluateReady, CAVEATS, type Conjunct, type ReadyEvaluation } from "../gates/ready.js";
 import type { RoundPolicy } from "../gates/predicates.js";
@@ -81,7 +81,7 @@ import {
   type ReviewerIdentity,
 } from "../schema/gates.js";
 import { loadRepoRegistry } from "../schema/repos.js";
-import { GATES_FILE, readSchemaJson, schemaPath } from "../schema/source.js";
+import { GATES_FILE, readSchemaJson, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
 
 /**
@@ -317,7 +317,7 @@ export function resolveRef(
   if (bare !== null) {
     if (explicit === null) {
       throw new RefError(
-        `'${typed}' is a bare pull-request number and names no repository. Either write it as <CODE>#${typed} -- the code is resolved through the target repository's ${GATES_FILE.replace("gates", "repos")} -- or pass --gh-repo owner/name. Guessing the repository from the current directory is the one shortcut this verb refuses.`,
+        `'${typed}' is a bare pull-request number and names no repository. Either write it as <CODE>#${typed} -- the code is resolved through the target repository's ${REPOS_FILE} -- or pass --gh-repo owner/name. Guessing the repository from the current directory is the one shortcut this verb refuses.`,
       );
     }
     return { ...explicit, number: Number.parseInt(typed, 10), typed };
@@ -424,7 +424,7 @@ export class IdentityError extends Error {}
  * same `[]` one layer up (rather than here) made `--reviewers a,b` with no
  * `--approvers` silently return `ready` on an unapproved pull request -- CON-32(b)'s
  * approve limb going vacuously true through the one identity source every
- * repository without a `schemas/gates.json` actually uses. Fixed at the call
+ * repository without a `nen/gates.json` actually uses. Fixed at the call
  * site: an omitted `--approvers` now defaults to the REVIEWER set (the
  * conservative reading -- every named reviewer must approve, never nobody).
  */
@@ -465,7 +465,7 @@ export function identitiesFromFlags(
 // body in ../gates/predicates.ts, and only this one was ever given the shape
 // guard -- which left the UNGUARDED copy on the path production actually takes,
 // since `identitiesFromFlags` above is never called once the target repository
-// ships a `schemas/gates.json`. One implementation, one guard, two importers;
+// ships a `nen/gates.json`. One implementation, one guard, two importers;
 // the contract and the reasoning are in that file's header.
 
 /**
@@ -475,13 +475,13 @@ export function identitiesFromFlags(
  * 4). That is a decision, so here is the reasoning rather than the rule alone:
  *
  *   * Every other path this verb reads is anchored to the target repository --
- *     `schemas/repos.json` for the ref, `schemas/gates.json` two branches below,
+ *     `nen/repos.json` for the ref, `nen/gates.json` two branches below,
  *     both through `schemaPath(repoRoot, ...)`. `--gates` was the one exception,
  *     and it was an exception nobody chose: `readFileSync(gatesFlag)` simply
  *     inherits `process.cwd()`.
  *   * The failure that exception produces is SILENT and WRONG, which is the
- *     worst pair available to a gate. `--repo ../other --gates schemas/gates.json`
- *     from a checkout that also has a `schemas/gates.json` read the CURRENT
+ *     worst pair available to a gate. `--repo ../other --gates nen/gates.json`
+ *     from a checkout that also has a `nen/gates.json` read the CURRENT
  *     directory's reviewers, judged the OTHER repository's pull request against
  *     them, and reported a verdict -- with `meta.identities.path` printing the
  *     bare relative string, so nothing on screen said which file had been read.
@@ -609,10 +609,17 @@ export function resolveIdentities(
     }
     return { identities: parseGateIdentities(gatesPath, value), source: "schema", path: gatesPath };
   }
-  const inRepo = schemaPath(repoRoot, GATES_FILE);
-  if (existsSync(inRepo)) {
+  // THE IN-REPO PATH IS THE RESOLVER'S, NOT THIS FILE'S. This verb bypasses
+  // `openTaxonomy` on purpose -- `--gates <path>` may point outside the
+  // repository -- but "where does gates.json live" is still one question with
+  // one answer, and answering it here with a second join is how a repository
+  // that has migrated to `nen/` gets told it has no gates file while
+  // `nen schema check` reads one. `resolveSchemaFile` applies the same
+  // `nen/`-then-`schemas/` order every loader uses.
+  const inRepo = resolveSchemaFile(repoRoot, GATES_FILE);
+  if (inRepo.canonical.present || (inRepo.legacy?.present ?? false)) {
     // Same shaping as the `--gates <path>` branch above: a malformed
-    // schemas/gates.json must fail as a path-bearing SchemaError, not as a bare
+    // gates.json must fail as a path-bearing SchemaError, not as a bare
     // SyntaxError with no file/pointer context. readSchemaJson is the shared
     // reader every other in-repo taxonomy load already goes through (see
     // ../schema/gates.ts's own loadGateIdentities, ../schema/repos.ts's
@@ -625,7 +632,9 @@ export function resolveIdentities(
     return { identities: identitiesFromFlags(reviewers, approvers), source: "flags", path: null };
   }
   throw new IdentityError(
-    `no reviewer identities. This gate never falls back to a built-in reviewer set: a binary that guessed the reviewers would judge this repository against another one's and report success. Give it one of: --gates <path>, a '${GATES_FILE}' in the target repository (looked for at '${inRepo}'), or --reviewers a,b,c.`,
+    `no reviewer identities. This gate never falls back to a built-in reviewer set: a binary that guessed the reviewers would judge this repository against another one's and report success. Give it one of: --gates <path>, a '${GATES_FILE}' in the target repository (looked for at '${inRepo.canonical.path}'${
+      inRepo.legacy === null ? "" : `, and at the legacy '${inRepo.legacy.path}'`
+    }), or --reviewers a,b,c.`,
   );
 }
 
@@ -734,7 +743,7 @@ export async function prReady(
   // "the caller never said" into that same `[]` -- as `?? ""` did before this
   // was fixed -- silently emptied the approve limb on the `--reviewers` identity
   // path, which is the ordinary way this verb runs today (no repository ships
-  // `schemas/gates.json` yet). An omitted `--approvers` therefore defaults to
+  // `nen/gates.json` yet). An omitted `--approvers` therefore defaults to
   // the REVIEWER set: the conservative reading, "every named reviewer must
   // approve", never "nobody has to". An explicit `--approvers ""` is still
   // honoured as the caller's own vacuous statement (identitiesFromFlags's own

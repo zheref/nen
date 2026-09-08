@@ -492,7 +492,7 @@ export function planConsolidation(
 
   // WHEN NO FAMILY WAS NAMED, DETECT WHAT THE REDUCTION WOULD HAVE CAUGHT.
   // The taxonomy declares its families STRUCTURALLY -- orderingFromTaxonomy
-  // above reads whichever family the caller names; nothing in schemas/ marks
+  // above reads whichever family the caller names; nothing in nen/ marks
   // one family as "the severities" (that is §3: nen knows no severity's name).
   // So the detection is structural too: group the union's `<ns>:<family>/<leaf>`
   // labels by their family prefix, and any prefix contributing two or more

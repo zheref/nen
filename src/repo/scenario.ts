@@ -1,7 +1,7 @@
 // src/repo/scenario.ts -- `nen repo scenario`: the caller workflow's scenario
 // read straight off the target repository's own registry entry.
 //
-// A LOOKUP, NOT A COMPUTATION. `schemas/repos.json`'s consumer entries already
+// A LOOKUP, NOT A COMPUTATION. `nen/repos.json`'s consumer entries already
 // carry a `scenario` field (../schema/repos.ts's ConsumerEntry) -- the value
 // bankai-quality/-handbooks resolution reads to pick a tooling and rule set.
 // This module's only job is naming the failure honestly when the lookup comes

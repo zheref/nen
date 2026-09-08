@@ -4,7 +4,7 @@ import type { RepoRegistry } from "../schema/repos.js";
 
 function registryOf(consumers: RepoRegistry["consumers"]): RepoRegistry {
   return {
-    path: "schemas/repos.json",
+    path: "nen/repos.json",
     latest: null,
     consumers,
     productCodes: {},

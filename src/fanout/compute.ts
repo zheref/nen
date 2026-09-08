@@ -5,7 +5,7 @@
 // PORTED FROM getsuga SKILL.md §7: "Compute the affected set factually:
 // changed-workflows INTERSECT consumes, where changed-workflows is the
 // .github/workflows/** diff across <vPrev>..<newTag> and consumes comes from
-// schemas/repos.json. Record every unaffected consumer as an explicit N/A
+// nen/repos.json. Record every unaffected consumer as an explicit N/A
 // with its basis -- an unstated N/A is indistinguishable from an unswept
 // repo."
 //

@@ -10,7 +10,7 @@
 //
 // ONE THING CHANGED, AND IT CHANGED EVERYWHERE: the reviewer IDENTITIES this
 // file used to hard-code are now DATA, supplied by the caller as a
-// `GateIdentities` read from the target repository's `schemas/gates.json` (see
+// `GateIdentities` read from the target repository's `nen/gates.json` (see
 // ../schema/gates.ts). The Akatsuki migration's §3 makes that mandatory -- "no
 // hard-coded personas, labels, check names, or colours" -- and §3 names this
 // module by way of example: the `case "sasuke": return /^sasuke \/ audit$/i`
@@ -84,14 +84,14 @@ import {
 } from "../github/types.js";
 // PORT ADDITION: the identities every reviewer-aware predicate below is now
 // parameterised by. A TYPE-ONLY import -- these predicates stay pure and never
-// read a file; the CALLER loads the target repository's `schemas/gates.json`
+// read a file; the CALLER loads the target repository's `nen/gates.json`
 // and hands the result in.
 import type { GateIdentities, ReviewerIdentity } from "../schema/gates.js";
 // PORT ADDITION (zheref/nen#8 item 3, review MAJOR 1): `safePattern` was a
 // private function in THIS file and a byte-identical private function in
 // ../verbs/pr_ready.ts. When the ReDoS guard landed it was added to that copy
 // only -- and this is the copy on the steady-state path, because once a target
-// repository ships a `schemas/gates.json`, `identitiesFromFlags` is never
+// repository ships a `nen/gates.json`, `identitiesFromFlags` is never
 // called and every `--reviewers` name the file does not declare is compiled
 // HERE and tested against logins that came off the network. Measured: 305ms per
 // `.test` through this copy for `(a+)+$` at login length, 0ms through the
@@ -393,7 +393,7 @@ function shellApproverNames(approvers: readonly string[]): string[] {
 //
 // PORT CHANGE (§3): the switch arms were the two exceptions written into the
 // binary; each is now that reviewer's `login_pattern` in the target repository's
-// `schemas/gates.json`. THE FALL-THROUGH IS KEPT, and it is not a fallback of
+// `nen/gates.json`. THE FALL-THROUGH IS KEPT, and it is not a fallback of
 // the kind ../schema/errors.ts refuses: it applies to a name the file does NOT
 // declare, and it reproduces the original's `default:` arm exactly -- an
 // undeclared reviewer matches itself, case-insensitively, and an unparseable one
@@ -474,7 +474,7 @@ export function reviewerReviewCheckPattern(
 // joining it where configured. Carried across verbatim, not chosen here.
 //
 // PORT CHANGE (§3): the two names were a constant in the binary and are now
-// `default_approvers` in the target repository's `schemas/gates.json`. The
+// `default_approvers` in the target repository's `nen/gates.json`. The
 // accessor takes the identities rather than exporting an array, because an
 // exported array would have to be SOMETHING when no repository has been read --
 // and whatever it was would be a hard-coded approver set with a different name.
@@ -1040,7 +1040,7 @@ export function isDeliveryPr(
 // at head, plus bugbot when a non-SKIPPED check naming Bugbot is.
 //
 // PRESENCE AT HEAD IS THE EVIDENCE that a reviewer is configured for THIS PR --
-// roy-build.yml's Bugbot rule, generalized. The registry (schemas/repos.json
+// roy-build.yml's Bugbot rule, generalized. The registry (nen/repos.json
 // `consumes`) is deliberately NOT consulted: a consumer that consumes
 // bisky-review.yml still gates Bisky per PR.
 //

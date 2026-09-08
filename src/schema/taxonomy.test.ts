@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO, LEGACY_REPO } from "./fixtures/paths.js";
 import { checkTaxonomy, openTaxonomy, type SchemaCheck } from "./taxonomy.js";
 
 describe("openTaxonomy", () => {
@@ -24,12 +24,12 @@ describe("openTaxonomy", () => {
 
   it("is lazy per file: a broken colours file does not break a labels read", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
-    mkdirSync(join(root, "schemas"));
+    mkdirSync(join(root, "nen"));
     writeFileSync(
-      join(root, "schemas", "labels.json"),
+      join(root, "nen", "labels.json"),
       JSON.stringify({ labels: [{ name: "x:y/z", color: "aabbcc", description: "d" }] }),
     );
-    writeFileSync(join(root, "schemas", "colors.yml"), "categories: [not, a, map]\n");
+    writeFileSync(join(root, "nen", "colors.yml"), "categories: [not, a, map]\n");
 
     const taxonomy = openTaxonomy({ repoFlag: root });
     expect(taxonomy.labels().names()).toEqual(["x:y/z"]);
@@ -69,10 +69,10 @@ describe("checkTaxonomy", () => {
     const report = checkTaxonomy({ repoFlag: BANKAI_REPO });
     expect(report.ok).toBe(true);
     expect(report.checks.map((c): string => c.file)).toEqual([
-      "schemas/labels.json",
-      "schemas/repos.json",
-      "schemas/colors.yml",
-      "schemas/gates.json",
+      "nen/labels.json",
+      "nen/repos.json",
+      "nen/colors.yml",
+      "nen/gates.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
     expect(report.checks[0]?.detail).toMatch(/\d+ labels/);
@@ -89,23 +89,32 @@ describe("checkTaxonomy", () => {
     }
   });
 
+  it("names BOTH locations in the not-found message, so a caller knows the fallback exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
+    const labels = checkTaxonomy({ repoFlag: root }).checks[0];
+    expect(labels?.detail).toContain("'nen/labels.json'");
+    expect(labels?.detail).toContain("'schemas/labels.json'");
+    // …and the path it names as the one to CREATE is the canonical one.
+    expect(labels?.path).toBe(join(root, "nen", "labels.json"));
+  });
+
   // A root carrying the three required files and whatever gates.json the caller
   // writes (or none).
   function repoWithThreeFiles(gates?: string): string {
     const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
-    mkdirSync(join(root, "schemas"), { recursive: true });
+    mkdirSync(join(root, "nen"), { recursive: true });
     // Copy the fixture's own three files rather than re-authoring them, so these
     // cases cannot drift from what the loaders are actually proved against.
     for (const file of ["labels.json", "repos.json", "colors.yml"]) {
-      copyFileSync(join(BANKAI_REPO, "schemas", file), join(root, "schemas", file));
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
     }
-    if (gates !== undefined) writeFileSync(join(root, "schemas", "gates.json"), gates);
+    if (gates !== undefined) writeFileSync(join(root, "nen", "gates.json"), gates);
     return root;
   }
 
   function gatesCheck(root: string): SchemaCheck | undefined {
     return checkTaxonomy({ repoFlag: root }).checks.find(
-      (c): boolean => c.file === "schemas/gates.json",
+      (c): boolean => c.file === "nen/gates.json",
     );
   }
 
@@ -157,10 +166,93 @@ describe("checkTaxonomy", () => {
 
   it("passes overall for a gates.json that is present and VALID", () => {
     const root = repoWithThreeFiles(
-      readFileSync(join(BANKAI_REPO, "schemas", "gates.json"), "utf8"),
+      readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
     );
     const report = checkTaxonomy({ repoFlag: root });
     expect(report.ok).toBe(true);
     expect(gatesCheck(root)?.ok).toBe(true);
   });
+});
+
+describe("checkTaxonomy and the schemas/ migration", () => {
+  function labelsCheck(root: string): SchemaCheck {
+    const check = checkTaxonomy({ repoFlag: root }).checks[0];
+    if (check === undefined) throw new Error("no labels row");
+    return check;
+  }
+
+  // A migrated repository, plus whatever legacy copy the case wants.
+  function migrated(legacyLabels?: string): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-migration-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    if (legacyLabels !== undefined) {
+      mkdirSync(join(root, "schemas"), { recursive: true });
+      writeFileSync(join(root, "schemas", "labels.json"), legacyLabels);
+    }
+    return root;
+  }
+
+  it("a CANONICAL read says so and has nothing to report", () => {
+    const check = labelsCheck(migrated());
+    expect(check.location).toBe("nen");
+    expect(check.file).toBe("nen/labels.json");
+    expect(check.ok).toBe(true);
+    expect(check.note).toBeNull();
+    expect(check.shadowed).toBe(false);
+    expect(checkTaxonomy({ repoFlag: migrated() }).deprecations).toEqual([]);
+  });
+
+  it("a LEGACY read loads, names the canonical path, and dates the removal", () => {
+    const root = LEGACY_REPO;
+    const report = checkTaxonomy({ repoFlag: root });
+    // It still PASSES -- the whole point of the fallback is that an
+    // un-migrated repository keeps working through the v0.3 line.
+    expect(report.ok).toBe(true);
+    const check = report.checks[0];
+    expect(check?.location).toBe("schemas");
+    expect(check?.file).toBe("schemas/labels.json");
+    expect(check?.ok).toBe(true);
+    expect(check?.detail).toMatch(/\d+ labels/);
+    expect(check?.note).toContain("nen/labels.json");
+    expect(check?.note).toContain("v0.4.0");
+    expect(check?.shadowed).toBe(false);
+    // Every one of the four legacy reads is named in `deprecations`, so a
+    // machine reader sees the migration state without parsing prose.
+    expect(report.deprecations.length).toBe(4);
+    expect(report.deprecations[0]).toContain("schemas/labels.json");
+  });
+
+  it("a SHADOWED leftover with different bytes FAILS the report, naming both paths", () => {
+    // MUTATION GUARD. Drop the shadow finding, or let it pass as a warning,
+    // and this goes green-to-red: the repository has two answers, nen picked
+    // one silently, and nothing else on screen would say so.
+    const root = migrated('{"labels":[]}');
+    const report = checkTaxonomy({ repoFlag: root });
+    expect(report.ok).toBe(false);
+    const check = report.checks[0];
+    expect(check?.shadowed).toBe(true);
+    // The file still LOADED, from the canonical location.
+    expect(check?.ok).toBe(true);
+    expect(check?.location).toBe("nen");
+    expect(check?.note).toContain("SHADOWED LEFTOVER");
+    expect(check?.note).toContain("schemas/labels.json");
+    expect(check?.note).toContain("nen/labels.json");
+    expect(report.deprecations.some((d): boolean => d.includes("SHADOWED"))).toBe(true);
+  });
+
+  it("a SHADOWED leftover with IDENTICAL bytes is ok, with a note", () => {
+    const root = migrated(readFileSync(join(BANKAI_REPO, "nen", "labels.json"), "utf8"));
+    const report = checkTaxonomy({ repoFlag: root });
+    expect(report.ok).toBe(true);
+    const check = report.checks[0];
+    expect(check?.ok).toBe(true);
+    expect(check?.shadowed).toBe(false);
+    expect(check?.location).toBe("nen");
+    expect(check?.note).toContain("identical copy");
+    expect(check?.note).toContain("schemas/labels.json");
+  });
+
 });

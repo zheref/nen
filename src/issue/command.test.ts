@@ -1600,10 +1600,10 @@ describe("nen issue consolidate-close -- the caller-supplied close comment", () 
   /** A fresh --repo root: real enough for loadLabelTaxonomy, empty otherwise. */
   function tempRepoRoot(): string {
     const root = mkdtempSync(join(tmpdir(), "nen-issue-repo-"));
-    mkdirSync(join(root, "schemas"));
+    mkdirSync(join(root, "nen"));
     writeFileSync(
-      join(root, "schemas", "labels.json"),
-      readFileSync(join(BANKAI_REPO, "schemas", "labels.json"), "utf8"),
+      join(root, "nen", "labels.json"),
+      readFileSync(join(BANKAI_REPO, "nen", "labels.json"), "utf8"),
     );
     return root;
   }

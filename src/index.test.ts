@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exitCodeFor, reportUnhandled, run, runFamily, type Io } from "./index.js";
 import { VerbUsageError, type Command } from "./cli/command.js";
 import { RepoRootError } from "./repo/root.js";
-import { ALT_REPO, BANKAI_REPO } from "./schema/fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO, LEGACY_REPO } from "./schema/fixtures/paths.js";
 import { defaultSeams, type CommandResult, type Seams } from "./seam/exec.js";
 import { VERSION } from "./version.js";
 
@@ -116,14 +116,14 @@ describe("nen schema check", () => {
     const bankai = await capture(["schema", "check", "--repo", BANKAI_REPO]);
     expect(bankai.code).toBe(0);
     expect(bankai.out.join("\n")).toContain(BANKAI_REPO);
-    expect(bankai.out.join("\n")).toMatch(/ok {2}\s+schemas\/labels\.json\s+13 labels/);
+    expect(bankai.out.join("\n")).toMatch(/ok {2}\s+nen\/labels\.json\s+13 labels/);
 
     // The SAME command against a repository with an entirely different
     // vocabulary. The verb reports what the file says; it knows none of it.
     const alt = await capture(["schema", "check", "--repo", ALT_REPO]);
     expect(alt.code).toBe(0);
-    expect(alt.out.join("\n")).toMatch(/schemas\/labels\.json\s+8 labels/);
-    expect(alt.out.join("\n")).toMatch(/schemas\/repos\.json\s+2 consumers/);
+    expect(alt.out.join("\n")).toMatch(/nen\/labels\.json\s+8 labels/);
+    expect(alt.out.join("\n")).toMatch(/nen\/repos\.json\s+2 consumers/);
   });
 
   // zheref/nen#17: the bankai fixture's product_codes nests a `$comment` the
@@ -134,7 +134,7 @@ describe("nen schema check", () => {
   it("counts only real product codes, never a nested $comment (zheref/nen#17)", async () => {
     const result = await capture(["schema", "check", "--repo", BANKAI_REPO]);
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/schemas\/repos\.json\s+3 consumers, 6 product codes/);
+    expect(result.out.join("\n")).toMatch(/nen\/repos\.json\s+3 consumers, 6 product codes/);
     expect(result.out.join("\n")).not.toContain("$comment");
   });
 
@@ -142,7 +142,7 @@ describe("nen schema check", () => {
     const empty = mkdtempSync(join(tmpdir(), "nen-cli-"));
     const result = await capture(["schema", "check", "--repo", empty]);
     expect(result.code).toBe(1);
-    expect(result.out.join("\n")).toMatch(/FAIL\s+schemas\/labels\.json/);
+    expect(result.out.join("\n")).toMatch(/FAIL\s+nen\/labels\.json/);
     expect(result.err.join("\n")).toMatch(/no built-in copy to fall back on/);
   });
 
@@ -150,15 +150,67 @@ describe("nen schema check", () => {
     const result = await capture(["schema", "check", "--repo", BANKAI_REPO, "--json"]);
     expect(result.code).toBe(0);
     const parsed: unknown = JSON.parse(result.out.join("\n"));
-    expect(parsed).toMatchObject({ root: BANKAI_REPO, ok: true });
-    const checks = (parsed as { checks: { file: string; ok: boolean; required: boolean }[] }).checks;
+    expect(parsed).toMatchObject({ root: BANKAI_REPO, ok: true, deprecations: [] });
+    const checks = (
+      parsed as {
+        checks: { file: string; ok: boolean; required: boolean; location: string; note: string | null; shadowed: boolean }[];
+      }
+    ).checks;
     expect(checks.map((c): string => c.file)).toEqual([
-      "schemas/labels.json",
-      "schemas/repos.json",
-      "schemas/colors.yml",
-      "schemas/gates.json",
+      "nen/labels.json",
+      "nen/repos.json",
+      "nen/colors.yml",
+      "nen/gates.json",
     ]);
     expect(checks.every((c): boolean => c.ok)).toBe(true);
+    // A fully migrated repository says so in the machine-readable output as
+    // well as on screen: every row answered from `nen/`, nothing deprecated,
+    // nothing shadowed. That is the shape a consumer's CI asserts on to know
+    // the v0.4.0 removal will not break it.
+    expect(checks.every((c): boolean => c.location === "nen")).toBe(true);
+    expect(checks.every((c): boolean => c.note === null && !c.shadowed)).toBe(true);
+  });
+
+  it("prints the LEGACY location a file was actually read from, plus the migration line", async () => {
+    const result = await capture(["schema", "check", "--repo", LEGACY_REPO]);
+    // The un-migrated repository still PASSES for the whole v0.3 line.
+    expect(result.code).toBe(0);
+    const text = result.out.join("\n");
+    expect(text).toMatch(/warn\s+schemas\/labels\.json\s+13 labels/);
+    expect(text).toContain("^ legacy location. Move it to 'nen/labels.json'");
+    expect(text).toContain("removed in v0.4.0");
+    expect(text).not.toContain("nen/labels.json  13 labels");
+  });
+
+  it("FAILS on a shadowed leftover, and says which file it read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-shadow-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    mkdirSync(join(root, "schemas"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    writeFileSync(join(root, "schemas", "labels.json"), '{"labels":[]}');
+
+    const result = await capture(["schema", "check", "--repo", root]);
+    expect(result.code).toBe(1);
+    const text = result.out.join("\n");
+    expect(text).toMatch(/FAIL\s+nen\/labels\.json\s+13 labels/);
+    expect(text).toContain("^ SHADOWED LEFTOVER: 'schemas/labels.json'");
+    // The stderr refusal describes the RIGHT failure -- not "could not be
+    // read", which is false about a repository whose files all loaded.
+    expect(result.err.join("\n")).toContain("with DIFFERENT contents");
+    expect(result.err.join("\n")).not.toContain("no built-in copy");
+
+    // Make the two copies identical and the same repository passes, with the
+    // deletion offered as a note rather than demanded as a failure.
+    writeFileSync(
+      join(root, "schemas", "labels.json"),
+      readFileSync(join(BANKAI_REPO, "nen", "labels.json"), "utf8"),
+    );
+    const clean = await capture(["schema", "check", "--repo", root]);
+    expect(clean.code).toBe(0);
+    expect(clean.out.join("\n")).toMatch(/ok {2}\s+nen\/labels\.json/);
+    expect(clean.out.join("\n")).toContain("^ an identical copy is still at 'schemas/labels.json'");
   });
 
   // The owner/name-slug refusal is asserted in the exit-code block at the end of
@@ -262,7 +314,7 @@ describe("usage goes to the right stream (review finding)", () => {
 // one error class each, using the `label` family (it exercises a taxonomy
 // lookup, a `gh` mutation, and a ref parse in one small surface).
 describe("registry family dispatch, through the real run() (review finding)", () => {
-  const VALID_LABEL = "bankai:stage/idea"; // declared in the bankai-repo fixture's schemas/labels.json
+  const VALID_LABEL = "bankai:stage/idea"; // declared in the bankai-repo fixture's nen/labels.json
 
   function neverCalled(): CommandResult {
     throw new Error("must not be called");

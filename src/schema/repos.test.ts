@@ -25,7 +25,7 @@ describe("loadRepoRegistry -- reads the TARGET repository", () => {
 
   // zheref/nen#17: the bankai fixture's product_codes nests a `$comment` INSIDE
   // the object this loader walks key-by-key -- the same shape the live
-  // bankai-core schemas/repos.json carries. A loader that iterated every key
+  // bankai-core nen/repos.json carries. A loader that iterated every key
   // as a code would manufacture a bogus product code named '$comment' whose
   // "repository" is the comment's own prose.
   it("skips a $-prefixed key nested inside product_codes, rather than treating it as a code (zheref/nen#17)", () => {
@@ -92,7 +92,7 @@ describe("loadRepoRegistry -- reads the TARGET repository", () => {
 });
 
 describe("parseRepoRegistry -- validation", () => {
-  const at = "/fake/schemas/repos.json";
+  const at = "/fake/nen/repos.json";
 
   it("requires `consumers` to be an array", () => {
     expect(() => parseRepoRegistry(at, { consumers: {} })).toThrow(/expected an array/);

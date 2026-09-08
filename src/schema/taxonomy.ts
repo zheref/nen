@@ -25,7 +25,16 @@ import { loadGateIdentities, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
-import { COLORS_FILE, GATES_FILE, LABELS_FILE, REPOS_FILE, schemaPath } from "./source.js";
+import {
+  COLORS_FILE,
+  GATES_FILE,
+  LABELS_FILE,
+  LEGACY_FALLBACK_REMOVED_IN,
+  REPOS_FILE,
+  resolveSchemaFile,
+  shadowState,
+  type SchemaLocation,
+} from "./source.js";
 
 export interface Taxonomy {
   /** Absolute path of the target repository's working-tree root. */
@@ -68,8 +77,11 @@ export function openTaxonomy(options: RepoRootOptions = {}): Taxonomy {
 }
 
 export interface SchemaCheck {
+  /** The repo-relative path that was READ -- `nen/…`, or `schemas/…` when the fallback answered. */
   readonly file: string;
   readonly path: string;
+  /** Which of the two directories answered; `nen` when the file is absent from both. */
+  readonly location: SchemaLocation;
   /** `true` when the file loaded and validated. */
   readonly ok: boolean;
   /** A one-line summary when ok, the SchemaError's message when not. */
@@ -83,30 +95,84 @@ export interface SchemaCheck {
    * not adopted.
    */
   readonly required: boolean;
+  /**
+   * `true` when a DIFFERENT copy of this file is still sitting at the legacy
+   * `schemas/` path. Nen read the `nen/` one; the legacy one is a stale
+   * taxonomy somebody may still be editing, so the row FAILS even though the
+   * load succeeded -- a silent win for `nen/` is exactly how the wrong file
+   * stays on disk for a year.
+   */
+  readonly shadowed: boolean;
+  /**
+   * The migration sentence for this row -- a legacy read, a shadowed leftover,
+   * or an identical copy that is free to delete. `null` when there is nothing
+   * to say.
+   */
+  readonly note: string | null;
 }
 
 export interface CheckReport {
   readonly root: string;
   readonly checks: readonly SchemaCheck[];
-  /** False when any REQUIRED file failed. */
+  /** False when any REQUIRED file failed, or any file is shadowed by a different legacy copy. */
   readonly ok: boolean;
+  /**
+   * Every migration sentence the run produced, in row order, so a machine
+   * reader sees the migration state without parsing prose. Empty for a fully
+   * migrated repository.
+   */
+  readonly deprecations: readonly string[];
+}
+
+// The two sentences a consumer mid-migration needs, written once so the four
+// files cannot disagree about what they promise.
+function migrationNote(
+  canonical: string,
+  legacy: string,
+  kind: "read" | "shadow-different" | "shadow-identical",
+): string {
+  if (kind === "read") {
+    return `legacy location. Move it to '${canonical}'; the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`;
+  }
+  if (kind === "shadow-identical") {
+    return `an identical copy is still at '${legacy}'. Deleting it is free today; the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`;
+  }
+  return `SHADOWED LEFTOVER: '${legacy}' is also present and its bytes DIFFER from '${canonical}'. Nen read '${canonical}'; whoever is editing the other file is editing nothing. Delete it, or reconcile it into '${canonical}' -- the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`;
 }
 
 function run(
-  file: string,
+  relative: string,
   root: string,
   required: boolean,
   load: () => string,
 ): SchemaCheck {
-  const path = schemaPath(root, file);
+  const resolved = resolveSchemaFile(root, relative);
+  const { path, location } = resolved;
+  const file = resolved.relative;
+  const shadow = shadowState(resolved);
+  const legacyRelative = resolved.legacy?.relative ?? null;
+  const shadowed = shadow === "different";
+  const note =
+    legacyRelative === null
+      ? null
+      : shadow === "different"
+        ? migrationNote(resolved.canonical.relative, legacyRelative, "shadow-different")
+        : shadow === "identical"
+          ? migrationNote(resolved.canonical.relative, legacyRelative, "shadow-identical")
+          : location === "schemas"
+            ? migrationNote(resolved.canonical.relative, legacyRelative, "read")
+            : null;
   try {
-    return { file, path, ok: true, detail: load(), required };
+    return { file, path, location, ok: true, detail: load(), required, shadowed, note };
   } catch (error) {
     return {
       file,
       path,
+      location,
       ok: false,
       detail: error instanceof SchemaError ? error.message : String(error),
+      shadowed,
+      note,
       // ABSENT AND CORRUPT ARE NOT THE SAME FINDING, and conflating them was a
       // real hole. `required` is what decides whether the overall report fails,
       // and gates.json is declared optional because only the readiness verbs
@@ -166,6 +232,14 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
   return {
     root,
     checks,
-    ok: checks.every((check): boolean => check.ok || !check.required),
+    // A SHADOWED LEFTOVER FAILS THE REPORT even though its file loaded. The
+    // alternative is a repository where `nen/` quietly wins, the stale
+    // `schemas/` copy is the one a human keeps editing, and nothing on screen
+    // ever says so -- which is the single failure the fallback was most likely
+    // to introduce, so it is the one this verb refuses to pass.
+    ok: checks.every((check): boolean => (check.ok || !check.required) && !check.shadowed),
+    deprecations: checks
+      .map((check): string | null => (check.note === null ? null : `${check.file}: ${check.note}`))
+      .filter((note): note is string => note !== null),
   };
 }

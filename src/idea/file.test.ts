@@ -8,7 +8,7 @@ import { compareReadBack, fileIdea, FileIdeaError } from "./file.js";
 const TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
 function taxonomy(): LabelTaxonomy {
-  return parseLabelTaxonomy("/x/schemas/labels.json", {
+  return parseLabelTaxonomy("/x/nen/labels.json", {
     labels: [{ name: "stage:idea", color: "d93f0b", description: "an idea" }],
   });
 }

@@ -17,7 +17,7 @@
 // sync-labels.sh — install/update the Bankai label taxonomy on a GitHub repo.
 //
 // Usage:
-//   ./scripts/sync-labels.sh --repo owner/name [--file schemas/labels.json] [--dry-run]
+//   ./scripts/sync-labels.sh --repo owner/name [--file nen/labels.json] [--dry-run]
 //
 // Requirements: jq; gh (authenticated) unless --dry-run.
 // Idempotent: existing labels are updated (color/description), missing ones created.

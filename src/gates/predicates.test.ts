@@ -42,7 +42,7 @@ import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
 //
 // PORT CHANGE (zheref/nen#1). Every reviewer-aware predicate now takes a
 // `GateIdentities` as its first argument, and this is the one the ported cases
-// use: a fixture repository whose `schemas/gates.json` states EXACTLY the
+// use: a fixture repository whose `nen/gates.json` states EXACTLY the
 // identities the original wrote into its own source. That is what makes this
 // suite a regression test for the refactor rather than merely a test of new
 // code -- the assertions below are the originals, unchanged, so a behavioural
@@ -618,7 +618,7 @@ describe("reviewerLoginPattern", () => {
 
   it("ADDED (zheref/nen#8 item 3): a CATASTROPHIC name matches nothing too, on THIS path -- the steady-state one", () => {
     // THE PATH THIS PINS, because it is the one production takes. When the
-    // target repository ships a `schemas/gates.json` -- the steady state --
+    // target repository ships a `nen/gates.json` -- the steady state --
     // `../verbs/pr_ready.ts`'s `identitiesFromFlags` is never called at all,
     // and every `--reviewers` name the FILE does not declare falls through
     // here, is compiled here, and is `.test`-ed against logins that came off
@@ -1687,7 +1687,7 @@ describe("defaultReviewers (the DEFAULT production path)", () => {
 // =============================================================================
 //
 // Everything above this line runs against `BANKAI` -- a fixture repository whose
-// `schemas/gates.json` states exactly the identities the original wrote into its
+// `nen/gates.json` states exactly the identities the original wrote into its
 // own source -- and passes UNCHANGED. That proves the refactor did not move the
 // behaviour.
 //
@@ -1916,7 +1916,7 @@ describe("names are data -- the same predicates against a different vocabulary",
 //
 // This matters because an undeclared reviewer is reachable in production, not
 // hypothetically: `--reviewers` takes names from a caller, and a repository can
-// rename a reviewer in schemas/gates.json without touching the caller that names
+// rename a reviewer in nen/gates.json without touching the caller that names
 // it. The dangerous direction would be for that mismatch to CLEAR a round.
 
 describe("an UNDECLARED reviewer owes a round, in every configuration", () => {

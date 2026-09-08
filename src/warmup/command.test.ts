@@ -46,9 +46,9 @@ function cleanRegistryRepo(current: string): string {
 /** A fresh registry with exactly the consumer entries given. */
 function registryRepo(consumers: readonly unknown[], latest: string): string {
   const dir = mkdtempSync(join(tmpdir(), "nen-warmup-"));
-  mkdirSync(join(dir, "schemas"), { recursive: true });
+  mkdirSync(join(dir, "nen"), { recursive: true });
   writeFileSync(
-    join(dir, "schemas", "repos.json"),
+    join(dir, "nen", "repos.json"),
     JSON.stringify({ latest, consumers, product_codes: { OR: "r" } }),
   );
   return dir;
@@ -77,7 +77,7 @@ describe("nen warmup", () => {
   it("does not report a stale pin for a $-prefixed key that ends in _pinned (zheref/nen#17)", async () => {
     const dir = cleanRegistryRepo("v1.0.0");
     writeFileSync(
-      join(dir, "schemas", "repos.json"),
+      join(dir, "nen", "repos.json"),
       JSON.stringify({
         latest: "v1.0.0",
         consumers: [

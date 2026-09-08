@@ -1,5 +1,5 @@
 // src/color/status.ts -- first-match colour precedence, over the target
-// repository's `schemas/colors.yml`.
+// repository's `nen/colors.yml`.
 //
 // PORTED FROM backlog-state §6, whose rule is one sentence and whose reason is
 // the sentence after it: "Precedence, when more than one could apply -- highest
@@ -7,7 +7,7 @@
 // board must produce identical colours; an unstated tie-break is how they
 // diverge."
 //
-// THE ORDER IS THE FILE'S, NOT THIS MODULE'S. `schemas/colors.yml` states it as
+// THE ORDER IS THE FILE'S, NOT THIS MODULE'S. `nen/colors.yml` states it as
 // `categories.<name>.precedence`, a list of value names, and ../schema/colors.ts
 // already validates that every name in it exists. So this module contains no
 // order, no glyph and no colour -- it walks a list the repository wrote. That is

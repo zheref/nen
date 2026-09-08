@@ -73,7 +73,7 @@ describe("loadGateIdentities -- reads the TARGET repository", () => {
 });
 
 describe("parseGateIdentities -- validation", () => {
-  const at = "/fake/schemas/gates.json";
+  const at = "/fake/nen/gates.json";
   const minimal = {
     version: 1,
     reviewers: [

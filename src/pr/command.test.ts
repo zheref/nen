@@ -294,7 +294,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   // this family's declared value flags via the PR_READY_FLAGS spread, for
   // `ready`'s sake) but ./command.ts's blocker() never read it -- silently
   // accepted, zero effect, and the verb still demanded --repo's own
-  // schemas/gates.json. The three tests below pin both halves of the fix and
+  // nen/gates.json. The three tests below pin both halves of the fix and
   // the direction that matters: the flag does not merely silence the missing-
   // file refusal, it is the file whose identities DECIDE.
   describe("next-blocker --gates (zheref/nen#20)", () => {
@@ -344,7 +344,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       ];
     }
 
-    it("without --gates, a checkout shipping no schemas/gates.json is still refused before any gh call", async () => {
+    it("without --gates, a checkout shipping no nen/gates.json is still refused before any gh call", async () => {
       const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
       // No seams calls are scripted: the refusal must land before the fetch,
       // so an unscripted call would throw first and fail this loudly.
@@ -355,7 +355,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       );
       expect(result.code).toBe(1);
       expect(result.err.join("\n")).toMatch(/no such file/);
-      expect(result.err.join("\n")).toMatch(/schemas\/gates\.json/);
+      expect(result.err.join("\n")).toMatch(/nen\/gates\.json/);
     });
 
     it("--gates redirects the taxonomy read: the alternate file's identities clear a PR the checkout alone could not even evaluate", async () => {
@@ -363,7 +363,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const result = await capture(
         [
           "pr", "next-blocker", "--target", "o/n", "--pr", "9",
-          "--gates", join(ALT_REPO, "schemas", "gates.json"),
+          "--gates", join(ALT_REPO, "nen", "gates.json"),
         ],
         checkout,
         new ScriptedSeams(greenAltApprovedScript()),
@@ -378,7 +378,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const result = await capture(
         [
           "pr", "next-blocker", "--target", "o/n", "--pr", "9",
-          "--gates", join(BANKAI_REPO, "schemas", "gates.json"),
+          "--gates", join(BANKAI_REPO, "nen", "gates.json"),
         ],
         checkout,
         new ScriptedSeams(greenAltApprovedScript()),
@@ -394,7 +394,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     // zheref/nen#8 item 4, on THIS verb: next-blocker shares `ready`'s
     // resolveIdentities rather than re-spelling it, so the relative-path rule
     // is one rule for both -- and this case proves it is, rather than asserting
-    // it. The process stands in a directory that HAS a schemas/gates.json while
+    // it. The process stands in a directory that HAS a nen/gates.json while
     // --repo points somewhere else that also has one; only one of the two
     // answers is right, and the two taxonomies give different verdicts on the
     // identical snapshot.
@@ -405,7 +405,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         const result = await capture(
           [
             "pr", "next-blocker", "--target", "o/n", "--pr", "9",
-            "--gates", join("schemas", "gates.json"),
+            "--gates", join("nen", "gates.json"),
           ],
           ALT_REPO,
           new ScriptedSeams(greenAltApprovedScript()),
@@ -425,7 +425,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const result = await capture(
         [
           "pr", "next-blocker", "--target", "o/n", "--pr", "9",
-          "--gates", join("schemas", "nowhere.json"),
+          "--gates", join("nen", "nowhere.json"),
         ],
         ALT_REPO,
         // Nothing scripted: the refusal must land before the fetch.

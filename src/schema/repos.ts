@@ -1,5 +1,5 @@
 // src/schema/repos.ts -- the consuming-repository registry, read from the TARGET
-// repository's `schemas/repos.json`.
+// repository's `nen/repos.json`.
 //
 // WHAT IT IS FOR. The registry records, factually, which repositories consume
 // this one's reusable machinery, what version each is pinned to, and which
@@ -179,7 +179,7 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     const codes = requireRecord(path, "product_codes", rawCodes);
     for (const [code, name] of Object.entries(codes)) {
       // `$`-prefixed keys are metadata, not data -- a nested `$comment` is a
-      // shape real registries carry (bankai-core's own schemas/repos.json
+      // shape real registries carry (bankai-core's own nen/repos.json
       // documents the object-reference notation from INSIDE product_codes,
       // not beside it), and walking it as a product code manufactures a
       // bogus entry whose "repository" is the comment's own prose

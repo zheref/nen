@@ -1,5 +1,5 @@
 // src/repo/resolve.ts -- `nen repo resolve`: a repository TOKEN against the
-// target repository's `schemas/repos.json`.
+// target repository's `nen/repos.json`.
 //
 // PORTED FROM the resolution rule stated, identically, in eight bankai-core
 // skills (backlog-state §1, backlog-board §1, futon §1, drive §1, build §1,

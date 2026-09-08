@@ -5,7 +5,7 @@
 // code path, filed twice from two different reviews).
 //
 // `../schema/gates.ts` compiles five patterns out of the target repository's
-// `schemas/gates.json` (`login_pattern`, `review_check_pattern`,
+// `nen/gates.json` (`login_pattern`, `review_check_pattern`,
 // `round_check_pattern`, `enrolment_check_pattern`, `delivery.author_pattern`)
 // and the readiness gate then runs them against strings GitHub hands back:
 // a pull request author's login, a reviewer's login, a check-run name. The
@@ -467,7 +467,7 @@ export function patternHazard(source: string, compiled: RegExp): PatternHazard |
  * IT LIVES HERE, not beside either of its two callers, because it had two
  * byte-identical bodies and only one of them was ever guarded -- see contract 2
  * in this file's header. `../gates/predicates.ts` is the copy on the STEADY-STATE
- * path (once a target repository ships a `schemas/gates.json`,
+ * path (once a target repository ships a `nen/gates.json`,
  * `../verbs/pr_ready.ts`'s `identitiesFromFlags` is not called at all), so the
  * unguarded twin was the one doing the compiling in production.
  */

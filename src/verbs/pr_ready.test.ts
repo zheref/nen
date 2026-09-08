@@ -206,7 +206,7 @@ describe("resolveIdentities", () => {
     expect(resolved.identities.defaultApprovers).toEqual(["sasuke", "tenma"]);
   });
 
-  it("falls back to the target repo's schemas/gates.json when there is no --gates", () => {
+  it("falls back to the target repo's nen/gates.json when there is no --gates", () => {
     const resolved = resolveIdentities(BANKAI_REPO, undefined, [], []);
     expect(resolved.source).toBe("schema");
     expect(resolved.identities.defaultApprovers).toEqual(["sasuke", "tenma"]);
@@ -229,7 +229,7 @@ describe("resolveIdentities", () => {
   // ── zheref/nen#8 item 4: WHICH FILE a relative `--gates` names ─────────────
   //
   // `readFileSync(gatesFlag)` inherits `process.cwd()`, so
-  // `--repo ../other --gates schemas/gates.json` read the CURRENT directory's
+  // `--repo ../other --gates nen/gates.json` read the CURRENT directory's
   // file, judged the OTHER repository's pull request against those reviewers,
   // and reported a verdict -- with `meta.identities.path` printing the bare
   // relative string, so nothing on screen said which file had been read. The
@@ -241,11 +241,11 @@ describe("resolveIdentities", () => {
 
   it("resolves a RELATIVE --gates against the --repo root, never against the cwd", () => {
     // The exact shape of the defect: two directories that each carry a
-    // schemas/gates.json, with the process standing in the wrong one.
+    // nen/gates.json, with the process standing in the wrong one.
     const decoy = mkdtempSync(join(tmpdir(), "nen-gates-decoy-"));
-    mkdirSync(join(decoy, "schemas"));
+    mkdirSync(join(decoy, "nen"));
     writeFileSync(
-      join(decoy, "schemas", "gates.json"),
+      join(decoy, "nen", "gates.json"),
       JSON.stringify({
         version: 1,
         reviewers: [{ name: "decoy", login_pattern: { pattern: "decoy", ignoreCase: true } }],
@@ -260,7 +260,7 @@ describe("resolveIdentities", () => {
     const previous = process.cwd();
     try {
       process.chdir(decoy);
-      const resolved = resolveIdentities(BANKAI_REPO, join("schemas", "gates.json"), [], []);
+      const resolved = resolveIdentities(BANKAI_REPO, join("nen", "gates.json"), [], []);
       // The TARGET repository's reviewers, not the decoy's -- this is the whole
       // finding. Before the fix this read ["decoy"].
       expect(resolved.identities.defaultApprovers).toEqual(["sasuke", "tenma"]);
@@ -290,14 +290,14 @@ describe("resolveIdentities", () => {
 
   it("refuses a --gates that does not exist with THIS codebase's own message, not a raw ENOENT", () => {
     try {
-      resolveIdentities(BANKAI_REPO, join("schemas", "typo.json"), [], []);
+      resolveIdentities(BANKAI_REPO, join("nen", "typo.json"), [], []);
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(SchemaError);
       const schemaError = error as SchemaError;
       // The RESOLVED path, the root it was resolved against, and the two ways
       // out -- everything needed to fix it without reading the source.
-      expect(schemaError.path).toBe(schemaPath(BANKAI_REPO, "schemas/typo.json"));
+      expect(schemaError.path).toBe(schemaPath(BANKAI_REPO, "nen/typo.json"));
       expect(schemaError.message).toContain(BANKAI_REPO);
       expect(schemaError.message).toMatch(/no such file/);
       expect(schemaError.message).toMatch(/RELATIVE/);
@@ -324,7 +324,7 @@ describe("resolveIdentities", () => {
 
   it("refuses a --gates that resolves to a DIRECTORY rather than reading it as a file", () => {
     try {
-      resolveIdentities(BANKAI_REPO, "schemas", [], []);
+      resolveIdentities(BANKAI_REPO, "nen", [], []);
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(SchemaError);
@@ -425,14 +425,14 @@ describe("resolveIdentities", () => {
     chmodSync(lockedDir, 0o700);
   });
 
-  it("a malformed in-repo schemas/gates.json fails as a path-bearing SchemaError, not a bare SyntaxError", () => {
+  it("a malformed in-repo nen/gates.json fails as a path-bearing SchemaError, not a bare SyntaxError", () => {
     // Mirrors ../schema/source.test.ts's "reports malformed JSON as itself"
     // case, but through the --gates-less fallback branch this same function
     // takes -- the branch Copilot's review on PR #9 found reading the file with
     // a raw JSON.parse and no SchemaError shaping (zheref/nen#9, pr_ready.ts:429).
     const root = mkdtempSync(join(tmpdir(), "nen-pr-ready-corrupt-gates-"));
-    mkdirSync(join(root, "schemas"));
-    const gatesPath = join(root, "schemas", "gates.json");
+    mkdirSync(join(root, "nen"));
+    const gatesPath = join(root, "nen", "gates.json");
     writeFileSync(gatesPath, "{ not json");
     try {
       resolveIdentities(root, undefined, [], []);
@@ -535,7 +535,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       roundPolicy: "bounded",
       excludeRun: null,
       deliveryPr: false,
-      identities: { source: "schema", path: "/repo/schemas/gates.json" },
+      identities: { source: "schema", path: "/repo/nen/gates.json" },
       warnings: [],
       evaluatedAt: "2025-01-01T00:00:00Z",
       generator: { program: "nen", version: "0.0.0" },
@@ -864,7 +864,7 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
 
 // BLOCKER regression (zheref/nen#2's review record, finding 1): on the
 // `--reviewers` identity path -- the ordinary way this verb runs today, since
-// no repository ships `schemas/gates.json` yet -- an OMITTED `--approvers`
+// no repository ships `nen/gates.json` yet -- an OMITTED `--approvers`
 // used to be indistinguishable from an explicitly empty one, both collapsing
 // to `defaultApprovers: []` one line before `identitiesFromFlags` was ever
 // reached. That made CON-32(b)'s approve limb VACUOUSLY TRUE and returned
@@ -1107,7 +1107,7 @@ describe("prReady -- a relative --gates is the target repository's file, and the
       const { io, out } = capture();
       const code = await prReady(
         input({
-          values: { "gh-repo": "zheref/example", gates: join("schemas", "gates.json") },
+          values: { "gh-repo": "zheref/example", gates: join("nen", "gates.json") },
           repoFlag: BANKAI_REPO,
         }),
         io,
@@ -1126,7 +1126,7 @@ describe("prReady -- a relative --gates is the target repository's file, and the
     const { io, out } = capture();
     await prReady(
       input({
-        values: { "gh-repo": "zheref/example", gates: join("schemas", "gates.json") },
+        values: { "gh-repo": "zheref/example", gates: join("nen", "gates.json") },
         booleans: new Set(["explain"]),
         repoFlag: BANKAI_REPO,
       }),
@@ -1140,7 +1140,7 @@ describe("prReady -- a relative --gates is the target repository's file, and the
     const { io, err } = capture();
     const code = await prReady(
       input({
-        values: { "gh-repo": "zheref/example", gates: join("schemas", "typo.json") },
+        values: { "gh-repo": "zheref/example", gates: join("nen", "typo.json") },
         repoFlag: BANKAI_REPO,
       }),
       io,

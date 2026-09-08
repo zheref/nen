@@ -1,4 +1,4 @@
-// src/schema/fixtures/paths.ts -- where the two fixture repository roots live,
+// src/schema/fixtures/paths.ts -- where the three fixture repository roots live,
 // resolved the same way the shipped code resolves a target repo: from
 // `process.cwd()`, never from `import.meta.url`.
 //
@@ -17,3 +17,11 @@ export const BANKAI_REPO = join(FIXTURES, "bankai-repo");
 
 /** A deliberately different vocabulary; nothing shipped knows its strings. */
 export const ALT_REPO = join(FIXTURES, "alt-repo");
+
+/**
+ * The un-migrated layout: the same four files as `bankai-repo`, still under
+ * `schemas/` and absent from `nen/`. It exists so the fallback is proved
+ * against a repository root rather than a temp directory, and it is deleted in
+ * v0.4.0 together with the legacy map in ../source.ts.
+ */
+export const LEGACY_REPO = join(FIXTURES, "legacy-repo");

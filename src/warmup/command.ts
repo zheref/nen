@@ -14,7 +14,7 @@ import { detectStalePins, sweepHandbookQuestions, type PinFinding, type Question
 
 const USAGE = `nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
 
-Stale-pin detection over the target repository's schemas/repos.json (every
+Stale-pin detection over the target repository's nen/repos.json (every
 consumer's default pin AND every per-caller pin override), plus an optional
 handbook-question sweep.
 

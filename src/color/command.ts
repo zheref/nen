@@ -12,7 +12,7 @@ import { ColorError, resolveStatus, type StatusResolution } from "./status.js";
 
 const USAGE = `nen color status --present <a,b,c> [--category <name>]
 
-Apply the target repository's schemas/colors.yml precedence to the values that
+Apply the target repository's nen/colors.yml precedence to the values that
 are true of one row, and report the first match.
 
   --present <a,b,c>  The category values that apply to this row, comma-separated.
