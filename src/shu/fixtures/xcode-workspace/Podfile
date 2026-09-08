@@ -1,0 +1,10 @@
+# TEST FIXTURE -- the pack calls this a marker that "adds a `pod install`
+# PRECONDITION; on its own it does not identify the stack", so `detect` records
+# it as EVIDENCE of a lane the container already identified and never proposes a
+# lane from it. Nothing here is ever run: nen asserts `pod install` and never
+# performs it.
+platform :ios, '15.1'
+
+target 'Placeholder' do
+  use_frameworks!
+end

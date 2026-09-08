@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TEST FIXTURE -- the shape a dependency manager produces: a workspace beside
+  the project it wraps, plus the generated Pods project. `xcodebuild` addresses
+  this container with a DIFFERENT flag from the one the reference row carries,
+  so `{project}` is withheld here and answered in ../../xcode-project/.
+
+  The commented-out FileRef is the XML comment rule again, from the other side:
+  read raw, this workspace would look as though it references a container that
+  is not in the tree.
+-->
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:Placeholder.xcodeproj">
+   </FileRef>
+   <FileRef
+      location = "group:Pods/Pods.xcodeproj">
+   </FileRef>
+   <!--
+   <FileRef
+      location = "group:Retired.xcodeproj">
+   </FileRef>
+   -->
+</Workspace>

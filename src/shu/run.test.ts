@@ -236,6 +236,108 @@ describe("--dry-run parity -- the thing you approve is the thing that runs", () 
   });
 });
 
+// ── (a2) the destination, through all THREE renderings ─────────────────────
+//
+// THE RISK THIS PR'S ISSUE NAMES BY HAND. A simulator destination is one argv
+// element carrying spaces AND commas -- `platform=iOS Simulator,name=iPhone 17
+// Pro,OS=26.5` -- and every layer between a declaration and a subprocess is a
+// place it can be split: the human line (where quoting is the only thing that
+// says where the boundary is), the machine-readable report (which a Windows
+// shell may read back), and the seam itself. Two of the three agreeing proves
+// nothing about the third, so all three are pinned on ONE row.
+//
+// IT IS HAND-DECLARED, and that is not a shortcut. `nen shu detect` answers
+// neither destination token on any tree -- a destination names a simulator on
+// the machine, and detect reads a working tree -- so a golden driven off a
+// proposal could never carry this value. The declaration below is exactly what
+// a maintainer writes after reading the proposal's note.
+describe("one argv element, from the declaration to the seam", () => {
+  const DESTINATION = "platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5";
+  const ARGV: readonly string[] = [
+    "-project",
+    "Placeholder.xcodeproj",
+    "-scheme",
+    "Placeholder",
+    "-destination",
+    DESTINATION,
+    "-configuration",
+    "Debug",
+    "build",
+  ];
+  const project = oneLane({ hosts: { "*": ["darwin"] } }, { exe: "xcodebuild", argv: ARGV });
+  const LINE = `xcodebuild -project Placeholder.xcodeproj -scheme Placeholder -destination '${DESTINATION}' -configuration Debug build`;
+
+  it("prints it as ONE quoted word in the dry run's own line", async () => {
+    const result = await withDeclaration(project, ["build", "--dry-run"], { platform: "darwin" });
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual([LINE]);
+    // The quotes are the information: the same line without them re-splits into
+    // three arguments, and that is a different command.
+    expect(result.out.join("\n")).toContain(`'${DESTINATION}'`);
+  });
+
+  it("carries it undivided in --json, in both modes, byte for byte", async () => {
+    const dry = JSON.parse(
+      (await withDeclaration(project, ["build", "--dry-run", "--json"], { platform: "darwin" })).out.join(
+        "\n",
+      ),
+    ) as { steps: readonly { argv: readonly string[] }[] };
+    expect(dry.steps[0]?.argv).toEqual(ARGV);
+    expect(dry.steps[0]?.argv).toHaveLength(9);
+    const wet = JSON.parse(
+      (
+        await withDeclaration(project, ["build", "--json"], {
+          platform: "darwin",
+          script: [ok(["xcodebuild", ...ARGV].join(" "))],
+        })
+      ).out.join("\n"),
+    ) as { steps: readonly { argv: readonly string[] }[] };
+    expect(wet.steps[0]?.argv).toEqual(dry.steps[0]?.argv);
+  });
+
+  it("hands it to the seam as one element, with no shell anywhere in between", async () => {
+    const result = await withDeclaration(project, ["build"], {
+      platform: "darwin",
+      script: [ok(["xcodebuild", ...ARGV].join(" "))],
+    });
+    expect(result.code).toBe(0);
+    expect(result.seams.calls).toHaveLength(1);
+    expect(result.seams.calls[0]?.command).toBe("xcodebuild");
+    expect(result.seams.calls[0]?.args).toEqual(ARGV);
+    // The element the seam took is the declaration's own bytes -- no quoting
+    // was added on the way in, which is the other half of the human line's
+    // quoting being a RENDERING and not an escape.
+    expect(result.seams.calls[0]?.args[5]).toBe(DESTINATION);
+  });
+
+  // A VALUE MAY CARRY THE QUOTE THE RENDERING USES. A simulator a developer
+  // renamed carries an apostrophe, and a line that wrapped it in single quotes
+  // and stopped there is one a reader cannot paste: the shell ends the quoted
+  // word at the apostrophe and the rest of the destination becomes three more
+  // arguments. So the rendering closes, escapes and reopens -- `'\''`, which is
+  // the shell's own idiom -- and the SEAM still takes the plain bytes.
+  //
+  // MUTANT: drop the `.replace(/'/g, "'\\''")` from `renderArgv` and this goes
+  // red on the printed line while every other assertion in this file stays
+  // green, because nothing else in the suite renders a value with a quote in it.
+  it("closes, escapes and reopens a single quote inside a value", async () => {
+    const named = "platform=iOS Simulator,name=Sergio's iPhone,OS=26.5";
+    const argv = ARGV.map((word): string => (word === DESTINATION ? named : word));
+    const renamed = oneLane({ hosts: { "*": ["darwin"] } }, { exe: "xcodebuild", argv });
+    const result = await withDeclaration(renamed, ["build", "--dry-run"], { platform: "darwin" });
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual([
+      "xcodebuild -project Placeholder.xcodeproj -scheme Placeholder -destination 'platform=iOS Simulator,name=Sergio'\\''s iPhone,OS=26.5' -configuration Debug build",
+    ]);
+    const ran = await withDeclaration(renamed, ["build"], {
+      platform: "darwin",
+      script: [ok(["xcodebuild", ...argv].join(" "))],
+    });
+    expect(ran.code).toBe(0);
+    expect(ran.seams.calls[0]?.args[5], "the seam takes the apostrophe itself").toBe(named);
+  });
+});
+
 // ── (b) the report's shape ─────────────────────────────────────────────────
 
 describe("--json -- the pinned key order", () => {

@@ -27,6 +27,12 @@ export const EMPTY_TREE = join(FIXTURES, "empty-tree");
 /** Two separate Gradle builds in one tree, the shape the inventory found. */
 export const KRO_SHAPED = join(FIXTURES, "kro-shaped");
 
+/** One `.xcodeproj`, one shared scheme whose test target exists. */
+export const XCODE_PROJECT = join(FIXTURES, "xcode-project");
+
+/** The same project inside the workspace a dependency manager writes. */
+export const XCODE_WORKSPACE = join(FIXTURES, "xcode-workspace");
+
 /** One marker tree per stack, by the stack id `detect` should answer with. */
 export const MARKERS = join(FIXTURES, "markers");
 export const markerTree = (name: string): string => join(MARKERS, name);
