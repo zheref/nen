@@ -61,6 +61,7 @@ import {
   type Placeholder,
   type ProfileCrossCheck,
   type ProfileMarker,
+  type ProfilePluginRule,
   type ProfilesPack,
   type ProfileVerb,
   type StackProfile,
@@ -3516,6 +3517,22 @@ interface TreeFile {
    * read each is the only version that is neither.
    */
   readonly markup: () => string | null;
+  /**
+   * THE SAME FILE IN THE OTHER SYNTAX, memoised the same way.
+   *
+   * IT IS A SECOND READER RATHER THAN A SECOND GUESS. `markup()` strips
+   * `<!-- ... -->` and nothing else, which is exactly right for the project
+   * files this reader was written for and exactly WRONG for a build script: a
+   * `// id("...")` survives it untouched, so a plugin somebody commented out
+   * reads back as a plugin the build applies -- the defect ../shu/detect.ts's
+   * two strippers exist for, arriving through the one seam that had only one of
+   * them. Which of the two a cross-check gets is the PACK's statement
+   * (`crossChecks[].plugin.syntax`), never a guess made from the extension
+   * here: a reader that decided it itself would have to carry a table of which
+   * ecosystem writes which comment, and would be silently wrong for the first
+   * file format nobody thought of.
+   */
+  readonly script: () => string | null;
 }
 
 /**
@@ -3536,13 +3553,17 @@ function walkLaneFiles(repoRoot: string, laneDirectory: string): readonly TreeFi
         walk(absolute, depth - 1);
         continue;
       }
-      let text: string | null | undefined;
+      let markup: string | null | undefined;
+      let script: string | null | undefined;
       files.push({
         name: entry.name,
         directory,
         laneRelative: relativePath(laneDirectory, absolute),
         repoRelative: relativePath(repoRoot, absolute),
-        markup: (): string | null => (text === undefined ? (text = readMarkup(absolute)) : text),
+        markup: (): string | null =>
+          markup === undefined ? (markup = readMarkup(absolute)) : markup,
+        script: (): string | null =>
+          script === undefined ? (script = readScript(absolute)) : script,
       });
     }
   };
@@ -3581,6 +3602,313 @@ function describeMarkers(markers: readonly ProfileMarker[]): string {
 /** A pack-supplied name, made safe to build a pattern out of. */
 function literalPattern(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ── a cross-check whose evidence is a PLUGIN APPLICATION ────────────────────
+//
+// `filesCarrying` ABOVE ANSWERS "DOES A FILE CONTAIN A WORD", AND THAT IS NOT
+// THE SAME QUESTION. Two rows of one stack in this pack run a task that exists
+// only because a plugin creates it, and the markers that identified the stack
+// confirm a wrapper, a settings file and a DIFFERENT plugin. So every lane
+// whose wrapper nen could answer was proposed a command the build does not
+// have -- `Task '<it>' not found in root project`, inside a file
+// `scaffold init --accept-detected` stores without a human reading it. §2.6 is
+// the rule that was broken: a task the project does not contain is a WARNING,
+// never a proposal.
+//
+// THREE THINGS MAKE IT A SEPARATE READER RATHER THAN A FOURTH MARKER:
+//
+//   * THE COMMENT SYNTAX. The reader above strips `<!-- -->`, which leaves a
+//     `// id("...")` standing -- a line somebody wrote to switch the plugin OFF
+//     read back as the plugin being on. Which stripper a check gets is the
+//     PACK's statement, so this file learns no table of which ecosystem writes
+//     which comment.
+//   * THE INDIRECTION. One of the four spellings a build script applies a
+//     plugin with does not contain the plugin's id at all: it names an ALIAS
+//     whose id lives in a second file. A marker list has no way to say "this
+//     file, resolved through that one".
+//   * THE THIRD VALUE. `contains` is carried-or-not. A build file applying a
+//     plugin nen CANNOT RESOLVE is neither: reading it as absent withholds a
+//     row a tree may well support, and reading it as present proposes a task
+//     that may not exist. It is withheld either way -- and the reason says
+//     which of the two it was, because a maintainer fixes them differently.
+//
+// EVERY STRING THIS READER LOOKS FOR IS THE PACK'S. The plugin id is the
+// markers' own `contains`, the catalogue filename and the build-logic directory
+// are `crossChecks[].plugin`'s, and ./detect.test.ts holds this module to
+// spelling none of them.
+
+/** What this lane says about the plugin a gated row's task comes from. */
+type PluginVerdict =
+  | { readonly kind: "applied" }
+  | { readonly kind: "absent" }
+  /** Every reason nen could not tell, in the order the tree states them. */
+  | { readonly kind: "unknown"; readonly why: readonly string[] };
+
+/** `alias(libs.plugins.some-name)` -> the accessor path it names, as written. */
+const PLUGIN_ALIAS = /\balias\s*\(\s*([A-Za-z0-9_.]+)\s*\)/g;
+
+/**
+ * A plugin application whose id nen cannot resolve -- `OPAQUE_PLUGIN` WITHOUT
+ * the alias clause, because an alias is the one of those this reader CAN
+ * follow, and reporting a resolved one as unreadable would withhold every
+ * modern build.
+ */
+const UNRESOLVABLE_PLUGIN = /\bapply\s*\(|\bapply\s+from\s*:|\bid\s*\(\s*[^"'\s)]/;
+
+/** A `[section]` header, and one `key = value` line inside it. */
+const TOML_SECTION = /^\s*\[([^\]\n]+)\]/;
+const TOML_ENTRY = /^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)$/;
+/** The section of an alias catalogue that maps a name to a PLUGIN. */
+const CATALOGUE_PLUGINS = "plugins";
+/** `{ id = "a.b.c", ... }` and the `"a.b.c:1.2.3"` shorthand beside it. */
+const CATALOGUE_ID = /\bid\s*=\s*["']([^"'\n]+)["']/;
+const CATALOGUE_SHORTHAND = /^["']([^"':\n]+)(?::[^"'\n]*)?["']\s*$/;
+
+/**
+ * The alias catalogue's plugin section, as accessor tail -> plugin id.
+ *
+ * THE KEY IS NOT THE ACCESSOR. A catalogue key is spelled with `-` or `_` and
+ * the generated accessor spells those as `.`, so a key written `a-b-c` is used
+ * as `<catalogue>.<section>.a.b.c` in the build file that references it.
+ * Normalising here is what lets the use site be compared as written.
+ *
+ * ONE ENTRY PER LINE, WHICH IS A BOUND AND IS STATED AS ONE: an inline table
+ * split across lines is not read, and an alias nen did not read resolves to
+ * nothing -- which is the `unknown` verdict, not a silent absence. A `#` at the
+ * start of a line never matches the entry shape, so a commented-out alias is
+ * not one either.
+ */
+function cataloguePlugins(text: string): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  let inside = false;
+  for (const line of text.split("\n")) {
+    const section = TOML_SECTION.exec(line);
+    if (section !== null) {
+      inside = (section[1] ?? "").trim() === CATALOGUE_PLUGINS;
+      continue;
+    }
+    if (!inside) continue;
+    const entry = TOML_ENTRY.exec(line);
+    if (entry === null) continue;
+    const value = (entry[2] ?? "").trim();
+    const id = CATALOGUE_ID.exec(value)?.[1] ?? CATALOGUE_SHORTHAND.exec(value)?.[1];
+    if (id === undefined || id === "") continue;
+    out.set((entry[1] ?? "").replace(/[-_]/g, "."), id);
+  }
+  return out;
+}
+
+/**
+ * Whether this file lives inside a build of ITS OWN rather than this lane's.
+ *
+ * THE SAME BOUNDARY THE MARKER SCAN ALREADY DRAWS (`fileCarrying` stops at it,
+ * and #127 is the PR that made a two-build tree come out as two lanes), applied
+ * to the file walk this family shares -- which does NOT stop there, because
+ * every reader it was written for asks about a project graph rather than about
+ * a build. A plugin applied inside a nested build is applied to a build this
+ * lane's own wrapper never runs, so counting it as evidence would license
+ * exactly the row this whole cross-check exists to withhold.
+ */
+function nestedBuildAbove(
+  laneDirectory: string,
+  file: TreeFile,
+  context: ReadonlySet<string>,
+): string | null {
+  const segments = file.laneRelative.split("/");
+  let directory = laneDirectory;
+  for (const segment of segments.slice(0, -1)) {
+    directory = join(directory, segment);
+    if (isOwnBuildRoot(directory, context)) return relativePath(laneDirectory, directory);
+  }
+  return null;
+}
+
+/** The files a plugin rule reads, with the marker's own directory prefix honoured. */
+function pluginCandidates(
+  files: readonly TreeFile[],
+  markers: readonly ProfileMarker[],
+): readonly TreeFile[] {
+  return files.filter((file): boolean =>
+    markers.some(
+      (marker): boolean =>
+        matchesPattern(marker.pattern, file.name) &&
+        // `*/<file>` NEVER MEANS THE LANE'S OWN `<file>`, and here that is the
+        // difference between a plugin a module APPLIES and one a root
+        // `plugins` block names `apply false` -- which declares a version for
+        // the modules and applies it nowhere, so the task it would create does
+        // not exist. `filesCarrying` above does not honour the prefix because
+        // no rule that goes through it states one; this rule does.
+        (!isNestedPattern(marker.pattern) || file.laneRelative.includes("/")),
+    ),
+  );
+}
+
+/** One reason `unknown` was the answer, in the terms the file states it. */
+function unresolvableReason(file: TreeFile, aliases: readonly string[]): string {
+  return aliases.length === 0
+    ? `${file.laneRelative} applies a plugin nen cannot resolve to an id from this file alone -- an apply(...) can name one at runtime and an apply from: reads another script entirely, so the plugin this row needs may be arriving through it`
+    : `${file.laneRelative} applies ${aliases.map((alias): string => `'${alias}'`).join(", ")}, ${aliases.length === 1 ? "an alias" : "aliases"} nen could not resolve to a plugin id`;
+}
+
+/**
+ * The verdict AND what nen actually opened to reach it.
+ *
+ * THE SECOND HALF IS NOT DECORATION: "nen found no plugin" and "nen found no
+ * build file to look in" are different findings with different fixes, and a
+ * reason that named only the pattern read as the first while being the second.
+ */
+interface PluginReading {
+  readonly verdict: PluginVerdict;
+  /** Candidate files that live inside a nested build, so were NOT read. */
+  readonly ignored: readonly string[];
+  /** Candidate files nen did open, in byte order. */
+  readonly read: readonly string[];
+  /** Alias catalogues nen found in this lane, in byte order. */
+  readonly catalogues: readonly string[];
+}
+
+/**
+ * THE VERDICT, over the whole lane: applied beats unknown beats absent.
+ *
+ * APPLIED WINS BECAUSE IT IS THE ONLY ONE OF THE THREE THAT IS PROVED. One
+ * module spelling the id is a fact about the build whatever the module beside
+ * it is doing, and a lane whose every other build file is unreadable still has
+ * the task this row runs.
+ */
+function pluginVerdict(
+  rule: ProfilePluginRule,
+  markers: readonly ProfileMarker[],
+  laneDirectory: string,
+  allFiles: readonly TreeFile[],
+  context: ReadonlySet<string> | null,
+): PluginReading {
+  const ids = markers
+    .map((marker): string | null => marker.contains)
+    .filter((contains): contains is string => contains !== null);
+  const read = (file: TreeFile): string =>
+    (rule.syntax === "script" ? file.script() : file.markup()) ?? "";
+  // THE NESTED BUILDS COME OFF FIRST, before anything is read: a file inside
+  // one is evidence about THAT build, and this rule is asked about this one.
+  const nested = new Map<TreeFile, string>();
+  const files: TreeFile[] = [];
+  for (const file of allFiles) {
+    const under = context === null ? null : nestedBuildAbove(laneDirectory, file, context);
+    if (under === null) files.push(file);
+    else nested.set(file, under);
+  }
+  const ignored = [...nested.entries()]
+    .filter(([file]): boolean => pluginCandidates([file], markers).length > 0)
+    .map(([file, under]): string => `${file.laneRelative} (inside '${under}')`)
+    .sort(compareBytes);
+  const catalogue = new Map<string, string>();
+  const catalogueFiles: string[] = [];
+  const catalogueName = rule.catalogue;
+  if (catalogueName !== null) {
+    for (const file of files) {
+      if (!matchesPattern(catalogueName, file.name)) continue;
+      catalogueFiles.push(file.laneRelative);
+      for (const [alias, id] of cataloguePlugins(read(file))) catalogue.set(alias, id);
+    }
+  }
+  catalogueFiles.sort(compareBytes);
+  const unknown: string[] = [];
+  const seen: string[] = [];
+  const applied: PluginReading = {
+    verdict: { kind: "applied" },
+    ignored,
+    read: seen,
+    catalogues: catalogueFiles,
+  };
+  for (const file of pluginCandidates(files, markers)) {
+    const text = read(file);
+    seen.push(file.laneRelative);
+    if (ids.some((id): boolean => text.includes(id))) return applied;
+    const used = [...text.matchAll(PLUGIN_ALIAS)].map((match): string => match[1] ?? "");
+    const unresolved: string[] = [];
+    for (const accessor of used) {
+      const alias = [...catalogue.keys()].find(
+        (name): boolean => accessor === name || accessor.endsWith(`.${name}`),
+      );
+      if (alias === undefined) {
+        unresolved.push(accessor);
+        continue;
+      }
+      const id = catalogue.get(alias) ?? "";
+      if (ids.includes(id)) return applied;
+    }
+    if (unresolved.length > 0) {
+      unknown.push(unresolvableReason(file, unresolved));
+      continue;
+    }
+    if (UNRESOLVABLE_PLUGIN.test(text)) unknown.push(unresolvableReason(file, []));
+  }
+  // A REPOSITORY THAT COMPILES ITS OWN PLUGINS CAN APPLY THIS ONE UNDER A NAME
+  // OF ITS OWN INVENTION, and nen reads no compiled build logic. That is the
+  // convention-plugin case, and reading it as absence would tell a maintainer
+  // their tree has no plugin when what is true is that nen cannot see.
+  for (const name of rule.ownBuildLogic) {
+    const present = listDirectory(laneDirectory).some(
+      (entry): boolean => entry.directory && entry.name === name,
+    );
+    if (!present) continue;
+    unknown.push(
+      `this lane compiles build logic of its own in '${name}', whose plugins nen does not read -- a convention plugin defined there may apply this one under an id this repository invented, and nen cannot see through it to tell`,
+    );
+  }
+  return {
+    verdict: unknown.length > 0 ? { kind: "unknown", why: unknown } : { kind: "absent" },
+    ignored,
+    read: seen.slice().sort(compareBytes),
+    catalogues: catalogueFiles,
+  };
+}
+
+/**
+ * The withholding reason a plugin verdict earns, with the PACK quoted twice.
+ *
+ * THE SECOND QUOTE IS THE ONE THAT WAS MISSING FROM EVERY SEAT THIS FAMILY
+ * WRITES. `check.why` says why the row needed the gate; `rule.alternative` says
+ * what to write INSTEAD, which is the only half a maintainer looking at an
+ * empty seat can act on today. The pack is required to state it
+ * (../profiles/pack.ts refuses a plugin rule without one), so this is not a
+ * clause that can go missing on the next stack that grows one.
+ */
+function pluginReason(
+  check: ProfileCrossCheck,
+  rule: ProfilePluginRule,
+  reading: PluginReading,
+): string {
+  const verdict = reading.verdict;
+  const catalogue =
+    rule.catalogue === null
+      ? ""
+      : reading.catalogues.length === 0
+        ? `, and for an ALIAS resolved through a ${rule.catalogue}, of which this lane has none`
+        : `, and for an ALIAS resolved to the same id through ${reading.catalogues.join(", ")}`;
+  // WHAT NEN OPENED, BY NAME, and the empty case said out loud. "no plugin
+  // found" and "no file to look in" are different findings with different
+  // fixes, and a reason that named only the pattern read as the first while
+  // being the second.
+  const opened =
+    reading.read.length === 0
+      ? "and it opened NONE: this lane has no file matching that pattern at all, so the absence is of a build file rather than of a plugin"
+      : `and it opened ${reading.read.join(", ")} with COMMENTS STRIPPED -- a commented-out plugin application is not one`;
+  const looked = `nen looked for ${describeMarkers(check.markers)}${catalogue}, ${opened}`;
+  const skipped =
+    reading.ignored.length === 0
+      ? ""
+      : ` ${reading.ignored.length === 1 ? "One further file was NOT read" : `${reading.ignored.length} further files were NOT read`}: ${reading.ignored.join(
+          ", ",
+        )} -- a directory shipping its own wrapper or its own settings file is a build of its OWN, and a plugin applied in there is applied to a build this lane's commands never run.`;
+  const head =
+    verdict.kind === "unknown"
+      ? `nen cannot tell whether this lane applies the plugin whose task this row runs, so it withholds rather than guess: ${verdict.why
+          .slice()
+          .sort(compareBytes)
+          .join("; ")}. ${looked}.${skipped} A row proposed on a maybe is a command that fails the first time anybody runs it`
+      : `nothing in this lane's own build applies the plugin whose task this row runs. ${looked}.${skipped} A task the project does not contain is a warning, never a proposal`;
+  return `${head}. What to write instead: ${rule.alternative} The pack's own reason for the gate: ${check.why} How the reading works: ${rule.why}`;
 }
 
 /**
@@ -4035,10 +4363,16 @@ function readStack(
   profile: StackProfile,
   repoRoot: string,
   laneDirectory: string,
+  hostStack: HostToolStack | undefined,
 ): StackReading {
   if (!statesProjectRules(profile)) return EMPTY_READING;
 
   const files = walkLaneFiles(repoRoot, laneDirectory);
+  // THE ONLY THING THIS READER USES THE HOST STACK FOR: where this lane's own
+  // build ENDS. `walkLaneFiles` deliberately does not stop at a nested build --
+  // every reader it was written for asks about a project graph, which crosses
+  // that boundary -- and a plugin rule asks about a BUILD, which does not.
+  const context = hostStack === undefined ? null : hostStack.contextFiles;
   const answers = new Map<string, string>();
   const unanswered = new Map<string, string>();
   const perVerb = new Map<string, TokenLayer>();
@@ -4129,6 +4463,20 @@ function readStack(
   // addressing a file outside it.
   const evidenceRoots: TreeFile[] = [];
   for (const check of profile.crossChecks) {
+    // THE OTHER KIND OF EVIDENCE, ASKED FIRST BECAUSE IT IS A DIFFERENT
+    // QUESTION ENTIRELY: not "does a file in this tree contain this word" but
+    // "does this build APPLY this plugin", three-valued, comments stripped, and
+    // an alias followed through the catalogue. ../profiles/pack.ts refuses a
+    // rule that states one of these AND answers a token, so a plugin check
+    // never reaches the evidence-root branch below.
+    const rule = check.plugin;
+    if (rule !== null) {
+      const found = pluginVerdict(rule, check.markers, laneDirectory, files, context);
+      if (found.verdict.kind === "applied") continue;
+      const reason = pluginReason(check, rule, found);
+      for (const verb of check.verbs) withheld.set(verb, reason);
+      continue;
+    }
     // ONE FILE MAY CARRY SEVERAL OF THE MARKERS -- a test project referencing
     // both a test SDK and a framework matches twice and is ONE piece of
     // evidence, not two, so the evidence is a SET of files keyed by path.
@@ -4891,7 +5239,7 @@ function proposeVerbs(
   hostStack: HostToolStack | undefined,
 ): ProposedVerbs {
   const manifest = readManifest(laneDirectory);
-  const reading = readStack(profile, repoRoot, laneDirectory);
+  const reading = readStack(profile, repoRoot, laneDirectory, hostStack);
   const verbs: Record<string, unknown> = {};
   const notes: string[] = [];
   const noCommand: string[] = [];

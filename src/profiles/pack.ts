@@ -482,9 +482,85 @@ export interface ProfileCrossCheck {
    * repository means, and in what order, is a list only it can state.
    */
   readonly answers: string | null;
+  /**
+   * THE EVIDENCE IS "A PLUGIN IS APPLIED" RATHER THAN "A FILE CONTAINS A WORD",
+   * or null when the plain `contains` reading above is the whole question.
+   *
+   * A `contains` MARKER CANNOT STATE IT, and that is the whole reason this
+   * field exists rather than a fourth marker. Three of the four ways a build
+   * script applies a plugin spell the plugin's own id verbatim, so a `contains`
+   * covers them; the fourth names an ALIAS whose id lives in a second file, and
+   * a marker list has no way to say "this file, resolved through that one".
+   * Worse, the plain reading is TWO-VALUED -- carried or not -- and a build
+   * script that applies a plugin nen cannot resolve is neither: reading it as
+   * "not carried" withholds a row a tree may well support, and reading it as
+   * carried proposes a task that does not exist.
+   */
+  readonly plugin: ProfilePluginRule | null;
   /** Why the row is withheld without it. Quoted verbatim into the proposal. */
   readonly why: string;
 }
+
+/**
+ * HOW A BUILD SCRIPT SAYS "THIS PLUGIN IS APPLIED HERE", as data.
+ *
+ * WHAT LIVES HERE AND WHAT DOES NOT. The plugin's own ID is not in this block:
+ * it is the `contains` of the cross-check's markers, so there is exactly ONE
+ * place in the pack that spells it and exactly one place a reviewer has to look
+ * to change it. This block names the MACHINERY that reading needs and that a
+ * marker list cannot express -- which comment syntax the evidence files are
+ * written in, which file resolves an alias to an id, and which directories hold
+ * build logic nen does not read.
+ *
+ * `alternative` IS REQUIRED, AND THAT IS THE POINT OF THE SHAPE. A gate that
+ * withholds a row and says only "not found" leaves a maintainer with an empty
+ * seat and no idea what belongs in it. The alternative is the row a tree
+ * WITHOUT this plugin would honestly declare, stated by the catalogue, quoted
+ * into the seat -- and a pack that gates a row without stating one is refused
+ * here rather than shipping a proposal that only ever says no.
+ */
+export interface ProfilePluginRule {
+  /**
+   * The comment syntax the evidence files use. A CLOSED SET OF TWO, because
+   * those are the two this reader implements -- and stating it is not
+   * decoration: a reader that strips the wrong syntax reads a commented-out
+   * plugin application as an applied plugin, which is the exact defect
+   * ../shu/detect.ts's two strippers exist for.
+   */
+  readonly syntax: PluginSyntax;
+  /**
+   * The file an ALIAS is resolved to an id through, or null where the
+   * ecosystem has none. Matched as a marker pattern, anywhere under the lane.
+   */
+  readonly catalogue: string | null;
+  /**
+   * Directory names holding build logic THIS repository compiles itself, whose
+   * plugins nen does not read.
+   *
+   * A repository with one of these can apply anything from a plugin id of its
+   * own invention, and nen cannot see through it. That is not "absent" and it
+   * is not "applied" -- it is the third value, and naming the directory is what
+   * turns a silent guess into a sentence a maintainer can act on.
+   */
+  readonly ownBuildLogic: readonly string[];
+  /** The row a tree WITHOUT this plugin would honestly declare. Quoted into the seat. */
+  readonly alternative: string;
+  /** Why this reading, and what counts as applied. Rendered beside the markers. */
+  readonly why: string;
+}
+
+/** The comment syntaxes ../shu/detect.ts can strip. A CLOSED set of two. */
+export const PLUGIN_SYNTAXES = ["markup", "script"] as const;
+export type PluginSyntax = (typeof PLUGIN_SYNTAXES)[number];
+
+/** Every key `plugin` reads. A stray one is a typo that silently disables a rule. */
+const PLUGIN_KEYS: readonly string[] = [
+  "alternative",
+  "catalogue",
+  "ownBuildLogic",
+  "syntax",
+  "why",
+];
 
 /**
  * WHERE A TOKEN'S VALUE IS READ OUT OF THE TREE, when the tree can answer it.
@@ -784,6 +860,13 @@ function parseCrossChecks(
         "gates no verb. A cross-check exists to withhold a row; one that gates none can never fire, and a rule that can never fire reads exactly like a satisfied one",
       );
     }
+    const markers = parseMarkers(
+      path,
+      `${pointer}.markers`,
+      "states no marker. A cross-check with no evidence to look for withholds its verbs always, which is what an `unsupported` cell says properly",
+      raw["markers"],
+    );
+    const answered = requireAnsweredToken(path, `${pointer}.answers`, raw["answers"]);
     return {
       verbs: verbs.map((item, at): string => {
         const where = `${pointer}.verbs[${at}]`;
@@ -797,16 +880,73 @@ function parseCrossChecks(
         }
         return verb;
       }),
-      markers: parseMarkers(
-        path,
-        `${pointer}.markers`,
-        "states no marker. A cross-check with no evidence to look for withholds its verbs always, which is what an `unsupported` cell says properly",
-        raw["markers"],
-      ),
-      answers: requireAnsweredToken(path, `${pointer}.answers`, raw["answers"]),
+      markers,
+      answers: answered,
+      plugin: parsePluginRule(path, `${pointer}.plugin`, raw["plugin"], markers, answered),
       why: requireString(path, `${pointer}.why`, raw["why"]),
     };
   });
+}
+
+/**
+ * `plugin`, which is OPTIONAL: a cross-check states one only where the evidence
+ * is a plugin APPLICATION rather than a word in a file.
+ *
+ * THREE REFUSALS, AND ALL THREE ARE ABOUT SILENCE. A stray key is refused
+ * because the fields here each switch a whole reading on -- a `catalog` written
+ * with one `l` disables the alias route with no message, and the rule then
+ * withholds every lane whose modules use it, which reads exactly like a
+ * repository that has no plugin. A marker with no `contains` is refused because
+ * the markers ARE where the plugin's id lives: a rule whose markers name only
+ * filenames has nothing to look for and would report every build file as
+ * evidence. And a rule that ALSO answers a token is refused because only one of
+ * the two readings can run, so the other would sit in the catalogue doing
+ * nothing while looking like a rule.
+ */
+function parsePluginRule(
+  path: string,
+  pointer: string,
+  value: unknown,
+  markers: readonly ProfileMarker[],
+  answers: string | null,
+): ProfilePluginRule | null {
+  if (value === undefined || value === null) return null;
+  const raw = requireRecord(path, pointer, value);
+  const strays = Object.keys(raw)
+    .filter((key): boolean => !PLUGIN_KEYS.includes(key))
+    .sort();
+  if (strays.length > 0) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `states ${strays.map((key): string => `'${key}'`).join(", ")}, which nothing reads. Every key here switches a whole reading on, so a misspelled one disables that reading in SILENCE and the rule then withholds rows for a reason nobody wrote down. The keys are [${PLUGIN_KEYS.join(", ")}]`,
+    );
+  }
+  if (answers !== null) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `is stated on a cross-check that also answers '${answers}'. A cross-check that answers a token names the FILE its gated row addresses, and the evidence here is a plugin APPLICATION -- a build file that applies something, which is not a file any row is pointed at. The two readings cannot both run, so stating both would leave one of them silently doing nothing: drop the token, or drop this block`,
+    );
+  }
+  const idless = markers.filter((marker): boolean => marker.contains === null);
+  if (idless.length > 0) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `is stated beside ${idless.length === 1 ? "a marker that names" : `${idless.length} markers that name`} no 'contains' (${idless.map((marker): string => `'${marker.pattern}'`).join(", ")}). The plugin's ID is the markers' 'contains' and lives nowhere else in this shape, so a marker without one gives this rule nothing to look for -- and a rule with nothing to look for reports every file it matches as evidence`,
+    );
+  }
+  const logic = requireArray(path, `${pointer}.ownBuildLogic`, raw["ownBuildLogic"]);
+  return {
+    syntax: requireEnum(path, `${pointer}.syntax`, raw["syntax"], PLUGIN_SYNTAXES),
+    catalogue: optionalString(path, `${pointer}.catalogue`, raw["catalogue"]),
+    ownBuildLogic: logic.map((entry, at): string =>
+      requireString(path, `${pointer}.ownBuildLogic[${at}]`, entry),
+    ),
+    alternative: requireString(path, `${pointer}.alternative`, raw["alternative"]),
+    why: requireString(path, `${pointer}.why`, raw["why"]),
+  };
 }
 
 /** A token a rule claims to answer: one whole member of the closed set, or null. */

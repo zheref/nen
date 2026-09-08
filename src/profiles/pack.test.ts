@@ -906,6 +906,133 @@ describe("the two fields that widen what `detect` will propose", () => {
     const parsed = parseProfile(AT, "example", VERBS, withCrossCheck(null, ["run"]));
     expect(parsed.crossChecks[0]?.answers).toBeNull();
   });
+
+  // ── `crossChecks[].plugin`, the shape zheref/nen#128 added ───────────────
+  //
+  // EVERY REFUSAL HERE IS ABOUT SILENCE. This block switches a whole reading
+  // on, and each field switches half of it: a misspelled key, a marker with no
+  // literal to look for, or a token nothing will read leaves the rule loading
+  // clean and doing something other than what it says. A catalogue that cannot
+  // be read is a catalogue that is refused.
+  const PLUGIN = {
+    syntax: "script",
+    catalogue: "libs.versions.toml",
+    ownBuildLogic: ["buildSrc"],
+    alternative: "the plain row a tree without it would declare",
+    why: "four spellings, comments stripped, three-valued",
+  };
+
+  function withPlugin(
+    plugin: unknown,
+    markers: unknown = [{ pattern: "*/build.gradle", contains: "a.b.c", why: "the id" }],
+    answers: unknown = null,
+  ): Record<string, unknown> {
+    return profile({
+      crossChecks: [
+        { verbs: ["test"], markers, answers, plugin, why: "the gate" },
+      ],
+    });
+  }
+
+  it("loads a plugin rule, keeping every field the reader acts on", () => {
+    const parsed = parseProfile(AT, "example", VERBS, withPlugin(PLUGIN));
+    const rule = parsed.crossChecks[0]?.plugin;
+    expect(rule?.syntax).toBe("script");
+    expect(rule?.catalogue).toBe("libs.versions.toml");
+    expect(rule?.ownBuildLogic).toEqual(["buildSrc"]);
+    expect(rule?.alternative).toContain("the plain row");
+  });
+
+  it("leaves a cross-check with NO plugin block null, which is every other stack", () => {
+    const parsed = parseProfile(AT, "example", VERBS, withCrossCheck(null, ["run"]));
+    expect(parsed.crossChecks[0]?.plugin).toBeNull();
+    // And the bundled pack agrees: exactly one profile states one.
+    const stated = loadProfilesPack().ids.filter((id): boolean =>
+      profileById(loadProfilesPack(), id).crossChecks.some((check): boolean => check.plugin !== null),
+    );
+    expect(stated).toEqual(["gradle-android"]);
+  });
+
+  it("refuses a stray key, because a misspelled one disables a reading in silence", () => {
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, withPlugin({ ...PLUGIN, catalog: "libs.versions.toml" })),
+    );
+    expect(error.pointer).toBe("crossChecks[0].plugin");
+    expect(error.message).toContain("'catalog'");
+    expect(error.message).toContain("SILENCE");
+    expect(error.message).toContain("ownBuildLogic");
+  });
+
+  it("refuses a syntax outside the closed set of two strippers nen has", () => {
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, withPlugin({ ...PLUGIN, syntax: "gradle" })),
+    );
+    expect(error.pointer).toBe("crossChecks[0].plugin.syntax");
+    expect(error.message).toContain("CLOSED set");
+    expect(error.message).toContain("markup, script");
+  });
+
+  it("refuses a marker with no 'contains', because that is where the plugin id lives", () => {
+    const error = refusal(() =>
+      parseProfile(
+        AT,
+        "example",
+        VERBS,
+        withPlugin(PLUGIN, [{ pattern: "*/build.gradle", contains: null, why: "any build file" }]),
+      ),
+    );
+    expect(error.pointer).toBe("crossChecks[0].plugin");
+    expect(error.message).toContain("'*/build.gradle'");
+    expect(error.message).toContain("nothing to look for");
+  });
+
+  it("refuses a plugin rule that ALSO answers a token, because one reading would be dead", () => {
+    const error = refusal(() =>
+      parseProfile(
+        AT,
+        "example",
+        VERBS,
+        profile({
+          verbs: {
+            build: { exe: "example", argv: ["build"], why: "w", source: "s" },
+            test: { exe: "example", argv: ["{project}"], why: "w", source: "s" },
+          },
+          crossChecks: [
+            {
+              verbs: ["test"],
+              markers: [{ pattern: "*/build.gradle", contains: "a.b.c", why: "the id" }],
+              answers: "{project}",
+              plugin: PLUGIN,
+              why: "the gate",
+            },
+          ],
+        }),
+      ),
+    );
+    expect(error.pointer).toBe("crossChecks[0].plugin");
+    expect(error.message).toContain("{project}");
+    expect(error.message).toContain("silently doing nothing");
+  });
+
+  it("requires the ALTERNATIVE, so no gate can withhold a row and say nothing to write", () => {
+    const rest = Object.fromEntries(
+      Object.entries(PLUGIN).filter(([key]): boolean => key !== "alternative"),
+    );
+    const error = refusal(() => parseProfile(AT, "example", VERBS, withPlugin(rest)));
+    expect(error.pointer).toBe("crossChecks[0].plugin.alternative");
+    expect(error.message).toContain("non-empty string");
+  });
+
+  it("accepts a rule with no catalogue and no build-logic directory at all", () => {
+    const parsed = parseProfile(
+      AT,
+      "example",
+      VERBS,
+      withPlugin({ ...PLUGIN, catalogue: null, ownBuildLogic: [] }),
+    );
+    expect(parsed.crossChecks[0]?.plugin?.catalogue).toBeNull();
+    expect(parsed.crossChecks[0]?.plugin?.ownBuildLogic).toEqual([]);
+  });
 });
 
 describe("profileById", () => {
