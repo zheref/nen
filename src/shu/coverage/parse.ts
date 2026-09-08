@@ -22,7 +22,6 @@
 // exactly one place in this family that opens a coverage report, and this is it.
 
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
 import { CoverageReportError, type CoverageFormat, type ParsedCoverage } from "./shape.js";
 import { COBERTURA } from "./formats/cobertura.js";
 import { ISTANBUL } from "./formats/istanbul.js";
@@ -39,9 +38,38 @@ import { XCCOV } from "./formats/xccov.js";
  */
 export const FORMATS: readonly CoverageFormat[] = [ISTANBUL, XCCOV, COBERTURA, JACOCO, LCOV];
 
-/** `istanbul-summary (coverage-summary.json), ...` -- for a refusal. */
+/**
+ * `istanbul-summary (coverage-summary.json), ...` -- for a refusal.
+ *
+ * IT ALSO NAMES THE ONE FILE PEOPLE EXPECT TO BE ON THE LIST AND IS NOT.
+ * `coverage-final.json` is what a v8/Istanbul run writes by default, it sits in
+ * the same directory as the summary, and it is a per-statement MAP rather than
+ * a summary -- so a repository that declares it gets a refusal listing five
+ * formats none of which is the file it just named, and no hint that the fix is
+ * one reporter away. Naming it here costs a sentence and answers the likeliest
+ * first question this verb produces.
+ */
 export function supportedFormats(): string {
-  return FORMATS.map((format): string => `${format.id} -- ${format.label}, ${format.writtenAs}`).join("; ");
+  const formats = FORMATS.map(
+    (format): string => `${format.id} -- ${format.label}, ${format.writtenAs}`,
+  ).join("; ");
+  return `${formats}. NOT one of them: 'coverage-final.json', the RAW per-statement map an Istanbul/v8 run writes beside the summary -- add the 'json-summary' reporter (or 'lcov') and declare the file it writes.`;
+}
+
+/**
+ * The last segment of a path, cut on BOTH separators on every platform.
+ *
+ * `node:path`'s `basename` IS PLATFORM-DEPENDENT and this decision must not be.
+ * A declaration is a file in somebody else's repository and may state
+ * `coverage\lcov.info`; on win32 `basename` cuts that to `lcov.info` and on
+ * POSIX it returns the whole string, so the same declaration would be
+ * recognised on one of this CLI's three platforms and refused on the other two
+ * -- a difference nothing in the declaration asked for. ../run.ts's `insideRepo`
+ * already checks both separators for the same reason.
+ */
+export function fileNameOf(path: string): string {
+  const segments = path.split(/[\\/]/);
+  return segments[segments.length - 1] ?? path;
 }
 
 /**
@@ -60,7 +88,7 @@ export function recognisedByName(path: string): boolean {
 
 /** The first format whose name rule claims this path, or null. */
 export function formatNamedBy(path: string): CoverageFormat | null {
-  const name = basename(path);
+  const name = fileNameOf(path);
   return FORMATS.find((format): boolean => format.namedBy(name)) ?? null;
 }
 
@@ -69,7 +97,7 @@ export function formatNamedBy(path: string): CoverageFormat | null {
  * first format whose sniff claims it, else null.
  */
 export function detectFormat(path: string, text: string): CoverageFormat | null {
-  const name = basename(path);
+  const name = fileNameOf(path);
   const named = FORMATS.filter((format): boolean => format.namedBy(name));
   for (const format of named) {
     if (format.sniff(text)) return format;
@@ -98,15 +126,43 @@ export function readReport(absolute: string, display: string): ParsedReport {
     const code = (error as NodeJS.ErrnoException).code;
     throw new CoverageReportError(
       code === "ENOENT"
-        ? `no coverage report at ${display}. The lane's 'coverage' verb ran and exited 0, and this file is not there: the declaration names it under this verb's 'artifacts', so either the tool writes it somewhere else -- correct the path -- or the run produced no report at all.`
+        ? `no coverage report at ${display}. The lane's 'coverage' verb ran and exited 0, and this file is not there: the declaration names it under this verb's 'artifacts', so either the tool writes it somewhere else -- correct the path -- or the run produced no report at all.${globNote(display)}`
         : `${display} could not be read (${code ?? (error instanceof Error ? error.message : String(error))}).`,
     );
   }
   const format = detectFormat(display, text);
   if (format === null) {
     throw new CoverageReportError(
-      `${display} is not a coverage report in any format nen reads. Supported: ${supportedFormats()}. The file name is a hint and the content decides, so a report in one of these formats under an unfamiliar name is still read -- this file matched none of them either way.`,
+      `${display} is not a coverage report in any format nen reads. Supported: ${supportedFormats()} The file name is a hint and the content decides, so a report in one of these formats under an unfamiliar name is still read -- this file matched none of them either way.`,
     );
   }
-  return { format, coverage: format.parse(text, display) };
+  // EVERY REFUSAL FROM HERE NAMES THE FILE, and this is the one place that can
+  // guarantee it. A parser is handed TEXT and knows the display path only
+  // because it is passed one; ../shape.ts's arithmetic is handed neither, so a
+  // count that cannot be true (`20 of 17 covered`) refuses in a sentence with
+  // no path in it. Prefixing here is what keeps "the message says which file to
+  // open" a property of the read rather than of each parser remembering to.
+  try {
+    return { format, coverage: format.parse(text, display) };
+  } catch (error) {
+    if (error instanceof CoverageReportError && !error.message.startsWith(`${display}:`)) {
+      throw new CoverageReportError(`${display}: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The sentence a path with a `*` in it gets, and nothing else gets.
+ *
+ * A DECLARATION IS A LIST OF LITERAL PATHS. `coverage/*.info` is recognised by
+ * name (it ends in `.info`), so nen goes and opens a file called `*.info`,
+ * which is not there -- and the honest refusal, "this file is not there", is
+ * then the least useful true sentence available. nen expands nothing: a shell
+ * would, and this CLI's one subprocess seam never uses one.
+ */
+function globNote(display: string): string {
+  return /[*?[\]]/.test(display)
+    ? " That path contains a wildcard, and an artifact is a LITERAL path: nen expands no globs -- there is no shell anywhere in this program -- so name the file the tool actually writes, or a step that copies it to a fixed name."
+    : "";
 }

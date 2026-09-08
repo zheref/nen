@@ -67,7 +67,8 @@ import {
 } from "../profiles/pack.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
 import { parseYaml } from "../schema/yaml.js";
-import { ASSERTABLE_KINDS, insideRepo } from "./run.js";
+import { ASSERTABLE_KINDS } from "./render.js";
+import { insideRepo } from "./run.js";
 
 /**
  * Directories NOTHING IN THIS FILE ever descends into -- one set, for every

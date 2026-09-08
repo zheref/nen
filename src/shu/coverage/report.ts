@@ -60,7 +60,15 @@ export interface CoverageReport {
   readonly targets: readonly CoverageTarget[];
   readonly threshold: CoverageThreshold | null;
   readonly report: CoverageSource | null;
-  /** NEN's exit code -- the executor's, never moved by the threshold. */
+  /**
+   * NEN's exit code, and the threshold never moves it.
+   *
+   * It is not simply the executor's: a run that exited 0 and whose report is
+   * missing, unreadable or undeclared is a 1 this verb's SECOND step decides
+   * (../coverage.ts's `parseAfterRun`), which is the same class of answer this
+   * CLI returns 1 for everywhere else. What it never is, in either direction,
+   * is a verdict about the number: see this file's header.
+   */
   readonly exitCode: number;
 }
 
@@ -75,16 +83,26 @@ export interface AssembleRequest {
 }
 
 /**
- * `total.lines.percent >= value`, or null when there is no percentage.
+ * Whether the line coverage cleared the bar, or null when there is no ratio.
+ *
+ * COMPARED ON THE COUNTS, NOT ON THE PERCENTAGE THE TABLE PRINTS. `percent` is
+ * rounded to two decimals for display (../coverage/shape.ts says why), and a
+ * comparison against a rounded number answers a different question from the one
+ * the caller asked: 19999 of 25000 lines is 79.996%, which rounds to 80.00 and
+ * would report `met: true` at `--threshold 80`. A caller that gates its own
+ * pipeline on `met` would then fail open on every project within half a
+ * rounding step of its bar -- the one direction this flag must never be wrong
+ * in, because a threshold that quietly says yes is indistinguishable from a
+ * threshold nobody set. `covered * 100 >= value * total` is the same comparison
+ * with no division and no rounding in it at all.
  *
  * `>=` AND NOT `>`: a threshold of 80 met by exactly 80 is met, which is what
  * every tool that carries one of these means by it and what a reader assumes
  * without checking.
  */
 export function thresholdMet(total: CoverageMeasure | null, value: number): boolean | null {
-  const percent = total?.lines.percent;
-  if (percent === undefined || percent === null) return null;
-  return percent >= value;
+  if (total === null || total.lines.total <= 0) return null;
+  return total.lines.covered * 100 >= value * total.lines.total;
 }
 
 export function assembleCoverage(request: AssembleRequest): CoverageReport {

@@ -160,9 +160,23 @@ export const LCOV: CoverageFormat = {
       }
     }
 
+    // A TRAILING RECORD WITH NO `end_of_record` IS A TRUNCATED FILE, AND IT IS
+    // REFUSED RATHER THAN FLUSHED. This is the one format of the five whose
+    // total is the sum of its own rows, so a record silently dropped here does
+    // not make the total look wrong -- it makes it look RIGHT and smaller: one
+    // complete record beside a truncated hundred-line one reports 100% for a
+    // 90%-covered project, with nothing anywhere saying a row went missing.
+    // Flushing the partial record is the other candidate and is worse: the
+    // counts in it are whatever the writer got out before it stopped, which is
+    // a number nen would then present as a measurement.
+    if (name !== null) {
+      throw new CoverageReportError(
+        `${path}: ends mid-record at 'SF:${name}' -- there is no 'end_of_record' after it. An LCOV tracefile is one 'SF:<file>' ... 'end_of_record' block per source file, and a file that stops inside one was truncated (a killed run, a full disk, two writers on one path). nen will not add up the part that arrived: this format's total IS the sum of its rows, so a dropped row reads as a smaller project rather than as a missing one.`,
+      );
+    }
     if (files.size === 0) {
       throw new CoverageReportError(
-        `${path}: contains no complete 'SF:' record. An LCOV tracefile is one 'SF:<file>' ... 'end_of_record' block per source file; a file with none is empty, truncated, or not this format.`,
+        `${path}: contains no complete 'SF:' record. An LCOV tracefile is one 'SF:<file>' ... 'end_of_record' block per source file; a file with none is empty or not this format.`,
       );
     }
 

@@ -21,18 +21,19 @@
 // and the executing one, imports no seam itself, and hands the advisory across
 // as a value. There is no parameter anywhere in ./coverage.ts through which a
 // catalogue value could become a path that is opened.
+//
+// THE SENTENCE IS NOT WRITTEN HERE, and that split is load-bearing rather than
+// tidy. `advisoryFor` formats a refusal out of values it is handed and reads
+// nothing, so it lives in ./coverage/advisory.ts, where the module that CAN
+// spawn may import it. If it lived in this file, ./coverage.ts would have to
+// import this file to print a sentence -- and would thereby reach the pack,
+// which is the offence ../profiles/inertness.test.ts exists to fail the build
+// on. One module reads the catalogue; another writes the English.
 
 import { loadProfilesPack, type ProfilesPack } from "../profiles/pack.js";
+import type { CoverageAdvisory } from "./coverage/advisory.js";
 
-/** What the pack records about one stack's report location. Advisory. */
-export interface CoverageAdvisory {
-  /** The conventional location, or null when the stack has none. */
-  readonly path: string | null;
-  /** The pack's own reason. Quoted verbatim; never nen's words about a stack. */
-  readonly why: string;
-  /** Where the pack read it. Quoted so a reader can check the claim. */
-  readonly source: string;
-}
+export type { CoverageAdvisory };
 
 /**
  * The advisory for every stack the pack carries, by stack id.
@@ -57,27 +58,4 @@ export function coverageAdvisories(pack: ProfilesPack = loadProfilesPack()): Rea
     };
   }
   return out;
-}
-
-/**
- * The sentence a refusal prints for one stack, or the honest absence.
- *
- * IT ALWAYS SAYS THE VALUE IS ADVISORY AND UNREAD. A refusal that merely named
- * a path would read as "nen looked there", and the whole point of this module
- * is that nen did not: it has no filesystem access, and the caller resolves
- * nothing it returns.
- */
-export function advisoryFor(
-  advisories: Readonly<Record<string, CoverageAdvisory>>,
-  stack: string,
-): string {
-  const advisory = advisories[stack];
-  if (advisory === undefined) {
-    return `The reference pack carries no profile for stack '${stack}', so nen has nothing to suggest about where its coverage report is written.`;
-  }
-  const head =
-    advisory.path === null
-      ? `The reference pack records no conventional report location for '${stack}'`
-      : `The reference pack records '${advisory.path}' as the conventional location for '${stack}'`;
-  return `${head} -- ADVISORY, and nen did not look there: it parses the report a declaration NAMES. The pack's reason: ${advisory.why} (${advisory.source})`;
 }

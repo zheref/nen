@@ -62,15 +62,19 @@ different things.
 
 - `shu-coverage-repo/nen/contract.json` — the repository `nen shu coverage` is
   proved against, and the reason it is not folded into `shu-repo` either: that
-  one's `coverage` row declares **no** `artifacts`, which is the "nothing to
-  parse" case this verb must answer for. This one carries four lanes, one per
-  answer: `web` declares an artifact that **is** a report nen reads (and
-  `coverage/coverage-summary.json` is committed beside it, so the parse runs end
-  to end), `core` declares no artifact at all, `native` declares a real file in
-  no format nen reads, and `gone` declares a report that is not on disk. Its
-  three stacks (`nextjs`, `xcode-ios`, `gatsby`) are chosen so the advisory the
-  refusal quotes differs per lane — one stack has a conventional report location
-  and the others say why they have none.
+  one's `coverage` row declares **no** `artifacts` and a stale **`report`** key
+  from an earlier draft of the design, which are the two "nothing to parse"
+  cases this verb must answer for (and the second must be *named* in the
+  refusal, not silently ignored — that row's own `why` says so). This one
+  carries five lanes, one per answer: `web` declares an artifact that **is** a
+  report nen reads (and `coverage/coverage-summary.json` is committed beside it,
+  so the parse runs end to end), `core` declares no artifact at all, `native`
+  declares a real file in no format nen reads, `gone` declares a report that is
+  not on disk, and `mixed` declares two artifacts of which only the **second**
+  is a report (`coverage/lcov.info`, also committed). Its three stacks
+  (`nextjs`, `xcode-ios`, `gatsby`) are chosen so the advisory the refusal
+  quotes differs per lane — one stack has a conventional report location and the
+  others say why they have none.
 
 The marker trees `nen shu detect` scans are a different kind of input and live
 separately, at `src/shu/fixtures/` — see that directory's own README; the

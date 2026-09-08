@@ -44,13 +44,32 @@ function countsOf(element: XmlElement): CoverageCounts | null {
   return counts(covered, missed + covered);
 }
 
+/**
+ * Add a counter to a tally, rather than replace what is already there.
+ *
+ * A NAME SEEN TWICE IS ONE ROW, NOT TWO -- ./cobertura.ts's rule, and this
+ * format needs it for a shape that one does not have. An AGGREGATE JaCoCo
+ * report (`<report><group name="core">…</group><group name="app">…</group>`,
+ * which is what a multi-module Gradle build writes) states each module's
+ * packages under its own `<group>`, and two modules routinely contain the same
+ * package name. Assigning meant the row for such a package carried the LAST
+ * group's lines and, if only the first group measured branches, the FIRST
+ * group's branches -- one row about two different things, and rows that no
+ * longer added up to the report-level total beside them.
+ */
 function record(tally: Tally, element: XmlElement): void {
   const type = element.attributes["type"];
   if (type !== LINE && type !== BRANCH) return;
   const value = countsOf(element);
   if (value === null) return;
-  if (type === LINE) tally.lines = value;
-  else tally.branches = value;
+  if (type === LINE) tally.lines = add(tally.lines, value);
+  else tally.branches = add(tally.branches, value);
+}
+
+function add(existing: CoverageCounts | null, value: CoverageCounts): CoverageCounts {
+  return existing === null
+    ? value
+    : counts(existing.covered + value.covered, existing.total + value.total);
 }
 
 export const JACOCO: CoverageFormat = {

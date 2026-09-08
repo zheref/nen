@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd">
+<!-- An AGGREGATE JaCoCo report: the shape a multi-module Gradle build writes,
+     with one <group> per module. Two things here are traps, and both are the
+     point of the file.
+
+     TRAP 1 -- `io/placeholder/util` APPEARS IN BOTH GROUPS. A shared package
+     compiled into two modules is the ordinary case, not a corner one. A reader
+     that ASSIGNS each counter to the row instead of adding it reports the LAST
+     group's lines (4/5) beside the FIRST group's branches (1/2) -- one row
+     about two different things, and rows that no longer add up to the report
+     total under them.
+
+     TRAP 2 -- `io/placeholder/core` STATES CLASS COUNTERS THAT DO NOT SUM TO
+     ITS PACKAGE COUNTER (1/1 and 1/1 against 5/7), which a real report's would.
+     They disagree on purpose: a reader that took its row from the <class>
+     level would produce the right answer by accident on any file where they
+     agree, so a fixture where they agree cannot tell the two readers apart.
+     This parser reads exactly two levels, <report> and <package>, and this is
+     what says so. -->
+<report name="placeholder-aggregate">
+  <sessioninfo id="placeholder-host" start="1767225600000" dump="1767225601000" />
+  <group name="core">
+    <package name="io/placeholder/util">
+      <class name="io/placeholder/util/Clock" sourcefilename="Clock.kt">
+        <counter type="LINE" missed="1" covered="3" />
+        <counter type="BRANCH" missed="1" covered="1" />
+      </class>
+      <counter type="LINE" missed="1" covered="3" />
+      <counter type="BRANCH" missed="1" covered="1" />
+    </package>
+    <package name="io/placeholder/core">
+      <class name="io/placeholder/core/Store" sourcefilename="Store.kt">
+        <counter type="LINE" missed="0" covered="1" />
+      </class>
+      <class name="io/placeholder/core/Cache" sourcefilename="Cache.kt">
+        <counter type="LINE" missed="0" covered="1" />
+      </class>
+      <counter type="LINE" missed="2" covered="5" />
+    </package>
+    <counter type="LINE" missed="3" covered="8" />
+    <counter type="BRANCH" missed="1" covered="1" />
+  </group>
+  <group name="app">
+    <package name="io/placeholder/util">
+      <class name="io/placeholder/util/Clock" sourcefilename="Clock.kt">
+        <counter type="LINE" missed="1" covered="4" />
+        <counter type="BRANCH" missed="0" covered="2" />
+      </class>
+      <counter type="LINE" missed="1" covered="4" />
+      <counter type="BRANCH" missed="0" covered="2" />
+    </package>
+    <counter type="LINE" missed="1" covered="4" />
+    <counter type="BRANCH" missed="0" covered="2" />
+  </group>
+  <counter type="INSTRUCTION" missed="6" covered="30" />
+  <counter type="LINE" missed="4" covered="12" />
+  <counter type="BRANCH" missed="1" covered="3" />
+</report>

@@ -23,11 +23,13 @@ import { runFamily } from "../index.js";
 import { classifyCommand } from "../parse/izanami.js";
 import { loadProfilesPack } from "../profiles/pack.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
-import { SHU_COVERAGE_REPO } from "../schema/fixtures/paths.js";
+import { SHU_COVERAGE_REPO, SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
-import { advisoryFor, coverageAdvisories } from "./coverage-defaults.js";
-import { parseThreshold } from "./coverage.js";
-import { COVERAGE_CONTRACT } from "./coverage/report.js";
+import { coverageAdvisories } from "./coverage-defaults.js";
+import { parseThreshold, relativiseName } from "./coverage.js";
+import { advisoryFor } from "./coverage/advisory.js";
+import { COVERAGE_CONTRACT, thresholdMet } from "./coverage/report.js";
+import { counts, measure } from "./coverage/shape.js";
 import { contractName } from "./run.js";
 
 /** The `web` lane's declared coverage command, which every run below scripts. */
@@ -38,6 +40,15 @@ const GONE = "npm run coverage";
 interface Options {
   readonly script?: readonly ScriptedCall[];
   readonly repo?: string;
+  /**
+   * The child environment the preconditions are asserted against.
+   *
+   * EMPTY BY DEFAULT, because this file's own fixture declares none. The
+   * executor's fixture (`SHU_REPO`) declares an `env` precondition, and a run
+   * against it is a run about a declaration written to the design that shipped
+   * -- so that one lane states the name it needs.
+   */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 interface Captured {
@@ -54,7 +65,10 @@ async function capture(argv: readonly string[], options: Options = {}): Promise<
     out: (line): void => void out.push(line),
     err: (line): void => void err.push(line),
   };
-  const seams = new ScriptedSeams(options.script ?? [], { platform: "linux", env: {} });
+  const seams = new ScriptedSeams(options.script ?? [], {
+    platform: "linux",
+    env: options.env ?? {},
+  });
   const code = await runFamily(
     shuCommand,
     ["shu", ...argv],
@@ -105,6 +119,21 @@ describe("a coverage run, parsed", () => {
     expect(parsed.total?.lines).toEqual({ covered: 14, total: 17, percent: 82.35 });
     expect(parsed.total?.branches).toEqual({ covered: 3, total: 4, percent: 75 });
     expect(parsed.report).toEqual({ format: "istanbul-summary", path: "coverage/coverage-summary.json" });
+  });
+
+  it("takes the first artifact whose FORMAT it recognises, not the first artifact", async () => {
+    // A coverage verb routinely writes several things -- an HTML tree, notes, a
+    // JUnit file, the machine report -- and the machine report is rarely
+    // first. The `mixed` lane declares `coverage/notes.md` ahead of
+    // `coverage/lcov.info`; a reader of `artifacts[0]` alone would refuse a
+    // lane that has declared exactly what it was asked for.
+    const result = await capture(["coverage", "--lane", "mixed", "--json"], {
+      script: [ok("npm run coverage:all")],
+    });
+    expect(result.code).toBe(0);
+    const parsed = document(result);
+    expect(parsed.report).toEqual({ format: "lcov", path: "coverage/lcov.info" });
+    expect(parsed.total?.lines).toEqual({ covered: 14, total: 17, percent: 82.35 });
   });
 
   it("carries a row per target, sorted, each with its own counts", async () => {
@@ -231,6 +260,27 @@ describe("--threshold reports and never gates", () => {
     expect(result.code).toBe(0);
   });
 
+  it("compares the COUNTS, not the percentage the table prints", () => {
+    // THE FAIL-OPEN MUTANT. 19999 of 25000 lines is 79.996%, which rounds to
+    // the 80.00 the table shows -- so a comparison against `percent` reports
+    // `met: true` for a project UNDER the bar, in the one direction a
+    // pipeline gating on this field cannot survive. One line more and it is
+    // genuinely met; the two cases differ by a single line and must differ in
+    // the answer.
+    const under = measure(counts(19999, 25000), null);
+    const exactly = measure(counts(20000, 25000), null);
+    expect(under.lines.percent).toBe(80);
+    expect(thresholdMet(under, 80)).toBe(false);
+    expect(exactly.lines.percent).toBe(80);
+    expect(thresholdMet(exactly, 80)).toBe(true);
+    // The same shape at the other end: 999999/1000000 is not 100%.
+    expect(thresholdMet(measure(counts(999999, 1000000), null), 100)).toBe(false);
+    expect(thresholdMet(measure(counts(1000000, 1000000), null), 100)).toBe(true);
+    // And nothing to compare stays null rather than becoming a verdict.
+    expect(thresholdMet(null, 80)).toBeNull();
+    expect(thresholdMet(measure(counts(0, 0), null), 0)).toBeNull();
+  });
+
   it("refuses a value it cannot read, before anything is spawned", async () => {
     // The last two are spelled with `=` because ../cli/args.ts refuses a
     // separate value that begins with `-` before this verb ever sees it -- also
@@ -253,8 +303,22 @@ describe("--threshold reports and never gates", () => {
   it("parses the flag the same way the verb does", () => {
     expect(parseThreshold(null)).toBeNull();
     expect(parseThreshold("0")).toBe(0);
+    expect(parseThreshold("100")).toBe(100);
     expect(parseThreshold(" 82.5 ")).toBe(82.5);
     expect((): unknown => parseThreshold("80%")).toThrow(/not a percentage/);
+  });
+
+  it("reads DECIMAL digits and nothing else -- '0x50' is not eighty", () => {
+    // `Number` also reads hex, binary, exponent and `Infinity`, so
+    // `--threshold 0x50` was silently accepted as 80: a caller who typed
+    // something else got a number instead of the sentence that would have told
+    // them. Every spelling below is a usage error now.
+    for (const raw of ["0x50", "0b1010000", "8e1", "1e2", "+80", ".5", "8 0", "Infinity"]) {
+      expect((): unknown => parseThreshold(raw), raw).toThrow(/not a percentage/);
+    }
+    // Surrounding whitespace is still trimmed rather than refused: a shell that
+    // handed over ` 80 ` said 80, and nothing else is ambiguous about it.
+    expect(parseThreshold(" 80 ")).toBe(80);
   });
 });
 
@@ -304,9 +368,14 @@ describe("the executor is the same executor", () => {
   });
 
   it("refuses a lane that declares no coverage at 4, in the declaration's words", async () => {
-    const result = await capture(["coverage"], { repo: shuRepoWithout() });
-    expect(result.code).toBe(4);
-    expect(result.err.join("\n")).toMatch(/declares no 'coverage'/);
+    const repo = shuRepoWithout();
+    try {
+      const result = await capture(["coverage"], { repo });
+      expect(result.code).toBe(4);
+      expect(result.err.join("\n")).toMatch(/declares no 'coverage'/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("exits 1 when the tool fails, and parses nothing", async () => {
@@ -322,11 +391,43 @@ describe("the executor is the same executor", () => {
     expect(result.out.join("\n")).not.toContain("82.35");
   });
 
-  it("exits 5 when the tool could not be started at all", async () => {
+  it("exits 5 when the tool could not be started at all -- AND STILL PRINTS THE REPORT", async () => {
+    // ../run.ts hands the report to the sink and then THROWS on this path, so
+    // the verb that captures the report is the one that could lose it -- on
+    // the one path where the argv that failed is what the reader needs. `nen
+    // shu build` prints nine lines and a refusal here; so does this.
     const result = await capture(["coverage"], {
       script: [{ match: WEB, result: { spawnFailed: true, code: -1 } }],
     });
     expect(result.code).toBe(5);
+    const text = result.out.join("\n");
+    expect(text).toContain("lane:          web  (nextjs)");
+    expect(text).toContain(`ran:           ${WEB}  -- did not start`);
+    expect(text).toContain("report:        coverage/coverage-summary.json  (istanbul-summary)");
+    expect(text).toContain("(nothing parsed -- the run did not succeed");
+    // The refusal itself still propagates, in ../command.ts's words.
+    expect(result.err.join("\n")).toMatch(/could not be started: 'pnpm'/);
+    // And nothing was parsed: the report is on disk and this run did not write it.
+    expect(text).not.toContain("82.35");
+  });
+
+  it("keeps stdout to ONE document on the exit-5 path under --json", async () => {
+    // The same rule as every other path, on the one that throws: `nen shu
+    // coverage --json | jq .` reads a document whatever happened, and the
+    // executor's own report is beside it on stderr.
+    const result = await capture(["coverage", "--json"], {
+      script: [{ match: WEB, result: { spawnFailed: true, code: -1 } }],
+    });
+    expect(result.code).toBe(5);
+    const parsed = document(result);
+    expect(parsed.exitCode).toBe(5);
+    expect(parsed.total).toBeNull();
+    expect(parsed.report).toEqual({
+      format: "istanbul-summary",
+      path: "coverage/coverage-summary.json",
+    });
+    expect(result.err.some((line): boolean => line.startsWith("lane:          web"))).toBe(true);
+    expect(result.out.filter((line): boolean => line.startsWith("lane:"))).toEqual([]);
   });
 
   it("keeps the precondition table where a human can read it", async () => {
@@ -418,6 +519,97 @@ describe("a run with no report to parse", () => {
     const result = await capture(["coverage", "--lane", "core", "--dry-run"]);
     expect(result.code).toBe(0);
     expect(result.err.join("\n")).toMatch(/declares no artifacts at all/);
+  });
+});
+
+// ── row names are not somebody's home directory ─────────────────────────────
+
+describe("a row name inside the repository is reported relative to it", () => {
+  it("relativises an absolute key the reporter wrote, on both separator shapes", () => {
+    // nyc and vitest's json-summary write ABSOLUTE keys, so a --json document
+    // or a pasted table carries the username and directory layout of whoever
+    // ran it -- the same class of leak ./run.ts refuses for a declaration's env
+    // VALUES. Both shapes are stated here rather than only this platform's,
+    // because a report read on a mac was often written on a CI runner.
+    expect(relativiseName("/w/repo", "/w/repo/src/a.ts")).toBe("src/a.ts");
+    expect(relativiseName("C:\\Users\\u\\repo", "C:\\Users\\u\\repo\\src\\a.ts")).toBe("src/a.ts");
+    // Mixed separators, which is what a POSIX-written path read on win32 is.
+    expect(relativiseName("C:\\Users\\u\\repo", "C:/Users/u/repo/src/a.ts")).toBe("src/a.ts");
+    // A trailing separator on the root changes nothing.
+    expect(relativiseName("/w/repo/", "/w/repo/src/a.ts")).toBe("src/a.ts");
+  });
+
+  it("leaves a name that is not inside the repository exactly as written", () => {
+    // nen reports what a report states. A row genuinely outside the tree is a
+    // fact about the run, not a string to rewrite into a relative path that
+    // would resolve somewhere else entirely.
+    expect(relativiseName("/w/repo", "/w/other/src/a.ts")).toBe("/w/other/src/a.ts");
+    expect(relativiseName("/w/repo", "src/a.ts")).toBe("src/a.ts");
+    // A PREFIX IS NOT A PATH BOUNDARY: `/w/repo-2` starts with `/w/repo`.
+    expect(relativiseName("/w/repo", "/w/repo-2/src/a.ts")).toBe("/w/repo-2/src/a.ts");
+    // And the root itself is left alone rather than becoming an empty name.
+    expect(relativiseName("/w/repo", "/w/repo")).toBe("/w/repo");
+  });
+
+  it("does it end to end, on a report whose keys are this run's own root", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["coverage-summary.json"] } } },
+    });
+    try {
+      // The keys are absolute BECAUSE the fixture is written at run time: no
+      // committed file can name a temporary directory, which is exactly why no
+      // committed fixture had caught this.
+      writeFileSync(
+        join(repo, "coverage-summary.json"),
+        JSON.stringify({
+          total: { lines: { total: 4, covered: 3 } },
+          [join(repo, "src", "a.ts")]: { lines: { total: 4, covered: 3 } },
+        }),
+      );
+      const result = await capture(["coverage", "--json"], { repo, script: [ok("x y")] });
+      expect(result.code).toBe(0);
+      const rows = document(result).targets.map((row): string => row.name);
+      expect(rows).toEqual([["src", "a.ts"].join("/")]);
+      // The point of the exercise: the temporary root is nowhere in the output.
+      expect(result.out.join("\n")).not.toContain(repo);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── a declaration written to the design that was published ──────────────────
+
+describe("a 'report' key the shipped verb does not read is NAMED", () => {
+  it("says so, with the pointer and the field that replaced it", async () => {
+    // ../schema/fixtures/shu-repo declares `coverage.report` -- zheref/nen#91's
+    // v4 §2.10 field -- and no `artifacts`. The schema preserves an unknown key
+    // rather than refusing it, so without this the refusal told somebody
+    // looking straight at their declared path that they had "declared no
+    // artifacts at all".
+    const result = await capture(["coverage"], {
+      repo: SHU_REPO,
+      env: { PLACEHOLDER_LANE_TOKEN: "a value no output may carry" },
+      script: [
+        ok("pnpm --filter @placeholder/core test:coverage"),
+        ok("pnpm --filter @placeholder/app test:coverage"),
+      ],
+    });
+    expect(result.code).toBe(1);
+    const message = result.err.join("\n");
+    expect(message).toContain("project.verbs.web.coverage.report");
+    expect(message).toMatch(/this release does not read/);
+    expect(message).toMatch(/reads 'artifacts' instead/);
+    expect(message).toContain("project.verbs.web.coverage.artifacts");
+  });
+
+  it("says nothing about it on a lane that simply declared nothing", async () => {
+    // The sentence is about a key that IS there. A lane with neither field gets
+    // the plain refusal, or every reader learns to skip a paragraph.
+    const result = await capture(["coverage", "--lane", "core"], { script: [ok(CORE)] });
+    expect(result.err.join("\n")).not.toMatch(/this release does not read/);
   });
 });
 

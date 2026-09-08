@@ -49,7 +49,7 @@ import {
   WINUI_NESTED,
 } from "./fixtures/paths.js";
 import { shuCommand } from "./command.js";
-import { ASSERTABLE_KINDS } from "./run.js";
+import { ASSERTABLE_KINDS } from "./render.js";
 
 /**
  * `detect` on a STATED host, defaulting to the one `capture` below scripts.

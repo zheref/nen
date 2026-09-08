@@ -110,8 +110,25 @@ export function percentOf(covered: number, total: number): number | null {
   return Math.round((covered / total) * 10000) / 100;
 }
 
-/** Counts, with the percentage derived rather than carried. */
+/**
+ * Counts, with the percentage derived rather than carried.
+ *
+ * MORE COVERED THAN THERE IS TO COVER IS A REFUSAL, NOT A PERCENTAGE OVER 100.
+ * Every format here states its two numbers separately -- `lines-covered` beside
+ * `lines-valid`, `coveredLines` beside `executableLines`, `LH` beside `LF` --
+ * and a file where the first exceeds the second took them from two different
+ * places (a merged report, a half-written one, a template with a stale figure
+ * in it). Reporting `117.65%` would carry that damage into a table and a
+ * `--json` document as though it were a measurement; clamping it to 100% would
+ * hide it entirely. The counts are named in the refusal so the reader can see
+ * which two disagree.
+ */
 export function counts(covered: number, total: number): CoverageCounts {
+  if (covered > total) {
+    throw new CoverageReportError(
+      `states ${covered} of ${total} covered, which is more covered than there is to cover. nen neither clamps that to 100% nor divides it out to a percentage above it: the two figures came from different places, and a report that says so is a report to go and look at.`,
+    );
+  }
   return { covered, total, percent: percentOf(covered, total) };
 }
 
@@ -175,8 +192,24 @@ export function sum(measures: readonly CoverageMeasure[]): CoverageMeasure {
 export function requireCount(value: unknown, path: string, pointer: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw new CoverageReportError(
-      `${path}: ${pointer} is ${value === undefined ? "absent" : JSON.stringify(value)}, and a coverage count is a non-negative number. nen reports what a report states and never coerces a count -- a total assembled out of guesses is worse than no total.`,
+      `${path}: ${pointer} is ${describeCount(value)}, and a coverage count is a non-negative number. nen reports what a report states and never coerces a count -- a total assembled out of guesses is worse than no total.`,
     );
   }
   return value;
+}
+
+/**
+ * The value a refusal quotes back, including the ones JSON cannot spell.
+ *
+ * `JSON.stringify(Infinity)` IS THE STRING `"null"`, and so is `NaN`'s -- so a
+ * message built out of it told a reader whose `1e400` overflowed on the way in
+ * that their count was `null`, which is a different mistake with a different
+ * fix. Non-finite numbers are printed as themselves; everything else is still
+ * JSON, because quoting is what distinguishes the string `"17"` from 17 and
+ * that distinction is the whole point of the refusal above it.
+ */
+function describeCount(value: unknown): string {
+  if (value === undefined) return "absent";
+  if (typeof value === "number" && !Number.isFinite(value)) return String(value);
+  return JSON.stringify(value);
 }

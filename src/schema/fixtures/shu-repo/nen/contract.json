@@ -64,7 +64,8 @@
             { "exe": "pnpm", "argv": ["--filter", "@placeholder/core", "test:coverage"] },
             { "exe": "pnpm", "argv": ["--filter", "@placeholder/app", "test:coverage"] }
           ],
-          "report": { "kind": "path", "value": "packages/core/coverage/coverage-final.json", "format": "v8-json" }
+          "report": { "kind": "path", "value": "packages/core/coverage/coverage-final.json", "format": "v8-json" },
+          "why": "DELIBERATELY STALE, AND KEPT. This `report` key is the field zheref/nen#91's v4 §2.10 published for naming a coverage report; the shipped verb reads `artifacts` instead, and the schema preserves an unknown key rather than refusing it -- so a repository written against the published design has a perfectly reasonable-looking declaration that nen does not read. That is the exact case `nen shu coverage` must NAME rather than answer with 'declares no artifacts at all', and this row is what proves it does. It also states TWO of the three things at once: no `artifacts`, and a `report` that looks like it should serve as one."
         },
         "dev": { "exe": "pnpm", "argv": ["exec", "next", "dev"] },
         "run": {

@@ -3931,12 +3931,31 @@ recognises, and it never searches a tree for one:
 }
 ```
 
+**The path is resolved against the repository root, not the lane's `cwd`** —
+the same rule every path in a declaration follows (`shu`'s `artifacts`,
+`preconditions[].value`), and the likeliest first mistake this verb produces. A
+lane whose `cwd` is `apps/web` and whose reporter writes `apps/web/coverage/
+lcov.info` declares exactly that, in full. A path that escapes the repository is
+**exit 2** naming it. `artifacts` are **literal paths**: nen expands no globs —
+there is no shell in this program — so `coverage/*.info` is a file called
+`*.info` and the refusal says so.
+
 A lane that declares none — or declares only artifacts that are not reports — is
 **exit 1** naming the field to add, listing the formats nen reads, and quoting
 the reference pack's *advisory* location for that stack (`docs/STACK-MATRIX.md`
 carries the same line per stack). That advisory is printed and **never opened**:
 the pack is a catalogue, and a path nen went and read on a catalogue's say-so
-would be a path nobody declared.
+would be a path nobody declared. If the lane declares a **`report`** key —
+the field an earlier draft of this design published — the refusal names it
+too, with the pointer, and says that this release reads `artifacts`.
+
+**Row names are made repo-relative.** `nyc` and vitest's `json-summary` write
+*absolute* keys (`/Users/<you>/work/<repo>/src/a.ts`, `C:\Users\…` on Windows),
+so a `--json` document or a pasted table would otherwise carry your account name
+and directory layout. A row that resolves inside the repository is reported
+relative to its root, `/`-separated on every platform; a row genuinely outside
+the tree is left exactly as the report wrote it, because that is a fact about
+the run rather than a string to rewrite.
 
 **Formats.** Chosen by file name first and confirmed against the bytes, so a
 report under an unfamiliar name is still read and a name that lies is still
@@ -3950,9 +3969,20 @@ caught:
 | `jacoco` | JaCoCo XML, and Kover's compatible form; rows are packages | the plugin's own path |
 | `lcov` | the LCOV tracefile, the common fallback; rows are files | `lcov.info` |
 
-A file in none of them is exit 1 listing exactly this table. `coverage-final.json`
-— Istanbul's *raw* per-statement map — is **not** one of them: ask the reporter
-for the summary, or for LCOV.
+A file in none of them is exit 1 listing exactly this table — and the refusal
+names `coverage-final.json` explicitly, because it is the likeliest thing to be
+declared by mistake: it is what a v8/Istanbul run writes *by default*, it sits
+beside the summary, and it is the **raw** per-statement map rather than a
+summary. Add the `json-summary` reporter (or `lcov`) and declare that file
+instead.
+
+**A report that is damaged is a refusal, never a number.** A truncated LCOV
+tracefile — a record with no `end_of_record`, from a killed run or a full disk —
+is exit 1 naming the `SF:` it stopped inside, rather than a total quietly missing
+a row (that format's total *is* the sum of its rows, so a dropped row reads as a
+smaller project, not as a broken file). A report stating more covered lines than
+it has lines is refused with both counts, rather than printed as `117.65%` or
+clamped to 100%.
 
 **`--threshold` reports and never gates.** `met` is `true`, `false`, or `null`
 when there was no number to compare. The exit code is the **run's**, in both
@@ -3961,11 +3991,24 @@ not decide whether a number is good enough — the policy that prompted this fla
 scopes its bar to *the files a pull request touched*, a git-diff-aware judgement
 no coverage report can answer. Read `met` and decide.
 
+The comparison is on the **counts**, not on the rounded percentage the table
+prints: 19 999 of 25 000 lines displays as `80.00%` and is **not** met at
+`--threshold 80`, because it is 79.996%. A value must be written in decimal
+digits (`80`, `82.5`); `0x50`, `8e1` and a trailing `%` are exit 2 rather than a
+number nen guessed at.
+
 **Output and exit codes** — `0`/`1`/`2`/`3`/`4`/`5` as the family's table above,
 plus: **exit 1** when the run succeeded and the report is missing, unreadable, in
 no format nen reads, or not declared at all. A run that did **not** succeed is
 not parsed at all — the file on disk may be a previous run's, and nen cannot tell
-by looking.
+by looking. On **exit 5** (the tool could not be started) the executor's report
+is still printed, and under `--json` stdout still carries exactly one document,
+with `exitCode: 5` — the same thing [`shu build`](#nen-shu-build) prints on that
+path.
+
+**The per-target table is not capped.** An Istanbul or LCOV report has one row
+per *file*, so a large repository prints a long table; `--json` carries the same
+rows. Pipe it (`| head`), or read `total` alone, until a `--top <n>` exists.
 
 **`--json`** is a different contract from the other executing verbs
 (`nen.shu.coverage/v0.1`), keys in order: `{ contract, lane, stack, total,

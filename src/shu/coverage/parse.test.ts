@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { coverageReport } from "../fixtures/paths.js";
 import { COBERTURA } from "./formats/cobertura.js";
 import { ISTANBUL } from "./formats/istanbul.js";
@@ -22,7 +23,15 @@ import { JACOCO } from "./formats/jacoco.js";
 import { LCOV } from "./formats/lcov.js";
 import { XCCOV } from "./formats/xccov.js";
 import { decodeEntities, parentOf, scanXml } from "./formats/xml.js";
-import { detectFormat, FORMATS, formatNamedBy, readReport, recognisedByName } from "./parse.js";
+import {
+  detectFormat,
+  fileNameOf,
+  FORMATS,
+  formatNamedBy,
+  readReport,
+  recognisedByName,
+  supportedFormats,
+} from "./parse.js";
 import { counts, CoverageReportError, percentOf, sum, type CoverageFormat } from "./shape.js";
 
 function fixture(name: string): string {
@@ -159,7 +168,7 @@ describe("a malformed report is refused by name, never guessed at", () => {
     [XCCOV, "xccov-malformed.json", /targets\[0\]\.name is absent/],
     [COBERTURA, "malformed.cobertura.xml", /neither a 'lines-valid' attribute/],
     [JACOCO, "jacoco-malformed.xml", /no <counter type="LINE"> directly under <report>/],
-    [LCOV, "malformed.info", /no complete 'SF:' record/],
+    [LCOV, "malformed.info", /ends mid-record/],
   ];
   for (const [format, file, message] of bad) {
     it(`${format.id}: ${file}`, () => {
@@ -167,6 +176,61 @@ describe("a malformed report is refused by name, never guessed at", () => {
       expect(() => format.parse(fixture(file), file)).toThrow(message);
     });
   }
+
+  it("lcov: names the record it stopped inside", () => {
+    // The `SF:` is the whole diagnosis: it is the file the writer was on when
+    // it stopped, which is where a truncated tracefile is investigated from.
+    expect(() => LCOV.parse(fixture("malformed.info"), "x")).toThrow(
+      "packages/core/src/index.ts",
+    );
+  });
+
+  it("lcov: a truncated record after a COMPLETE one is still a refusal", () => {
+    // THE MUTANT THIS EXISTS FOR: flush what arrived and carry on. One
+    // complete 13-line record beside a truncated 100-line one then reports
+    // 100% for a project that is nowhere near it -- and nothing in the output
+    // says a row went missing, because this format's total IS the sum of its
+    // rows. `malformed.info` cannot catch that: it has no complete record, so
+    // the older "no complete 'SF:' record" refusal fires either way.
+    const text = [
+      "SF:a.ts",
+      "DA:1,1",
+      "LF:1",
+      "LH:1",
+      "end_of_record",
+      "SF:b.ts",
+      "DA:1,0",
+      "LF:100",
+    ].join("\n");
+    expect(() => LCOV.parse(text, "cov/lcov.info")).toThrow(CoverageReportError);
+    expect(() => LCOV.parse(text, "cov/lcov.info")).toThrow(/ends mid-record at 'SF:b\.ts'/);
+  });
+
+  it("lcov: a file with no 'SF:' at all is the other refusal", () => {
+    expect(() => LCOV.parse("TN:\n", "x")).toThrow(/contains no complete 'SF:' record/);
+  });
+
+  it("refuses more covered than there is to cover, naming both counts", () => {
+    // `percentOf(20, 17)` is 117.65, which is not a coverage percentage; the
+    // two numbers came from different places and saying so beats printing it.
+    const text = JSON.stringify({ total: { lines: { total: 17, covered: 20 } } });
+    expect(() => ISTANBUL.parse(text, "x")).toThrow(CoverageReportError);
+    expect(() => ISTANBUL.parse(text, "x")).toThrow(/states 20 of 17 covered/);
+    // The same guard on the XML side, where the two numbers are attributes on
+    // the root and nothing else in the file has to agree with them.
+    const xml =
+      '<coverage line-rate="1" lines-covered="100" lines-valid="10"><packages /></coverage>';
+    expect(() => COBERTURA.parse(xml, "x")).toThrow(/states 100 of 10 covered/);
+  });
+
+  it("quotes a count JSON cannot spell, rather than calling it null", () => {
+    // `JSON.parse('{"covered": 1e400}')` is `Infinity`, and
+    // `JSON.stringify(Infinity)` is the string "null" -- so the refusal used to
+    // tell a reader whose number overflowed that their count was absent.
+    expect(() => ISTANBUL.parse('{"total":{"lines":{"covered":1e400,"total":17}}}', "x")).toThrow(
+      /total\.lines\.covered is Infinity/,
+    );
+  });
 
   it("names the file in the refusal, so a reader knows which one to open", () => {
     expect(() => ISTANBUL.parse("{", "coverage/report.json")).toThrow(/^coverage\/report\.json: /);
@@ -190,8 +254,27 @@ describe("the traps each format sets", () => {
   });
 
   it("cobertura: prefers the root's own counts over its own sum of the rows", () => {
-    const parsed = COBERTURA.parse(fixture("coverage.cobertura.xml"), "x");
+    // ON A FIXTURE WHERE THE TWO DISAGREE, or the assertion cannot fail: the
+    // happy fixture's rows sum exactly to its root, so a parser that summed
+    // instead would pass it. Here the root states 14/17 and the rows nen can
+    // see account for 11/13, because one package is present with an empty
+    // <classes/>.
+    const parsed = COBERTURA.parse(fixture("root-counts.cobertura.xml"), "x");
     expect(parsed.total.lines).toEqual(TOTAL_LINES);
+    expect(sum(parsed.targets).lines).toEqual({ covered: 11, total: 13, percent: 84.62 });
+    expect(parsed.total.branches).toEqual(TOTAL_BRANCHES);
+  });
+
+  it("cobertura: a package with no classes is a row at 0 of 0, not a dropped row", () => {
+    // It was in the file, so it is in the table -- as `--`, which is what a
+    // null percentage renders as. (JaCoCo's parser DROPS the equivalent row,
+    // because a package there carries counters rather than a class list and a
+    // package with no LINE counter has not been measured at all. The two
+    // formats disagree about what the empty case means, and each reader
+    // follows its own format.)
+    const parsed = COBERTURA.parse(fixture("root-counts.cobertura.xml"), "x");
+    const generated = parsed.targets.find((row): boolean => row.name === "Placeholder.Generated");
+    expect(generated?.lines).toEqual({ covered: 0, total: 0, percent: null });
   });
 
   it("jacoco: reads the counters under <report> and <package>, not the deeper ones", () => {
@@ -206,6 +289,32 @@ describe("the traps each format sets", () => {
     ]);
   });
 
+  it("jacoco: adds up a package name that appears in two <group>s", () => {
+    // THE AGGREGATE SHAPE, which is what a multi-module Gradle build writes and
+    // what the single-module fixture above cannot exercise. `io/placeholder/
+    // util` is compiled into both modules; a parser that ASSIGNED each counter
+    // to the row would report the last group's lines (4/5) beside the first
+    // group's branches (1/2), and the rows would stop adding up to the total.
+    const parsed = JACOCO.parse(fixture("jacoco-aggregate.xml"), "x");
+    const util = parsed.targets.find((row): boolean => row.name === "io/placeholder/util");
+    expect(util?.lines).toEqual({ covered: 7, total: 9, percent: 77.78 });
+    expect(util?.branches).toEqual({ covered: 3, total: 4, percent: 75 });
+    expect(parsed.total.lines).toEqual({ covered: 12, total: 16, percent: 75 });
+    // The cross-check that makes it one report rather than two halves.
+    expect(sum(parsed.targets).lines).toEqual(parsed.total.lines);
+    expect(sum(parsed.targets).branches).toEqual(parsed.total.branches);
+  });
+
+  it("jacoco: a package row is the PACKAGE counter, never the classes under it", () => {
+    // The aggregate fixture states class counters for `io/placeholder/core`
+    // that deliberately do not sum to its package counter (1/1 and 1/1 against
+    // 5/7). A reader taking its row from the <class> level gets 2/2; one that
+    // takes the last class gets 1/1. Neither is the row.
+    const parsed = JACOCO.parse(fixture("jacoco-aggregate.xml"), "x");
+    const core = parsed.targets.find((row): boolean => row.name === "io/placeholder/core");
+    expect(core?.lines).toEqual({ covered: 5, total: 7, percent: 71.43 });
+  });
+
   it("jacoco: drops a package with no LINE counter rather than showing it at 0/0", () => {
     const text = '<report name="x"><package name="empty" /><counter type="LINE" missed="1" covered="1"/></report>';
     expect(JACOCO.parse(text, "x").targets).toEqual([]);
@@ -214,6 +323,18 @@ describe("the traps each format sets", () => {
   it("lcov: a branch stated as never reached counts against the denominator", () => {
     const text = ["SF:a.ts", "DA:1,1", "BRDA:1,0,0,2", "BRDA:1,0,1,-", "end_of_record"].join("\n");
     expect(LCOV.parse(text, "x").total.branches).toEqual({ covered: 1, total: 2, percent: 50 });
+  });
+
+  it("lcov: counts the DA entries when the record states no LF/LH", () => {
+    // SOME WRITERS OMIT THE SUMMARY LINES, and the entries are then the only
+    // figure in the record. A fallback that answered 0/0 here would report a
+    // whole file as "a report about no code" -- which reads as `--%`, not as a
+    // mistake -- and every fixture in this suite states LF/LH, so nothing else
+    // would notice.
+    const text = ["SF:a.ts", "DA:1,1", "DA:2,3", "DA:3,0", "end_of_record"].join("\n");
+    const parsed = LCOV.parse(text, "x");
+    expect(parsed.total.lines).toEqual({ covered: 2, total: 3, percent: 66.67 });
+    expect(parsed.targets[0]?.lines).toEqual({ covered: 2, total: 3, percent: 66.67 });
   });
 
   it("lcov: prefers LF/LH over counting DA entries", () => {
@@ -278,6 +399,32 @@ describe("choosing a parser", () => {
     expect(formatNamedBy("coverage/index.html")).toBeNull();
   });
 
+  it("cuts the file name on BOTH separators, on whichever platform this is", () => {
+    // `node:path`'s `basename` is platform-dependent, so a declaration written
+    // with Windows separators was recognised on win32 and refused on the other
+    // two -- the same file, the same declaration, three answers. `fileNameOf`
+    // is the platform-independent cut, and this is stated with `join` for the
+    // native shape and a literal for the foreign one, so it holds either way.
+    expect(fileNameOf(join("coverage", "lcov.info"))).toBe("lcov.info");
+    expect(fileNameOf("coverage\\lcov.info")).toBe("lcov.info");
+    expect(fileNameOf("coverage/lcov.info")).toBe("lcov.info");
+    expect(fileNameOf("lcov.info")).toBe("lcov.info");
+    for (const path of ["coverage\\lcov.info", "coverage/lcov.info", "a\\b/c\\lcov.info"]) {
+      expect(recognisedByName(path), path).toBe(true);
+      expect(formatNamedBy(path)?.id, path).toBe("lcov");
+    }
+  });
+
+  it("names coverage-final.json as the file that is NOT one of the formats", () => {
+    // The likeliest first mistake: it is what a v8/Istanbul run writes by
+    // default, it sits beside the summary, and it is a per-statement map. A
+    // refusal that listed five formats without mentioning it left a reader
+    // staring at a filename the list did not explain.
+    expect(recognisedByName("coverage/coverage-final.json")).toBe(false);
+    expect(supportedFormats()).toContain("coverage-final.json");
+    expect(supportedFormats()).toContain("json-summary");
+  });
+
   it("lets the CONTENT overrule a name that says something else", () => {
     // A repository is free to call its report whatever it likes. The name puts
     // a parser at the front of the queue; the bytes decide.
@@ -331,6 +478,28 @@ describe("the one read", () => {
       /is not a coverage report in any format nen reads/,
     );
     expect(() => readReport(coverageReport("notes.md"), "coverage/notes.md")).toThrow(/lcov/);
+  });
+
+  it("says an artifact is a literal path when the missing one has a wildcard", () => {
+    // `coverage/*.info` is recognised BY NAME (it ends in `.info`), so nen goes
+    // and opens a file called `*.info` and truthfully reports that it is not
+    // there -- which is the least useful true sentence available. nen expands
+    // nothing: there is no shell anywhere in this program.
+    expect(() => readReport(coverageReport("*.info"), "coverage/*.info")).toThrow(
+      /wildcard, and an artifact is a LITERAL path/,
+    );
+    // And the sentence is not bolted onto every missing file.
+    expect(() => readReport(coverageReport("nowhere.info"), "coverage/nowhere.info")).not.toThrow(
+      /wildcard/,
+    );
+  });
+
+  it("names the file in a refusal the arithmetic raised, not only the parsers'", () => {
+    // `../shape.ts` is handed two numbers and no path, so its refusal has no
+    // file in it; the one read is what guarantees every message says which
+    // file to open.
+    expect(() => readReport(coverageReport("impossible-counts.json"), "coverage/impossible.json"))
+      .toThrow(/^coverage\/impossible\.json: states 20 of 17 covered/);
   });
 
   it("distinguishes 'not there' from 'could not be read'", () => {

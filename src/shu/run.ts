@@ -36,7 +36,13 @@ import { containedPath } from "../repo/contain.js";
 import type { Seams } from "../seam/exec.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
-import { renderArgv, renderInvocation, type HostVerdict, type RenderedInvocation } from "./render.js";
+import {
+  ASSERTABLE_KINDS,
+  renderArgv,
+  renderInvocation,
+  type HostVerdict,
+  type RenderedInvocation,
+} from "./render.js";
 
 /**
  * The two long-running verbs. They go through the interactive seam -- stdio
@@ -48,18 +54,10 @@ import { renderArgv, renderInvocation, type HostVerdict, type RenderedInvocation
  */
 export const INTERACTIVE_VERBS: readonly string[] = ["dev", "run"];
 
-/**
- * The precondition kinds this release can assert. Everything else refuses.
- *
- * EXPORTED BECAUSE ./detect.ts HAS TO SAY THE SAME TWO WORDS. Its note about a
- * toolchain row it will not propose a precondition for names the kinds nen can
- * assert, and a hand-typed "'path' or 'env'" over there is a sentence that goes
- * stale the day a third kind lands here, silently, with no test able to notice.
- * The import direction is safe and deliberately one-way: `detect` reads this
- * module, never the reverse, so nothing on the spawning path acquires an edge
- * to the profiles pack (../profiles/inertness.test.ts sweeps for exactly that).
- */
-export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
+// The precondition kinds this release can assert now live in ./render.ts --
+// the pure half -- because ./detect.ts has to say the same two words and must
+// not acquire an import edge to this module to do it. See that constant's own
+// comment; ../profiles/inertness.test.ts is what the move is for.
 
 export interface AssertedPrecondition {
   readonly kind: string;

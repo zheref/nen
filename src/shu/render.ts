@@ -29,6 +29,23 @@ import { VerbUsageError } from "../cli/command.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import type { Invocation, ProjectBlock } from "../schema/contract.js";
 
+/**
+ * The precondition kinds this release can assert. Everything else refuses.
+ *
+ * IT LIVES IN THE PURE MODULE, NOT IN THE ONE THAT SPAWNS. Two files say these
+ * two words: ./run.ts asserts them, and ./detect.ts names them in a note about
+ * a precondition it will NOT propose -- and a hand-typed "'path' or 'env'" over
+ * there is a sentence that goes stale the day a third kind lands here,
+ * silently, with no test able to notice. Sharing the constant is the fix; where
+ * it is shared FROM is the part that matters. Exported from ./run.ts, it gave
+ * `detect` -- a verb that spawns nothing and legitimately reads the reference
+ * pack -- an import edge to the module every `nen shu` subprocess comes out of,
+ * and ../profiles/inertness.test.ts reads that edge (correctly) as "this module
+ * can spawn". This module renders a plan and runs nothing, so the same sharing
+ * costs no edge at all.
+ */
+export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
+
 /** One command, as it will be spawned: exe apart from argv, never a string. */
 export interface RenderedStep {
   readonly exe: string;

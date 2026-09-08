@@ -19,15 +19,18 @@ claim this verb makes.
 | `xccov-report.json` | xccov JSON report | happy path; per-target rows, no branch figure anywhere |
 | `xccov-empty.json` | " | no targets, zero lines |
 | `xccov-malformed.json` | " | a target row with no `name` |
+| `impossible-counts.json` | " | 20 covered of 17: the refusal the *arithmetic* raises, and the proof that the one read still names the file in it |
 | `coverage.cobertura.xml` | Cobertura XML | happy path; **the class-level line list is repeated under `<method>`**, which is the double-count trap |
+| `root-counts.cobertura.xml` | " | the root's counts and the rows' sum **disagree** (an empty `<classes/>` package) — the only shape that can prove nen reports the writer's total rather than its own |
 | `empty.cobertura.xml` | " | `lines-valid="0"`, no packages |
 | `malformed.cobertura.xml` | " | a `<coverage>` root stating no line figure at all |
 | `jacocoTestReport.xml` | JaCoCo XML | happy path; counters at four nesting levels, only two of which are read |
+| `jacoco-aggregate.xml` | " | the multi-module `<group>` shape: **one package name in two groups** (rows must add up, not overwrite) and a package whose class counters deliberately do not sum to it |
 | `jacoco-empty.xml` | " | a report-level `LINE` counter at 0/0 |
 | `jacoco-malformed.xml` | " | package counters only — no report-level `LINE` |
 | `lcov.info` | LCOV tracefile | happy path; `LF`/`LH` summaries beside `DA`/`BRDA` entries |
 | `empty.info` | " | one record, no lines |
-| `malformed.info` | " | `SF:` with no `end_of_record` |
+| `malformed.info` | " | `SF:` with no `end_of_record` — a truncated tracefile, refused and never flushed |
 | `notes.md` | — | not a coverage report in any format: the detection refusal |
 
 The names are not decoration either — `src/shu/coverage/parse.ts` chooses a
