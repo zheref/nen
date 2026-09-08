@@ -15,7 +15,14 @@ import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import { loadProfilesPack, PLACEHOLDERS, profileById, verbCell } from "../profiles/pack.js";
-import { detect, MARKER_STACKS, MAX_DEPTH, renderDetect } from "./detect.js";
+import {
+  detect,
+  listDirectory,
+  MARKER_STACKS,
+  MAX_DEPTH,
+  renderDetect,
+  type Entry,
+} from "./detect.js";
 import {
   EMPTY_TREE,
   GATSBY_SITE,
@@ -1283,6 +1290,66 @@ describe("nen shu detect -- the gatsby golden suite, byte for byte", () => {
       expect(report.steps).toEqual([
         { exe: "gatsby", argv: ["build"], cwd: dir, exitCode: null, durationMs: null },
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- the directory order one tree is proposed in", () => {
+  // THE SORT IS PINNED AGAINST AN INJECTED ENTRY LIST rather than against a
+  // real directory, and that is the whole point of the seam. A test that made
+  // files and read them back can only assert what THAT host's `readdirSync`
+  // happened to return -- and the two hosts disagree: this suite runs under
+  // Node and the shipped binary is Bun. Three files created `zulu`, `Beta`,
+  // `alpha`, one directory, the same second: node answered
+  // ["Beta","alpha","zulu"] and bun answered ["Beta","zulu","alpha"]. So a
+  // green suite over a real directory proves nothing about the binary a user
+  // runs, and deleting the sort entirely left every such test passing.
+  const scrambled: readonly { name: string; directory: boolean }[] = [
+    { name: "zulu", directory: true },
+    { name: "äpple", directory: true },
+    { name: "alpha", directory: true },
+    { name: "Beta", directory: true },
+  ];
+
+  it("sorts by BYTE order, not by locale -- 'Beta' before 'alpha', 'zulu' before 'apple'", () => {
+    const sorted = listDirectory("/ignored", (): readonly Entry[] => scrambled);
+    expect(sorted.map((entry): string => entry.name)).toEqual([
+      "Beta",
+      "alpha",
+      "zulu",
+      "äpple",
+    ]);
+    // THE TWO MUTANTS THIS KILLS, named. Deleting the sort leaves the injected
+    // order (`zulu` first). Swapping byte order for `localeCompare` puts
+    // `alpha` first and `apple` second, because a locale-aware collation folds
+    // case and diacritics -- which makes the written document depend on the
+    // machine's locale, the same class of bug as an unsorted read, one layer
+    // up and harder to see.
+    const byLocale = [...scrambled]
+      .sort((a, b): number => a.name.localeCompare(b.name))
+      .map((entry): string => entry.name);
+    expect(byLocale).not.toEqual(sorted.map((entry): string => entry.name));
+    expect(scrambled.map((entry): string => entry.name)).not.toEqual(
+      sorted.map((entry): string => entry.name),
+    );
+  });
+
+  it("answers an unreadable directory with nothing, rather than throwing", () => {
+    expect(listDirectory(join(tmpdir(), "nen-detect-no-such-directory-ever"))).toEqual([]);
+  });
+
+  it("orders two sibling lanes by byte order, and the written document with them", () => {
+    // The end-to-end consequence: `apps/Beta` before `apps/alpha`, in the lane
+    // list, in `--lane`'s refusal and in the key order of the file.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-order-"));
+    try {
+      for (const name of ["alpha", "Beta"]) {
+        mkdirSync(join(dir, "apps", name), { recursive: true });
+        writeFileSync(join(dir, "apps", name, "next.config.js"), "module.exports = {};\n");
+      }
+      expect(detect(dir).lanes.map((lane): string => lane.lane)).toEqual(["Beta", "alpha"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

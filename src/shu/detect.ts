@@ -188,38 +188,79 @@ function readJson(path: string): Record<string, unknown> | null {
   }
 }
 
-interface Entry {
+export interface Entry {
   readonly name: string;
   readonly directory: boolean;
 }
 
 /**
- * One directory's entries, SORTED BY NAME.
+ * BYTE ORDER (code unit), the one order anything in this file sorts in.
  *
- * `readdirSync` returns whatever order the filesystem hands back -- creation
- * order on APFS, hash order on ext4 -- and this verb's whole output is built by
- * walking directories with it. Unsorted, a proposal is not reproducible: the
- * LANE ORDER changes (which changes the order `--lane`'s refusal lists them in,
- * and the key order of the written file), the MARKER list for a lane that
- * matched twice changes, and -- the one that is a correctness problem rather
- * than a cosmetic one -- `laneName`'s collision suffixes are assigned in
- * iteration order, so two lanes competing for one name could swap between two
- * runs over the same tree.
- *
- * IT WAS REPRODUCED, not theorised: the same three-lane fixture answered
- * `nextjs, web, admin` from the CLI and `nextjs, admin, web` from the suite on
- * one machine, minutes apart, because a checkout had rewritten the directory in
- * between. Sorting here fixes every caller at once -- the marker scan, the walk
- * and the workspace-member expansion all read through this one function.
+ * `localeCompare` is the tempting alternative and is wrong for every sort here:
+ * it depends on the machine's collation, so `apps/Beta` and `apps/alpha` come
+ * back in one order under an ICU build and the other under a locale that folds
+ * case -- which is the SAME class of bug as an unsorted `readdirSync`, one layer
+ * up, and harder to see because it reproduces on the machine that wrote it.
+ * Byte order is ugly on purpose (`Beta` before `alpha`, because `B` is 0x42 and
+ * `a` is 0x61) and it is the same everywhere.
  */
-function listDirectory(path: string): readonly Entry[] {
+function compareBytes(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The reader `listDirectory` sorts. A SEAM, so the order can be pinned.
+ *
+ * It exists because a test over a real directory can only assert what THAT
+ * host's `readdirSync` happened to return -- which is precisely the thing this
+ * module may not trust (see below). Injecting the entries turns "the sort is
+ * byte order" from a claim about a filesystem into an assertion about a
+ * function.
+ */
+export type DirectoryReader = (path: string) => readonly Entry[];
+
+const readEntries: DirectoryReader = (path): readonly Entry[] => {
   try {
-    return readdirSync(path, { withFileTypes: true })
-      .map((entry): Entry => ({ name: entry.name, directory: entry.isDirectory() }))
-      .sort((a, b): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return readdirSync(path, { withFileTypes: true }).map(
+      (entry): Entry => ({ name: entry.name, directory: entry.isDirectory() }),
+    );
   } catch {
     return [];
   }
+};
+
+/**
+ * One directory's entries, SORTED BY BYTE ORDER.
+ *
+ * `readdirSync` returns whatever order the host hands back, and the host is not
+ * ONE host: this suite runs under Node and the shipped binary is Bun, and the
+ * two answer the same directory differently. Reproduced on one machine, over
+ * one directory, in the same second -- three files created in the order `zulu`,
+ * `Beta`, `alpha`:
+ *
+ *     node -> ["Beta","alpha","zulu"]      bun -> ["Beta","zulu","alpha"]
+ *
+ * That is not a checkout being rewritten between two runs; it is two runtimes
+ * reading one unchanged directory, and it reproduces every time. So the suite
+ * agreeing with itself proves nothing about what a user's binary does, which is
+ * the whole reason the sort is here rather than left to the platform.
+ *
+ * Unsorted, a proposal is not reproducible: the LANE ORDER changes (which
+ * changes the order `--lane`'s refusal lists them in, and the key order of the
+ * written file), the MARKER list for a lane that matched twice changes, and --
+ * the one that is a correctness problem rather than a cosmetic one --
+ * `laneName`'s collision suffixes are assigned in iteration order, so two lanes
+ * competing for one name could swap between two runs over the same tree.
+ *
+ * Sorting here fixes every caller at once: the marker scan, the walk and the
+ * workspace-member expansion all read through this one function, and nothing
+ * downstream sorts a second time.
+ */
+export function listDirectory(
+  path: string,
+  read: DirectoryReader = readEntries,
+): readonly Entry[] {
+  return [...read(path)].sort((a, b): number => compareBytes(a.name, b.name));
 }
 
 function relativePath(repoRoot: string, path: string): string {
@@ -1012,7 +1053,7 @@ function hostSignature(hosts: Readonly<Record<string, readonly string[]>>): stri
   return JSON.stringify(
     Object.entries(hosts)
       .map(([verb, platforms]): [string, readonly string[]] => [verb, platforms])
-      .sort(([a], [b]): number => a.localeCompare(b)),
+      .sort(([a], [b]): number => compareBytes(a, b)),
   );
 }
 
@@ -1037,7 +1078,7 @@ export function detect(repoRoot: string): DetectReport {
       markers.push(match.marker);
       byStack.set(match.stack, markers);
     }
-    const stacks = [...byStack.keys()].sort((a, b): number => a.localeCompare(b));
+    const stacks = [...byStack.keys()].sort(compareBytes);
     if (stacks.length > 1) {
       notes.push(
         `${cwd} carries markers for ${stacks.length} stacks (${stacks.join(", ")}). Both lanes are proposed and neither is chosen -- delete the one this repository does not build.`,
