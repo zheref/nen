@@ -1141,7 +1141,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given"),
       run: DRY("starts a long-running production process on this terminal unless --dry-run is given"),
       coverage: DRY("spawns the lane's declared coverage command unless --dry-run is given -- a coverage run writes its report tree by definition"),
-      warmup: MUT("brings a working copy to a known state -- even its dry run fetches, and nobody watches a warm-up"),
+      warmup: MUT("brings a working copy to a known state: it discards, fetches, force-moves a trunk ref and checks out a branch. No form of it is a pure read -- the dry run spawns nothing, but a warm-up is not a thing anyone WATCHES, so certifying one form read-only buys a caller nothing and costs the fail-closed answer"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },

@@ -14,9 +14,16 @@ import { detectStalePins, sweepHandbookQuestions, type PinFinding, type Question
 
 const USAGE = `nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
 
-Stale-pin detection over the target repository's nen/repos.json (every
-consumer's default pin AND every per-caller pin override), plus an optional
-handbook-question sweep.
+Warms the target repository's POLICY inbox: stale-pin detection over its
+nen/repos.json (every consumer's default pin AND every per-caller pin
+override), plus an optional handbook-question sweep. It READS ONLY -- nothing
+here writes a file, a ref or a remote.
+
+NOT 'nen shu warmup', which is a different verb entirely: that one warms a
+WORKING COPY for iteration (clean -> fetch -> fast-forward the trunk -> cut a
+branch -> verify the declared build) and mutates git state. This verb warms a
+REGISTRY; that one warms a checkout. The two compose in that order and neither
+is a rename of the other.
 
 A consumer with NO pin recorded is reported as an 'unpinned' finding and
 FAILS the run, exactly as a stale pin does: the check could not be performed,

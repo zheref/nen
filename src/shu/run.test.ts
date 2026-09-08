@@ -900,31 +900,33 @@ describe("a step's own output", () => {
   });
 });
 
-// ── (h) the verb that is declared and not yet built ────────────────────────
+// ── (h) NO verb is declared-and-unbuilt any more ───────────────────────────
 //
-// ONE, NOT TWO, SINCE zheref/nen#113. `tools` was the other; it is built now,
-// and ./tools.test.ts is where it is proved. This block keeps the shape it had
-// so that `warmup` arriving (PR12) is a one-line deletion rather than a
-// rewrite, and so the "declared, documented, refuses by name" contract stays
-// pinned for as long as anything still uses it.
+// There were two -- `tools` (zheref/nen#113) and `warmup` (zheref/nen#124) --
+// and both are built. The "declared, documented, refuses at 4 by name" shape
+// was worth keeping while anything used it, and is worth ASSERTING GONE now
+// that nothing does: a regression that re-added either refusal would otherwise
+// surface only in the other verb's own suite, and this file is where the
+// family's shape is pinned.
 
-describe("the verb that refuses by name", () => {
-  for (const verb of ["warmup"]) {
-    it(`'${verb}' refuses at 4 saying it is not implemented yet, and names the release`, async () => {
-      const result = await capture([verb]);
-      expect(result.code).toBe(4);
-      expect(result.err.join("\n")).toMatch(/not implemented yet in this release/);
-      expect(result.err.join("\n")).toMatch(/zheref\/nen#91/);
-    });
-  }
-
+describe("no verb answers 4 merely because nen has not built it", () => {
   it("no longer refuses 'tools', which this release implements", async () => {
     // The fixture declares no toolchain and no dependency, so this is the
     // "nothing to check" answer -- exit 0 with a note, never the exit-4 refusal
-    // it used to give. Pinned from this side too, because a regression that
-    // re-added the refusal would otherwise only show up in the other suite.
+    // it used to give.
     const result = await capture(["tools"]);
     expect(result.code).toBe(0);
     expect(result.err.join("\n")).toMatch(/nothing to check/);
+  });
+
+  it("no longer refuses 'warmup', which this release implements", async () => {
+    // Refused at 2 for a MISSING FLAG, which is a fact about the invocation --
+    // never at 4, which would be a claim that nen has no such verb. Nothing is
+    // scripted on the seam, so this also proves the refusal lands before any
+    // git call: an unscripted call would throw.
+    const result = await capture(["warmup"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--branch is required/);
+    expect(result.err.join("\n")).not.toMatch(/not implemented/);
   });
 });

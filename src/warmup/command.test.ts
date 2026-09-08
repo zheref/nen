@@ -225,4 +225,21 @@ describe("nen warmup", () => {
       expect(result.out.join("\n")).toMatch(/1 unanswered handbook question\(s\)/);
     });
   });
+
+  // TWO VERBS, ONE WORD, AND BOTH HELP TEXTS SAY SO (zheref/nen#124). This one
+  // warms a REGISTRY and reads only; `nen shu warmup` warms a WORKING COPY and
+  // mutates git state. Neither is a rename of the other, the collision is
+  // resolved by nesting exactly as `nen dev` / `nen shu dev` already is, and a
+  // caller who reaches the wrong one must be told from the help alone.
+  describe("the distinction from 'nen shu warmup'", () => {
+    it("says, in its own --help, which warm-up this is and which it is not", async () => {
+      const result = await capture(["warmup", "--help"]);
+      expect(result.code).toBe(0);
+      const help = result.out.join("\n");
+      expect(help).toMatch(/Warms the target repository's POLICY inbox/);
+      expect(help).toMatch(/It READS ONLY/);
+      expect(help).toMatch(/NOT 'nen shu warmup'/);
+      expect(help).toMatch(/WORKING COPY/);
+    });
+  });
 });

@@ -212,7 +212,7 @@ verb does by default:
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu deploy`](#nen-shu-deploy), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. `deploy` additionally requires `--target <name>`, with no default ever. On `dev` and `run`, `--json` is **refused** without `--dry-run` |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
-| [`shu warmup`](#nen-shu-warmup) | no | — | not implemented yet — it refuses at exit 4. It is classified **mutating in every form**, dry run included: even a dry run fetches, and nobody watches a warm-up |
+| [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
 "Still reads GitHub" matters in CI: a dry run of those three needs a token even
 though it writes nothing.
@@ -362,7 +362,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`epic`](#family-epic) | [`nen epic next-wave`](#nen-epic-next-wave) | flips a completed child, redraws the progress bar, computes the next releasable wave | local file (--body-file), optional write (--out) | yes |
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file and explicit caps | local file (--efforts) | yes |
-| [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | detects stale/unpinned consumer versions in the registry, plus an optional handbook-question sweep | nen/repos.json, optional local files | yes |
+| [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
@@ -413,7 +413,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- --target is required and has no default | nen/contract.json (project block + targets); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
-| [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | bring a working copy to a known state, then verify it -- NOT IMPLEMENTED YET, refuses at exit 4 | nothing yet | yes |
+| [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev replay`](#nen-dev-replay) | replay the imported dedupe corpus slice against nen's own normalizeTitle/findCanonical and report any disagreement | tests/fixtures/dualrun-slice/dedupe/*.json (or --slice-dir) | yes |
@@ -1437,6 +1437,13 @@ the extra word rather than refusing it, unlike every other family in this sectio
 consumer's pin behind `--current`, and does any consumer have an unanswered handbook question": a
 consumer recorded with NO pin at all is reported as an `unpinned` finding and fails the run exactly like
 a stale one, because an unperformed check must never render as a clean one.
+
+**This warms a *registry*, and reads only. [`nen shu warmup`](#nen-shu-warmup) warms a *working copy*
+(clean → fetch → fast-forward the trunk → cut a branch → verify the declared build) and mutates git
+state.** Two verbs, one word, and neither is a rename of the other: the collision is resolved by
+nesting, exactly as `nen dev` / [`nen shu dev`](#nen-shu-dev) already is, and izanami's table keys on
+the *family*, so `warmup` and `shu` are structurally distinct rows — this one classifies **read-only**
+and that one **mutating in every form**. They compose in that order when you want both.
 
 **Usage**
 
@@ -3328,7 +3335,7 @@ more. See also the [Exit codes](#exit-codes) convention.
 | `1` | the tool ran and failed. Nen exits 1 whatever the tool's own code was; the tool's code is in `steps[].exitCode`. A `nen/contract.json` that is **present and malformed** is also 1 — the file is there and says something nen cannot read, which is a repository defect rather than a mistyped invocation, and it is the code every family in this CLI answers an unreadable schema file with. The refusal names the file, the pointer and the expectation |
 | `2` | usage: **no** declaration, no `project` block, an unknown `--lane`, a placeholder nen cannot substitute, a `--target` that names no declared target, `--json` on a long-running verb without `--dry-run`, a path that resolves outside the repository, or a precondition that is not satisfied |
 | `3` | **unsupported host** — the verb is real, this machine cannot run it. Never 1 (a retry wrapper would retry forever) and never 2 (the invocation was correct) |
-| `4` | **unsupported verb for this lane** — the declaration says so, in its own words. The invocation was correct; the answer is a fact about the repository. Across the seven stacks this family is designed for, it is the majority case. `shu warmup` also answers 4 in this release, saying it is not implemented yet and naming the PR it arrives in |
+| `4` | **unsupported verb for this lane** — the declaration says so, in its own words. The invocation was correct; the answer is a fact about the repository. Across the seven stacks this family is designed for, it is the majority case. [`shu warmup`](#nen-shu-warmup) passes it through from the build (or test) it delegates, unchanged |
 | `5` | the declared program could not be started at all — not installed, or not on `PATH`. On [`shu tools`](#nen-shu-tools) it is also the CHECK verdict for a host where anything is missing or is not the pinned version |
 
 **`--json`**, on every verb that executes one, is one object with these keys, in
@@ -3929,7 +3936,222 @@ mode:          check
 
 ### `nen shu warmup`
 
-**Not implemented yet in this release.** It will bring a working copy to a known state and then verify it. It refuses at exit 4 saying so. Note that it is classified `mutating` in izanami's table in **every** form, dry run included: even its dry run fetches, and nobody watches a warm-up.
+Get a working copy ready to iterate, in one line: check it is clean, fetch, fast-forward the trunk,
+cut the branch you name from its fresh tip, then verify that the project still builds. **It is the one
+verb in this family that mutates git state** — every other `shu` verb either reads, or spawns what the
+target repository declared inside a directory — which is why `--repo` is required here and bracketed
+everywhere else, and why every step **refuses rather than guessing**.
+
+**Not [`nen warmup`](#nen-warmup)**, which is a different verb entirely: that one sweeps a *registry*
+for stale pins and unanswered handbook questions, and reads only. This one warms a *working copy*. The
+collision is resolved by nesting, exactly as `nen dev` / [`nen shu dev`](#nen-shu-dev) already is, and
+the two compose in that order rather than replacing each other.
+
+**Nothing is ever rolled back.** A step that fails leaves the tree exactly where it got to and says so,
+with the report listing what did run. Undoing a fetch, deleting a branch or restoring files would be a
+second mutation on a working copy nen has just discovered it does not understand.
+
+**Usage**
+
+```text
+nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard] [--tests]
+               [--lane <name>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | **yes** | The working copy to warm. | No default, unlike every other `shu` verb: a verb that fetches into a repository, moves a branch ref and checks out a new branch must never do it to "wherever this process happens to be". |
+| `--branch <name>` | **yes** | The branch to cut from the freshly-fetched trunk. | Nen never invents one. Validated with git's own `check-ref-format --branch`, and refused at 2 if it already exists **locally or on `origin`** — never reused, reset or force-moved. A name beginning with `-` is refused before git can read it as an option. |
+| `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
+| `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). |
+| `--tests` | no | Also run the lane's declared `test` after the build. | Off by default — a test suite is the slow half and a warm-up is the fast one. The test is skipped when the build did not pass. |
+| `--lane <name>` | no | Which lane the build/test verification runs on. | Defaults to `project.defaultLane`. An unknown lane is refused at 2 **before a single git call** — a caller who mistyped it must not have their working copy cleaned to find out. The lane is then **resolved again** from the declaration on the branch this verb cut, which is the tree the build actually runs in. |
+| `--dry-run` | no | Print every command, in order, and run **nothing**. | Not even the fetch, and not one probe. Because it reads no git state, three of its lines say what a real run would spell differently: which fast-forward shape applies, that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
+| `--json` | no | The report as one object. | See below. |
+
+**The remote is `origin`, and only `origin`.** There is no `--remote`: a flag like that would have to
+answer "and what does it mean when the trunk exists on two of them" the day somebody used it, and a
+warm-up is not where that gets settled. A repository without an `origin` is refused at 2 with whatever
+`git remote` actually listed.
+
+**Steps, in the one order they may run in** — and the ordering is tested, because three of the
+dependencies are load-bearing. The working copy is classified **before** the fetch (no point touching a
+remote for a tree that is about to be refused). The name-on-the-remote question is asked **after** it (a
+stale remote-tracking ref would report a branch absent that the real remote already has). And **every
+check that needs no mutation runs before `--discard` destroys anything** — an absent `origin`, a `--from`
+that is not a local branch, a name git will not accept, a name that is already a local branch. A mistyped
+`--branch` is the cheapest mistake there is, and it must not cost anybody their uncommitted work.
+
+| # | Command | Refuses when |
+|---|---|---|
+| 1 | `git branch --show-current` | it cannot be read at all. Empty output means a **detached HEAD**, which is *reported*, not an error |
+| 1a | `git rev-list --count HEAD --not --branches --remotes` | *(only on a detached HEAD)* the count is non-zero (exit 2, naming it): `git switch -c` would orphan exactly those commits, and the only record of them afterwards is the reflog, which expires. A count that cannot be read refuses too — it is never answered "none" |
+| 1b | `git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD` | anything comes back: a merge, rebase or cherry-pick is in progress (exit 2). Nen then asks `git rev-parse --verify --quiet` per ref to name which, and quotes that operation's own `--abort`. This is **not** an ordinary dirty tree and `--discard` does not clear it |
+| 2 | `git -c core.quotePath=false status --porcelain=v1 -z -uall` | the tree is dirty and there is no `--discard` (exit 2, every path listed, with a [`stage triage`](#nen-stage-triage) flag beside a filename shaped like a secret or a binary). An **unreadable** status refuses too — it is never read as a clean one |
+| 3 | `git remote` | `origin` is not among them (exit 2, listing what is) |
+| 4 | `git show-ref --verify --quiet refs/heads/<trunk>` | there is no such local branch (exit 2, naming `--from`). A code *above* 1 is git failing to answer and is reported as that, never as "absent" |
+| 5 | `git check-ref-format --branch <name>` | git will not accept the name (exit 2, quoting git's own refusal) |
+| 6 | `git show-ref --verify --quiet refs/heads/<name>` | the name is already a local branch (exit 2) |
+| 6a | `git reset --hard`, then `git clean -fd`, then the status read **again** | only with `--discard`, and only when there was something to discard. The re-read refuses at 2 if anything survived — see [below](#what---discard-removes) |
+| 7 | `git fetch origin` | it fails (exit 1 — a *step* failure, not a refusal) |
+| 8 | `git merge-base --is-ancestor <trunk> origin/<trunk>` | the local trunk has **diverged** (exit 2). A code *above* 1 is git failing to answer and is reported as that, never as "diverged" |
+| 9 | `git merge --ff-only origin/<trunk>` *(on the trunk)* or `git branch --force <trunk> origin/<trunk>` *(not on it)* | it fails. Two shapes because git has two: a checked-out branch cannot be moved by `branch --force`, and one that is not checked out cannot be advanced by `merge` |
+| 10 | `git ls-remote --heads origin refs/heads/<name>` | the name is already on `origin` (exit 2) — **or the look-up itself failed**, which is never read as "absent". The ref is spelled in **full**: `ls-remote` matches a bare pattern against the *tail* of every ref on slash boundaries, so `--branch x` asked as a bare `x` would match an existing `refs/heads/feat/x` and refuse a name that is free |
+| 11 | `git switch -c <name> origin/<trunk>` | it fails |
+| 12 | the lane's declared `build`, then (with `--tests`) its `test` | see the exit codes below |
+
+<a id="what---discard-removes"></a>
+
+**What `--discard` will and will not remove.** It runs `git reset --hard` and then `git clean -fd`, and
+then **reads the working copy again** — because "the command exited 0" and "the tree is clean" are
+different claims, and only the second one is what the flag promised.
+
+- **Removed:** every unstaged change to a tracked file, every **staged** change (which is why the tracked
+  half is `git reset --hard` and not `git checkout -- .` — the latter restores the tree *from the index*,
+  so a staged change survives it in both and rides onto the new branch), and every untracked file and
+  ordinary untracked directory.
+- **Never removed:** an **ignored** file (no `-x`: it is the developer's own cache), an untracked
+  **nested repository** (no second `-f`: that directory is a repository and may carry commits that exist
+  nowhere else), and anything inside a **submodule** (no `--recurse-submodules`: a submodule is its own
+  repository with its own uncommitted work, and this flag is scoped to the repository `--repo` names).
+- A nested repository or a dirty submodule therefore **survives** the discard, and the re-read refuses at
+  exit 2 naming it, quoting whatever `git clean` itself said. Refused and named, rather than removed.
+  At that point nothing has been fetched and no ref has moved.
+
+**The build and test are delegated, in this process**, to the same executor
+[`nen shu build`](#nen-shu-build) is — never a `spawnSync` of nen calling itself — so the argv that runs
+is the lane's own declared argv, in the lane's own `cwd`, and the delegate's per-step exit code and
+duration land in this verb's report.
+
+**The declaration is re-read after the checkout.** The lane the build runs on is resolved from the
+`nen/contract.json` on the **branch this verb just cut**, not from the tree the run started in — between
+the two sits a fetch, a fast-forward and a checkout. A repository that gained a `project` block on the
+trunk is verified against it rather than being reported as having none; a lane renamed on the trunk
+resolves to the new name, and the disagreement with the pre-fetch read is stated on stderr. `--lane` is
+still validated against the *starting* tree before the first git call, because a caller who mistyped it
+is owed that answer before anything is discarded.
+
+**A repository with no declaration is not a failure.** One that carries no `nen/contract.json` `project`
+block gets the branch it asked for, the line `no declaration — build/test verification skipped` on
+stderr naming [`nen shu detect`](#nen-shu-detect), and **exit 0**. The git half is useful on its own.
+
+**Output and exit codes**
+
+| Code | When |
+|---|---|
+| `0` | every step passed, or a dry run rendered, or there was no declaration to verify against |
+| `1` | a step **ran and failed** — a `git` that answered non-zero, or the declared build/test. The report is still emitted, because the caller now has a working copy in a state they did not ask for and that list is the only thing that says which. A `git` that could not be **started** is also 1, with no document: *install it, or put it on PATH*. **A delegated `2` is also `1`** — see below |
+| `2` | every refusal above: dirty tree without `--discard`, a merge/rebase/cherry-pick in progress, a detached `HEAD` carrying commits nothing else reaches, no `origin`, a `--from` that is not a local branch, a diverged trunk, a name git will not accept, a name that already exists, a `--discard` that ran and left the tree still not clean, an unknown `--lane`, a missing `--repo` or `--branch`. Each prints its evidence on **stderr** |
+| `3`/`4`/`5` | passed through **unchanged** from the delegated build or test — unsupported host, unsupported verb for this lane, declared program not installed |
+
+**A delegated `2` becomes `1`, and only here.** The executor's `2` means "this verb could not be performed
+as declared" — an unmet precondition, an invocation it will not honour. Warmup's own `2` means something
+else and incompatible: *nen refused, and changed nothing*. By the time the verification runs, the trunk is
+fast-forwarded and the branch is checked out, so passing the code through would say something false and
+would owe the caller a document that exit 2 does not carry. From warmup's side this is a verification step
+that ran and did not pass, which is what `1` means here and everywhere else in the family. The executor's
+own code is in the report row's `note` and in the sentence on stderr, and its own evidence is on stderr
+unchanged. `3`, `4` and `5` still pass through: each of those is a fact about the repository or the host
+that warmup has no better answer to.
+
+**The document follows the mutation, not the code.** A refusal reached **before** this verb changed
+anything prints its evidence on stderr and **no document** on stdout, as everywhere else in this CLI. A
+refusal reached **after** it has already discarded work, **completed a fetch** or moved a ref prints the
+report of what it changed first — the same argument a failed step makes: the caller now holds a repository
+in a state they did not ask for, and `steps` is the only thing that says which state. **A completed
+`git fetch origin` counts**, because it writes objects and moves remote-tracking refs — even though it
+leaves the working copy, the index and every local branch alone, so it is nothing a caller has to repair.
+A diverged trunk (step 8), a name already on `origin` and a look-up that could not answer (step 10) are
+therefore each refused **with** the report; every refusal made before the fetch still prints none, except
+the `--discard` re-read (step 6a), which already carried one for a destruction of its own. stdout is
+therefore always either empty or exactly one document of the published shape, and never an error object.
+
+`--json` is `{ contract, repo, trunk, remote, branch, discard, steps, lane, exitCode }`, in that order,
+with `contract: "nen.shu.warmup/v0.1"`. Each `steps[]` row is `{ kind, argv, exitCode, durationMs, note }`,
+where `kind` is `git | build | test` and `argv` is the **whole** command line, executable first — and is
+**empty** on the row of a delegated verb the executor refused before it rendered one (a lane that seats
+`test` as `unsupported`, say), so the last row of that report is not a *successful build* sitting beside an
+exit code of 4. `exitCode` and `durationMs` are `null` **exactly** when nothing was run — a dry run, a step
+the run never reached, or that same unrendered row — and `lane` is `null` when there is no declaration.
+
+**Example — the dry run**
+
+```bash
+nen shu warmup --repo ./web-app --branch my-idea --dry-run
+```
+```text
+repo:          /abs/path/web-app
+remote:        origin
+trunk:         main
+branch:        my-idea
+discard:       no -- a dirty working copy refuses
+lane:          web
+would run:     git branch --show-current
+would run:     git rev-list --count HEAD --not --branches --remotes
+would run:     git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD
+would run:     git -c core.quotePath=false status --porcelain=v1 -z -uall
+would run:     git remote
+would run:     git show-ref --verify --quiet refs/heads/main
+would run:     git check-ref-format --branch my-idea
+would run:     git show-ref --verify --quiet refs/heads/my-idea
+would run:     git fetch origin
+would run:     git merge-base --is-ancestor main origin/main
+would run:     git branch --force main origin/main
+would run:     git ls-remote --heads origin refs/heads/my-idea
+would run:     git switch -c my-idea origin/main
+would run:     pnpm turbo run build
+```
+
+(most lines also carry an indented note saying what that step decides or refuses on; they are elided
+here. exit 0, and **nothing at all is spawned**. The orphan-commit count on line 2 is one of the three a
+real run may spell differently: it asks it only when line 1 comes back empty. With `--discard` the plan
+gains `git reset --hard`, `git clean -fd` and a second `git status` after line 8.)
+
+**Example — a dirty tree, refused**
+
+```text
+nen shu warmup: the working copy at /abs/path/web-app carries 3 uncommitted path(s), and warmup destroys nothing nobody asked it to.
+   M README.md
+  ?? .env  [secret-shape]
+  ?? sub/new.txt
+Commit them, stash them, or pass --discard to throw them away -- that runs 'git reset --hard' and then 'git clean -fd', in that order, printing this same list first and re-reading the tree afterwards.
+Ignored files are NEVER touched: 'git clean' is run without -x, because an ignored file is this developer's cache and not this verb's to delete.
+```
+
+(exit 2, all on stderr; stdout is empty, because this refusal changed nothing)
+
+**Example — `--discard` ran, and something survived it**
+
+```text
+ran:           git reset --hard  -- exit 0 in 14ms
+               discarding 4 uncommitted path(s):
+                  M README.md
+                 ?? .env  [secret-shape]
+                 ?? sub/new.txt
+                 ?? vendored/
+ran:           git clean -fd  -- exit 0 in 11ms
+               untracked files and directories only. -x is never passed: ...
+               git said: Removing .env
+               git said: Removing sub/
+ran:           git -c core.quotePath=false status --porcelain=v1 -z -uall  -- exit 0 in 11ms
+               1 path(s) SURVIVED the discard
+```
+```text
+nen shu warmup: --discard ran and the working copy at /abs/path/web-app is STILL not clean: 1 path(s) survived it.
+  ?? vendored/
+'git clean -fd' said, for its part:
+  Removing .env
+  Removing sub/
+Both commands exited 0, and neither of them destroys these:
+  - a path ending in '/' is a directory git would not descend into, which under -uall means a NESTED REPOSITORY. 'git clean' will not delete one without a second -f, and nen never passes -ff: that directory is a repository and may carry commits that exist nowhere else.
+  - a modified path that is a SUBMODULE is its own repository with its own uncommitted work. 'git reset --hard' is run without --recurse-submodules deliberately: --discard is scoped to the repository --repo names, and never reaches into another one.
+Deal with them yourself and run this again. Nothing has been fetched and no ref has moved -- the only thing this run changed is the tracked and untracked work the two commands above did destroy, which the report above lists.
+```
+
+(exit 2, the report on stdout and the refusal on stderr — the one shape of exit 2 here that carries a
+document, because by then this run had already destroyed something)
 
 ## This repository's own dev loop
 
@@ -4950,12 +5172,13 @@ See [per-stack notes](#nen-shu-detect) under `shu detect`.
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. It is `compose-desktop`'s **only** row — `{gw} run`, the one invocation that lane has, which `detect` proposes end to end. On `expo` it is the verb that *builds and launches* a native lane, which is why `detect` proposes no `build` there and withholds `run` itself until the declaration names a platform — `expo run:{platform}` unedited is exit **2**. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
 | deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`. There is no default target, ever — and `--target` is checked **before** the lane and the verb, so a proposal with no `targets` block answers that first. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. |
 | coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s row names a result bundle nen cannot know and is withheld with the token named. Parsing the report the declaration names, and the never-a-gate `--threshold`, arrive with a later PR. |
-| host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. [`shu warmup`](#nen-shu-warmup) still refuses at 4 and arrives in PR 12. |
+| host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. |
+| start a piece of work (clean, fetch, branch, prove it builds) | **yes — the git half everywhere, the build half where a lane declares one** | [`shu warmup`](#nen-shu-warmup) | One line for the five things a developer does by hand at the start of every task: refuse (or, with `--discard`, destroy) uncommitted work, fetch, fast-forward the trunk, cut the branch **you** name from its fresh tip, then run the lane's declared `build` — and its `test` with `--tests`. The **only** `shu` verb that mutates git state, so `--repo` is required and every step refuses rather than guessing; `--dry-run` prints every git and toolchain command and runs none of them. A repository with no `project` block still gets the git half and exits 0. Not [`warmup`](#nen-warmup), which sweeps a registry for stale pins and reads only. |
 
 The remaining work is tracked in
 [zheref/nen#91](https://github.com/zheref/nen/issues/91), *stack-aware developer
-verbs*: stack-aware scaffolding, `coverage`'s report parsing, the deploy targets
-and `shu warmup`. Until each lands, those actions stay with each project's own
+verbs*: stack-aware scaffolding, `coverage`'s report parsing and the deploy
+targets. Until each lands, those actions stay with each project's own
 toolchain — and a repository that writes its own `nen/contract.json` can drive
 any stack through `nen shu` today.
 

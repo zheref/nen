@@ -75,6 +75,26 @@ describe("ScriptedSeams", () => {
     });
   });
 
+  // The one thing a single-answer table could not express: a verb that reads
+  // something, changes it, and reads it AGAIN to check what it changed. `nen shu
+  // warmup --discard` does exactly that, and the point of its second `git
+  // status` is that the answer is allowed to differ from the first.
+  it("answers duplicate entries for one command line in order, repeating the last", () => {
+    const seams = new ScriptedSeams([
+      { match: "git status", result: { stdout: "dirty\n" } },
+      { match: "git status", result: { stdout: "clean\n" } },
+    ]);
+    expect(seams.run("git", ["status"]).stdout).toBe("dirty\n");
+    expect(seams.run("git", ["status"]).stdout).toBe("clean\n");
+    expect(seams.run("git", ["status"]).stdout).toBe("clean\n");
+  });
+
+  it("still answers a single entry with the same result every time", () => {
+    const seams = new ScriptedSeams([{ match: "git status", result: { stdout: "same\n" } }]);
+    expect(seams.run("git", ["status"]).stdout).toBe("same\n");
+    expect(seams.run("git", ["status"]).stdout).toBe("same\n");
+  });
+
   it("reports the real host platform unless a test states one", () => {
     expect(new ScriptedSeams([]).platform).toBe(process.platform);
     expect(new ScriptedSeams([], { platform: "win32" }).platform).toBe("win32");
