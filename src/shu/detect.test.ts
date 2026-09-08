@@ -27,6 +27,7 @@ import {
   PACK_MATCHED_STACKS,
   renderDetect,
   REFINEMENT_DEPTH,
+  APPLE_TOKENS,
   stripScriptComments,
   type DetectedLane,
   type DetectReport,
@@ -47,6 +48,8 @@ import {
   WINUI_APP,
   WINUI_LINKED,
   WINUI_NESTED,
+  XCODE_PROJECT,
+  XCODE_WORKSPACE,
 } from "./fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { ASSERTABLE_KINDS } from "./render.js";
@@ -633,15 +636,16 @@ describe("nen shu detect -- one marker per stack", () => {
       expect(commandRows(lane?.verbs)).toEqual([...proposed]);
       expect(lane?.notes.length, "a withheld map with no reason is the failure").toBeGreaterThan(0);
       for (const note of lane?.notes ?? []) {
-        // Six shapes of note, and each is something a maintainer acts on: a row
-        // withheld, the pack declining to choose, a toolchain requirement nen
-        // will not turn into a precondition it would have to invent a value
+        // Eight shapes of note, and each is something a maintainer acts on: a
+        // row withheld, the pack declining to choose, a toolchain requirement
+        // nen will not turn into a precondition it would have to invent a value
         // for, the catalogue's own prose about this stack (the preconditions
         // and the recorded conflicts a verb row cannot carry), the host a
-        // host-conditional token was resolved for, and the module the pack's
-        // tasks were re-addressed to.
+        // host-conditional token was resolved for, the module the pack's
+        // tasks were re-addressed to, the destination no working tree will ever
+        // answer, and the ONE value nen contributed rather than read.
         expect(note).toMatch(
-          /withheld|proposes no command|no precondition is proposed|the reference pack's own note|was resolved for |includes as the module /,
+          /withheld|proposes no command|no precondition is proposed|the reference pack's own note|was resolved for |includes as the module |^no destination is proposed|^\{resultBundle\} was answered/,
         );
       }
     });
@@ -3072,17 +3076,38 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
     expect(note).toMatch(
       /the shared scheme nen can see here is 'Placeholder' \(Placeholder\.xcodeproj\/xcshareddata\/xcschemes\/Placeholder\.xcscheme\)/,
     );
-    expect(note).toMatch(/which scheme a verb means is this repository's decision, not a count/);
-    // The row is still WITHHELD. Reading a scheme name off the disk is not the
-    // same act as deciding which scheme a verb means.
+    // RE-SCOPED IN THIS PR, DELIBERATELY. #126 withheld `{scheme}` on the
+    // strength of the COUNT -- "a lane with one scheme has not said which a
+    // verb means either" -- and the count was never the thing that made
+    // substituting unsafe: it was that nen could not tell a working scheme from
+    // this fixture's, whose test action names a target its own project file
+    // does not contain. Now that the cross-check decides, the count only
+    // withholds where there is more than one, and the reason printed for THIS
+    // tree is the broken cross-check rather than an arithmetic that was never
+    // the argument.
+    expect(note, "one scheme is no longer withheld for being one").not.toMatch(
+      /which scheme a verb means is this repository's decision, not a count/,
+    );
+    expect(note).toMatch(
+      /nen answers no scheme from a broken one: substituting it would propose a command that fails on a clean clone/,
+    );
+    // The row is still WITHHELD, for the tokens no tree answers.
     const lane = detect(EXPO_BARE).lanes.find((entry): boolean => entry.stack === "xcode-ios");
     expect(commandRows(lane?.verbs)).toEqual([]);
   });
 
   it("says the container is a workspace, which the reference row's own flag does not address", () => {
-    expect(iosNote(EXPO_BARE, "build")).toMatch(
-      /this lane's container is a WORKSPACE \(Placeholder\.xcworkspace\)/,
+    const note = iosNote(EXPO_BARE, "build");
+    expect(note).toMatch(/this lane's container is a WORKSPACE \(Placeholder\.xcworkspace\)/);
+    // AND WHY IT IS THIS LANE'S CONTAINER: the workspace's own contents file
+    // names the project. A workspace that named something else would not
+    // withhold this row at all -- see the M1 case further down.
+    expect(note).toMatch(
+      /whose own contents\.xcworkspacedata references Placeholder\.xcodeproj/,
     );
+    // The FLAG is read out of the pack's own argv, never spelled here.
+    expect(note).toContain("the reference row addresses its container as '-project {project}'");
+    expect(note).toMatch(/the pack states that the flag changes with the container/);
   });
 
   // THE OTHER HALF OF THE CROSS-CHECK, and the one a checked-in fixture cannot
@@ -3108,13 +3133,19 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
         "utf8",
       );
       const note = iosNote(dir, "test");
-      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
       expect(note, "the finding must be GONE, not merely reworded").not.toMatch(
         /BROKEN ON A CLEAN CHECKOUT/,
       );
-      // The scheme is still NAMED -- that half is about what is on disk, not
-      // about whether the scheme works.
-      expect(note).toMatch(/the shared scheme nen can see here is 'Placeholder'/);
+      // RE-SCOPED IN THIS PR. A cross-check that PASSED is now the licence to
+      // answer the token, so `{scheme}` leaves the leftover list and the note
+      // stops naming it -- and stops describing the scheme at all, because a
+      // reason for a value nen just wrote is noise. `{project}` stays withheld
+      // (this lane is the CocoaPods shape) and `{simUdid}` stays withheld for
+      // the reason no tree can lift.
+      expect(note).toMatch(/still names \{project\}, \{simUdid\}/);
+      expect(note, "a token nen answered earns no reason").not.toMatch(
+        /the shared scheme nen can see here/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3229,8 +3260,14 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
       expect(note, "every project parsed, so nothing is withheld").not.toMatch(
         /could not read a native-target list/,
       );
-      // The row is still withheld for its tokens, which is a different reason.
-      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+      // The cross-check passed against the UNION, so `{scheme}` is answered --
+      // and `{project}` is withheld for a different reason entirely, which is
+      // the one this tree now proves: TWO projects, and nen resolves no
+      // ambiguity.
+      expect(note).toMatch(/still names \{project\}, \{simUdid\}/);
+      expect(note).toMatch(
+        /this lane carries 2 projects \(Extra\.xcodeproj, Placeholder\.xcodeproj\)/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3431,8 +3468,12 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
       const note = iosNote(dir, "test");
       expect(note, "the one real testable resolves").not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
       expect(note, "a macro expansion is not a target the scheme tests").not.toContain("Ghost");
-      // The rest of the reason is untouched -- this withholds nothing.
-      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+      // The rest of the reason is untouched -- this withholds nothing. And
+      // because the cross-check now PASSES, `{scheme}` is answered rather than
+      // named: the token leaves the leftover list, which is the strongest form
+      // this assertion can take -- a reader of the macro expansion as a test
+      // target would break the check and put the token straight back.
+      expect(note).toMatch(/still names \{project\}, \{simUdid\}/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3455,6 +3496,582 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
     );
   });
 });
+
+// ── the xcode-ios lane, end to end ──────────────────────────────────────────
+//
+// TWO CHECKED-IN TREES, AND THE ONLY DIFFERENCE BETWEEN THEM IS THE CONTAINER.
+// `xcode-project/` is the shape the catalogue read for this stack -- one
+// `.xcodeproj`, no workspace -- and `xcode-workspace/` is the same project
+// wrapped in the workspace a dependency manager writes. Everything else is
+// byte-identical, so every assertion about the container below is an assertion
+// about the container and not about a second fixture that also differs
+// somewhere else.
+
+describe("nen shu detect -- the xcode-ios lane", () => {
+  const lane = (repo: string): DetectedLane | undefined =>
+    detect(repo).lanes.find((entry): boolean => entry.stack === "xcode-ios");
+
+  const note = (repo: string, verb: string): string =>
+    lane(repo)
+      ?.notes.find((entry): boolean => entry.startsWith(`'${verb}' withheld`)) ?? "";
+
+  const laneNote = (repo: string, opening: string): string =>
+    lane(repo)?.notes.find((entry): boolean => entry.startsWith(opening)) ?? "";
+
+  it("finds one lane at the root of each tree, from the container the pack prefers", () => {
+    expect(lane(XCODE_PROJECT)?.markers).toEqual(["Placeholder.xcodeproj"]);
+    expect(lane(XCODE_PROJECT)?.evidence).toEqual([]);
+    // The workspace WINS the marker where both are present -- that is the pack's
+    // own preference, and it is a different question from which container the
+    // reference row's flag addresses (below).
+    expect(lane(XCODE_WORKSPACE)?.markers).toEqual(["Placeholder.xcworkspace"]);
+    expect(lane(XCODE_WORKSPACE)?.cwd).toBe(".");
+  });
+
+  // §2.6 AT ITS FULL STRENGTH FOR THIS STACK. Every row the pack carries a
+  // command for names a token no working tree can answer, so this stack
+  // proposes NO command row on any tree -- and the file is still loadable,
+  // because the seven cells the pack has no command for arrive as seats.
+  it("proposes no command row on either tree, and seven seats on both", () => {
+    for (const repo of [XCODE_PROJECT, XCODE_WORKSPACE]) {
+      expect(commandRows(lane(repo)?.verbs), repo).toEqual([]);
+      expect(unsupportedRows(lane(repo)?.verbs), repo).toEqual([
+        "archive",
+        "deploy",
+        "dev",
+        "lint",
+        "release",
+        "run",
+        "ui-test",
+      ]);
+    }
+  });
+
+  it("proposes the pack's darwin-only hosts block, with the pack's own note", () => {
+    const proposal = detect(XCODE_PROJECT).proposal as unknown as Proposal;
+    expect(proposal.project.hosts).toEqual({ "*": ["darwin"] });
+    expect(proposal.project.defaultLane).toBe("xcode-ios");
+    const hosts = detect(XCODE_PROJECT).notes.find((entry): boolean =>
+      entry.includes("the proposed 'hosts' block"),
+    );
+    expect(hosts).toContain(profileById(loadProfilesPack(), "xcode-ios").hostNote);
+  });
+
+  // ── {project}: the container, and the flag that addresses it ──────────────
+
+  it("answers {project} from the one project, LANE-RELATIVE, when nothing else claims it", () => {
+    expect(note(XCODE_PROJECT, "build")).toMatch(/still names \{destination\}, which only/);
+    expect(note(XCODE_PROJECT, "build"), "a token nen answered earns no reason").not.toMatch(
+      /\{project\}/,
+    );
+  });
+
+  it("writes the container's name, not its path from the repository root", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-nested-"));
+    try {
+      cpSync(XCODE_PROJECT, join(dir, "ios"), { recursive: true });
+      const nested = detect(dir).lanes.find((entry): boolean => entry.stack === "xcode-ios");
+      expect(nested?.cwd).toBe("ios");
+      expect(nested?.markers).toEqual(["ios/Placeholder.xcodeproj"]);
+      // The row runs in the lane's own cwd, so the value is the name it has
+      // THERE. `ios/Placeholder.xcodeproj` would be resolved twice.
+      const withheld =
+        nested?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
+      expect(withheld).not.toMatch(/\{project\}/);
+      expect(withheld).not.toContain("ios/Placeholder.xcodeproj");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE FLAG IS PART OF THE ROW. `xcodebuild` addresses a project and a
+  // workspace with different flags, so a workspace path written behind the
+  // project flag is not a row one token short of working -- it is a command
+  // that fails everywhere. The flag nen prints is READ out of the pack's argv.
+  it("withholds {project} where the workspace claims the project, naming the pack's flag", () => {
+    const withheld = note(XCODE_WORKSPACE, "build");
+    expect(withheld).toMatch(/still names \{destination\}, \{project\}/);
+    expect(withheld).toMatch(
+      /this lane's container is a WORKSPACE \(Placeholder\.xcworkspace\) whose own contents\.xcworkspacedata references Placeholder\.xcodeproj/,
+    );
+    expect(withheld).toContain("the reference row addresses its container as '-project {project}'");
+    // The pack's own reason for preferring the workspace, quoted rather than
+    // restated -- it is the sentence that says WHY the bare project is wrong.
+    expect(withheld).toContain(
+      "a workspace is what CocoaPods produces, and building the bare project instead is how a Pods-based build fails with missing headers",
+    );
+    // And no row was written with the wrong flag in front of the right path.
+    expect(commandRows(lane(XCODE_WORKSPACE)?.verbs)).toEqual([]);
+  });
+
+  it("withholds {project} where the lane's only container is a workspace", () => {
+    const withheld =
+      detect(markerTree("xcode")).lanes[0]?.notes.find((entry): boolean =>
+        entry.startsWith("'build' withheld"),
+      ) ?? "";
+    expect(withheld).toMatch(
+      /this lane's container is a WORKSPACE \(Placeholder\.xcworkspace\) and there is no project beside it/,
+    );
+    expect(withheld).toMatch(
+      /nen will not write a workspace's path behind a flag that names a project/,
+    );
+    // The pack's own doc for the token is quoted, because it is the sentence
+    // that states the rule this clause enforces.
+    expect(withheld).toContain(
+      PLACEHOLDERS.find((entry): boolean => entry.token === "{project}")?.meaning ?? "NO MEANING",
+    );
+  });
+
+  it("withholds {project} when the lane carries two projects, naming both", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-two-projects-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      cpSync(join(dir, "Placeholder.xcodeproj"), join(dir, "Alternate.xcodeproj"), {
+        recursive: true,
+      });
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
+      expect(withheld).toMatch(
+        /this lane carries 2 projects \(Alternate\.xcodeproj, Placeholder\.xcodeproj\)/,
+      );
+      expect(withheld).toMatch(/it takes exactly one path/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE #122 M1 RULE, ONE FILE FORMAT OVER: a container that does not LIST the
+  // project is not that project's container, and it decides nothing about the
+  // project's row -- neither answering it nor withholding it.
+  it("lets the project answer when a workspace beside it references something else", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-unrelated-workspace-"));
+    try {
+      cpSync(XCODE_WORKSPACE, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "Placeholder.xcworkspace", "contents.xcworkspacedata"),
+        [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<Workspace version = "1.0">',
+          '   <FileRef location = "group:../Elsewhere/Other.xcodeproj"></FileRef>',
+          "</Workspace>",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
+      expect(withheld, "the token is answered from the project").not.toMatch(/\{project\}/);
+      expect(withheld).not.toMatch(/container is a WORKSPACE/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // FAIL CLOSED, and it is the same argument as the unreadable `.pbxproj`: a
+  // container nen could not ask is not a container that answered. The workspace
+  // it could not read may be exactly the one this project is built through.
+  it("withholds {project} when it cannot read a workspace's own contents file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-unreadable-workspace-"));
+    try {
+      cpSync(XCODE_WORKSPACE, dir, { recursive: true });
+      rmSync(join(dir, "Placeholder.xcworkspace", "contents.xcworkspacedata"));
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
+      expect(withheld).toMatch(/still names \{destination\}, \{project\}/);
+      expect(withheld).toContain(
+        "nen could not read Placeholder.xcworkspace/contents.xcworkspacedata",
+      );
+      expect(withheld).toMatch(/A container nen could not ask is not a container that answered/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A COMMENTED-OUT REFERENCE IS NOT A REFERENCE. Read raw, the workspace in
+  // the fixture would look as though it lists a container the tree has not got.
+  it("does not read a commented-out FileRef as a container the workspace holds", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-commented-fileref-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      mkdirSync(join(dir, "Placeholder.xcworkspace"), { recursive: true });
+      writeFileSync(
+        join(dir, "Placeholder.xcworkspace", "contents.xcworkspacedata"),
+        [
+          '<?xml version="1.0" encoding="UTF-8"?>',
+          '<Workspace version = "1.0">',
+          '   <!-- <FileRef location = "group:Placeholder.xcodeproj"></FileRef> -->',
+          "</Workspace>",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
+      // The workspace references nothing that is here, so it is not this
+      // project's container and the project answers.
+      expect(withheld, "a comment is not a reference").not.toMatch(/\{project\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── {scheme}: answered only from a cross-check that PASSED ────────────────
+
+  it("answers {scheme} from the one shared scheme whose test target the project declares", () => {
+    for (const repo of [XCODE_PROJECT, XCODE_WORKSPACE]) {
+      expect(note(repo, "test"), repo).not.toMatch(/\{scheme\}/);
+      expect(note(repo, "test"), repo).not.toMatch(/the shared scheme nen can see here/);
+      expect(note(repo, "test"), repo).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+    }
+  });
+
+  // THE OTHER DIRECTION OF THE SAME PIN, and it is the one #126 wrote: a scheme
+  // whose test action names a target the project does not declare is never
+  // substituted, however alone it is in the lane.
+  it("never answers {scheme} from a BROKEN scheme, however few there are", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-broken-scheme-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      const pbxproj = join(dir, "Placeholder.xcodeproj", "project.pbxproj");
+      writeFileSync(
+        pbxproj,
+        readFileSync(pbxproj, "utf8").replace("name = PlaceholderTests;", "name = Renamed;"),
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      expect(withheld).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      expect(withheld).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+      expect(withheld).toMatch(
+        /nen answers no scheme from a broken one: substituting it would propose a command that fails on a clean clone/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never answers {scheme} when a target list could not be read", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-unreadable-targets-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "Placeholder.xcodeproj", "project.pbxproj"),
+        "// a format this reader does not know\n",
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      expect(withheld).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      expect(withheld).toMatch(
+        /a cross-check nen could not perform is not one that passed, and a scheme nen could not check is not a scheme it answers from/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never answers {scheme} when the lane has two shared schemes, and names both", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-two-schemes-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      const schemes = join(dir, "Placeholder.xcodeproj", "xcshareddata", "xcschemes");
+      cpSync(join(schemes, "Placeholder.xcscheme"), join(schemes, "Alternate.xcscheme"));
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      expect(withheld).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      expect(withheld).toMatch(
+        /the shared schemes nen can see here are 'Alternate' \([^)]*Alternate\.xcscheme\), 'Placeholder' \([^)]*Placeholder\.xcscheme\)/,
+      );
+      expect(withheld).toMatch(
+        /nen answers no row from a lane carrying more than one: which of them a verb means is this repository's decision, not a count/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // "NOTHING FAILED" IS NOT "IT PASSED". A build-only scheme is an ordinary
+  // thing to keep and the one shape where this stack's cross-check can say
+  // nothing at all, so the token stays withheld and the note says which it is.
+  it("never answers {scheme} from a scheme whose test action names no target", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-empty-testaction-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      const scheme = join(
+        dir,
+        "Placeholder.xcodeproj",
+        "xcshareddata",
+        "xcschemes",
+        "Placeholder.xcscheme",
+      );
+      writeFileSync(
+        scheme,
+        readFileSync(scheme, "utf8").replace(
+          /<Testables>[\s\S]*?<\/Testables>/,
+          "<Testables></Testables>",
+        ),
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      expect(withheld).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      expect(withheld).toMatch(
+        /that scheme's test action names no target at all, so there was nothing for nen to check it against/,
+      );
+      expect(withheld).toMatch(/a check it could not perform is not a check that passed/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A COMMENTED-OUT TARGET IS NOT A TARGET, in both of the project format's
+  // comment forms. Delete the stripping and the scheme's `PlaceholderTests`
+  // still resolves -- so the assertion is made the other way round, with a
+  // scheme that names the ghost.
+  it("does not read a commented-out target as one the project declares", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-commented-target-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      const scheme = join(
+        dir,
+        "Placeholder.xcodeproj",
+        "xcshareddata",
+        "xcschemes",
+        "Placeholder.xcscheme",
+      );
+      writeFileSync(
+        scheme,
+        readFileSync(scheme, "utf8").replace(/BlueprintName = "PlaceholderTests"/, 'BlueprintName = "Ghost"'),
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      expect(withheld).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+      expect(withheld).toContain("names 'Ghost'");
+      // And the declared list is the three real targets -- neither commented
+      // name is in it.
+      expect(withheld).toContain(
+        "it declares Placeholder, PlaceholderTests, PlaceholderUITests",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── the two tokens no tree will ever answer, and the one nen contributes ──
+
+  it("answers neither destination token on any tree, and says why once per lane", () => {
+    for (const repo of [XCODE_PROJECT, XCODE_WORKSPACE, markerTree("xcode"), EXPO_BARE]) {
+      const rows = lane(repo)?.verbs ?? {};
+      expect(
+        JSON.stringify(rows).includes("iPhone"),
+        `${repo}: no device name may reach a row`,
+      ).toBe(false);
+    }
+    const cited = laneNote(XCODE_PROJECT, "no destination is proposed");
+    expect(cited).toMatch(/name a simulator on the machine that runs the command/);
+    // The pack's own sentences, quoted -- which is where the observed forms are.
+    const pack = profileById(loadProfilesPack(), "xcode-ios");
+    const testWhy = verbCell(pack, "test");
+    expect(testWhy.kind).toBe("command");
+    expect(cited).toContain(
+      "-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'",
+    );
+    expect(cited).toMatch(/nen will not lift a value out of a sentence/);
+  });
+
+  it("answers {resultBundle} into nen's own generated directory, and says it did", () => {
+    expect(note(XCODE_PROJECT, "coverage")).toMatch(/still names \{simUdid\}/);
+    expect(note(XCODE_PROJECT, "coverage")).not.toMatch(/\{resultBundle\}/);
+    const written = laneNote(XCODE_PROJECT, "{resultBundle} was answered by nen");
+    expect(written).toContain("'coverage' writes .nen/coverage.xcresult");
+    expect(written).toMatch(/naming an OUTPUT rather than a fact this repository states/);
+    // The one honest thing to say about a directory nen does not create for you.
+    expect(written).toMatch(/nen does NOT write a \.gitignore for you/);
+    // And the constraint a maintainer moving it must keep.
+    expect(written).toMatch(/move it in EVERY step of the row at once/);
+  });
+
+  // ── the token list itself, pinned in both directions ──────────────────────
+
+  it("names only tokens the pack publishes, and every token this stack's rows carry", () => {
+    const published = PLACEHOLDERS.map((entry): string => entry.token);
+    expect(APPLE_TOKENS.filter((token): boolean => !published.includes(token))).toEqual([]);
+    const pack = loadProfilesPack();
+    const profile = profileById(pack, "xcode-ios");
+    const carried = new Set<string>();
+    for (const verb of pack.commandVerbs) {
+      const cell = verbCell(profile, verb);
+      const steps =
+        cell.kind === "command" && cell.invocation.kind === "command"
+          ? [{ exe: cell.invocation.exe, argv: cell.invocation.argv }]
+          : cell.kind === "steps" && cell.invocation.kind === "steps"
+            ? cell.invocation.steps
+            : [];
+      for (const word of steps.flatMap((step): readonly string[] => [step.exe, ...step.argv])) {
+        for (const token of published) if (word.includes(token)) carried.add(token);
+      }
+    }
+    expect([...carried].sort()).toEqual([...APPLE_TOKENS].sort());
+  });
+});
+
+describe("nen shu detect -- the xcode-ios proposal, executed", () => {
+  /**
+   * The written declaration for a fixture tree, in a temp copy of it.
+   *
+   * `--write` is the real path a maintainer takes, so the goldens below are
+   * assertions about a file `detect` produced rather than about an object a
+   * test assembled.
+   */
+  async function written<T>(
+    fixture: string,
+    body: (dir: string) => Promise<T>,
+  ): Promise<T> {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-written-"));
+    try {
+      cpSync(fixture, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir, "darwin")).code).toBe(0);
+      return await body(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  /** Every seat, and the phrase from the pack's own reason it must quote. */
+  const SEATS: Readonly<Record<string, string>> = {
+    "ui-test": "UI-test TARGETS exist and are never run",
+    lint: "SwiftLint appears nowhere in the seven repositories",
+    archive: "No repository invokes `xcodebuild archive`",
+    release: "No fastlane, no `altool`, no `xcrun notarytool`",
+    dev: "the documented dev loop is a GUI gesture",
+    run: "Zero `xcrun simctl install` / `simctl launch` occurrences",
+    deploy: "KroApple's only deploy lane is a Supabase DATABASE MIGRATION",
+  };
+
+  for (const [verb, quoted] of Object.entries(SEATS)) {
+    it(`refuses '${verb}' at exit 4, quoting the pack's own sentence back`, async () => {
+      await written(XCODE_PROJECT, async (dir): Promise<void> => {
+        // `deploy` ALONE NEEDS A TARGET TO REACH ITS OWN SEAT, and that is a
+        // finding rather than a quirk of this test: `--target` is a usage gate
+        // that fires BEFORE the lane's row is read, so a proposal `detect`
+        // wrote -- which declares no targets, because nen never picks one --
+        // answers exit 2 "no targets declared" for a verb whose seat carries
+        // the reason a reader wants. The seat is right and unreachable until
+        // the repository declares a target; the note is in the PR body.
+        const extra = verb === "deploy" ? ["--target", "placeholder"] : [];
+        if (verb === "deploy") {
+          const path = join(dir, "nen", "contract.json");
+          const declaration = JSON.parse(readFileSync(path, "utf8")) as {
+            project: Record<string, unknown>;
+          };
+          declaration.project["targets"] = { placeholder: { why: "so the seat is reachable" } };
+          writeFileSync(path, JSON.stringify(declaration, null, 2), "utf8");
+        }
+        const result = await capture([verb, "--dry-run", ...extra], dir, "darwin");
+        expect(result.code).toBe(4);
+        expect(result.err.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
+        expect(result.err.join("\n")).toContain(quoted);
+        // And nothing was spawned to find that out.
+        expect(result.out).toEqual([]);
+      });
+    });
+  }
+
+  // THE GATE THAT FIRES FIRST, pinned so that the paragraph above is a claim
+  // about the program rather than about this test's arrangement.
+  it("answers exit 2 for 'deploy' on the proposal as written, because it declares no target", async () => {
+    await written(XCODE_PROJECT, async (dir): Promise<void> => {
+      const result = await capture(["deploy", "--dry-run"], dir, "darwin");
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--target is required/);
+    });
+  });
+
+  // THE THREE ROWS THE PACK DOES CARRY A COMMAND FOR are absent from the file
+  // rather than seated, so `nen shu build` says "this lane declares no verb"
+  // rather than quoting a reason that was never about this repository.
+  it("writes no row at all for the three rows whose tokens no tree answers", async () => {
+    await written(XCODE_PROJECT, async (dir): Promise<void> => {
+      const declaration = JSON.parse(
+        readFileSync(join(dir, "nen", "contract.json"), "utf8"),
+      ) as { project: { verbs: Record<string, Record<string, unknown>> } };
+      const rows = declaration.project.verbs["xcode-ios"] ?? {};
+      for (const verb of ["build", "test", "coverage"]) expect(rows[verb]).toBeUndefined();
+    });
+  });
+
+  // ── the darwin-only host, proved on the two hosts that are not darwin ─────
+  //
+  // The written proposal carries the pack's `hosts` block and no command row,
+  // so the refusal a maintainer meets is the one they get AFTER filling the
+  // tokens in. That is what this declares by hand: the same lane, the same
+  // hosts block, and the row a maintainer would write.
+  const FILLED: Readonly<Record<string, unknown>> = {
+    exe: "xcodebuild",
+    argv: [
+      "-project",
+      "Placeholder.xcodeproj",
+      "-scheme",
+      "Placeholder",
+      "-destination",
+      "platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5",
+      "-configuration",
+      "Debug",
+      "build",
+    ],
+    why: "the pack's row with this repository's own answers in it",
+  };
+
+  async function filled<T>(body: (dir: string) => Promise<T>): Promise<T> {
+    return await written(XCODE_PROJECT, async (dir): Promise<T> => {
+      const path = join(dir, "nen", "contract.json");
+      const declaration = JSON.parse(readFileSync(path, "utf8")) as {
+        project: { verbs: Record<string, Record<string, unknown>> };
+      };
+      const rows = declaration.project.verbs["xcode-ios"] ?? {};
+      rows["build"] = FILLED;
+      declaration.project.verbs["xcode-ios"] = rows;
+      writeFileSync(path, JSON.stringify(declaration, null, 2), "utf8");
+      return await body(dir);
+    });
+  }
+
+  for (const platform of ["linux", "win32"] as const) {
+    it(`refuses a filled-in row at exit 3 on ${platform}, and spawns nothing`, async () => {
+      await filled(async (dir): Promise<void> => {
+        const result = await capture(["build", "--dry-run"], dir, platform);
+        expect(result.code).toBe(3);
+        expect(result.err.join("\n")).toContain(`is declared for darwin; this host is ${platform}`);
+        expect(result.out).toEqual([]);
+      });
+    });
+  }
+
+  it("runs the same row on darwin, where the host gate passes", async () => {
+    await filled(async (dir): Promise<void> => {
+      const result = await capture(["build", "--dry-run"], dir, "darwin");
+      expect(result.code).toBe(0);
+      // AND THE DESTINATION IS ONE ARGUMENT. The quoting is the only thing in
+      // this line that says so; a reader who re-splits it on spaces gets a
+      // different command. ./run.test.ts pins the same row through `--json` and
+      // through the seam.
+      expect(result.out.filter((line): boolean => line.startsWith("would run:"))).toEqual([
+        "would run:     xcodebuild -project Placeholder.xcodeproj -scheme Placeholder -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' -configuration Debug build",
+      ]);
+    });
+  });
+});
+
 
 describe("nen shu detect -- the expo markers themselves", () => {
   it("reads the manifest KEY, never the filename alone", () => {
@@ -3526,9 +4143,15 @@ describe("nen shu detect -- the expo markers themselves", () => {
   it("says nothing of the kind when the file is absent", () => {
     for (const lane of detect(EXPO_BARE).lanes) {
       expect(lane.markers, lane.lane).not.toContain("eas.json");
-      expect(lane.evidence, lane.lane).toEqual([]);
-      expect(lane.notes.join("\n"), lane.lane).not.toMatch(/this lane also carries/);
+      expect(lane.evidence, lane.lane).not.toContain("eas.json");
+      expect(lane.notes.join("\n"), lane.lane).not.toMatch(/this lane also carries eas\.json/);
     }
+    // The Apple lane's OWN evidence-only marker is a different file and a
+    // different claim -- the `Podfile` the pack calls a marker that identifies
+    // nothing on its own. It is here so that "no evidence" cannot be asserted
+    // by accident for a lane that legitimately has some.
+    const ios = detect(EXPO_BARE).lanes.find((lane): boolean => lane.stack === "xcode-ios");
+    expect(ios?.evidence).toEqual(["ios/Podfile"]);
   });
 
   // n3, the other surface. The human rendering and `--json` say the same thing

@@ -1,0 +1,51 @@
+// !$*UTF8*$!
+// TEST FIXTURE -- the CocoaPods half of this stack: a project AND the
+// workspace that wraps it, byte-identical to ../../xcode-project/'s project
+// except for this header. The scheme's cross-check passes in both trees; what
+// differs is the CONTAINER, which is what the two fixtures exist to separate.
+//
+// THREE NATIVE TARGETS, and the third is deliberate: a UI-test target exists
+// and no shared scheme runs it, which is the premise of the pack's own
+// `ui-test` seat ("UI-test TARGETS exist and are never run"). A reader meeting
+// that seat against this tree can see the target it is talking about.
+//
+// The two commented-out targets below are the same case in both of this
+// format's comment forms: a `name = ...;` inside a comment must not count as a
+// target the project declares. Delete the comment stripping in `readTargets`
+// and `Ghost` and `Phantom` join the list.
+{
+	archiveVersion = 1;
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXNativeTarget section */
+		13B07F861A680F5B00A75B9A /* Placeholder */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00E356EB1AD99517003FC87E;
+			name = Placeholder;
+			productName = Placeholder;
+			productType = "com.apple.product-type.application";
+		};
+		00E356ED1AD99517003FC87E /* PlaceholderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00E356F61AD99517003FC87E;
+			name = PlaceholderTests;
+			productName = PlaceholderTests;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		00E356EE1AD99517003FC87F /* PlaceholderUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00E356F61AD99517003FC87F;
+			name = PlaceholderUITests;
+			productName = PlaceholderUITests;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/*		DEAD0001 = {
+			isa = PBXNativeTarget;
+			name = Ghost;
+		}; */
+//		DEAD0002 = { isa = PBXNativeTarget; name = Phantom; };
+/* End PBXNativeTarget section */
+	};
+	rootObject = 83CBB9F71A601CBA00E9B192;
+}

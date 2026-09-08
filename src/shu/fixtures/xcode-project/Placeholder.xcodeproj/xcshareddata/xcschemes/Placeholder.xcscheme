@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TEST FIXTURE -- ONE shared scheme, and its test action names a target the
+  project beside it declares. That is what makes `{scheme}` answerable here and
+  not in ../../../../expo-bare/ios/.
+
+  The commented-out testable below is the XML half of the comment rule: read
+  raw, `Ghost` is a test target this project does not contain, and the whole
+  scheme is reported broken on a clean checkout on the strength of a comment.
+  Delete `stripXmlComments` from `readScheme` and this scheme goes broken and
+  `{scheme}` goes withheld.
+-->
+<Scheme
+   LastUpgradeVersion = "2650"
+   version = "1.7">
+   <BuildAction
+      parallelizeBuildables = "YES"
+      buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "13B07F861A680F5B00A75B9A"
+               BuildableName = "Placeholder.app"
+               BlueprintName = "Placeholder"
+               ReferencedContainer = "container:Placeholder.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction
+      buildConfiguration = "Debug"
+      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+      shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "00E356ED1AD99517003FC87E"
+               BuildableName = "PlaceholderTests.xctest"
+               BlueprintName = "PlaceholderTests"
+               ReferencedContainer = "container:Placeholder.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <!--
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "DEAD0001"
+               BuildableName = "Ghost.xctest"
+               BlueprintName = "Ghost"
+               ReferencedContainer = "container:Placeholder.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         -->
+      </Testables>
+   </TestAction>
+   <ArchiveAction
+      buildConfiguration = "Release"
+      revealArchiveInOrganizer = "YES">
+   </ArchiveAction>
+</Scheme>
