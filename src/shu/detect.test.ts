@@ -4731,12 +4731,12 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
     // approved shape.
     const profile = profileById(loadProfilesPack(), "dotnet-winui");
     const test = verbCell(profile, "test");
-    expect(test.source).toContain("argued in PR #122");
+    expect(test.source).toContain("argued in PR #132");
     expect(test.source).toContain("NOT in the v3 q7 / v4 approval");
     expect(test.source).toContain("gated on a test project existing");
     const build = verbCell(profile, "build");
     expect(build.source).toContain("decisions v3 q7 (approved)");
-    expect(build.source).toContain("`-c Debug` argued in PR #122");
+    expect(build.source).toContain("`-c Debug` argued in PR #132");
     // And the profile's own notes carry the distinction, because the `source`
     // fields are per-cell and the reason spans both.
     expect(profile.notes.join("\n")).toContain("THEY ARE NOT EQUALLY APPROVED");
