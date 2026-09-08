@@ -2212,6 +2212,8 @@ function laneAnswers(
   verb: string,
   wanted: ReadonlySet<string>,
   apple: () => AppleLane,
+  /** The word the pack's own row puts in front of `{project}`, or null. */
+  projectFlag: string | null,
 ): LaneAnswers {
   const answered = new Map<string, string>();
   const refused = new Map<string, string>();
@@ -2226,7 +2228,7 @@ function laneAnswers(
   // which names one never opens a bundle -- and the ONE read is shared with the
   // note below, which asks the same directories the same questions.
   if (APPLE_TOKENS.some((token): boolean => wanted.has(token))) {
-    appleAnswers(apple, verb, wanted, answered);
+    appleAnswers(apple, verb, wanted, answered, projectFlag);
   }
   return { answered, refused, exes };
 }
@@ -2632,7 +2634,34 @@ interface SchemeFinding {
   /** Lane-relative, forward-slashed, so the note points at a file. */
   readonly file: string;
   readonly buildTargets: readonly string[];
+  /** The testables written INTO the scheme. A plan-driven scheme has none. */
   readonly testTargets: readonly TestTarget[];
+  /**
+   * Every test plan the scheme's own test action delegates to, in the order it
+   * names them.
+   *
+   * A SCHEME THAT DELEGATES NAMES ITS TARGETS SOMEWHERE ELSE, and reading only
+   * the `<Testables>` block of one is how a working scheme gets reported as
+   * naming no target at all. That is the shape every project created by a
+   * modern Xcode has: the test action carries an EMPTY `<Testables>` and a
+   * `<TestPlanReference>`, and the target list lives in the `.xctestplan` JSON
+   * beside it. So the plan is followed, and a plan nen could not follow is
+   * `targets: null` -- a different fact from "the plan lists nothing", and the
+   * note says which one it found.
+   */
+  readonly plans: readonly PlanFinding[];
+}
+
+/** One `.xctestplan` a scheme delegates its test action to. */
+interface PlanFinding {
+  /** The reference as the scheme wrote it, the location's own prefix dropped. */
+  readonly reference: string;
+  /**
+   * The test targets the plan names, or `null` when nen could not read it --
+   * the file was not there, was not JSON, or did not carry a `testTargets`
+   * array. Never an empty list standing in for a plan nen never opened.
+   */
+  readonly targets: readonly TestTarget[] | null;
 }
 
 /** A scheme's test entry: the target it names, and the product that target builds. */
@@ -2649,6 +2678,30 @@ interface TestTarget {
    * scheme skips it" is a different job of work from "the target is missing".
    */
   readonly skipped: boolean;
+  /**
+   * The container the reference says the target is DECLARED IN, the location's
+   * own prefix dropped -- `Placeholder.xcodeproj`, `Packages/KroKit`, or `""`
+   * when the reference names none.
+   *
+   * IT IS WHAT MAKES THE CROSS-CHECK HONEST, and reading it is this PR's
+   * correction. The check compares a scheme's test targets against the target
+   * list of the `.xcodeproj` bundles AT THIS LANE'S ROOT, and a modern checkout
+   * routinely names targets that live somewhere else: a local Swift package
+   * (`container:Packages/KroKit`, whose targets are declared in a
+   * `Package.swift` this reader does not open) or a project in another
+   * directory. Measured against a list that never asked those containers a
+   * thing, every one of them came out as "the project declares no such target"
+   * -- a finding that is FALSE on a checkout where the test run succeeds, and
+   * `testTargetsIn`'s own header says a finding naming the wrong pair is worse
+   * than no finding at all.
+   */
+  readonly container: string;
+  /**
+   * The test plan this target came from, or `""` for a testable written into
+   * the scheme itself. Printed, because "the scheme names it" and "the plan the
+   * scheme delegates to names it" are two different files to go and edit.
+   */
+  readonly plan: string;
 }
 
 /**
@@ -2740,11 +2793,52 @@ const TESTABLE_CLOSE = "</TestableReference>";
 const BLUEPRINT_ATTRIBUTE = /\bBlueprintName\s*=\s*"([^"]*)"/;
 const BUILDABLE_ATTRIBUTE = /\bBuildableName\s*=\s*"([^"]*)"/;
 const SKIPPED_ATTRIBUTE = /\bskipped\s*=\s*"([^"]*)"/;
+/** The container a reference declares its target in -- read off the SAME element. */
+const CONTAINER_ATTRIBUTE = /\bReferencedContainer\s*=\s*"([^"]*)"/;
+/**
+ * A test plan the test action delegates to.
+ *
+ * Matched wherever it appears inside the action rather than only inside a
+ * `<TestPlans>` wrapper: the element is written nowhere else, and requiring the
+ * wrapper would miss a `<TestPlans/>` shape for no gain.
+ */
+const TEST_PLAN_REFERENCE = /<TestPlanReference\b((?:[^>"]|"[^"]*")*)>/g;
+/** One test-plan reference's own location, out of that element's attributes. */
+const PLAN_REFERENCE_ATTRIBUTE = /\breference\s*=\s*"([^"]*)"/;
 /** The section an `.xcodeproj` lists its native targets in, by its own delimiters. */
 const NATIVE_TARGETS =
   /\/\* Begin PBXNativeTarget section \*\/([\s\S]*?)\/\* End PBXNativeTarget section \*\//;
-/** `name = Foo;` or `name = "Foo Bar";` -- the two spellings a project file uses. */
-const TARGET_NAME = /\bname\s*=\s*(?:"([^"]*)"|([A-Za-z0-9_.+-]+))\s*;/g;
+/**
+ * `name = Foo;` or `name = "Foo Bar";` -- the two spellings a project file uses.
+ *
+ * THE QUOTED BRANCH HONOURS THE ESCAPE, and the direction the old one failed in
+ * is the unsafe one. `"([^"]*)"` stops at the backslash-escaped quote inside
+ * `name = "Kro\"Q";`, so the target came out as `Kro\` -- or, where the escape
+ * sat at the end, the value was dropped entirely -- and a target the project
+ * DOES declare went missing from the list. A missing target is not a quiet
+ * gap here: it is what makes `schemeReason` report a working scheme as BROKEN
+ * ON A CLEAN CHECKOUT. `stripScriptComments` one screen up already reads this
+ * file's escape rule, so the two halves of the same reader now agree about it.
+ */
+const TARGET_NAME = /\bname\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([A-Za-z0-9_.+-]+))\s*;/g;
+
+/** A quoted project-file value's own escapes, undone. */
+function unescapeQuoted(value: string): string {
+  return value.replace(/\\(.)/g, "$1");
+}
+
+/**
+ * The path a scheme's own reference names, the location's prefix dropped.
+ *
+ * `container:`, `group:` and `self:` say WHERE the path is relative to, and
+ * every reader here compares the path itself. Written to match
+ * `readWorkspaceReferences`'s own rule one file format over, because the two
+ * formats spell a location the same way and reading them two ways would be two
+ * chances to disagree about one string.
+ */
+function referencePath(location: string): string {
+  return location.slice(location.indexOf(":") + 1);
+}
 
 function attributesIn(text: string, pattern: RegExp): readonly string[] {
   const out: string[] = [];
@@ -2801,19 +2895,90 @@ function testTargetsIn(testSection: string): readonly TestTarget[] {
       blueprint,
       buildable: BUILDABLE_ATTRIBUTE.exec(element ?? "")?.[1] ?? "",
       skipped: (SKIPPED_ATTRIBUTE.exec(attributes)?.[1] ?? "").toUpperCase() === "YES",
+      // OFF THE SAME ELEMENT AS THE TWO NAMES, for the same reason they are:
+      // the container is what decides whether the pair beside it is a pair nen
+      // is in a position to check at all.
+      container: referencePath(CONTAINER_ATTRIBUTE.exec(element ?? "")?.[1] ?? ""),
+      plan: "",
     };
-    // DE-DUPLICATION IS PER PAIR, NEVER PER NAME. Two references to the same
-    // (target, product) are one finding printed once; two references sharing a
-    // product are two findings and must both survive. And a pair a scheme names
-    // once skipped and once not is NOT skipped -- the scheme runs it.
+    // DE-DUPLICATION IS PER PAIR, NEVER PER NAME, and the container is part of
+    // the pair. Two references to the same (target, product, container) are one
+    // finding printed once; two references sharing a product are two findings
+    // and must both survive; and the same name in two DIFFERENT containers is
+    // two targets, which is the whole point of reading the container. A pair a
+    // scheme names once skipped and once not is NOT skipped -- the scheme runs
+    // it.
     const already = found.findIndex(
       (entry): boolean =>
-        entry.blueprint === target.blueprint && entry.buildable === target.buildable,
+        entry.blueprint === target.blueprint &&
+        entry.buildable === target.buildable &&
+        entry.container === target.container,
     );
     if (already === -1) found.push(target);
     else if (!target.skipped) found[already] = target;
   }
   return found;
+}
+
+/** One JSON value, as an object, or null when it is anything else. */
+function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
+}
+
+/**
+ * The test targets a `.xctestplan` names, or null when nen could not read it.
+ *
+ * NULL IS NOT AN EMPTY LIST, and this is the third place in this reader where
+ * that distinction is the whole point. A plan file nen could not open, could
+ * not parse, or that carries no `testTargets` array is a target list nen DOES
+ * NOT HAVE -- and reporting the scheme that delegates to it as one that names
+ * no target at all would be inventing a finding out of nen's own blind spot.
+ *
+ * A REFERENCE THAT LEAVES THIS LANE IS UNREADABLE BY DECISION, not by accident:
+ * a `../` in the path resolves outside the directory this scan was given, and
+ * this verb reads a lane. It gets the same honest sentence a missing file does.
+ */
+function readTestPlan(laneDirectory: string, reference: string): PlanFinding {
+  const unreadable: PlanFinding = { reference, targets: null };
+  const segments = reference.split(/[/\\]/).filter((segment): boolean => segment !== "");
+  if (segments.length === 0 || segments.includes("..") || segments.includes(".")) {
+    return unreadable;
+  }
+  const text = readText(join(laneDirectory, ...segments));
+  if (text === null) return unreadable;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return unreadable;
+  }
+  const rows = asRecord(parsed)?.["testTargets"];
+  if (!Array.isArray(rows)) return unreadable;
+  const targets: TestTarget[] = [];
+  for (const row of rows) {
+    const entry = asRecord(row);
+    const target = asRecord(entry?.["target"]);
+    const name = target?.["name"];
+    if (typeof name !== "string" || name === "") continue;
+    const container = target?.["containerPath"];
+    targets.push({
+      blueprint: name,
+      // A plan names a TARGET and never the product it builds, so there is no
+      // landmark to print beside this one. The empty string is the same "the
+      // reference carried none" this file already uses for a testable without a
+      // `BuildableName`, and `testTargetLabel` prints neither.
+      buildable: "",
+      // A plan's own switch for a target it lists and does not run. It is the
+      // same fact `skipped` is on a testable -- the target still has to exist --
+      // so it is read the same way and said in the plan's own words.
+      skipped: entry?.["enabled"] === false,
+      container: referencePath(typeof container === "string" ? container : ""),
+      plan: reference,
+    });
+  }
+  return { reference, targets };
 }
 
 function readScheme(laneDirectory: string, container: string, file: string): SchemeFinding {
@@ -2826,11 +2991,21 @@ function readScheme(laneDirectory: string, container: string, file: string): Sch
   const text = stripXmlComments(readText(path) ?? "");
   const testSection = TEST_ACTION.exec(text)?.[0] ?? "";
   const buildSection = BUILD_ACTION.exec(text)?.[0] ?? "";
+  const references: string[] = [];
+  for (const opening of testSection.matchAll(TEST_PLAN_REFERENCE)) {
+    const named = referencePath(PLAN_REFERENCE_ATTRIBUTE.exec(opening[1] ?? "")?.[1] ?? "");
+    if (named !== "" && !references.includes(named)) references.push(named);
+  }
   return {
     name: file.replace(XCSCHEME, ""),
     file: [container, ...SHARED_SCHEMES, file].join("/"),
     buildTargets: attributesIn(buildSection, BLUEPRINT_NAME),
     testTargets: testTargetsIn(testSection),
+    // A PLAN REFERENCE IS RELATIVE TO THE CONTAINER THAT HOLDS THE SCHEME, and
+    // every container this reader opens sits at the lane root -- so the lane
+    // directory is what the path is joined to, and `readTestPlan` refuses one
+    // that would climb out of it.
+    plans: references.map((reference): PlanFinding => readTestPlan(laneDirectory, reference)),
   };
 }
 
@@ -2853,7 +3028,8 @@ function readTargets(laneDirectory: string, project: string): ReadonlySet<string
   // measured against something nobody can build.
   const targets = new Set<string>();
   for (const match of stripScriptComments(section).matchAll(TARGET_NAME)) {
-    const name = match[1] ?? match[2];
+    const quoted = match[1];
+    const name = quoted === undefined ? match[2] : unescapeQuoted(quoted);
     if (name !== undefined && name !== "") targets.add(name);
   }
   return targets;
@@ -2922,6 +3098,81 @@ function readAppleLane(laneDirectory: string): AppleLane {
 }
 
 /**
+ * Every test target one scheme names, wherever it named it.
+ *
+ * The testables written into the scheme, then the targets of every plan nen
+ * could read, in the order the scheme names the plans. A plan nen could NOT
+ * read contributes nothing here and is asked about separately -- an unreadable
+ * plan must never look like a plan that listed nothing.
+ */
+function schemeTestTargets(scheme: SchemeFinding): readonly TestTarget[] {
+  return [
+    ...scheme.testTargets,
+    ...scheme.plans.flatMap((plan): readonly TestTarget[] => plan.targets ?? []),
+  ];
+}
+
+/**
+ * Is this reference's container one of the projects nen actually READ?
+ *
+ * THE SCOPE OF THE CROSS-CHECK, STATED ONCE. `readTargets` opens the
+ * `.xcodeproj` bundles at this lane's root and nothing else, so those are the
+ * only containers whose target list nen holds. A reference naming anything else
+ * -- a path with directory segments in it (a local package, a project one
+ * directory over), a project bundle that is not at this root, or no container
+ * at all -- is one this reader is in no position to confirm OR to contradict.
+ *
+ * IT IS A NAME COMPARISON AND THE LOOSENESS RUNS THE SAFE WAY. A bare name that
+ * is not one of this lane's projects is out of scope, and a bare name that IS
+ * one is checked; nothing here resolves a path, so nothing here can decide that
+ * a container nen never opened declares no such target.
+ */
+function inLane(lane: AppleLane, container: string): boolean {
+  return !container.includes("/") && !container.includes("\\") && lane.projects.includes(container);
+}
+
+/** Which kind of container bundle a reference row's own flag addresses. */
+type ContainerKind = "project" | "workspace";
+
+/**
+ * The container flags this reader was written against, and the kind each one
+ * addresses.
+ *
+ * THE ONE PIECE OF A BUILD TOOL'S VOCABULARY IN THIS FILE, AND IT IS HERE
+ * BECAUSE EVERY ALTERNATIVE IS WORSE. The rule this table serves is a SAFETY
+ * one -- nen must never write a path of one container kind behind the flag that
+ * addresses the other -- and a rule of that shape cannot be enforced by a
+ * reader that treats the flag as an opaque word: `flagBefore` can quote the
+ * catalogue's flag into a sentence without knowing it, but it cannot decide
+ * with it. The pack is where a command's SHAPE lives (§3) and it publishes no
+ * flag-to-kind pairing to read, so the pairing is stated here, as data, with
+ * three properties that keep it honest:
+ *
+ *   1. IT ONLY EVER WITHHOLDS MORE. A flag absent from this table answers
+ *      nothing and says so by name -- the failure of a stale table is a note a
+ *      maintainer reads, never a command nen wrote from a guess.
+ *   2. IT NAMES NO PROGRAM. ./purity.test.ts sweeps this file for the Apple
+ *      profile's own executables and finds none; a flag is not a tool, and
+ *      nothing here decides WHAT to run.
+ *   3. IT IS PINNED AGAINST THE PACK. ./detect.test.ts reads the flag out of a
+ *      temp copy of the catalogue, flips it to the other kind, and asserts the
+ *      answer flips with it -- in both directions -- so a pack that changed its
+ *      row and a reader that did not is a red test rather than a false command.
+ *
+ * The kinds themselves are `.xcodeproj` and `.xcworkspace`, which are FILENAMES
+ * -- the one class of fact this module's own header argues it may carry.
+ */
+const CONTAINER_FLAGS: ReadonlyMap<string, ContainerKind> = new Map([
+  ["-project", "project"],
+  ["-workspace", "workspace"],
+]);
+
+/** The kind a row's flag addresses, or null when this reader does not know it. */
+function containerKind(flag: string | null): ContainerKind | null {
+  return flag === null ? null : (CONTAINER_FLAGS.get(flag) ?? null);
+}
+
+/**
  * The one container this lane leaves nen no choice about, or null.
  *
  * THE FLAG IS PART OF THE ROW, and that is the fact this function turns on.
@@ -2932,15 +3183,33 @@ function readAppleLane(laneDirectory: string): AppleLane {
  * kind the row's own flag names, and the pack says as much in the token's own
  * doc: "for a workspace-based repository, the flag changes with it".
  *
+ * AND THE FLAG NOW DECIDES, WHICH IS THIS PR'S CORRECTION. Until it did, the
+ * rule was hard-coded the way the pack happens to spell its rows today -- the
+ * answer was always the one `.xcodeproj`, and a `.xcworkspace` could only ever
+ * withhold. That made the flag decorative: editing the catalogue's three
+ * `-project` entries to the other flag (legal, schema-valid, and exactly what a
+ * workspace-based repository's rows look like) left nen answering the token
+ * from a bare project behind a flag that does not address one -- a command that
+ * fails on every machine, three sentences that go false, and not one test that
+ * notices. So the flag the pack wrote is read out of its own argv and the
+ * answer follows it; a flag this reader does not know withholds and says so.
+ *
  * A WORKSPACE THAT DOES NOT LIST THE PROJECT DOES NOT DECIDE ANYTHING. It is
  * some other build's container that happens to live in this directory, and
  * letting it withhold this project's row would be the same defect as letting it
  * answer one: a container is only this project's container if it says so. The
  * two shapes that DO withhold are a workspace that names the project -- the
  * shape a dependency manager produces, where building the bare project is the
- * documented way to fail -- and a workspace nen could not read at all.
+ * documented way to fail -- and a workspace nen could not read at all. Both are
+ * questions about a PROJECT answer; a row that addresses its container as a
+ * workspace asks neither, because the workspace is then the container itself.
  */
-function projectAnswer(lane: AppleLane): string | null {
+function projectAnswer(lane: AppleLane, flag: string | null): string | null {
+  const kind = containerKind(flag);
+  if (kind === null) return null;
+  if (kind === "workspace") {
+    return lane.workspaces.length === 1 ? (lane.workspaces[0]?.name ?? null) : null;
+  }
   const project = lane.projects.length === 1 ? lane.projects[0] : undefined;
   if (project === undefined) return null;
   for (const workspace of lane.workspaces) {
@@ -2948,6 +3217,36 @@ function projectAnswer(lane: AppleLane): string | null {
     if (workspace.references.includes(project)) return null;
   }
   return project;
+}
+
+/** What this lane answers for `{project}` behind one flag, and why. */
+export interface AppleContainerReading {
+  /** The container's lane-relative name, or null where nen answers none. */
+  readonly answer: string | null;
+  /** The clause a row still naming the token would carry. */
+  readonly reason: string;
+}
+
+/**
+ * What a row addressing its container as `<flag> {project}` gets from this
+ * lane, answer and reason together.
+ *
+ * EXPORTED FOR ./detect.test.ts, AND IT IS THE ONLY SEAM WHERE THE CATALOGUE'S
+ * WORD AND THIS READER'S ANSWER CAN BE HELD TO EACH OTHER. `detect` always
+ * loads the BUNDLED pack -- the profiles are static imports, so a bundler can
+ * follow them -- which means no fixture tree can put a different flag in front
+ * of the token. The test therefore loads a MUTATED temp copy of the pack
+ * through the pack's own reader, takes the flag out of that copy's argv, and
+ * hands it here: the catalogue changing its row and this reader not noticing is
+ * then a red test rather than a command written behind the wrong flag.
+ */
+export function readAppleContainer(
+  laneDirectory: string,
+  flag: string | null,
+  profile: StackProfile,
+): AppleContainerReading {
+  const lane = readAppleLane(laneDirectory);
+  return { answer: projectAnswer(lane, flag), reason: projectReason(lane, profile, flag) };
 }
 
 /**
@@ -2965,18 +3264,37 @@ function projectAnswer(lane: AppleLane): string | null {
  *   * more than one shared scheme -- which one a verb means is a decision;
  *   * a target list nen could not read -- a cross-check nen could not perform
  *     is not a cross-check that passed;
+ *   * a test plan the scheme delegates to and nen could not read -- the targets
+ *     are named in that file, and nen has not got them;
+ *   * a testable declared in a container OUTSIDE this lane's root projects --
+ *     a local package or a project in another directory, neither of which this
+ *     reader opens, so the check was performed on only part of the scheme;
  *   * a test action naming no target at all -- there is nothing to check it
  *     against, and "nothing failed" is not the same fact as "it passed";
  *   * a test action naming a target the projects do not declare -- the scheme
  *     is broken upstream of any placeholder.
+ *
+ * THE OUT-OF-LANE CASE IS A WITHHOLDING RATHER THAN AN ANSWER, and it is the
+ * one judgement in this function that could honestly have gone the other way.
+ * The alternative -- answer when every IN-lane testable resolves, and name the
+ * rest as unchecked -- was rejected on the strength of where the naming would
+ * have to happen: a token nen ANSWERS earns no clause in the note (that is what
+ * makes the note shrink as a checkout gets tidier), so the caveat that made the
+ * answer safe is exactly the sentence a reader would stop being shown. The
+ * value withholding costs is one word, and the note still names the scheme and
+ * its file, so the copying is still done; the value it buys is that this file
+ * goes on meaning one thing by an answered `{scheme}` -- a cross-check that was
+ * performed, in full, and passed.
  */
 function schemeAnswer(lane: AppleLane): SchemeFinding | null {
   const scheme = lane.schemes.length === 1 ? lane.schemes[0] : undefined;
   const targets = lane.targets;
-  if (scheme === undefined || targets === null || scheme.testTargets.length === 0) return null;
-  return scheme.testTargets.every((target): boolean => targets.has(target.blueprint))
-    ? scheme
-    : null;
+  if (scheme === undefined || targets === null) return null;
+  if (scheme.plans.some((plan): boolean => plan.targets === null)) return null;
+  const named = schemeTestTargets(scheme);
+  const checkable = named.filter((target): boolean => inLane(lane, target.container));
+  if (checkable.length === 0 || checkable.length !== named.length) return null;
+  return checkable.every((target): boolean => targets.has(target.blueprint)) ? scheme : null;
 }
 
 /**
@@ -2991,10 +3309,11 @@ function appleAnswers(
   verb: string,
   wanted: ReadonlySet<string>,
   answered: Map<string, string>,
+  projectFlag: string | null,
 ): void {
   if (wanted.has(PROJECT_CONTAINER) || wanted.has(SCHEME_NAME)) {
     const lane = apple();
-    const project = wanted.has(PROJECT_CONTAINER) ? projectAnswer(lane) : null;
+    const project = wanted.has(PROJECT_CONTAINER) ? projectAnswer(lane, projectFlag) : null;
     if (project !== null) answered.set(PROJECT_CONTAINER, project);
     const scheme = wanted.has(SCHEME_NAME) ? schemeAnswer(lane) : null;
     if (scheme !== null) answered.set(SCHEME_NAME, scheme.name);
@@ -4162,9 +4481,14 @@ interface AppleRow {
  * not going to run it anyway.
  */
 function testTargetLabel(target: TestTarget): string {
-  const aside = [target.buildable, target.skipped ? "skipped by the scheme" : ""].filter(
-    (part): boolean => part !== "",
-  );
+  const aside = [
+    target.buildable,
+    // WHICH FILE NAMED IT. A target the SCHEME lists and a target the scheme's
+    // test PLAN lists are two different files to open, and a maintainer told
+    // only "the scheme names it" would edit the wrong one.
+    target.plan === "" ? "" : `named by ${target.plan}`,
+    target.skipped ? (target.plan === "" ? "skipped by the scheme" : "off in that plan") : "",
+  ].filter((part): boolean => part !== "");
   return `'${target.blueprint}'${aside.length === 0 ? "" : ` (${aside.join(", ")})`}`;
 }
 
@@ -4208,16 +4532,47 @@ function markerReason(profile: StackProfile, container: string): string {
  * word the pack's own row puts in front of the token, read out of the argv;
  * what the OTHER flag is called is the pack's business and the maintainer's,
  * and this file states the requirement rather than the vocabulary.
+ *
+ * A SIXTH SHAPE ARRIVES WHERE THE FLAG ITSELF IS ONE THIS READER DOES NOT KNOW
+ * -- see `CONTAINER_FLAGS`. It withholds and says which word it met, because a
+ * reader told only "nen could not choose" would go looking at their checkout
+ * for a problem that is in the catalogue.
  */
-function projectReason(row: AppleRow): string {
-  const { lane, profile } = row;
-  const flag = flagBefore(row.steps, PROJECT_CONTAINER);
+function projectReason(lane: AppleLane, profile: StackProfile, flag: string | null): string {
+  const kind = containerKind(flag);
   const addressed =
     flag === null
       ? `the reference row names ${PROJECT_CONTAINER} on its own`
       : `the reference row addresses its container as '${flag} ${PROJECT_CONTAINER}'`;
   const meaning = `The pack's own note on the token: ${TOKEN_MEANINGS.get(PROJECT_CONTAINER) ?? ""}`;
   const names = (found: readonly string[]): string => found.join(", ");
+  const workspaces = lane.workspaces.map((found): string => found.name);
+
+  if (kind === null) {
+    return ` -- ${addressed}, and that is not a word this reader knows a container kind for. nen answers this token for exactly two kinds, each behind the flag that addresses it: a lone '.xcodeproj' where the row addresses a project, and a lone '.xcworkspace' where it addresses a workspace. It will not write a path behind a third word and hope the kinds line up -- a path of the wrong kind behind a container flag fails on every machine rather than on some of them. This lane carries ${
+      lane.projects.length + workspaces.length === 0
+        ? "no container at either kind"
+        : names([...workspaces, ...lane.projects])
+    }; state the row this repository means. ${meaning}`;
+  }
+
+  if (kind === "workspace") {
+    if (workspaces.length === 1) {
+      /* c8 ignore next 3 -- `projectAnswer` answers exactly this shape, so a row
+         reaching this line named the token, was answered it, and never asked
+         for a reason. It stays because the two functions are two places. */
+      return ` -- nen answered this token from ${names(workspaces)}`;
+    }
+    return workspaces.length === 0
+      ? ` -- ${addressed}, and this lane has no .xcworkspace at its root${
+          lane.projects.length === 0
+            ? " (nor a .xcodeproj), so there is no container here for it to name"
+            : ` -- it carries ${names(lane.projects)}, which is the other container kind. nen will not write a project's path behind a flag that names a workspace: the flag is PART of the row, and a row carrying the wrong one fails on every machine rather than on some of them`
+        }. ${meaning}`
+      : ` -- this lane carries ${workspaces.length} workspaces (${names(
+          workspaces,
+        )}), and which of them this verb builds is a decision nen resolves none of: ${addressed}, and it takes exactly one path. Delete the one this repository does not build, or state the row yourself`;
+  }
 
   if (lane.projects.length === 0) {
     return lane.workspaces.length === 0
@@ -4309,6 +4664,52 @@ function schemeReason(row: AppleRow): string {
     );
   }
 
+  // THE TWO FACTS THAT ARE TRUE WHETHER OR NOT NEN HOLDS A TARGET LIST, printed
+  // before the ones that depend on one: a plan nen could not open, and a
+  // testable declared somewhere nen does not read. Both say what nen did NOT
+  // check, and neither is a claim about the checkout.
+  for (const scheme of lane.schemes) {
+    const unreadable = scheme.plans.filter((plan): boolean => plan.targets === null);
+    if (unreadable.length === 0) continue;
+    clauses.push(
+      // THE FALSE SENTENCE THIS CLAUSE REPLACES was "that scheme's test action
+      // names no target at all", which is what a plan-driven scheme looked like
+      // to a reader of `<Testables>` alone -- every project a modern Xcode
+      // creates, described as though it tested nothing.
+      ` -- and '${scheme.name}' (${scheme.file}) drives its test action from ${
+        unreadable.length === 1 ? "the test plan" : "the test plans"
+      } ${unreadable
+        .map((plan): string => `'${plan.reference}'`)
+        .join(
+          ", ",
+        )}, which nen could not read: a scheme that delegates to a plan names its targets in THAT file, so nen holds no list for it and makes no claim about it in either direction. It is not a scheme that names no target -- it is a target list nen has not got`,
+    );
+  }
+  for (const scheme of lane.schemes) {
+    const outside = schemeTestTargets(scheme).filter(
+      (target): boolean => !inLane(lane, target.container),
+    );
+    if (outside.length === 0) continue;
+    clauses.push(
+      // THE FINDING THAT MUST NOT BE MADE, SAID AS THE NON-FINDING IT IS. A
+      // testable in a local package or in a project one directory over is not a
+      // target this lane's projects are missing; it is a target nen never went
+      // looking for, and reporting it as the former is a maintainer sent to fix
+      // a checkout that builds.
+      ` -- and nen did not check every target '${scheme.name}' (${scheme.file}) names: ${outside
+        .map((target): string =>
+          target.container === ""
+            ? `${testTargetLabel(target)}, whose reference names no container at all`
+            : `${testTargetLabel(target)}, declared in '${target.container}'`,
+        )
+        .join(
+          ", ",
+        )}. nen reads the .xcodeproj bundles at THIS lane's root and nothing else -- not a local package's own manifest, and not a project in another directory -- so ${
+        outside.length === 1 ? "that reference is" : "those references are"
+      } neither confirmed nor called broken: a target nen never looked for is not a target this project has not got. The token is withheld because the check was PARTIAL, which is a different fact from a check that failed`,
+    );
+  }
+
   const targets = lane.targets;
   if (targets === null && lane.projects.length > 0) {
     const unreadable = lane.unreadableProjects;
@@ -4337,7 +4738,14 @@ function schemeReason(row: AppleRow): string {
     const broken = lane.schemes
       .map((scheme): { scheme: SchemeFinding; missing: readonly TestTarget[] } => ({
         scheme,
-        missing: scheme.testTargets.filter((target): boolean => !targets.has(target.blueprint)),
+        // ONLY THE REFERENCES NEN IS IN A POSITION TO CHECK. A testable whose
+        // own container is not one of the projects `readTargets` opened has
+        // already earned its own clause above, and measuring it against this
+        // lane's target list is what produced a BROKEN ON A CLEAN CHECKOUT for
+        // a checkout whose test run succeeds.
+        missing: schemeTestTargets(scheme).filter(
+          (target): boolean => inLane(lane, target.container) && !targets.has(target.blueprint),
+        ),
       }))
       .filter((entry): boolean => entry.missing.length > 0);
     for (const { scheme, missing } of broken) {
@@ -4357,7 +4765,15 @@ function schemeReason(row: AppleRow): string {
         )} matters, because the scheme asks for a target the project does not contain. nen answers no scheme from a broken one: substituting it would propose a command that fails on a clean clone`,
       );
     }
-    const empty = lane.schemes.length === 1 && (lane.schemes[0]?.testTargets.length ?? 0) === 0;
+    // "NAMES NO TARGET" IS A CLAIM, AND IT NEEDS EVERY SOURCE READ. A scheme
+    // whose `<Testables>` is empty because a test PLAN carries the list names
+    // plenty; one whose plan nen could not open names an unknown number. Only a
+    // scheme with nothing in either place has earned this sentence.
+    const only = lane.schemes.length === 1 ? lane.schemes[0] : undefined;
+    const empty =
+      only !== undefined &&
+      schemeTestTargets(only).length === 0 &&
+      only.plans.every((plan): boolean => plan.targets !== null);
     if (empty) {
       clauses.push(
         // "NOTHING FAILED" IS NOT "IT PASSED". A build-only scheme is a perfectly
@@ -4411,7 +4827,11 @@ function appleReason(row: AppleRow): string {
   const clause = (token: string, text: () => string): string =>
     row.leftover.includes(token) ? text() : "";
   return [
-    clause(PROJECT_CONTAINER, (): string => projectReason(row)),
+    clause(
+      PROJECT_CONTAINER,
+      (): string =>
+        projectReason(row.lane, row.profile, flagBefore(row.steps, PROJECT_CONTAINER)),
+    ),
     clause(SCHEME_NAME, (): string => schemeReason(row)),
     machineReason(row.leftover),
   ].join("");
@@ -4543,6 +4963,10 @@ function proposeVerbs(
       verb,
       new Set(named),
       appleLane,
+      // READ OUT OF THE CATALOGUE'S OWN ARGV, and read from the UNSUBSTITUTED
+      // steps: the flag decides which kind of container this row's token may be
+      // answered with, and the row is the only place that fact is written down.
+      flagBefore(packSteps, PROJECT_CONTAINER),
     );
     for (const [token, value] of answers.answered) {
       if (HOST_TOKENS.some((entry): boolean => entry.token === token)) {
@@ -4843,6 +5267,13 @@ function proposeVerbs(
   // it is under `.nen/` rather than beside the sources, and says it is as
   // editable as every other row here -- and it names the ONE constraint the
   // pack puts on the value, which a maintainer moving it must keep.
+  //
+  // AND THE TWO THINGS THAT BITE ON THE SECOND RUN, both of which a maintainer
+  // would otherwise meet as a failure rather than as a sentence: the path is
+  // LANE-relative, because the row runs in the lane's own cwd like every other
+  // path in it, and this stack's tool REFUSES to write a result bundle that is
+  // already on disk -- so the row a maintainer fills in works once and then
+  // stops until the bundle is gone or the value carries something per-run.
   if (resultBundles.size > 0) {
     notes.push(
       `${RESULT_BUNDLE} was answered by nen rather than read off this repository: ${[
@@ -4851,7 +5282,7 @@ function proposeVerbs(
         .map(([verb, value]): string => `'${verb}' writes ${value}`)
         .join(
           ", ",
-        )}. It is the one token in this stack's rows naming an OUTPUT rather than a fact this repository states, so there was nothing here to read -- and nen's own generated output lives under the dot-prefixed '${GENERATED_DIRECTORY}/', one character from the committed 'nen/', so that a 'git add nen/' after a run can never stage a build artefact. nen does NOT write a .gitignore for you: if '${GENERATED_DIRECTORY}/' is not ignored in this repository, ignore it. Move the path if you would rather keep the bundle elsewhere -- but move it in EVERY step of the row at once: the pack states the same value in the step that writes the bundle and the step that reads it, which is why that row is one cell and not two.`,
+        )}. It is the one token in this stack's rows naming an OUTPUT rather than a fact this repository states, so there was nothing here to read -- and nen's own generated output lives under the dot-prefixed '${GENERATED_DIRECTORY}/', one character from the committed 'nen/', so that a 'git add nen/' after a run can never stage a build artefact. The path is LANE-relative, like every other path in the row: a lane whose cwd is 'ios' writes 'ios/${GENERATED_DIRECTORY}/'. '${GENERATED_DIRECTORY}/' is what \`nen scaffold init\` appends to this repository's .gitignore, so a repository stood up with that verb already ignores it and one that was not must ignore it itself -- nen writes no .gitignore from this verb. THE SECOND RUN IS THE ONE TO KNOW ABOUT: this stack's tool refuses to write a result bundle that already exists, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value names a path per run. And the bundle is a DIRECTORY the tool writes rather than the report itself; the row's own second step is what turns it into readable output. Move the path if you would rather keep the bundle elsewhere -- but move it in EVERY step of the row at once: the pack states the same value in the step that writes the bundle and the step that reads it, which is why that row is one cell and not two.`,
     );
   }
 

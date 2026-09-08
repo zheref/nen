@@ -15,8 +15,15 @@ import { join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
-import { loadProfilesPack, PLACEHOLDERS, profileById, verbCell } from "../profiles/pack.js";
 import {
+  loadProfilesPack,
+  PLACEHOLDERS,
+  profileById,
+  verbCell,
+  type StackProfile,
+} from "../profiles/pack.js";
+import {
+  readAppleContainer,
   detect as detectOn,
   hostToolPrograms,
   listDirectory,
@@ -33,6 +40,14 @@ import {
   type DetectReport,
   type Entry,
 } from "./detect.js";
+// THE IGNORE LINE, FROM THE ONE MODULE THAT WRITES IT. `detect`'s own note
+// says which line `nen scaffold init` appends, and the two must not be able to
+// drift: a sentence about another verb's behaviour, retyped, is a sentence that
+// goes false silently -- which is exactly how the claim this replaces survived
+// the verb growing the append. A test may import across the two families; the
+// sweeps that forbid it (./purity.test.ts, ../profiles/inertness.test.ts) are
+// about the EXECUTION path and exclude `*.test.ts` by name.
+import { GITIGNORE_ENTRY } from "../scaffold/init.js";
 import {
   EMPTY_TREE,
   EXPO_BARE,
@@ -3733,6 +3748,146 @@ describe("nen shu detect -- the xcode-ios lane", () => {
     }
   });
 
+  // ── the flag decides the KIND, and the flag comes out of the pack ─────────
+  //
+  // WHAT THIS CLOSES. `projectAnswer` used to answer from the one `.xcodeproj`
+  // whatever flag the row carried, and the flag reached the PROSE only. Editing
+  // the catalogue's three `-project` entries to the flag a workspace-based
+  // repository's rows carry -- legal, schema-valid, one word -- left nen
+  // answering the token from a bare project behind a flag that does not address
+  // one, with three sentences gone false and not one test red. So the pack's
+  // own word now decides, and this holds the two to each other by loading a
+  // MUTATED copy of the catalogue through the pack's own reader.
+
+  /** The word the pack's `build` row puts in front of `{project}`. */
+  const packFlag = (directory: string | null): string | null => {
+    const cell = verbCell(profileById(loadProfilesPack(directory), "xcode-ios"), "build");
+    const argv =
+      cell.kind === "command" && cell.invocation.kind === "command" ? cell.invocation.argv : [];
+    const at = argv.indexOf("{project}");
+    return at > 0 ? (argv[at - 1] ?? null) : null;
+  };
+
+  /** A temp copy of the shipped pack with every container flag flipped. */
+  const flippedPack = (read: (flag: string | null, profile: StackProfile) => void): void => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pack-flipped-"));
+    try {
+      cpSync(join(process.cwd(), "profiles"), dir, { recursive: true });
+      const path = join(dir, "xcode-ios.json");
+      // The flag as a WHOLE argv element, so nothing inside a `why` sentence or
+      // a source citation is touched -- this is a change to the row's shape.
+      const document = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      const flip = (value: unknown): unknown =>
+        Array.isArray(value)
+          ? value.map((entry): unknown => (entry === "-project" ? "-workspace" : flip(entry)))
+          : typeof value === "object" && value !== null
+            ? Object.fromEntries(
+                Object.entries(value as Record<string, unknown>).map(
+                  ([key, entry]): readonly [string, unknown] => [key, flip(entry)],
+                ),
+              )
+            : value;
+      writeFileSync(path, JSON.stringify(flip(document), null, 2), "utf8");
+      const profile = profileById(loadProfilesPack(dir), "xcode-ios");
+      read(packFlag(dir), profile);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("answers {project} only for the container kind the pack's own flag addresses", () => {
+    const shipped = packFlag(null);
+    expect(shipped, "the shipped catalogue addresses a project").toBe("-project");
+    const profile = profileById(loadProfilesPack(), "xcode-ios");
+    // The tree with ONE project and no workspace answers behind the shipped
+    // flag, and answers NOTHING behind the other kind's.
+    expect(readAppleContainer(XCODE_PROJECT, shipped, profile).answer).toBe(
+      "Placeholder.xcodeproj",
+    );
+    expect(readAppleContainer(XCODE_PROJECT, "-workspace", profile).answer).toBeNull();
+    // And the CocoaPods tree is the mirror image: the shipped flag withholds
+    // (the workspace claims the project), and the workspace flag answers the
+    // workspace -- the container that row would actually address.
+    expect(readAppleContainer(XCODE_WORKSPACE, shipped, profile).answer).toBeNull();
+    expect(readAppleContainer(XCODE_WORKSPACE, "-workspace", profile).answer).toBe(
+      "Placeholder.xcworkspace",
+    );
+  });
+
+  it("flips with the catalogue when the pack's own row changes its container flag", () => {
+    flippedPack((flag, profile): void => {
+      expect(flag, "the mutated pack addresses a workspace").toBe("-workspace");
+      // THE WHOLE POINT, IN TWO LINES. Read through the flag the mutated pack
+      // carries, the tree that used to answer withholds and the tree that used
+      // to withhold answers -- so a catalogue that changed its row cannot leave
+      // this reader writing a path of the kind the row no longer addresses.
+      expect(readAppleContainer(XCODE_PROJECT, flag, profile).answer).toBeNull();
+      expect(readAppleContainer(XCODE_WORKSPACE, flag, profile).answer).toBe(
+        "Placeholder.xcworkspace",
+      );
+      // And the reason names the flag it met and the kind it wanted.
+      const withheld = readAppleContainer(XCODE_PROJECT, flag, profile).reason;
+      expect(withheld).toContain("the reference row addresses its container as '-workspace");
+      expect(withheld).toContain("this lane has no .xcworkspace at its root");
+      expect(withheld).toMatch(
+        /nen will not write a project's path behind a flag that names a workspace/,
+      );
+    });
+  });
+
+  it("withholds {project} and names the word when the flag is one it knows no kind for", () => {
+    const profile = profileById(loadProfilesPack(), "xcode-ios");
+    const reading = readAppleContainer(XCODE_PROJECT, "-elsewhere", profile);
+    expect(reading.answer, "a flag nen knows no kind for answers nothing").toBeNull();
+    expect(reading.reason).toContain(
+      "the reference row addresses its container as '-elsewhere {project}'",
+    );
+    expect(reading.reason).toMatch(/not a word this reader knows a container kind for/);
+    // It says what it DOES know how to answer, and what this lane holds.
+    expect(reading.reason).toContain("a lone '.xcodeproj'");
+    expect(reading.reason).toContain("a lone '.xcworkspace'");
+    expect(reading.reason).toContain("This lane carries Placeholder.xcodeproj");
+    // A row that names the token and no flag at all is the same withholding.
+    expect(readAppleContainer(XCODE_PROJECT, null, profile).answer).toBeNull();
+    expect(readAppleContainer(XCODE_PROJECT, null, profile).reason).toContain(
+      "the reference row names {project} on its own",
+    );
+  });
+
+  it("withholds a workspace answer when the lane carries two of them, naming both", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-two-workspaces-"));
+    try {
+      cpSync(XCODE_WORKSPACE, dir, { recursive: true });
+      cpSync(join(dir, "Placeholder.xcworkspace"), join(dir, "Alternate.xcworkspace"), {
+        recursive: true,
+      });
+      const profile = profileById(loadProfilesPack(), "xcode-ios");
+      const reading = readAppleContainer(dir, "-workspace", profile);
+      expect(reading.answer).toBeNull();
+      expect(reading.reason).toContain(
+        "this lane carries 2 workspaces (Alternate.xcworkspace, Placeholder.xcworkspace)",
+      );
+      expect(reading.reason).toMatch(/it takes exactly one path/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("says there is no container at either kind when the lane holds neither", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-no-container-"));
+    try {
+      const profile = profileById(loadProfilesPack(), "xcode-ios");
+      expect(readAppleContainer(dir, "-workspace", profile).reason).toContain(
+        "this lane has no .xcworkspace at its root (nor a .xcodeproj), so there is no container here for it to name",
+      );
+      expect(readAppleContainer(dir, "-elsewhere", profile).reason).toContain(
+        "This lane carries no container at either kind",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // ── {scheme}: answered only from a cross-check that PASSED ────────────────
 
   it("answers {scheme} from the one shared scheme whose test target the project declares", () => {
@@ -3881,6 +4036,56 @@ describe("nen shu detect -- the xcode-ios lane", () => {
     }
   });
 
+  // A QUOTED TARGET NAME MAY CARRY AN ESCAPED QUOTE, and the direction the old
+  // reader failed in was the unsafe one: `"([^"]*)"` stops at the backslash, so
+  // `name = "Kro\"Q";` yielded `Kro\`, the real target went missing from the
+  // list, and the scan resumed mid-value -- which is how a project that DOES
+  // declare a scheme's test target got a BROKEN ON A CLEAN CHECKOUT.
+  //
+  // MUTANT: put `"([^"]*)"` back in `TARGET_NAME` and this goes red twice --
+  // the escaped name comes out truncated, and the target written after it is
+  // lost with it.
+  it("reads a target name whose quotes are escaped, and the ones written after it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-escaped-name-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      const pbxproj = join(dir, "Placeholder.xcodeproj", "project.pbxproj");
+      writeFileSync(
+        pbxproj,
+        readFileSync(pbxproj, "utf8").replace(
+          "\t\t\tname = PlaceholderTests;",
+          '\t\t\tname = "Kro\\"Q";',
+        ),
+        "utf8",
+      );
+      const scheme = join(
+        dir,
+        "Placeholder.xcodeproj",
+        "xcshareddata",
+        "xcschemes",
+        "Placeholder.xcscheme",
+      );
+      writeFileSync(
+        scheme,
+        readFileSync(scheme, "utf8").replace(
+          /BlueprintName = "PlaceholderTests"/,
+          'BlueprintName = "Ghost"',
+        ),
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      // The escaped name is UNESCAPED in the list, and the target declared
+      // after it is still there -- a reader that stopped at the backslash would
+      // have resumed in the middle of the value and lost the next one.
+      expect(withheld).toContain('it declares Kro"Q, Placeholder, PlaceholderUITests');
+      expect(withheld, "the truncated form must not appear").not.toContain("Kro\\");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // ── the two tokens no tree will ever answer, and the one nen contributes ──
 
   it("answers neither destination token on any tree, and says why once per lane", () => {
@@ -3914,10 +4119,57 @@ describe("nen shu detect -- the xcode-ios lane", () => {
     const written = laneNote(XCODE_PROJECT, "{resultBundle} was answered by nen");
     expect(written).toContain("'coverage' writes .nen/coverage.xcresult");
     expect(written).toMatch(/naming an OUTPUT rather than a fact this repository states/);
-    // The one honest thing to say about a directory nen does not create for you.
-    expect(written).toMatch(/nen does NOT write a \.gitignore for you/);
+    // THE IGNORE LINE IS THE SCAFFOLD VERB'S OWN, IMPORTED RATHER THAN RETYPED.
+    // The sentence this replaces said nen writes no .gitignore for you, which
+    // stopped being true the moment `nen scaffold init` grew the append -- and
+    // it was retyped here, so nothing failed when it went false. Both halves
+    // now read the ONE constant, so a rename of the entry cannot leave this
+    // note describing a line nen no longer writes; and the sentence itself is
+    // order-independent, because which verb a maintainer ran first is not a
+    // fact `detect` can see.
+    expect(written).toContain(`'${GITIGNORE_ENTRY}' is what \`nen scaffold init\` appends`);
+    expect(written).toContain("one that was not must ignore it itself");
+    expect(written, "nen writes no ignore file from THIS verb, which is the honest half").toMatch(
+      /nen writes no \.gitignore from this verb/,
+    );
     // And the constraint a maintainer moving it must keep.
     expect(written).toMatch(/move it in EVERY step of the row at once/);
+  });
+
+  // THE TWO FACTS A MAINTAINER OTHERWISE MEETS AS A FAILING SECOND RUN. The
+  // value is lane-relative because the row runs in the lane's cwd, and this
+  // stack's tool refuses to write a bundle that is already on disk -- so a row
+  // filled in from this note works once and then stops.
+  it("says the bundle path is lane-relative, and that a second run needs it gone", () => {
+    const written = laneNote(XCODE_PROJECT, "{resultBundle} was answered by nen");
+    expect(written).toContain("The path is LANE-relative");
+    expect(written).toContain("a lane whose cwd is 'ios' writes 'ios/.nen/'");
+    expect(written).toMatch(/refuses to write a result bundle that already exists/);
+    expect(written).toMatch(
+      /succeeds once and then fails until the previous bundle is deleted or the value names a path per run/,
+    );
+    // AND WHAT THE BUNDLE IS NOT: it is a directory the tool writes, not the
+    // report a reader parses. The row's own second step is what produces that.
+    expect(written).toMatch(/the bundle is a DIRECTORY the tool writes rather than the report/);
+  });
+
+  // THE SAME NOTE, ON A LANE THAT IS NOT THE REPOSITORY ROOT -- which is the
+  // only tree that can prove the value is the lane's and not the repository's.
+  it("writes the bundle path relative to the LANE, on a lane one directory down", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-nested-bundle-"));
+    try {
+      cpSync(XCODE_PROJECT, join(dir, "ios"), { recursive: true });
+      const nested = detect(dir).lanes.find((entry): boolean => entry.stack === "xcode-ios");
+      expect(nested?.cwd).toBe("ios");
+      const withheld =
+        nested?.notes.find((entry): boolean => entry.startsWith("'coverage' withheld")) ?? "";
+      expect(withheld).toContain("{resultBundle} = .nen/coverage.xcresult");
+      expect(withheld, "the lane's cwd is not spelled into the value twice").not.toContain(
+        "ios/.nen/coverage.xcresult",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // ── the token list itself, pinned in both directions ──────────────────────
@@ -3941,6 +4193,460 @@ describe("nen shu detect -- the xcode-ios lane", () => {
       }
     }
     expect([...carried].sort()).toEqual([...APPLE_TOKENS].sort());
+  });
+});
+
+// ── the container a testable names, and the test plan a scheme delegates to ──
+//
+// THE TWO SHAPES A MODERN CHECKOUT HAS AND THE FIRST DRAFT OF THIS READER GOT
+// WRONG, both in the same direction and both expensive: it reported a scheme
+// that WORKS as broken on a clean checkout.
+//
+//   * A testable whose `ReferencedContainer` is a LOCAL SWIFT PACKAGE or a
+//     project in another directory. The reader never looked at the attribute,
+//     so it measured that target against the target list of the `.xcodeproj`
+//     bundles at this lane's root -- a list that never asked the package a
+//     thing -- and printed "this lane's project declares no such target".
+//   * A scheme driven by a TEST PLAN, which is what every project created by a
+//     recent Xcode looks like: an EMPTY `<Testables>` and a
+//     `<TestPlanReference>`. The reader saw no testable and said the test
+//     action "names no target at all", of a scheme that names several.
+//
+// Both false sentences are now impossible to write and both are pinned here.
+
+describe("nen shu detect -- the Apple lane's containers and test plans", () => {
+  const iosNote = (repo: string, verb: string): string =>
+    detect(repo)
+      .lanes.find((entry): boolean => entry.stack === "xcode-ios")
+      ?.notes.find((entry): boolean => entry.startsWith(`'${verb}' withheld`)) ?? "";
+
+  const SCHEME_PATH: readonly string[] = [
+    "Placeholder.xcodeproj",
+    "xcshareddata",
+    "xcschemes",
+    "Placeholder.xcscheme",
+  ];
+
+  /** The lane's one shared scheme, rewritten with a test action of your own. */
+  const writeScheme = (dir: string, testAction: string): void => {
+    writeFileSync(
+      join(dir, ...SCHEME_PATH),
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<Scheme LastUpgradeVersion = "2650" version = "1.7">',
+        '   <BuildAction parallelizeBuildables = "YES">',
+        "   </BuildAction>",
+        '   <TestAction buildConfiguration = "Debug">',
+        testAction,
+        "   </TestAction>",
+        "</Scheme>",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  };
+
+  /** One `<TestableReference>`, with the container ITS OWN reference names. */
+  const testable = (
+    blueprint: string,
+    buildable: string,
+    container: string,
+    skipped = false,
+  ): string =>
+    [
+      `         <TestableReference skipped = "${skipped ? "YES" : "NO"}">`,
+      "            <BuildableReference",
+      '               BuildableIdentifier = "primary"',
+      `               BuildableName = "${buildable}"`,
+      `               BlueprintName = "${blueprint}"`,
+      ...(container === "" ? [] : [`               ReferencedContainer = "container:${container}"`]),
+      "               >",
+      "            </BuildableReference>",
+      "         </TestableReference>",
+    ].join("\n");
+
+  /** A `<Testables>` block around zero or more testables. */
+  const testables = (...entries: readonly string[]): string =>
+    ["      <Testables>", ...entries, "      </Testables>"].join("\n");
+
+  /** The `<TestPlans>` block a plan-driven scheme carries instead. */
+  const testPlans = (...references: readonly string[]): string =>
+    [
+      "      <TestPlans>",
+      ...references.map(
+        (reference, index): string =>
+          [
+            `         <TestPlanReference reference = "container:${reference}" default = "${
+              index === 0 ? "YES" : "NO"
+            }">`,
+            "         </TestPlanReference>",
+          ].join("\n"),
+      ),
+      "      </TestPlans>",
+    ].join("\n");
+
+  /** One target row of a `.xctestplan`, as that file writes one. */
+  interface PlanRow {
+    readonly name: string;
+    readonly container: string;
+    readonly enabled?: boolean;
+  }
+
+  /** One `.xctestplan`, written where the scheme's reference points. */
+  const writePlan = (dir: string, file: string, targets: readonly PlanRow[]): void => {
+    writeFileSync(
+      join(dir, ...file.split("/")),
+      JSON.stringify(
+        {
+          configurations: [{ id: "A", name: "Configuration 1", options: {} }],
+          defaultOptions: { targetForVariableExpansion: { name: "Placeholder" } },
+          testTargets: targets.map((target): unknown => ({
+            ...(target.enabled === undefined ? {} : { enabled: target.enabled }),
+            target: {
+              containerPath: `container:${target.container}`,
+              identifier: "00E356ED1AD99517003FC87E",
+              name: target.name,
+            },
+          })),
+          version: 1,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+  };
+
+  /** A temp copy of the one-project tree, arranged and then read. */
+  const laneWhere = (
+    slug: string,
+    testAction: string,
+    arrange: (dir: string) => void,
+    read: (note: string) => void,
+  ): void => {
+    const dir = mkdtempSync(join(tmpdir(), `nen-xcode-${slug}-`));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      writeScheme(dir, testAction);
+      arrange(dir);
+      read(iosNote(dir, "test"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  /** A local Swift package in the lane, with a test target of its own. */
+  const addPackage = (dir: string, path: string, target: string): void => {
+    const product = target.replace(/Tests$/, "");
+    mkdirSync(join(dir, ...path.split("/")), { recursive: true });
+    writeFileSync(
+      join(dir, ...path.split("/"), "Package.swift"),
+      [
+        "// swift-tools-version: 6.0",
+        "import PackageDescription",
+        "",
+        "let package = Package(",
+        `    name: "${product}",`,
+        "    targets: [",
+        `        .target(name: "${product}"),`,
+        `        .testTarget(name: "${target}", dependencies: ["${product}"]),`,
+        "    ]",
+        ")",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  };
+
+  /** A sibling `.xcodeproj` in another directory, declaring one target. */
+  const addSiblingProject = (dir: string, path: string, target: string): void => {
+    mkdirSync(join(dir, ...path.split("/")), { recursive: true });
+    writeFileSync(
+      join(dir, ...path.split("/"), "project.pbxproj"),
+      [
+        "// !$*UTF8*$!",
+        "{",
+        "\tobjects = {",
+        "/* Begin PBXNativeTarget section */",
+        "\t\tFEED0001 = {",
+        "\t\t\tisa = PBXNativeTarget;",
+        `\t\t\tname = ${target};`,
+        "\t\t};",
+        "/* End PBXNativeTarget section */",
+        "\t};",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  };
+
+  // MUTANT: drop `ReferencedContainer` from `testTargetsIn` (or make `inLane`
+  // answer true unconditionally) and this goes red -- `KroKitTests` is measured
+  // against the lane's own target list and a scheme whose `test` run SUCCEEDS
+  // is reported broken on a clean checkout.
+  it("makes no broken-checkout finding about a testable declared in a local package", () => {
+    laneWhere(
+      "package-container",
+      testables(testable("KroKitTests", "KroKitTests.xctest", "Packages/KroKit")),
+      (dir): void => {
+        addPackage(dir, "Packages/KroKit", "KroKitTests");
+      },
+      (note): void => {
+        expect(note, "the target is declared in a file nen never opened").not.toMatch(
+          /BROKEN ON A CLEAN CHECKOUT/,
+        );
+        expect(note).toMatch(/nen did not check every target 'Placeholder'/);
+        expect(note).toContain("'KroKitTests' (KroKitTests.xctest), declared in 'Packages/KroKit'");
+        expect(note).toMatch(
+          /nen reads the \.xcodeproj bundles at THIS lane's root and nothing else/,
+        );
+        expect(note).toMatch(/neither confirmed nor called broken/);
+        // AND THE DECISION THIS PR ARGUES FOR: a check performed on only part
+        // of a scheme is not a check that passed, so the token is withheld --
+        // with the reason saying PARTIAL rather than failed.
+        expect(note).toMatch(/still names \{scheme\}, \{simUdid\}/);
+        expect(note).toMatch(
+          /the check was PARTIAL, which is a different fact from a check that failed/,
+        );
+      },
+    );
+  });
+
+  it("makes no broken-checkout finding about a project outside this lane's root", () => {
+    laneWhere(
+      "sibling-container",
+      testables(testable("CoreTests", "CoreTests.xctest", "Vendor/Core/Core.xcodeproj")),
+      (dir): void => {
+        addSiblingProject(dir, "Vendor/Core/Core.xcodeproj", "CoreTests");
+      },
+      (note): void => {
+        expect(note).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain(
+          "'CoreTests' (CoreTests.xctest), declared in 'Vendor/Core/Core.xcodeproj'",
+        );
+        expect(note).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      },
+    );
+  });
+
+  // THE OTHER HALF, AND THE ONE THAT KEEPS THE CROSS-CHECK WORTH HAVING: a
+  // testable in THIS lane's own project is still checked, in the same scheme,
+  // beside one that is not. A fix that simply stopped checking would pass every
+  // assertion above, and this one is what it fails.
+  it("still checks the IN-lane testables of a scheme that also names an out-of-lane one", () => {
+    laneWhere(
+      "mixed-containers",
+      testables(
+        testable("Ghost", "Ghost.xctest", "Placeholder.xcodeproj"),
+        testable("KroKitTests", "KroKitTests.xctest", "Packages/KroKit"),
+      ),
+      (dir): void => {
+        addPackage(dir, "Packages/KroKit", "KroKitTests");
+      },
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain("names 'Ghost' (Ghost.xctest) in its test action");
+        // The out-of-lane one is NOT in the finding -- it has its own clause.
+        const finding =
+          note.split(" -- ").find((clause): boolean => clause.includes("BROKEN ON A CLEAN")) ?? "";
+        expect(finding, "a target nen never looked for is not part of the finding").not.toContain(
+          "KroKitTests",
+        );
+        expect(note).toContain("declared in 'Packages/KroKit'");
+      },
+    );
+  });
+
+  // A reference that names NO container at all is out of scope for the same
+  // reason and fails the same way: safely.
+  it("checks nothing against a reference that names no container at all", () => {
+    laneWhere(
+      "no-container",
+      testables(testable("Ghost", "Ghost.xctest", "")),
+      (): void => undefined,
+      (note): void => {
+        expect(note).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain("'Ghost' (Ghost.xctest), whose reference names no container at all");
+      },
+    );
+  });
+
+  // ── the test plan ─────────────────────────────────────────────────────────
+
+  // MUTANT: stop reading `<TestPlanReference>` and this goes red twice over --
+  // the scheme is described as naming no target at all, and `{scheme}` is
+  // withheld from a repository whose scheme is perfectly sound.
+  it("follows a test plan and answers {scheme} from the targets the plan names", () => {
+    laneWhere(
+      "plan-ok",
+      [testables(), testPlans("Placeholder.xctestplan")].join("\n"),
+      (dir): void => {
+        writePlan(dir, "Placeholder.xctestplan", [
+          { name: "PlaceholderTests", container: "Placeholder.xcodeproj" },
+        ]);
+      },
+      (note): void => {
+        expect(note, "the plan's target is one the project declares").not.toMatch(
+          /BROKEN ON A CLEAN CHECKOUT/,
+        );
+        expect(note, "the false sentence this replaces").not.toMatch(/names no target at all/);
+        // The cross-check PASSED, so the token leaves the leftover list -- the
+        // strongest form this assertion can take.
+        expect(note).toMatch(/still names \{simUdid\}/);
+        expect(note).toContain("{scheme} = Placeholder");
+      },
+    );
+  });
+
+  it("reports a plan's target the project does not declare, naming the plan", () => {
+    laneWhere(
+      "plan-broken",
+      [testables(), testPlans("Placeholder.xctestplan")].join("\n"),
+      (dir): void => {
+        writePlan(dir, "Placeholder.xctestplan", [
+          { name: "Ghost", container: "Placeholder.xcodeproj" },
+        ]);
+      },
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        // THE FILE TO OPEN IS THE PLAN, NOT THE SCHEME -- which is why the
+        // label says so: a maintainer sent to the scheme would find an empty
+        // <Testables> and no `Ghost` anywhere in it.
+        expect(note).toContain("names 'Ghost' (named by Placeholder.xctestplan) in its test action");
+        expect(note).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      },
+    );
+  });
+
+  it("says which plan it could not read, rather than that the scheme names no target", () => {
+    laneWhere(
+      "plan-missing",
+      [testables(), testPlans("Placeholder.xctestplan")].join("\n"),
+      (): void => undefined,
+      (note): void => {
+        expect(note).toContain(
+          "drives its test action from the test plan 'Placeholder.xctestplan', which nen could not read",
+        );
+        expect(note).toMatch(/it is a target list nen has not got/);
+        expect(note, "the sentence that would be false here").not.toMatch(/names no target at all/);
+        expect(note).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      },
+    );
+  });
+
+  it("treats a plan that is not JSON, and one with no target list, as unread", () => {
+    for (const [slug, body] of [
+      ["plan-not-json", "this is not a test plan\n"],
+      ["plan-no-targets", JSON.stringify({ version: 1, configurations: [] })],
+    ] as const) {
+      laneWhere(
+        slug,
+        [testables(), testPlans("Placeholder.xctestplan")].join("\n"),
+        (dir): void => {
+          writeFileSync(join(dir, "Placeholder.xctestplan"), body, "utf8");
+        },
+        (note): void => {
+          expect(note, slug).toContain("which nen could not read");
+          expect(note, slug).not.toMatch(/names no target at all/);
+        },
+      );
+    }
+  });
+
+  // A PLAN THAT REALLY DOES LIST NOTHING earns the sentence the two above must
+  // not: "nothing failed" is still not "it passed", and the note says which of
+  // the two facts this is.
+  it("says a plan that lists no target names no target, which is a different fact", () => {
+    laneWhere(
+      "plan-empty",
+      [testables(), testPlans("Placeholder.xctestplan")].join("\n"),
+      (dir): void => {
+        writePlan(dir, "Placeholder.xctestplan", []);
+      },
+      (note): void => {
+        expect(note).toMatch(/that scheme's test action names no target at all/);
+        expect(note).not.toContain("could not read");
+        expect(note).toMatch(/still names \{scheme\}, \{simUdid\}/);
+      },
+    );
+  });
+
+  it("applies the container rule to a plan's own containerPath", () => {
+    laneWhere(
+      "plan-out-of-lane",
+      [testables(), testPlans("Placeholder.xctestplan")].join("\n"),
+      (dir): void => {
+        addPackage(dir, "Packages/KroKit", "KroKitTests");
+        writePlan(dir, "Placeholder.xctestplan", [
+          { name: "KroKitTests", container: "Packages/KroKit" },
+        ]);
+      },
+      (note): void => {
+        expect(note).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain(
+          "'KroKitTests' (named by Placeholder.xctestplan), declared in 'Packages/KroKit'",
+        );
+      },
+    );
+  });
+
+  // A plan's `enabled: false` is the same fact `skipped` is on a testable -- the
+  // target still has to exist -- and it is reported in the plan's own words.
+  it("cross-checks a target the plan lists and switches off, and says it is off", () => {
+    laneWhere(
+      "plan-disabled",
+      [testables(), testPlans("Placeholder.xctestplan")].join("\n"),
+      (dir): void => {
+        writePlan(dir, "Placeholder.xctestplan", [
+          { name: "Ghost", container: "Placeholder.xcodeproj", enabled: false },
+        ]);
+      },
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain("'Ghost' (named by Placeholder.xctestplan, off in that plan)");
+      },
+    );
+  });
+
+  // A plan reference that would climb OUT of the lane is not followed at all --
+  // this verb reads a lane -- and it earns the same honest sentence a missing
+  // file does rather than a silent empty list.
+  it("does not follow a plan reference that leaves this lane", () => {
+    laneWhere(
+      "plan-escapes",
+      [testables(), testPlans("../Elsewhere/Placeholder.xctestplan")].join("\n"),
+      (): void => undefined,
+      (note): void => {
+        expect(note).toContain("'../Elsewhere/Placeholder.xctestplan', which nen could not read");
+        expect(note).not.toMatch(/names no target at all/);
+      },
+    );
+  });
+
+  // A scheme may carry BOTH, and the check is over the union: the testables the
+  // scheme writes down and the targets its plan names.
+  it("checks the testables and the plan's targets together", () => {
+    laneWhere(
+      "plan-and-testables",
+      [
+        testables(testable("PlaceholderTests", "PlaceholderTests.xctest", "Placeholder.xcodeproj")),
+        testPlans("Placeholder.xctestplan"),
+      ].join("\n"),
+      (dir): void => {
+        writePlan(dir, "Placeholder.xctestplan", [
+          { name: "Ghost", container: "Placeholder.xcodeproj" },
+        ]);
+      },
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain("names 'Ghost' (named by Placeholder.xctestplan)");
+        expect(note, "the testable that resolves is not in the finding").not.toContain(
+          "'PlaceholderTests' (PlaceholderTests.xctest) in its test action",
+        );
+      },
+    );
   });
 });
 
