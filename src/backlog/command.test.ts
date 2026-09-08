@@ -265,4 +265,138 @@ describe("nen backlog order", () => {
     expect(message).toMatch(/--blocks names no row with: '938'/);
     expect(message).toMatch(/\(none -- the --rows-from file is empty\)/);
   });
+
+  // #105: `--rows-from` used to be a bare `readJsonFile<readonly InRow[]>`
+  // cast -- a compile-time assertion about runtime data that a wrong shape
+  // sailed straight through. The worst case was `backlog fetch --json`'s OWN
+  // output (an OBJECT, not the array `order` expects) reaching
+  // `requireTokensMatch`'s `for (const row of rows)` as a bare object, which
+  // crashed with the raw "nen backlog: {} is not iterable" at exit 1 -- an
+  // input this verb's own --help already anticipated ("e.g. 'backlog fetch
+  // --json' reshaped") but never actually checked for.
+  describe("validates the row document at the read seam (#105)", () => {
+    function writeFixture(content: string): string {
+      const dir = mkdtempSync(join(tmpdir(), "nen-backlog-"));
+      const file = join(dir, "rows.json");
+      writeFileSync(file, content);
+      return file;
+    }
+
+    it("REFUSES (exit 2) 'backlog fetch --json' output handed straight through, naming the mistake and 'backlog --help'", async () => {
+      // `fetch`'s own emitted shape: `{ repo, truncated, ...assembly }` where
+      // `assembly` is `fetch.ts`'s `Assembly` (`{ rows, issueCount, prCount }`)
+      // -- exactly what `nen backlog fetch --repo-slug o/r --json > rows.json`
+      // would write to disk, reproduced by hand here (never a live 'gh' call).
+      const file = writeFixture(JSON.stringify({
+        repo: "o/r",
+        truncated: false,
+        rows: [
+          { issueNumber: 1, title: "an issue", labels: ["p2"], prNumbers: [5], createdAt: "2026-01-01T00:00:00Z" },
+        ],
+        issueCount: 1,
+        prCount: 1,
+      }));
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+      ]);
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      const message = result.err.join("\n");
+      expect(message).toMatch(/looks like 'backlog fetch --json' output/);
+      expect(message).toMatch(/Reshape it first/);
+      expect(message).toMatch(/backlog --help/);
+      expect(message).not.toMatch(/is not iterable/);
+    });
+
+    it("REFUSES (exit 2) a non-array document with a generic 'must be a JSON ARRAY' message", async () => {
+      const file = writeFixture(JSON.stringify({ foo: "bar" }));
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+      ]);
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      const message = result.err.join("\n");
+      expect(message).toMatch(/must be a JSON ARRAY of rows/);
+      expect(message).not.toMatch(/is not iterable/);
+    });
+
+    it("REFUSES (exit 2) a row missing 'severity', naming the file, the row and the field", async () => {
+      const file = writeFixture(JSON.stringify([
+        { id: "XY-IS-#1", createdAt: "2026-01-01T00:00:00Z", number: 1 },
+      ]));
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+      ]);
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      const message = result.err.join("\n");
+      expect(message).toMatch(new RegExp(`'${file}'`));
+      expect(message).toMatch(/row 'XY-IS-#1' needs a string 'severity'/);
+      expect(message).toMatch(/got nothing \(the field is missing\)/);
+    });
+
+    it("REFUSES (exit 2) a row whose 'createdAt' is not a string, naming the file, the row and the field", async () => {
+      const file = writeFixture(JSON.stringify([
+        { id: "XY-IS-#1", severity: "high", createdAt: 12345, number: 1 },
+      ]));
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+      ]);
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      const message = result.err.join("\n");
+      expect(message).toMatch(new RegExp(`'${file}'`));
+      expect(message).toMatch(/row 'XY-IS-#1' needs a string 'createdAt', got a number/);
+    });
+
+    it("REFUSES (exit 2) a row that is not an object at all (e.g. a bare string)", async () => {
+      const file = writeFixture(JSON.stringify(["not-a-row"]));
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+      ]);
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      const message = result.err.join("\n");
+      expect(message).toMatch(/row at index 0 is the string 'not-a-row', not a row object/);
+    });
+
+    it("still accepts a null 'severity' (an untriaged row that ranks last) -- null is not the same refusal as missing", async () => {
+      const file = writeFixture(JSON.stringify([
+        { id: "untriaged", severity: null, createdAt: "2026-01-01T00:00:00Z", number: 1 },
+        { id: "critical", severity: "critical", createdAt: "2026-01-01T00:00:00Z", number: 2 },
+      ]));
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+      ]);
+      expect(result.code).toBe(0);
+      expect(result.out[0]).toMatch(/1\. critical/);
+      expect(result.out[1]).toMatch(/2\. untriaged {2}severity=\(none\)/);
+    });
+
+    // BYTE-PARITY ON AN EXISTING FIXTURE'S OUTPUT: the unchanged happy path
+    // from issue #24's own fixture, asserted as an exact array (not just
+    // regex matches), so the new read-seam validation cannot be the thing
+    // that quietly changes a byte of a well-formed call's output.
+    it("does not change a single byte of the happy path's output (issue #24's fixture, byte-parity)", async () => {
+      const file = writeIssue24Rows();
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+        "--blocks", "938,939",
+      ]);
+      expect(result.code).toBe(0);
+      expect(result.out).toEqual([
+        "1. XY-IS-#937  severity=high  2026-09-01T22:55:36Z",
+        "2. XY-IS-#938  severity=medium blocks  2026-09-01T23:19:42Z",
+        "3. XY-IS-#939  severity=medium blocks  2026-09-01T23:47:08Z",
+      ]);
+      expect(result.err).toEqual([]);
+    });
+  });
 });
