@@ -4419,6 +4419,35 @@ describe("nen shu detect -- what the dotnet-winui lane refuses to answer", () =>
     }
   });
 
+  it("stops the version-file search AT the repository root, never above it", () => {
+    // THE MUTANT THIS KILLS: dropping the root check from the upward walk. It
+    // is invisible on any fixture inside this checkout -- there is no
+    // `global.json` above them -- and on a developer's machine it would read
+    // whatever pin happens to sit in a parent directory or a home directory,
+    // and propose it as this repository's own statement about itself.
+    const outer = mkdtempSync(join(tmpdir(), "nen-winui-outer-"));
+    try {
+      writeFileSync(
+        join(outer, "global.json"),
+        JSON.stringify({ sdk: { version: "1.2.3" } }),
+        "utf8",
+      );
+      const repo = join(outer, "repo");
+      mkdirSync(repo);
+      writeFileSync(join(repo, "App.csproj"), WINUI_CSPROJ, "utf8");
+      const report = detect(repo);
+      expect(
+        (report.proposal as unknown as { project: Record<string, unknown> }).project,
+        "a pin outside the repository is not this repository's statement",
+      ).not.toHaveProperty("toolchain");
+      const notes = report.lanes[0]?.notes.join("\n") ?? "";
+      expect(notes).toContain("there is no global.json in the lane or above it");
+      expect(notes).not.toContain("1.2.3");
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
   it("withholds the version when global.json is there and says nothing nen can read", () => {
     const dir = winuiTree({
       "App.csproj": WINUI_CSPROJ,
@@ -4691,6 +4720,26 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
         .filter(([, entry]): boolean => entry.hostTool)
         .map(([tool]): string => tool),
     ).toEqual(["dotnet-sdk"]);
+  });
+
+  it("cites the two rows the maintainer did not approve as argued rather than approved", () => {
+    // M7. `build` is decisions v3 q7; `-c Debug` and the whole `test` row are
+    // not, and the pack must not borrow one citation for the other. A reader
+    // comparing this profile against the approval has to be able to see which
+    // cells are the maintainer's and which are this PR's -- and a maintainer
+    // who disagrees deletes the `test` row and the grid returns to the
+    // approved shape.
+    const profile = profileById(loadProfilesPack(), "dotnet-winui");
+    const test = verbCell(profile, "test");
+    expect(test.source).toContain("argued in PR #122");
+    expect(test.source).toContain("NOT in the v3 q7 / v4 approval");
+    expect(test.source).toContain("gated on a test project existing");
+    const build = verbCell(profile, "build");
+    expect(build.source).toContain("decisions v3 q7 (approved)");
+    expect(build.source).toContain("`-c Debug` argued in PR #122");
+    // And the profile's own notes carry the distinction, because the `source`
+    // fields are per-cell and the reason spans both.
+    expect(profile.notes.join("\n")).toContain("THEY ARE NOT EQUALLY APPROVED");
   });
 
   it("exempts from the manifest check EXACTLY the programs the pack marks hostTool", () => {
