@@ -488,10 +488,23 @@ function appendArgs(
   const first = plan.steps[0];
   /* c8 ignore next -- `stepsOf` never returns an empty list for a runnable row */
   if (plan.steps.length !== 1 || first === undefined) {
+    // QUOTED THE SAME WAY run.ts's `target:` LINE QUOTES ITS OWN TAIL --
+    // `renderArgv` implements the project's one quoting rule, and a target's
+    // appended args are argv tokens like any other. `args.join(" ")` here
+    // would silently un-quote a token that carries whitespace or a quote (an
+    // `args: ["--branch", "two words"]` target reads as THREE arguments
+    // instead of two), so this reuses `renderArgv` rather than growing a
+    // second, looser rendering of the same tokens. `exe` takes the first
+    // token because `renderArgv` quotes it exactly as it quotes every `argv`
+    // element -- there is no seam here for a real executable to reach, and
+    // `firstArg` is never actually undefined because `args.length === 0`
+    // already returned above.
+    const [firstArg, ...restArgs] = args;
     throw new VerbUsageError(
-      `target '${target}' appends ${args.length} argument${args.length === 1 ? "" : "s"} (${args.join(
-        " ",
-      )}), and '${plan.verb}' on lane '${plan.lane}' declares ${plan.steps.length} steps. nen will not guess which of them reaches the destination: write the destination's arguments into the step that does, under project.verbs.${plan.lane}.${plan.verb}, and drop this target's 'args' -- or declare a single-step ${plan.verb} row.`,
+      `target '${target}' appends ${args.length} argument${args.length === 1 ? "" : "s"} (${
+        /* c8 ignore next -- args.length === 0 already returned above */
+        firstArg === undefined ? "" : renderArgv({ exe: firstArg, argv: restArgs })
+      }), and '${plan.verb}' on lane '${plan.lane}' declares ${plan.steps.length} steps. nen will not guess which of them reaches the destination: write the destination's arguments into the step that does, under project.verbs.${plan.lane}.${plan.verb}, and drop this target's 'args' -- or declare a single-step ${plan.verb} row.`,
     );
   }
   return [{ exe: first.exe, argv: [...first.argv, ...args] }];

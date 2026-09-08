@@ -19,7 +19,7 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { assertPreconditions, INTERACTIVE_VERBS } from "./run.js";
-import type { RenderedInvocation, RenderedPrecondition } from "./render.js";
+import { renderArgv, type RenderedInvocation, type RenderedPrecondition } from "./render.js";
 
 const TOKEN = "PLACEHOLDER_LANE_TOKEN";
 /** The one value the fixture declares for a child's environment. */
@@ -1101,6 +1101,44 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
       /appends 1 argument \(--prod\), and 'deploy' on lane 'only' declares 2 steps/,
     );
     expect(result.err.join("\n")).toMatch(/will not guess which of them reaches the destination/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  // THE SAME RISK AS THE `target:` LINE, ONE LAYER UP. This refusal printed a
+  // target's appended args with `args.join(" ")` too -- the exact un-quoted
+  // join the `target:` line's `(appends: ...)` tail was fixed away from. A
+  // target whose args carry a space -- `["--branch", "two words"]` -- read as
+  // THREE arguments instead of two. The expected quoting is computed from
+  // `renderArgv` itself rather than hand-typed, so this cannot drift from
+  // what the fix actually calls; no shell ever sees this string (it is a
+  // message, not a spawned argv), so the same single-quote escaping is
+  // correct on Windows and POSIX alike.
+  it("quotes a target's appended args in the multi-step refusal too", async () => {
+    const result = await withDeclaration(
+      oneLane({
+        verbs: {
+          only: {
+            deploy: {
+              steps: [
+                { exe: "placeholder-site-tool", argv: ["build"] },
+                { exe: "placeholder-deploy-tool", argv: ["publish"] },
+              ],
+            },
+          },
+        },
+        targets: { prod: { args: ["--branch", "two words"] } },
+      }),
+      ["deploy", "--target", "prod", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    const quoted = renderArgv({ exe: "--branch", argv: ["two words"] });
+    expect(err).toContain(`appends 2 arguments (${quoted})`);
+    // The space-carrying argument survives as ONE quoted element.
+    expect(quoted).toContain("'two words'");
+    // The un-quoted join this test guards against would print exactly this
+    // substring -- three bare tokens where the destination declared two.
+    expect(err).not.toContain("(--branch two words)");
     expect(result.seams.calls).toEqual([]);
   });
 
