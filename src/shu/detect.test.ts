@@ -167,6 +167,120 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
     expect(notes).toMatch(/'run' withheld: it runs 'next'/);
   });
 
+  it("derives the executable from a SCOPED packageManager pin using the LAST '@', not the first", () => {
+    // A scoped manager's own name opens with '@' ('@scope/pm@1.2.3'), so
+    // splitting on the FIRST '@' would hand back an empty executable. This
+    // fixture pins '@scope/pm' the way a repo running a private, scoped
+    // package manager would.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-scoped-pm-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          packageManager: "@scope/pm@1.2.3",
+          scripts: {
+            build: "placeholder",
+            test: "placeholder",
+            lint: "placeholder",
+            dev: "placeholder",
+          },
+          devDependencies: {
+            "@biomejs/biome": "1.9.4",
+            next: "15.1.0",
+            turbo: "2.3.3",
+            vitest: "2.1.8",
+          },
+        }),
+      );
+      const report = detect(dir);
+      const verbs = report.lanes[0]?.verbs as Record<
+        string,
+        { exe?: string; steps?: { exe: string }[] }
+      >;
+      expect(verbs["build"]?.exe).toBe("@scope/pm");
+      expect(verbs["dev"]?.exe).toBe("@scope/pm");
+      expect(verbs["lint"]?.steps?.every((step): boolean => step.exe === "@scope/pm")).toBe(
+        true,
+      );
+      // Nothing named {pm} or {packageManager} is left withheld: the scoped
+      // pin substituted cleanly.
+      const notes = report.lanes[0]?.notes.join("\n") ?? "";
+      expect(notes).not.toMatch(/withheld: its reference command still names \{pm\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("derives the executable from an UNSCOPED packageManager pin ('pnpm@9.15.9' -> 'pnpm')", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-plain-pm-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          packageManager: "pnpm@9.15.9",
+          scripts: {
+            build: "placeholder",
+            test: "placeholder",
+            lint: "placeholder",
+            dev: "placeholder",
+          },
+          devDependencies: {
+            "@biomejs/biome": "1.9.4",
+            next: "15.1.0",
+            turbo: "2.3.3",
+            vitest: "2.1.8",
+          },
+        }),
+      );
+      const report = detect(dir);
+      const verbs = report.lanes[0]?.verbs as Record<string, { exe?: string }>;
+      expect(verbs["build"]?.exe).toBe("pnpm");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds every templated row, and names the reason, when the pin carries no '@version' (bare name)", () => {
+    // 'pnpm' with no version at all -- the field IS declared, unlike the
+    // "declares no 'packageManager' field" case above, but it is malformed:
+    // nen refuses to guess an executable from a string it cannot split a
+    // version off of, rather than silently treating the whole string as the
+    // executable.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-bad-pm-noversion-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm" }));
+      const report = detect(dir);
+      expect(report.lanes[0]?.verbs).toEqual({});
+      const notes = report.lanes[0]?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/'build' withheld: its reference command still names \{pm\}/);
+      expect(notes).toMatch(/carries no '@version' nen can split an executable from/);
+      expect(notes).toMatch(/packageManager: "pnpm"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("also withholds, with the same reason, when the pin is a bare scope with no version ('@scope/pm')", () => {
+    // Only one '@' in the whole pin, and it sits at index 0 -- there is no
+    // version to its right either, so this is the same malformed case as a
+    // bare name, not the scoped-and-versioned case above.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-bad-pm-scope-only-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "@scope/pm" }));
+      const report = detect(dir);
+      expect(report.lanes[0]?.verbs).toEqual({});
+      const notes = report.lanes[0]?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/carries no '@version' nen can split an executable from/);
+      expect(notes).toMatch(/packageManager: "@scope\/pm"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("withholds the verbs whose task package.json declares no script for, naming each", () => {
     const report = detect(NEXTJS_PARTIAL);
     // The tree declares `build` and `dev` as scripts and neither `test` nor

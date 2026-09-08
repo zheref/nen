@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -439,6 +439,45 @@ describe("nothing steps outside the tree --repo names", () => {
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/artifacts\[0\] names '\.\.\/outside'/);
+  });
+
+  it("accepts a root entry whose name merely STARTS WITH '..' ('..something'), and does not mistake it for an escape", async () => {
+    // A bare `rel.startsWith("..")` matches this too -- it is the bug this
+    // fixes. `..something` is a real, legitimate entry name (a directory
+    // like `..cache` some tools use), and it never leaves the repository:
+    // `resolve` treats it as one ordinary path segment, not as a `..` step.
+    const result = await withDeclaration(
+      { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: "..something" } } },
+      ["build", "--dry-run", "--json"],
+    );
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { cwd: string };
+    // Resolved to a directory literally named '..something' directly under the
+    // repository root -- never one level up, which is what the bug did.
+    expect(basename(report.cwd)).toBe("..something");
+    expect(isAbsolute(report.cwd)).toBe(true);
+  });
+
+  it("still refuses a lane cwd of exactly '..'", async () => {
+    const result = await withDeclaration(
+      { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: ".." } } },
+      ["build"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.'/);
+    expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
+  });
+
+  it("still refuses a lane cwd of '../x'", async () => {
+    const result = await withDeclaration(
+      { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: "../x" } } },
+      ["build"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.\/x'/);
+    expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
   });
 });
 

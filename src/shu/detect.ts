@@ -389,6 +389,15 @@ interface Manifest {
   readonly present: boolean;
   /** `{ executable: "pnpm", pin: "pnpm@9.15.9" }`, or null when unstated. */
   readonly packageManager: { readonly executable: string; readonly pin: string } | null;
+  /**
+   * Set only when `package.json` DOES declare a `packageManager` string but
+   * it carries no `@version` nen can split off -- a bare name (`"pnpm"`), a
+   * bare scope (`"@scope/pm"`), or the empty string after trimming a scope.
+   * `packageManager` stays null in this case, and this is the reason a note
+   * quotes rather than the generic "declares no 'packageManager' field" one,
+   * which is reserved for the field being absent altogether.
+   */
+  readonly packageManagerIssue: string | null;
   readonly declares: (name: string) => boolean;
   readonly scripts: ReadonlySet<string>;
 }
@@ -402,13 +411,24 @@ function readManifest(laneDirectory: string): Manifest {
     typeof scriptBlock === "object" && scriptBlock !== null && !Array.isArray(scriptBlock)
       ? new Set(Object.keys(scriptBlock))
       : new Set<string>();
+  // The EXECUTABLE is the pin with its trailing `@<version>` stripped, and the
+  // PIN is the string verbatim -- the pack keeps the two apart because one of
+  // them may carry a version into an install argv and the other may not. The
+  // split is the LAST `@`, never the first: a scoped manager's own name opens
+  // with `@` (`@scope/pm@1.2.3`), so splitting on the first `@` would hand back
+  // an empty executable. An `@` at index 0 (no version after a scope) or no
+  // `@` at all (no version at all) is not a name+version pin nen can use, so
+  // nen withholds rather than guessing one half of it.
+  const at = pin === null ? -1 : pin.lastIndexOf("@");
+  const packageManager = pin !== null && at > 0 ? { executable: pin.slice(0, at), pin } : null;
+  const packageManagerIssue =
+    pin !== null && at <= 0
+      ? `package.json names 'packageManager: "${pin}"', which carries no '@version' nen can split an executable from -- nen withholds rather than guessing one`
+      : null;
   return {
     present: document !== null,
-    // The EXECUTABLE is the pin with its version stripped, and the PIN is the
-    // string verbatim -- the pack keeps the two apart because one of them may
-    // carry a version into an install argv and the other may not.
-    packageManager:
-      pin === null ? null : { executable: pin.split("@")[0] ?? pin, pin },
+    packageManager,
+    packageManagerIssue,
     declares: (name): boolean => dependsOn(document, name),
     scripts,
   };
@@ -504,7 +524,9 @@ function proposeVerbs(
       notes.push(
         `'${verb}' withheld: its reference command still names ${leftover.join(", ")}, which only this repository can answer${
           leftover.includes(PM_EXECUTABLE) || leftover.includes(PM_PIN)
-            ? " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
+            ? manifest.packageManagerIssue !== null
+              ? ` -- ${manifest.packageManagerIssue}`
+              : " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
             : ""
         }. nen never proposes an unsubstituted token: a guessed argument is a different command.`,
       );

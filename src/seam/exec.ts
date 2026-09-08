@@ -48,6 +48,7 @@
 // of the three CI lanes, which is the same as not being provable at all.
 
 import { spawnSync } from "node:child_process";
+import { constants as osConstants } from "node:os";
 
 /** The two external tools this binary is allowed to know about (D16). */
 export const GIT = "git";
@@ -206,10 +207,17 @@ export const spawnInteractiveRunner: InteractiveRunner = (
     const signal = result.signal ?? null;
     return {
       // `status` is null exactly when a signal killed the child. 128 + the
-      // signal number is the shell's own convention, and SIGINT is 2; every
-      // other signal keeps the same arithmetic rather than collapsing to 1,
-      // because "it was killed" and "it failed" are different facts.
-      code: result.status ?? (signal === "SIGINT" ? 130 : signal === null ? 1 : 128),
+      // signal number is the shell's own convention -- SIGINT is 2, so a
+      // SIGINT kill is 130 -- and `os.constants.signals` is where node exposes
+      // that number for every OTHER signal too, rather than this file hand-
+      // maintaining its own table. A signal name the current platform's
+      // `os.constants.signals` does not carry (there is no such name in
+      // practice, but the map is platform-built, not guaranteed exhaustive)
+      // falls back to the bare 128 instead of throwing: "it was killed" is
+      // still true even when nen cannot name the number.
+      code:
+        result.status ??
+        (signal === null ? 1 : 128 + (osConstants.signals[signal] ?? 0)),
       signal,
       spawnFailed: false,
     };

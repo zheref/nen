@@ -31,7 +31,7 @@
 // equal the calls a scripted seam records for the same invocation.
 
 import { lstatSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import type { Seams } from "../seam/exec.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
@@ -143,11 +143,19 @@ function entryExists(path: string): boolean {
 function insideRepo(repoRoot: string, value: string, pointer: string): string {
   const absolute = resolve(repoRoot, value);
   const rel = relative(repoRoot, absolute);
-  // `..` covers the ordinary escape; `isAbsolute` covers the Windows case where
-  // the two paths are on different drives and `relative` cannot express the
-  // step at all -- a platform-conditional hole this repository's CI matrix
-  // exists to catch.
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  // The escape check is `rel === ".."`, `rel` starting with `..` FOLLOWED BY A
+  // SEPARATOR, or `isAbsolute` -- never a bare `rel.startsWith("..")`, which
+  // also matches a root entry that merely happens to be NAMED starting with
+  // `..` (`..something`), rejecting a legitimate path that never left the
+  // tree. Both separators are checked -- `path.sep` for the platform `relative`
+  // actually used, and the literal `/` alongside it because a declaration may
+  // state a POSIX-style path even when nen runs on Windows. `isAbsolute`
+  // covers the Windows case where the two paths are on different drives and
+  // `relative` cannot express the step at all -- a platform-conditional hole
+  // this repository's CI matrix exists to catch.
+  const escapesRoot =
+    rel === ".." || rel.startsWith(`..${sep}`) || rel.startsWith("../") || isAbsolute(rel);
+  if (escapesRoot) {
     throw new VerbUsageError(
       `${pointer} names '${value}', which resolves outside the repository at ${repoRoot}. Every path a declaration states is relative to the repository root, and nen will not step outside the tree --repo pointed it at.`,
     );

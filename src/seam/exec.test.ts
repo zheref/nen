@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   defaultSeams,
@@ -132,6 +132,26 @@ describe("spawnInteractiveRunner -- the long-running seam", () => {
     spawnInteractiveRunner(process.execPath, ["-e", "process.exit(0)"]);
     expect(process.listenerCount("SIGINT")).toBe(before);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "maps a non-SIGINT signal kill to 128 + the signal's number, not a bare 128 (POSIX only)",
+    () => {
+      // The comment above the arithmetic in exec.ts said "128 + the signal
+      // number" while the code it sat over returned a constant 128 for every
+      // non-SIGINT signal -- a claim only a NAMED, non-zero signal can pin,
+      // since a bare 128 and "128 + 0" are indistinguishable. SIGTERM is 15 on
+      // every POSIX platform node ships for, so a real self-SIGTERM must come
+      // back as 143, not 128. Skipped on Windows: spawnSync there reports no
+      // numbered POSIX signal for `signal` at all, so there is nothing to pin.
+      const result = spawnInteractiveRunner(process.execPath, [
+        "-e",
+        "process.kill(process.pid, 'SIGTERM')",
+      ]);
+      expect(result.signal).toBe("SIGTERM");
+      expect(osConstants.signals.SIGTERM).toBe(15);
+      expect(result.code).toBe(143);
+    },
+  );
 
   it("runs the child in the cwd it was given, and not in this process's own", () => {
     // ASSERTS THE PATH, not that a path exists. The first version of this test
