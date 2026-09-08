@@ -1114,9 +1114,13 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // MUTATING in every form: even its dry run fetches, and nobody watches a
   // warm-up.
   //
+  // AND ONE EXECUTING VERB IS NOT `DRY` EITHER: `deploy`, which is
+  // `write-flag-gated` on `--run` because it no longer HAS a form that spawns
+  // without one. Its row carries the argument.
+  //
   // AND THERE IS NO `"*"` KEY. NenFamilyEntry's own doc comment says the
   // wildcard covers a family whose flags select the behaviour or whose every
-  // subcommand shares one policy; this family's emphatically do not -- three
+  // subcommand shares one policy; this family's emphatically do not -- four
   // of the thirteen are not `DRY` -- and a `"*"` row would swallow them.
   // ../parse/izanami.test.ts asserts exactly which keys are here, and which
   // policy each carries, so a row's kind cannot change by accident.
@@ -1156,7 +1160,29 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       lint: DRY("spawns the lane's declared lint command unless --dry-run is given -- a check mode and its --write twin differ by one flag in the declaration, not here"),
       archive: DRY("spawns the lane's declared packaging step unless --dry-run is given"),
       release: DRY("spawns the lane's declared publication step unless --dry-run is given"),
-      deploy: DRY("sends a build to a declared target unless --dry-run is given"),
+      // THE ONE EXECUTING VERB THAT IS NOT `DRY`, and the difference is a
+      // property of nen rather than a claim about somebody's declaration.
+      //
+      // Every other row in this family is `dry-run-gated` because the BARE form
+      // spawns the target repository's own argv, which this table cannot vouch
+      // for. `deploy` no longer has such a form: ../shu/run.ts requires `--run`
+      // before it spawns anything at all, so the bare line and the `--dry-run`
+      // line are the SAME line -- both render a plan and start nothing, which
+      // ../shu/run.test.ts pins against a scripted seam that records zero
+      // calls. That makes the read-only claim here identical in kind to the one
+      // `nen wake fire` and `nen label apply` carry, and `write-flag-gated` is
+      // the policy that says it: absent `--run`, this reports; with `--run`, in
+      // any spelling nen's own argv reader accepts, it is mutating.
+      //
+      // AND THE GATE IS THE STRICTER SIDE OF THIS MODULE'S ASYMMETRY. A quoted
+      // or escaped `--run` the scan cannot prove absent classifies `unknown`
+      // and refuses, because this policy's read-only verdict rests on that
+      // flag's ABSENCE -- which is exactly the direction a verb that puts bytes
+      // on somebody else's infrastructure should err in.
+      deploy: GATED(
+        ["--run"],
+        "sends a build to a declared target once --run is given; without it the verb renders the resolved plan and spawns nothing at all, which is a property of nen rather than a claim about the declaration's argv",
+      ),
       dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given"),
       run: DRY("starts a long-running production process on this terminal unless --dry-run is given"),
       coverage: DRY("spawns the lane's declared coverage command unless --dry-run is given -- a coverage run writes its report tree by definition"),

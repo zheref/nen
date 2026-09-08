@@ -29,6 +29,16 @@
 // real run spawns -- the same rendering function, from the same rendered plan.
 // ./run.test.ts pins that from both sides: the `would run:` lines of a dry run
 // equal the calls a scripted seam records for the same invocation.
+//
+// AND ONE VERB IS DRY BY DEFAULT: `deploy` (./render.ts's TARGETED_VERBS) acts
+// only when the caller also typed `--run`. Every other verb here spawns
+// something inside a directory the caller is standing in and can be undone by
+// running it again; a deploy puts bytes on somebody else's infrastructure,
+// where "run it again" is not a repair. So it is gated the way this CLI's other
+// two irreversible verbs are (`nen label apply --run`, `nen wake fire --run`,
+// CON-38's dry-run-first convention), and the two flags are independent:
+// `--target` says WHERE, `--run` says NOW, and `--run --dry-run` is refused
+// rather than resolved in either direction.
 
 import { lstatSync } from "node:fs";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
@@ -192,8 +202,14 @@ export function assertPreconditions(
   repoRoot: string,
   seams: Seams,
 ): readonly AssertedPrecondition[] {
-  return plan.preconditions.map((entry, index): AssertedPrecondition => {
-    const pointer = `project.preconditions.${plan.lane}[${index}].value`;
+  return plan.preconditions.map((entry): AssertedPrecondition => {
+    // THE ROW'S OWN ADDRESS, CARRIED FROM ./render.ts rather than computed from
+    // its index here. Two blocks contribute rows to this one list now -- the
+    // lane's `preconditions`, and the variable NAMES a resolved `deploy` target
+    // requires -- so an index into the MERGED list addressed the wrong file
+    // position for every row of the second kind, naming a
+    // `project.preconditions.<lane>[i]` that does not exist.
+    const pointer = `${entry.pointer}.value`;
     if (!ASSERTABLE_KINDS.includes(entry.kind)) {
       return { kind: entry.kind, value: entry.value, satisfied: null };
     }
@@ -382,6 +398,18 @@ export interface RunOptions {
   /** `deploy`'s mandatory `--target`. Null for every other verb. */
   readonly target: string | null;
   /**
+   * `deploy`'s mandatory `--run`. False for every other verb, which do not
+   * read it -- ./command.ts's per-subcommand flag table refuses it there.
+   *
+   * WITHOUT IT THE VERB REPORTS AND ACTS ON NOTHING, which is `nen label
+   * apply --run`'s and `nen wake fire --run`'s shape (CON-38's dry-run-first
+   * convention) applied to the one verb in this family whose blast radius is
+   * other people's users. `--target` says WHERE and `--run` says NOW, and
+   * neither implies the other: a caller who has typed the destination
+   * correctly has not thereby said "send it".
+   */
+  readonly run: boolean;
+  /**
    * A SINK FOR THE REPORT INSTEAD OF PRINTING IT. Absent -- every verb but one
    * -- and the report is emitted here, as text or as the one JSON document on
    * stdout, exactly as it always was.
@@ -422,6 +450,18 @@ export interface RunOptions {
  * alternative in the same sentence costs one run and teaches the rule.
  */
 function refuseImpossibleFlags(context: CommandContext, options: RunOptions): void {
+  // `--run --dry-run` IS REFUSED RATHER THAN RESOLVED IN EITHER DIRECTION.
+  // One says "send it" and the other says "send nothing", and a caller who has
+  // typed both has not said which they meant. Honouring `--dry-run` would be
+  // the safe reading and is still the wrong one: it exits 0 having deployed
+  // nothing, which a script reads as a deploy that worked. Honouring `--run`
+  // is unthinkable on this verb. So neither -- and because it is a fact about
+  // the command line, it answers before the declaration is even opened.
+  if (options.run && options.dryRun) {
+    throw new VerbUsageError(
+      `'${options.verb}' was given both --run and --dry-run. --run sends the build; --dry-run sends nothing and prints what would have been sent. Nen will not pick one of two contradicting instructions on the one verb whose blast radius is other people's users. Drop --run to see the plan (that is what this verb does without it, and --dry-run is its explicit spelling), or drop --dry-run to send it.`,
+    );
+  }
   if (!context.json || options.dryRun || !INTERACTIVE_VERBS.includes(options.verb)) return;
   throw new VerbUsageError(
     `'${options.verb}' is long-running: nen inherits this terminal and hands it to the child, so stdout belongs to that child and a --json report would be one object followed by however much the child then writes. Pass --dry-run for the same pre-flight as one JSON document (it starts nothing), or drop --json and read the pre-flight as text. The two long-running verbs are: ${INTERACTIVE_VERBS.join(", ")}.`,
@@ -449,7 +489,10 @@ function refuseImpossibleFlags(context: CommandContext, options: RunOptions): vo
  *      answered "no targets declared" and sent its maintainer to write a
  *      `targets` block that could not have helped;
  *   4. then the preconditions -- including the environment NAMES the resolved
- *      target requires -- and only then does anything spawn.
+ *      target requires;
+ *   5. and only then, on a verb with a destination, does `--run` decide whether
+ *      anything spawns at all. Without it the resolved plan is printed and
+ *      nothing is started, at exit 0.
  */
 export function runVerb(context: CommandContext, repoRoot: string, options: RunOptions): number {
   refuseImpossibleFlags(context, options);
@@ -484,11 +527,31 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     return 2;
   }
 
-  if (options.dryRun) {
+  // THE GATE, AND IT IS THE LAST THING BEFORE ANYTHING SPAWNS. A verb with a
+  // destination acts only when the caller said `--run`; without it this is the
+  // same report `--dry-run` prints -- the fully resolved argv, the destination
+  // substituted, every precondition asserted -- and nothing is started.
+  //
+  // WHY IT IS EXIT 0 AND A REPORT RATHER THAN "add --run" AT EXIT 2. The shape
+  // is `nen label apply` and `nen wake fire`'s, verbatim: those print what they
+  // WOULD do and exit 0, and the sentence on stderr says the run wrote nothing.
+  // A refusal instead would make the safe form of this verb the one that
+  // fails, so a caller checking the plan reads a non-zero code for having done
+  // the careful thing -- and every wrapper script would learn to ignore it.
+  const gated = TARGETED_VERBS.includes(options.verb) && !options.run;
+  if (options.dryRun || gated) {
     const steps = plan.steps.map(
       (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
     );
     emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
+    // ON STDERR, NOT IN THE DOCUMENT, so `--json` stdout stays exactly one
+    // object of the published shape -- the same place every other advisory
+    // sentence in this family goes.
+    if (gated && !options.dryRun) {
+      context.io.err(
+        `nothing was sent: '${options.verb}' acts only with --run. The plan above is fully resolved -- the destination substituted into the argv, every precondition asserted -- and no process was started. Re-run the same line with --run to send it.`,
+      );
+    }
     return 0;
   }
 

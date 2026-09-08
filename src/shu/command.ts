@@ -75,7 +75,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   release: { values: ["lane"], booleans: ["dry-run"] },
   dev: { values: ["lane"], booleans: ["dry-run"] },
   run: { values: ["lane"], booleans: ["dry-run"] },
-  deploy: { values: ["lane", "target"], booleans: ["dry-run"] },
+  deploy: { values: ["lane", "target"], booleans: ["dry-run", "run"] },
   coverage: { values: ["lane", "threshold"], booleans: ["dry-run"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
@@ -149,8 +149,12 @@ verbs:
   dev         Start the lane's DEBUG build. Long-running: nen inherits this
               terminal and hands it to the child.
   run         Start the lane's PRODUCTION build, locally. Also long-running.
-  deploy      Send a build to a declared, NAMED target. --target is required
-              and has no default, not even when exactly one target exists.
+  deploy      Send a build to a declared, NAMED target. TWO flags, and no
+              single-flag path to acting: --target is required and has no
+              default, not even when exactly one target exists, and --run is
+              required before anything is sent. Without --run it prints the
+              fully resolved plan -- the destination substituted into the argv,
+              every precondition asserted -- and spawns nothing, at exit 0.
   coverage    Run the lane's coverage command, then PARSE the report it
               produced into one shape: a total, a row per target, and -- with
               --threshold -- whether the number cleared a bar. The report is
@@ -264,7 +268,9 @@ flags:
                    the thing that runs. On 'tools' this covers the version
                    PROBES too: a dry run of that verb spawns nothing whatever,
                    which is what makes it the one form of it a watcher can
-                   certify read-only. On 'warmup' it prints every git command
+                   certify read-only. On 'deploy' it is the EXPLICIT spelling
+                   of what that verb does anyway without --run, and giving both
+                   --run and --dry-run is exit 2. On 'warmup' it prints every git command
                    AND every delegated toolchain command, in order, and runs
                    none of them -- not even the fetch. That form still
                    classifies MUTATING in izanami's table, unlike the other
@@ -326,7 +332,21 @@ flags:
                    'unsupported' (a destination with no command line at all --
                    a provider's git integration, a CI action -- which is exit 4
                    in the repository's own words).
-  --write          'detect' only. Writes nen/contract.json when there is none.
+                   IT DOES NOT MEAN "SEND IT": see --run.
+  --run            'deploy' only, and REQUIRED before anything is sent. Without
+                   it the verb prints the fully resolved plan -- the
+                   destination substituted into the argv, the preconditions
+                   asserted, every step as 'would run:' -- and starts nothing,
+                   at exit 0, exactly as --dry-run does. This is the same
+                   dry-run-first gate '${PROGRAM} label apply --run' and
+                   '${PROGRAM} wake fire --run' carry, on the one verb in this
+                   family whose blast radius is other people's users: every
+                   other verb here spawns something inside a directory and can
+                   be undone by running it again, and a deploy cannot.
+                   --target and --run are INDEPENDENT and both required to act:
+                   one says where, the other says now. Giving --run and
+                   --dry-run together is exit 2 rather than a guess about which
+                   of two contradicting instructions was meant.
                    There is no --force and no merge.
   --install        'tools' only. THE ONE FLAG IN THIS FAMILY THAT CHANGES THE
                    HOST rather than a repository. It acts only for entries whose
@@ -457,8 +477,9 @@ exit codes:
      and in the sentence on stderr
   2  usage: no declaration, no "project" block, an unknown --lane, a
      placeholder nen cannot substitute, a --target that names no declared
-     target, --json on a long-running verb without --dry-run, a path that
-     resolves outside the repository, or a PRECONDITION that is not satisfied.
+     target, --run given together with --dry-run, --json on a long-running verb
+     without --dry-run, a path that resolves outside the repository, or a
+     PRECONDITION that is not satisfied.
      On 'tools' also: an --only naming a tool the declaration does not carry, a
      'version' in a form nen cannot evaluate, and -- under --install -- a pin
      this release will not act on (a range where the installer activates one
@@ -836,6 +857,10 @@ export const shuCommand: Command = {
         lane: context.args.values["lane"] ?? null,
         dryRun: context.args.booleans.has("dry-run"),
         target: context.args.values["target"] ?? null,
+        // AND NEVER AN IMPLIED --run. `refuseForeignFlags` above has already
+        // refused this flag on every verb but 'deploy', so reading it
+        // unconditionally here cannot turn another verb's line into an action.
+        run: context.args.booleans.has("run"),
       });
     } catch (error) {
       // This family's own codes (3/4/5) are returned, not thrown past

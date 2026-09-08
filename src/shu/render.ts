@@ -76,6 +76,19 @@ export interface RenderedPrecondition {
   readonly kind: string;
   readonly value: string | readonly string[];
   readonly why: string | null;
+  /**
+   * Where in the declaration this row came from, e.g.
+   * `project.preconditions.web[1]` or `project.targets.staging.requiresEnv[0]`.
+   *
+   * IT IS CARRIED RATHER THAN RECOMPUTED because two blocks now contribute
+   * rows to one list. ./run.ts's assertion refuses a `path` that escapes the
+   * repository BY POINTER, and it used to build that pointer from the row's
+   * index into the merged list -- so every row a TARGET contributed was
+   * reported as `project.preconditions.<lane>[<i>]`, an address that does not
+   * exist in the file. A refusal naming a place a reader cannot find is a
+   * refusal they cannot act on.
+   */
+  readonly pointer: string;
 }
 
 export interface HostVerdict {
@@ -97,7 +110,17 @@ export interface ResolvedTarget {
   readonly name: string;
   /** What this destination appended to the lane's declared argv, in order. */
   readonly args: readonly string[];
-  /** Variable NAMES this destination requires, byte-ordered. Never values. */
+  /**
+   * Variable NAMES this destination requires, byte-ordered and DE-DUPLICATED.
+   * Never values.
+   *
+   * IT IS THE WHOLE LIST, including a variable the lane's own preconditions
+   * already declare -- this is what the DESTINATION requires, which is a fact
+   * about the destination whoever else also happens to require it. The
+   * assertion is what de-overlaps: `resolveTarget` appends only the names the
+   * lane does not already state, so one variable is one row in the table and
+   * "2 preconditions are not satisfied" never means one variable counted twice.
+   */
   readonly requiresEnv: readonly string[];
 }
 
@@ -294,7 +317,15 @@ function artifactsOf(raw: Readonly<Record<string, unknown>>, pointer: string): r
   });
 }
 
-function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb: string): void {
+/**
+ * Every refused placeholder token in a set of steps, de-duplicated, in order.
+ *
+ * SPLIT OUT FROM THE REFUSAL BELOW because two callers ask the same question of
+ * two different sources and owe a caller two different pointers: the lane's own
+ * argv (`renderInvocation`) and the argv a TARGET composed onto it
+ * (`resolveTarget`). One scanner, two sentences.
+ */
+function unsubstituted(steps: readonly RenderedStep[]): readonly string[] {
   const found: string[] = [];
   for (const step of steps) {
     for (const token of [step.exe, ...step.argv]) {
@@ -303,10 +334,19 @@ function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb:
       }
     }
   }
-  if (found.length === 0) return;
-  const unique = [...new Set(found)];
+  return [...new Set(found)];
+}
+
+/** The half of the sentence both refusals end with: what is refused, and why. */
+function placeholderRule(unique: readonly string[]): string {
+  return `${unique.join(", ")}. Placeholder substitution is not in this release (zheref/nen#91). Nen will not guess what a placeholder stands for -- a guessed argument is a different command. (Only the reference pack's own tokens are refused -- ${REFUSED_PLACEHOLDERS.join(", ")}; every other braced argument is passed to the child exactly as written.)`;
+}
+
+function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb: string): void {
+  const unique = unsubstituted(steps);
+  if (unique.length === 0) return;
   throw new VerbUsageError(
-    `'${verb}' on lane '${lane}' names ${unique.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute: ${unique.join(", ")}. Placeholder substitution is not in this release (zheref/nen#91): write the literal argv this lane runs, or run the verb on a lane whose declaration carries none. Nen will not guess what a placeholder stands for -- a guessed argument is a different command. (Only the reference pack's own tokens are refused -- ${REFUSED_PLACEHOLDERS.join(", ")}; every other braced argument is passed to the child exactly as written.)`,
+    `'${verb}' on lane '${lane}' names ${unique.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute: ${placeholderRule(unique)} Write the literal argv this lane runs under project.verbs.${lane}.${verb}, or run the verb on a lane whose declaration carries none.`,
   );
 }
 
@@ -369,12 +409,31 @@ export function renderInvocation(
     steps,
     env: envOf(invocation.raw, pointer),
     host: { platform: request.platform, supported: true, declared: declaredHosts },
-    preconditions: (project.preconditions[lane] ?? []).map(
-      (entry): RenderedPrecondition => ({ kind: entry.kind, value: entry.value, why: entry.why }),
-    ),
+    preconditions: lanePreconditions(project, lane),
     artifacts: artifactsOf(invocation.raw, pointer),
     why: invocation.why,
   };
+}
+
+/**
+ * The lane's own preconditions, each carrying the address it came from.
+ *
+ * Split out only so the pointer is built beside the index it is built from --
+ * ./run.ts used to build it from the index into the MERGED list, which is the
+ * defect `RenderedPrecondition.pointer` exists to close.
+ */
+function lanePreconditions(
+  project: ProjectBlock,
+  lane: string,
+): readonly RenderedPrecondition[] {
+  return (project.preconditions[lane] ?? []).map(
+    (entry, index): RenderedPrecondition => ({
+      kind: entry.kind,
+      value: entry.value,
+      why: entry.why,
+      pointer: `project.preconditions.${lane}[${index}]`,
+    }),
+  );
 }
 
 /**
@@ -490,12 +549,44 @@ export function resolveTarget(
     );
   }
   const steps = appendArgs(plan, target.args, requested);
+  // THE SAME GUARD THE LANE'S OWN ARGV GETS, over the CONCATENATION. The lane's
+  // half was checked in `renderInvocation`, before this target existed; a
+  // target's `args` had never been checked at all, so `"args": ["-destination",
+  // "{destination}"]` composed cleanly and handed the seam a literal
+  // `{destination}` -- exit 0, and a token the pack publishes as a placeholder
+  // reaching a real command line. The whole concatenation is re-scanned rather
+  // than just `target.args`, because what must not carry an unsubstituted token
+  // is the argv that spawns, and re-scanning tokens already proven clean costs
+  // one pass over a list nen just built.
+  const composed = unsubstituted(steps);
+  if (composed.length > 0) {
+    throw new VerbUsageError(
+      `target '${requested}' composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this destination needs under project.targets.${requested}.args -- a destination is a fact this repository states, and nen substitutes nothing into it.`,
+    );
+  }
+  // DE-DUPLICATED FIRST, AND THE REPORT CARRIES THE DE-DUPLICATED LIST. A
+  // declaration repeating a name -- by hand, or by a generator -- printed the
+  // row once per occurrence and counted each in "N preconditions are not
+  // satisfied", so one unset variable was reported as three problems.
+  const required = byteOrder([...new Set(target.requiresEnv)]);
+  // AND A VARIABLE THE LANE ALREADY DECLARES IS ASSERTED ONCE. The two blocks
+  // are different statements about the same fact -- the lane says "this build
+  // needs it", the target says "this destination needs it" -- and both are
+  // true, so `target.requiresEnv` above still lists it. What must not happen is
+  // the ASSERTION running twice: two identical `FAIL env X` rows, in a table
+  // whose only distinguishing column is the one the report does not print, is a
+  // reader wondering which of the two Xs they failed to set.
+  const laneEnv = new Set(
+    plan.preconditions.flatMap((entry): readonly string[] =>
+      entry.kind === "env" && typeof entry.value === "string" ? [entry.value] : [],
+    ),
+  );
   return {
     ...plan,
     target: {
       name: requested,
       args: target.args,
-      requiresEnv: byteOrder(target.requiresEnv),
+      requiresEnv: required,
     },
     steps,
     // ASSERTED THROUGH THE MACHINERY THAT ALREADY EXISTS. A destination's
@@ -503,17 +594,22 @@ export function resolveTarget(
     // that kind by checking the name is SET and never reading the value -- so
     // they are appended to the lane's own list rather than given a second
     // assertion path that would have to make the same promise twice. They come
-    // AFTER the lane's, byte-ordered, and the report's `target.requiresEnv`
-    // says which rows arrived this way.
+    // AFTER the lane's, byte-ordered, each carrying its own pointer, and the
+    // report's `target.requiresEnv` says which variables arrived this way.
     preconditions: [
       ...plan.preconditions,
-      ...byteOrder(target.requiresEnv).map(
-        (name): RenderedPrecondition => ({
-          kind: "env",
-          value: name,
-          why: `required by the deploy target '${requested}'. nen asserts the variable is SET and never reads, compares or prints its value.`,
-        }),
-      ),
+      ...required
+        .filter((name): boolean => !laneEnv.has(name))
+        .map(
+          (name): RenderedPrecondition => ({
+            kind: "env",
+            value: name,
+            why: `required by the deploy target '${requested}'. nen asserts the variable is SET and never reads, compares or prints its value.`,
+            // The index into what the FILE says, not into the sorted list a
+            // reader never saw: a pointer is an address somebody opens.
+            pointer: `project.targets.${requested}.requiresEnv[${target.requiresEnv.indexOf(name)}]`,
+          }),
+        ),
     ],
   };
 }

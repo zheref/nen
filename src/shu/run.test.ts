@@ -870,6 +870,45 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     }
   });
 
+  it("answers the SEAT even when the TARGET is the one with no command line", async () => {
+    // THE PAIR THE WHOLE ORDER ARGUMENT RESTS ON, and both halves are exit 4:
+    // the lane's seat and the destination's `unsupported` are each terminal, so
+    // whichever answers, a caller learns a fact that no retype changes. The
+    // LANE's is the one that must win -- it is true of every destination, while
+    // the target's is true of this one -- so the sentence a reader gets is the
+    // lane's own.
+    const result = await capture(["deploy", "--target", "provider-integration"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain(
+      "no target is wired. Declare one under `targets` before nen will run this.",
+    );
+    // And NOT the destination's, which would send a maintainer to fix the one
+    // target instead of the lane that cannot deploy at all.
+    expect(result.err.join("\n")).not.toContain("hosting provider's git integration");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("answers the HOST at 3 before a --target that names nothing", async () => {
+    // The other unpinned pair: `project.hosts` is a fact about this MACHINE and
+    // the destination is a fact about the command line, so the machine answers
+    // first -- retyping the target on a host the declaration excludes could not
+    // have helped, and exit 3 is the code a caller routes to another runner on.
+    const result = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { prod: {} },
+        hosts: { deploy: ["darwin"] },
+      }),
+      ["deploy", "--target", "not-a-declared-target"],
+      { platform: "linux" },
+    );
+    expect(result.code).toBe(3);
+    expect(result.err.join("\n")).toMatch(
+      /'deploy' on lane 'only' \(placeholder-stack\) is declared for darwin; this host is linux/,
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
   it("asks for the destination -- byte-ordered -- once the lane HAS a deploy to send", async () => {
     const result = await capture(["deploy", "--lane", "pages"]);
     expect(result.code).toBe(2);
@@ -889,6 +928,21 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
       /--target 'anything' is not declared under project\.targets\. Declared: preview, production, provider-integration, staging\./,
     );
     expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses a --target naming an inherited object member as the undeclared target it is", async () => {
+    // `project.targets["constructor"]` is a function on any ordinary object, so
+    // a lookup asking `!== undefined` would accept this, read `args` off a
+    // function and deploy. The map is prototype-less AND the lookup uses
+    // hasOwnProperty; this pins the answer a caller gets either way.
+    for (const inherited of ["constructor", "toString", "__proto__"]) {
+      const result = await capture(["deploy", "--lane", "pages", "--target", inherited]);
+      expect(result.code, inherited).toBe(2);
+      expect(result.err.join("\n"), inherited).toContain(
+        `--target '${inherited}' is not declared under project.targets.`,
+      );
+      expect(result.seams.calls, inherited).toEqual([]);
+    }
   });
 
   it("prints the block to paste when the repository declares no targets at all", async () => {
@@ -924,7 +978,7 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     // A DRY RUN SPAWNS NOTHING -- the whole reason izanami certifies this one
     // form of a verb that otherwise writes to somebody else's infrastructure.
     expect(dry.seams.calls).toEqual([]);
-    const wet = await capture(["deploy", "--lane", "pages", "--target", "staging"], {
+    const wet = await capture(["deploy", "--lane", "pages", "--target", "staging", "--run"], {
       env: DEPLOY_ENV,
       script: [ok(argv)],
     });
@@ -1022,11 +1076,12 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
 
   it("passes when the variables are set -- and never reads, compares or prints a value", async () => {
     const argv = "placeholder-deploy-tool publish --dir public --env production";
-    const result = await capture(["deploy", "--lane", "pages", "--target", "production", "--json"], {
-      env: DEPLOY_ENV,
-      script: [ok(argv)],
-    });
+    const result = await capture(
+      ["deploy", "--lane", "pages", "--target", "production", "--run", "--json"],
+      { env: DEPLOY_ENV, script: [ok(argv)] },
+    );
     expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual([argv]);
     const everything = [...result.out, ...result.err].join("\n");
     // The two the TARGET requires, and the one the DECLARATION supplies to the
     // child: three values, three ways for one of them to leak, none of them.
@@ -1100,6 +1155,124 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
       const result = await capture(argv);
       expect(result.code, argv.join(" ")).not.toBe(0);
       expect(result.out, argv.join(" ")).toEqual([]);
+    }
+  });
+});
+
+// ── (d.2) `deploy --run`: the second gate, and the one that decides ─────────
+//
+// `--target` says WHERE and `--run` says NOW, and NEITHER IMPLIES THE OTHER.
+// Every other verb in this family spawns something inside a directory the
+// caller is standing in and can be undone by running it again; this one puts
+// bytes on somebody else's infrastructure, where "run it again" is not a
+// repair. So it is dry-run-first, exactly as `nen label apply --run` and `nen
+// wake fire --run` are.
+
+describe("nen shu deploy --run -- nothing is sent without it", () => {
+  const PLAN = "placeholder-deploy-tool publish --dir public --env staging";
+  const GATED = ["deploy", "--lane", "pages", "--target", "staging"] as const;
+
+  it("prints the FULLY RESOLVED plan and spawns nothing, at exit 0", async () => {
+    const result = await capture([...GATED], { env: DEPLOY_ENV });
+    expect(result.code).toBe(0);
+    // The destination is substituted into the argv -- this is the resolved
+    // plan, not a template a reader has to finish in their head.
+    expect(wouldRun(result.out)).toEqual([PLAN]);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/target: {8}staging {2}\(appends: --env staging\)/);
+    // The preconditions are ASSERTED, not skipped: the report says ok, which is
+    // the fact a reader is checking before they add --run.
+    expect(out).toMatch(/ok {4}env {2}PLACEHOLDER_DEPLOY_TOKEN/);
+    // NOTHING WAS STARTED. ScriptedSeams throws on an unscripted call, so an
+    // empty script is half the assertion and the empty call list is the rest.
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(
+      /nothing was sent: 'deploy' acts only with --run\./,
+    );
+  });
+
+  it("sends exactly what the gated form printed, once --run is given", async () => {
+    const gated = await capture([...GATED], { env: DEPLOY_ENV });
+    const sent = await capture([...GATED, "--run"], { env: DEPLOY_ENV, script: [ok(PLAN)] });
+    expect(sent.code).toBe(0);
+    // The thing you approve is the thing that runs -- the same property the
+    // whole family's `--dry-run` carries, now on the default form of this verb.
+    expect(spawned(sent.seams)).toEqual(wouldRun(gated.out));
+    expect(sent.err.join("\n")).not.toMatch(/nothing was sent/);
+  });
+
+  it("says nothing about --run on the verbs that have no destination", async () => {
+    // The gate is TARGETED_VERBS', not the family's: `build` still spawns on a
+    // bare line, and a sentence about a flag it does not read would be noise.
+    const result = await capture(["build"], { script: [ok("pnpm turbo run build")] });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual(["pnpm turbo run build"]);
+    expect(result.err.join("\n")).not.toMatch(/--run/);
+  });
+
+  it("refuses --run together with --dry-run at 2, before it reads anything", async () => {
+    for (const argv of [
+      ["deploy", "--lane", "pages", "--target", "staging", "--run", "--dry-run"],
+      ["deploy", "--run", "--dry-run"],
+      // A declaration this repository does not have: the pair is a fact about
+      // the command line, so it answers before the file is even opened.
+      ["deploy", "--run", "--dry-run", "--repo", tmpdir()],
+    ]) {
+      const result = await capture(argv, { env: DEPLOY_ENV });
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n"), argv.join(" ")).toMatch(
+        /was given both --run and --dry-run/,
+      );
+      expect(result.seams.calls, argv.join(" ")).toEqual([]);
+      expect(result.out, argv.join(" ")).toEqual([]);
+    }
+  });
+
+  it("refuses --run on every verb in the family that is not 'deploy'", async () => {
+    // ./command.ts's per-subcommand flag table, so `nen shu build --run` cannot
+    // parse cleanly and be silently ignored -- and cannot be read as an action.
+    for (const verb of ["build", "test", "lint", "coverage", "detect", "tools"]) {
+      const result = await capture([verb, "--run"]);
+      expect(result.code, verb).toBe(2);
+      expect(result.err.join("\n"), verb).toMatch(/--run is not read by 'shu /);
+      expect(result.seams.calls, verb).toEqual([]);
+    }
+  });
+
+  it("is ONE json document and no more, with the advisory on stderr", async () => {
+    const result = await capture([...GATED, "--json"], { env: DEPLOY_ENV });
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as {
+      readonly steps: readonly { readonly exitCode: number | null }[];
+      readonly log: { readonly mode: string };
+    };
+    // "Was anything executed" is told the way it is told everywhere in this
+    // report: a null step exit code and the log mode. There is no `dryRun`
+    // boolean, and there is no second one for `--run` either.
+    expect(report.steps.map((step): number | null => step.exitCode)).toEqual([null]);
+    expect(report.log.mode).toBe("dry-run");
+    expect(result.err.join("\n")).toMatch(/nothing was sent/);
+  });
+
+  it("still refuses an unmet precondition at 2 -- the gate is not a way past it", async () => {
+    const result = await capture([...GATED], { env: { [TOKEN]: "x" } });
+    expect(result.code).toBe(2);
+    expect(result.out.join("\n")).toMatch(/FAIL {2}env {2}PLACEHOLDER_DEPLOY_TOKEN/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("answers the SEAT and the destination before it ever looks at --run", async () => {
+    // The gate is the LAST thing decided, so `--run` never turns a refusal into
+    // a different refusal -- and never into a run.
+    for (const argv of [
+      ["deploy", "--run"],
+      ["deploy", "--lane", "pages", "--run"],
+      ["deploy", "--lane", "pages", "--target", "nope", "--run"],
+      ["deploy", "--lane", "pages", "--target", "provider-integration", "--run"],
+    ]) {
+      const result = await capture(argv, { env: DEPLOY_ENV });
+      expect([2, 4], argv.join(" ")).toContain(result.code);
+      expect(result.seams.calls, argv.join(" ")).toEqual([]);
     }
   });
 });

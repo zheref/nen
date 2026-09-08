@@ -370,7 +370,11 @@ export function runCoverage(
       verb: "coverage",
       lane: options.lane,
       dryRun: options.dryRun,
+      // NEITHER FLAG BELONGS TO THIS VERB. `coverage` takes no destination and
+      // has no `--run` gate -- ./command.ts's per-subcommand flag table refuses
+      // both on it -- and the executor reads them only for the verbs that do.
       target: null,
+      run: false,
       sink,
     });
   } catch (error) {

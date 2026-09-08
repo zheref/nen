@@ -277,19 +277,92 @@ describe("resolveTarget", () => {
     });
     const resolved = resolveTarget(block, plan(block), "prod");
     expect(resolved.preconditions).toEqual([
-      { kind: "path", value: "deps", why: null },
+      { kind: "path", value: "deps", why: null, pointer: "project.preconditions.one[0]" },
       {
         kind: "env",
         value: "A_TOKEN",
         why: expect.stringContaining("never reads, compares or prints its value") as unknown as string,
+        // THE ROW'S OWN ADDRESS, and it is the index into what the FILE says
+        // rather than into the byte-ordered list -- A_TOKEN is declared second.
+        pointer: "project.targets.prod.requiresEnv[1]",
       },
       {
         kind: "env",
         value: "B_TOKEN",
         why: expect.stringContaining("required by the deploy target 'prod'") as unknown as string,
+        pointer: "project.targets.prod.requiresEnv[0]",
       },
     ]);
     expect(resolved.target?.requiresEnv).toEqual(["A_TOKEN", "B_TOKEN"]);
+  });
+
+  it("de-duplicates requiresEnv: one variable is one row, however often it is written", () => {
+    // A name repeated -- by hand, or by whatever generated the block -- used to
+    // print the row once per occurrence and count each of them, so ONE unset
+    // variable was reported as "3 preconditions are not satisfied".
+    const block = deployable({ prod: { requiresEnv: ["DUP", "DUP", "DUP"] } });
+    const resolved = resolveTarget(block, plan(block), "prod");
+    expect(resolved.target?.requiresEnv).toEqual(["DUP"]);
+    expect(resolved.preconditions).toEqual([
+      {
+        kind: "env",
+        value: "DUP",
+        why: expect.stringContaining("required by the deploy target 'prod'") as unknown as string,
+        pointer: "project.targets.prod.requiresEnv[0]",
+      },
+    ]);
+  });
+
+  it("asserts a variable the LANE already declares once, and still reports it as required", () => {
+    // Two true statements about one fact: the lane says this build needs the
+    // variable, the target says this destination does. `target.requiresEnv`
+    // keeps both -- it is what the DESTINATION requires -- while the assertion
+    // runs once, because two identical `FAIL env X` rows leave a reader
+    // wondering which of the two Xs they failed to set.
+    const block = parseProjectBlock("/fixture/nen/contract.json", {
+      lanes: { one: { stack: "stack-a", cwd: "." } },
+      defaultLane: "one",
+      verbs: { one: { deploy: { exe: "tool", argv: ["publish"] } } },
+      preconditions: { one: [{ kind: "env", value: "SHARED_TOKEN", why: "the lane's own" }] },
+      targets: { prod: { requiresEnv: ["SHARED_TOKEN", "ONLY_THE_TARGETS"] } },
+    });
+    const resolved = resolveTarget(block, plan(block), "prod");
+    expect(resolved.target?.requiresEnv).toEqual(["ONLY_THE_TARGETS", "SHARED_TOKEN"]);
+    expect(resolved.preconditions).toEqual([
+      {
+        kind: "env",
+        value: "SHARED_TOKEN",
+        why: "the lane's own",
+        pointer: "project.preconditions.one[0]",
+      },
+      {
+        kind: "env",
+        value: "ONLY_THE_TARGETS",
+        why: expect.stringContaining("required by the deploy target 'prod'") as unknown as string,
+        pointer: "project.targets.prod.requiresEnv[1]",
+      },
+    ]);
+  });
+
+  it("refuses a placeholder a TARGET composes onto the argv, naming its own pointer", () => {
+    // The lane's half is checked in renderInvocation, before this target
+    // exists; a target's `args` had never been checked at all, so this argv
+    // composed cleanly and handed the seam a literal `{destination}`.
+    const block = deployable({ prod: { args: ["-destination", "{destination}"] } });
+    expect(() => resolveTarget(block, plan(block), "prod")).toThrow(VerbUsageError);
+    expect(() => resolveTarget(block, plan(block), "prod")).toThrow(
+      /target 'prod' composes a placeholder nen cannot substitute onto 'deploy' on lane 'one': \{destination\}/,
+    );
+    expect(() => resolveTarget(block, plan(block), "prod")).toThrow(
+      /project\.targets\.prod\.args/,
+    );
+    // The other direction: a braced argument that is NOT one of the pack's own
+    // tokens is an ordinary argument and passes through untouched, exactly as
+    // it does in a lane's argv.
+    const ordinary = deployable({ prod: { args: ["--define={\"NODE_ENV\":\"production\"}"] } });
+    expect(resolveTarget(ordinary, plan(ordinary), "prod").steps).toEqual([
+      { exe: "tool", argv: ["publish", "--define={\"NODE_ENV\":\"production\"}"] },
+    ]);
   });
 
   it("refuses a missing --target at 2, listing what IS declared in byte order", () => {
@@ -359,6 +432,47 @@ describe("resolveTarget", () => {
       { steps: [{ exe: "tool", argv: ["build"] }, { exe: "tool", argv: ["publish"] }] },
     );
     expect(resolveTarget(bare, plan(bare), "prod").steps).toHaveLength(2);
+  });
+
+  it("appends onto a ONE-step 'steps' row -- the rule is about the count, not the form", () => {
+    // `{steps: [one]}` and `{exe, argv}` are the same command written two ways,
+    // and the refusal above is "nen will not guess WHICH step", which a row
+    // with one step does not ask anyone to guess.
+    const block = deployable({ prod: { args: ["--prod"] } }, { steps: [{ exe: "tool", argv: ["publish"] }] });
+    expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
+      { exe: "tool", argv: ["publish", "--prod"] },
+    ]);
+  });
+
+  it("looks a target up by OWN key, so an ordinary object's prototype is no target map", () => {
+    // BELT AND BRACES, AND THE BRACES ARE PINNED HERE. ../schema/contract.ts
+    // now builds `project.targets` with `Object.create(null)`, which alone
+    // makes `targets["constructor"]` undefined -- so the `hasOwnProperty` in
+    // this function is unreachable through the loader and a mutant that
+    // removed it would survive against a parsed declaration. This function is
+    // EXPORTED and takes a `ProjectBlock`, so it is pinned against one built
+    // the ordinary way instead: the guard is the lookup's, not the loader's.
+    const block = deployable({ staging: {} });
+    const ordinary: ProjectBlock = { ...block, targets: { ...block.targets } };
+    expect(Object.getPrototypeOf(ordinary.targets)).toBe(Object.prototype);
+    for (const inherited of ["constructor", "toString", "valueOf"]) {
+      expect(() => resolveTarget(ordinary, plan(ordinary), inherited), inherited).toThrow(
+        new RegExp(`--target '${inherited}' is not declared under project\\.targets\\. Declared: staging\\.`),
+      );
+    }
+  });
+
+  it("refuses a --target naming an OBJECT PROTOTYPE member as the undeclared target it is", () => {
+    // `project.targets["constructor"]` is a function on any ordinary object, so
+    // a lookup that asked `!== undefined` instead of `hasOwnProperty` would
+    // accept `--target constructor`, resolve `args`/`requiresEnv` off a
+    // function, and deploy. Two spellings, one answer.
+    const block = deployable({ staging: {} });
+    for (const inherited of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      expect(() => resolveTarget(block, plan(block), inherited), inherited).toThrow(
+        new RegExp(`--target '${inherited === "__proto__" ? "__proto__" : inherited}' is not declared under project\\.targets\\. Declared: staging\\.`),
+      );
+    }
   });
 
   it("changes nothing else about the plan it was given", () => {
