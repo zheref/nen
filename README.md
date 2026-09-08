@@ -337,14 +337,23 @@ Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
-Stack-aware developer verbs (`nen shu build | test | lint | …`) are not in that
-list yet; what those verbs will be able to run per stack is already written down
-in [`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
+`nen shu` runs those verbs today, against any repository that declares them.
+Eleven of the thirteen execute — `nen shu build --dry-run` prints the exact
+argv, cwd and environment *names* it would spawn and spawns nothing; `nen shu
+detect` proposes a `nen/contract.json` project block from the markers on disk
+and never writes one without `--write`. `shu tools` and `shu warmup` are
+declared, documented, and refuse at exit 4 naming the release they arrive in.
+
+What each verb can run **per stack** is written down in
+[`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen
 verbs, each cell either a reference command cited to the repository it came
-from or an `unsupported` with the reason, generated from the bundled profiles
-pack (`profiles/*.json`) by `bun run matrix` and drift-checked by the suite.
-The pack is a catalogue: nothing that spawns a process reads it, and a test
-fails the build if that stops being true.
+from, a `declared-only` (real for the stack, and the observed repositories
+disagree about what it means), or an `unsupported` with the reason. It is
+generated from the bundled profiles pack (`profiles/*.json`) by `bun run
+matrix` and drift-checked by the suite. The pack is a **catalogue, not an
+authority**: `nen shu detect` reads it to write a proposal a human edits, and
+an import-graph test fails the build if anything that can spawn a process ever
+reaches it — the executor included.
 
 ## Working on Nen
 

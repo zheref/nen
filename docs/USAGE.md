@@ -172,7 +172,11 @@ the wrong thing:
 | `4` | **unsupported verb for this lane** — the declaration says so, in its own words | not `2`: the invocation was correct and the answer is a fact about the repository. It is the *majority* case across the stacks the family covers |
 | `5` | **the declared program could not be started** — not installed, not on `PATH` | not `1`: "the tool is not installed" and "the tool ran and said no" want different reactions, and `src/seam/exec.ts` keeps them apart precisely so a caller need not guess |
 
-No other family returns `3`, `4` or `5`.
+`shu` is the only *family* that returns `3`, `4` or `5`; the one other place in
+this CLI where a code above `2` appears is [`bootstrap`](#nen-bootstrap), which
+is not on the three-code scheme at all — it relays the bootstrap script's own
+published `3`–`7` unchanged, and those numbers mean the script's things, not
+these. A caller branching on `3`/`4`/`5` must know which of the two it invoked.
 
 One inconsistency is worth knowing before it surprises you: a missing
 `--target` exits `1` rather than `2` on sixteen verbs — every verb routed
@@ -182,9 +186,13 @@ note under [`labels sync`](#nen-labels-sync), and
 
 ### `--dry-run` discipline
 
-Every mutating verb can be asked to print the exact `gh` (or `git`) call it
-would make and write nothing. The flag's name follows what the verb does by
-default:
+Every mutating verb can be asked to show what it would do and do nothing. What
+it shows depends on what it does: most of them print the exact `gh` (or `git`)
+call they would make; [`label apply`](#nen-label-apply) writes its ledger line
+either way and marks it `outcome: "dry-run"`; and the [`shu`](#family-shu)
+verbs print the argv the **target repository's own declaration** states, which
+is the only kind of command they ever run. The flag's name follows what the
+verb does by default:
 
 | Verb | Safe by default? | Flag | Notes |
 |---|---|---|---|
@@ -202,8 +210,9 @@ default:
 | [`canon mirror generate`](#nen-canon-mirror-generate) | no | — | use [`canon mirror check`](#nen-canon-mirror-check), which writes nothing |
 | [`pr retarget`](#nen-pr-retarget), [`pr request-reviews`](#nen-pr-request-reviews), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
-| [`shu build`](#nen-shu-build), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu deploy`](#nen-shu-deploy), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. `deploy` additionally requires `--target <name>`, with no default ever |
-| [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu coverage`](#nen-shu-coverage) | — | `--dry-run` | these four are **deliberately unclassified** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `--dry-run` is the form a watcher can use. The argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain |
+| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu deploy`](#nen-shu-deploy), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. `deploy` additionally requires `--target <name>`, with no default ever. On `dev` and `run`, `--json` is **refused** without `--dry-run` |
+| [`shu tools`](#nen-shu-tools) | yes | `--install` | not implemented yet — it refuses at exit 4. When it lands, the check form probes and reports; `--install` is the one flag that changes the host |
+| [`shu warmup`](#nen-shu-warmup) | no | — | not implemented yet — it refuses at exit 4. It is classified **mutating in every form**, dry run included: even a dry run fetches, and nobody watches a warm-up |
 
 "Still reads GitHub" matters in CI: a dry run of those three needs a token even
 though it writes nothing.
@@ -3287,12 +3296,20 @@ postinstall scripts. This release asserts two kinds:
 
 | `kind` | `value` | Satisfied when |
 |---|---|---|
-| `path` | one repo-root-relative path | the entry exists (a dangling symlink counts as present-and-broken, not absent) |
+| `path` | one repo-root-relative path | the entry exists (a dangling symlink, or a path nen cannot `lstat` at all, counts as present-and-broken, not absent) |
 | `env` | one variable **name** | the variable is set. Its value is never read, compared or printed |
 
 A kind nen cannot assert is reported as `satisfied: null` — *"cannot assert"* —
 and **refuses at exit 2**. It is never reported as a pass: a check that could
-not be performed must never render as one that came back clean.
+not be performed must never render as one that came back clean. That covers a
+kind this release does not know **and** a kind it does know stated as a *list*
+of values: `{"kind": "path", "value": ["a", "b"]}` is not a path, and reading
+the first element would be nen guessing which one the declaration meant.
+
+**Every path a declaration states is relative to the repository root**, and one
+that resolves outside it — a lane `cwd` of `../..`, a precondition path of
+`../../etc/passwd`, an artifact outside the tree — is exit 2 naming the path.
+Nen will not step outside the tree `--repo` pointed it at.
 
 **Exit codes** — this family extends the CLI's published `0`/`1`/`2` with three
 more. See also the [Exit codes](#exit-codes) convention.
@@ -3300,10 +3317,10 @@ more. See also the [Exit codes](#exit-codes) convention.
 | Code | Meaning |
 |---|---|
 | `0` | the tool ran and succeeded, or a dry run rendered |
-| `1` | the tool ran and failed. Nen exits 1 whatever the tool's own code was; the tool's code is in `steps[].exitCode` |
-| `2` | usage: no declaration, no `project` block, an unknown `--lane`, a placeholder nen cannot substitute, a `--target` that names no declared target, or a precondition that is not satisfied |
+| `1` | the tool ran and failed. Nen exits 1 whatever the tool's own code was; the tool's code is in `steps[].exitCode`. A `nen/contract.json` that is **present and malformed** is also 1 — the file is there and says something nen cannot read, which is a repository defect rather than a mistyped invocation, and it is the code every family in this CLI answers an unreadable schema file with. The refusal names the file, the pointer and the expectation |
+| `2` | usage: **no** declaration, no `project` block, an unknown `--lane`, a placeholder nen cannot substitute, a `--target` that names no declared target, `--json` on a long-running verb without `--dry-run`, a path that resolves outside the repository, or a precondition that is not satisfied |
 | `3` | **unsupported host** — the verb is real, this machine cannot run it. Never 1 (a retry wrapper would retry forever) and never 2 (the invocation was correct) |
-| `4` | **unsupported verb for this lane** — the declaration says so, in its own words. The invocation was correct; the answer is a fact about the repository. Across the seven stacks this family is designed for, it is the majority case |
+| `4` | **unsupported verb for this lane** — the declaration says so, in its own words. The invocation was correct; the answer is a fact about the repository. Across the seven stacks this family is designed for, it is the majority case. `shu tools` and `shu warmup` also answer 4 in this release, saying they are not implemented yet and naming the PR each arrives in |
 | `5` | the declared program could not be started at all — not installed, or not on `PATH` |
 
 **`--json`**, on every verb that executes one, is one object with these keys, in
@@ -3314,6 +3331,22 @@ preconditions, exitCode, durationMs, artifacts, log }`. `contract` is
 run — which is how a `--json` reader tells a dry run from a real one; `exitCode`
 is nen's. Under `--json` a step's own output is relayed to **stderr**, so stdout
 stays exactly one document.
+
+`--json` is **refused at exit 2** on [`shu dev`](#nen-shu-dev) and
+[`shu run`](#nen-shu-run) unless `--dry-run` is also given. Those two hand this
+terminal to the child, so stdout belongs to the child from the handover
+onwards, and one JSON object followed by however much a dev server then writes
+is not a document. `--dry-run --json` is their machine-readable pre-flight; the
+refusal is checked before the declaration is read, because it is a fact about
+the command line rather than about the repository.
+
+**Placeholders.** A `{token}` in a declared argv is refused **only** when it is
+one of the reference pack's own — `{pm}`, `{scheme}`, `{destination}` and the
+rest of the closed set [`docs/STACK-MATRIX.md`](STACK-MATRIX.md) publishes and
+explains. Every other braced argument is passed to the child exactly as
+written, so a declaration may state `--define={"a":1}` without nen having an
+opinion about it. The refusal lists the set, which is the whole answer to
+"then what may I write".
 
 **Argv quoting.** Every printed argv quotes an element containing whitespace.
 Those quotes are information: `-destination 'platform=iOS Simulator,name=...'`
@@ -3353,17 +3386,34 @@ the one piece of filesystem knowledge the family is allowed to have:
 **What it will not do.** Two lanes in one tree get two lanes and
 `defaultLane: null` plus a note — choosing would be how a scripted `nen shu
 build` silently starts building something else. Two stacks' markers in **one**
-directory get both lanes and neither is chosen. A `Makefile` beside a lane is
-reported as a **finding**, never as a proposal. And every verb the reference
-pack would propose is cross-checked against the repository's own `package.json`
-first: the whole verb map is withheld unless `packageManager` names the manager
-every reference argv routes through, and an individual verb is withheld when the
-dependency its argv names is not declared. A proposal you paste and then
-discover is fiction is worse than an empty map with a reason.
+directory get both lanes, both names qualified by their stack
+(`web-gatsby`, `web-nextjs`), and neither is chosen. Two spellings of one
+framework's config in one directory are **one** lane with two markers. A
+`Makefile` beside a lane is reported as a **finding**, never as a proposal.
 
-Only `nextjs` has reference verbs in this release. The other six stacks get a
-lane, `verbs: {}` and a note naming the PR of
-[zheref/nen#91](https://github.com/zheref/nen/issues/91) that fills them.
+**And every row is cross-checked before it is proposed.** The reference pack
+([`docs/STACK-MATRIX.md`](STACK-MATRIX.md)) states a *shape*; `detect`
+substitutes what your repository answers and then withholds anything it cannot
+stand behind, naming the row and the reason:
+
+| Check | A row is withheld when |
+|---|---|
+| **placeholders** | it still carries a pack token after substitution. Exactly two are substituted, both from the lane's own `package.json`: `{pm}` (the `packageManager` field with its version stripped) and `{packageManager}` (that field verbatim). `{scheme}`, `{destination}`, `{package}` and the rest are facts only your repository knows, and a guessed argument is a different command |
+| **the executable** | its `exe` is neither the package manager that `package.json` names nor a package it declares as a dependency. Those are the only two ways `detect` can *see* that a repository carries a program |
+| **the script** | its argv runs `run <task>` and `package.json` declares no such script. If the task lives somewhere `detect` does not read — a workspace member, a task runner's own config — the note says so and the row is yours to add by hand |
+
+A proposal you paste and then discover is fiction is worse than an empty map
+with a reason. `detect` also names the cells the **pack itself** proposes no
+command for — `declared-only` and `unsupported` rows — because "the pack
+declined to choose for you" and "this proposal has a gap" are different facts
+and a reader who cannot tell them apart writes the row nen was avoiding.
+
+The scan is bounded, and both bounds can hide a real lane: it descends at most
+**three** directories below `--repo`, and it never enters `.git`, `.gradle`,
+`.idea`, `.nen`, `.next`, `DerivedData`, `Pods`, `build`, `dist`,
+`node_modules`, `out` or `vendor` — so a lane living in a directory named like
+build output is invisible to it by design. The "no lane detected" message says
+both, because a silent miss and an empty tree look identical from outside.
 
 **Output and exit codes** — the proposal on stdout (as text with the block to
 paste, or as `--json` `{ contract, repo, declaration, declarationPresent, lanes,
@@ -3384,9 +3434,12 @@ declaration: /Users/…/two-app-monorepo/nen/contract.json  (absent)
   web  (nextjs)  cwd web
         marker: web/next.config.js
         verbs:  build, dev, lint, run, test
+        ^ 'coverage' withheld: its reference command still names {package}, which only this repository can answer. nen never proposes an unsubstituted token: a guessed argument is a different command.
+        ^ the reference pack proposes no command for ui-test (two meanings), archive (evidence, not an artifact), release (declared n/a in the repo), deploy (three shapes, no default). …
   admin  (nextjs)  cwd admin
         marker: admin/next.config.js
         verbs:  build, dev, lint, run, test
+        ^ … (the same two notes)
 
 note: a lane's NAME is proposed from the directory it lives in (or from the stack id at the repository root) and is yours to change -- it is the token '--lane' takes, and nothing in nen reads meaning into it.
 
@@ -3456,15 +3509,15 @@ Run the lane's test suite, from its declared `test` invocation.
 nen shu test [--repo <path>] [--lane <name>] [--dry-run] [--json]
 ```
 
-**Output and exit codes** — as `build`. Note that this verb is **deliberately unclassified** in izanami's automation-policy table: `nen watch until --command "nen shu test"` refuses, and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository, and a read-only row would certify it sight unseen.
+**Output and exit codes** — as `build`. Like every executing verb in this family it is **`dry-run-gated`** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository — a declared test task may well write, and one keystroke separates a golden-image check from its recorder — so the bare form is never certified, while the dry run is, because rendering and spawning nothing is a property of nen rather than a claim about that argv.
 
 ### `nen shu ui-test`
 
-Run the lane's UI/E2E suite. Same shape as `test`, same deliberate `unknown` classification. Multi-step declarations are common here — a browser download step before the suite itself — and every step is printed by `--dry-run` and run in order.
+Run the lane's UI/E2E suite. Same shape as `test`, same `dry-run-gated` classification. Multi-step declarations are common here — a browser download step before the suite itself — and every step is printed by `--dry-run` and run in order.
 
 ### `nen shu lint`
 
-Run the lane's linter and format check. Same shape as `test`, same deliberate `unknown` classification.
+Run the lane's linter and format check. Same shape as `test`, same `dry-run-gated` classification — a check mode and its `--write` twin differ by one flag *in the declaration*, which is exactly why nen does not certify the bare form.
 
 **Example**
 
@@ -3487,11 +3540,13 @@ Publish the artifact, where the lane declares a publication step. Nen never synt
 
 ### `nen shu dev`
 
-Start the lane's **debug** build for local iteration. Long-running: nen prints the pre-flight report, then inherits this terminal and hands it to the child, so `--json`'s `steps[].exitCode` and `exitCode` are `null` and `log.mode` is `"interactive"`. Ctrl-C reaches the child; nen stays alive to report. `--dry-run` starts nothing at all.
+Start the lane's **debug** build for local iteration. Long-running: nen prints the pre-flight report as text, then inherits this terminal and hands it to the child, so the report's `steps[].exitCode` and `exitCode` are `null` and `log.mode` is `"interactive"`. Ctrl-C reaches the child; nen stays alive to report. `--dry-run` starts nothing at all.
+
+`--json` is **refused at exit 2** here unless `--dry-run` is given: stdout belongs to the child from the handover onwards, so a report on that stream would be one object followed by a dev server's log lines. `nen shu dev --dry-run --json` is the machine-readable form of exactly the same pre-flight.
 
 ### `nen shu run`
 
-Start the lane's **production or staging** build, locally. The distinguishing property against `dev` is the build configuration, not the lifetime — `run` is long-running too, and goes through the same interactive seam.
+Start the lane's **production or staging** build, locally. The distinguishing property against `dev` is the build configuration, not the lifetime — `run` is long-running too, goes through the same interactive seam, and refuses `--json` without `--dry-run` for the same reason.
 
 ### `nen shu deploy`
 
@@ -3510,7 +3565,7 @@ goes.
 
 ### `nen shu coverage`
 
-Run the lane's coverage command. Same shape as `test`, same deliberate `unknown` classification. Parsing the coverage report the declaration names (`verbs.<lane>.coverage.report`) and the never-a-gate `--threshold` arrive with a later PR of [zheref/nen#91](https://github.com/zheref/nen/issues/91); this release runs the declared command and reports the steps.
+Run the lane's coverage command. Same shape as `test`, same `dry-run-gated` classification — a coverage run writes its report tree by definition. Parsing the coverage report the declaration names (`verbs.<lane>.coverage.report`) and the never-a-gate `--threshold` arrive with a later PR of [zheref/nen#91](https://github.com/zheref/nen/issues/91); this release runs the declared command and reports the steps.
 
 ### `nen shu tools`
 
@@ -4483,26 +4538,29 @@ checkout: a compiled binary has no harness to run, and says so by name.
 ## Day-to-day actions → today's verbs
 
 What a developer does in a day, against what actually ships. The
-[`shu`](#family-shu) family closed the headline gap for **one stack** — every
-verb below runs what the target repository DECLARES in its `nen/contract.json`,
-so "exists" means "exists for a repository that carries a declaration nen can
-read", and the reference verbs `shu detect` proposes exist for `nextjs` only.
-The other six stacks get a lane and an empty verb map until the profiles pack
-lands; a lane's own hand-written declaration works for any stack today.
+[`shu`](#family-shu) family closed the headline gap — but read "exists" exactly:
+every verb below runs what the target repository **declares** in its
+`nen/contract.json`, so it exists for a repository that carries a declaration
+nen can read, and for **any** stack that writes one. What varies by stack is how
+much of that declaration [`shu detect`](#nen-shu-detect) can propose for you:
+the reference pack carries a command for a given verb on a given stack, or it
+declines to (`declared-only`, `unsupported`), and `detect` withholds anything it
+cannot cross-check against the repository's own `package.json`.
+[`docs/STACK-MATRIX.md`](STACK-MATRIX.md) is the cell-by-cell answer.
 
 | Action | Exists today? | Verb | Scope |
 |---|---|---|---|
-| build | **yes — nextjs only, PR 2 of #91** | [`shu build`](#nen-shu-build) | Runs the `build` invocation the lane declares, in the lane's `cwd`, with `--dry-run` printing every step first. Nen's own binaries are still cross-compiled by `bun run build:<target>`, which is a package script, not a nen verb. |
-| test | **yes — nextjs only, PR 2 of #91** | [`shu test`](#nen-shu-test), [`dev test`](#nen-dev-test) | `shu test` runs a *target project's* declared test invocation; `dev test` still spawns `bun run test` in *this* checkout. |
-| ui-test | **yes — nextjs only, PR 2 of #91** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form. Nen still runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
-| lint | **yes — nextjs only, PR 2 of #91** | [`shu lint`](#nen-shu-lint), [`dev lint`](#nen-dev-lint) | `shu lint` runs a *target project's* declared lint invocation (commonly two steps, in order); `dev lint` still spawns `bun run lint` in *this* checkout. |
-| archive | **the verb exists; no stack declares one yet** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. Most lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. No signing material is ever synthesised. |
+| build | **yes — any lane that declares one** | [`shu build`](#nen-shu-build) | Runs the `build` invocation the lane declares, in the lane's `cwd`, with `--dry-run` printing every step first. Nen's own binaries are still cross-compiled by `bun run build:<target>`, which is a package script, not a nen verb. |
+| test | **yes — any lane that declares one** | [`shu test`](#nen-shu-test), [`dev test`](#nen-dev-test) | `shu test` runs a *target project's* declared test invocation; `dev test` still spawns `bun run test` in *this* checkout. |
+| ui-test | **the verb exists; no stack ships a reference row** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form — but the pack proposes no default for any stack, because the observed repositories disagree about what this verb even means (a browser suite, or a static visual build). `detect` says so and withholds; the declaration decides. Nen runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
+| lint | **yes — any lane that declares one** | [`shu lint`](#nen-shu-lint), [`dev lint`](#nen-dev-lint) | `shu lint` runs a *target project's* declared lint invocation (commonly two steps, in order); `dev lint` still spawns `bun run lint` in *this* checkout. |
+| archive | **the verb exists; no stack ships a reference row** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. Most lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. No signing material is ever synthesised. |
 | release | **mechanics, plus the verb** | [`shu release`](#nen-shu-release), [`release resolve-target`](#nen-release-resolve-target), [`release preflight`](#nen-release-preflight), [`release self-check`](#nen-release-self-check), [`changelog collate`](#nen-changelog-collate), [`changelog completeness`](#nen-changelog-completeness), [`tag cut`](#nen-tag-cut), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record) | `shu release` runs a lane's declared publication step where it has one. The rest is unchanged: preconditions, the changelog, the annotated tag, the consumer fan-out — a tag is not a release. |
-| dev (debug run) | **yes — nextjs only, PR 2 of #91** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
-| run (production run) | **yes — nextjs only, PR 2 of #91** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
+| dev (debug run) | **yes — any lane that declares one** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
+| run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
 | deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`. There is no default target, ever. No stack ships a reference deploy row. |
-| coverage | **yes — nextjs only, PR 2 of #91** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. Parsing the report it names, and the never-a-gate `--threshold`, arrive with a later PR. |
-| host toolchain | **no** | — | [`shu tools`](#nen-shu-tools) is declared and refuses at exit 4: it is the one verb whose blast radius is the developer's machine, and it ships on its own (PR 4 of #91). |
+| coverage | **the verb exists; the reference rows are templated** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack's rows for it name a workspace or a result bundle nen cannot know, so `detect` withholds them with the token named and the declaration supplies it. Parsing the report the declaration names, and the never-a-gate `--threshold`, arrive with a later PR. |
+| host toolchain | **no** | — | [`shu tools`](#nen-shu-tools) is declared, documented and refuses at exit 4: it is the one verb whose blast radius is the developer's machine, and it ships on its own (PR 4 of #91). [`shu warmup`](#nen-shu-warmup) refuses at 4 for the same kind of reason and arrives in PR 12. |
 
 The remaining work is tracked in
 [zheref/nen#91](https://github.com/zheref/nen/issues/91), *stack-aware developer
