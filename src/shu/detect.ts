@@ -193,11 +193,30 @@ interface Entry {
   readonly directory: boolean;
 }
 
+/**
+ * One directory's entries, SORTED BY NAME.
+ *
+ * `readdirSync` returns whatever order the filesystem hands back -- creation
+ * order on APFS, hash order on ext4 -- and this verb's whole output is built by
+ * walking directories with it. Unsorted, a proposal is not reproducible: the
+ * LANE ORDER changes (which changes the order `--lane`'s refusal lists them in,
+ * and the key order of the written file), the MARKER list for a lane that
+ * matched twice changes, and -- the one that is a correctness problem rather
+ * than a cosmetic one -- `laneName`'s collision suffixes are assigned in
+ * iteration order, so two lanes competing for one name could swap between two
+ * runs over the same tree.
+ *
+ * IT WAS REPRODUCED, not theorised: the same three-lane fixture answered
+ * `nextjs, web, admin` from the CLI and `nextjs, admin, web` from the suite on
+ * one machine, minutes apart, because a checkout had rewritten the directory in
+ * between. Sorting here fixes every caller at once -- the marker scan, the walk
+ * and the workspace-member expansion all read through this one function.
+ */
 function listDirectory(path: string): readonly Entry[] {
   try {
-    return readdirSync(path, { withFileTypes: true }).map(
-      (entry): Entry => ({ name: entry.name, directory: entry.isDirectory() }),
-    );
+    return readdirSync(path, { withFileTypes: true })
+      .map((entry): Entry => ({ name: entry.name, directory: entry.isDirectory() }))
+      .sort((a, b): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   } catch {
     return [];
   }

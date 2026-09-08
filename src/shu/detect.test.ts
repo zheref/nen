@@ -725,6 +725,39 @@ describe("nen shu detect -- what it proposes can be run", () => {
 // once per package rather than as one invocation.
 
 describe("nen shu detect -- the nextjs workspace shape", () => {
+  it("orders lanes and markers by NAME, so one tree always proposes one document", () => {
+    // REPRODUCED BEFORE IT WAS FIXED: this same fixture answered `nextjs, web,
+    // admin` from the CLI and `nextjs, admin, web` from the suite minutes
+    // apart, because `readdirSync` hands back the filesystem's own order and a
+    // checkout had rewritten the directory in between. Lane order is not
+    // cosmetic -- `laneName`'s collision suffixes are assigned in iteration
+    // order, so two lanes competing for one name could swap between two runs.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-order-"));
+    try {
+      // Created in an order that is NOT the sorted one, so a fixture that
+      // happened to be written alphabetically cannot make this pass by luck.
+      for (const name of ["zeta", "alpha", "middle"]) {
+        mkdirSync(join(dir, name), { recursive: true });
+        writeFileSync(join(dir, name, "next.config.js"), "module.exports = {};\n");
+      }
+      const lanes = detect(dir).lanes.map((lane): string => lane.lane);
+      expect(lanes).toEqual(["alpha", "middle", "zeta"]);
+      expect(detect(dir).lanes.map((lane): string => lane.lane)).toEqual(lanes);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // And the same rule over a lane's MARKERS, which come out of one
+    // directory's listing rather than out of the walk.
+    const twice = mkdtempSync(join(tmpdir(), "nen-detect-order-markers-"));
+    try {
+      writeFileSync(join(twice, "next.config.mjs"), "export default {};\n");
+      writeFileSync(join(twice, "next.config.js"), "module.exports = {};\n");
+      expect(detect(twice).lanes[0]?.markers).toEqual(["next.config.js", "next.config.mjs"]);
+    } finally {
+      rmSync(twice, { recursive: true, force: true });
+    }
+  });
+
   it("proposes one lane per workspace member that carries a marker, plus the root's own", () => {
     // A member WITHOUT a marker (packages/core) is a package, not a lane: it is
     // named in the root's coverage note and gets no lane of its own, because a
