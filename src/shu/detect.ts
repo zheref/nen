@@ -57,6 +57,7 @@ import {
   profileById,
   spellOnHost,
   verbCell,
+  type PackMinimum,
   type Placeholder,
   type ProfileCrossCheck,
   type ProfileMarker,
@@ -810,10 +811,11 @@ function fileCarrying(
  * refined" is a claim only a profile that states a refinement can make.
  */
 function packMarkersIn(
+  repoRoot: string,
   directory: string,
   names: readonly string[],
   markers: readonly ProfileMarker[],
-): readonly string[] {
+): PackMarkerMatches {
   const found: string[] = [];
   let qualifies = !markers.some((marker): boolean => marker.contains !== null);
   for (const name of names) {
@@ -822,7 +824,60 @@ function packMarkersIn(
     found.push(join(directory, name));
     if (marker.contains !== null) qualifies = true;
   }
-  return qualifies ? found : [];
+  if (qualifies) return { markers: found, nearMisses: [] };
+  return { markers: [], nearMisses: nearMissesIn(repoRoot, directory, names, markers) };
+}
+
+/**
+ * `<UseWinUI>true</UseWinUI>` -> `UseWinUI`, when the literal is ONE WHOLE
+ * ELEMENT and nothing else.
+ *
+ * READ OFF THE PACK'S OWN LITERAL rather than stated here, which is what keeps
+ * this file free of the stack: nen does not know what the element MEANS, only
+ * that the catalogue wrote a complete element and that a file spelling the same
+ * element with attributes is a near miss rather than a coincidence.
+ */
+function markerElement(contains: string): string | null {
+  return /^<([A-Za-z_][\w.-]*)>[^<>]*<\/\1>$/.exec(contains)?.[1] ?? null;
+}
+
+/**
+ * A file that ALMOST carries a refined marker, and the sentence that says so.
+ *
+ * THE SILENT NON-DETECTION THIS EXISTS TO END. `<UseWinUI Condition="'$(Config)'
+ * == 'Release'">true</UseWinUI>` is a real project of this stack, written the
+ * way MSBuild lets you write it, and it matched no marker at all -- so the tree
+ * came back "no lane detected", which is the same answer an empty directory
+ * gets. nen does not evaluate conditions and should not start; what it can do is
+ * refuse to be silent about the one shape it knows it is declining.
+ *
+ * IT IS A NEAR MISS AND NOT A MATCH, deliberately: an attribute can switch the
+ * element OFF as easily as on, and proposing a lane from a line nen cannot
+ * evaluate is exactly the guess §2.6 forbids.
+ */
+function nearMissesIn(
+  repoRoot: string,
+  directory: string,
+  names: readonly string[],
+  markers: readonly ProfileMarker[],
+): readonly string[] {
+  const out: string[] = [];
+  for (const marker of markers) {
+    const literal = marker.contains;
+    if (literal === null) continue;
+    const element = markerElement(literal);
+    if (element === null) continue;
+    for (const name of names) {
+      if (!matchesPattern(marker.pattern, name)) continue;
+      const text = readMarkup(join(directory, name));
+      if (text === null || text.includes(literal)) continue;
+      if (!new RegExp(`<${literalPattern(element)}\\s[^>]*>`).test(text)) continue;
+      out.push(
+        `${relativePath(repoRoot, join(directory, name))} spells <${element}> WITH ATTRIBUTES, and the reference pack's marker for this stack is the literal '${literal}'. nen does not evaluate a condition -- an attribute can switch the element off as easily as on, and a lane proposed from a line nen cannot read would be a guess. So this tree is NOT proposed as that stack, and the reason is here rather than in the silence a missing marker otherwise leaves. Write the unconditional form, or state the lane by hand.`,
+      );
+    }
+  }
+  return out;
 }
 
 /** Whether this file both matches a marker's pattern and carries its literal. */
@@ -857,6 +912,18 @@ interface DirectoryMatches {
    * "warning, never a proposal" case, and silence about it reads as absence.
    */
   readonly nestedBuilds: readonly string[];
+  /**
+   * Files that ALMOST carried a pack-matched stack's refined marker -- see
+   * `nearMissesIn`. Reported as findings, because a real project nen declines
+   * to read looks exactly like an empty directory from the outside.
+   */
+  readonly nearMisses: readonly string[];
+}
+
+/** One pack-matched stack's answer for one directory. */
+interface PackMarkerMatches {
+  readonly markers: readonly string[];
+  readonly nearMisses: readonly string[];
 }
 
 /** Every stack whose markers this ONE directory carries. */
@@ -872,6 +939,7 @@ function matchesIn(
     entries.filter((entry): boolean => !entry.directory).map((entry): string => entry.name),
   );
   const nestedBuilds = new Set<string>();
+  const nearMisses: string[] = [];
   const found: Match[] = [];
   const add = (stack: string, marker: string): void => {
     found.push({ stack, marker: relativePath(repoRoot, marker), identifying: true });
@@ -950,10 +1018,16 @@ function matchesIn(
   }
 
   for (const { stack, markers } of packMarkers) {
-    for (const marker of packMarkersIn(directory, names, markers)) add(stack, marker);
+    const answer = packMarkersIn(repoRoot, directory, names, markers);
+    for (const marker of answer.markers) add(stack, marker);
+    nearMisses.push(...answer.nearMisses);
   }
 
-  return { matches: found, nestedBuilds: [...nestedBuilds].sort(compareBytes) };
+  return {
+    matches: found,
+    nestedBuilds: [...nestedBuilds].sort(compareBytes),
+    nearMisses,
+  };
 }
 
 /** One pack-matched stack and the markers the pack states for it. */
@@ -1012,6 +1086,8 @@ interface Scan {
   readonly found: readonly { directory: string; matches: readonly Match[] }[];
   /** Every nested build the refinement search stopped at, absolute, byte-ordered. */
   readonly nestedBuilds: readonly string[];
+  /** Every near-miss sentence the scan collected, byte-ordered. */
+  readonly nearMisses: readonly string[];
 }
 
 /** Every directory with markers, deepest-last, root first. */
@@ -1022,9 +1098,16 @@ function scan(
 ): Scan {
   const out: { directory: string; matches: readonly Match[] }[] = [];
   const nested = new Set<string>();
+  const misses = new Set<string>();
   const walk = (directory: string, depth: number): void => {
-    const { matches, nestedBuilds } = matchesIn(repoRoot, directory, hostStacks, packMarkers);
+    const { matches, nestedBuilds, nearMisses } = matchesIn(
+      repoRoot,
+      directory,
+      hostStacks,
+      packMarkers,
+    );
     for (const build of nestedBuilds) nested.add(build);
+    for (const miss of nearMisses) misses.add(miss);
     if (matches.length > 0) out.push({ directory, matches });
     if (depth === 0) return;
     for (const entry of listDirectory(directory)) {
@@ -1036,7 +1119,11 @@ function scan(
     }
   };
   walk(repoRoot, MAX_DEPTH);
-  return { found: out, nestedBuilds: [...nested].sort(compareBytes) };
+  return {
+    found: out,
+    nestedBuilds: [...nested].sort(compareBytes),
+    nearMisses: [...misses].sort(compareBytes),
+  };
 }
 
 /**
@@ -3274,6 +3361,23 @@ function layerFor(reading: StackReading, verb: string): TokenLayer {
   return { answers, unanswered };
 }
 
+/**
+ * The program ONE toolchain entry lets a row skip the manifest check for.
+ *
+ * A SET RATHER THAN A BOOLEAN AT THE CALL SITE, because this is the exemption
+ * itself and it is worth being able to look at. It is EMPTY unless the pack
+ * says otherwise: `hostTool` is false by default and false for every tool a
+ * repository could also declare as a dependency, so the ordinary answer here is
+ * "nothing", and a mutant that turned it on everywhere would erase the
+ * executable check for every stack that states any toolchain at all.
+ * ./detect.test.ts pins it against the pack in both directions.
+ */
+export function hostToolPrograms(entry: PackMinimum): ReadonlySet<string> {
+  const program = entry.probe[0];
+  if (!entry.hostTool || program === undefined) return new Set();
+  return new Set([program]);
+}
+
 /** Whether this profile states anything the project reader could act on. */
 function statesProjectRules(profile: StackProfile): boolean {
   return (
@@ -3524,22 +3628,51 @@ function readStack(
     if (PACK_TOKENS.some((token): boolean => entry.probe.some((word): boolean => word.includes(token)))) {
       continue;
     }
-    const program = entry.probe[0];
-    if (entry.hostTool && program !== undefined) confirmed.add(program);
+    for (const program of hostToolPrograms(entry)) confirmed.add(program);
     const versionFile = entry.versionFile;
     if (versionFile === null) continue;
     const found = findVersionFile(repoRoot, laneDirectory, versionFile.file);
-    const stated = found === null ? undefined : valueAtPath(readJson(found) ?? {}, versionFile.path);
+    const document = found === null ? null : readJson(found);
+    const stated = document === null ? undefined : valueAtPath(document, versionFile.path);
     if (typeof stated === "string" && stated !== "") {
+      const at = relativePath(repoRoot, found ?? "");
+      // WHAT ELSE THE PIN'S OWN BLOCK SAYS, because a version alone is not the
+      // whole statement. A `global.json` stating `"rollForward": "latestFeature"`
+      // beside its `"version"` is declaring a FLOOR -- any SDK in that band
+      // satisfies it -- and nen's toolchain check compares versions EXACTLY, so
+      // a host with a newer SDK in the same band is reported as a mismatch
+      // against a pin the repository never meant as exact. nen still proposes
+      // the version and nothing else (a `version` is what the declaration's own
+      // reader accepts, and there is no field for a policy), but it says so
+      // rather than dropping the sentence: a pin whose meaning nen cannot carry
+      // is a pin whose meaning a maintainer has to be told about.
+      const block = valueAtPath(document ?? {}, versionFile.path.slice(0, -1));
+      const key = versionFile.path[versionFile.path.length - 1];
+      const siblings =
+        typeof block === "object" && block !== null && !Array.isArray(block)
+          ? Object.entries(block as Record<string, unknown>)
+              .filter(([name, value]): boolean => name !== key && typeof value !== "object")
+              .map(([name, value]): string => `${name} = ${JSON.stringify(value)}`)
+              .sort(compareBytes)
+          : [];
+      const policy =
+        siblings.length === 0
+          ? ""
+          : ` ${at} also states ${siblings.join(", ")} at ${versionFile.path.slice(0, -1).join(".") || "(root)"}, which nen's toolchain block has no field for: it means the pin is a FLOOR or a policy rather than an exact requirement, and 'nen shu tools' compares versions EXACTLY -- so a host inside the band this repository accepts can still be reported as a mismatch. Narrow it by hand, or read that report with this in mind.`;
       toolchain[tool] = {
         version: stated,
         probe: entry.probe,
         versionFrom: entry.versionFrom,
         installer: entry.installer,
-        why: `${relativePath(repoRoot, found ?? "")} states this pin at ${versionFile.path.join(".")}, and nen proposes that and nothing else. The pack's own reason for the requirement: ${entry.why}`,
+        // THE PACK'S SENTENCE IS ABOUT THE REPOSITORY THE CATALOGUE OBSERVED,
+        // not about this one, and splicing it in unlabelled produced a
+        // declaration that contradicted itself: the reason quoted here begins
+        // "There is NO global.json in the repository" on a tree whose pin nen
+        // has just read out of one.
+        why: `${at} states this pin at ${versionFile.path.join(".")}, and nen proposes that and nothing else.${policy} The reference pack requires this tool for a reason written against the repository the catalogue observed rather than this one: ${entry.why}`,
       };
       notes.push(
-        `'${tool}' is proposed under project.toolchain with version ${stated}, read from ${relativePath(repoRoot, found ?? "")} (${versionFile.path.join(".")}) -- this repository's own statement about itself, never the pack's. Its installer is '${entry.installer}', and 'nen shu tools' reports what is on the host rather than installing it unless the installer is one this release runs.`,
+        `'${tool}' is proposed under project.toolchain with version ${stated}, read from ${at} (${versionFile.path.join(".")}) -- this repository's own statement about itself, never the pack's.${policy} Its installer is '${entry.installer}', and 'nen shu tools' reports what is on the host rather than installing it unless the installer is one this release runs.`,
       );
       continue;
     }
@@ -4234,6 +4367,23 @@ function proposeVerbs(
     );
   }
 
+  // THE PROSE A `hosts` MAP CANNOT CARRY, carried beside it. `hosts` is a list
+  // of `process.platform` values and nothing else, so everything that makes a
+  // platform constraint actionable -- which IDE, which SDK, which formats are
+  // per-host, what a teammate on the other machine sees -- lived only in the
+  // pack and in docs/STACK-MATRIX.md. A maintainer reading `"hosts": {"*":
+  // ["win32"]}` in their own declaration was told WHAT nen refuses and never
+  // why, and the exit-3 message says less still. It is emitted wherever a
+  // `hosts` block is proposed at all: a stack running everywhere still has
+  // something to say about per-format and per-lane splits.
+  if (Object.keys(profile.hosts).length > 0 && profile.hostNote !== "") {
+    notes.push(
+      `the platforms in 'hosts' are ${Object.entries(profile.hosts)
+        .map(([verb, platforms]): string => `${verb}: ${platforms.join(", ")}`)
+        .join("; ")}, and the reference pack's own note on what that means in practice -- which a 'hosts' map cannot carry and an exit-3 refusal does not print -- is: ${profile.hostNote}`,
+    );
+  }
+
   if (noCommand.length > 0) {
     notes.push(
       `the reference pack proposes no command for ${noCommand.join(", ")}. That is the pack DECLINING to choose for you rather than a gap in this proposal -- docs/STACK-MATRIX.md carries each one's full reason, and the declaration is where this repository's answer goes. Each is proposed as an explicit {"unsupported": "<the pack's own reason>"} row rather than left out, because a lane whose verb map is empty is a declaration nen's own reader refuses, and because a row a maintainer can SEE is a row they can replace.${
@@ -4473,7 +4623,7 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
   const pack = loadProfilesPack();
   const hostStacks = hostToolStacks(pack);
   const resolved = resolveSchemaFile(repoRoot, CONTRACT_FILE);
-  const { found, nestedBuilds } = scan(repoRoot, hostStacks, packMarkersOf(pack));
+  const { found, nestedBuilds, nearMisses } = scan(repoRoot, hostStacks, packMarkersOf(pack));
   const lanes: DetectedLane[] = [];
   const profiles = new Map<string, StackProfile>();
   const taken = new Set<string>();
@@ -4578,6 +4728,15 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
     );
   }
 
+  // A PROJECT NEN DECLINED TO READ IS NOT AN EMPTY DIRECTORY, and from the
+  // outside they used to look identical. `nearMissesIn` carries the whole
+  // argument; these are the sentences it produced, reported whether or not a
+  // lane was found -- a tree with one lane and a second, conditional project is
+  // exactly the case where the silence is most expensive.
+  for (const miss of nearMisses) {
+    notes.push(`a project file nen did NOT read as a marker: ${miss}`);
+  }
+
   const makefile = found.some((entry): boolean =>
     listDirectory(entry.directory).some((file): boolean => file.name === "Makefile"),
   );
@@ -4632,21 +4791,34 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
   // lanes answering the SAME tool with different versions is an ambiguity, and
   // this file resolves none: neither is proposed, and the note names both.
   const toolchain: Record<string, unknown> = {};
-  const contested = new Map<string, string[]>();
+  // WHICH LANE PUT EACH ENTRY THERE, kept alongside it. Without it the note
+  // below could only name the lanes that ARRIVED SECOND -- "(program among
+  // them)" for a disagreement between `app` and `program` -- which names one
+  // side of a two-sided fact and leaves the maintainer to find the other. Both
+  // sides, always, byte-ordered.
+  const owner = new Map<string, string>();
+  const contested = new Map<string, Set<string>>();
   for (const [lane, entries] of toolchains) {
     for (const [tool, entry] of Object.entries(entries)) {
       const prior = toolchain[tool];
       if (prior !== undefined && JSON.stringify(prior) !== JSON.stringify(entry)) {
-        contested.set(tool, [...(contested.get(tool) ?? []), lane]);
+        const involved = contested.get(tool) ?? new Set<string>();
+        const first = owner.get(tool);
+        /* c8 ignore next -- an entry is in `toolchain` only via `owner` */
+        if (first !== undefined) involved.add(first);
+        involved.add(lane);
+        contested.set(tool, involved);
         continue;
       }
       toolchain[tool] = entry;
+      owner.set(tool, lane);
     }
   }
   for (const [tool, lanesInvolved] of contested) {
     delete toolchain[tool];
+    const named = [...lanesInvolved].sort(compareBytes);
     notes.push(
-      `no project.toolchain entry is proposed for '${tool}': more than one lane states a version for it and they disagree (${lanesInvolved.join(", ")} among them), and project.toolchain is ONE block for the whole project rather than one per lane. nen resolves no ambiguity -- state the version this repository means.`,
+      `no project.toolchain entry is proposed for '${tool}': ${named.length} lanes state a version for it and they disagree (${named.join(", ")}), and project.toolchain is ONE block for the whole project rather than one per lane. nen resolves no ambiguity -- state the version this repository means.`,
     );
   }
 

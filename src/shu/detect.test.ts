@@ -18,6 +18,7 @@ import { ScriptedSeams } from "../seam/scripted.js";
 import { loadProfilesPack, PLACEHOLDERS, profileById, verbCell } from "../profiles/pack.js";
 import {
   detect as detectOn,
+  hostToolPrograms,
   listDirectory,
   MARKER_STACKS,
   markerSpellings,
@@ -45,6 +46,7 @@ import {
   NEXTJS_WORKSPACES,
   WINUI_APP,
   WINUI_LINKED,
+  WINUI_NESTED,
 } from "./fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { ASSERTABLE_KINDS } from "./run.js";
@@ -3698,6 +3700,27 @@ describe("nen shu detect -- the dotnet-winui lane, end to end", () => {
     expect(lane?.markers).toEqual(["Placeholder.csproj", "Placeholder.sln"]);
   });
 
+  it("carries the pack's hostNote as a lane note, beside the hosts block it explains", () => {
+    // N4: `hosts` is a list of `process.platform` values and nothing else, so
+    // everything that makes the constraint actionable -- which IDE, which SDK,
+    // what a macOS teammate sees -- reached only docs/STACK-MATRIX.md. A
+    // maintainer reading `"hosts": {"*": ["win32"]}` in their own declaration
+    // was told WHAT nen refuses and never why.
+    const lane = detect(WINUI_APP).lanes[0];
+    const notes = lane?.notes.join("\n") ?? "";
+    const profile = profileById(loadProfilesPack(), "dotnet-winui");
+    expect(notes).toContain(profile.hostNote);
+    expect(notes).toContain("the platforms in 'hosts' are *: win32");
+  });
+
+  it("carries a hostNote for a stack whose hosts are every platform too", () => {
+    // Emitted wherever a `hosts` block is proposed at all: a stack running
+    // everywhere still has per-format and per-lane splits worth stating.
+    const lane = detect(GATSBY_SITE).lanes[0];
+    const profile = profileById(loadProfilesPack(), "gatsby");
+    expect(lane?.notes.join("\n")).toContain(profile.hostNote);
+  });
+
   it("proposes the win32 allowlist the pack states, for every verb", () => {
     const proposal = detect(WINUI_APP).proposal as unknown as Proposal;
     expect(proposal.project.hosts).toEqual({ "*": ["win32"] });
@@ -4196,6 +4219,26 @@ describe("nen shu detect -- what the dotnet-winui lane refuses to answer", () =>
     });
   });
 
+  it("withholds only BUILD when two solutions sit beside a test project", () => {
+    // N5: the ambiguity is about `{project}` for the LANE, and `test` answers
+    // that token from its own evidence file -- so `test` is still proposed. The
+    // behaviour was right and the claim about it was wrong; this is the pin.
+    withTree(
+      {
+        "App.csproj": WINUI_CSPROJ,
+        "A.sln": "a\n",
+        "B.sln": "b\n",
+        "Tests/Tests.csproj":
+          '<Project><ItemGroup><PackageReference Include="xunit" /></ItemGroup></Project>\n',
+      },
+      (notes, verbs): void => {
+        expect(verbs).toEqual(["test"]);
+        expect(notes).toContain("'build' withheld:");
+        expect(notes).not.toContain("'test' withheld:");
+      },
+    );
+  });
+
   it("withholds, naming both, when two project files carry the WinUI property and no solution does", () => {
     withTree({ "One.csproj": WINUI_CSPROJ, "Two.csproj": WINUI_CSPROJ }, (notes, verbs): void => {
       expect(verbs).toEqual([]);
@@ -4233,6 +4276,89 @@ describe("nen shu detect -- what the dotnet-winui lane refuses to answer", () =>
       );
       expect(notes).toContain("'*.csproj' carrying 'Microsoft.NET.Test.Sdk'");
     });
+  });
+
+  it("SEATS the row a cross-check withholds, carrying the reason inside it", () => {
+    // A row that is simply absent makes `nen shu test` answer "this lane
+    // declares no 'test'", which is true of the FILE and says nothing about the
+    // tree. A row a maintainer can SEE is a row they can replace.
+    const dir = winuiTree({ "App.csproj": WINUI_CSPROJ });
+    try {
+      const row = detect(dir).lanes[0]?.verbs["test"] as { unsupported?: string };
+      expect(row?.unsupported, "the row is written, not omitted").toBeTypeOf("string");
+      expect(row?.unsupported).toContain("PROPOSED SEAT");
+      expect(row?.unsupported).toContain("no file in this lane carries the evidence this row needs");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("says so, rather than nothing, for a CONDITIONAL marker property it will not evaluate", () => {
+    // N7: `<UseWinUI Condition="...">true</UseWinUI>` is a real project of this
+    // stack and matched no marker, so the tree came back "no lane detected" --
+    // the same answer an empty directory gets.
+    const dir = winuiTree({
+      "App.csproj":
+        "<Project><PropertyGroup>" +
+        "<UseWinUI Condition=\"'$(Configuration)' == 'Release'\">true</UseWinUI>" +
+        "</PropertyGroup></Project>\n",
+    });
+    try {
+      const report = detect(dir);
+      // Still no lane: an attribute can switch the element OFF as easily as on.
+      expect(report.lanes).toEqual([]);
+      const notes = report.notes.join("\n");
+      expect(notes).toContain("App.csproj spells <UseWinUI> WITH ATTRIBUTES");
+      expect(notes).toContain("nen does not evaluate a condition");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the project walk at the depth bound it states, and says the bound", () => {
+    // THE MUTANT THIS KILLS: removing the bound from `walkLaneFiles`. An
+    // unbounded walk of a large .NET checkout is slow, and a project file deep
+    // inside somebody's fixture tree is far likelier to be test data than a
+    // build -- so the bound is real, it is the SAME one the marker scan uses,
+    // and the withholding note names it rather than leaving a silent miss.
+    const inside = "a/b/c/Deep.csproj";
+    const beyond = "a/b/c/d/TooDeep.csproj";
+    const evidence = '<Project><ItemGroup><PackageReference Include="xunit" /></ItemGroup></Project>\n';
+    withTree({ "App.csproj": WINUI_CSPROJ, [beyond]: evidence }, (notes, verbs): void => {
+      expect(verbs).toEqual(["build"]);
+      expect(notes).toContain("'test' withheld: no file in this lane carries the evidence");
+    });
+    // One directory shallower is inside the bound and IS read, which is what
+    // makes the case above a bound rather than a broken walk.
+    withTree({ "App.csproj": WINUI_CSPROJ, [inside]: evidence }, (_notes, verbs): void => {
+      expect(verbs).toEqual(["build", "test"]);
+    });
+    // And the bound is the one number, pinned: the project walk and the marker
+    // scan use the SAME `MAX_DEPTH`, and a second constant here would drift.
+    expect(MAX_DEPTH).toBe(3);
+  });
+
+  it("names BOTH lanes when two of them state different versions of one tool", () => {
+    // R26/N3: the note used to read "(b among them)" -- one side of a two-sided
+    // fact, because only the lanes that arrived SECOND were recorded.
+    const dir = winuiTree({
+      "a/App.csproj": WINUI_CSPROJ,
+      "a/global.json": JSON.stringify({ sdk: { version: "8.0.100" } }),
+      "b/App.csproj": WINUI_CSPROJ,
+      "b/global.json": JSON.stringify({ sdk: { version: "9.0.100" } }),
+    });
+    try {
+      const report = detect(dir);
+      expect(report.lanes.map((lane): string => lane.lane).sort()).toEqual(["a", "b"]);
+      expect(
+        (report.proposal as unknown as { project: Record<string, unknown> }).project,
+      ).not.toHaveProperty("toolchain");
+      const note =
+        report.notes.find((line): boolean => line.includes("no project.toolchain entry")) ?? "";
+      expect(note).toContain("2 lanes state a version for it and they disagree (a, b)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("accepts any ONE of the frameworks the pack lists as that evidence", () => {
@@ -4309,6 +4435,103 @@ describe("nen shu detect -- what the dotnet-winui lane refuses to answer", () =>
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── a dotnet-winui lane that is NOT the repository root ─────────────────────
+//
+// `winui-nested/` exists for the class of mistake a root-only fixture cannot
+// see: every path this stack answers with is LANE-RELATIVE, because a verb runs
+// in the lane's own `cwd`, and at the root the two spellings are identical.
+
+describe("nen shu detect -- a dotnet-winui lane below the repository root", () => {
+  it("names the lane after its directory and answers {project} LANE-relative", () => {
+    const report = detect(WINUI_NESTED);
+    expect(report.lanes).toHaveLength(1);
+    const lane = report.lanes[0];
+    expect(lane?.lane).toBe("desktop");
+    expect(lane?.cwd).toBe("apps/desktop");
+    // THE MUTANT THIS KILLS: answering with the repo-relative path. At the root
+    // the two are the same string, so every other case in this file passes
+    // either way -- here `dotnet build apps/desktop/Desktop.slnx` would run in
+    // `apps/desktop` and miss by exactly two directories.
+    expect(lane?.verbs["build"]).toMatchObject({
+      argv: ["build", "Desktop.slnx", "-c", "Debug"],
+    });
+    expect(JSON.stringify(lane?.verbs["build"])).not.toContain("apps/desktop/Desktop.slnx");
+  });
+
+  it("records the markers REPO-relative, because a marker is a fact about the tree", () => {
+    const lane = detect(WINUI_NESTED).lanes[0];
+    // Forward slashes on every host: `DetectedLane.markers` is documented
+    // repo-relative and forward-slashed, so this is a literal rather than a
+    // `path.join` -- joining here would assert the platform's separator and
+    // pass on the one that has it.
+    expect(lane?.markers).toEqual(["apps/desktop/Desktop.csproj", "apps/desktop/Desktop.slnx"]);
+  });
+
+  it("proposes the in-lane reference as a REPO-relative precondition", () => {
+    // The other half of the same distinction: a precondition is resolved
+    // against the repository root, not against the lane's cwd.
+    const proposal = detect(WINUI_NESTED).proposal as unknown as {
+      project: { preconditions?: Record<string, readonly Record<string, unknown>[]> };
+    };
+    const declared = proposal.project.preconditions?.["desktop"] ?? [];
+    expect(declared.map((row): unknown => row["value"])).toEqual([
+      "apps/desktop/Core/Core.csproj",
+    ]);
+  });
+
+  it("reads the XML solution format, and lets it answer because it lists the project", () => {
+    // `.slnx` is Visual Studio 17.10's solution format. It is a marker and an
+    // answer rank in the pack; nothing in detect.ts knows the extension.
+    const lane = detect(WINUI_NESTED).lanes[0];
+    expect(lane?.markers.join(" ")).toContain("Desktop.slnx");
+    expect(lane?.verbs["build"]).toMatchObject({ argv: ["build", "Desktop.slnx", "-c", "Debug"] });
+  });
+
+  it("reads the global.json ABOVE the lane, and stops at the repository root", () => {
+    // R9: the search climbs from the lane to the repository root and no
+    // further. This fixture's pin is two directories above the lane, and the
+    // directory above the repository root is the whole checkout -- a walk that
+    // did not stop would read whatever `global.json` a developer's home
+    // directory happens to carry.
+    const proposal = detect(WINUI_NESTED).proposal as unknown as {
+      project: { toolchain?: Record<string, Record<string, unknown>> };
+    };
+    const entry = proposal.project.toolchain?.["dotnet-sdk"];
+    expect(entry?.["version"]).toBe("8.0.404");
+    expect(String(entry?.["why"])).toContain("global.json states this pin at sdk.version");
+  });
+
+  it("carries the pin's SIBLING policy into the why and the note, as a floor", () => {
+    // N1: `rollForward` is what makes the pin a FLOOR, and a toolchain block
+    // has no field for it -- so a host with a newer SDK in the same band is
+    // reported as a mismatch against a pin the repository never meant as exact.
+    const report = detect(WINUI_NESTED);
+    const proposal = report.proposal as unknown as {
+      project: { toolchain?: Record<string, Record<string, unknown>> };
+    };
+    const why = String(proposal.project.toolchain?.["dotnet-sdk"]?.["why"]);
+    expect(why).toContain('rollForward = "latestFeature"');
+    expect(why).toContain("the pin is a FLOOR");
+    expect(report.lanes[0]?.notes.join("\n")).toContain('rollForward = "latestFeature"');
+  });
+
+  it("does not splice the pack's NO-global.json sentence into a tree that HAS one", () => {
+    // N2: the pack's `why` is written against the repository the catalogue
+    // observed, and quoting it unlabelled produced a declaration that
+    // contradicted the pin sitting three lines above it.
+    const proposal = detect(WINUI_NESTED).proposal as unknown as {
+      project: { toolchain?: Record<string, Record<string, unknown>> };
+    };
+    const why = String(proposal.project.toolchain?.["dotnet-sdk"]?.["why"]);
+    expect(why).toContain(
+      "written against the repository the catalogue observed rather than this one",
+    );
+    const spliced = why.indexOf("There is NO `global.json` in the repository");
+    expect(spliced).toBeGreaterThan(-1);
+    expect(spliced).toBeGreaterThan(why.indexOf("rather than this one"));
   });
 });
 
@@ -4468,6 +4691,30 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
         .filter(([, entry]): boolean => entry.hostTool)
         .map(([tool]): string => tool),
     ).toEqual(["dotnet-sdk"]);
+  });
+
+  it("exempts from the manifest check EXACTLY the programs the pack marks hostTool", () => {
+    // THE MUTANT THIS KILLS: turning the exemption on for every toolchain
+    // entry. It erases the executable check -- "a tool the project does not
+    // visibly carry is a warning, never a proposal" -- for every stack that
+    // states a toolchain at all, and it does so silently, by proposing MORE.
+    // Pinned in both directions over the whole pack, because the mutant is
+    // invisible on the one stack whose entry already has the flag.
+    const pack = loadProfilesPack();
+    const exempt: string[] = [];
+    const withheld: string[] = [];
+    for (const id of pack.ids) {
+      for (const entry of Object.values(profileById(pack, id).toolchain)) {
+        const programs = [...hostToolPrograms(entry)];
+        if (entry.hostTool) exempt.push(...programs);
+        else {
+          expect(programs, `${id}: ${entry.tool}`).toEqual([]);
+          withheld.push(entry.tool);
+        }
+      }
+    }
+    expect(exempt).toEqual(["dotnet"]);
+    expect(withheld.length, "OFF is the default and most entries take it").toBeGreaterThan(5);
   });
 
   it("holds EVERY pattern in EVERY profile to a shape this reader understands", () => {

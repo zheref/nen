@@ -21,6 +21,8 @@ export const GATSBY_SITE = join(FIXTURES, "gatsby-site");
 export const EXPO_BARE = join(FIXTURES, "expo-bare");
 export const WINUI_APP = join(FIXTURES, "winui-app");
 export const WINUI_LINKED = join(FIXTURES, "winui-linked");
+/** A `dotnet-winui` lane that is NOT the repository root, and an XML solution. */
+export const WINUI_NESTED = join(FIXTURES, "winui-nested");
 export const EMPTY_TREE = join(FIXTURES, "empty-tree");
 /** Two separate Gradle builds in one tree, the shape the inventory found. */
 export const KRO_SHAPED = join(FIXTURES, "kro-shaped");
