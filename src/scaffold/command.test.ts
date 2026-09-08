@@ -36,7 +36,7 @@ describe("nen scaffold init -- CLI wiring", () => {
   it("creates directories and installs the hook", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-scaffold-verb-"));
     const result = await capture(
-      ["scaffold", "init", "--directories", "src,tests", "--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"],
+      ["scaffold", "init", "--stack", "nextjs", "--directories", "src,tests", "--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"],
       root,
     );
     expect(result.code).toBe(0);
@@ -75,7 +75,7 @@ describe("nen scaffold init -- CLI wiring", () => {
     writeFileSync(hookPath, projectsOwnHook);
 
     const result = await capture(
-      ["scaffold", "init", "--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"],
+      ["scaffold", "init", "--stack", "nextjs", "--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"],
       root,
     );
     expect(result.code).toBe(1);
