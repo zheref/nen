@@ -891,17 +891,23 @@ describe("the CI workflow's NEN_REF is a ref that can actually run it", () => {
   };
 
   it("init writes the GREATER of this build's version and the declared minimum", async () => {
-    // THE BLOCKER THIS CLOSES. `v${VERSION}` is v0.2.0, and `git ls-tree
-    // v0.2.0` has no src/shu at all -- so every repository this verb
-    // scaffolded received a workflow whose bootstrap refuses at exit 6 and
-    // whose verbs would not exist even if it did not. The written ref is now
-    // pinned to be at least the minimum, whatever version this build carries.
+    // THE BLOCKER THIS CLOSES. While this build was v0.2.0, `git ls-tree
+    // v0.2.0` had no src/shu at all -- so every repository this verb scaffolded
+    // received a workflow whose bootstrap refuses at exit 6 and whose verbs
+    // would not exist even if it did not. The written ref is pinned to be at
+    // least the minimum, whatever version this build carries. From v0.3.0 the
+    // two are the same number (this build IS the release the minimum names), so
+    // the greater of them is computed here rather than written down -- a version
+    // bump moves `VERSION` past the minimum and must not have to edit this test.
     const root = tempCopy(NEXTJS_SINGLE);
     await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
     const body = readFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "utf8");
+    const greater = compareNenRefs(MINIMUM, `v${VERSION}`) >= 0 ? MINIMUM : `v${VERSION}`;
     expect(compareNenRefs(refIn(body), MINIMUM)).toBeGreaterThanOrEqual(0);
-    expect(refIn(body)).toBe(MINIMUM);
-    expect(compareNenRefs(MINIMUM, `v${VERSION}`)).toBeGreaterThan(0);
+    expect(refIn(body)).toBe(greater);
+    // The minimum names a release that exists, so it can never be ahead of the
+    // binary that ships it (../scaffold/templates.test.ts holds the same line).
+    expect(compareNenRefs(MINIMUM, `v${VERSION}`)).toBeLessThanOrEqual(0);
   });
 
   it("new writes the same ref, by the same rule", async () => {
@@ -911,11 +917,30 @@ describe("the CI workflow's NEN_REF is a ref that can actually run it", () => {
     expect(compareNenRefs(refIn(body), MINIMUM)).toBeGreaterThanOrEqual(0);
   });
 
-  it("says out loud that it cannot verify offline that a release exists for it", async () => {
+  it("states the offline caveat EXACTLY when the written ref is not this build's own", async () => {
+    // THE RULE, AND WHY IT CHANGED IN v0.3.0. The note exists because nen cannot
+    // check offline that a release was published for a tag it writes -- and the
+    // only ref it can vouch for is `v${VERSION}`, the one it is. While the
+    // minimum named an unreleased version this fired on every run, so the test
+    // asserted it unconditionally. On a build at or above the minimum the two
+    // refs agree and the note would be telling a caller nen cannot verify its
+    // own version. The invariant is the biconditional, held in both eras.
     const root = tempCopy(NEXTJS_SINGLE);
     const result = await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
     const printed = result.out.join("\n");
-    expect(printed).toContain(MINIMUM);
+    const written = refIn(readFileSync(join(root, ".github", "workflows", "nen-shu.yml"), "utf8"));
+    expect(written).toBe(compareNenRefs(MINIMUM, `v${VERSION}`) >= 0 ? MINIMUM : `v${VERSION}`);
+    expect(printed.includes("cannot verify offline")).toBe(written !== `v${VERSION}`);
+  });
+
+  it("says out loud that it cannot verify offline a release exists for a ref that is not its own", async () => {
+    const root = tempCopy(NEXTJS_SINGLE);
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--nen-ref", "v9.9.9", ...TRAILERS],
+      root,
+    );
+    const printed = result.out.join("\n");
+    expect(printed).toContain("v9.9.9");
     expect(printed).toContain("cannot verify offline");
     // The README's own sentence about what happens when a tag has no release.
     expect(printed).toContain("exit 6");
