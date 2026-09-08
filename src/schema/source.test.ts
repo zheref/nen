@@ -346,22 +346,28 @@ describe("readSchemaFile", () => {
   it.skipIf(!POSIX)(
     "A THROW COUNTS AS PRESENT: an unreadable nen/ copy fails loudly, it does not fall back",
     () => {
-      // THE MUTATION GUARD FOR `isPresent`'s catch, and the property the whole
-      // fallback's safety rests on. `existsSync` answers false for ANY failure,
-      // which is why this resolver stats with `throwIfNoEntry: false` instead:
-      // a genuine ENOENT becomes `undefined`, and anything that THROWS means an
-      // entry exists in some form this process could not stat.
+      // THE MUTATION GUARD FOR THE FALLBACK'S SAFETY, not for `isPresent`'s
+      // catch specifically -- `lstatSync` does not follow a symlink, so a
+      // SELF-REFERENTIAL `nen/labels.json` is stat'able (it exists, as a
+      // symlink) and `isPresent` answers `true` from its SUCCESS branch, not
+      // its catch. What this still guards is what happens next: the cycle is
+      // still there, so the read below still throws ELOOP, and that failure
+      // must stay loud rather than being swallowed and re-routed to
+      // `schemas/`. (The DANGLING-symlink test below is the one that actually
+      // exercises `isPresent`'s catch branch and its ENOTDIR fold-in.)
       //
-      // Flip that catch to `false` and nothing else in the suite notices --
-      // while a repository whose `nen/labels.json` is an ELOOP symlink starts
-      // being served the STALE `schemas/` taxonomy, silently, at exit 0. That
-      // is the exact failure the fallback was most likely to introduce and the
-      // one it was designed not to have: a broken canonical file is a defect to
-      // report, never a reason to quietly read the old one.
+      // Route `isPresent` back through `statSync` and nothing else in the
+      // suite notices -- while a repository whose `nen/labels.json` is an
+      // ELOOP symlink starts being served the STALE `schemas/` taxonomy,
+      // silently, at exit 0. That is the exact failure the fallback was most
+      // likely to introduce and the one it was designed not to have: a broken
+      // canonical file is a defect to report, never a reason to quietly read
+      // the old one.
       //
       // A SELF-REFERENTIAL SYMLINK is the cheapest portable way to build an
-      // entry that exists and cannot be stat'd. Windows is skipped because
-      // creating a symlink there needs a privilege ordinary CI does not hold.
+      // entry whose READ, not whose stat, fails with a cycle. Windows is
+      // skipped because creating a symlink there needs a privilege ordinary CI
+      // does not hold.
       const root = scratch();
       const legacy = write(root, "schemas/labels.json", '{"which":"stale schemas copy"}');
       mkdirSync(join(root, "nen"), { recursive: true });
@@ -382,6 +388,54 @@ describe("readSchemaFile", () => {
         // file's contents returned as though nothing were wrong.
         expect(message).toContain("ELOOP");
         expect(message).not.toContain(ABSENT_FILE_MARKER);
+        expect((error as SchemaError).path).toBe(schemaPath(root, LABELS_FILE));
+      }
+    },
+  );
+
+  it.skipIf(!POSIX)(
+    "A DANGLING symlink counts as present too: it fails loudly with ENOENT, it does not fall back",
+    () => {
+      // THE FAILURE THIS FIX CLOSES, alongside the ELOOP case above. `statSync`
+      // follows a symlink to its target; a `nen/labels.json` that points at a
+      // file which does not exist resolved, under `statSync`, to a plain ENOENT
+      // on the TARGET -- suppressed by `throwIfNoEntry: false` exactly like a
+      // genuinely missing entry, so the dangling symlink read as ABSENT and the
+      // resolver silently served the stale `schemas/` copy: the exact
+      // stale-taxonomy failure the "a throw counts as present" rule exists to
+      // prevent, reached by a path that rule did not cover. `lstatSync` stats
+      // the symlink ITSELF, which is there no matter what it points to, so it
+      // now counts as present and `nen/` still wins; the read below is what
+      // follows the link, and it still reports the real ENOENT -- loudly,
+      // naming `nen/labels.json`, and still actionable (`--repo`, "add the
+      // file") rather than silently returning the legacy text.
+      //
+      // Revert `isPresent` to `statSync` and this goes red: `resolved.location`
+      // becomes `"schemas"`, and `readSchemaFile` returns the stale legacy text
+      // instead of throwing.
+      //
+      // Windows is skipped for the same reason as the ELOOP test above:
+      // creating a symlink there needs a privilege ordinary CI does not hold.
+      const root = scratch();
+      write(root, "schemas/labels.json", '{"which":"stale schemas copy"}');
+      mkdirSync(join(root, "nen"), { recursive: true });
+      symlinkSync("does-not-exist.json", schemaPath(root, LABELS_FILE));
+
+      const resolved = resolveSchemaFile(root, LABELS_FILE);
+      expect(resolved.canonical.present).toBe(true);
+      expect(resolved.location).toBe("nen");
+
+      try {
+        readSchemaFile(root, LABELS_FILE);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(SchemaError);
+        const message = (error as SchemaError).message;
+        // Loud and actionable, not a silent fallback: the standard "no such
+        // file" phrasing, naming the nen/ path, still pointing at --repo.
+        expect(message).toContain(ABSENT_FILE_MARKER);
+        expect(message).toContain("'nen/labels.json'");
+        expect(message).toMatch(/--repo/);
         expect((error as SchemaError).path).toBe(schemaPath(root, LABELS_FILE));
       }
     },

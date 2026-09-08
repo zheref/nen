@@ -29,7 +29,7 @@
 // this same obligation, not just `../repos.ts`'s two call sites
 // (`product_codes`, and the per-caller pin fields on a consumer entry).
 
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SchemaError } from "./errors.js";
 
@@ -48,10 +48,11 @@ export const LEGACY_FALLBACK_REMOVED_IN = "v0.4.0";
 /**
  * THE ONE EXCEPTION TO "NO SEARCH ORDER", AND IT IS TIME-BOXED.
  *
- * Until v0.2.0 the four taxonomy files lived under `schemas/`. `nen/` is now
- * the canonical directory (zheref/nen#108) and `schemas/` is read only when
- * `nen/` does not answer, so that a repository which has not migrated keeps
- * working for the whole v0.3 line. Removed in v0.4.0: at that point this map
+ * Through v0.2.0 the four taxonomy files lived under `schemas/`. From v0.3.0
+ * the canonical directory is `nen/` (zheref/nen#108), and `schemas/` is read
+ * only as a fallback, when `nen/` does not answer -- so that a repository
+ * which has not migrated keeps working for the whole v0.3 line. The fallback
+ * is removed in v0.4.0 (`LEGACY_FALLBACK_REMOVED_IN`): at that point this map
  * and the `legacy-repo` fixture that pins it are deleted together, and any test
  * still depending on either goes red.
  *
@@ -103,8 +104,8 @@ export function schemaPath(repoRoot: string, relative: string): string {
   return join(repoRoot, ...relative.split("/"));
 }
 
-// "Is something there?", answered so that an ACCESS failure is never mistaken
-// for an ABSENCE.
+// "Is something there?", answered so that an ACCESS failure -- and a SYMLINK,
+// dangling or not -- is never mistaken for an ABSENCE.
 //
 // `existsSync` returns false for any failure, so an EACCES on a parent
 // directory or an ELOOP symlink cycle would silently route the read to the
@@ -112,28 +113,45 @@ export function schemaPath(repoRoot: string, relative: string): string {
 // file that is right there. `throwIfNoEntry: false` narrows that to the
 // failures that genuinely mean "nothing is there"; anything this THROWS means
 // the entry exists in some form this process could not stat, so it counts as
-// present and the read below reports the real errno. EACCES and ELOOP throw,
-// which is the property the fallback's safety rests on and which
-// `source.test.ts` pins with a self-referential symlink.
+// present and the read below reports the real errno.
+//
+// `lstatSync`, NOT `statSync` -- THE PROBE MUST NOT FOLLOW THE SYMLINK. A
+// `statSync` on a DANGLING symlink at `nen/labels.json` resolves the target,
+// finds nothing, and reports plain ENOENT -- suppressed by `throwIfNoEntry`
+// exactly like a missing file, so the entry reads as ABSENT and the resolver
+// serves the stale `schemas/` copy without a word, the exact failure this
+// probe exists to prevent. `lstatSync` stats the symlink ITSELF, which is
+// there regardless of what it points to, so both a dangling symlink and a
+// SELF-REFERENTIAL one now succeed here and count as present; the read below
+// is what follows the link and reports the real errno (ENOENT for the
+// dangling case, ELOOP for the self-referential one that `source.test.ts`
+// pins). EACCES still throws for either stat call, which is the property the
+// fallback's safety otherwise rests on.
 //
 // "NOTHING IS THERE" IS TWO ERRNOS, NOT ONE, and the second is worth naming
-// because it is a deliberate widening rather than a leak: `throwIfNoEntry:
-// false` suppresses ENOTDIR as well as ENOENT. A repository with a stray FILE
-// named `nen` therefore reads as an ABSENCE and routes to the `schemas/`
-// fallback rather than failing loudly -- which is the same answer that
+// because it is a deliberate widening rather than a leak: for `statSync`,
+// `throwIfNoEntry: false` suppresses ENOTDIR as well as ENOENT, so a
+// repository with a stray FILE named `nen` reads as an ABSENCE and routes to
+// the `schemas/` fallback rather than failing loudly -- the same answer that
 // repository would get with no `nen` entry at all, and the honest one, since
-// nothing can ever live under a path component that is a file.
+// nothing can ever live under a path component that is a file. VERIFIED WITH A
+// PROBE: `lstatSync` does NOT get the same courtesy -- `throwIfNoEntry: false`
+// suppresses its ENOENT but still lets ENOTDIR through as a throw. Left alone
+// that would flip the stray-`nen`-file case to "present" (any throw counts as
+// present) and stop it falling back, so the catch below folds ENOTDIR back in
+// by hand to keep the two stat calls answering identically here.
 //
 // THAT ONE IS UNIFORM ACROSS PLATFORMS, which is worth stating because the
 // route differs: Windows reports `ERROR_PATH_NOT_FOUND` for a file used as a
-// directory, which libuv maps to ENOENT, where POSIX reports ENOTDIR. Both are
-// suppressed here, so both platforms fall back. There is no divergence to
-// account for in this case -- the two errnos arrive at the same behaviour.
+// directory, which libuv maps to ENOENT, where POSIX reports ENOTDIR.
+// `throwIfNoEntry` already suppresses ENOENT for both stat calls, so the
+// Windows case never reaches the catch at all; the explicit ENOTDIR check
+// below is the POSIX side of the same uniform answer.
 function isPresent(path: string): boolean {
   try {
-    return statSync(path, { throwIfNoEntry: false }) !== undefined;
-  } catch {
-    return true;
+    return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOTDIR";
   }
 }
 
