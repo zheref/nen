@@ -3510,6 +3510,34 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
       },
     );
   });
+
+  // N11. A PAIR A SCHEME NAMES TWICE, ONCE SKIPPED AND ONCE NOT, IS NOT SKIPPED
+  // -- the scheme runs it, and a note calling it skipped would tell a
+  // maintainer the reference they are about to delete costs them nothing.
+  // MUTANT: keep whichever entry arrived first (drop the `else if
+  // (!target.skipped)` replacement), or let the last one win outright, and one
+  // of these two orders goes red.
+  for (const [slug, first, second] of [
+    ["skipped-then-not", true, false],
+    ["not-then-skipped", false, true],
+  ] as const) {
+    it(`resolves a pair named ${slug.replace(/-/g, " ")} to NOT skipped`, () => {
+      laneWhere(
+        slug,
+        [
+          testable("PlaceholderTests", "PlaceholderTests.xctest", { skipped: first }),
+          testable("PlaceholderTests", "PlaceholderTests.xctest", { skipped: second }),
+        ].join("\n"),
+        [],
+        (note): void => {
+          expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+          // ONE finding, because it is one pair -- and it does not say skipped.
+          expect(note).toContain("names 'PlaceholderTests' (PlaceholderTests.xctest) in");
+          expect(note, "the scheme runs it").not.toContain("skipped by the scheme");
+        },
+      );
+    });
+  }
 });
 
 // ── the xcode-ios lane, end to end ──────────────────────────────────────────
@@ -3559,6 +3587,45 @@ describe("nen shu detect -- the xcode-ios lane", () => {
         "run",
         "ui-test",
       ]);
+    }
+  });
+
+  // THE SAME PIN AGAINST THE TREE MOST LIKELY TO BREAK IT. Every other stack's
+  // rows are answered from a `package.json` -- a declared dependency, a
+  // declared script that spells the command out verbatim -- and `runsVerbatim`
+  // is a route that skips the executable and task checks entirely. A tree that
+  // declares this stack's tool AND writes the reference row out as one of its
+  // own scripts takes every one of those routes at once, and it must STILL get
+  // no command row: the tokens this stack withholds are machine facts, and no
+  // manifest can corroborate a simulator.
+  it("proposes no command row even where the manifest declares the tool and the row", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-manifest-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify(
+          {
+            name: "placeholder",
+            devDependencies: { xcodebuild: "1.0.0" },
+            scripts: {
+              build:
+                "xcodebuild -project Placeholder.xcodeproj -scheme Placeholder -destination platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5 -configuration Debug build",
+              test: "xcodebuild -project Placeholder.xcodeproj -scheme Placeholder -destination id=DEADBEEF -enableCodeCoverage YES -skipMacroValidation test",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      const found = detect(dir).lanes.find((entry): boolean => entry.stack === "xcode-ios");
+      expect(commandRows(found?.verbs), "a script is not a simulator").toEqual([]);
+      const withheld =
+        found?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
+      expect(withheld).toMatch(/still names \{destination\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -4084,6 +4151,178 @@ describe("nen shu detect -- the xcode-ios lane", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // ── the behaviours a mutant survived, each with the mutant it now kills ───
+
+  // M16. The pack's THIRD marker is EVIDENCE and identifies nothing on its own,
+  // which is the pack's own sentence about it. MUTANT: add `Podfile` to the
+  // marker branch in `matchesIn` and this goes red -- a repository with a
+  // dependency manifest and no Xcode container at all is proposed an Apple lane
+  // whose every row names a container that is not there.
+  it("proposes no lane at all for a tree whose only Apple file is a Podfile", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-podfile-only-"));
+    try {
+      writeFileSync(
+        join(dir, "Podfile"),
+        ["platform :ios, '17.0'", "target 'Placeholder' do", "end", ""].join("\n"),
+        "utf8",
+      );
+      expect(detect(dir).lanes, "a precondition is not an identification").toEqual([]);
+      // And BESIDE a container the same file IS recorded, as evidence -- which
+      // is what makes the assertion above about the file rather than about a
+      // reader that ignores it.
+      cpSync(XCODE_WORKSPACE, dir, { recursive: true });
+      expect(lane(dir)?.evidence).toEqual(["Podfile"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // N3. A workspace writes its containers with a location PREFIX, and which
+  // prefix it uses is the workspace's business: `group:` is what Xcode writes
+  // today and `container:` is equally legal. MUTANT: read the location without
+  // dropping the prefix (or match `group:` alone) and this goes red -- the
+  // CocoaPods shape stops being recognised and nen answers `{project}` from a
+  // bare project the workspace owns.
+  it("reads a workspace's own reference whichever location prefix it carries", () => {
+    for (const prefix of ["group:", "container:", "self:", ""]) {
+      const dir = mkdtempSync(join(tmpdir(), "nen-xcode-fileref-prefix-"));
+      try {
+        cpSync(XCODE_WORKSPACE, dir, { recursive: true });
+        writeFileSync(
+          join(dir, "Placeholder.xcworkspace", "contents.xcworkspacedata"),
+          [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Workspace version = "1.0">',
+            `   <FileRef location = "${prefix}Placeholder.xcodeproj"></FileRef>`,
+            "</Workspace>",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const withheld =
+          detect(dir)
+            .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
+        expect(withheld, prefix).toContain(
+          "whose own contents.xcworkspacedata references Placeholder.xcodeproj",
+        );
+        expect(withheld, prefix).not.toContain("nen DID answer {project}");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // N4. The target list is the UNION across every project in the lane, and the
+  // fixture's own second project sorts FIRST -- so a reader that stopped at the
+  // first project would still have found the target and this suite would not
+  // have noticed. MUTANT: stop the union after the first project (or read only
+  // the last) and this goes red, because the only project that declares the
+  // scheme's target is the byte-SECOND one.
+  it("finds a scheme's target in the byte-SECOND project of the lane", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-union-second-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      const pbxproj = join(dir, "Placeholder.xcodeproj", "project.pbxproj");
+      writeFileSync(
+        pbxproj,
+        readFileSync(pbxproj, "utf8").replace("name = PlaceholderTests;", "name = Renamed;"),
+        "utf8",
+      );
+      mkdirSync(join(dir, "Zeta.xcodeproj"), { recursive: true });
+      writeFileSync(
+        join(dir, "Zeta.xcodeproj", "project.pbxproj"),
+        [
+          "// !$*UTF8*$!",
+          "{",
+          "\tobjects = {",
+          "/* Begin PBXNativeTarget section */",
+          "\t\tFEED0001 = {",
+          "\t\t\tisa = PBXNativeTarget;",
+          "\t\t\tname = PlaceholderTests;",
+          "\t\t};",
+          "/* End PBXNativeTarget section */",
+          "\t};",
+          "}",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      expect(withheld).toMatch(
+        /this lane carries 2 projects \(Placeholder\.xcodeproj, Zeta\.xcodeproj\)/,
+      );
+      expect(withheld, "the target is declared in the second one").not.toMatch(
+        /BROKEN ON A CLEAN CHECKOUT/,
+      );
+      // The union answered the scheme, so the token left the leftover list --
+      // `{project}` stays withheld, for the count.
+      expect(withheld).toMatch(/still names \{project\}, \{simUdid\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // N5. A scheme under `xcuserdata/` belongs to one developer's checkout and is
+  // never this repository's. MUTANT: read `xcuserdata/xcschemes/` beside the
+  // shared directory and this goes red -- the lane reports two schemes, the
+  // count withholds `{scheme}`, and the note names a scheme a colleague's clone
+  // has not got.
+  it("never counts a scheme that lives under xcuserdata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-xcode-xcuserdata-"));
+    try {
+      cpSync(XCODE_PROJECT, dir, { recursive: true });
+      const mine = join(dir, "Placeholder.xcodeproj", "xcuserdata", "someone.xcuserdatad", "xcschemes");
+      mkdirSync(mine, { recursive: true });
+      cpSync(
+        join(dir, "Placeholder.xcodeproj", "xcshareddata", "xcschemes", "Placeholder.xcscheme"),
+        join(mine, "Mine.xcscheme"),
+      );
+      const withheld =
+        detect(dir)
+          .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'test' withheld")) ?? "";
+      expect(withheld, "one shared scheme, and the check still passes").toMatch(
+        /still names \{simUdid\}/,
+      );
+      expect(withheld).toContain("{scheme} = Placeholder");
+      expect(withheld, "a private scheme is not a scheme this repository states").not.toContain(
+        "Mine",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // N15/N16. THE MACHINE CLAUSE IS PER ROW, and the token it names is the one
+  // THAT row carries: `build` names a selector, `test` and `coverage` name a
+  // udid. MUTANT: print the clause once per lane (or name every machine token
+  // on every row) and this goes red -- a reader of the `build` note is told
+  // about a value that row does not carry, and a reader of a row that has one
+  // is told nothing.
+  it("gives every withheld row its own machine clause, naming that row's token", () => {
+    const rows: Readonly<Record<string, string>> = {
+      build: "{destination}",
+      test: "{simUdid}",
+      coverage: "{simUdid}",
+    };
+    for (const [verb, token] of Object.entries(rows)) {
+      const withheld = note(XCODE_PROJECT, verb);
+      expect(withheld, verb).toContain(`${token} names a fact about the MACHINE`);
+      expect(withheld, verb).toMatch(/`nen shu detect` reads the working tree and spawns nothing/);
+      // The OTHER machine token is not in this row and earns no clause here.
+      const other = token === "{destination}" ? "{simUdid}" : "{destination}";
+      expect(withheld, `${verb} must not name ${other}`).not.toContain(
+        `${other} names a fact about the MACHINE`,
+      );
+    }
+    // And the pack's cited FORMS are quoted once for the lane, not once per row.
+    const cited = (lane(XCODE_PROJECT)?.notes ?? []).filter((entry): boolean =>
+      entry.startsWith("no destination is proposed"),
+    );
+    expect(cited, "once per lane, not once per row").toHaveLength(1);
   });
 
   // ── the two tokens no tree will ever answer, and the one nen contributes ──

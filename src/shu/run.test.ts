@@ -309,6 +309,33 @@ describe("one argv element, from the declaration to the seam", () => {
     // quoting being a RENDERING and not an escape.
     expect(result.seams.calls[0]?.args[5]).toBe(DESTINATION);
   });
+
+  // A VALUE MAY CARRY THE QUOTE THE RENDERING USES. A simulator a developer
+  // renamed carries an apostrophe, and a line that wrapped it in single quotes
+  // and stopped there is one a reader cannot paste: the shell ends the quoted
+  // word at the apostrophe and the rest of the destination becomes three more
+  // arguments. So the rendering closes, escapes and reopens -- `'\''`, which is
+  // the shell's own idiom -- and the SEAM still takes the plain bytes.
+  //
+  // MUTANT: drop the `.replace(/'/g, "'\\''")` from `renderArgv` and this goes
+  // red on the printed line while every other assertion in this file stays
+  // green, because nothing else in the suite renders a value with a quote in it.
+  it("closes, escapes and reopens a single quote inside a value", async () => {
+    const named = "platform=iOS Simulator,name=Sergio's iPhone,OS=26.5";
+    const argv = ARGV.map((word): string => (word === DESTINATION ? named : word));
+    const renamed = oneLane({ hosts: { "*": ["darwin"] } }, { exe: "xcodebuild", argv });
+    const result = await withDeclaration(renamed, ["build", "--dry-run"], { platform: "darwin" });
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual([
+      "xcodebuild -project Placeholder.xcodeproj -scheme Placeholder -destination 'platform=iOS Simulator,name=Sergio'\\''s iPhone,OS=26.5' -configuration Debug build",
+    ]);
+    const ran = await withDeclaration(renamed, ["build"], {
+      platform: "darwin",
+      script: [ok(["xcodebuild", ...argv].join(" "))],
+    });
+    expect(ran.code).toBe(0);
+    expect(ran.seams.calls[0]?.args[5], "the seam takes the apostrophe itself").toBe(named);
+  });
 });
 
 // ── (b) the report's shape ─────────────────────────────────────────────────
