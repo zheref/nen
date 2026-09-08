@@ -69,7 +69,7 @@ import {
   XCODE_WORKSPACE,
 } from "./fixtures/paths.js";
 import { shuCommand } from "./command.js";
-import { ASSERTABLE_KINDS } from "./render.js";
+import { ASSERTABLE_KINDS, TARGETED_VERBS } from "./render.js";
 
 /**
  * `detect` on a STATED host, defaulting to the one `capture` below scripts.
@@ -661,16 +661,20 @@ describe("nen shu detect -- one marker per stack", () => {
       expect(commandRows(lane?.verbs)).toEqual([...proposed]);
       expect(lane?.notes.length, "a withheld map with no reason is the failure").toBeGreaterThan(0);
       for (const note of lane?.notes ?? []) {
-        // Eight shapes of note, and each is something a maintainer acts on: a
+        // Nine shapes of note, and each is something a maintainer acts on: a
         // row withheld, the pack declining to choose, a toolchain requirement
         // nen will not turn into a precondition it would have to invent a value
         // for, the catalogue's own prose about this stack (the preconditions
         // and the recorded conflicts a verb row cannot carry), the host a
         // host-conditional token was resolved for, the module the pack's
-        // tasks were re-addressed to, the destination no working tree will ever
-        // answer, and the ONE value nen contributed rather than read.
+        // tasks were re-addressed to, the simulator destination no working tree
+        // will ever answer, the ONE value nen contributed rather than read, and
+        // the EMPTY `targets` block -- the one FIELD whose emptiness is a fact
+        // about nen rather than about this tree. (The seventh and the ninth
+        // both say "destination" and are different subjects: one is a
+        // machine's simulator, the other is where a deploy sends a build.)
         expect(note).toMatch(
-          /withheld|proposes no command|no precondition is proposed|the reference pack's own note|was resolved for |includes as the module |^no destination is proposed|^\{resultBundle\} was answered/,
+          /withheld|proposes no command|no precondition is proposed|the reference pack's own note|was resolved for |includes as the module |^no destination is proposed|^\{resultBundle\} was answered|'targets' is proposed EMPTY/,
         );
       }
     });
@@ -1174,7 +1178,14 @@ describe("nen shu detect -- the nextjs golden suite, byte for byte", () => {
       expect((await capture(["detect", "--write"], dir)).code).toBe(0);
       const verbs = detect(dir).lanes.find((lane): boolean => lane.lane === "web")?.verbs;
       expect(unsupportedRows(verbs)).toEqual(["archive", "deploy", "release", "ui-test"]);
-      for (const verb of ["archive", "release", "ui-test"]) {
+      // `deploy` IS IN THIS LIST NOW, and that is the fix: its seat used to be
+      // unreachable, because `--target` was a usage gate in front of the
+      // declaration and answered "no targets declared" (2) for a lane whose row
+      // says, in the pack's own words, that there is no default deploy to run.
+      // The proposal declares `"targets": {}` and the seat still wins, in every
+      // form of the line -- which is what makes the written sentence worth
+      // writing.
+      for (const verb of ["archive", "deploy", "release", "ui-test"]) {
         const result = await capture([verb, "--dry-run", "--lane", "web"], dir);
         expect(result.code, verb).toBe(4);
         // THE WHOLE POINT OF THE STUB: the executor's refusal is the pack's
@@ -1182,17 +1193,12 @@ describe("nen shu detect -- the nextjs golden suite, byte for byte", () => {
         // in the repository's own file.
         expect(result.err.join("\n"), verb).toContain(reasonOf(verbs, verb));
       }
-      // `deploy` never reaches the verb: --target is checked FIRST by design
-      // (./run.ts states the order), and this proposal declares no target.
-      const withoutTarget = await capture(["deploy", "--dry-run", "--lane", "web"], dir);
-      expect(withoutTarget.code).toBe(2);
-      expect(withoutTarget.err.join("\n")).toMatch(/--target is required/);
       const withTarget = await capture(
         ["deploy", "--dry-run", "--lane", "web", "--target", "x"],
         dir,
       );
-      expect(withTarget.code).toBe(2);
-      expect(withTarget.err.join("\n")).toMatch(/declares no targets at all/);
+      expect(withTarget.code).toBe(4);
+      expect(withTarget.err.join("\n")).toContain(reasonOf(verbs, "deploy"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1289,6 +1295,42 @@ describe("nen shu detect -- the gatsby lane, end to end", () => {
       );
       expect(notes).toMatch(/'deploy' withheld: its reference command still names \{archiveScript\}/);
       expect(notes).toMatch(/a guessed argument is a different command/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes the publishing step ONLY where the tree carries the tool it names", () => {
+    // THE DEPLOY ROW IS CORROBORATED LIKE EVERY OTHER ROW, and it is the one
+    // row where a proposal nobody checked would put bytes on somebody's
+    // infrastructure. The pack cites a real command for this stack; a tree that
+    // does not declare the program it runs is a tree where that citation is
+    // about a DIFFERENT repository, so the row is a warning rather than a
+    // proposal -- and `archive`, whose executable this lane answers another
+    // way, is proposed beside it, which is what makes this about the tool
+    // rather than about the lane.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-gatsby-nopublisher-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        devDependencies: Record<string, string>;
+      };
+      const publisher = Object.keys(manifest.devDependencies)[0] ?? "";
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ ...manifest, devDependencies: {} }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).toEqual(["archive", "build", "dev", "run"]);
+      expect(lane?.notes.join("\n")).toContain(
+        `'deploy' withheld: it runs '${publisher}', which this lane's package.json neither declares as a dependency, nor names as its packageManager, nor spells out verbatim as one of its own scripts`,
+      );
+      // A WITHHELD ROW IS ABSENT RATHER THAN SEATED -- the seats belong to the
+      // cells the PACK has no command for, and this cell has one. The note is
+      // where the reason lives, and the executor still answers 4 (this lane
+      // declares no 'deploy') rather than running anything.
+      expect(unsupportedRows(lane?.verbs)).not.toContain("deploy");
+      expect(Object.keys(lane?.verbs ?? {})).not.toContain("deploy");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3608,20 +3650,21 @@ describe("nen shu detect -- the two Gradle lanes, end to end through the executo
         "release",
         "run",
       ]);
-      for (const verb of ["archive", "coverage", "dev", "release", "run"]) {
+      for (const verb of ["archive", "coverage", "deploy", "dev", "release", "run"]) {
         const result = await capture([verb, "--dry-run", "--lane", "gradle-android"], dir);
         expect(result.code, verb).toBe(4);
         expect(result.err.join("\n"), verb).toContain(reasonOf(verbs, verb));
       }
-      // `deploy` never reaches the verb: --target is checked FIRST by design,
-      // and this proposal declares no target -- the same order the nextjs
-      // golden pins, for the same reason.
+      // `deploy` reaches its seat here too, and with a --target that names
+      // nothing: the seat is the more specific fact and it is terminal, so it
+      // answers whatever else is wrong with the line -- the same order the
+      // nextjs golden pins, for the same reason.
       const deploy = await capture(
         ["deploy", "--dry-run", "--lane", "gradle-android", "--target", "x"],
         dir,
       );
-      expect(deploy.code).toBe(2);
-      expect(deploy.err.join("\n")).toMatch(/declares no targets at all/);
+      expect(deploy.code).toBe(4);
+      expect(deploy.err.join("\n")).toContain(reasonOf(verbs, "deploy"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5800,23 +5843,15 @@ describe("nen shu detect -- the xcode-ios proposal, executed", () => {
   for (const [verb, quoted] of Object.entries(SEATS)) {
     it(`refuses '${verb}' at exit 4, quoting the pack's own sentence back`, async () => {
       await written(XCODE_PROJECT, async (dir): Promise<void> => {
-        // `deploy` ALONE NEEDS A TARGET TO REACH ITS OWN SEAT, and that is a
-        // finding rather than a quirk of this test: `--target` is a usage gate
-        // that fires BEFORE the lane's row is read, so a proposal `detect`
-        // wrote -- which declares no targets, because nen never picks one --
-        // answers exit 2 "no targets declared" for a verb whose seat carries
-        // the reason a reader wants. The seat is right and unreachable until
-        // the repository declares a target; the note is in the PR body.
-        const extra = verb === "deploy" ? ["--target", "placeholder"] : [];
-        if (verb === "deploy") {
-          const path = join(dir, "nen", "contract.json");
-          const declaration = JSON.parse(readFileSync(path, "utf8")) as {
-            project: Record<string, unknown>;
-          };
-          declaration.project["targets"] = { placeholder: { why: "so the seat is reachable" } };
-          writeFileSync(path, JSON.stringify(declaration, null, 2), "utf8");
-        }
-        const result = await capture([verb, "--dry-run", ...extra], dir, "darwin");
+        // `deploy` IS ONE OF THE SEVEN NOW, on the proposal exactly as `detect`
+        // wrote it. It used to need a hand-injected `targets` entry and a
+        // `--target` on the line to reach its own seat -- `--target` was a
+        // usage gate that fired BEFORE the lane's row was read, so a proposal
+        // that declares no targets (because nen never picks one) answered exit
+        // 2 "no targets declared" for a verb whose seat carries the reason a
+        // reader wants. The destination is resolved after the row now, so the
+        // seat answers first and this loop needs no special case.
+        const result = await capture([verb, "--dry-run"], dir, "darwin");
         expect(result.code).toBe(4);
         expect(result.err.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
         expect(result.err.join("\n")).toContain(quoted);
@@ -5827,12 +5862,20 @@ describe("nen shu detect -- the xcode-ios proposal, executed", () => {
   }
 
   // THE GATE THAT FIRES FIRST, pinned so that the paragraph above is a claim
-  // about the program rather than about this test's arrangement.
-  it("answers exit 2 for 'deploy' on the proposal as written, because it declares no target", async () => {
+  // about the program rather than about this test's arrangement -- and it is
+  // the SEAT, in every form of the line. The proposal declares `"targets": {}`,
+  // so a caller who reads the exit-2 advice and writes a destination gets the
+  // same 4 afterwards: this lane's deploy is a database migration, which no
+  // `targets` block can change.
+  it("answers exit 4 for 'deploy' on the proposal as written, whatever --target says", async () => {
     await written(XCODE_PROJECT, async (dir): Promise<void> => {
-      const result = await capture(["deploy", "--dry-run"], dir, "darwin");
-      expect(result.code).toBe(2);
-      expect(result.err.join("\n")).toMatch(/--target is required/);
+      for (const extra of [[], ["--target", "anything"]]) {
+        const result = await capture(["deploy", "--dry-run", ...extra], dir, "darwin");
+        expect(result.code, extra.join(" ")).toBe(4);
+        expect(result.err.join("\n"), extra.join(" ")).toContain(
+          "KroApple's only deploy lane is a Supabase DATABASE MIGRATION",
+        );
+      }
     });
   });
 
@@ -7325,6 +7368,117 @@ describe("nen shu detect -- the dotnet-winui rows live in the pack, not in this 
       ).project;
       expect(project, tree).not.toHaveProperty("toolchain");
       expect(project, tree).not.toHaveProperty("preconditions");
+    }
+  });
+});
+
+// ── the empty `targets` block, and the note that travels with it ────────────
+//
+// `detect` PROPOSES A DESTINATION FOR NOBODY, EVER, and this suite is where
+// that is a property rather than a promise. The block is written empty on every
+// proposal, on every stack, from every tree in this repository -- because a
+// deploy destination is not a fact any checkout carries, however much of it nen
+// reads. The stub is the seat that says so in the file where the answer goes.
+
+describe("nen shu detect -- the targets stub", () => {
+  const TREES: readonly (readonly [string, string])[] = [
+    ["nextjs-single", NEXTJS_SINGLE],
+    ["nextjs-workspaces", NEXTJS_WORKSPACES],
+    ["gatsby-site", GATSBY_SITE],
+    ["expo-bare", EXPO_BARE],
+    ["kro-shaped", KRO_SHAPED],
+    ["winui-linked", WINUI_LINKED],
+    ["winui-nested", WINUI_NESTED],
+  ];
+
+  it("writes 'targets': {} on every proposal, from every tree, and never a destination", () => {
+    for (const [name, tree] of TREES) {
+      const project = (
+        detect(tree).proposal as unknown as { project: Record<string, unknown> }
+      ).project;
+      expect(project["targets"], name).toEqual({});
+    }
+    // AND THE MARKER TREES TOO -- the smallest proposals in the suite, where a
+    // block added "only when the tree answered something" would be absent.
+    for (const tree of ["gatsby", "expo", "xcode", "gradle-android", "compose-desktop", "winui"]) {
+      const proposal = detect(markerTree(tree)).proposal;
+      expect(
+        (proposal as unknown as { project: Record<string, unknown> }).project["targets"],
+        tree,
+      ).toEqual({});
+    }
+  });
+
+  it("pins where the block sits in the document, so a golden cannot reshuffle silently", () => {
+    // The optional two come last and only when this tree answered them; the
+    // four before them are on every proposal, in this order.
+    expect(
+      Object.keys((detect(GATSBY_SITE).proposal as unknown as { project: object }).project),
+    ).toEqual(["lanes", "defaultLane", "verbs", "hosts", "targets"]);
+    expect(
+      Object.keys((detect(WINUI_LINKED).proposal as unknown as { project: object }).project),
+    ).toEqual(["lanes", "defaultLane", "verbs", "hosts", "targets", "toolchain", "preconditions"]);
+  });
+
+  it("carries the reference pack's own word on 'deploy', per stack, beside the stub", () => {
+    // THREE CELL SHAPES, THREE SENTENCES, all of them the catalogue's: a
+    // command row's `why` (gatsby), a declared-only row's reason (nextjs), and
+    // an unsupported row's reason (the Apple lane). A note that quoted none of
+    // them would leave a maintainer an empty block and no way to fill it in.
+    const gatsby = detect(GATSBY_SITE).lanes[0]?.notes.join("\n") ?? "";
+    expect(gatsby).toMatch(/'targets' is proposed EMPTY and nen will never fill it in/);
+    expect(gatsby).toContain("THE CI PROFILE HAS NO COMMAND AT ALL");
+    expect(gatsby).toContain("zheref.io/package.json:14");
+
+    const nextjs = detect(NEXTJS_SINGLE).lanes[0]?.notes.join("\n") ?? "";
+    expect(nextjs).toContain("THREE OBSERVED SHAPES, NONE A DEFAULT");
+
+    const apple = detect(markerTree("xcode")).lanes[0]?.notes.join("\n") ?? "";
+    expect(apple).toContain("which is not an app deploy and must not be filed as one");
+  });
+
+  it("says how a destination is written, and what must never be written into one", () => {
+    const notes = detect(GATSBY_SITE).lanes[0]?.notes.join("\n") ?? "";
+    expect(notes).toContain('"requiresEnv": ["<VARIABLE_NAME>"]');
+    expect(notes).toMatch(/never reads, compares or prints the value of/);
+    expect(notes).toMatch(/Never a credential VALUE: this file is committed\./);
+    // The two refusals a writer needs to know about BEFORE they write the
+    // block, rather than after a deploy refused.
+    expect(notes).toMatch(/refused on a multi-step row/);
+    expect(notes).toMatch(/NO COMMAND LINE AT ALL/);
+  });
+
+  it("names no verb of its own: the note is generated from the executor's list", () => {
+    // The one place this file could have acquired a verb literal. It reads
+    // ./render.ts's TARGETED_VERBS instead -- the PURE half, so `detect` gains
+    // no import edge to the module that spawns -- and a second verb with a
+    // destination therefore arrives here without an edit.
+    for (const verb of TARGETED_VERBS) {
+      expect(detect(GATSBY_SITE).lanes[0]?.notes.join("\n")).toContain(
+        `'nen shu ${verb}' requires --target`,
+      );
+    }
+  });
+
+  it("round-trips: the written file asks for a destination the proposal cannot supply", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-targets-stub-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const written = JSON.parse(readFileSync(join(dir, "nen", "contract.json"), "utf8")) as {
+        project: { targets: Record<string, unknown> };
+      };
+      expect(written.project.targets).toEqual({});
+      // THE PROPOSAL LOADS, AND THE ONE THING IT CANNOT ANSWER IS ASKED FOR.
+      // gatsby is the stack whose `deploy` row IS a command, so the refusal is
+      // the destination rather than a seat -- and it carries the block to
+      // paste, in the file this run just wrote.
+      const deploy = await capture(["deploy", "--dry-run"], dir);
+      expect(deploy.code).toBe(2);
+      expect(deploy.err.join("\n")).toMatch(/declares no targets at all/);
+      expect(deploy.err.join("\n")).toContain('"targets": { "<name>"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -46,6 +46,25 @@ import type { Invocation, ProjectBlock } from "../schema/contract.js";
  */
 export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
 
+/**
+ * The verbs that send something SOMEWHERE, and therefore require `--target`.
+ *
+ * HERE FOR THE REASON ABOVE, WORD FOR WORD. Two files say this list: ./run.ts
+ * resolves a destination for exactly these verbs, and ./detect.ts names them in
+ * the note that travels with the empty `targets` block it proposes -- so a
+ * `"deploy"` literal in `detect` would be a sentence that goes stale the day a
+ * second verb with a destination lands, and importing the list from ./run.ts
+ * would give `detect` the import edge ../profiles/inertness.test.ts reads as
+ * "this module can spawn".
+ *
+ * It is a LIST for the reason `INTERACTIVE_VERBS` is one: a second such verb is
+ * a line here rather than a new branch, and a reader looking for "which verbs
+ * take a target" finds a list rather than an `=== "deploy"` inside a condition.
+ * ./command.ts's flag table is the other half -- `--target` is refused outright
+ * on every verb that is not in it.
+ */
+export const TARGETED_VERBS: readonly string[] = ["deploy"];
+
 /** One command, as it will be spawned: exe apart from argv, never a string. */
 export interface RenderedStep {
   readonly exe: string;
@@ -67,10 +86,27 @@ export interface HostVerdict {
   readonly declared: readonly string[] | null;
 }
 
+/**
+ * The destination a `deploy` resolved to, as the report prints it.
+ *
+ * NAMES ONLY, ALWAYS. `requiresEnv` is a list of variable NAMES nen asserts are
+ * set; no value of one is read, compared or rendered anywhere -- the same rule
+ * `RenderedInvocation.env` follows one field up, for the same reason.
+ */
+export interface ResolvedTarget {
+  readonly name: string;
+  /** What this destination appended to the lane's declared argv, in order. */
+  readonly args: readonly string[];
+  /** Variable NAMES this destination requires, byte-ordered. Never values. */
+  readonly requiresEnv: readonly string[];
+}
+
 export interface RenderedInvocation {
   readonly lane: string;
   readonly stack: string;
   readonly verb: string;
+  /** The destination, on a verb that takes one. Null on every other verb. */
+  readonly target: ResolvedTarget | null;
   /** Repo-relative, forward-slashed -- the lane's own `cwd`. */
   readonly cwdRelative: string;
   readonly steps: readonly RenderedStep[];
@@ -325,6 +361,10 @@ export function renderInvocation(
     lane,
     stack: declaredLane.stack,
     verb: request.verb,
+    // A PLAN IS TARGETLESS UNTIL A TARGET IS RESOLVED ONTO IT (`resolveTarget`
+    // below). Rendering the lane's verb and choosing the destination are two
+    // decisions, and the second one is refused in more ways than the first.
+    target: null,
     cwdRelative: declaredLane.cwd,
     steps,
     env: envOf(invocation.raw, pointer),
@@ -334,6 +374,147 @@ export function renderInvocation(
     ),
     artifacts: artifactsOf(invocation.raw, pointer),
     why: invocation.why,
+  };
+}
+
+/**
+ * The block a repository with no destinations pastes, and then edits.
+ *
+ * IT IS PART OF THE REFUSAL, not documentation the refusal points at. "declare
+ * a target" is advice a reader has to go and look up the shape of; the shape
+ * itself is four keys long and fits on the line that refused.
+ */
+const TARGETS_STUB =
+  '"targets": { "<name>": { "args": ["<argument appended to the deploy argv>"], "requiresEnv": ["<VARIABLE_NAME>"], "why": "<what this destination is>" } }';
+
+/** Byte order, the same order every listing in this family is printed in. */
+function byteOrder(names: readonly string[]): readonly string[] {
+  return [...names].sort((a, b): number => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * The lane's declared argv with the destination's arguments on the end.
+ *
+ * NEN DOES NOT GUESS WHICH STEP REACHES THE DESTINATION. Appending to the LAST
+ * step of a multi-step row would be an inference about somebody else's command
+ * line -- the publishing step is usually the last one, and "usually" is exactly
+ * the word this family refuses -- so a target that appends onto a multi-step
+ * verb is refused with both facts and the two ways out.
+ */
+function appendArgs(
+  plan: RenderedInvocation,
+  args: readonly string[],
+  target: string,
+): readonly RenderedStep[] {
+  if (args.length === 0) return plan.steps;
+  const first = plan.steps[0];
+  /* c8 ignore next -- `stepsOf` never returns an empty list for a runnable row */
+  if (plan.steps.length !== 1 || first === undefined) {
+    throw new VerbUsageError(
+      `target '${target}' appends ${args.length} argument${args.length === 1 ? "" : "s"} (${args.join(
+        " ",
+      )}), and '${plan.verb}' on lane '${plan.lane}' declares ${plan.steps.length} steps. nen will not guess which of them reaches the destination: write the destination's arguments into the step that does, under project.verbs.${plan.lane}.${plan.verb}, and drop this target's 'args' -- or declare a single-step ${plan.verb} row.`,
+    );
+  }
+  return [{ exe: first.exe, argv: [...first.argv, ...args] }];
+}
+
+/**
+ * Resolve `--target` onto a rendered plan, or refuse.
+ *
+ * WHY THIS RUNS AFTER `renderInvocation` AND NOT BEFORE IT. The order used to
+ * be the other way round -- `--target` was a usage gate checked before the lane
+ * and the verb were read -- and the consequence was that a lane whose `deploy`
+ * is an `unsupported` SEAT could never say so: `nen shu deploy --lane app` on a
+ * lane that will never deploy answered "no targets declared" (exit 2), which
+ * sends a maintainer to write a `targets` block that cannot make the row
+ * runnable. Two facts were competing and the WEAKER one was winning:
+ *
+ *   * the seat is TERMINAL. "This lane has no deploy, in the repository's own
+ *     words" is true whatever the command line says, and acting on the other
+ *     refusal's advice does not change it.
+ *   * a missing or unknown `--target` is a fact about the COMMAND LINE, which
+ *     the caller fixes by typing something else.
+ *
+ * A refusal that sends someone to do work that cannot help is worse than one
+ * that costs them a retype, so the terminal fact goes first -- and every
+ * refusal `renderInvocation` makes (an undeclared lane, a seat, a host, an
+ * unsubstituted placeholder) is a fact about the repository or the machine.
+ * Once a plan EXISTS, the destination is the last thing decided before the
+ * preconditions are asserted, and nothing has spawned either way.
+ *
+ * THE ONE THING THIS ORDER COSTS is that `--target typo` on a lane whose deploy
+ * is a seat is answered with the seat rather than with the typo. That is the
+ * right trade: the typo is invisible to a repository that will never deploy
+ * that lane at all.
+ */
+export function resolveTarget(
+  project: ProjectBlock,
+  plan: RenderedInvocation,
+  requested: string | null,
+): RenderedInvocation {
+  const declared = byteOrder(Object.keys(project.targets));
+  if (requested === null) {
+    throw new VerbUsageError(
+      `'${plan.verb}' on lane '${plan.lane}' (${plan.stack}) needs --target, and there is no default -- not even when exactly one target is declared. nen never chooses where a build goes. ${
+        declared.length === 0
+          ? `This repository declares no targets at all, so there is nothing --target could name yet: add one to nen/contract.json under project.targets -- ${TARGETS_STUB} -- where 'args' and 'requiresEnv' are both optional and 'requiresEnv' names variables nen asserts are SET and never reads the value of.`
+          : `Declared under project.targets: ${declared.join(", ")}.`
+      }`,
+    );
+  }
+  const target = Object.prototype.hasOwnProperty.call(project.targets, requested)
+    ? project.targets[requested]
+    : undefined;
+  if (target === undefined) {
+    // A TARGET THAT IS NOT DECLARED IS NOT A TARGET. Accepting the flag's mere
+    // presence would make `--target` a formality a caller satisfies with any
+    // word, which is the same as having no requirement -- and the requirement
+    // exists because nen must never choose where a build goes.
+    throw new VerbUsageError(
+      `--target '${requested}' is not declared under project.targets. ${
+        declared.length === 0
+          ? `This repository declares no targets at all; add one before asking nen to deploy to it -- ${TARGETS_STUB}.`
+          : `Declared: ${declared.join(", ")}.`
+      }`,
+    );
+  }
+  if (target.unsupported !== null) {
+    // THE OTHER TERMINAL FACT, and it is the destination's rather than the
+    // lane's: a hosting provider's git integration and a CI action are both
+    // real deploys with NO COMMAND LINE for nen to run. Exit 4 with the
+    // repository's own sentence, exactly as an unsupported verb row answers.
+    throw new ShuRefusal(
+      EXIT_UNSUPPORTED_VERB,
+      `target '${requested}' has no command line at all, so there is nothing for nen to run on lane '${plan.lane}' (${plan.stack}). The declaration's own reason: ${target.unsupported}`,
+    );
+  }
+  const steps = appendArgs(plan, target.args, requested);
+  return {
+    ...plan,
+    target: {
+      name: requested,
+      args: target.args,
+      requiresEnv: byteOrder(target.requiresEnv),
+    },
+    steps,
+    // ASSERTED THROUGH THE MACHINERY THAT ALREADY EXISTS. A destination's
+    // required variables are preconditions of kind `env` -- ./run.ts asserts
+    // that kind by checking the name is SET and never reading the value -- so
+    // they are appended to the lane's own list rather than given a second
+    // assertion path that would have to make the same promise twice. They come
+    // AFTER the lane's, byte-ordered, and the report's `target.requiresEnv`
+    // says which rows arrived this way.
+    preconditions: [
+      ...plan.preconditions,
+      ...byteOrder(target.requiresEnv).map(
+        (name): RenderedPrecondition => ({
+          kind: "env",
+          value: name,
+          why: `required by the deploy target '${requested}'. nen asserts the variable is SET and never reads, compares or prints its value.`,
+        }),
+      ),
+    ],
   };
 }
 

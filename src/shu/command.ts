@@ -213,11 +213,26 @@ the declaration:
   project.hosts         { "<verb>|*": ["darwin","linux","win32"] }, compared
                         against this host. An exact verb key wins over "*", and
                         a declaration with no hosts block constrains nothing.
-  project.targets       { "<name>": ... }, the deploy destinations. --target
-                        must name a key of it. A --target that names none is
-                        exit 2 listing what IS declared -- accepting the flag's
-                        mere presence would make it a formality satisfied by
-                        any word.
+  project.targets       { "<name>": { args, requiresEnv, unsupported, why } },
+                        the deploy destinations. --target must name a key of
+                        it. A --target that names none is exit 2 listing what
+                        IS declared -- accepting the flag's mere presence would
+                        make it a formality satisfied by any word. The COMMAND
+                        stays in project.verbs.<lane>.deploy, where every other
+                        verb's command is; a target says where that command
+                        sends it:
+                          args         appended to that argv, in order. Refused
+                                       on a multi-step row: which step reaches
+                                       the destination is a guess.
+                          requiresEnv  variable NAMES that must be SET,
+                                       asserted exactly as a precondition of
+                                       kind 'env' is -- the value is never
+                                       read, compared, logged or printed. A
+                                       credential belongs in the environment;
+                                       one written here would be in git.
+                          unsupported  this destination has no command line at
+                                       all (a provider's git integration, a CI
+                                       action). Exit 4, in the repo's words.
 
   project.toolchain     { "<tool>": { version, probe, versionFrom, installer,
                         why } } -- the HOST tools 'tools' checks. 'version' is
@@ -298,8 +313,19 @@ flags:
                    test suite is the slow half and a warm-up is the fast one.
   --target <name>  'deploy' only. Must name a key of project.targets. Required,
                    with no default ever -- not even when there is exactly one.
-                   It is checked BEFORE the lane and the verb, so a line that
-                   gets both wrong is told about the target first.
+                   It is resolved AFTER the lane, the verb, the host and the
+                   placeholders, and before the preconditions: a lane whose
+                   'deploy' the declaration seats as unsupported answers exit 4
+                   with its own reason whatever --target says, because that is
+                   true however the line is retyped, while a missing or unknown
+                   target is exit 2 naming what IS declared. A target may add
+                   'args' (appended to the lane's declared deploy argv, and
+                   refused on a multi-step row -- nen will not guess which step
+                   reaches the destination), 'requiresEnv' (variable NAMES nen
+                   asserts are SET, never reading or printing a value) and
+                   'unsupported' (a destination with no command line at all --
+                   a provider's git integration, a CI action -- which is exit 4
+                   in the repository's own words).
   --write          'detect' only. Writes nen/contract.json when there is none.
                    There is no --force and no merge.
   --install        'tools' only. THE ONE FLAG IN THIS FAMILY THAT CHANGES THE
@@ -329,8 +355,12 @@ flags:
                    are still missing that nen will not install.
   --json           On every verb that executes one, the report as one object,
                    keys in order:
-                   { contract, lane, stack, verb, steps, cwd, env, host,
-                     preconditions, exitCode, durationMs, artifacts, log }.
+                   { contract, lane, stack, verb, target, steps, cwd, env,
+                     host, preconditions, exitCode, durationMs, artifacts,
+                     log }. 'target' is null on every verb but 'deploy', where
+                   it is { name, args, requiresEnv } -- the destination that
+                   was resolved, what it appended to the argv, and the
+                   variable NAMES it requires. Never a value of one.
                    On 'warmup' it is a different contract again
                    ('${WARMUP_CONTRACT}'), keys in order:
                    { contract, repo, trunk, remote, branch, discard, steps,
@@ -794,17 +824,13 @@ export const shuCommand: Command = {
         );
       }
 
-      if (subcommand === "deploy") {
-        // NEVER A DEFAULT TARGET, not even when there is exactly one. A deploy
-        // that picks its own destination is the one mistake in this family
-        // whose blast radius is other people's users.
-        requireValue(
-          context.args,
-          "target",
-          "'shu deploy' sends a build to a NAMED target from project.targets, and there is no default -- one entry does not make it one.",
-        );
-      }
-
+      // NEVER A DEFAULT TARGET, not even when there is exactly one -- a deploy
+      // that picks its own destination is the one mistake in this family whose
+      // blast radius is other people's users. THE REQUIREMENT IS NOT CHECKED
+      // HERE, though it used to be: a usage gate in front of the declaration
+      // made a written `deploy` seat unreachable, because a lane that will
+      // never deploy answered "--target is required" instead of its own reason.
+      // ./run.ts's `runVerb` header carries the order and the argument.
       return runVerb(context, repoRoot, {
         verb: subcommand,
         lane: context.args.values["lane"] ?? null,

@@ -40,8 +40,11 @@ import {
   ASSERTABLE_KINDS,
   renderArgv,
   renderInvocation,
+  resolveTarget,
+  TARGETED_VERBS,
   type HostVerdict,
   type RenderedInvocation,
+  type ResolvedTarget,
 } from "./render.js";
 
 /**
@@ -57,7 +60,8 @@ export const INTERACTIVE_VERBS: readonly string[] = ["dev", "run"];
 // The precondition kinds this release can assert now live in ./render.ts --
 // the pure half -- because ./detect.ts has to say the same two words and must
 // not acquire an import edge to this module to do it. See that constant's own
-// comment; ../profiles/inertness.test.ts is what the move is for.
+// comment; ../profiles/inertness.test.ts is what the move is for. `deploy`'s
+// TARGETED_VERBS is there for exactly the same reason and arrived the same way.
 
 export interface AssertedPrecondition {
   readonly kind: string;
@@ -105,6 +109,17 @@ export interface ShuReport {
   readonly lane: string;
   readonly stack: string;
   readonly verb: string;
+  /**
+   * The destination, on a verb that takes one; `null` on every other verb.
+   *
+   * IT IS IN EVERY VERB'S REPORT, not only `deploy`'s, because one family has
+   * one document shape: a reader that had to know which verbs carry the key
+   * would be reading a different contract per verb. And it is in the report at
+   * all because this is the one verb whose blast radius is other people's
+   * users -- a deploy report that did not say WHERE it deployed is a report
+   * nobody can audit afterwards.
+   */
+  readonly target: ResolvedTarget | null;
   readonly steps: readonly ShuStepReport[];
   readonly cwd: string;
   /**
@@ -235,6 +250,27 @@ export function renderReport(report: ShuReport): readonly string[] {
   const lines: string[] = [];
   lines.push(labelled("lane", `${report.lane}  (${report.stack})`));
   lines.push(labelled("verb", report.verb));
+  // THE DESTINATION, ON THE VERB THAT HAS ONE, and printed high -- above the
+  // argv, because it is the fact a reader is checking before they let the argv
+  // run. `args` is what this target APPENDED, so a reader can see which part of
+  // the line below came from the destination rather than from the lane. Only
+  // NAMES appear for the environment, here as everywhere.
+  if (report.target !== null) {
+    lines.push(
+      labelled(
+        "target",
+        `${report.target.name}${
+          report.target.args.length === 0
+            ? "  (appends no argument)"
+            : `  (appends: ${report.target.args.join(" ")})`
+        }${
+          report.target.requiresEnv.length === 0
+            ? ""
+            : `  requires env: ${report.target.requiresEnv.join(", ")}`
+        }`,
+      ),
+    );
+  }
   lines.push(
     labelled(
       "host",
@@ -323,6 +359,7 @@ function assemble(
     lane: plan.lane,
     stack: plan.stack,
     verb: plan.verb,
+    target: plan.target,
     steps,
     cwd,
     env: Object.keys(plan.env).sort(),
@@ -402,37 +439,29 @@ function refuseImpossibleFlags(context: CommandContext, options: RunOptions): vo
  *      repository, and a caller who typed an impossible pair should not have
  *      to have a valid declaration to be told so;
  *   1. the declaration must exist;
- *   2. `--target`, when given, must name a declared target -- BEFORE the lane
- *      and the verb are resolved, so `--lane bogus --target x` reports the
- *      target rather than the lane. That is deliberate and it is the reason
- *      this list exists: `--target` is the flag whose blast radius is other
- *      people's users, and a caller who got it wrong should hear about THAT
- *      first, whatever else is also wrong with the line;
- *   3. then the lane, then the verb, then the host, then the preconditions,
- *      and only then does anything spawn.
+ *   2. then the lane, then the verb, then the host, then the placeholders --
+ *      ./render.ts's own order, every step of it a fact about the repository or
+ *      the machine;
+ *   3. THEN the destination, on a verb that takes one (./render.ts's
+ *      `resolveTarget`, which carries the argument for this position). It was
+ *      once step 2, checked before the lane and the verb were read, and that
+ *      made a written `deploy` SEAT unreachable: a lane that will never deploy
+ *      answered "no targets declared" and sent its maintainer to write a
+ *      `targets` block that could not have helped;
+ *   4. then the preconditions -- including the environment NAMES the resolved
+ *      target requires -- and only then does anything spawn.
  */
 export function runVerb(context: CommandContext, repoRoot: string, options: RunOptions): number {
   refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
-  if (options.target !== null && !Object.prototype.hasOwnProperty.call(project.targets, options.target)) {
-    // A TARGET THAT IS NOT DECLARED IS NOT A TARGET. Accepting the flag's mere
-    // presence would make `--target` a formality a caller satisfies with any
-    // word, which is the same as having no requirement -- and the requirement
-    // exists because nen must never choose where a build goes.
-    const declared = Object.keys(project.targets).filter((key): boolean => !key.startsWith("$"));
-    throw new VerbUsageError(
-      `--target '${options.target}' is not declared under project.targets. ${
-        declared.length === 0
-          ? "This repository declares no targets at all; add one before asking nen to deploy to it."
-          : `Declared: ${declared.join(", ")}.`
-      }`,
-    );
-  }
-  const plan = renderInvocation(project, {
+  const rendered = renderInvocation(project, {
     lane: options.lane,
     verb: options.verb,
     platform: context.seams.platform,
   });
+  const plan = TARGETED_VERBS.includes(options.verb)
+    ? resolveTarget(project, rendered, options.target)
+    : rendered;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
   const preconditions = assertPreconditions(plan, repoRoot, context.seams);
 

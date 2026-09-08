@@ -1607,6 +1607,29 @@ describe("NEN_VERB_TABLE -- the shu family, every verb classified", () => {
     }
   });
 
+  it("keeps 'deploy' MUTATING in every real form, and read-only only under --dry-run", () => {
+    // THE ONE VERB IN THIS FAMILY WHOSE BLAST RADIUS IS OTHER PEOPLE'S USERS,
+    // pinned with the flags a real line carries: `--target` is mandatory on it,
+    // so a table that classified the bare `nen shu deploy` correctly and lost
+    // the classification the moment a caller typed the flag it REQUIRES would
+    // be right about a command nobody runs.
+    expect(shu?.subcommands["deploy"]?.kind).toBe("dry-run-gated");
+    for (const line of [
+      "nen shu deploy",
+      "nen shu deploy --target production",
+      "nen shu deploy --repo /tmp/x --lane web --target production",
+    ]) {
+      expect(classifyCommand(line).classification, line).toBe("mutating");
+    }
+    for (const line of [
+      "nen shu deploy --dry-run --target production",
+      "nen shu deploy --target production --dry-run",
+      "nen shu deploy --repo /tmp/x --lane web --target production --dry-run --json",
+    ]) {
+      expect(classifyCommand(line).classification, line).toBe("read-only");
+    }
+  });
+
   it("so the four that used to be unclassified are now watchable with --dry-run", () => {
     // The regression this row exists for, stated in the terms the review found
     // it in: these four were absent, so BOTH forms refused.

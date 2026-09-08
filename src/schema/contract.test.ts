@@ -281,12 +281,93 @@ describe("project", () => {
     expect(contract.project?.verbs["web"]?.["resume:pdf"]?.kind).toBe("command");
   });
 
-  it("keeps profiles and targets verbatim, since nothing reads them yet", () => {
+  it("keeps profiles verbatim, since nothing reads them yet", () => {
     const contract = parse({
-      project: { ...PROJECT, profiles: { ci: { web: { build: { exe: "x", argv: ["y"] } } } }, targets: { prod: { host: "a" } } },
+      project: { ...PROJECT, profiles: { ci: { web: { build: { exe: "x", argv: ["y"] } } } } },
     });
     expect(contract.project?.profiles["ci"]).toBeDefined();
-    expect(contract.project?.targets["prod"]).toEqual({ host: "a" });
+  });
+
+  // ── project.targets: parsed, because something reads it now ───────────────
+  //
+  // It was an opaque record while the only question anyone asked of it was
+  // "does this key exist". A target now contributes ARGUMENTS to a spawned
+  // argv and NAMES to an assertion, and an unparsed map turns a mistyped key
+  // into silence: the flag was accepted, nothing was appended, and a different
+  // command deployed.
+
+  it("reads a target's args, requiresEnv, unsupported and why, and keeps the rest", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        targets: {
+          prod: {
+            args: ["--env", "production"],
+            requiresEnv: ["PLACEHOLDER_TOKEN"],
+            why: "the live site",
+            host: "a",
+          },
+        },
+      },
+    });
+    const target = contract.project?.targets["prod"];
+    expect(target?.name).toBe("prod");
+    expect(target?.args).toEqual(["--env", "production"]);
+    expect(target?.requiresEnv).toEqual(["PLACEHOLDER_TOKEN"]);
+    expect(target?.unsupported).toBeNull();
+    expect(target?.why).toBe("the live site");
+    // UNKNOWN KEYS ARE PRESERVED, NOT REFUSED -- this schema's convention
+    // everywhere, so a shape a later release reads is not a shape this one
+    // deletes.
+    expect(target?.raw["host"]).toBe("a");
+  });
+
+  it("accepts a name-only target: naming it is the whole requirement", () => {
+    const contract = parse({ project: { ...PROJECT, targets: { preview: {} } } });
+    expect(contract.project?.targets["preview"]?.args).toEqual([]);
+    expect(contract.project?.targets["preview"]?.requiresEnv).toEqual([]);
+  });
+
+  it("reads a target with no command line at all as its own sentence", () => {
+    const contract = parse({
+      project: { ...PROJECT, targets: { pages: { unsupported: "an action, not a command" } } },
+    });
+    expect(contract.project?.targets["pages"]?.unsupported).toBe("an action, not a command");
+  });
+
+  it("refuses a target that is both unsupported and carries arguments", () => {
+    const error = refusal({
+      project: { ...PROJECT, targets: { pages: { unsupported: "no command", args: ["--prod"] } } },
+    });
+    expect(error.pointer).toBe("project.targets.pages");
+    expect(error.message).toContain("has no arguments either");
+  });
+
+  it("refuses the shapes a typo produces, by pointer", () => {
+    expect(refusal({ project: { ...PROJECT, targets: { prod: "https://example.invalid" } } }).pointer).toBe(
+      "project.targets.prod",
+    );
+    expect(refusal({ project: { ...PROJECT, targets: { prod: { args: "--prod" } } } }).pointer).toBe(
+      "project.targets.prod.args",
+    );
+    expect(refusal({ project: { ...PROJECT, targets: { prod: { args: [7] } } } }).pointer).toBe(
+      "project.targets.prod.args[0]",
+    );
+    expect(
+      refusal({ project: { ...PROJECT, targets: { prod: { requiresEnv: [{}] } } } }).pointer,
+    ).toBe("project.targets.prod.requiresEnv[0]");
+    expect(refusal({ project: { ...PROJECT, targets: [] } }).pointer).toBe("project.targets");
+  });
+
+  it("skips a $-prefixed key, as every other block in this schema does", () => {
+    const contract = parse({
+      project: { ...PROJECT, targets: { $comment: "a note", prod: {} } },
+    });
+    expect(Object.keys(contract.project?.targets ?? {})).toEqual(["prod"]);
+  });
+
+  it("has no targets at all when the block is absent", () => {
+    expect(parse({ project: PROJECT }).project?.targets).toEqual({});
   });
 
   it("reads hosts as a per-verb platform allowlist", () => {

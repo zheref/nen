@@ -5,7 +5,14 @@ import { describe, expect, it } from "vitest";
 import { VerbUsageError } from "../cli/command.js";
 import { parseProjectBlock, type ProjectBlock } from "../schema/contract.js";
 import { ShuRefusal } from "./exit.js";
-import { REFUSED_PLACEHOLDERS, renderArgv, renderInvocation, resolveLane } from "./render.js";
+import {
+  REFUSED_PLACEHOLDERS,
+  renderArgv,
+  renderInvocation,
+  resolveLane,
+  resolveTarget,
+  type RenderedInvocation,
+} from "./render.js";
 
 function project(overrides: Record<string, unknown> = {}): ProjectBlock {
   return parseProjectBlock("/fixture/nen/contract.json", {
@@ -221,6 +228,138 @@ describe("renderInvocation", () => {
   // break on purpose.
   it("takes a declaration and a request, and nothing else", () => {
     expect(renderInvocation.length).toBe(2);
+  });
+});
+
+// ── resolveTarget: the destination, resolved onto a rendered plan ───────────
+//
+// PURE, LIKE THE REST OF THIS FILE. The order the executor applies it in is
+// ./run.test.ts's subject; what a target DOES to a plan is this one's.
+
+describe("resolveTarget", () => {
+  const request = { lane: null, verb: "deploy", platform: "linux" };
+
+  /** A one-lane declaration whose `deploy` is a real row, plus targets. */
+  function deployable(targets: Record<string, unknown>, steps?: unknown): ProjectBlock {
+    return parseProjectBlock("/fixture/nen/contract.json", {
+      lanes: { one: { stack: "stack-a", cwd: "." } },
+      defaultLane: "one",
+      verbs: { one: { deploy: steps ?? { exe: "tool", argv: ["publish"] } } },
+      targets,
+    });
+  }
+
+  function plan(block: ProjectBlock): RenderedInvocation {
+    return renderInvocation(block, request);
+  }
+
+  it("appends the target's args to the declared argv, in the declared order", () => {
+    const block = deployable({ prod: { args: ["--env", "production"] } });
+    const resolved = resolveTarget(block, plan(block), "prod");
+    expect(resolved.steps).toEqual([{ exe: "tool", argv: ["publish", "--env", "production"] }]);
+    expect(resolved.target).toEqual({ name: "prod", args: ["--env", "production"], requiresEnv: [] });
+  });
+
+  it("leaves the argv alone for a name-only target -- naming it is the requirement", () => {
+    const block = deployable({ prod: {} });
+    expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
+      { exe: "tool", argv: ["publish"] },
+    ]);
+  });
+
+  it("adds requiresEnv as env preconditions, byte-ordered, after the lane's own", () => {
+    const block = parseProjectBlock("/fixture/nen/contract.json", {
+      lanes: { one: { stack: "stack-a", cwd: "." } },
+      defaultLane: "one",
+      verbs: { one: { deploy: { exe: "tool", argv: ["publish"] } } },
+      preconditions: { one: [{ kind: "path", value: "deps" }] },
+      targets: { prod: { requiresEnv: ["B_TOKEN", "A_TOKEN"] } },
+    });
+    const resolved = resolveTarget(block, plan(block), "prod");
+    expect(resolved.preconditions).toEqual([
+      { kind: "path", value: "deps", why: null },
+      {
+        kind: "env",
+        value: "A_TOKEN",
+        why: expect.stringContaining("never reads, compares or prints its value") as unknown as string,
+      },
+      {
+        kind: "env",
+        value: "B_TOKEN",
+        why: expect.stringContaining("required by the deploy target 'prod'") as unknown as string,
+      },
+    ]);
+    expect(resolved.target?.requiresEnv).toEqual(["A_TOKEN", "B_TOKEN"]);
+  });
+
+  it("refuses a missing --target at 2, listing what IS declared in byte order", () => {
+    const block = deployable({ staging: {}, production: {} });
+    expect(() => resolveTarget(block, plan(block), null)).toThrow(VerbUsageError);
+    expect(() => resolveTarget(block, plan(block), null)).toThrow(
+      /Declared under project\.targets: production, staging\./,
+    );
+    expect(() => resolveTarget(block, plan(block), null)).toThrow(/there is no default/);
+  });
+
+  it("refuses an undeclared --target at 2 rather than accepting any word", () => {
+    const block = deployable({ staging: {} });
+    expect(() => resolveTarget(block, plan(block), "prod")).toThrow(
+      /--target 'prod' is not declared under project\.targets\. Declared: staging\./,
+    );
+  });
+
+  it("prints the block to paste when nothing is declared, for both refusals", () => {
+    const block = deployable({});
+    for (const requested of [null, "prod"]) {
+      expect(() => resolveTarget(block, plan(block), requested)).toThrow(/declares no targets at all/);
+      expect(() => resolveTarget(block, plan(block), requested)).toThrow(/"targets": \{ "<name>"/);
+    }
+  });
+
+  it("refuses a destination with no command line at 4, in the repository's words", () => {
+    const block = deployable({ pages: { unsupported: "an action publishes this, not a command" } });
+    expect(() => resolveTarget(block, plan(block), "pages")).toThrow(ShuRefusal);
+    expect(() => resolveTarget(block, plan(block), "pages")).toThrow(
+      /an action publishes this, not a command/,
+    );
+    try {
+      resolveTarget(block, plan(block), "pages");
+    } catch (error) {
+      expect((error as ShuRefusal).code).toBe(4);
+    }
+  });
+
+  it("refuses to guess which step of a multi-step row reaches the destination", () => {
+    const block = deployable(
+      { prod: { args: ["--prod"] } },
+      { steps: [{ exe: "tool", argv: ["build"] }, { exe: "tool", argv: ["publish"] }] },
+    );
+    expect(() => resolveTarget(block, plan(block), "prod")).toThrow(
+      /appends 1 argument \(--prod\), and 'deploy' on lane 'one' declares 2 steps/,
+    );
+    // The same multi-step row with a target that appends nothing is fine: the
+    // refusal is about composing an argv, not about multi-step deploys.
+    const bare = deployable(
+      { prod: {} },
+      { steps: [{ exe: "tool", argv: ["build"] }, { exe: "tool", argv: ["publish"] }] },
+    );
+    expect(resolveTarget(bare, plan(bare), "prod").steps).toHaveLength(2);
+  });
+
+  it("changes nothing else about the plan it was given", () => {
+    const block = deployable({ prod: { args: ["--prod"], why: "the live site" } });
+    const before = plan(block);
+    const after = resolveTarget(block, before, "prod");
+    expect(after.lane).toBe(before.lane);
+    expect(after.stack).toBe(before.stack);
+    expect(after.verb).toBe(before.verb);
+    expect(after.env).toEqual(before.env);
+    expect(after.host).toEqual(before.host);
+    expect(after.artifacts).toEqual(before.artifacts);
+    // And the plan it was handed is untouched: a target is resolved ONTO a
+    // plan, not INTO one.
+    expect(before.target).toBeNull();
+    expect(before.steps).toEqual([{ exe: "tool", argv: ["publish"] }]);
   });
 });
 
