@@ -2801,6 +2801,42 @@ describe("nen shu detect -- the expo stack, three lanes in one tree", () => {
     expect(report.notes.join("\n")).toMatch(/the lanes need different platforms/);
   });
 
+  // WHAT THE GRADLE READER ANSWERS ABOUT THE `android/` HALF, on every host.
+  // Prebuild output is a `gradle-android` lane like any other -- it ships its
+  // own wrapper (both spellings, because `expo prebuild` writes both) and its
+  // own `settings.gradle` -- so three rows are proposed with `{gw}` resolved
+  // for the host, and `test` alone stays withheld: that settings file includes
+  // `:app`, `:app` applies the plugin that identified the lane, and an
+  // application module is not the library `{unitTestTask}` needs. Nothing about
+  // the Metro lane above it changes any of that; the two are related in a note
+  // and merged nowhere.
+  for (const { platform, exe } of [
+    { platform: "darwin", exe: "./gradlew" },
+    { platform: "linux", exe: "./gradlew" },
+    { platform: "win32", exe: "gradlew.bat" },
+  ] as const) {
+    it(`proposes the native android lane's own rows on ${platform}, and withholds only {unitTestTask}`, () => {
+      const android = detect(EXPO_BARE, platform).lanes.find(
+        (lane): boolean => lane.lane === "android",
+      );
+      expect(commandRows(android?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      expect(android?.verbs["build"], platform).toMatchObject({
+        exe,
+        argv: ["assembleDebug", "--stacktrace"],
+      });
+      const notes = android?.notes.join("\n") ?? "";
+      expect(notes, platform).toMatch(/'test' withheld: .*\{unitTestTask\}/);
+      // The reason is the SETTINGS FILE's, read from this lane's own tree --
+      // not a Node-shaped one about a manifest that is not there.
+      expect(notes, platform).toMatch(/settings\.gradle includes :app/);
+      expect(notes, platform).not.toMatch(/no readable package\.json/);
+      // And the host the word was resolved for is recorded beside the rows.
+      expect(notes, platform).toContain(
+        `{gw} in this lane's proposed rows was resolved for ${platform}: nen wrote '${exe}'`,
+      );
+    });
+  }
+
   it("relates the native lanes to the manifest that generates them, and merges nothing", () => {
     // The phrase is matched in its SINGULAR form on purpose: the note says
     // "SIBLING LANE" for one child and "SIBLING LANES" for several, and an

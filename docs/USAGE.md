@@ -3511,9 +3511,9 @@ by side in the tree, and narrowing would turn a one-word edit into exit **3**
 *"unsupported host"* — a refusal that is false about the stack and that hides
 the actual fix.
 
-**Per-stack notes.** The four stacks `detect` proposes end to end, plus
-`expo`, whose Metro lane is proposed end to end and whose native lanes are
-not:
+**Per-stack notes.** The four stacks `detect` proposes end to end, plus `expo`,
+whose Metro lane is proposed end to end and whose native lanes are proposed as
+lanes of their own stacks:
 
 | Stack | What it proposes | What it withholds, and why |
 |---|---|---|
@@ -3529,13 +3529,19 @@ not:
 scan finds a `.xcworkspace` under one and a Gradle wrapper plus
 `com.android.application` under the other, and proposes `ios` (`xcode-ios`,
 darwin) and `android` (`gradle-android`) as lanes of their own with those
-stacks' rows. `defaultLane` is `null`, and **no `hosts` block is proposed**: the
-Apple lane runs on darwin alone and the other two run anywhere, and `hosts` is
-keyed by *verb* rather than by lane, so a union would let `nen shu test --lane
-ios` start on linux. A note relates the three — the `expo` profile names `ios`
-**and** `android` among its own markers, which is the pack's way of saying
-prebuild output is committed — and merges nothing: whether a verb on the Metro
-lane should drive a native one is a decision the repository makes.
+stacks' rows. **The Android half is not a marker-only lane**, and it is where
+the two stacks meet: `gradle-android`'s tool is a file the repository *commits*,
+and `expo prebuild` writes it — so the wrapper and the lane's own
+`settings.gradle` are both right there, `build`, `ui-test` and `lint` arrive as
+**commands** with `{gw}` resolved for this host, and only `test` is withheld,
+because `include ':app'` names the application module rather than the library
+`{unitTestTask}` needs. `defaultLane` is `null`, and **no `hosts` block is
+proposed**: the Apple lane runs on darwin alone and the other two run anywhere,
+and `hosts` is keyed by *verb* rather than by lane, so a union would let
+`nen shu test --lane ios` start on linux. A note relates the three — the `expo`
+profile names `ios` **and** `android` among its own markers, which is the pack's
+way of saying prebuild output is committed — and merges nothing: whether a verb
+on the Metro lane should drive a native one is a decision the repository makes.
 
 The note's gate is that **conjunction**, in full: the pack's sentence is *"`ios/`
 AND `android/` both present means the BARE workflow"*, so a tree with only one of
