@@ -369,7 +369,9 @@ describe("nen backlog order", () => {
       expect(result.code).toBe(2);
       expect(result.out).toEqual([]);
       const message = result.err.join("\n");
-      expect(message).toMatch(new RegExp(`'${file}'`));
+      // toContain, not a RegExp built from the path: on Windows `file` is
+      // `C:\Users\RUNNER~1\...`, and backslashes read as regex escapes.
+      expect(message).toContain(`'${file}'`);
       expect(message).toMatch(/row 'XY-IS-#1' needs a string 'severity'/);
       expect(message).toMatch(/got nothing \(the field is missing\)/);
     });
@@ -385,7 +387,9 @@ describe("nen backlog order", () => {
       expect(result.code).toBe(2);
       expect(result.out).toEqual([]);
       const message = result.err.join("\n");
-      expect(message).toMatch(new RegExp(`'${file}'`));
+      // toContain, not a RegExp built from the path: on Windows `file` is
+      // `C:\Users\RUNNER~1\...`, and backslashes read as regex escapes.
+      expect(message).toContain(`'${file}'`);
       expect(message).toMatch(/row 'XY-IS-#1' needs a string 'createdAt', got a number/);
     });
 
