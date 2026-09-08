@@ -1116,6 +1116,30 @@ describe("a filesystem refusal is reported, and the rest of the report survives"
     expect(existsSync(join(root, "nen", "contract.json"))).toBe(true);
   });
 
+  it("records the errno of a WRITE the filesystem rejected, and keeps going", async () => {
+    // A FILE where a directory has to go: `mkdirSync` refuses it on every
+    // platform, which is what makes this the portable way to fail a write
+    // mid-run. Two steps fail here -- the declaration and the workflow -- and
+    // both must be rows, with the steps after them still performed.
+    const root = tempCopy(NEXTJS_SINGLE);
+    writeFileSync(join(root, "nen"), "not a directory\n", "utf8");
+    writeFileSync(join(root, ".github"), "not a directory\n", "utf8");
+    const result = await capture(["scaffold", "init", "--stack", "nextjs", "--json", ...TRAILERS], root);
+    expect(result.code).toBe(1);
+    const document = JSON.parse(result.out.join("\n")) as {
+      writes: { path: string; action: string; why: string }[];
+    };
+    for (const path of ["nen/contract.json", ".github/workflows/nen-shu.yml"]) {
+      const row = document.writes.find((write): boolean => write.path === path);
+      expect(row?.action, path).toBe("refused");
+      expect(row?.why, path).toMatch(/EEXIST|ENOTDIR|EACCES|EPERM/);
+    }
+    // ...and the step AFTER them still ran, which is the whole point of the
+    // report surviving: `.gitignore` is created and reported.
+    expect(document.writes.find((write): boolean => write.path === ".gitignore")?.action).toBe("created");
+    expect(existsSync(join(root, ".gitignore"))).toBe(true);
+  });
+
   it("a refused row is published in --json's writes[], never filtered out", async () => {
     // The mutation this kills: filtering `refused` out of the document. A
     // report that only lists what succeeded is a report that says "done".

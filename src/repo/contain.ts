@@ -81,19 +81,23 @@ export interface RealContainment {
 function present(path: string): boolean {
   try {
     return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
-  } catch {
-    // An EACCES on a parent is not an absence: treat it as present and let the
-    // write itself report the real errno rather than walking further up.
-    return true;
+  } catch (error) {
+    // ENOTDIR is an ABSENCE, not a presence: it says an ancestor is a file, so
+    // this path is not there and the walk must keep going up until it finds
+    // the ancestor that is. ENOENT the same. Anything else -- EACCES on a
+    // parent, most likely -- is not an absence, and the write itself will
+    // report the real errno better than another step up would.
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== "ENOTDIR" && code !== "ENOENT";
   }
 }
 
-/** `realpathSync`, falling back to the lexical path for a dangling link. */
-function realOf(path: string): string {
+/** `realpathSync`, or null when the path cannot be resolved at all. */
+function realOf(path: string): string | null {
   try {
     return realpathSync(path);
   } catch {
-    return path;
+    return null;
   }
 }
 
@@ -120,8 +124,22 @@ export function realContainment(root: string, absolute: string): RealContainment
     anchor = parent;
   }
   const anchorReal = realOf(anchor);
+  if (anchorReal === null || realRoot === null) {
+    // NEITHER END COULD BE RESOLVED, so nothing here is PROVEN to leave the
+    // tree -- and a containment check that refused on "could not tell" would
+    // refuse a dangling symlink, a racing delete and a permission-shadowed
+    // parent alike. The write is allowed to proceed and to fail with its own
+    // errno, which the caller records: that is a fact rather than a guess.
+    return { real: absolute, contained: true, link: null, target: null };
+  }
   const real = tail.length === 0 ? anchorReal : join(anchorReal, ...tail);
-  const redirected = anchorReal !== anchor;
+  // A LINK ONLY WHERE THE PATH ITSELF WAS REDIRECTED. `realpath` also
+  // normalises the ancestors a caller never wrote (`/var` -> `/private/var` on
+  // macOS), so comparing whole paths would call every temporary directory a
+  // symlink. The comparison is against the anchor with the ROOT's own
+  // resolution already applied.
+  const lexical = isContained(resolve(root), anchor) ? join(realRoot, relative(resolve(root), anchor)) : anchor;
+  const redirected = anchorReal !== lexical;
   return {
     real,
     contained: isContained(realRoot, real),
