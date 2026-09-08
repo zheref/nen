@@ -1,0 +1,8 @@
+{
+  "name": "@placeholder/unverified",
+  "private": true,
+  "packageManager": "placeholder-manager@1.0.0",
+  "devDependencies": {
+    "next": "15.1.0"
+  }
+}
