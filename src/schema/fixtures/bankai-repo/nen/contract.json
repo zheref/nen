@@ -1,0 +1,125 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the BOTH-BLOCKS shape, adapted from the kro-pwa example in zheref/nen#91's proposal to this fixture's own placeholder vocabulary. Not shipped; see ../../README.md. Nothing in nen ACTS on either block yet (zheref/nen#108): this file exists so the loader, the shadow check and `nen schema check`'s contract row are proved against a document that uses every field the schema declares.",
+
+  "dependency": {
+    "name": "nen",
+    "source": "zheref/nen",
+    "repository": "https://github.com/zheref/nen",
+
+    "minimum": "0.3",
+    "minimum_semantics": "MAJOR.MINOR. While nen's line is 0.x this means >=0.3.0 <0.4.0 EXACTLY -- at major zero the MINOR is the breaking-change vehicle, so a higher minor is out of range in both directions.",
+    "zero_major_caveat": {
+      "$comment": "An unknown key, preserved verbatim and read by nothing in nen. Its presence in this fixture is the proof of that rule.",
+      "applies_while": "the installed and pinned majors are both 0",
+      "rule": "minimum '0.3' resolves to the range >=0.3.0 <0.4.0."
+    },
+
+    "pinned_ref": "v0.3.0",
+    "version_probe": ["nen", "--version"],
+    "version_probe_output": "a bare semver on stdout, e.g. '0.3.0' -- no 'v' prefix, no other text",
+
+    "bootstrap": {
+      "vendored": false,
+      "script_path_in_source": "bootstrap/nen.sh",
+      "url": "https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh",
+      "fetch_must_be_two_step": true,
+      "published_binaries": ["nen-linux-x64", "nen-darwin-arm64", "nen-windows-x64.exe"],
+      "manifest_asset": "SHA256SUMS"
+    },
+
+    "no_improvised_fallback": "Unsatisfied means re-pin to pinned_ref and halt. There is no third path."
+  },
+
+  "project": {
+    "scenario": "compose-uzf-v2",
+
+    "lanes": {
+      "web": { "stack": "nextjs", "cwd": "." },
+      "android": { "stack": "gradle-android", "cwd": "android" }
+    },
+    "defaultLane": "web",
+
+    "toolchain": {
+      "node": {
+        "version": ">=20.19.0",
+        "probe": ["node", "--version"],
+        "versionFrom": "first-semver-on-stdout",
+        "installer": "verify-only",
+        "why": "A Node install is a system-wide decision with five common answers; nen probes and reports the pin."
+      },
+      "pnpm": {
+        "version": "9.15.9",
+        "probe": ["pnpm", "--version"],
+        "versionFrom": "first-semver-on-stdout",
+        "installer": "corepack",
+        "why": "The packageManager field states it, and corepack is the one install nen performs without reservation."
+      },
+      "java": {
+        "version": "21",
+        "probe": ["java", "-version"],
+        "versionFrom": "first-semver-on-stderr",
+        "installer": "verify-only",
+        "why": "java -version writes to stderr. Two JDKs in one tree is the android lane's own problem to order."
+      }
+    },
+
+    "preconditions": {
+      "web": [
+        {
+          "kind": "command",
+          "value": ["corepack", "--version"],
+          "why": "pnpm is activated through corepack as its own step BEFORE the cached install."
+        },
+        {
+          "kind": "path",
+          "value": "node_modules",
+          "why": "nen ASSERTS the install has been run; nen never runs it, because a dependency install executes this project's own postinstall scripts."
+        }
+      ],
+      "android": [
+        {
+          "kind": "path",
+          "value": "android/gradlew",
+          "why": "The wrapper is the repository's own Gradle. A repo without one is a finding, not something nen installs around."
+        }
+      ]
+    },
+
+    "verbs": {
+      "web": {
+        "build": { "exe": "pnpm", "argv": ["turbo", "run", "build"] },
+        "test": { "exe": "pnpm", "argv": ["turbo", "run", "test"] },
+        "lint": {
+          "steps": [
+            { "exe": "pnpm", "argv": ["exec", "biome", "check", "."] },
+            { "exe": "pnpm", "argv": ["turbo", "run", "lint"] }
+          ],
+          "why": "Two commands, in order. The second alone misses the repo-wide format check."
+        },
+        "dev": { "exe": "pnpm", "argv": ["turbo", "run", "dev"] },
+        "archive": { "unsupported": "no packaging step exists; this lane is a PWA." },
+        "deploy": { "unsupported": "no target is wired; declare one under `targets` first." },
+        "storybook": {
+          "exe": "pnpm",
+          "argv": ["run", "storybook"],
+          "why": "An UNKNOWN verb name, preserved rather than rejected -- the ecosystem's verbs are the repository's to name."
+        }
+      },
+      "android": {
+        "build": { "exe": "{gw}", "argv": ["assembleDebug"] },
+        "test": { "exe": "{gw}", "argv": ["testDebugUnitTest"] },
+        "release": { "unsupported": "store publication is a human's, behind credentials nen never holds." }
+      }
+    },
+
+    "profiles": {
+      "ci": {
+        "$comment": "Preserved verbatim; no verb reads profiles yet.",
+        "web": { "build": { "exe": "pnpm", "argv": ["turbo", "run", "build", "--filter=...[origin/main]"] } }
+      }
+    },
+    "targets": {},
+    "hosts": { "*": ["darwin", "linux", "win32"], "build": ["darwin", "linux"] }
+  }
+}

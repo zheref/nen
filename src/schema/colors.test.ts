@@ -77,7 +77,7 @@ describe("loadColorVocabulary -- reads the TARGET repository", () => {
 });
 
 describe("parseColorVocabulary -- validation", () => {
-  const at = "/fake/schemas/colors.yml";
+  const at = "/fake/nen/colors.yml";
   const parse = (yaml: string): ReturnType<typeof parseColorVocabulary> =>
     parseColorVocabulary(at, parseYaml(yaml));
 

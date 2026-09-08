@@ -56,7 +56,7 @@ export const ideaCommand: Command = {
     // BEFORE the body file is read -- a flag refusal must not wait on I/O.
     const repoFlag = requireRepoFlag(
       context,
-      "It is the checkout whose schemas/labels.json validates every label in the filing.",
+      "It is the checkout whose nen/labels.json validates every label in the filing.",
     );
 
     const bodyFile = context.args.values["body-file"];

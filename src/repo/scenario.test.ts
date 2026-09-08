@@ -8,7 +8,7 @@ import { parseRepoRegistry } from "../schema/repos.js";
 // and a product code whose value is a FULL owner/name slug -- so each of the
 // three refusal causes (zheref/nen#28), plus both recordedWhere() outcomes
 // (zheref/nen#28's second finding), has a subject.
-const REGISTRY = parseRepoRegistry("/x/schemas/repos.json", {
+const REGISTRY = parseRepoRegistry("/x/nen/repos.json", {
   latest: "v1.0.0",
   consumers: [
     { repo: "zheref/KroApple", consumes: [], scenario: "swiftui-tca-uzf-v2" },

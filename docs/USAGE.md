@@ -196,14 +196,46 @@ though it writes nothing.
 
 Nen hard-codes no label names, no repository names, no reviewer names and no
 colours. Every verb that needs a repository's own vocabulary reads it from that
-repository's `schemas/` directory, at the path `--repo` names:
+repository's `nen/` directory, at the path `--repo` names:
 
 | File | What it holds | What reads it |
 |---|---|---|
-| `schemas/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
-| `schemas/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) |
-| `schemas/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
-| `schemas/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
+| `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) |
+| `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
+| `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins). Parsed and validated; **no verb acts on it yet** | [`schema check`](#nen-schema-check) |
+
+`nen/` holds committed configuration only. Generated output goes to a
+dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
+one-character difference is what keeps a build log out of a review.
+
+**The legacy `schemas/` location.** Before v0.3 the four taxonomy files lived in
+a `schemas/` directory. Nen still reads them from there when `nen/` does not
+carry them, so an un-migrated repository keeps working for the whole v0.3 line;
+that fallback is **removed in v0.4.0**. It is read-only — nothing in nen writes
+to `schemas/` — and [`schema check`](#nen-schema-check) is where the migration
+state is reported: a file read from the legacy location gets a `warn` row naming
+the canonical path, and a file present in BOTH with different bytes is a
+*shadowed leftover* that fails the check, because `nen/` wins the read and the
+copy somebody may still be editing is the one nen ignores. That comparison is
+**byte-exact**: two copies differing only in line endings (a CRLF/LF drift a
+checkout can produce on its own) count as different, because "identical" is
+what licenses deleting one of them. A "no such file" refusal names both
+locations.
+
+The fallback covers the four taxonomy files and nothing else. `nen/contract.json`
+is new in this line and has **no** legacy location — no released nen ever read
+one — so a repository's own unrelated file under `schemas/` is never claimed as
+a nen contract.
+
+**An explicitly pinned path does not move on its own.** The fallback answers only
+for paths nen resolves itself. A caller that hard-codes a location — `pr ready
+--gates schemas/gates.json`, or `gate derive --policy-paths "schemas/,…"` — is
+naming a path, and nen takes it literally: `--gates` deliberately does not fall
+back, since a flag that quietly read a different file than the one it was handed
+would be worse than a refusal. Move those pins along with the files, in the same
+change; `schema check` will not warn about them, because it never sees them.
 
 A repository carrying none of these can still use the repository-agnostic verbs
 ([`commit format`](#nen-commit-format), [`ref parse`](#nen-ref-parse),
@@ -213,7 +245,7 @@ it **refuses explicitly, naming the exact file and path it looked for**, rather
 than guessing or falling back to a built-in default that would belong to some
 other project. `pr ready` and `pr next-blocker` accept `--gates <path>` to point
 at a gates file outside the target repository;
-[`schema check`](#nen-schema-check) reports all four files' verdicts at once and
+[`schema check`](#nen-schema-check) reports every file's verdict at once and
 is the fastest way to find out which one is missing.
 
 ### Platform parity
@@ -285,11 +317,11 @@ verbs need a token and which run offline. Every verb accepts the global
 
 | Family | Verb | Purpose | Reads | `--json` |
 |---|---|---|---|---|
-| [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | schemas/gates.json + schemas/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
+| [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | nen/gates.json + nen/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
 | [`pr`](#family-pr) | [`nen pr staleness`](#nen-pr-staleness) | stale + Ready merge-permission arithmetic over a verified-wake history | caller-supplied --wakes-from JSON file, no schema/git/gh | yes |
 | [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns | caller-supplied --body-from/--requirements-from files | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
-| [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | schemas/gates.json (or --gates), github (gh) | yes |
+| [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge | git (fetch/merge/push, reaches origin) | yes |
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | gh pr edit --add-reviewer, once per name | github (gh) | yes |
@@ -305,39 +337,39 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`epic`](#family-epic) | [`nen epic next-wave`](#nen-epic-next-wave) | flips a completed child, redraws the progress bar, computes the next releasable wave | local file (--body-file), optional write (--out) | yes |
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file and explicit caps | local file (--efforts) | yes |
-| [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | detects stale/unpinned consumer versions in the registry, plus an optional handbook-question sweep | schemas/repos.json, optional local files | yes |
+| [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | detects stale/unpinned consumer versions in the registry, plus an optional handbook-question sweep | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
-| [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | schemas/labels.json; gh only with --run | yes |
-| [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | schemas/labels.json; gh unless --dry-run | yes |
+| [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
+| [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
-| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the four taxonomy files a repository is expected to carry, reporting each one's verdict | schemas/labels.json, repos.json, colors.yml, gates.json | yes |
-| [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own schemas/colors.yml precedence | schemas/colors.yml | yes |
-| [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | schemas/repos.json; git (no-token form) | yes |
+| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and where it was read from | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional) | yes |
+| [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
+| [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
-| [`repo`](#family-repo) | [`nen repo scenario`](#nen-repo-scenario) | reads back the scenario recorded for one --target in the registry | schemas/repos.json | yes |
-| [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | schemas/repos.json | yes |
+| [`repo`](#family-repo) | [`nen repo scenario`](#nen-repo-scenario) | reads back the scenario recorded for one --target in the registry | nen/repos.json | yes |
+| [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
-| [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional schemas/repos.json-shaped --base-repos/--head-repos | yes |
+| [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)) | git log --merges, CHANGELOG.md, changelog.d/ | yes |
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
-| [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (schemas/repos.json) are affected by workflows changed in a release range | schemas/repos.json, git diff, .github/workflows/ | yes |
-| [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | schemas/repos.json, git diff, .github/workflows/, ledger file | yes |
+| [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
+| [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
-| [`issue`](#family-issue) | [`nen issue file`](#nen-issue-file) | file an issue with labels and assignee IN the create call, refusing any label the target taxonomy does not carry or that a forbidden family names | schemas/labels.json; gh (issue create) | yes |
+| [`issue`](#family-issue) | [`nen issue file`](#nen-issue-file) | file an issue with labels and assignee IN the create call, refusing any label the target taxonomy does not carry or that a forbidden family names | nen/labels.json; gh (issue create) | yes |
 | [`issue`](#family-issue) | [`nen issue comment`](#nen-issue-comment) | post one caller-supplied comment on one issue (or, deliberately, one PR) number | gh (issue comment / api) | yes |
 | [`issue`](#family-issue) | [`nen issue attach-sub`](#nen-issue-attach-sub) | attach children as GitHub sub-issues under a parent, certifying every number as an ISSUE (never a PR) before the first write | gh (api reads, sub_issues POST) | yes |
-| [`issue`](#family-issue) | [`nen issue consolidate-close`](#nen-issue-consolidate-close) | the file-&gt;attach-&gt;close choreography: union labels, reduce one severity family to its strongest label, guard every child for an open PR, close each with a comment | schemas/labels.json; gh (api reads, sub_issues POST, issue close/comment) | yes |
+| [`issue`](#family-issue) | [`nen issue consolidate-close`](#nen-issue-consolidate-close) | the file-&gt;attach-&gt;close choreography: union labels, reduce one severity family to its strongest label, guard every child for an open PR, close each with a comment | nen/labels.json; gh (api reads, sub_issues POST, issue close/comment) | yes |
 | [`issue`](#family-issue) | [`nen issue chain-position`](#nen-issue-chain-position) | classify where an OPEN issue sits on its delivery chain, from its labels alone | gh (api read) | yes |
 | [`issue`](#family-issue) | [`nen issue terminus`](#nen-issue-terminus) | classify which object ends an issue's delivery run (its own PR, each child's PR, or one integration-branch delivery PR) | gh (api read) | yes |
-| [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | schemas/labels.json; gh (issue create + api read) | yes |
+| [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | create the directory skeleton, install the trailer-enforcing commit-msg hook, and (once) write a canon-values.yml template | writes to disk under --repo (.git/hooks/, canon-values path); no git/gh | yes |
-| [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario schemas/repos.json records for it | schemas/repos.json | yes |
+| [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | substitute every {{TOKEN}} in each canonical rule file into a mirror directory, writing only changed files and deleting orphans | caller-named --rules-dir + --canon-values file; writes --out-dir; no git/gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | regenerate the mirror in memory and diff it against the committed --mirror-dir: missing / extra / stale / hand-edited | caller-named --rules-dir + --canon-values + --mirror-dir; no git/gh | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
@@ -348,7 +380,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev replay`](#nen-dev-replay) | replay the imported dedupe corpus slice against nen's own normalizeTitle/findCanonical and report any disagreement | tests/fixtures/dualrun-slice/dedupe/*.json (or --slice-dir) | yes |
 | [`parse`](#family-parse) | [`nen parse <skill>`](#nen-parse-skill) | parse an arbitrary skill's invocation against a caller-supplied --grammar template, echo the parse, or refuse with a corrected line | none | yes |
-| [`parse`](#family-parse) | [`nen parse futon`](#nen-parse-futon) | parse futon's own grammar and resolve its repo token against the target repo's schemas/repos.json, refusing a 'then &lt;terminal&gt;' clause on a repo that is not the caller's own | schemas/repos.json | yes |
+| [`parse`](#family-parse) | [`nen parse futon`](#nen-parse-futon) | parse futon's own grammar and resolve its repo token against the target repo's nen/repos.json, refusing a 'then &lt;terminal&gt;' clause on a repo that is not the caller's own | nen/repos.json | yes |
 | [`parse`](#family-parse) | [`nen parse izanagi`](#nen-parse-izanagi) | parse izanagi's MUTATING-loop grammar, refusing when 'up to &lt;N&gt;' is absent | none | yes |
 | [`parse`](#family-parse) | [`nen parse izanami`](#nen-parse-izanami) | parse izanami's READ-ONLY-loop grammar and classify every command in it against izanami's own allow/refuse table | none | yes |
 | [`bootstrap`](#family-bootstrap) | [`nen bootstrap`](#nen-bootstrap) | fetch, checksum-verify and cache a pinned nen binary by running bootstrap/nen.sh, relaying its verified path and exit code unchanged | bootstrap/nen.sh under --repo; network (GitHub release assets + SHA256SUMS) | no *(stdio)* |
@@ -373,9 +405,9 @@ arithmetic (`staleness`), a PR-body template check (`body-check`), a typed
 state snapshot (`fetch`), the first blocking condition in a fixed order
 (`next-blocker`), a trunk cascade-merge (`cascade-main`), and two narrow `gh
 pr edit` mutations (`retarget`, `request-reviews`). `ready` and `next-blocker`
-read reviewer identities from `schemas/gates.json` (or an explicit `--gates`
+read reviewer identities from `nen/gates.json` (or an explicit `--gates`
 file, or a reduced `--reviewers` set with no default); `ready`'s ref
-resolution also reads `schemas/repos.json`'s `product_codes`. This family
+resolution also reads `nen/repos.json`'s `product_codes`. This family
 never merges, labels, or comments on a pull request.
 
 ### `nen pr ready`
@@ -385,9 +417,9 @@ verdict, quoted, plus the first failing conjunct — nothing else. It is
 read-only: it never labels, merges or comments, and it holds no readiness
 *authority* today (the shell gate still does; see the verb's own header for
 the shadow-window position). A `<CODE>#<N>` ref is resolved through the
-target repository's `schemas/repos.json` `product_codes`; a bare number needs
+target repository's `nen/repos.json` `product_codes`; a bare number needs
 `--gh-repo`. Reviewer identities come from exactly one of `--gates <path>`,
-the target repo's `schemas/gates.json`, or `--reviewers a,b,c` — there is no
+the target repo's `nen/gates.json`, or `--reviewers a,b,c` — there is no
 built-in default set, and with none of the three the verb refuses rather than
 guessing.
 
@@ -408,9 +440,9 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
 | `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded` |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
-| `--gates <path>` | no | read reviewer identities from this file instead of `schemas/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
+| `--gates <path>` | no | read reviewer identities from this file instead of `nen/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
-| `--repo <path>` | no | the checkout whose `schemas/` is read | default cwd |
+| `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
 
 **Output and exit codes** — human line is `<repo>#<pr>: <gateLine>` (or the
@@ -590,7 +622,7 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 |---|---|---|---|
 | `--target <owner/name>` | yes | the GitHub repository | missing exits 1 (see `pr fetch`'s note) |
 | `--pr <n>` | yes | the pull-request number | missing/invalid exits 2 |
-| `--repo <path>` | **yes** | the checkout whose `schemas/gates.json` supplies identities | usage lists it unbracketed; an omitted `--repo` is refused by name at exit 2, never silently read from cwd (#28) |
+| `--repo <path>` | **yes** | the checkout whose `nen/gates.json` supplies identities | usage lists it unbracketed; an omitted `--repo` is refused by name at exit 2, never silently read from cwd (#28) |
 | `--reviewers <a,b>` | no | override reviewer set | an explicitly empty value (`""`, `","`) is refused at exit 2, never read as "nothing owed" |
 | `--policy <p>` | no | `bounded` \| `strict` | any other value is silently ignored (treated as unset) rather than refused |
 | `--delivery-pr` | no | this PR is a delivery PR | affects the CON-40 carve-out |
@@ -606,7 +638,7 @@ GitHub/schema-read failure, exit 2 on a bad flag.
 **Example**
 
 ```bash
-nen pr next-blocker --target o/n --pr 9 --repo . --gates src/schema/fixtures/alt-repo/schemas/gates.json
+nen pr next-blocker --target o/n --pr 9 --repo . --gates src/schema/fixtures/alt-repo/nen/gates.json
 ```
 ```text
 #9: none
@@ -1194,7 +1226,7 @@ changed  101: gate 'G2' -> 'G4', status '🟡 G1-ready' -> '🟢 G2/G4-ready', n
 
 Coordinates one epic's child checklist: flips a completed child's checkbox, redraws the `## Progress`
 bar, and computes which unchecked children are releasable next under a concurrency cap. It reads
-nothing from GitHub or from `schemas/` — the parent issue's body is handed to it as a file, and the
+nothing from GitHub or from `nen/` — the parent issue's body is handed to it as a file, and the
 citation naming the rule the coordinator acts under is always caller-supplied, never a literal this
 binary carries.
 
@@ -1356,7 +1388,7 @@ freed: BC-IS-#110
 **`nen warmup`**
 
 Detects stale or missing version pins across every consumer recorded in the target repository's
-`schemas/repos.json`, and optionally sweeps a set of handbook questions for which repositories have not
+`nen/repos.json`, and optionally sweeps a set of handbook questions for which repositories have not
 answered them. It only reports — it never edits the registry, and "not checked" is always distinct from
 "checked and clean".
 
@@ -1381,7 +1413,7 @@ nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
 | `--current <vX.Y.Z>` | yes | This repository's actual latest version. | Stated explicitly — a plugin-shipped `registry.latest` can itself be stale. |
 | `--questions-from <path>` | no | A JSON array of `{ id, text }` handbook questions. | Omitting it skips the sweep, reported as an explicit `NOT CHECKED` (`{"checked": false}` in `--json`), never a silent "no gaps". |
 | `--answers-from <path>` | required together with `--questions-from` | A JSON object `{ "<repo>": ["<question-id>", ...] }`. | Required once `--questions-from` is given (exit 2 otherwise). |
-| `--repo <path>` | no | The checkout whose `schemas/repos.json` is checked. | Defaults to cwd. |
+| `--repo <path>` | no | The checkout whose `nen/repos.json` is checked. | Defaults to cwd. |
 
 **Output and exit codes** — human rendering: a stale-pins block (`"no stale pins"` or `"<n> stale
 pin(s):"` plus one line per finding), an unpinned-consumers block, and either a question-sweep block
@@ -1475,7 +1507,7 @@ references objects with.
 
 Applies one label to one object (an issue or a pull request) and appends a durable, after-the-fact
 ledger line recording the decision. It checks the label against the target repository's
-`schemas/labels.json` before attempting anything, and it never writes to GitHub unless `--run` is
+`nen/labels.json` before attempting anything, and it never writes to GitHub unless `--run` is
 given — the ledger records the decision either way.
 
 ### `nen label apply`
@@ -1496,7 +1528,7 @@ nen label apply <object-ref> --label <name> --repo-slug <owner/name> [--reason <
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `<object-ref>` (positional) | yes | `<CODE>-<IS\|PR>-#<N>`. | Only the number is used against `--repo-slug`'s numbering — the code is not re-resolved. Malformed -> exit 2. |
-| `--label <name>` | yes | Checked against `schemas/labels.json` before anything is attempted. | Unknown label -> exit 2, naming the declared labels. |
+| `--label <name>` | yes | Checked against `nen/labels.json` before anything is attempted. | Unknown label -> exit 2, naming the declared labels. |
 | `--repo-slug <owner/name>` | yes | The owner/name the mutation runs against. | |
 | `--reason <text>` | no | Recorded in the ledger. | Never sent to GitHub. |
 | `--ledger <path>` | no | Ledger file location. | Defaults to `label-ledger.jsonl` under `--repo`'s root. |
@@ -1534,7 +1566,7 @@ mutate GitHub by default — `--dry-run` is what makes either one safe to previe
 ### `nen labels sync`
 
 Answers "does the target repository's label set match this repository's own taxonomy": for every
-label in `schemas/labels.json`, it creates the label if it is absent or updates it if it already
+label in `nen/labels.json`, it creates the label if it is absent or updates it if it already
 exists. One bad label (a description GitHub rejects) never aborts the run — every other good label
 still lands, and the failures are named at the end.
 
@@ -1549,7 +1581,7 @@ nen labels sync --target <owner/name> --repo <path> [--dry-run]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--target <owner/name>` | yes | The repository labels are synced to. | A missing `--target` exits **1**, not 2 — see the note below. |
-| `--repo <path>` | yes | The checkout whose `schemas/labels.json` is the taxonomy being synced. | Listed unbracketed in usage; omitting it is refused BY NAME at exit 2 (issue #28) rather than silently defaulting to cwd. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` is the taxonomy being synced. | Listed unbracketed in usage; omitting it is refused BY NAME at exit 2 (issue #28) rather than silently defaulting to cwd. |
 | `--dry-run` | no (boolean) | Logs every label ("would sync: ...") without calling `gh` at all. | There is no separate `--run` flag here (unlike `label apply`): omitting `--dry-run` means this verb mutates immediately. |
 
 > **Note:** a missing `--target` exits 1 rather than 2 on **sixteen**
@@ -1645,10 +1677,10 @@ old -> new: renamed -- renamed 'old' -> 'new', associations preserved
 
 **`nen schema`**
 
-Loads and validates the four taxonomy files a target repository is expected to carry —
-`schemas/labels.json`, `schemas/repos.json`, `schemas/colors.yml`, `schemas/gates.json` — and reports
-each file's own verdict. `nen` has no built-in copy of any of them to fall back on: an absent or
-malformed file is reported by name, never guessed past.
+Loads and validates the files a target repository is expected to carry under `nen/` —
+`nen/labels.json`, `nen/repos.json`, `nen/colors.yml`, `nen/gates.json` and the optional
+`nen/contract.json` — and reports each file's own verdict. `nen` has no built-in copy of any of them to
+fall back on: an absent or malformed file is reported by name, never guessed past.
 
 ### `nen schema check`
 
@@ -1656,7 +1688,26 @@ Answers "can this repository's taxonomy be read at all, and by which files": eve
 (labels, repos, colors) failing fails the whole report; `gates.json` is optional in the sense that its
 ABSENCE does not fail the report (only the readiness verbs need it) — but a `gates.json` that IS present
 and malformed is still required, because a file that exists and is wrong is a defect in this
-repository's own taxonomy, not a feature it simply hasn't adopted.
+repository's own taxonomy, not a feature it simply hasn't adopted. `nen/contract.json` is optional the
+same way, one step further: its absence is an `ok` row reading `absent (optional)`, and only a contract
+that is present and malformed fails.
+
+It is also where the `schemas/` → `nen/` migration is reported. A file read from the legacy `schemas/`
+location gets a `warn` row printed at the path it was actually read from, followed by an indented
+`^ legacy location…` line naming the canonical path and the v0.4.0 removal. A file present in BOTH
+places whose bytes DIFFER is a **shadowed leftover**: the row FAILS the report even though the file
+loaded, because `nen/` won the read and the copy somebody may still be editing is the one nen ignores.
+Identical bytes in both places is an `ok` row with a note saying the deletion is free. The comparison
+is **byte-exact** — a CRLF/LF drift between the two copies counts as different, since "identical" is
+the finding that licenses deleting one of them.
+
+A fourth state exists for the case where the comparison could not be made at all: both copies are
+present, and one of them will not open (`EACCES`, a symlink cycle). That row is an **unverified
+leftover**, and it fails the report for the same fail-closed reason — but it says so in its own words
+and names the errno, rather than asserting bytes it never compared. The distinction is not cosmetic:
+when it is the `nen/` copy that cannot be read, "the bytes differ, nen read the `nen/` one, delete the
+legacy copy" is three claims that are false and one instruction that would delete the only readable
+file the repository has left.
 
 **Usage**
 
@@ -1669,13 +1720,20 @@ nen schema check --repo <path> [--json]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
-| `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...] }`. |
+| `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }`. |
 
 **Output and exit codes** — human rendering: `"repository: <root>"` then one line per file:
-`"  <ok|FAIL|warn>  <schemas file>  <detail>"`. `--json` matches exactly: `{ root, ok, checks }`, each
-check carrying `{ file, path, ok, detail, required }`. Exit 0 when every REQUIRED file loaded and
-validated; exit 1 when any required file failed (absent, unreadable, or invalid) — `gates.json` failing
-only because it is absent does not trip this.
+`"  <ok|FAIL|warn>  <file, at the path it was read from>  <detail>"`, optionally followed by an
+indented `"        ^ <migration note>"` line. `--json` matches exactly: `{ root, ok, checks,
+deprecations }`, each check carrying `{ file, path, location, ok, detail, required, shadow, shadowed,
+note }` in that key order for every row — `location` is `"nen"` or `"schemas"`, `shadow` is
+`"none" | "identical" | "different" | "unknown"` (what the two copies had to say to each other, so a
+machine reader can tell "the bytes disagree" from "nen could not look"), `shadowed` is the boolean that
+fails the row, and `deprecations` lists every migration note in row order (empty for a fully migrated
+repository). Exit 0 when every REQUIRED file loaded and validated and nothing is shadowed; exit 1 when
+any required file failed (absent, unreadable, or invalid) or any file's legacy copy is unaccounted for
+— different bytes, or a comparison nen could not make — `gates.json` failing only because it is absent
+does not trip this, and neither does an absent `nen/contract.json`.
 
 **Example**
 
@@ -1684,18 +1742,40 @@ nen schema check --repo src/schema/fixtures/bankai-repo
 ```
 ```text
 repository: /path/to/src/schema/fixtures/bankai-repo
-  ok    schemas/labels.json  13 labels
-  ok    schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
-  ok    schemas/colors.yml  3 categories, 13 values
-  ok    schemas/gates.json  5 reviewer identities
+  ok    nen/labels.json  13 labels
+  ok    nen/repos.json  3 consumers, 6 product codes, latest v0.11.2
+  ok    nen/colors.yml  3 categories, 13 values
+  ok    nen/gates.json  5 reviewer identities
+  ok    nen/contract.json  dependency (nen >= 0.3, pinned v0.3.0), project (2 lanes: web, android; 10 verbs; 3 toolchain entries)
 ```
+(from a real run against the bundled fixture repo)
+
+The same verb against the bundled **un-migrated** fixture, which carries the four files at the legacy
+location and no contract:
+
+```bash
+nen schema check --repo src/schema/fixtures/legacy-repo
+```
+```text
+repository: /path/to/src/schema/fixtures/legacy-repo
+  warn  schemas/labels.json  13 labels
+        ^ legacy location. Move it to 'nen/labels.json'; the schemas/ fallback is removed in v0.4.0.
+  warn  schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
+        ^ legacy location. Move it to 'nen/repos.json'; the schemas/ fallback is removed in v0.4.0.
+  warn  schemas/colors.yml  3 categories, 13 values
+        ^ legacy location. Move it to 'nen/colors.yml'; the schemas/ fallback is removed in v0.4.0.
+  warn  schemas/gates.json  5 reviewer identities
+        ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.4.0.
+  ok    nen/contract.json  absent (optional)
+```
+exit 0 — an un-migrated repository still passes for the whole v0.3 line.
 (from a real run against the bundled fixture repo)
 
 <a id="family-color"></a>
 
 **`nen color`**
 
-Resolves one row's colour token by applying the target repository's own `schemas/colors.yml`
+Resolves one row's colour token by applying the target repository's own `nen/colors.yml`
 precedence to the values that are true of that row. There is no built-in colour table and no fallback
 anywhere in this family: a combination the file's precedence cannot rank is reported unresolved rather
 than picked from arbitrarily.
@@ -1719,7 +1799,7 @@ nen color status --present <a,b,c> [--category <name>]
 |---|---|---|---|
 | `--present <a,b,c>` | no (the parser accepts its absence) | The category values that apply to this row, comma-separated. | Order is irrelevant — the file's own precedence decides. An empty/omitted value resolves to `"unresolved"` at exit 1, not a usage error. |
 | `--category <name>` | no | The colours category to resolve in. | Defaults to the subcommand's own name (`"status"`). An undeclared category is a usage error (exit 2), naming the ones the file does declare. |
-| `--repo <path>` | no | The checkout whose `schemas/colors.yml` is read. | Defaults to cwd. |
+| `--repo <path>` | no | The checkout whose `nen/colors.yml` is read. | Defaults to cwd. |
 
 **Output and exit codes** — human rendering: `"<emoji>  <name>[  <label>]"`, an optional
 `"outranked: ..."` line, then `"precedence: <a > b > c>"`, and, if any `--present` value is not one of
@@ -1743,7 +1823,7 @@ precedence: on_hold > blocked > ready_g2_g4 > ready_g1 > in_progress
 
 **`nen repo`**
 
-Resolves a repository token against the target repository's own `schemas/repos.json`, inventories a
+Resolves a repository token against the target repository's own `nen/repos.json`, inventories a
 consumer's live GitHub backlog, and reads back one target's recorded scenario. Resolution is always
 exact and case-insensitive, never a prefix match: an unknown token is an error naming what the registry
 does contain, never a guess at "the closest match".
@@ -1769,7 +1849,7 @@ nen repo resolve [--from <dir>] [--repo <path>]
 |---|---|---|---|
 | `<token>` (positional) | no | A product code, `owner/name` slug, short name, or `all`. | Matched exactly, case-insensitively, never as a prefix. An unknown token is refused (exit 1), listing every code/repo the registry does have. |
 | `--from <dir>` | no | NO-TOKEN FORM ONLY: the directory whose `origin` is read. | Defaults to cwd. Refused (exit 2) when combined with an explicit token. |
-| `--repo <path>` | no | The checkout whose `schemas/repos.json` is the registry resolved against. | Defaults to cwd. Independent of `--from` — one is "whose registry", the other is "whose origin". |
+| `--repo <path>` | no | The checkout whose `nen/repos.json` is the registry resolved against. | Defaults to cwd. Independent of `--from` — one is "whose registry", the other is "whose origin". |
 
 **Output and exit codes** — human rendering: an `"origin: <url>"` line (no-token form only), then one
 line per resolved repo: `"<repo>[  (<code>)]  via <kind>"`. `--json` prints `{ token, origin, repos }`.
@@ -1830,7 +1910,7 @@ open PRs: 0
 
 ### `nen repo scenario`
 
-Reads back the `scenario` string recorded for `--target` in `--repo`'s `schemas/repos.json` — the
+Reads back the `scenario` string recorded for `--target` in `--repo`'s `nen/repos.json` — the
 value `canon resolve`/quality-tooling lookups read elsewhere in this CLI. `--repo` is required and
 never defaulted to cwd here specifically because a cwd default previously surfaced whatever unrelated
 registry happened to be there instead of the forgotten flag (issue #28).
@@ -1845,12 +1925,12 @@ nen repo scenario --repo <path> --target <owner/name>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--repo <path>` | yes | The checkout whose `schemas/repos.json` records `--target`'s scenario. | Listed unbracketed; omitting it is refused BY NAME at exit 2, never silently defaulted. |
+| `--repo <path>` | yes | The checkout whose `nen/repos.json` records `--target`'s scenario. | Listed unbracketed; omitting it is refused BY NAME at exit 2, never silently defaulted. |
 | `--target <owner/name>` | yes | The repository whose scenario is read back. | Missing -> exit 1 (same inconsistency as above). |
 
 **Output and exit codes** — human rendering is the bare scenario string on success, or `"nen: <reason>"`
 on stderr otherwise. `--json` prints `{ ok, scenario }` or `{ ok, reason }`. Exit 0 when a scenario was
-found; exit 1 with a DISTINCT reason for each of: `--repo` carries no `schemas/repos.json`, `--target`
+found; exit 1 with a DISTINCT reason for each of: `--repo` carries no `nen/repos.json`, `--target`
 is not recorded anywhere in it, or it is recorded but carries no `scenario` field; exit 2 when `--repo`
 is omitted.
 
@@ -1892,7 +1972,7 @@ nen ref format --code <CODE> --kind <IS|PR> --number <N> [--state <s>] [--url <u
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--code <CODE>` | yes | Two or three uppercase letters. | Checked against `schemas/repos.json`; a code the registry does not carry is refused (exit 2), naming the declared codes. |
+| `--code <CODE>` | yes | Two or three uppercase letters. | Checked against `nen/repos.json`; a code the registry does not carry is refused (exit 2), naming the declared codes. |
 | `--kind <IS\|PR>` | yes | IS for an issue, PR for a pull request. | Any other value -> exit 2. |
 | `--number <N>` | yes | The object's number. | Must be a whole number. |
 | `--state <s>` | no | `merged \| completed \| closed \| draft \| open`. | An unrecognized value still emits the bare token, but warns on stderr and exits 1 — an unreadable lifecycle must not look like a confirmed-open one. |
@@ -2133,7 +2213,7 @@ nen changelog fragment-required --spec-paths <a,b> --fragment-dir <dir> (--files
 | `--head-changelog <path>` | yes | the changelog at HEAD | — |
 | `--body-from <path>` | no | the PR body, checked for an opt-out statement | — |
 | `--base-changelog <path>` | no | the changelog at the merge base | used to detect a "release move" |
-| `--base-repos <path>` / `--head-repos <path>` | no | a `schemas/repos.json`-shaped file, read only for its `.latest` field | used to detect an integration-epic collation |
+| `--base-repos <path>` / `--head-repos <path>` | no | a `nen/repos.json`-shaped file, read only for its `.latest` field | used to detect an integration-epic collation |
 | `--repo <path>` | no | resolves every relative path above, and `--range`'s `git diff` | default cwd |
 | `--json` | no | machine-readable verdict | — |
 
@@ -2302,7 +2382,7 @@ exit 0
 
 **`nen fanout`**
 
-getsuga §7's CON-22 fan-out: which downstream consumers (`schemas/repos.json`)
+getsuga §7's CON-22 fan-out: which downstream consumers (`nen/repos.json`)
 are affected by the GitHub Actions workflows a release range changed. It
 never opens a repin PR itself — `compute` reports the set and `record`
 appends it to an audit ledger for a caller to act on.
@@ -2326,7 +2406,7 @@ nen fanout compute --range <vPrev>..<vNew> [--workflows-dir <dir>]
 |---|---|---|---|
 | `--range <vPrev>..<vNew>` | yes | the release range | computed via `git diff --name-only` scoped to `--workflows-dir` |
 | `--workflows-dir <dir>` | no | the workflows directory | default `.github/workflows` |
-| `--repo <path>` | no | the repo whose `schemas/repos.json` and workflow history are read | default cwd |
+| `--repo <path>` | no | the repo whose `nen/repos.json` and workflow history are read | default cwd |
 | `--json` | no | machine-readable fan-out rows | — |
 
 **Output and exit codes** — human lines: `changed workflows in <range>:
@@ -2345,7 +2425,7 @@ AFFECTED  zheref/KroApple (KP)  -- consumes sasuke-review.yml, which changed in 
 AFFECTED  zheref/KroAndroid (KN)  -- consumes sasuke-review.yml, which changed in this range
 AFFECTED  zheref/bankai-scaffold (BS)  -- consumes sasuke-review.yml, which changed in this range
 ```
-(from a real run against a scratch git repo seeded with the bundled fixture's `schemas/repos.json` and two tags, `v0.11.2` and `v0.11.3`, differing only in `sasuke-review.yml`)
+(from a real run against a scratch git repo seeded with the bundled fixture's `nen/repos.json` and two tags, `v0.11.2` and `v0.11.3`, differing only in `sasuke-review.yml`)
 
 ### `nen fanout record`
 
@@ -2365,7 +2445,7 @@ nen fanout record --range <vPrev>..<vNew> [--workflows-dir <dir>] [--ledger <pat
 | `--range <vPrev>..<vNew>` | yes | the release range | same as `compute` |
 | `--workflows-dir <dir>` | no | the workflows directory | default `.github/workflows` |
 | `--ledger <path>` | no | the ledger file to append to | default `fanout-ledger.jsonl`, resolved against `--repo`/cwd if relative (not stated in `--help`, only in code) |
-| `--repo <path>` | no | the repo whose `schemas/repos.json` and workflow history are read | default cwd |
+| `--repo <path>` | no | the repo whose `nen/repos.json` and workflow history are read | default cwd |
 | `--json` | no | machine-readable fan-out rows plus `ledgerPath` | — |
 
 **Output and exit codes** — human line: `recorded <n> row(s) to <ledgerPath>`;
@@ -2430,13 +2510,13 @@ re-ran the failed job(s) of zheref/KroApple's run 42
 Reconcile against the backlog before writing to it, then file, attach, close
 and classify. Every verb here reaches GitHub, and several of them read it even
 under `--dry-run`; the only schema file any of them opens is the target
-repository's `schemas/labels.json`.
+repository's `nen/labels.json`.
 
 <a id="family-issue"></a>
 
 **`nen issue`**
 
-Reconciles the backlog before it writes to it: `nen issue` is the search-guard-file-classify choreography around GitHub issues -- it never decides that two issues are the same problem, never chooses a severity, and never writes a title or body, all of which stay a human's or an LLM caller's judgment. It reads and writes exclusively through `gh`; the only schema file any of its subcommands opens is the target repository's `schemas/labels.json` (`file` and `consolidate-close`, to validate every label before it is ever sent to GitHub).
+Reconciles the backlog before it writes to it: `nen issue` is the search-guard-file-classify choreography around GitHub issues -- it never decides that two issues are the same problem, never chooses a severity, and never writes a title or body, all of which stay a human's or an LLM caller's judgment. It reads and writes exclusively through `gh`; the only schema file any of its subcommands opens is the target repository's `nen/labels.json` (`file` and `consolidate-close`, to validate every label before it is ever sent to GitHub).
 
 Every subcommand shares one flag spec, and `nen issue <verb>` refuses any flag a *different* sibling subcommand owns (e.g. `issue chain-position --dry-run` or `issue file --body <text>`) with a message naming which verb the flag actually belongs to, rather than silently accepting and ignoring it.
 
@@ -2540,7 +2620,7 @@ nen issue file --target <owner/name> --repo <path> --title <t>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository to file into. | Missing exits 1. |
-| `--repo <path>` | yes | The checkout whose `schemas/labels.json` validates every `--label`. | Listed unbracketed in usage: omitted, this exits **2** by name, never silently reads the cwd's own taxonomy. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` validates every `--label`. | Listed unbracketed in usage: omitted, this exits **2** by name, never silently reads the cwd's own taxonomy. |
 | `--title <t>` | yes | The issue title. | Empty title is refused as part of the batch below (exit 1), not at the parser. |
 | `--body-file <path>` | yes | Path to the issue body. A body typed inline on the command line is a body nobody reviewed, so there is no `--body`. | Omitted entirely exits **2** (checked ahead of the batch); an unreadable path is a separate refusal. |
 | `--label a,b` | yes | Comma-separated labels, applied in the create call. | Every label must exist in `--repo`'s taxonomy; an empty list is refused. |
@@ -2655,7 +2735,7 @@ nen issue consolidate-close --target <owner/name> --parent <n>
 | `--target <owner/name>` | yes | The GitHub repository. | Missing exits 1. |
 | `--parent <n>` | yes | The consolidated issue every child folds into. | Object-class certified before any read is even used for planning. |
 | `--children 1,2` | yes | Issue numbers to attach then close. | Same certification. |
-| `--repo <path>` | yes | The checkout whose `schemas/labels.json` computes the label union and severity maximum. | Listed unbracketed: omitted, exits **2** by name (zheref/nen#28). |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` computes the label union and severity maximum. | Listed unbracketed: omitted, exits **2** by name (zheref/nen#28). |
 | `--severity-family <ns>:<family>` | no | The one label family reduced to its single strongest label. | Malformed shape (no `:`, or a leaf given instead of a family) is a usage error (exit 2); a well-formed family the taxonomy does not declare is a refusal (exit 1) naming the families it DOES declare. |
 | `--close-comment <template>` | no | Replaces the default close text for EVERY child. | Template over `{parent}`/`{child}` ONLY; any other brace run (unmatched, or an unknown placeholder) is refused (exit 2) before any call. Mutually exclusive with `--close-comment-map`. |
 | `--close-comment-map <path>` | no | A JSON object `{"<child>": "<text>", ...}` giving each child ITS OWN close text. | Path resolved against `--repo`'s root, not `process.cwd()`. Its key set must equal `--children` exactly -- a missing or extra key is refused. |
@@ -2775,7 +2855,7 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository to file into. | |
-| `--repo <path>` | yes | The checkout whose `schemas/labels.json` validates every `--label`. | Listed unbracketed: omitted, exits 2 by name. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` validates every `--label`. | Listed unbracketed: omitted, exits 2 by name. |
 | `--title <t>` | yes | The idea's title. | |
 | `--body-file <path>` | yes | Path to the idea body. | Omitted entirely exits 2; the read text is compared byte-for-byte against the read-back. |
 | `--label a,b` | yes | Comma-separated labels. | Same taxonomy validation as `issue file`. |
@@ -2815,7 +2895,7 @@ questions the pre-release quality gate asks, and Conventional Commits shape.
 
 **`nen scaffold`**
 
-The deterministic, scenario-agnostic half of a full project scaffolder: directory layout, the commit-msg hook, and (once) a canon-values template. It never generates scenario-specific project code (mobile-web, mobile-desktop, cross-apple, ...) -- that half of a full scaffolder's role is explicitly out of scope for this verb. It reads nothing from `schemas/`; it only writes to the target `--repo`.
+The deterministic, scenario-agnostic half of a full project scaffolder: directory layout, the commit-msg hook, and (once) a canon-values template. It never generates scenario-specific project code (mobile-web, mobile-desktop, cross-apple, ...) -- that half of a full scaffolder's role is explicitly out of scope for this verb. It reads nothing from `nen/`; it only writes to the target `--repo`.
 
 ### `nen scaffold init`
 
@@ -2864,7 +2944,7 @@ canon-values: /tmp/new-consumer/.claude/canon-values.yml
 
 **`nen canon`**
 
-Resolves which handbooks a target repository loads, and keeps a canonical-rule mirror in sync with a `canon-values.yml`. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`schemas/repos.json`), and substitutes/diffs a rule mirror the way `scripts/sync_canon.py` did.
+Resolves which handbooks a target repository loads, and keeps a canonical-rule mirror in sync with a `canon-values.yml`. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and substitutes/diffs a rule mirror the way `scripts/sync_canon.py` did.
 
 ### `nen canon resolve`
 
@@ -2882,8 +2962,8 @@ nen canon resolve --repo <path> --target <owner/name>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--repo <path>` | yes | The checkout whose `schemas/repos.json` maps `--target` to a scenario. | Listed unbracketed: omitted, exits 2 by name. |
-| `--target <owner/name>` | yes | The consumer repository being resolved. | Refused (exit 1) if unrecorded, or recorded but not a consumer (`schemas/repos.json`'s `consumers[]`). |
+| `--repo <path>` | yes | The checkout whose `nen/repos.json` maps `--target` to a scenario. | Listed unbracketed: omitted, exits 2 by name. |
+| `--target <owner/name>` | yes | The consumer repository being resolved. | Refused (exit 1) if unrecorded, or recorded but not a consumer (`nen/repos.json`'s `consumers[]`). |
 | `--always-load <path,path,...>` | yes | The repository's own unconditional-load manifest. | An empty list is refused -- there is no meaningful "loads nothing" empty form. |
 | `--stack-dir <dir>` | yes | Directory the one stack handbook is resolved under. | |
 | `--leaf <file>` | no | The stack handbook's filename. | Defaults to `architecture.md`. |
@@ -3255,7 +3335,7 @@ does more than match a template; every other skill supplies its grammar as a
 
 **`nen parse`**
 
-Parses a skill invocation against the grammar that skill itself publishes, echoes the parse, and refuses an unparseable line with a corrected line ready to paste -- it never decides that a parsed line is a good idea, only that it matches its own grammar. Three skills (`futon`, `izanagi`, `izanami`) carry their own grammar and extra domain logic baked into this binary because each does strictly more than "match a template": `futon` resolves its repo token against `schemas/repos.json`, `izanami` classifies every command against its own read-only allow/refuse table, `izanagi` enforces that its cap is never defaulted. Every OTHER skill name is a caller-supplied `--grammar` template matched against `--line`.
+Parses a skill invocation against the grammar that skill itself publishes, echoes the parse, and refuses an unparseable line with a corrected line ready to paste -- it never decides that a parsed line is a good idea, only that it matches its own grammar. Three skills (`futon`, `izanagi`, `izanami`) carry their own grammar and extra domain logic baked into this binary because each does strictly more than "match a template": `futon` resolves its repo token against `nen/repos.json`, `izanami` classifies every command against its own read-only allow/refuse table, `izanagi` enforces that its cap is never defaulted. Every OTHER skill name is a caller-supplied `--grammar` template matched against `--line`.
 
 ### `nen parse <skill>`
 
@@ -3290,7 +3370,7 @@ env: prod
 
 ### `nen parse futon`
 
-Parses futon's own invocation grammar (`<repo>@<severity>[+] [then <terminal>]`) and resolves its repo token against `--repo`'s `schemas/repos.json` registry -- `+` means this severity band OR HIGHER, a bare severity means that band alone, and `then tag`/`then tag+fanout` is read from the LAST whole-word `then`. The terminal clause is refused unless the resolved repo IS the one you are standing in (or `--self` names it): a consumer's release is a different job than the registry owner's, and this refusal is what keeps a consumer's futon invocation from accidentally cutting the OWNER's tag.
+Parses futon's own invocation grammar (`<repo>@<severity>[+] [then <terminal>]`) and resolves its repo token against `--repo`'s `nen/repos.json` registry -- `+` means this severity band OR HIGHER, a bare severity means that band alone, and `then tag`/`then tag+fanout` is read from the LAST whole-word `then`. The terminal clause is refused unless the resolved repo IS the one you are standing in (or `--self` names it): a consumer's release is a different job than the registry owner's, and this refusal is what keeps a consumer's futon invocation from accidentally cutting the OWNER's tag.
 
 **Usage**
 
@@ -3302,7 +3382,7 @@ nen parse futon --repo <path> "<repo>@<severity>[+] [then <terminal>]" [--self <
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--repo <path>` | yes | The checkout whose `schemas/repos.json` the repo token resolves against. | Listed unbracketed: omitted, exits 2 by name. |
+| `--repo <path>` | yes | The checkout whose `nen/repos.json` the repo token resolves against. | Listed unbracketed: omitted, exits 2 by name. |
 | (positional invocation) | yes | The futon line itself, e.g. `BC@high+ then tag`. | Joined from every positional after `futon`. |
 | `--self <owner/name>` | no | Overrides "which repo am I standing in" (otherwise read from the git remote). | Needed when the caller's own remote does not resolve, or under test. |
 
@@ -3589,7 +3669,7 @@ nen pr ready 112 --gh-repo zheref/nen --reviewers copilot,sasuke --json
 
 Look for `verdict`. `ready` exits 0; `not-ready` and `unevaluated` both exit 1,
 and `unevaluated` means GitHub could not be read — never that the PR passed.
-In a repository that ships `schemas/gates.json`, drop `--reviewers` and let the
+In a repository that ships `nen/gates.json`, drop `--reviewers` and let the
 identities come from the taxonomy instead; `--gates <path>` points at a gates
 file somewhere else.
 
@@ -3599,7 +3679,7 @@ missing body requirement:
 
 ```bash
 nen pr next-blocker --target zheref/nen --pr 112 --repo . \
-  --gates src/schema/fixtures/bankai-repo/schemas/gates.json
+  --gates src/schema/fixtures/bankai-repo/nen/gates.json
 ```
 
 `kind: none` exits 0; anything else exits 1 and the `detail` line names what to
@@ -3786,7 +3866,7 @@ nen canon mirror check --rules-dir handbooks/rules \
 ```
 
 `resolve` prints the always-load set plus exactly one stack handbook, derived
-from the scenario `schemas/repos.json` records for the target. `mirror check`
+from the scenario `nen/repos.json` records for the target. `mirror check`
 writes nothing and is the CI half: it exits 1 on any `missing`, `extra`,
 `stale` or `hand-edited` file, and `--header-pattern` is what tells a moved ref
 (`stale`) from an edited mirror file (`hand-edited`).
@@ -3836,14 +3916,14 @@ nen idea file --target zheref/nen --repo src/schema/fixtures/bankai-repo \
 `issue file --dry-run` prints the exact `gh issue create` argv and makes no
 network call at all. There is no `--body`: a body typed on the command line is
 a body nobody reviewed. Every label is checked against `--repo`'s
-`schemas/labels.json` first, because GitHub would silently *create* an unknown
+`nen/labels.json` first, because GitHub would silently *create* an unknown
 label rather than refuse. `idea file` looks for `read-back OK`; any mismatch
 exits 1, and so does a read-back that lands on a pull request — and it has no
 `--dry-run`, so run it only when you mean to file.
 
 Two different bases are in play in that block, which is why the body paths are
 spelled `./`. `--repo` points at the bundled fixture because that is where
-`schemas/labels.json` lives; `--body-file` does **not** resolve against it.
+`nen/labels.json` lives; `--body-file` does **not** resolve against it.
 `issue file` never opens the body at all — the path goes into the `gh issue
 create` argv verbatim, so `gh`'s own working directory resolves it (the
 dry-run above prints `--body-file ./body.md` unchanged) — and `idea file`

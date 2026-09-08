@@ -97,7 +97,7 @@ describe("assertRepoRoot", () => {
 
   it("does not require a .git directory", () => {
     // A tarball extraction, a container mount and a test fixture are all
-    // legitimate targets; the loud error a caller needs is about schemas/.
+    // legitimate targets; the loud error a caller needs is about nen/.
     const dir = mkdtempSync(join(tmpdir(), "nen-root-"));
     expect(() => assertRepoRoot({ cwd: dir })).not.toThrow();
   });

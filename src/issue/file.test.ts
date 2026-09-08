@@ -7,7 +7,7 @@ import { createArgv, fileIssue, mentionedIssues, openPrCheck, validateFiling, ty
 const TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
 function taxonomy(): LabelTaxonomy {
-  return parseLabelTaxonomy("/x/schemas/labels.json", {
+  return parseLabelTaxonomy("/x/nen/labels.json", {
     labels: [
       { name: "bug", color: "d93f0b", description: "a bug" },
       { name: "ns:sev/high", color: "d93f0b", description: "high" },

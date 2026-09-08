@@ -24,7 +24,7 @@ The object notation <CODE>-<IS|PR>-#<N>, formatted and parsed.
 
 format:
   --code <CODE>    Two or three uppercase letters. Checked against the target
-                   repository's schemas/repos.json -- a code the registry does
+                   repository's nen/repos.json -- a code the registry does
                    not carry is refused, not emitted.
   --kind <IS|PR>   IS for an issue, PR for a pull request.
   --number <N>     The object's number.
@@ -69,7 +69,7 @@ export const refCommand: Command = {
       return 0;
     }
 
-    const code = requireValue(context.args, "code", "It is the product code from schemas/repos.json.");
+    const code = requireValue(context.args, "code", "It is the product code from nen/repos.json.");
     const kindRaw = requireValue(context.args, "kind", "IS for an issue, PR for a pull request.");
     if (kindRaw !== "IS" && kindRaw !== "PR") {
       throw new VerbUsageError(`--kind must be IS or PR, got '${kindRaw}'.`);

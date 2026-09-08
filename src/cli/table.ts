@@ -10,7 +10,7 @@
 // instead of ragged pipes.
 //
 // WIDTH IS VISIBLE WIDTH, not character count. Every mandated status glyph
-// (the colour circles this repository's schemas/colors.yml assigns) is a wide
+// (the colour circles this repository's nen/colors.yml assigns) is a wide
 // codepoint -- an emoji or an East-Asian-wide character -- and measuring it as
 // one column is what made the original's borders zigzag (bankai-core#648). This
 // is a pragmatic approximation of Unicode East Asian Width (no ICU in a Bun
@@ -82,7 +82,7 @@ const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0xff00, 0xff60], // Fullwidth forms
   [0xffe0, 0xffe6],
   [0x2600, 0x27bf], // Misc symbols and Dingbats -- ✅ ❌ ⭐ and the rest of this
-  // repository's own status-glyph alphabet (schemas/colors.yml) live here.
+  // repository's own status-glyph alphabet (nen/colors.yml) live here.
   [0x2b00, 0x2bff], // Misc symbols and arrows
   [0x1f000, 0x1ffff], // Emoji / symbol blocks (mahjong through flags)
   [0x20000, 0x3fffd], // CJK extension B and beyond

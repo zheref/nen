@@ -592,7 +592,7 @@ function file(context: CommandContext): number {
   // never silently read as "validate against whatever taxonomy the cwd
   // happens to hold" (zheref/nen#28).
   const root = assertRepoRoot({
-    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/labels.json validates every label in the filing."),
+    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/labels.json validates every label in the filing."),
   });
   const taxonomy = loadLabelTaxonomy(root);
   const request: FileRequest = {
@@ -632,7 +632,7 @@ function file(context: CommandContext): number {
 // that is a decision rather than an omission. zheref/nen#28's rule is that a
 // verb whose usage promises the flag unbracketed must refuse its absence by
 // name -- `file` and `consolidate-close` do, because both validate against the
-// target checkout's schemas/labels.json. Commenting reads no taxonomy at all,
+// target checkout's nen/labels.json. Commenting reads no taxonomy at all,
 // so requiring a checkout would be asking for a path this verb has nothing to
 // do with; --target alone addresses the API, exactly as its own help text says.
 function comment(context: CommandContext): number {
@@ -1045,7 +1045,7 @@ function consolidate(context: CommandContext): number {
   // Same requiredness as file() above: this subcommand's usage line also lists
   // --repo unbracketed (zheref/nen#28).
   const root = assertRepoRoot({
-    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/labels.json computes the label union and severity maximum."),
+    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/labels.json computes the label union and severity maximum."),
   });
   const taxonomy = loadLabelTaxonomy(root);
   const severityFamily = readSeverityFamily(context, taxonomy);

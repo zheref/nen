@@ -11,7 +11,7 @@
 //
 // THE SEVERITY ORDER IS A PARAMETER, never a literal. `critical`/`high`/
 // `medium`/`low` are this repository's OWN severity vocabulary
-// (schemas/labels.json's `severity` family); a binary that hard-coded them
+// (nen/labels.json's `severity` family); a binary that hard-coded them
 // would rank a repository with a different severity vocabulary by names it
 // does not have. The caller states the order (`--severity-order`), naming
 // its own repository's severities in its own priority order; a row whose

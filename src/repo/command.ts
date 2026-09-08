@@ -22,7 +22,7 @@ nen repo inventory --target <owner/name> --epic-label <label> --integration-pref
 nen repo scenario --repo <path> --target <owner/name>
 
 resolve:
-  Resolve a repository TOKEN against the target repository's schemas/repos.json.
+  Resolve a repository TOKEN against the target repository's nen/repos.json.
 
   <token>          A product code (BC), an owner/name slug (owner/name), a
                    repository's short name, or 'all'. Matched EXACTLY and
@@ -31,7 +31,7 @@ resolve:
                    product_codes (keys and values), maintained_tools and
                    pending_onboarding.
   (no token)       Resolve the working directory's 'origin' remote instead.
-  --repo <path>    The checkout whose schemas/repos.json is the registry
+  --repo <path>    The checkout whose nen/repos.json is the registry
                    resolved against -- the same flag its siblings (repo
                    scenario, canon resolve) take, valid with and without a
                    token. Defaults to the current directory.
@@ -52,12 +52,12 @@ inventory:
   shipped in this binary.
 
 scenario:
-  The scenario recorded for --target in --repo's schemas/repos.json --
+  The scenario recorded for --target in --repo's nen/repos.json --
   the value canon-resolve/quality-tooling lookups read. --repo is
   REQUIRED (exit 2), never defaulted to the current directory: a cwd
   default surfaced as whatever registry happened to be there, not as the
   forgotten flag (zheref/nen#28). Exits 1 with a DISTINCT reason when
-  --repo carries no schemas/repos.json, when --target is not recorded in
+  --repo carries no nen/repos.json, when --target is not recorded in
   it at all, or when it is recorded but carries no scenario.`;
 
 function render(resolution: Resolution): string[] {
@@ -92,7 +92,7 @@ export const repoCommand: Command = {
     // strictness exists to prevent, one flag deep (zheref/nen#27). Refused
     // loudly, naming the flag the caller actually wanted -- and refused BEFORE
     // the registry is opened, because a misuse of the flags must not be
-    // reported as "the cwd has no schemas/repos.json" when the cwd was never
+    // reported as "the cwd has no nen/repos.json" when the cwd was never
     // the checkout the caller meant.
     if (token !== null && context.args.values["from"] !== undefined) {
       throw new VerbUsageError(
@@ -155,7 +155,7 @@ function scenario(context: CommandContext): number {
   // silently-defaulted-to-cwd failure (zheref/nen#28).
   const repoFlag = requireRepoFlag(
     context,
-    "It is the checkout whose schemas/repos.json records --target's scenario; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
+    "It is the checkout whose nen/repos.json records --target's scenario; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
   );
   const target = requireTarget(context);
   const root = assertRepoRoot({ repoFlag });

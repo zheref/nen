@@ -136,12 +136,12 @@ describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged 
   });
 
   // The three downstream causes the one old refusal conflated (zheref/nen#28),
-  // one test each. Cause 1: the --repo path carries no schemas/repos.json.
-  it("scenario names a --repo path with no schemas/repos.json as exactly that (exit 1)", async () => {
+  // one test each. Cause 1: the --repo path carries no nen/repos.json.
+  it("scenario names a --repo path with no nen/repos.json as exactly that (exit 1)", async () => {
     const empty = mkdtempSync(join(tmpdir(), "nen-no-registry-"));
     const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, empty);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/schemas[/\\]repos\.json: no such file/);
+    expect(result.err.join("\n")).toMatch(/nen[/\\]repos\.json: no such file/);
   });
 
   // Cause 2: the registry knows nothing about the target, anywhere.

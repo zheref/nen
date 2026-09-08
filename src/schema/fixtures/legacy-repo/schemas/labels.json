@@ -1,0 +1,18 @@
+{
+  "$comment": "TEST FIXTURE -- a trimmed excerpt of the live bankai-core schemas/labels.json shape. Not shipped; see ../../README.md.",
+  "labels": [
+    { "name": "bankai:stage/idea", "color": "ededed", "description": "Raw idea awaiting research" },
+    { "name": "bankai:stage/researched", "color": "1d76db", "description": "Epic drafted, awaiting G1 approval" },
+    { "name": "bankai:stage/building", "color": "fbca04", "description": "Released to a builder" },
+    { "name": "bankai:stage/in-review", "color": "d93f0b", "description": "Reviewers reviewing" },
+    { "name": "bankai:stage/human-review", "color": "b60205", "description": "Waiting on you -- any gate" },
+    { "name": "bankai:stage/fulfilled", "color": "006b75", "description": "Closing PR merged. Terminal." },
+    { "name": "bankai:severity/critical", "color": "b60205", "description": "Blocks and pages the human immediately" },
+    { "name": "bankai:severity/high", "color": "d93f0b", "description": "Must fix before merge/release" },
+    { "name": "bankai:severity/medium", "color": "fbca04", "description": "Fix soon" },
+    { "name": "bankai:severity/low", "color": "0e8a16", "description": "Nice to fix" },
+    { "name": "bankai:agent/sasuke", "color": "4527a0", "description": "Owned by Sasuke (Ninja)" },
+    { "name": "bankai:agent/tenma", "color": "1565c0", "description": "Owned by Tenma (Knight)" },
+    { "name": "bankai:epic", "color": "5319e7", "description": "An epic, delivered on an integration branch" }
+  ]
+}

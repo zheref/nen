@@ -10,7 +10,7 @@ function registry(overrides: Partial<RepoRegistry> = {}): RepoRegistry {
   ];
   const productCodes = overrides.productCodes ?? { KP: "zheref/KroApple", KN: "zheref/KroAndroid", BC: "zheref/bankai-core" };
   return {
-    path: "schemas/repos.json",
+    path: "nen/repos.json",
     latest: null,
     consumers,
     productCodes,

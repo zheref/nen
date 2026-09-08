@@ -27,7 +27,7 @@
 //     `approvers="$approvers,bisky"` arm, `case "copilot"`, a
 //     `"sasuke,tenma,copilot"` default reviewer set, `copilot round stalled`.
 //     Every one of those is now read from the target repository's
-//     `schemas/gates.json` through ../schema/gates.ts, exactly as
+//     `nen/gates.json` through ../schema/gates.ts, exactly as
 //     ./predicates.ts already reads the predicate half. WHERE A NAME BECAME A
 //     STRUCTURAL PROPERTY, the mapping is:
 //

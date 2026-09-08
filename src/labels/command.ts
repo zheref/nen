@@ -49,7 +49,7 @@ function sync(context: CommandContext): number {
   // a sync that read whatever taxonomy the cwd held would push THAT repo's
   // labels at --target (zheref/nen#28).
   const root = assertRepoRoot({
-    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/labels.json is the taxonomy being synced."),
+    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/labels.json is the taxonomy being synced."),
   });
   const taxonomy = loadLabelTaxonomy(root);
   const report = syncLabels(context.seams, target, taxonomy, context.args.booleans.has("dry-run"));

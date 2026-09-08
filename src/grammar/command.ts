@@ -9,7 +9,7 @@
 // FUTON/IZANAGI/IZANAMI ARE A DELIBERATE EXCEPTION, NOT A LEFTOVER DUPLICATE
 // OF THE ENGINE BELOW. Each does strictly more than "parse a line against a
 // template and echo it": futon RESOLVES its repo token against the target
-// repository's schemas/repos.json registry and refuses a terminal clause
+// repository's nen/repos.json registry and refuses a terminal clause
 // against a repo that is not the caller's own; izanami CLASSIFIES every
 // parsed command against its read-only allow/refuse table; izanagi enforces
 // that 'up to <N>' is present, never defaulted. None of that domain logic
@@ -65,7 +65,7 @@ and the corrected line is printed on stderr so a caller can paste it.
 
 futon:
   Parses the futon invocation grammar and resolves its repo token against
-  --repo's schemas/repos.json registry. '+' means this severity band OR
+  --repo's nen/repos.json registry. '+' means this severity band OR
   HIGHER; a bare severity is that band alone. 'then tag' / 'then tag+fanout'
   is read from the LAST whole-word 'then'. The terminal is refused unless
   the resolved repo IS the one you are standing in (or --self names it) --
@@ -227,7 +227,7 @@ function futon(context: CommandContext, raw: string): number {
   // runFamily's standard usage-error trailer rather than this catch's bare one.
   const repoFlag = requireRepoFlag(
     context,
-    "It is the checkout whose schemas/repos.json the invocation's repo token resolves against.",
+    "It is the checkout whose nen/repos.json the invocation's repo token resolves against.",
   );
   let root: string;
   try {

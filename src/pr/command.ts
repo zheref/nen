@@ -93,7 +93,7 @@ ready:
   --exclude-run <id>          Drop one Actions run's own checks (CON-36 clause
                               3; pass it only from inside that run's own job).
   --gates <path>              Read reviewer identities from this gates file
-                              instead of the target repo's schemas/gates.json.
+                              instead of the target repo's nen/gates.json.
                               A RELATIVE path is resolved against the --repo
                               root, NOT the current directory; pass an
                               absolute path for a file outside the target
@@ -127,7 +127,7 @@ next-blocker:
   stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
   diff-shaped and not checked here; see ../pr/blocker.ts's header.
   --gates <path>              Read reviewer identities from this gates file
-                              instead of the target repo's schemas/gates.json
+                              instead of the target repo's nen/gates.json
                               -- the same flag 'ready' takes, through the same
                               resolver, so a checkout that ships no gates file
                               can still be evaluated. A RELATIVE path is
@@ -372,7 +372,7 @@ function blocker(context: CommandContext): number {
   // --reviewers guard above, which is checked first precisely so a bad flag
   // is refused without any filesystem or network work.
   const root = assertRepoRoot({
-    repoFlag: requireRepoFlag(context, "It is the checkout whose schemas/gates.json supplies the reviewer identities."),
+    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/gates.json supplies the reviewer identities."),
   });
   // `--gates <path>` goes through ../verbs/pr_ready.ts's resolveIdentities --
   // THE SAME resolver `pr ready` uses, never a re-spelled copy -- because
@@ -381,7 +381,7 @@ function blocker(context: CommandContext): number {
   // PR_READY_FLAGS for `ready`'s sake), so `next-blocker --gates <path>`
   // PARSED cleanly and was then never read. Silently accepted, zero effect --
   // a caller pointing the flag at a real file to evaluate a checkout that
-  // ships no schemas/gates.json still got that checkout's own "no such file"
+  // ships no nen/gates.json still got that checkout's own "no such file"
   // refusal, which reads as "the flag didn't help" rather than "the flag
   // doesn't exist". The empty reviewer/approver lists below are unreachable
   // padding, not a semantic choice: resolveIdentities consults its

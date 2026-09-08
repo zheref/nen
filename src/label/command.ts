@@ -45,7 +45,7 @@ Apply a label to one object, logged.
   <object-ref>       <CODE>-<IS|PR>-#<N>. Only the number is used against
                      --repo-slug's own numbering; the code is not re-resolved.
   --label <name>      Checked against the target repository's
-                     schemas/labels.json before anything is attempted.
+                     nen/labels.json before anything is attempted.
   --repo-slug <o/n>   The owner/name the mutation runs against.
   --reason <text>      Recorded in the ledger; not sent to GitHub.
   --ledger <path>      Defaults to changelog.d/../label-ledger.jsonl under the

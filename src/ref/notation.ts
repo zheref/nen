@@ -11,7 +11,7 @@
 // written here as constants rather than read from a schema. A status circle is a
 // VOCABULARY -- a repository decides what its statuses are and what each means,
 // which is why ../color/status.ts reads every one of them from
-// `schemas/colors.yml`. `IS` versus `PR` is not a vocabulary: it is the two
+// `nen/colors.yml`. `IS` versus `PR` is not a vocabulary: it is the two
 // halves of this notation's own grammar, in the same way the `-` separators are.
 // A repository that wanted a third object kind would be changing the notation,
 // not configuring it.
@@ -121,7 +121,7 @@ const CODE = /^[A-Z]{2,3}$/;
 export function formatRef(options: FormatOptions): Formatted {
   if (!CODE.test(options.code)) {
     throw new RefError(
-      `'${options.code}' is not a product code. A code is two or three UPPERCASE letters and comes from the target repository's schemas/repos.json -- add it there before naming a new repository.`,
+      `'${options.code}' is not a product code. A code is two or three UPPERCASE letters and comes from the target repository's nen/repos.json -- add it there before naming a new repository.`,
     );
   }
   if (!Number.isInteger(options.number) || options.number <= 0) {

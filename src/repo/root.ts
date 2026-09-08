@@ -108,7 +108,7 @@ export function resolveRepoRoot(options: RepoRootOptions = {}): string {
 // a schema directory extracted from a tarball, mounted in a container, or laid
 // out by a test fixture is a legitimate target; requiring a `.git` would refuse
 // those for no benefit, and the loud error a caller actually needs is "there is
-// no schemas/ here", which the schema loaders raise by name.
+// no nen/ here", which the schema loaders raise by name.
 export function assertRepoRoot(options: RepoRootOptions = {}): string {
   const root = resolveRepoRoot(options);
   const source =

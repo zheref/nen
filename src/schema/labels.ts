@@ -1,6 +1,6 @@
 // src/schema/labels.ts -- the label taxonomy, read from the TARGET repository.
 //
-// `schemas/labels.json` is the source of truth for every label name, colour and
+// `nen/labels.json` is the source of truth for every label name, colour and
 // description in the repository nen is pointed at. This module validates it and
 // exposes typed accessors; it knows the SHAPE of a label and nothing about any
 // particular label's NAME. Grep this file for a `bankai:` or an `akatsuki:`

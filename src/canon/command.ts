@@ -33,7 +33,7 @@ usage:
       resolved scenario that is empty or path-shaped ('.', '..', contains
       '/') is refused too, since the stack path is built directly from it.
       --repo is REQUIRED the same way (exit 2), never defaulted to the
-      current directory: it names the checkout whose schemas/repos.json
+      current directory: it names the checkout whose nen/repos.json
       maps --target to its scenario, and a cwd default surfaced as that
       directory's missing-or-unrelated registry instead of the forgotten
       flag (zheref/nen#28).
@@ -102,7 +102,7 @@ function resolve(context: CommandContext): number {
   // below, never patched over with the call site's cwd (zheref/nen#28).
   const repoFlag = requireRepoFlag(
     context,
-    "It is the checkout whose schemas/repos.json maps --target to the scenario this handbook set derives from; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
+    "It is the checkout whose nen/repos.json maps --target to the scenario this handbook set derives from; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
   );
   const targetRaw = context.args.values["target"];
   if (targetRaw === undefined) throw new VerbUsageError("--target owner/name is required.");

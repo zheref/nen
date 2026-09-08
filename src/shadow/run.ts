@@ -34,7 +34,7 @@
 // the sweep never reads, because only `.ts` files are shipped code -- and this
 // file loads it at runtime like every other piece of this repository's
 // taxonomy. The identities the oracle judges by follow the same rule: they are
-// read from ../schema/fixtures/bankai-repo/schemas/gates.json, "the vocabulary
+// read from ../schema/fixtures/bankai-repo/nen/gates.json, "the vocabulary
 // of the live system nen serves today" (its own README), rather than
 // duplicated into a second copy this file would own and could drift from.
 //

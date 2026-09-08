@@ -1,5 +1,5 @@
 // src/schema/colors.ts -- the colour vocabulary, read from the TARGET
-// repository's `schemas/colors.yml`.
+// repository's `nen/colors.yml`.
 //
 // THE ONE RULE THAT MAKES REUSE SAFE, carried across from the file this reads
 // because a reader of the loader needs it as much as a reader of the data: a

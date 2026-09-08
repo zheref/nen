@@ -54,6 +54,7 @@ import { parseArgs, UsageError } from "./cli/args.js";
 import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
 import { COMMANDS, findCommand } from "./cli/registry.js";
 import { RepoRootError } from "./repo/root.js";
+import { LEGACY_FALLBACK_REMOVED_IN } from "./schema/source.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
@@ -113,13 +114,16 @@ else.
 
 const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
 
-Load and validate the target repository's taxonomy files -- schemas/labels.json,
-schemas/repos.json, schemas/colors.yml, schemas/gates.json -- and report each
-one's verdict: ok, or FAIL naming what is wrong.
+Load and validate the target repository's nen/ files -- nen/labels.json,
+nen/repos.json, nen/colors.yml, nen/gates.json and the optional
+nen/contract.json -- and report each one's verdict: ok, or FAIL naming what is
+wrong. A file found only under the legacy schemas/ directory still loads and is
+reported as such; that fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.
 
   --repo <path>    The target repository's working-tree root. Defaults to the
                    current directory.
-  --json           Machine-readable output: { root, ok, checks: [...] }.`;
+  --json           Machine-readable output:
+                   { root, ok, checks: [...], deprecations: [...] }.`;
 
 // The flags the TWO pre-registry commands share. Left as one spec because
 // those two are parsed together, exactly as they always were; a registry
@@ -375,12 +379,44 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
   }
   io.out(`repository: ${report.root}`);
   for (const check of report.checks) {
-    const mark = check.ok ? "ok  " : check.required ? "FAIL" : "warn";
+    // FOUR MARKS, and the two new ones are both about the migration rather
+    // than about the file's contents: a row read from the legacy `schemas/`
+    // location loaded fine and is `warn` because it will stop loading in
+    // v0.4.0, and a row whose legacy copy DIFFERS is `FAIL` because the
+    // repository has two answers and nen silently picked one.
+    const mark = check.shadowed
+      ? "FAIL"
+      : check.ok
+        ? check.location === "schemas"
+          ? "warn"
+          : "ok  "
+        : check.required
+          ? "FAIL"
+          : "warn";
     io.out(`  ${mark}  ${check.file}  ${check.detail}`);
+    // The migration sentence goes on its OWN line, under the row it is about.
+    // Folding it into `detail` would put it inside the field `--json` publishes
+    // as the file's verdict, where a machine reader parsing that string would
+    // then have to tell a verdict from a deprecation.
+    if (check.note !== null) io.out(`        ^ ${check.note}`);
   }
   if (!report.ok) {
+    // THREE DIFFERENT FAILURES, THREE DIFFERENT SENTENCES. "Could not be read"
+    // is false about a repository whose every file loaded and whose only
+    // problem is a stale duplicate, and a refusal that misdescribes what
+    // happened sends the reader looking for a corrupt file that is not there.
+    // The third exists for the same reason as the second: "with DIFFERENT
+    // contents. Nen read the 'nen/' one. Delete the legacy copy" asserts three
+    // things nen does not know when it could not open one of the two files --
+    // and nominates for deletion the copy that may be the only readable one.
+    const unreadable = report.checks.some((check): boolean => !check.ok && check.required);
+    const unverified = report.checks.some((check): boolean => check.shadow === "unknown");
     io.err(
-      `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`,
+      unreadable
+        ? `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`
+        : unverified
+          ? `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', and nen could not read one of the two to compare them. It will not say which copy it served or which one to delete on evidence it does not have -- fix the unreadable path named above, then re-run. The schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`
+          : `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', with DIFFERENT contents. Nen read the 'nen/' one. Delete the legacy copy, or reconcile it -- the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`,
     );
   }
   return report.ok ? 0 : 1;

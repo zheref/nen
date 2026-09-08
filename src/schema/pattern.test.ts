@@ -62,7 +62,7 @@ describe("catastrophicShape -- the exponential-backtracking families", () => {
 
 describe("catastrophicShape -- what it must NOT refuse", () => {
   it("passes the patterns the two shipped fixtures actually declare", () => {
-    // Copied from src/schema/fixtures/{bankai,alt}-repo/schemas/gates.json. If
+    // Copied from src/schema/fixtures/{bankai,alt}-repo/nen/gates.json. If
     // this list ever goes red the guard has started refusing real reviewer
     // identities, which is a worse defect than the one it closes.
     for (const source of [

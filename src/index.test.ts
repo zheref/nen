@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exitCodeFor, reportUnhandled, run, runFamily, type Io } from "./index.js";
 import { VerbUsageError, type Command } from "./cli/command.js";
 import { RepoRootError } from "./repo/root.js";
-import { ALT_REPO, BANKAI_REPO } from "./schema/fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO, LEGACY_REPO } from "./schema/fixtures/paths.js";
 import { defaultSeams, type CommandResult, type Seams } from "./seam/exec.js";
 import { VERSION } from "./version.js";
 
@@ -111,19 +111,34 @@ describe("usage errors are exit 2, distinct from failures", () => {
   });
 });
 
+// The `--json` shape of one row, in the order it is published. Written once so
+// the assertions below cannot drift apart, and so adding a field is a visible
+// edit to a named contract rather than a silent widening.
+const CHECK_KEYS = [
+  "file",
+  "path",
+  "location",
+  "ok",
+  "detail",
+  "required",
+  "shadow",
+  "shadowed",
+  "note",
+] as const;
+
 describe("nen schema check", () => {
   it("reads the repository --repo names, not the process's own", async () => {
     const bankai = await capture(["schema", "check", "--repo", BANKAI_REPO]);
     expect(bankai.code).toBe(0);
     expect(bankai.out.join("\n")).toContain(BANKAI_REPO);
-    expect(bankai.out.join("\n")).toMatch(/ok {2}\s+schemas\/labels\.json\s+13 labels/);
+    expect(bankai.out.join("\n")).toMatch(/ok {2}\s+nen\/labels\.json\s+13 labels/);
 
     // The SAME command against a repository with an entirely different
     // vocabulary. The verb reports what the file says; it knows none of it.
     const alt = await capture(["schema", "check", "--repo", ALT_REPO]);
     expect(alt.code).toBe(0);
-    expect(alt.out.join("\n")).toMatch(/schemas\/labels\.json\s+8 labels/);
-    expect(alt.out.join("\n")).toMatch(/schemas\/repos\.json\s+2 consumers/);
+    expect(alt.out.join("\n")).toMatch(/nen\/labels\.json\s+8 labels/);
+    expect(alt.out.join("\n")).toMatch(/nen\/repos\.json\s+2 consumers/);
   });
 
   // zheref/nen#17: the bankai fixture's product_codes nests a `$comment` the
@@ -134,7 +149,7 @@ describe("nen schema check", () => {
   it("counts only real product codes, never a nested $comment (zheref/nen#17)", async () => {
     const result = await capture(["schema", "check", "--repo", BANKAI_REPO]);
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/schemas\/repos\.json\s+3 consumers, 6 product codes/);
+    expect(result.out.join("\n")).toMatch(/nen\/repos\.json\s+3 consumers, 6 product codes/);
     expect(result.out.join("\n")).not.toContain("$comment");
   });
 
@@ -142,7 +157,7 @@ describe("nen schema check", () => {
     const empty = mkdtempSync(join(tmpdir(), "nen-cli-"));
     const result = await capture(["schema", "check", "--repo", empty]);
     expect(result.code).toBe(1);
-    expect(result.out.join("\n")).toMatch(/FAIL\s+schemas\/labels\.json/);
+    expect(result.out.join("\n")).toMatch(/FAIL\s+nen\/labels\.json/);
     expect(result.err.join("\n")).toMatch(/no built-in copy to fall back on/);
   });
 
@@ -150,15 +165,166 @@ describe("nen schema check", () => {
     const result = await capture(["schema", "check", "--repo", BANKAI_REPO, "--json"]);
     expect(result.code).toBe(0);
     const parsed: unknown = JSON.parse(result.out.join("\n"));
-    expect(parsed).toMatchObject({ root: BANKAI_REPO, ok: true });
-    const checks = (parsed as { checks: { file: string; ok: boolean; required: boolean }[] }).checks;
-    expect(checks.map((c): string => c.file)).toEqual([
-      "schemas/labels.json",
-      "schemas/repos.json",
-      "schemas/colors.yml",
-      "schemas/gates.json",
+    expect(parsed).toMatchObject({ root: BANKAI_REPO, ok: true, deprecations: [] });
+    const checks = (
+      parsed as {
+        checks: Record<string, unknown>[];
+      }
+    ).checks;
+    expect(checks.map((c): unknown => c["file"])).toEqual([
+      "nen/labels.json",
+      "nen/repos.json",
+      "nen/colors.yml",
+      "nen/gates.json",
+      "nen/contract.json",
     ]);
-    expect(checks.every((c): boolean => c.ok)).toBe(true);
+    expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);
+    for (const check of checks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
+    // A fully migrated repository says so in the machine-readable output as
+    // well as on screen: every row answered from `nen/`, nothing deprecated,
+    // nothing shadowed, no comparison left unmade. That is the shape a
+    // consumer's CI asserts on to know the v0.4.0 removal will not break it.
+    expect(checks.every((c): boolean => c["location"] === "nen")).toBe(true);
+    expect(checks.every((c): boolean => c["note"] === null && c["shadowed"] === false)).toBe(true);
+    expect(checks.every((c): boolean => c["shadow"] === "none")).toBe(true);
+  });
+
+  it("publishes ONE key order for every row, including the ones that took the failure path", async () => {
+    // `--json` is the stable surface, and a row's key order must not encode
+    // which branch built it. Two rows here never take the success path: the
+    // contract row, whose ABSENCE is rewritten into an `ok` after failing, and
+    // a genuinely failing row. Asserting only against a repository where every
+    // row succeeds proves nothing about either -- which is exactly how the
+    // contract row came to serialise `…, detail, shadowed, note, required`
+    // while the other four said `…, detail, required, shadowed, note`.
+    const legacy = await capture(["schema", "check", "--repo", LEGACY_REPO, "--json"]);
+    expect(legacy.code).toBe(0);
+    const legacyChecks = (JSON.parse(legacy.out.join("\n")) as { checks: Record<string, unknown>[] })
+      .checks;
+    const contract = legacyChecks.at(-1);
+    expect(contract?.["file"]).toBe("nen/contract.json");
+    expect(contract?.["detail"]).toBe("absent (optional)");
+    for (const check of legacyChecks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
+
+    // …and a row that failed outright, from a repository carrying nothing.
+    const empty = await capture([
+      "schema",
+      "check",
+      "--repo",
+      mkdtempSync(join(tmpdir(), "nen-cli-keys-")),
+      "--json",
+    ]);
+    expect(empty.code).toBe(1);
+    const emptyChecks = (JSON.parse(empty.out.join("\n")) as { checks: Record<string, unknown>[] })
+      .checks;
+    expect(emptyChecks.some((c): boolean => c["ok"] === false)).toBe(true);
+    for (const check of emptyChecks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
+  });
+
+  it("prints the LEGACY location a file was actually read from, plus the migration line", async () => {
+    const result = await capture(["schema", "check", "--repo", LEGACY_REPO]);
+    // The un-migrated repository still PASSES for the whole v0.3 line.
+    expect(result.code).toBe(0);
+    const text = result.out.join("\n");
+    expect(text).toMatch(/warn\s+schemas\/labels\.json\s+13 labels/);
+    expect(text).toContain("^ legacy location. Move it to 'nen/labels.json'");
+    expect(text).toContain("removed in v0.4.0");
+    expect(text).not.toContain("nen/labels.json  13 labels");
+  });
+
+  it("FAILS on a shadowed leftover, and says which file it read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-shadow-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    mkdirSync(join(root, "schemas"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    writeFileSync(join(root, "schemas", "labels.json"), '{"labels":[]}');
+
+    const result = await capture(["schema", "check", "--repo", root]);
+    expect(result.code).toBe(1);
+    const text = result.out.join("\n");
+    expect(text).toMatch(/FAIL\s+nen\/labels\.json\s+13 labels/);
+    expect(text).toContain("^ SHADOWED LEFTOVER: 'schemas/labels.json'");
+    // The stderr refusal describes the RIGHT failure -- not "could not be
+    // read", which is false about a repository whose files all loaded.
+    expect(result.err.join("\n")).toContain("with DIFFERENT contents");
+    expect(result.err.join("\n")).not.toContain("no built-in copy");
+
+    // Make the two copies identical and the same repository passes, with the
+    // deletion offered as a note rather than demanded as a failure.
+    writeFileSync(
+      join(root, "schemas", "labels.json"),
+      readFileSync(join(BANKAI_REPO, "nen", "labels.json"), "utf8"),
+    );
+    const clean = await capture(["schema", "check", "--repo", root]);
+    expect(clean.code).toBe(0);
+    expect(clean.out.join("\n")).toMatch(/ok {2}\s+nen\/labels\.json/);
+    expect(clean.out.join("\n")).toContain("^ an identical copy is still at 'schemas/labels.json'");
+  });
+
+  it("carries a contract row: absent when there is none, validated when there is", async () => {
+    const migrated = await capture(["schema", "check", "--repo", BANKAI_REPO]);
+    expect(migrated.out.join("\n")).toMatch(
+      /ok {2}\s+nen\/contract\.json\s+dependency \(nen >= 0\.3, pinned v0\.3\.0\), project \(2 lanes/,
+    );
+
+    const none = await capture(["schema", "check", "--repo", LEGACY_REPO]);
+    expect(none.out.join("\n")).toMatch(/ok {2}\s+nen\/contract\.json\s+absent \(optional\)/);
+  });
+
+  it("does NOT claim a foreign 'schemas/stack.json' as its contract", async () => {
+    // REGRESSION GUARD FOR A CONSUMER-FACING FAILURE. `nen/contract.json` is
+    // new in this line: no released nen ever read a `schemas/` name for it, so
+    // it has no legacy location, and giving it one would not preserve
+    // compatibility with anything -- it would seize a filename in a directory
+    // nen is walking away from. A repository that carries its own
+    // `schemas/stack.json` (a build's stack manifest, say) and no nen contract
+    // has changed nothing and must pass, with the contract row reading absent.
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-foreign-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    mkdirSync(join(root, "schemas"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    writeFileSync(
+      join(root, "schemas", "stack.json"),
+      '{"platform":"ios","minimum_os":"17.0","not":"a nen contract"}',
+    );
+
+    const result = await capture(["schema", "check", "--repo", root]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/ok {2}\s+nen\/contract\.json\s+absent \(optional\)/);
+    expect(result.out.join("\n")).not.toContain("stack.json");
+    expect(result.err).toEqual([]);
+  });
+
+  it("says the comparison FAILED rather than 'the bytes differ' when it could not be made", async () => {
+    // The three claims the shadow sentence makes -- the bytes DIFFER, nen read
+    // the `nen/` copy, delete the legacy one -- are all unproven when one of
+    // the two files will not open, and the third is advice to delete a file on
+    // evidence nobody has. The row still FAILS the report, fail-closed; what
+    // changes is that it says what actually happened, and names the errno.
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-unverified-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    mkdirSync(join(root, "schemas", "labels.json"), { recursive: true });
+
+    const result = await capture(["schema", "check", "--repo", root]);
+    expect(result.code).toBe(1);
+    const text = result.out.join("\n");
+    // The file itself LOADED, from the canonical location, and is still FAIL.
+    expect(text).toMatch(/FAIL\s+nen\/labels\.json\s+13 labels/);
+    expect(text).toContain("^ UNVERIFIED LEFTOVER: 'schemas/labels.json'");
+    expect(text).toContain("EISDIR");
+    expect(text).not.toContain("SHADOWED LEFTOVER");
+    expect(text).not.toContain("bytes DIFFER");
+    const err = result.err.join("\n");
+    expect(err).toContain("could not read one of the two to compare them");
+    expect(err).not.toContain("with DIFFERENT contents");
+    expect(err).not.toContain("no built-in copy");
   });
 
   // The owner/name-slug refusal is asserted in the exit-code block at the end of
@@ -262,7 +428,7 @@ describe("usage goes to the right stream (review finding)", () => {
 // one error class each, using the `label` family (it exercises a taxonomy
 // lookup, a `gh` mutation, and a ref parse in one small surface).
 describe("registry family dispatch, through the real run() (review finding)", () => {
-  const VALID_LABEL = "bankai:stage/idea"; // declared in the bankai-repo fixture's schemas/labels.json
+  const VALID_LABEL = "bankai:stage/idea"; // declared in the bankai-repo fixture's nen/labels.json
 
   function neverCalled(): CommandResult {
     throw new Error("must not be called");

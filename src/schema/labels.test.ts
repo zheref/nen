@@ -65,7 +65,7 @@ describe("loadLabelTaxonomy -- reads the TARGET repository", () => {
 });
 
 describe("parseLabelTaxonomy -- validation", () => {
-  const at = "/fake/schemas/labels.json";
+  const at = "/fake/nen/labels.json";
 
   it("refuses a non-object root", () => {
     expect(() => parseLabelTaxonomy(at, [])).toThrow(/expected an object/);

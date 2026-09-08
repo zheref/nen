@@ -20,7 +20,7 @@ import {
 const TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
 function taxonomy(): LabelTaxonomy {
-  return parseLabelTaxonomy("/x/schemas/labels.json", {
+  return parseLabelTaxonomy("/x/nen/labels.json", {
     labels: [
       { name: "ns:sev/critical", color: "b60205", description: "c" },
       { name: "ns:sev/high", color: "d93f0b", description: "h" },

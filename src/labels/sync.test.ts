@@ -7,7 +7,7 @@ import { createArgv, editArgv, syncLabels } from "./sync.js";
 const TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
 function taxonomy(): LabelTaxonomy {
-  return parseLabelTaxonomy("/x/schemas/labels.json", {
+  return parseLabelTaxonomy("/x/nen/labels.json", {
     labels: [
       { name: "a", color: "111111", description: "label a" },
       { name: "b", color: "222222", description: "label b" },
