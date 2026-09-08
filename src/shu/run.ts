@@ -255,12 +255,19 @@ export function renderReport(report: ShuReport): readonly string[] {
   const verbPrefix = report.log.mode === "dry-run" ? "would run" : "ran";
   for (const step of report.steps) {
     const argv = renderArgv({ exe: step.exe, argv: step.argv });
-    lines.push(
-      labelled(
-        verbPrefix,
-        step.exitCode === null ? argv : `${argv}  -- exit ${step.exitCode} in ${step.durationMs}ms`,
-      ),
-    );
+    // Three shapes for a null exitCode, and only one of them is a failure: a dry
+    // run and the interactive pre-flight never ran anything YET (bare argv, the
+    // same rendering `--dry-run` always had), while a captured step left null
+    // because it could not be SPAWNED at all -- "exit null in nullms" would
+    // claim a code that was never produced, so a streamed step says plainly
+    // that it did not start instead.
+    const detail =
+      step.exitCode !== null
+        ? `${argv}  -- exit ${step.exitCode} in ${step.durationMs}ms`
+        : report.log.mode === "streamed"
+          ? `${argv}  -- did not start`
+          : argv;
+    lines.push(labelled(verbPrefix, detail));
   }
   lines.push(labelled("cwd", report.cwd));
   lines.push(labelled("env", report.env.length === 0 ? "(none added)" : report.env.join(", ")));
@@ -475,7 +482,19 @@ function runCaptured(
     });
     const durationMs = context.seams.now().getTime() - stepStarted;
     relay(context, result.stdout, result.stderr);
-    steps.push({ exe: step.exe, argv: step.argv, cwd, exitCode: result.code, durationMs });
+    // `result.code` is MEANINGLESS on a spawn failure (../seam/exec.ts's own
+    // words for it) -- typically -1, a value with no exit-code meaning at all --
+    // and `durationMs` measured nothing since the process never started. Both
+    // are reported `null`, the same value this report already uses everywhere
+    // else for "nothing ran" (a dry run, an unreached step): one caller-visible
+    // rule instead of a spawn-failure special case that leaks a sentinel number.
+    steps.push({
+      exe: step.exe,
+      argv: step.argv,
+      cwd,
+      exitCode: result.spawnFailed ? null : result.code,
+      durationMs: result.spawnFailed ? null : durationMs,
+    });
 
     if (result.spawnFailed) {
       // NOT exit 1. "the tool is not installed" and "the tool ran and said no"

@@ -631,6 +631,59 @@ describe("refusals", () => {
     expect(result.err.join("\n")).toMatch(/nen never installs a toolchain/);
   });
 
+  it("nulls the failing step's exitCode and durationMs on a spawn failure -- `code` is meaningless", async () => {
+    // -1 is what ../seam/exec.ts's real spawnRunner returns on a spawn
+    // failure (its `result.error` branch); scripting it here rather than
+    // leaving `code` to the fixture's own default of 0 is what makes this
+    // test catch a regression back to `exitCode: result.code` -- 0 would pass
+    // either way, -1 would not.
+    const result = await capture(["build", "--json"], {
+      script: [{ match: "pnpm turbo run build", result: { spawnFailed: true, code: -1 } }],
+    });
+    expect(result.code).toBe(5);
+    const report = JSON.parse(result.out.join("\n")) as {
+      steps: readonly { exitCode: number | null; durationMs: number | null }[];
+      exitCode: number | null;
+    };
+    expect(report.steps[0]?.exitCode).toBeNull();
+    expect(report.steps[0]?.durationMs).toBeNull();
+    // NEN's own exit code is unaffected: still 5, the tool-not-installed
+    // family code, never the tool's own (meaningless) -1.
+    expect(report.exitCode).toBe(5);
+  });
+
+  it("nulls only the step that failed to spawn -- an earlier CAPTURED step keeps its real numbers", async () => {
+    const result = await capture(["lint", "--json"], {
+      script: [
+        ok("pnpm exec biome check ."),
+        { match: "pnpm turbo run lint", result: { spawnFailed: true, code: -1 } },
+      ],
+      ticking: true,
+    });
+    expect(result.code).toBe(5);
+    const report = JSON.parse(result.out.join("\n")) as {
+      steps: readonly { exitCode: number | null; durationMs: number | null }[];
+    };
+    expect(report.steps).toHaveLength(2);
+    expect(report.steps[0]?.exitCode).toBe(0);
+    expect(report.steps[0]?.durationMs).not.toBeNull();
+    expect(report.steps[1]?.exitCode).toBeNull();
+    expect(report.steps[1]?.durationMs).toBeNull();
+  });
+
+  it("the human rendering says a step 'did not start' rather than claiming an exit code it never produced", async () => {
+    const result = await capture(["build"], {
+      script: [{ match: "pnpm turbo run build", result: { spawnFailed: true, code: -1 } }],
+    });
+    expect(result.code).toBe(5);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/ran: *pnpm turbo run build {2}-- did not start/);
+    // Not the "-- exit <code> in <ms>ms" shape a real (captured) result gets,
+    // and specifically not a rendering of the meaningless -1.
+    expect(out).not.toMatch(/exit -1/);
+    expect(out).not.toMatch(/exit null/);
+  });
+
   it("refuses a --target that names no declared target, rather than accepting any word", async () => {
     const result = await capture(["deploy", "--target", "anything"]);
     expect(result.code).toBe(2);
@@ -731,6 +784,33 @@ describe("the interactive verbs", () => {
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/pnpm exec next dev exited 3/);
   });
+
+  for (const verb of ["dev", "run"]) {
+    it(`'${verb}': exit 5, naming the step and the spawn failure, when the declared program cannot start`, async () => {
+      // Same family code as the captured path (EXIT_TOOL_NOT_INSTALLED = 5),
+      // and the same "cannot assert an exit code for a process that never
+      // started" shape -- here it holds trivially, because the pre-flight
+      // report is built and emitted BEFORE any step of an interactive verb is
+      // ever run, so every step's exitCode/durationMs is null regardless of
+      // what runInteractive later reports.
+      const result = await capture([verb], {
+        script: [{ match: NEXTJS_GOLDENS[verb]?.[0] ?? "", result: { spawnFailed: true, code: -1 } }],
+      });
+      expect(result.code).toBe(5);
+      expect(result.err.join("\n")).toMatch(/step 1 of 1 could not be started: 'pnpm'/);
+      const report = JSON.parse(
+        (
+          await capture([verb, "--dry-run", "--json"])
+        ).out.join("\n"),
+      ) as { steps: readonly { exitCode: number | null; durationMs: number | null }[] };
+      // The pre-flight (the only report a real run of this verb ever emits)
+      // is proved elsewhere to carry nulls; this pins that a spawn failure
+      // changes nothing about that -- there is no SECOND report for an
+      // interactive verb to get wrong.
+      expect(report.steps[0]?.exitCode).toBeNull();
+      expect(report.steps[0]?.durationMs).toBeNull();
+    });
+  }
 });
 
 // ── (f) the environment is names, never values ─────────────────────────────
