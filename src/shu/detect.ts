@@ -65,10 +65,10 @@ import {
   type ProfileVerb,
   type StackProfile,
 } from "../profiles/pack.js";
+import { containedPath } from "../repo/contain.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
 import { parseYaml } from "../schema/yaml.js";
 import { ASSERTABLE_KINDS } from "./render.js";
-import { insideRepo } from "./run.js";
 
 /**
  * Directories NOTHING IN THIS FILE ever descends into -- one set, for every
@@ -3061,7 +3061,7 @@ type TreeLookup =
 function lookInTree(repoRoot: string, repoRelative: string): TreeLookup {
   const segments = repoRelative.split("/").filter((segment): boolean => segment !== "");
   /* c8 ignore next -- a reference resolving to the repository root itself is
-     refused by `insideRepo` before this is asked */
+     refused by the containment check before this is asked */
   if (segments.length === 0) return { kind: "directory" };
   let directory = repoRoot;
   const walked: string[] = [];
@@ -3146,14 +3146,22 @@ function classifyReference(repoRoot: string, file: TreeFile, raw: string): Refer
     };
   }
   const repoRelative = relativePath(repoRoot, join(file.directory, ...normalised.split("/")));
-  try {
-    // THE EXECUTOR'S OWN FUNCTION, ASKED RATHER THAN RESTATED. `./run.ts`'s
-    // `insideRepo` is what a declared path is resolved through at run time, and
-    // it refuses one that leaves the tree by name at exit 2 -- so a reference it
-    // would refuse is a precondition that could never hold. A second copy of the
-    // rule here would drift the first time either was fixed.
-    insideRepo(repoRoot, repoRelative, `project.preconditions (from ${file.repoRelative})`);
-  } catch {
+  // THE SHARED RULE, ASKED RATHER THAN RESTATED. `../repo/contain.ts` is where
+  // "does this path stay inside the tree --repo pointed at?" is written once for
+  // the whole CLI; `./run.ts`'s `insideRepo` is that same call plus the exit-2
+  // message a DECLARATION's pointer needs. A reference `containedPath` answers
+  // `null` for is one the executor would refuse, so it is a precondition that
+  // could never hold -- and a second copy of the rule here would drift the first
+  // time either was fixed.
+  //
+  // IT ASKS THE RULE AND NOT THE WRAPPER, and that is not tidiness. The message
+  // is the only thing `insideRepo` adds and this function uses none of it -- it
+  // composes its own `why` -- while the import paid for it in an edge to the
+  // module every `nen shu` subprocess comes out of. ../profiles/inertness.test.ts
+  // reads that edge (correctly) as "this module can spawn", of a verb that
+  // spawns nothing and legitimately reads the reference pack. The rule module
+  // deliberately throws nothing for exactly this reason: see its header.
+  if (containedPath(repoRoot, repoRelative) === null) {
     return {
       kind: "escape",
       resolved: repoRelative,
