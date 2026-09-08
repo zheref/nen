@@ -3560,9 +3560,19 @@ describe("nen shu detect -- the xcode-ios lane", () => {
   // ── {project}: the container, and the flag that addresses it ──────────────
 
   it("answers {project} from the one project, LANE-RELATIVE, when nothing else claims it", () => {
-    expect(note(XCODE_PROJECT, "build")).toMatch(/still names \{destination\}, which only/);
-    expect(note(XCODE_PROJECT, "build"), "a token nen answered earns no reason").not.toMatch(
-      /\{project\}/,
+    const withheld = note(XCODE_PROJECT, "build");
+    expect(withheld).toMatch(/still names \{destination\}, which only/);
+    // THE ANSWERED VALUES ARE VISIBLE ON THE WITHHELD ROW, which is the only
+    // place they can be seen: this stack proposes no command row on any tree,
+    // so a value that reached no note would reach nobody.
+    expect(withheld).toContain(
+      "nen DID answer {project} = Placeholder.xcodeproj, {scheme} = Placeholder from this lane's own files",
+    );
+    // AND ONLY THE TOKENS THIS ROW NAMES. `build` does not write a result
+    // bundle, so nothing about one is answered, read or mentioned for it.
+    expect(withheld).not.toContain("{resultBundle}");
+    expect(withheld).toMatch(
+      /what this row still needs stated is \{destination\} and nothing else/,
     );
   });
 
@@ -3577,7 +3587,7 @@ describe("nen shu detect -- the xcode-ios lane", () => {
       // THERE. `ios/Placeholder.xcodeproj` would be resolved twice.
       const withheld =
         nested?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
-      expect(withheld).not.toMatch(/\{project\}/);
+      expect(withheld).toContain("nen DID answer {project} = Placeholder.xcodeproj");
       expect(withheld).not.toContain("ios/Placeholder.xcodeproj");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -3662,7 +3672,9 @@ describe("nen shu detect -- the xcode-ios lane", () => {
       const withheld =
         detect(dir)
           .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
-      expect(withheld, "the token is answered from the project").not.toMatch(/\{project\}/);
+      expect(withheld, "the token is answered from the project").toContain(
+        "nen DID answer {project} = Placeholder.xcodeproj",
+      );
       expect(withheld).not.toMatch(/container is a WORKSPACE/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -3713,7 +3725,9 @@ describe("nen shu detect -- the xcode-ios lane", () => {
           .lanes[0]?.notes.find((entry): boolean => entry.startsWith("'build' withheld")) ?? "";
       // The workspace references nothing that is here, so it is not this
       // project's container and the project answers.
-      expect(withheld, "a comment is not a reference").not.toMatch(/\{project\}/);
+      expect(withheld, "a comment is not a reference").toContain(
+        "nen DID answer {project} = Placeholder.xcodeproj",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3723,7 +3737,7 @@ describe("nen shu detect -- the xcode-ios lane", () => {
 
   it("answers {scheme} from the one shared scheme whose test target the project declares", () => {
     for (const repo of [XCODE_PROJECT, XCODE_WORKSPACE]) {
-      expect(note(repo, "test"), repo).not.toMatch(/\{scheme\}/);
+      expect(note(repo, "test"), repo).toContain("{scheme} = Placeholder");
       expect(note(repo, "test"), repo).not.toMatch(/the shared scheme nen can see here/);
       expect(note(repo, "test"), repo).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
     }
@@ -3891,7 +3905,12 @@ describe("nen shu detect -- the xcode-ios lane", () => {
 
   it("answers {resultBundle} into nen's own generated directory, and says it did", () => {
     expect(note(XCODE_PROJECT, "coverage")).toMatch(/still names \{simUdid\}/);
-    expect(note(XCODE_PROJECT, "coverage")).not.toMatch(/\{resultBundle\}/);
+    // BYTE ORDER, like every other list this verb prints -- and this is the one
+    // row where the answers arrive in a different order from the one they are
+    // reported in, so it is the row that can prove the sort exists.
+    expect(note(XCODE_PROJECT, "coverage")).toContain(
+      "nen DID answer {project} = Placeholder.xcodeproj, {resultBundle} = .nen/coverage.xcresult, {scheme} = Placeholder from this lane's own files",
+    );
     const written = laneNote(XCODE_PROJECT, "{resultBundle} was answered by nen");
     expect(written).toContain("'coverage' writes .nen/coverage.xcresult");
     expect(written).toMatch(/naming an OUTPUT rather than a fact this repository states/);

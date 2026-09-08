@@ -4614,7 +4614,27 @@ function proposeVerbs(
 
     const leftover = leftoverTokens(steps);
     if (leftover.length > 0) {
+      // WHAT NEN DID ANSWER, ON THE ROW THAT WAS WITHHELD ANYWAY.
+      //
+      // A withheld row's whole output is its note, and until this clause the
+      // note was pure refusal: a maintainer could not see that nen had already
+      // resolved three of a row's five tokens, because the row those values
+      // went into was never written. That is a real cost on this family's
+      // hardest stack, where every row names a token no tree can answer -- the
+      // work of filling one in is "copy four values out of the checkout and
+      // add one", and nen had done the copying and thrown it away.
+      //
+      // IT IS ALSO THE ONLY PLACE THE ANSWERED VALUES ARE OBSERVABLE, which is
+      // what makes them testable: a value that reaches no proposal and no note
+      // is a value no test can pin, and a mutant that answered a path relative
+      // to the wrong directory survived exactly there.
+      const resolved = [...answers.answered]
+        .sort(([a], [b]): number => compareBytes(a, b))
+        .map(([token, value]): string => `${token} = ${value}`);
       const clauses = [
+        resolved.length === 0
+          ? ""
+          : ` -- nen DID answer ${resolved.join(", ")} from this lane's own files, so what this row still needs stated is ${leftover.join(", ")} and nothing else`,
         leftover.includes(PM_EXECUTABLE) || leftover.includes(PM_PIN)
           ? manifest.packageManagerIssue !== null
             ? ` -- ${manifest.packageManagerIssue}`
