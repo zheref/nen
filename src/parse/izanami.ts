@@ -682,9 +682,25 @@ const SHELL_METACHARS = /[|;&<>()%`\n\r]/;
  * 'a.txt' | tee b.txt' is no longer...`, which reads as three quoted spans
  * rather than one line. Escaped to `\'`, alongside `\r`/`\n` above, so a quote
  * in the caller's own line can never be mistaken for this message's wrapping.
+ *
+ * A LITERAL BACKSLASH gets escaped FIRST, before any of the above (zheref/nen
+ * #98 adversarial review of #76's fix): the quote-escaping step above turns
+ * every `'` into `\'`, but a line that already carried its OWN backslash
+ * right before a quote -- `cat 'C:\foo\' > log.txt`, a Windows path with a
+ * trailing backslash inside the quotes -- left that pre-existing `\` sitting
+ * right next to the escape this function inserts, rendering as `\\'` with no
+ * way to tell the caller's own backslash apart from this function's escape.
+ * Doubling every backslash to `\\` before the quote pass restores the usual
+ * escaping invariant (`\\` is always one literal backslash, `\'` is always
+ * one literal quote), so the two-character groups never collide regardless
+ * of what precedes a quote in the caller's line.
  */
 function shellMetacharRefusal(command: string): string {
-  const shown = command.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/'/g, "\\'");
+  const shown = command
+    .replace(/\\/g, "\\\\")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/'/g, "\\'");
   return `a shell metacharacter (>, >>, |, ;, &, <, (, ), %, a backtick, a newline or a CR) hands part of this line to the SHELL rather than to the command it starts with, so '${shown}' is no longer the single command any row could vouch for. Watch the bare read, and run the redirection or the second command yourself.`;
 }
 

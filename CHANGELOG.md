@@ -8,6 +8,12 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 - **board** — `nen board render` and `nen board diff` validate the board file at the read seam and refuse a malformed board at exit 2 naming the file, row and field, instead of crashing with a raw `TypeError` (render) or silently diffing the string `"undefined"` (diff). Undeclared top-level board fields are now dropped from their `--json` output, as `build` already did for rows ([#99](https://github.com/zheref/nen/pull/99), closes #92)
 - **epic** — `nen epic next-wave` treats every ref spelling inside a `blocked by` / `blocks` clause (bare `#N`, `owner/repo#N`, a markdown link) as an edge, never the line's identity, and finds the clause even when a prose `blocked by` precedes it; a line whose only ref sits inside a clause is reported as unparsed instead of becoming a phantom child ([#103](https://github.com/zheref/nen/pull/103), closes #97)
+- **parse** — izanami's automation-policy classifier answers a verb that is mutating in every form (`tag cut`, `label apply`, `pr retarget`, …) as `mutating` with its own reason even when `--` is present, instead of a generic `unknown`; the refusal is unchanged ([#PR](link))
+- **parse** — the shell-metacharacter refusal renders the caller's line safely when it contains a quote or backslash ([#PR](link))
+
+### Changed
+
+- review debt: seven Copilot threads left open on #71, #72, #74, #75, #76 answered with pins for the `--gh-repo` shorthand path, relative `--body-file` cwd resolution and the `GIT_FETCH_PLAIN` line-scan hinge, plus explicit result types in the classifier CLI ([#PR](link), closes #98)
 
 ### Added
 

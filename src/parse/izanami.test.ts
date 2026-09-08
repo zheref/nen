@@ -191,6 +191,25 @@ describe("classifyCommand -- plain file reads (#31)", () => {
     expect(result.reason).not.toContain("'cat 'a.txt' | tee b.txt'");
   });
 
+  // zheref/nen#98's adversarial review of #76's fix: escaping the quote but
+  // not a literal backslash already in the line left a backslash-then-quote
+  // input ambiguous -- a Windows path with a trailing backslash inside
+  // quotes, `cat 'C:\foo\' > log.txt`, rendered its own `\` sitting right
+  // next to this function's inserted escape as `\\'`, indistinguishable from
+  // an escaped backslash followed by a bare quote. Doubling every backslash
+  // FIRST keeps `\\` (one literal backslash) and `\'` (one literal quote) as
+  // distinct two-character groups no matter what precedes a quote.
+  it("escapes a backslash already in the line before escaping a quote, so a backslash-then-quote input stays unambiguous", () => {
+    const result = classifyCommand("cat 'C:\\foo\\' > log.txt");
+    expect(result.classification).toBe("unknown");
+    // The escaped, unambiguous form: every literal backslash doubled, and
+    // the caller's own quotes escaped, each group distinct from the other.
+    expect(result.reason).toContain("'cat \\'C:\\\\foo\\\\\\' > log.txt'");
+    // NOT a malformed form where a lone backslash sits next to the escaped
+    // quote, indistinguishable from a doubled (escaped) backslash.
+    expect(result.reason).not.toContain("'cat \\'C:\\foo\\\\' > log.txt'");
+  });
+
   // #31 review: an embedded newline or CR is the shell's own command
   // separator -- "cat a.txt\ngit push" is TWO commands, and the head-token
   // match would only ever see the first. Unreachable as an execution vector
