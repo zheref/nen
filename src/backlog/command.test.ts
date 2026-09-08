@@ -309,6 +309,42 @@ describe("nen backlog order", () => {
       expect(message).not.toMatch(/is not iterable/);
     });
 
+    // Review finding (MAJOR, pre-merge): the refusal used to tell a caller to
+    // reshape 'blocksOther'/'affectsConsumers' INTO each row -- but `order()`
+    // never reads either field from JSON; they are computed below from the
+    // --blocks/--affects-consumers CLI flags, matched by id or issue number.
+    // A caller following the old wording's literal recipe got their
+    // blocking/affecting judgement silently dropped: no error, exit 0, both
+    // flags rendered as false. The message must instead point the caller at
+    // the two flags, and must never present either field as something a row
+    // in the JSON document carries.
+    it("names --blocks/--affects-consumers as the way to mark a row, never as row fields to reshape in (review finding)", async () => {
+      const file = writeFixture(JSON.stringify({
+        repo: "o/r",
+        truncated: false,
+        rows: [
+          { issueNumber: 1, title: "an issue", labels: ["p2"], prNumbers: [5], createdAt: "2026-01-01T00:00:00Z" },
+        ],
+        issueCount: 1,
+        prCount: 1,
+      }));
+      const result = await capture([
+        "backlog", "order", "--rows-from", file,
+        "--severity-order", "critical,high,medium,low",
+      ]);
+      expect(result.code).toBe(2);
+      const message = result.err.join("\n");
+      expect(message).toMatch(/--blocks\/--affects-consumers/);
+      // The old wording told the caller to reshape these INTO the row, as
+      // the last item of the same recipe as 'id'/'number'/'severity'. The
+      // corrected message may still name the fields (to say 'order' does
+      // NOT read them from the file), but never as part of that recipe.
+      expect(message).not.toMatch(/'blocksOther'\/'affectsConsumers' from your own/);
+      const reshapeRecipe = message.split("-- then pass the reshaped array.")[0]!;
+      expect(reshapeRecipe).not.toMatch(/blocksOther/);
+      expect(message).toMatch(/does not read 'blocksOther'\/'affectsConsumers' from this file/);
+    });
+
     it("REFUSES (exit 2) a non-array document with a generic 'must be a JSON ARRAY' message", async () => {
       const file = writeFixture(JSON.stringify({ foo: "bar" }));
       const result = await capture([
@@ -398,5 +434,24 @@ describe("nen backlog order", () => {
       ]);
       expect(result.err).toEqual([]);
     });
+  });
+});
+
+// Review finding (MAJOR, pre-merge): `--help`'s own `--rows-from` entry told
+// a caller to reshape 'blocksOther'/'affectsConsumers' INTO each row -- an
+// input `order()` never reads, since both are computed from the
+// --blocks/--affects-consumers flags below, matched by id or issue number. A
+// caller who followed that literal recipe got both flags rendered as false
+// with no error at all. This pins the corrected text: the two flags are
+// named as how a row is marked, and neither field is presented as something
+// the row document itself carries.
+describe("backlog --help names --blocks/--affects-consumers, never row fields to reshape in (review finding)", () => {
+  it("'--rows-from's entry points at the two CLI flags, not at row keys", () => {
+    expect(backlogCommand.usage).toMatch(/--blocks\/--affects-consumers/);
+    expect(backlogCommand.usage).not.toMatch(/'blocksOther'\/'affectsConsumers' from your own/);
+  });
+
+  it("documents 'createdAt' as an ISO-8601 instant, since ordering compares it as plain text", () => {
+    expect(backlogCommand.usage).toMatch(/ISO-8601/);
   });
 });

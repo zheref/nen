@@ -21,6 +21,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { readJsonFile } from "../cli/inputs.js";
+import { describeValue, rowLabel } from "../cli/shape.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { buildBoard, type Board, type BoardRow } from "./build.js";
 import { diffBoards } from "./diff.js";
@@ -82,31 +83,9 @@ and field (exit 2) rather than crashing.`;
 
 const ROW_SHAPE = "{ id, title, refs, gate, status, needs }";
 
-// The "got" half of a refusal. Bare `typeof` is not enough: `typeof null`
-// is "object", an array is "object" too, and a missing field would print as
-// the grammatically hostile "undefined" -- each sends the caller hunting
-// for a mistake they did not make.
-function describeValue(value: unknown): string {
-  if (value === undefined) return "nothing (the field is missing)";
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "an array";
-  if (typeof value === "string") return `the string '${value}'`;
-  // "an object", never "a object". A plain object DOES reach this fallback
-  // (e.g. `refs` sent as `{ ... }` -- neither array, null, nor string), and
-  // it is the one typeof in JSON's vocabulary that starts with a vowel; the
-  // bare template below would hand back exactly the grammatically hostile
-  // output this helper exists to avoid.
-  if (typeof value === "object") return "an object";
-  return `a ${typeof value}`;
-}
-
-// A refusal that cannot say WHICH row it refuses sends the caller back to
-// bisecting the file by hand. The row's own id is used whenever it is a
-// usable name; the index is the fallback, not the default.
-function rowLabel(row: Readonly<Record<string, unknown>>, index: number): string {
-  const id = row["id"];
-  return typeof id === "string" && id !== "" ? `row '${id}'` : `row at index ${index}`;
-}
+// describeValue() and rowLabel() moved to ../cli/shape.js (#105 review, minor
+// 1) -- ../backlog/command.ts's validateOrderRows() had grown a byte-for-byte
+// copy of both; see that module's header for why they now live in one place.
 
 // `subject` names WHAT must be the array, in the refusal's own voice: `build`
 // hands this the whole `--rows-from` document, so the default (`'<path>'`)

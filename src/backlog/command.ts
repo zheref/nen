@@ -9,6 +9,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { readJsonFile, splitList } from "../cli/inputs.js";
+import { describeValue, rowLabel } from "../cli/shape.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { GH, mustJson, type Seams } from "../seam/exec.js";
 import { assembleRows, type RawIssue, type RawPr } from "./fetch.js";
@@ -43,12 +44,17 @@ order:
                             straight through, which is an OBJECT of
                             { issueNumber, title, labels, prNumbers, createdAt }
                             rows, not this array -- is refused (exit 2) by
-                            file, row and field, never crashes. A fetch result
-                            must be reshaped first: severity from each row's
-                            labels, 'id'/'number' from 'issueNumber' (or the
-                            lone 'prNumbers' entry for a PR-only effort),
-                            'blocksOther'/'affectsConsumers' from your own
-                            judgement.
+                            file, row and field, never crashes. Reshape a
+                            fetch result as: 'id'/'number' from 'issueNumber'
+                            (or the lone 'prNumbers' entry for a PR-only
+                            effort), 'severity' from each row's labels,
+                            'createdAt' as an ISO-8601 instant (ordering
+                            compares it as plain text, so a non-ISO value
+                            mis-sorts silently). Blocking/affecting is NEVER a
+                            row field: it is named on the COMMAND LINE
+                            instead, via --blocks/--affects-consumers below --
+                            'order' never reads
+                            'blocksOther'/'affectsConsumers' from this file.
   --severity-order <a,b,..> This repository's own severity vocabulary, in
                             priority order. A row whose severity is not in
                             this list ranks LAST.
@@ -270,24 +276,11 @@ const ROW_SHAPE = "{ id, severity, createdAt, number }";
 // path, on purpose, rather than being refused. Requiring 'number' here too
 // would refuse that same row one step earlier, for a field this codebase has
 // already decided is safe to degrade on.
-function describeValue(value: unknown): string {
-  if (value === undefined) return "nothing (the field is missing)";
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "an array";
-  if (typeof value === "string") return `the string '${value}'`;
-  // "an object", never "a object" -- the one typeof in JSON's vocabulary
-  // that starts with a vowel.
-  if (typeof value === "object") return "an object";
-  return `a ${typeof value}`;
-}
-
-// A refusal that cannot say WHICH row it refuses sends the caller back to
-// bisecting the file by hand. The row's own id is used whenever it is a
-// usable name; the index is the fallback, not the default.
-function rowLabel(row: Readonly<Record<string, unknown>>, index: number): string {
-  const id = row["id"];
-  return typeof id === "string" && id !== "" ? `row '${id}'` : `row at index ${index}`;
-}
+//
+// describeValue() and rowLabel() live in ../cli/shape.js, shared with
+// ../board/command.ts's validateBoardRows()/validateBoard() (#105 review,
+// minor 1) -- this file had grown a byte-for-byte copy of both; see that
+// module's header for why they now live in one place.
 
 // Detects specifically the `backlog fetch --json` envelope this file's own
 // `fetch()` emits (`emit(context.io, context.json, { repo, truncated,
@@ -306,7 +299,7 @@ function looksLikeFetchOutput(raw: unknown): boolean {
 function validateOrderRows(raw: unknown, path: string): readonly InRow[] {
   if (looksLikeFetchOutput(raw)) {
     throw new VerbUsageError(
-      `'${path}' looks like 'backlog fetch --json' output (an OBJECT with a 'rows' array of { issueNumber, title, labels, prNumbers, createdAt }), not the JSON ARRAY of ${ROW_SHAPE} that 'order' expects. Reshape it first -- a severity from each row's labels, 'id'/'number' from 'issueNumber' (or the lone 'prNumbers' entry for a PR-only effort), 'blocksOther'/'affectsConsumers' from your own judgement -- then pass the reshaped array. Run 'nen backlog --help'.`,
+      `'${path}' looks like 'backlog fetch --json' output (an OBJECT with a 'rows' array of { issueNumber, title, labels, prNumbers, createdAt }), not the JSON ARRAY of ${ROW_SHAPE} that 'order' expects. Reshape it first: 'id'/'number' from 'issueNumber' (or the lone 'prNumbers' entry for a PR-only effort), 'severity' from each row's labels, 'createdAt' as an ISO-8601 instant -- then pass the reshaped array. Blocking another issue and affecting consumer behaviour/DX are never row fields here: they are your own judgement, named on the COMMAND LINE instead, via --blocks/--affects-consumers -- 'order' does not read 'blocksOther'/'affectsConsumers' from this file. Run 'nen backlog --help'.`,
     );
   }
   if (!Array.isArray(raw)) {
