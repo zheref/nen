@@ -68,6 +68,7 @@ import {
   parseInvocation,
   requireArgv,
   requireEnum,
+  requireToolName,
   type Installer,
   type Invocation,
   type VersionFrom,
@@ -744,6 +745,11 @@ function parseToolchain(path: string, value: unknown): Record<string, PackMinimu
   const toolchain: Record<string, PackMinimum> = {};
   for (const [tool, entry] of Object.entries(record)) {
     if (tool.startsWith("$")) continue;
+    // THE SAME NAME RULE THE CONTRACT LOADER APPLIES, imported rather than
+    // restated: `nen shu detect` copies a row of this block into a proposed
+    // declaration, and a name that loader would refuse would make the proposal
+    // unreadable by the program that wrote it.
+    requireToolName(path, "toolchain", tool);
     const pointer = `toolchain.${tool}`;
     const raw = requireRecord(path, pointer, entry);
     if (raw["minimum"] === undefined) {

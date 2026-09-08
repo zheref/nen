@@ -816,26 +816,73 @@ const MUTATING_PATTERNS: readonly RegExp[] = [
 //
 // A FAITHFUL SCAN IS NOT YET A CORRECT ONE (#31 round four). Faithfulness
 // says the scan's tokens ARE the reader's arguments; it says nothing about
-// whether the scan recognizes the reader's SPELLINGS for a given flag. Both
-// gates below therefore state their spelling rule explicitly, and in opposite
-// directions, because they are asking opposite questions:
+// whether the scan recognizes the reader's SPELLINGS for a given flag. The
+// gates below state their spelling rule explicitly, and they do not all agree
+// -- "matching more spellings" is only safe in the direction each gate falls
+// back to when the match misses:
 //
 //   * the WRITE-FLAG side asks "is a write flag present", so it matches every
 //     spelling ../cli/args.ts accepts -- `--run`, `-run`, `--out=x`, `-out=x`
 //     -- since args.ts strips one OR two dashes. Matching one spelling too
 //     many only over-refuses. See findFlagToken.
-//   * the DRY-RUN side asks "is the read gate present", so it stays on the
-//     exact `--dry-run` token. `--dry-run=<x>` is refused by args.ts on a
-//     boolean flag and could mean the opposite to another tool; the
-//     single-dash `-dry-run` really would run as a dry run, and is left
-//     unmatched anyway, because widening a GATE is how a fail-open is built.
+//   * `dry-run-gated`'s gate asks "is the read gate present" on a verb that
+//     WRITES BY DEFAULT, so a spelling it fails to match still falls back to
+//     `mutating` -- the same safe direction the write-flag side falls back
+//     to -- and it stays on the exact `--dry-run` token: `--dry-run=<x>` is
+//     refused by args.ts on a boolean flag and could mean the opposite to
+//     another tool, and the single-dash `-dry-run` -- which really would run
+//     as a dry run -- is left unmatched too, costing only an over-refusal.
+//   * `dry-run-only`'s gate asks the SAME question, but has no writes-by-
+//     default fallback: a spelling it fails to match falls back to `unknown`
+//     for a line this table can otherwise PROVE is a read (zheref/nen#120
+//     thread 2 -- `nen shu tools -dry-run` really is `--dry-run` to
+//     ../cli/args.ts, which strips one dash or two alike, and a dry run on
+//     this verb spawns nothing whatever, probes included;
+//     ../shu/tools.test.ts pins that from both sides). So it uses
+//     findFlagToken too, matching `-dry-run` alongside `--dry-run` -- the
+//     same helper the write-flag side uses, because here missing a spelling
+//     is not the safe direction. It still excludes `--dry-run=<x>` /
+//     `-dry-run=<x>`: `dry-run` is a boolean flag on `shu tools`
+//     (../shu/command.ts's SHU_SUBCOMMAND_FLAGS) and args.ts refuses an
+//     inline value on a boolean outright, so that spelling can never actually
+//     run as a dry run and is left in `unknown` rather than promoted --
+//     matching the reader's own refusal instead of guessing what another
+//     tool would have made of it.
 
 export type NenVerbPolicy =
   | { readonly kind: "read-only"; readonly why: string }
   | { readonly kind: "read-only-forwarding"; readonly why: string }
   | { readonly kind: "mutating"; readonly why: string }
   | { readonly kind: "dry-run-gated"; readonly why: string }
-  | { readonly kind: "write-flag-gated"; readonly writeFlags: readonly string[]; readonly why: string };
+  | { readonly kind: "write-flag-gated"; readonly writeFlags: readonly string[]; readonly why: string }
+  /**
+   * ONLY THE EXPLICIT DRY RUN IS A READ; the bare form is `unknown` and a write
+   * flag is `mutating`. The sixth kind, and the narrowest.
+   *
+   * WHY IT IS NOT ONE OF THE OTHER FIVE. It exists for a verb with THREE
+   * distinct answers rather than two, and no existing kind can say all three:
+   *
+   *   * `write-flag-gated` would certify the bare form READ-ONLY. For `shu
+   *     tools` that is a claim about somebody else's argv -- the version probes
+   *     it spawns come out of the TARGET repository's declaration -- and it is
+   *     exactly the claim every executing row in the `shu` family is `DRY`
+   *     rather than `RO` to avoid making.
+   *   * `dry-run-gated` would call the bare form MUTATING. That is a different
+   *     false statement: a declared version probe is not certified read-only,
+   *     and it is not evidence of a write either. `unknown` is the honest
+   *     verdict for "this line runs a program nen did not choose"; both refuse,
+   *     and only one of them is true.
+   *   * leaving the row OUT would classify EVERY form `unknown`, including the
+   *     dry run -- the exact regression the four missing `shu` rows were fixed
+   *     for, where the docs promised `--dry-run` was watchable and the table
+   *     refused it.
+   *
+   * The `--dry-run` form IS certified, because on this verb a dry run spawns
+   * nothing at all -- not even a probe -- which is a property of nen that
+   * ../shu/tools.test.ts pins from both sides, rather than a claim about a
+   * declaration.
+   */
+  | { readonly kind: "dry-run-only"; readonly writeFlags: readonly string[]; readonly why: string };
 
 export interface NenFamilyEntry {
   /**
@@ -854,6 +901,11 @@ const MUT = (why: string): NenVerbPolicy => ({ kind: "mutating", why });
 const DRY = (why: string): NenVerbPolicy => ({ kind: "dry-run-gated", why });
 const GATED = (writeFlags: readonly string[], why: string): NenVerbPolicy => ({
   kind: "write-flag-gated",
+  writeFlags,
+  why,
+});
+const DRY_ONLY = (writeFlags: readonly string[], why: string): NenVerbPolicy => ({
+  kind: "dry-run-only",
   writeFlags,
   why,
 });
@@ -1052,16 +1104,33 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   shu: {
     subcommands: {
       detect: GATED(["--write"], "reads markers and proposes a declaration; only --write writes one"),
-      // TODO(zheref/nen#91, PR4): re-open this row when `shu tools` is built.
-      // It is classified read-only-until-`--install` on the strength of a verb
-      // that does not exist yet, and the check form will spawn VERSION PROBES
-      // WHOSE ARGV COMES FROM THE TARGET'S OWN DECLARATION -- the same
-      // provenance that makes every executing row above `DRY` rather than
-      // `RO`. A probe is not a build and `--version` is not a write, but that
-      // is a claim about what a declaration ought to contain, and this table's
-      // whole discipline is not making those. Decide it against the
-      // implementation, not against this comment.
-      tools: GATED(["--install"], "the check form spawns declared version probes and writes nothing; --install is the one write flag"),
+      // THE PR2 TODO, RESOLVED AGAINST THE IMPLEMENTATION (zheref/nen#113).
+      //
+      // The row was `GATED(["--install"])` on the strength of a verb that did
+      // not exist yet, which certified the BARE form read-only. Built, the verb
+      // does this: it spawns, per tool, the `probe` argv out of the TARGET
+      // repository's `project.toolchain`. That is the same provenance that
+      // makes every executing row below `DRY` rather than `RO` -- nen did not
+      // choose the program, the target's declaration did.
+      //
+      // A `--version` QUERY IS NOT PROVABLY A READ, and the temptation to say
+      // otherwise is the whole reason this row moved. `probe` is an argv like
+      // any other: nothing in the schema constrains it to a version flag,
+      // nothing checks that the program it names only prints, and a
+      // declaration is a file in somebody else's repository. Certifying it
+      // would be certifying a convention, and this table's discipline is that
+      // it certifies nen's own behaviour and never somebody else's file.
+      //
+      // SO: `unknown` bare -- refused, and honestly labelled "not provably a
+      // read" rather than mislabelled "writes"; `mutating` with `--install`,
+      // the one flag that changes the HOST; `read-only` with `--dry-run`,
+      // which on this verb spawns nothing whatever -- not even a probe -- and
+      // is therefore a property of nen. That is three answers, which is why
+      // this is the one row in the table carrying `dry-run-only`.
+      tools: DRY_ONLY(
+        ["--install"],
+        "spawns the version probes the TARGET repository declares, which nen did not choose and cannot certify; --install additionally changes the HOST",
+      ),
       build: DRY("spawns the lane's declared build unless --dry-run is given"),
       test: DRY("spawns the lane's declared test command unless --dry-run is given -- and a declared test task may write (a golden-image recorder, a coverage tree), so the bare form is never certified"),
       "ui-test": DRY("spawns the lane's declared UI/E2E command unless --dry-run is given -- commonly a multi-step form that also downloads a browser"),
@@ -1498,6 +1567,89 @@ function evaluateNenPolicy(
         };
       }
       return { classification: "read-only", reason: `${label} --dry-run -- the explicit dry-run form reports without writing` };
+    }
+    case "dry-run-only": {
+      // THE WRITE FLAG FIRES FIRST, UNCONDITIONALLY -- the same order, and the
+      // same reason, as `write-flag-gated` below.
+      //
+      // IT COSTS ONE TRUE READ, DELIBERATELY. `nen shu tools --install
+      // --dry-run` really does run nothing: the dry run is checked before the
+      // install in ../shu/command.ts, and ../shu/tools.test.ts pins that a
+      // scripted seam records ZERO calls for that line. Calling it mutating
+      // over-refuses it. That is the trade this module always takes, and here
+      // it buys something specific: `--install` is the one flag in this CLI
+      // whose blast radius is the developer's MACHINE, and a line whose
+      // safety depends on one adjacent token still being there is exactly the
+      // shape the write-flag rule exists for. A caller who wants the certified
+      // read passes --dry-run alone; nobody watches an install.
+      const written = policy.writeFlags
+        .map((flag): { flag: string; token: string | undefined } => ({ flag, token: findFlagToken(tokens, flag) }))
+        .find((entry): boolean => entry.token !== undefined);
+      if (written?.token !== undefined) {
+        const spelled =
+          written.token === written.flag
+            ? written.flag
+            : `${written.token} (the ${written.flag} flag -- nen's own argv reader takes one or two leading dashes alike)`;
+        return { classification: "mutating", reason: `${label} ${spelled} -- ${policy.why}` };
+      }
+      // THE READ GATE MATCHES EVERY SPELLING findFlagToken DOES -- unlike
+      // dry-run-gated's exact-token rule above, and deliberately (zheref/
+      // nen#120 thread 2; see the "DRY-RUN side" note in this file's header,
+      // above NEN_VERB_TABLE). `dry-run-gated` can afford to miss `-dry-run`
+      // because a miss there falls back to `mutating`, its own safe
+      // direction; THIS policy's miss falls back to `unknown` for a line the
+      // table can otherwise prove is a read -- `nen shu tools -dry-run` is
+      // `--dry-run` to ../cli/args.ts (one dash or two, alike) and spawns
+      // nothing whatever, probes included, which ../shu/tools.test.ts pins
+      // from both sides. Refusing it was not the safe over-refusal the
+      // module's write-flag side always takes; it was refusing a provable
+      // read.
+      //
+      // THE INLINE-VALUE SPELLINGS DO NOT WIDEN WITH IT, checked first and
+      // over ALL tokens rather than just the one findFlagToken would return:
+      // `dry-run` is declared a BOOLEAN flag on `shu tools`
+      // (../shu/command.ts's SHU_SUBCOMMAND_FLAGS), and args.ts throws on ANY
+      // `--dry-run=<x>` / `-dry-run=<x>` token wherever it falls in argv,
+      // independent of a bare `--dry-run` elsewhere on the same line -- so a
+      // line carrying one can never actually run as a dry run, and is kept in
+      // `unknown` with a reason that says so, rather than promoted to
+      // `read-only` on the strength of a bare token that would never be
+      // reached.
+      const dryRunInlineValueToken = tokens.find(
+        (token): boolean => token.startsWith("--dry-run=") || token.startsWith("-dry-run="),
+      );
+      if (dryRunInlineValueToken !== undefined) {
+        return nenUnknown(
+          `${label} -- ${policy.why}. '${dryRunInlineValueToken}' is not read as the dry-run gate: 'dry-run' is a boolean flag on 'shu tools' and ../cli/args.ts refuses an inline value on a boolean outright (a usage error, not a dry run), so that spelling can never actually run as a dry run. Neither bare form is certified: pass --dry-run (or -dry-run) alone for the one that is, or run this by hand.`,
+        );
+      }
+      const dryRunToken = findFlagToken(tokens, "--dry-run");
+      if (dryRunToken !== undefined) {
+        if (!lineFaithful) {
+          // The gate must be provable to be a gate. An unfaithful line can
+          // donate a `--dry-run` (or `-dry-run`) token no shell ever
+          // produced, and this is the one branch of this policy that ADMITS
+          // -- so it is the one that must insist the scan is honest.
+          return nenUnknown(
+            `${label} is a read only in its explicit --dry-run form, and ${UNFAITHFUL} -- so the ${dryRunToken} this scan found is not provably an argument of its own`,
+          );
+        }
+        return {
+          classification: "read-only",
+          reason: `${label} ${dryRunToken} -- the explicit dry-run form spawns nothing at all, probes included`,
+        };
+      }
+      // NEITHER GATE NOR WRITE FLAG: unknown, not mutating. The bare form runs
+      // a program the TARGET repository named, and "not provably a read" is a
+      // different fact from "writes". Both refuse; only this one is true, and a
+      // caller reading the reason learns which of the two it is.
+      //
+      // No faithfulness branch is needed here: every path out of this point
+      // refuses, so a spelling the scan could not see can only move the answer
+      // between two refusals.
+      return nenUnknown(
+        `${label} -- ${policy.why}. Neither bare form is certified: pass --dry-run for the one that is (it spawns nothing at all), or run this by hand.`,
+      );
     }
     case "write-flag-gated": {
       const hit = policy.writeFlags

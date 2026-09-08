@@ -900,10 +900,16 @@ describe("a step's own output", () => {
   });
 });
 
-// ── (h) the verbs that are declared and not yet built ──────────────────────
+// ── (h) the verb that is declared and not yet built ────────────────────────
+//
+// ONE, NOT TWO, SINCE zheref/nen#113. `tools` was the other; it is built now,
+// and ./tools.test.ts is where it is proved. This block keeps the shape it had
+// so that `warmup` arriving (PR12) is a one-line deletion rather than a
+// rewrite, and so the "declared, documented, refuses by name" contract stays
+// pinned for as long as anything still uses it.
 
-describe("the two verbs that refuse by name", () => {
-  for (const verb of ["tools", "warmup"]) {
+describe("the verb that refuses by name", () => {
+  for (const verb of ["warmup"]) {
     it(`'${verb}' refuses at 4 saying it is not implemented yet, and names the release`, async () => {
       const result = await capture([verb]);
       expect(result.code).toBe(4);
@@ -911,4 +917,14 @@ describe("the two verbs that refuse by name", () => {
       expect(result.err.join("\n")).toMatch(/zheref\/nen#91/);
     });
   }
+
+  it("no longer refuses 'tools', which this release implements", async () => {
+    // The fixture declares no toolchain and no dependency, so this is the
+    // "nothing to check" answer -- exit 0 with a note, never the exit-4 refusal
+    // it used to give. Pinned from this side too, because a regression that
+    // re-added the refusal would otherwise only show up in the other suite.
+    const result = await capture(["tools"]);
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toMatch(/nothing to check/);
+  });
 });

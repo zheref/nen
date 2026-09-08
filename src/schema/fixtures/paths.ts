@@ -38,3 +38,17 @@ export const LEGACY_REPO = join(FIXTURES, "legacy-repo");
  * nothing to do with each other.
  */
 export const SHU_REPO = join(FIXTURES, "shu-repo");
+
+/**
+ * A repository whose `nen/contract.json` carries a `dependency` block and a
+ * `project.toolchain` rich enough to drive `nen shu tools` end to end: all four
+ * `versionFrom` members, four installers between them (one nen runs, one
+ * declared and not enabled in this release, one with nothing to install, one
+ * verify-only), and a `package.json` whose `packageManager` pin agrees with the
+ * declaration so the cross-check has an agreeing case to be proved against.
+ *
+ * SEPARATE FROM `SHU_REPO` ON PURPOSE. That fixture declares no toolchain and
+ * no dependency, which is what makes it the "nothing to check" case -- folding
+ * the two together would delete a state this verb has to answer for.
+ */
+export const SHU_TOOLS_REPO = join(FIXTURES, "shu-tools-repo");

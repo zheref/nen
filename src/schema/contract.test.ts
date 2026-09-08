@@ -400,6 +400,70 @@ describe("project.toolchain", () => {
       "argv ARRAY",
     );
   });
+
+  // ── the KEY, which does not stay in the file ─────────────────────────────
+
+  it("REFUSES a tool name that would become an argument rather than a package", () => {
+    // The only map key in this loader that is validated, because it is the only
+    // one that leaves the file: `nen shu tools --install` renders
+    // `<tool>@<version>` into the argv it spawns, so a key of `--all` becomes a
+    // FLAG to the installer. There is no shell on that path -- an argv is a
+    // list -- so this is an injection into the ARGUMENT LIST, which is the one
+    // nen builds itself.
+    const REFUSED: readonly string[] = [
+      "--all",
+      "-x",
+      ".hidden",
+      "_private",
+      "two words",
+      "pnpm@9.15.9",
+      "../../etc/passwd",
+      "a;rm -rf /",
+      "id$(whoami)",
+      "`id`",
+      "a|b",
+      "",
+    ];
+    for (const name of REFUSED) {
+      const error = refusal({ project: { ...PROJECT, toolchain: { [name]: NODE } } });
+      expect(error.pointer, name).toBe(`project.toolchain.${name}`);
+      expect(error.message, name).toContain("not a tool name nen can act on");
+    }
+  });
+
+  it("accepts every shape a real toolchain name takes, scoped forms included", () => {
+    const ACCEPTED: readonly string[] = [
+      "node",
+      "pnpm",
+      "dotnet-sdk",
+      "expo-cli",
+      "visual-studio",
+      "placeholder-jdk",
+      "python3.12",
+      "gcc_toolchain",
+      "@acme/build-tool",
+      "Xcode",
+    ];
+    for (const name of ACCEPTED) {
+      const contract = parse({ project: { ...PROJECT, toolchain: { [name]: NODE } } });
+      expect(contract.project?.toolchain[name]?.tool, name).toBe(name);
+    }
+  });
+
+  it("still skips a $-prefixed key rather than refusing it as a name", () => {
+    // `$comment` is metadata every block in this family carries, and it is
+    // filtered BEFORE the name rule -- otherwise documenting a toolchain block
+    // would make it unreadable. A hostile-looking `$` key is skipped by the
+    // same filter and is therefore never a row, never a `--only` match and
+    // never part of an argv: not refused, and not reachable either.
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        toolchain: { $comment: "why these tools", "$(id)": "not a tool", node: NODE },
+      },
+    });
+    expect(Object.keys(contract.project?.toolchain ?? {})).toEqual(["node"]);
+  });
 });
 
 describe("describeContract, the one line `schema check` prints", () => {

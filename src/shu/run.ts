@@ -150,7 +150,7 @@ function entryExists(path: string): boolean {
  * mistake whose only symptom would otherwise be a verb quietly running
  * somewhere else, and a refusal that names the path costs nothing.
  */
-function insideRepo(repoRoot: string, value: string, pointer: string): string {
+export function insideRepo(repoRoot: string, value: string, pointer: string): string {
   const absolute = resolve(repoRoot, value);
   const rel = relative(repoRoot, absolute);
   // The escape check is `rel === ".."`, `rel` starting with `..` FOLLOWED BY A
