@@ -816,19 +816,38 @@ const MUTATING_PATTERNS: readonly RegExp[] = [
 //
 // A FAITHFUL SCAN IS NOT YET A CORRECT ONE (#31 round four). Faithfulness
 // says the scan's tokens ARE the reader's arguments; it says nothing about
-// whether the scan recognizes the reader's SPELLINGS for a given flag. Both
-// gates below therefore state their spelling rule explicitly, and in opposite
-// directions, because they are asking opposite questions:
+// whether the scan recognizes the reader's SPELLINGS for a given flag. The
+// gates below state their spelling rule explicitly, and they do not all agree
+// -- "matching more spellings" is only safe in the direction each gate falls
+// back to when the match misses:
 //
 //   * the WRITE-FLAG side asks "is a write flag present", so it matches every
 //     spelling ../cli/args.ts accepts -- `--run`, `-run`, `--out=x`, `-out=x`
 //     -- since args.ts strips one OR two dashes. Matching one spelling too
 //     many only over-refuses. See findFlagToken.
-//   * the DRY-RUN side asks "is the read gate present", so it stays on the
-//     exact `--dry-run` token. `--dry-run=<x>` is refused by args.ts on a
-//     boolean flag and could mean the opposite to another tool; the
-//     single-dash `-dry-run` really would run as a dry run, and is left
-//     unmatched anyway, because widening a GATE is how a fail-open is built.
+//   * `dry-run-gated`'s gate asks "is the read gate present" on a verb that
+//     WRITES BY DEFAULT, so a spelling it fails to match still falls back to
+//     `mutating` -- the same safe direction the write-flag side falls back
+//     to -- and it stays on the exact `--dry-run` token: `--dry-run=<x>` is
+//     refused by args.ts on a boolean flag and could mean the opposite to
+//     another tool, and the single-dash `-dry-run` -- which really would run
+//     as a dry run -- is left unmatched too, costing only an over-refusal.
+//   * `dry-run-only`'s gate asks the SAME question, but has no writes-by-
+//     default fallback: a spelling it fails to match falls back to `unknown`
+//     for a line this table can otherwise PROVE is a read (zheref/nen#120
+//     thread 2 -- `nen shu tools -dry-run` really is `--dry-run` to
+//     ../cli/args.ts, which strips one dash or two alike, and a dry run on
+//     this verb spawns nothing whatever, probes included;
+//     ../shu/tools.test.ts pins that from both sides). So it uses
+//     findFlagToken too, matching `-dry-run` alongside `--dry-run` -- the
+//     same helper the write-flag side uses, because here missing a spelling
+//     is not the safe direction. It still excludes `--dry-run=<x>` /
+//     `-dry-run=<x>`: `dry-run` is a boolean flag on `shu tools`
+//     (../shu/command.ts's SHU_SUBCOMMAND_FLAGS) and args.ts refuses an
+//     inline value on a boolean outright, so that spelling can never actually
+//     run as a dry run and is left in `unknown` rather than promoted --
+//     matching the reader's own refusal instead of guessing what another
+//     tool would have made of it.
 
 export type NenVerbPolicy =
   | { readonly kind: "read-only"; readonly why: string }
@@ -1573,19 +1592,51 @@ function evaluateNenPolicy(
             : `${written.token} (the ${written.flag} flag -- nen's own argv reader takes one or two leading dashes alike)`;
         return { classification: "mutating", reason: `${label} ${spelled} -- ${policy.why}` };
       }
-      if (tokens.includes("--dry-run")) {
+      // THE READ GATE MATCHES EVERY SPELLING findFlagToken DOES -- unlike
+      // dry-run-gated's exact-token rule above, and deliberately (zheref/
+      // nen#120 thread 2; see the "DRY-RUN side" note in this file's header,
+      // above NEN_VERB_TABLE). `dry-run-gated` can afford to miss `-dry-run`
+      // because a miss there falls back to `mutating`, its own safe
+      // direction; THIS policy's miss falls back to `unknown` for a line the
+      // table can otherwise prove is a read -- `nen shu tools -dry-run` is
+      // `--dry-run` to ../cli/args.ts (one dash or two, alike) and spawns
+      // nothing whatever, probes included, which ../shu/tools.test.ts pins
+      // from both sides. Refusing it was not the safe over-refusal the
+      // module's write-flag side always takes; it was refusing a provable
+      // read.
+      //
+      // THE INLINE-VALUE SPELLINGS DO NOT WIDEN WITH IT, checked first and
+      // over ALL tokens rather than just the one findFlagToken would return:
+      // `dry-run` is declared a BOOLEAN flag on `shu tools`
+      // (../shu/command.ts's SHU_SUBCOMMAND_FLAGS), and args.ts throws on ANY
+      // `--dry-run=<x>` / `-dry-run=<x>` token wherever it falls in argv,
+      // independent of a bare `--dry-run` elsewhere on the same line -- so a
+      // line carrying one can never actually run as a dry run, and is kept in
+      // `unknown` with a reason that says so, rather than promoted to
+      // `read-only` on the strength of a bare token that would never be
+      // reached.
+      const dryRunInlineValueToken = tokens.find(
+        (token): boolean => token.startsWith("--dry-run=") || token.startsWith("-dry-run="),
+      );
+      if (dryRunInlineValueToken !== undefined) {
+        return nenUnknown(
+          `${label} -- ${policy.why}. '${dryRunInlineValueToken}' is not read as the dry-run gate: 'dry-run' is a boolean flag on 'shu tools' and ../cli/args.ts refuses an inline value on a boolean outright (a usage error, not a dry run), so that spelling can never actually run as a dry run. Neither bare form is certified: pass --dry-run (or -dry-run) alone for the one that is, or run this by hand.`,
+        );
+      }
+      const dryRunToken = findFlagToken(tokens, "--dry-run");
+      if (dryRunToken !== undefined) {
         if (!lineFaithful) {
           // The gate must be provable to be a gate. An unfaithful line can
-          // donate a `--dry-run` token no shell ever produced, and this is the
-          // one branch of this policy that ADMITS -- so it is the one that must
-          // insist the scan is honest.
+          // donate a `--dry-run` (or `-dry-run`) token no shell ever
+          // produced, and this is the one branch of this policy that ADMITS
+          // -- so it is the one that must insist the scan is honest.
           return nenUnknown(
-            `${label} is a read only in its explicit --dry-run form, and ${UNFAITHFUL} -- so the --dry-run this scan found is not provably an argument of its own`,
+            `${label} is a read only in its explicit --dry-run form, and ${UNFAITHFUL} -- so the ${dryRunToken} this scan found is not provably an argument of its own`,
           );
         }
         return {
           classification: "read-only",
-          reason: `${label} --dry-run -- the explicit dry-run form spawns nothing at all, probes included`,
+          reason: `${label} ${dryRunToken} -- the explicit dry-run form spawns nothing at all, probes included`,
         };
       }
       // NEITHER GATE NOR WRITE FLAG: unknown, not mutating. The bare form runs
