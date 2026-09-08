@@ -330,14 +330,21 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
   // and this one's is "and only where the tree shows this". A stack with none
   // gets no heading, which is most of them.
   for (const check of profile.crossChecks) {
+    const rule = check.plugin;
     lines.push(
       `### Cross-checks for ${check.verbs.map(code).join(", ")}`,
       "",
-      `${check.why} Any ONE of the following matching in the lane's tree is the evidence; without it the row is withheld with this reason${
-        check.answers === null
-          ? ""
-          : `, and the file that carries it is also what answers ${code(check.answers)} for ${check.verbs.map(code).join(", ")} -- several of them are an ambiguity rather than a choice`
-      }.`,
+      rule === null
+        ? `${check.why} Any ONE of the following matching in the lane's tree is the evidence; without it the row is withheld with this reason${
+            check.answers === null
+              ? ""
+              : `, and the file that carries it is also what answers ${code(check.answers)} for ${check.verbs.map(code).join(", ")} -- several of them are an ambiguity rather than a choice`
+          }.`
+        : // A PLUGIN RULE IS NOT "does a file contain a word", and rendering it
+          // as one would print a sentence that is false about the only rows it
+          // gates: the answer is THREE-VALUED, the file is read with its
+          // comments gone, and an alias is followed into a second file.
+          `${check.why} The evidence is a plugin **application** rather than a word in a file, so the reading is the one described below: three-valued, comments stripped, and an alias followed through the catalogue. The pattern and literal ${check.markers.length === 1 ? "is" : "are"}:`,
       "",
       ...table(
         ["pattern", "must contain", "why"],
@@ -347,6 +354,29 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
           marker.why,
         ]),
       ),
+      "",
+    );
+    if (rule === null) continue;
+    // THE FIELD `detect` ACTS ON, RENDERED. Every other page-level omission in
+    // this generator was a field a reader could not see nen using; these four
+    // decide whether a row is proposed at all, and `alternative` is the half a
+    // maintainer looking at the seat has to act on.
+    lines.push(
+      ...table(
+        ["comment syntax", "alias catalogue", "build logic nen does not read", "why"],
+        [
+          [
+            code(rule.syntax),
+            rule.catalogue === null ? "*(none)*" : code(rule.catalogue),
+            rule.ownBuildLogic.length === 0
+              ? "*(none)*"
+              : rule.ownBuildLogic.map(code).join(", "),
+            rule.why,
+          ],
+        ],
+      ),
+      "",
+      `**Withheld with a seat, never dropped**, and the seat says what to write instead: ${rule.alternative}`,
       "",
     );
   }
