@@ -281,17 +281,26 @@ export function renderReport(report: ShuReport): readonly string[] {
   // the line below came from the destination rather than from the lane. Only
   // NAMES appear for the environment, here as everywhere.
   if (report.target !== null) {
+    const target = report.target;
+    // QUOTED THE SAME WAY THE `would run:` LINE QUOTES ITS OWN ARGV --
+    // `renderArgv` implements the project's one quoting rule, and a target's
+    // appended args are argv tokens like any other. `join(" ")` here would
+    // silently un-quote a token that carries whitespace or a quote (an `--env
+    // 'staging east'` destination becomes `--env staging east`, which reads as
+    // TWO elements instead of one), so this reuses `renderArgv` rather than
+    // growing a second, looser rendering of the same tokens. `exe` takes the
+    // first token because `renderArgv` quotes it exactly as it quotes every
+    // `argv` element -- there is no seam here for a real executable to reach.
+    const [firstArg, ...restArgs] = target.args;
     lines.push(
       labelled(
         "target",
-        `${report.target.name}${
-          report.target.args.length === 0
+        `${target.name}${
+          firstArg === undefined
             ? "  (appends no argument)"
-            : `  (appends: ${report.target.args.join(" ")})`
+            : `  (appends: ${renderArgv({ exe: firstArg, argv: restArgs })})`
         }${
-          report.target.requiresEnv.length === 0
-            ? ""
-            : `  requires env: ${report.target.requiresEnv.join(", ")}`
+          target.requiresEnv.length === 0 ? "" : `  requires env: ${target.requiresEnv.join(", ")}`
         }`,
       ),
     );

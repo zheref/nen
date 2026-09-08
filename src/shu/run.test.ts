@@ -1213,6 +1213,40 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     expect(bare.out.join("\n")).toMatch(/target: {8}preview {2}\(appends no argument\)/);
   });
 
+  // THE RISK THIS TEST PINS: `report.target.args.join(" ")` reads back
+  // cleanly for `--env staging` above only because none of ITS tokens carry a
+  // space or a quote. A target whose args do -- `["--note", "two words",
+  // "it's"]` -- is exactly the case `renderArgv` exists for: `join(" ")`
+  // would print `--note two words it's`, which a reader re-splits into FOUR
+  // arguments instead of three. So this pins the `target:` line's quoted
+  // tail against the SAME quoted tail the `would run:` line prints for the
+  // identical tokens, rather than hand-typing an expected string that could
+  // drift from `renderArgv`'s own escaping.
+  it("quotes a target's appended args in the report exactly as the would-run line does", async () => {
+    const project = oneLane({
+      verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+      targets: { prod: { args: ["--note", "two words", "it's"] } },
+    });
+    const result = await withDeclaration(project, ["deploy", "--target", "prod", "--dry-run"]);
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    const appended = /\(appends: ([^)]+)\)/.exec(out);
+    expect(appended).not.toBeNull();
+    const quotedTail = appended?.[1] ?? "";
+    // The middle argument carries a space, so it must survive as ONE quoted
+    // element -- the un-quoted join this test guards against would print it
+    // as two.
+    expect(quotedTail).toContain("'two words'");
+    expect(quotedTail).not.toBe(["--note", "two words", "it's"].join(" "));
+    // Same substring, same place, in the `would run:` line -- the target's
+    // args are the tail of that argv, quoted by the very same `renderArgv`.
+    expect(wouldRun(result.out)).toEqual([`placeholder-deploy-tool publish ${quotedTail}`]);
+    // `--json` is unaffected: it already carries the raw, unquoted array.
+    const json = await withDeclaration(project, ["deploy", "--target", "prod", "--dry-run", "--json"]);
+    const report = JSON.parse(json.out.join("\n")) as TargetReport;
+    expect(report.target?.args).toEqual(["--note", "two words", "it's"]);
+  });
+
   it("prints NO document on stdout for any of its refusals under --json", async () => {
     const refusals: readonly (readonly string[])[] = [
       ["deploy", "--json"],
