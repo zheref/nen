@@ -123,6 +123,12 @@ const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
 const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
 
+--repo is bracketed there because twelve of the thirteen verbs default it to the
+directory you are standing in. It is REQUIRED on 'warmup', the one verb here
+that mutates git state: a verb that fetches into a repository, force-moves a
+branch ref and checks out a new branch must never do it to wherever this process
+happens to be. The refusal says so by name.
+
 Stack-aware developer verbs. Every one of them runs what the TARGET REPOSITORY
 declares in nen/contract.json under "project" -- its lanes, its per-verb argv,
 its preconditions, its platforms. Nen carries no build system, no package
@@ -158,11 +164,14 @@ verbs:
               from its fresh tip, then verify the declared build (and, with
               --tests, the declared tests). THE ONLY VERB IN THIS FAMILY THAT
               MUTATES GIT STATE, so --repo is required and every step refuses
-              rather than guessing: a dirty tree, an absent '${WARMUP_REMOTE}', a
-              diverged trunk, a name that already exists or that git will not
-              accept are each exit 2 with the evidence. Nothing is rolled back.
-              NOT '${PROGRAM} warmup', which sweeps a REGISTRY for stale pins and
-              unanswered handbook questions and reads only.
+              rather than guessing: a dirty tree, an operation half-finished, a
+              detached HEAD carrying commits nothing else reaches, an absent
+              '${WARMUP_REMOTE}', a diverged trunk, a name that already exists or that
+              git will not accept are each exit 2 with the evidence. EVERY
+              CHECK THAT NEEDS NO MUTATION RUNS BEFORE --discard DESTROYS
+              ANYTHING, so a mistyped --branch costs nothing. Nothing is rolled
+              back. NOT '${PROGRAM} warmup', which sweeps a REGISTRY for stale pins
+              and unanswered handbook questions and reads only.
 
 the declaration:
   <repo>/nen/contract.json, "project" block. Absent, or present with no
@@ -240,8 +249,10 @@ flags:
                    classifies MUTATING in izanami's table, unlike the other
                    verbs' dry runs, and deliberately: a warm-up is not a thing
                    anyone watches, so the fail-closed answer costs nothing.
-                   Because it reads no git state, two of its lines say what a
-                   real run would do differently.
+                   Because it reads no git state, three of its lines say what a
+                   real run would do differently -- which fast-forward shape
+                   applies, that '${DEFAULT_TRUNK}' is an assumption, and that the
+                   orphan-commit count is asked only on a detached HEAD.
   --only <t[,t]>   'tools' only. Check (and install) just these tools, by the
                    name the declaration gives them. A name it does not declare
                    is exit 2 listing the ones it does -- an empty report is not
@@ -257,10 +268,20 @@ flags:
                    naming this flag when it does not -- nen infers a trunk from
                    no remote HEAD and from no lone branch.
   --discard        'warmup' only. Throw away uncommitted work instead of
-                   refusing it: 'git checkout -- .' then 'git clean -fd', in
-                   that order, with the exact list printed first. NEVER 'git
-                   clean -x': an ignored file is the developer's own cache, and
-                   this verb does not delete one.
+                   refusing it: 'git reset --hard' then 'git clean -fd', in
+                   that order, with the exact list printed first. 'reset --hard'
+                   and not 'checkout -- .', because the latter restores the tree
+                   FROM THE INDEX and a staged change would survive it in both.
+                   NEVER 'git clean -x': an ignored file is the developer's own
+                   cache, and this verb does not delete one. NEVER a second -f
+                   either: that deletes a NESTED REPOSITORY, which may carry
+                   commits that exist nowhere else.
+                   THE TREE IS THEN READ AGAIN. Those two commands exiting 0 is
+                   a statement about the commands, not about the tree: neither
+                   removes a nested repository, and neither reaches into a
+                   submodule. Anything still uncommitted afterwards is exit 2
+                   naming it -- with the report, because by then this run has
+                   destroyed something and the report is what says what.
   --tests          'warmup' only. Also run the lane's declared 'test' after the
                    build, through the same executor. Off by default, because a
                    test suite is the slow half and a warm-up is the fast one.
@@ -305,11 +326,16 @@ flags:
                      lane, exitCode }, where each steps[] row is
                    { kind, argv, exitCode, durationMs, note } and 'kind' is
                    git | build | test. 'argv' is the WHOLE command line,
-                   executable first. 'exitCode' and 'durationMs' are null
-                   exactly when nothing was run -- a dry run, or a step the run
-                   never reached -- and 'lane' is null when the repository
+                   executable first, and is EMPTY on the row of a delegated
+                   verb the executor refused before it rendered one. 'exitCode'
+                   and 'durationMs' are null exactly when nothing was run -- a
+                   dry run, a step the run never reached, or that same
+                   unrendered row -- and 'lane' is null when the repository
                    carries no declaration, which is reported and is not a
-                   failure. A git that could not be STARTED is not a row of
+                   failure. 'lane' is resolved from the declaration on the
+                   BRANCH this verb cut, re-read after the checkout, because
+                   the tree the run started in is not the tree the build runs
+                   in. A git that could not be STARTED is not a row of
                    nulls: it is the exit-1 'install it, or put it on PATH'
                    refusal, with no document at all.
                    On 'tools' it is a different contract
@@ -363,7 +389,14 @@ exit codes:
      CLI answers an unreadable schema file with. The refusal names the file,
      the pointer and the expectation. On 'warmup', a git step that RAN and
      failed is 1 too, naming it -- and nothing is rolled back: the working copy
-     is left exactly as that run reached it, and the report says what did run
+     is left exactly as that run reached it, and the report says what did run.
+     A DELEGATED 2 IS ALSO 1 THERE, and only there: the executor's 2 means "this
+     verb could not be performed as declared" (an unmet precondition, an
+     invocation it will not honour), which from warmup's side is a verification
+     step that ran and did not pass. Passing it through would say "nen refused
+     and changed nothing" of a run that has already fast-forwarded a trunk and
+     checked out a branch. The executor's own code is in the report row's note
+     and in the sentence on stderr
   2  usage: no declaration, no "project" block, an unknown --lane, a
      placeholder nen cannot substitute, a --target that names no declared
      target, --json on a long-running verb without --dry-run, a path that
@@ -374,11 +407,21 @@ exit codes:
      exact version, or a pin the lane's own manifest contradicts). Every one of
      those is refused BEFORE anything is installed.
      On 'warmup' also: a dirty working copy without --discard (listing every
-     path that would be lost), no '${WARMUP_REMOTE}' remote, a --from that is not a
-     local branch, a local trunk that has DIVERGED from ${WARMUP_REMOTE}'s, a
-     --branch that git will not accept, and a --branch that already exists
-     locally or on ${WARMUP_REMOTE}. Every one of them prints its evidence on
-     stderr and NO document on stdout
+     path that would be lost), a merge/rebase/cherry-pick still in progress, a
+     DETACHED HEAD carrying commits no branch and no remote-tracking ref
+     reaches, no '${WARMUP_REMOTE}' remote, a --from that is not a local branch, a
+     local trunk that has DIVERGED from ${WARMUP_REMOTE}'s, a --branch that git will
+     not accept, a --branch that already exists locally or on ${WARMUP_REMOTE}, and a
+     --discard that ran and left the tree still not clean (a nested repository,
+     a dirty submodule). Every one of them prints its evidence on stderr.
+     THE DOCUMENT FOLLOWS THE MUTATION, not the code: a refusal reached before
+     this verb changed anything prints NO document on stdout, as everywhere
+     else in this CLI; one reached after it has already discarded work or moved
+     a ref prints the report of what it changed, for the reason a failed step
+     does -- the caller now holds a working copy in a state they did not ask
+     for, and 'steps' is the only thing that says which. stdout is still either
+     empty or exactly one document of the published shape, and never an error
+     object
   3  unsupported host -- the verb is real, this machine cannot run it
   4  unsupported verb for THIS LANE -- the declaration says so, in its own
      words. The invocation was correct; the answer is a fact about the repo.

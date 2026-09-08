@@ -57,6 +57,8 @@ export class ScriptedSeams implements Seams {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly platform: NodeJS.Platform;
   private readonly script: readonly ScriptedCall[];
+  /** How many times each command line has been answered, for `find`'s ordering. */
+  private readonly answered = new Map<string, number>();
 
   constructor(
     script: readonly ScriptedCall[],
@@ -78,15 +80,33 @@ export class ScriptedSeams implements Seams {
     this.platform = options.platform ?? process.platform;
   }
 
+  /**
+   * SEVERAL ENTRIES WITH ONE `match` ARE ANSWERED IN ORDER, one per call, and
+   * the last of them repeats for every call after that.
+   *
+   * One entry behaves exactly as it always did -- answering every call with the
+   * same result -- so no existing script changes meaning. What this adds is the
+   * one thing a single-answer table could not express: a verb that reads
+   * something, CHANGES it, and reads it again to check. `nen shu warmup
+   * --discard` does precisely that (`git status`, discard, `git status`), and
+   * the whole point of the second read is that the answer must be allowed to
+   * differ from the first -- a fixture that could only ever give one answer
+   * could not tell a discard that worked from one that silently did not.
+   */
   private find(command: string, args: readonly string[], what: string): Partial<CommandResult> {
     const key = [command, ...args].join(" ");
-    const found = this.script.find((entry): boolean => entry.match === key);
-    if (found === undefined) {
+    const matching = this.script.filter((entry): boolean => entry.match === key);
+    if (matching.length === 0) {
       throw new Error(
         `unscripted ${what}: '${key}'. Add it to the script, or fix the caller that made it -- an unexpected call is the finding, not the fixture's gap.`,
       );
     }
-    return found.result;
+    const seen = this.answered.get(key) ?? 0;
+    this.answered.set(key, seen + 1);
+    const chosen = matching[Math.min(seen, matching.length - 1)];
+    /* c8 ignore next -- `matching` is non-empty here, so the index is in range */
+    if (chosen === undefined) throw new Error(`unscripted ${what}: '${key}'.`);
+    return chosen.result;
   }
 
   run: Runner = (command, args, options = {}): CommandResult => {
