@@ -1,0 +1,3 @@
+// TEST FIXTURE -- nothing here is run.
+rootProject.name = 'Placeholder'
+include ':app'

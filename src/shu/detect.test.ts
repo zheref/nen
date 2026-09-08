@@ -23,10 +23,13 @@ import {
   renderDetect,
   REFINEMENT_DEPTH,
   stripScriptComments,
+  type DetectedLane,
+  type DetectReport,
   type Entry,
 } from "./detect.js";
 import {
   EMPTY_TREE,
+  EXPO_BARE,
   GATSBY_SITE,
   KRO_SHAPED,
   markerTree,
@@ -2746,6 +2749,907 @@ describe("nen shu detect -- the two Gradle lanes, end to end through the executo
       expect(result.err.join("\n")).toMatch(
         /'build' on lane 'app' names a placeholder nen cannot substitute: \{gw\}/,
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── the expo stack, and the native lanes a bare workflow proposes ───────────
+//
+// THE TREE UNDER TEST is ./fixtures/expo-bare/, a three-lane repository shaped
+// like the one the catalogue read (zheref/food-diary) with every name replaced:
+// a Metro lane at the root, and `ios/` and `android/` prebuild output committed
+// beside it. Its iOS half reproduces the finding that made this stack worth a
+// cross-check of its own -- a shared scheme whose test action names a target
+// the project does not contain, which fails a test run on a CLEAN CHECKOUT and
+// which no amount of filling placeholders in would fix.
+//
+// THE MUTANTS THESE KILL, each stated where it is killed:
+//
+//   1. `build` PROPOSED FOR expo. The reference `run` row builds AND launches,
+//      so a `build` row on this stack is a row that starts an application on
+//      somebody's simulator the first time a script asks for a compile. Two
+//      assertions hold it: the pack's cell must be `unsupported`, and no expo
+//      lane in any fixture may carry a `build` COMMAND row.
+//   2. `{platform}` PROPOSED UNSUBSTITUTED. The row must stay withheld even
+//      though this lane's own scripts spell both values -- SEEING a value and
+//      CHOOSING one are different acts, and only the second is forbidden.
+//   3. THE SCHEME CROSS-CHECK DISABLED. With the check gone, `test` is withheld
+//      naming three placeholders and says nothing about the scheme, which reads
+//      as "state these three and the row runs". It does not run.
+
+describe("nen shu detect -- the expo stack, three lanes in one tree", () => {
+  const bare = (): DetectReport => detect(EXPO_BARE);
+  const laneNamed = (name: string): DetectedLane | undefined =>
+    bare().lanes.find((lane): boolean => lane.lane === name);
+
+  it("proposes the Metro lane and both native siblings, and chooses none of them", () => {
+    const report = bare();
+    expect(report.exitCode).toBe(0);
+    expect(report.lanes.map((lane): string => `${lane.lane}:${lane.stack}:${lane.cwd}`)).toEqual([
+      "expo:expo:.",
+      "android:gradle-android:android",
+      "ios:xcode-ios:ios",
+    ]);
+    const proposal = report.proposal as unknown as Proposal;
+    expect(proposal.project.defaultLane).toBeNull();
+    // THREE LANES, TWO HOST SIGNATURES: the Apple lane runs on darwin alone and
+    // the other two run anywhere, so no `hosts` block is proposed and the note
+    // says why. A UNION here would let `nen shu test --lane ios` start on linux.
+    expect(proposal.project.hosts).toEqual({});
+    expect(report.notes.join("\n")).toMatch(/the lanes need different platforms/);
+  });
+
+  // WHAT THE GRADLE READER ANSWERS ABOUT THE `android/` HALF, on every host.
+  // Prebuild output is a `gradle-android` lane like any other -- it ships its
+  // own wrapper (both spellings, because `expo prebuild` writes both) and its
+  // own `settings.gradle` -- so three rows are proposed with `{gw}` resolved
+  // for the host, and `test` alone stays withheld: that settings file includes
+  // `:app`, `:app` applies the plugin that identified the lane, and an
+  // application module is not the library `{unitTestTask}` needs. Nothing about
+  // the Metro lane above it changes any of that; the two are related in a note
+  // and merged nowhere.
+  for (const { platform, exe } of [
+    { platform: "darwin", exe: "./gradlew" },
+    { platform: "linux", exe: "./gradlew" },
+    { platform: "win32", exe: "gradlew.bat" },
+  ] as const) {
+    it(`proposes the native android lane's own rows on ${platform}, and withholds only {unitTestTask}`, () => {
+      const android = detect(EXPO_BARE, platform).lanes.find(
+        (lane): boolean => lane.lane === "android",
+      );
+      expect(commandRows(android?.verbs)).toEqual(["build", "lint", "ui-test"]);
+      expect(android?.verbs["build"], platform).toMatchObject({
+        exe,
+        argv: ["assembleDebug", "--stacktrace"],
+      });
+      const notes = android?.notes.join("\n") ?? "";
+      expect(notes, platform).toMatch(/'test' withheld: .*\{unitTestTask\}/);
+      // The reason is the SETTINGS FILE's, read from this lane's own tree --
+      // not a Node-shaped one about a manifest that is not there.
+      expect(notes, platform).toMatch(/settings\.gradle includes :app/);
+      expect(notes, platform).not.toMatch(/no readable package\.json/);
+      // And the host the word was resolved for is recorded beside the rows.
+      expect(notes, platform).toContain(
+        `{gw} in this lane's proposed rows was resolved for ${platform}: nen wrote '${exe}'`,
+      );
+    });
+  }
+
+  it("relates the native lanes to the manifest that generates them, and merges nothing", () => {
+    // The phrase is matched in its SINGULAR form on purpose: the note says
+    // "SIBLING LANE" for one child and "SIBLING LANES" for several, and an
+    // assertion that only knew the plural let a mutant that fires the note on
+    // a one-child tree through unnoticed.
+    const note = bare().notes.find((entry): boolean => entry.includes("SIBLING LANE"));
+    expect(note).toBeDefined();
+    // BOTH markers are named, because the pack's rule is a conjunction and the
+    // note is only allowed to speak when the conjunction is met.
+    expect(note).toMatch(/the lane 'expo' names 'ios' AND 'android' among its OWN markers/);
+    expect(note).toMatch(/'android' \(gradle-android, cwd android\)/);
+    expect(note).toMatch(/'ios' \(xcode-ios, cwd ios\)/);
+    // The relationship is stated and the decision is not taken.
+    expect(note).toMatch(/is a decision this repository makes/);
+    // And the pack's own sentence for the marker is what carries the claim.
+    expect(note).toMatch(/prebuild output is committed, and the native lanes are real/);
+    // Nothing here is described as unrelated, because nothing here is.
+    expect(note).not.toMatch(/nen also found/);
+  });
+
+  // M1. THE PAYLOAD IS THE DECLARED CHILDREN, NOT EVERY NESTED LANE. A `site/`
+  // Next.js build beside a bare Expo tree is hand-written, and the first draft
+  // of this note swept it into "SIBLING LANES ... generated native output
+  // committed beside the manifest" on the strength of `ios/` firing the gate.
+  // Building the payload from `children` again turns this red.
+  it("never calls an UNRELATED nested lane generated native output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-unrelated-child-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      cpSync(NEXTJS_SINGLE, join(dir, "site"), { recursive: true });
+      const note = detect(dir).notes.find((entry): boolean => entry.includes("SIBLING LANE"));
+      expect(note).toBeDefined();
+      // The sibling list is exactly the two the profile names.
+      expect(note).toContain(
+        "nen found a lane in each of them: 'android' (gradle-android, cwd android), 'ios' (xcode-ios, cwd ios).",
+      );
+      // And the unrelated lane is named in a clause that claims NOTHING.
+      expect(note).toMatch(/nen also found 'site' \(nextjs, cwd site\) directly inside 'expo'/);
+      expect(note).toMatch(/this profile's markers do not name that directory/);
+      expect(note).toMatch(/so nen relates it to nothing/);
+      // The decisive assertion: the sibling sentence must not reach the site.
+      expect(
+        note?.slice(0, note.indexOf("nen also found")),
+        "a hand-written Next.js build is not prebuild output",
+      ).not.toContain("site");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // M2. THE GATE IS THE CONJUNCTION THE `why` DESCRIBES. The pack says "`ios/`
+  // AND `android/` both present means the BARE workflow"; a note that fires on
+  // `ios/` alone quotes a sentence that is not true of the tree it is printed
+  // against. Loosening the gate back to "one declared child" turns this red.
+  it("claims no bare workflow from ios/ alone, whose marker why requires both", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-ios-only-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      rmSync(join(dir, "android"), { recursive: true, force: true });
+      const report = detect(dir);
+      // The Apple lane is still FOUND -- this is about the claim, not the scan.
+      expect(report.lanes.map((lane): string => lane.cwd)).toEqual([".", "ios"]);
+      expect(
+        report.notes.join("\n"),
+        "half a conjunction is a different tree, not a weaker claim",
+      ).not.toMatch(/SIBLING LANE/);
+      expect(report.notes.join("\n")).not.toMatch(/BARE workflow/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A NESTED LANE IS NOT A SIBLING LANE, and the gate that says so is the
+  // parent profile's OWN marker table rather than the nesting. This tree has a
+  // lane DIRECTLY inside another -- the same shape the note fires on -- and
+  // `nextjs` names no directory among its markers, so nothing is claimed about
+  // the relationship. Widening the gate to any nesting turns this red.
+  it("says nothing of the kind about a lane merely nested inside another", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-nested-not-sibling-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n", "utf8");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "root", devDependencies: { next: "15.1.0" } }),
+        "utf8",
+      );
+      cpSync(GATSBY_SITE, join(dir, "site"), { recursive: true });
+      const report = detect(dir);
+      expect(report.lanes.map((lane): string => lane.cwd)).toEqual([".", "site"]);
+      expect(
+        report.notes.join("\n"),
+        "the gate is the pack's marker table, not the nesting",
+      ).not.toMatch(/SIBLING LANE/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // And the same for a workspace root's members, which are one level deeper.
+    expect(detect(NEXTJS_WORKSPACES).notes.join("\n")).not.toMatch(/SIBLING LANE/);
+  });
+
+  it("proposes exactly the two rows this lane's own manifest confirms", () => {
+    const lane = laneNamed("expo");
+    expect(commandRows(lane?.verbs)).toEqual(["dev", "lint"]);
+    // THE ARGV IS THE PACK'S, verbatim -- `detect` names no tool of its own.
+    const profile = profileById(loadProfilesPack(), "expo");
+    for (const verb of ["dev", "lint"]) {
+      const cell = verbCell(profile, verb);
+      expect(cell.kind, verb).toBe("command");
+      if (cell.kind !== "command" || cell.invocation.kind !== "command") continue;
+      const invocation = cell.invocation;
+      expect(lane?.verbs[verb], verb).toEqual({
+        exe: invocation.exe,
+        argv: invocation.argv,
+        why: invocation.why,
+      });
+    }
+  });
+
+  // MUTANT 1.
+  it("NEVER proposes a build row for this stack, and seats the pack's reason instead", () => {
+    const cell = verbCell(profileById(loadProfilesPack(), "expo"), "build");
+    expect(cell.kind, "the catalogue's own cell is what makes this true").toBe("unsupported");
+    for (const tree of [EXPO_BARE, markerTree("expo")]) {
+      for (const lane of detect(tree).lanes.filter((entry): boolean => entry.stack === "expo")) {
+        expect(commandRows(lane.verbs), tree).not.toContain("build");
+        expect(unsupportedRows(lane.verbs), tree).toContain("build");
+        expect(reasonOf(lane.verbs, "build")).toMatch(
+          /build AND launch, there is no build-only invocation/,
+        );
+        expect(reasonOf(lane.verbs, "build")).toMatch(
+          /Conflating the two would make `nen shu build` launch an app/,
+        );
+      }
+    }
+  });
+
+  // MUTANT 2.
+  it("withholds run, names both values its own scripts spell, and says where to state one", () => {
+    const lane = laneNamed("expo");
+    expect(commandRows(lane?.verbs)).not.toContain("run");
+    expect(unsupportedRows(lane?.verbs)).not.toContain("run");
+    const note = lane?.notes.find((entry): boolean => entry.startsWith("'run' withheld"));
+    expect(note).toBeDefined();
+    expect(note).toMatch(/still names \{platform\}/);
+    expect(note).toMatch(/spell \{platform\}'s position 2 ways/);
+    expect(note).toMatch(/android, in 'android': expo run:android/);
+    expect(note).toMatch(/ios, in 'ios': expo run:ios/);
+    expect(note).toMatch(/still will not pick one/);
+    expect(note).toMatch(
+      /State it under project\.verbs\.expo\.run, or give each value a lane of its own/,
+    );
+  });
+
+  // The near-miss reader is the one that must NOT fire here: `expo start` and
+  // `expo lint` have the same word count as the reference `run` row and answer
+  // nothing, because the position they differ at is not a whole token.
+  it("does not report an unrelated script of the same length as a near miss", () => {
+    const note = laneNamed("expo")?.notes.find((entry): boolean =>
+      entry.startsWith("'run' withheld"),
+    );
+    expect(note).not.toMatch(/nothing corroborates the match/);
+    expect(note).not.toMatch(/'lint': expo lint/);
+  });
+});
+
+describe("nen shu detect -- the Apple lane's scheme, read against the project's targets", () => {
+  const iosNote = (repo: string, verb: string): string =>
+    detect(repo)
+      .lanes.find((lane): boolean => lane.stack === "xcode-ios")
+      ?.notes.find((entry): boolean => entry.startsWith(`'${verb}' withheld`)) ?? "";
+
+  // MUTANT 3.
+  it("withholds test naming the target the scheme asks for and the project has not got", () => {
+    const note = iosNote(EXPO_BARE, "test");
+    expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+    expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+    // THE FILE IS PART OF THE SUBJECT, not just the name -- see the duplicate
+    // -name case below.
+    expect(note).toContain(
+      "'Placeholder' (Placeholder.xcodeproj/xcshareddata/xcschemes/Placeholder.xcscheme) names 'PlaceholderTests' (PlaceholderTests.xctest)",
+    );
+    expect(note).toMatch(/this lane's project declares no such target -- it declares Placeholder/);
+    expect(note).toMatch(/a test on that scheme fails before .* matters/);
+  });
+
+  // n1. TWO SCHEMES OF THE SAME NAME ARE TWO FILES. A repository that keeps a
+  // shared scheme in its `.xcworkspace` AND its `.xcodeproj` earned two
+  // byte-identical paragraphs, which read as one printed twice rather than as
+  // two files a maintainer must edit apart. Dropping the file back out of the
+  // clause turns this red.
+  it("tells two same-named schemes apart by the file each one lives in", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-twice-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      const shared = join(dir, "ios", "Placeholder.xcworkspace", "xcshareddata", "xcschemes");
+      mkdirSync(shared, { recursive: true });
+      cpSync(
+        join(dir, "ios", "Placeholder.xcodeproj", "xcshareddata", "xcschemes", "Placeholder.xcscheme"),
+        join(shared, "Placeholder.xcscheme"),
+      );
+      const note = iosNote(dir, "test");
+      const paragraphs = note
+        .split(" -- ")
+        .filter((clause): boolean => clause.includes("BROKEN ON A CLEAN CHECKOUT"));
+      expect(paragraphs, "one finding per FILE").toHaveLength(2);
+      expect(new Set(paragraphs).size, "and the two must not be byte-identical").toBe(2);
+      expect(note).toContain("Placeholder.xcworkspace/xcshareddata/xcschemes/Placeholder.xcscheme");
+      expect(note).toContain("Placeholder.xcodeproj/xcshareddata/xcschemes/Placeholder.xcscheme");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the shared scheme it found, by name and by file, and substitutes none of it", () => {
+    const note = iosNote(EXPO_BARE, "build");
+    expect(note).toMatch(
+      /the shared scheme nen can see here is 'Placeholder' \(Placeholder\.xcodeproj\/xcshareddata\/xcschemes\/Placeholder\.xcscheme\)/,
+    );
+    expect(note).toMatch(/which scheme a verb means is this repository's decision, not a count/);
+    // The row is still WITHHELD. Reading a scheme name off the disk is not the
+    // same act as deciding which scheme a verb means.
+    const lane = detect(EXPO_BARE).lanes.find((entry): boolean => entry.stack === "xcode-ios");
+    expect(commandRows(lane?.verbs)).toEqual([]);
+  });
+
+  it("says the container is a workspace, which the reference row's own flag does not address", () => {
+    expect(iosNote(EXPO_BARE, "build")).toMatch(
+      /this lane's container is a WORKSPACE \(Placeholder\.xcworkspace\)/,
+    );
+  });
+
+  // THE OTHER HALF OF THE CROSS-CHECK, and the one a checked-in fixture cannot
+  // carry because the point is the ABSENCE of a finding: a project that
+  // declares the target its scheme names earns the token reason and no more.
+  it("makes no such claim when the project DOES declare the target the scheme names", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-ok-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      const pbxproj = join(dir, "ios", "Placeholder.xcodeproj", "project.pbxproj");
+      writeFileSync(
+        pbxproj,
+        readFileSync(pbxproj, "utf8").replace(
+          "/* End PBXNativeTarget section */",
+          [
+            "\t\t00E356ED1AD99517003FC87E /* PlaceholderTests */ = {",
+            "\t\t\tisa = PBXNativeTarget;",
+            "\t\t\tname = PlaceholderTests;",
+            "\t\t};",
+            "/* End PBXNativeTarget section */",
+          ].join("\n"),
+        ),
+        "utf8",
+      );
+      const note = iosNote(dir, "test");
+      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+      expect(note, "the finding must be GONE, not merely reworded").not.toMatch(
+        /BROKEN ON A CLEAN CHECKOUT/,
+      );
+      // The scheme is still NAMED -- that half is about what is on disk, not
+      // about whether the scheme works.
+      expect(note).toMatch(/the shared scheme nen can see here is 'Placeholder'/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // FAIL CLOSED. A project file nen cannot parse is one nen knows nothing
+  // about, and reporting every scheme in the lane as broken on the strength of
+  // an unfamiliar format is the worst answer available.
+  it("makes NO claim at all when it cannot read a target list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-unreadable-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      writeFileSync(
+        join(dir, "ios", "Placeholder.xcodeproj", "project.pbxproj"),
+        "// a format this reader does not know\n",
+        "utf8",
+      );
+      const note = iosNote(dir, "test");
+      expect(note).toMatch(/could not read a native-target list out of Placeholder\.xcodeproj/);
+      // THE FILE IS NAMED, not just the bundle: `project.pbxproj` is what nen
+      // opened and what a maintainer has to go and look at.
+      expect(note).toContain("Placeholder.xcodeproj/project.pbxproj");
+      expect(note).toMatch(/a cross-check nen could not perform is not one that passed/);
+      expect(note).not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+      // Nothing parsed, so there is no second half to this clause.
+      expect(note).not.toMatch(/did parse/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── the PARTIAL read, which is the hole the all-or-nothing union closes ────
+  //
+  // A lane may hold more than one `.xcodeproj`, and the first draft merged the
+  // ones that parsed and skipped the ones that did not (`if (declared === null)
+  // continue;`). That left `targets` non-null and INCOMPLETE, and an incomplete
+  // list is read downstream as licence to call a scheme broken: a scheme whose
+  // test target lives in the project nen could not read was reported as BROKEN
+  // ON A CLEAN CHECKOUT on the strength of a cross-check never performed.
+
+  /** A second `.xcodeproj` in the lane, declaring exactly `targets`. */
+  const addProject = (dir: string, name: string, targets: readonly string[] | null): void => {
+    const bundle = join(dir, "ios", `${name}.xcodeproj`);
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(
+      join(bundle, "project.pbxproj"),
+      targets === null
+        ? "// a format this reader does not know\n"
+        : [
+            "// !$*UTF8*$!",
+            "{",
+            "\tobjects = {",
+            "/* Begin PBXNativeTarget section */",
+            ...targets.flatMap((target, index): readonly string[] => [
+              `\t\tFEED000${index} /* ${target} */ = {`,
+              "\t\t\tisa = PBXNativeTarget;",
+              `\t\t\tname = ${target};`,
+              "\t\t};",
+            ]),
+            "/* End PBXNativeTarget section */",
+            "\t};",
+            "}",
+          ].join("\n"),
+      "utf8",
+    );
+  };
+
+  // MUTANT: restore `if (declared === null) continue;` in `readAppleLane` and
+  // this goes red -- `Placeholder.xcodeproj` parses, its lone target is
+  // `Placeholder`, and the scheme's `PlaceholderTests` gets called missing on a
+  // target list that never asked `Extra.xcodeproj` a thing.
+  it("withholds the whole cross-check when only SOME of the lane's projects parse", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-partial-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      addProject(dir, "Extra", null);
+      const note = iosNote(dir, "test");
+      // The finding is GONE, because it was never nen's to make.
+      expect(note, "a partial target list is not a cross-check").not.toMatch(
+        /BROKEN ON A CLEAN CHECKOUT/,
+      );
+      // And the note names the file that stopped it -- that one, not the lane.
+      expect(note).toContain("Extra.xcodeproj/project.pbxproj");
+      expect(note, "the readable project is not the unreadable one").not.toContain(
+        "Placeholder.xcodeproj/project.pbxproj",
+      );
+      expect(note).toMatch(/a cross-check nen could not perform is not one that passed/);
+      // The dropped half is stated out loud rather than left as silence a
+      // reader would take for "and Placeholder.xcodeproj checked out fine".
+      expect(note).toContain("Placeholder.xcodeproj did parse");
+      expect(note).toMatch(/WITHHELD ALL THE SAME/);
+      // The scheme is still NAMED. Withholding the target claim is not
+      // withholding what is plainly on disk.
+      expect(note).toMatch(/the shared scheme nen can see here is 'Placeholder'/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE UNION STILL WORKS. Withholding on ONE unreadable project must not
+  // become withholding whenever a lane has two projects: a target declared by
+  // the SECOND one answers the scheme just as well as the first.
+  it("answers the scheme from the second project when every project parses", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-union-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      addProject(dir, "Extra", ["PlaceholderTests"]);
+      const note = iosNote(dir, "test");
+      expect(note, "the target exists, in the other project").not.toMatch(
+        /BROKEN ON A CLEAN CHECKOUT/,
+      );
+      expect(note, "every project parsed, so nothing is withheld").not.toMatch(
+        /could not read a native-target list/,
+      );
+      // The row is still withheld for its tokens, which is a different reason.
+      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A scheme kept in `xcuserdata/` belongs to one developer's checkout. Nen
+  // reads the SHARED directory only, and says so rather than reporting a name a
+  // colleague's clone has not got.
+  it("reports no shared scheme when the lane has none, and names where it looked", () => {
+    const note =
+      detect(markerTree("xcode")).lanes[0]?.notes.find((entry): boolean =>
+        entry.startsWith("'build' withheld"),
+      ) ?? "";
+    expect(note).toMatch(/nen found no SHARED scheme in this lane/);
+    expect(note).toMatch(/<container>\/xcshareddata\/xcschemes\//);
+    expect(note).toMatch(/a scheme under xcuserdata\/ is one developer's checkout/);
+  });
+
+  // ── one testable is one unit ───────────────────────────────────────────────
+  //
+  // The reader these four cases pin replaced one that swept the whole test
+  // action for `BlueprintName`s and `BuildableName`s, de-duplicated each list
+  // apart, and paired them BY INDEX. That holds for the fixture's single
+  // testable and for nothing else a real repository ships: a shared product, a
+  // `<MacroExpansion>`, or a `skipped` reference each knock the two lists out
+  // of step, and the clause then names a pair the scheme never wrote.
+
+  /** The lane's shared scheme, rewritten with a `<TestAction>` body of your own. */
+  const withTestAction = (dir: string, body: string): void => {
+    writeFileSync(
+      join(dir, "ios", "Placeholder.xcodeproj", "xcshareddata", "xcschemes", "Placeholder.xcscheme"),
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<Scheme LastUpgradeVersion = "1430" version = "1.3">',
+        '   <BuildAction parallelizeBuildables = "YES">',
+        "   </BuildAction>",
+        '   <TestAction buildConfiguration = "Debug">',
+        "      <Testables>",
+        body,
+        "      </Testables>",
+        "   </TestAction>",
+        "</Scheme>",
+      ].join("\n"),
+      "utf8",
+    );
+  };
+
+  /** One `<TestableReference>`, written as Xcode writes one. */
+  const testable = (
+    blueprint: string,
+    buildable: string,
+    options: { readonly skipped?: boolean; readonly reversed?: boolean } = {},
+  ): string =>
+    [
+      `         <TestableReference skipped = "${options.skipped === true ? "YES" : "NO"}">`,
+      "            <BuildableReference",
+      '               BuildableIdentifier = "primary"',
+      // THE ORDER IS THE POINT of one case below: Xcode writes the buildable
+      // first today, and nothing about the format promises it always will.
+      ...(options.reversed === true
+        ? [
+            `               BlueprintName = "${blueprint}"`,
+            `               BuildableName = "${buildable}"`,
+          ]
+        : [
+            `               BuildableName = "${buildable}"`,
+            `               BlueprintName = "${blueprint}"`,
+          ]),
+      '               ReferencedContainer = "container:Placeholder.xcodeproj">',
+      "            </BuildableReference>",
+      "         </TestableReference>",
+    ].join("\n");
+
+  /** Extra native targets in the lane's own project, beside the fixture's `Placeholder`. */
+  const declare = (dir: string, targets: readonly string[]): void => {
+    const pbxproj = join(dir, "ios", "Placeholder.xcodeproj", "project.pbxproj");
+    writeFileSync(
+      pbxproj,
+      readFileSync(pbxproj, "utf8").replace(
+        "/* End PBXNativeTarget section */",
+        [
+          ...targets.flatMap((target, index): readonly string[] => [
+            `\t\tFACE000${index} /* ${target} */ = {`,
+            "\t\t\tisa = PBXNativeTarget;",
+            `\t\t\tname = ${target};`,
+            "\t\t};",
+          ]),
+          "/* End PBXNativeTarget section */",
+        ].join("\n"),
+      ),
+      "utf8",
+    );
+  };
+
+  /** A temp checkout of the bare lane, with a scheme and a target list of your own. */
+  const laneWhere = (
+    slug: string,
+    body: string,
+    targets: readonly string[],
+    read: (note: string) => void,
+  ): void => {
+    const dir = mkdtempSync(join(tmpdir(), `nen-expo-scheme-${slug}-`));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      withTestAction(dir, body);
+      if (targets.length > 0) declare(dir, targets);
+      read(iosNote(dir, "test"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  // MUTANT: restore the independent sweeps and the index pairing --
+  // `blueprints.map((blueprint, index) => ({ blueprint, buildable:
+  // buildables[index] ?? "" }))` -- and this goes red. `PlaceholderTests.xctest`
+  // is written twice and survives de-duplication once, so the third reference's
+  // product slides onto the second's blueprint and the note sends a maintainer
+  // to a bundle that a target the project DOES declare builds.
+  it("pairs a blueprint with the buildable from its OWN reference, not by index", () => {
+    laneWhere(
+      "shared-product",
+      [
+        testable("PlaceholderTests", "PlaceholderTests.xctest"),
+        // Two bundles built from one product: legal, shipped, and the shape
+        // that de-duplication silently collapsed.
+        testable("PlaceholderUITests", "PlaceholderTests.xctest"),
+        testable("PlaceholderSnapshotTests", "PlaceholderSnapshotTests.xctest"),
+      ].join("\n"),
+      ["PlaceholderTests", "PlaceholderSnapshotTests"],
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        expect(note, "the missing blueprint, with the product ITS reference names").toContain(
+          "names 'PlaceholderUITests' (PlaceholderTests.xctest) in its test action",
+        );
+        // The product of a target the project HAS must not be dragged into a
+        // finding about a target it has not.
+        expect(note, "a bundle no missing reference named").not.toContain(
+          "PlaceholderSnapshotTests.xctest",
+        );
+      },
+    );
+  });
+
+  // The two names are read off ONE element, so neither may depend on the order
+  // the element spells them in.
+  it("reads both names whichever order the reference writes them in", () => {
+    laneWhere(
+      "reversed",
+      testable("PlaceholderUITests", "PlaceholderUITests.xctest", { reversed: true }),
+      [],
+      (note): void => {
+        expect(note).toContain(
+          "names 'PlaceholderUITests' (PlaceholderUITests.xctest) in its test action",
+        );
+      },
+    );
+  });
+
+  // MUTANT: sweep every `<BuildableReference>` in the test action rather than
+  // only those inside a `<TestableReference>`, and this goes red -- the macro
+  // expansion's `Ghost` becomes a test target nobody declared, and a scheme
+  // whose test action is sound is reported BROKEN ON A CLEAN CHECKOUT.
+  it("does not read a MacroExpansion's reference as a test target", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-macro-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      withTestAction(dir, testable("PlaceholderTests", "PlaceholderTests.xctest"));
+      // The macro expansion sits in the test action and OUTSIDE `<Testables>`,
+      // which is where Xcode puts it, and it names the app target rather than
+      // a test one.
+      const scheme = join(
+        dir,
+        "ios",
+        "Placeholder.xcodeproj",
+        "xcshareddata",
+        "xcschemes",
+        "Placeholder.xcscheme",
+      );
+      writeFileSync(
+        scheme,
+        readFileSync(scheme, "utf8").replace(
+          "      </Testables>",
+          [
+            "      </Testables>",
+            "      <MacroExpansion>",
+            "         <BuildableReference",
+            '            BuildableIdentifier = "primary"',
+            '            BuildableName = "Ghost.app"',
+            '            BlueprintName = "Ghost"',
+            '            ReferencedContainer = "container:Placeholder.xcodeproj">',
+            "         </BuildableReference>",
+            "      </MacroExpansion>",
+          ].join("\n"),
+        ),
+        "utf8",
+      );
+      declare(dir, ["PlaceholderTests"]);
+      const note = iosNote(dir, "test");
+      expect(note, "the one real testable resolves").not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+      expect(note, "a macro expansion is not a target the scheme tests").not.toContain("Ghost");
+      // The rest of the reason is untouched -- this withholds nothing.
+      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A skipped testable is excluded from the RUN and still names a target that
+  // has to exist, so the cross-check applies -- and the note says the scheme
+  // skips it, because that changes which repair a maintainer reaches for.
+  it("cross-checks a skipped testable all the same, and says that it is skipped", () => {
+    laneWhere(
+      "skipped",
+      testable("PlaceholderTests", "PlaceholderTests.xctest", { skipped: true }),
+      [],
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain(
+          "names 'PlaceholderTests' (PlaceholderTests.xctest, skipped by the scheme)",
+        );
+      },
+    );
+  });
+});
+
+describe("nen shu detect -- the expo markers themselves", () => {
+  it("reads the manifest KEY, never the filename alone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-marker-"));
+    try {
+      writeFileSync(join(dir, "app.json"), JSON.stringify({ name: "not-expo" }), "utf8");
+      expect(detect(dir).lanes, "app.json is a filename a dozen tools use").toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The dynamic manifest cannot be read without EXECUTING it, and `detect`
+  // executes nothing -- so the confirmation is the dependency the repository
+  // declares beside it.
+  it("accepts the app.config.ts form, confirmed against the declared dependency", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-config-ts-"));
+    try {
+      writeFileSync(join(dir, "app.config.ts"), "export default { expo: {} };\n", "utf8");
+      expect(detect(dir).lanes, "a config file with no dependency behind it").toEqual([]);
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "p", dependencies: { expo: "53.0.0" } }),
+        "utf8",
+      );
+      const lanes = detect(dir).lanes;
+      expect(lanes.map((lane): string => lane.stack)).toEqual(["expo"]);
+      expect(lanes[0]?.markers).toEqual(["app.config.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // EVIDENCE, NEVER AN IDENTIFICATION. The pack says this file identifies an
+  // Expo project on its own; `detect` declines that half, and records the file
+  // against the seats whose quoted reason turns on its absence.
+  it("records eas.json beside a manifest, and never proposes a lane from it alone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-eas-"));
+    try {
+      writeFileSync(join(dir, "eas.json"), JSON.stringify({ build: {} }), "utf8");
+      expect(detect(dir).lanes, "a build profile is not a project").toEqual([]);
+
+      writeFileSync(join(dir, "app.json"), JSON.stringify({ expo: { name: "p" } }), "utf8");
+      const lane = detect(dir).lanes[0];
+      // n3. THE TWO KINDS ARE KEPT APART, on the ONE surface `--json` and the
+      // text share: `markers` is what made the lane and `evidence` is what the
+      // lane merely carries. "Delete it and the lane goes away" is true of
+      // every path in the first list and false of every path in the second, and
+      // one list could not say both.
+      expect(lane?.markers).toEqual(["app.json"]);
+      expect(lane?.evidence).toEqual(["eas.json"]);
+      const note = lane?.notes.find((entry): boolean => entry.includes("this lane also carries"));
+      expect(note).toMatch(/this lane also carries eas\.json/);
+      expect(note).toMatch(/nen did NOT identify the lane from/);
+      expect(note).toMatch(
+        /a seat whose quoted reason turns on its absence is the first row to distrust/,
+      );
+      // The pack's own sentence for the marker carries the claim, and it is the
+      // sentence that explains the `archive` seat a few rows down.
+      expect(note).toMatch(
+        /no repository in the inventory has one, which is why `archive` is unsupported/,
+      );
+      expect(reasonOf(lane?.verbs, "archive")).toMatch(/NO `eas\.json` AND NO EAS PROJECT ID/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("says nothing of the kind when the file is absent", () => {
+    for (const lane of detect(EXPO_BARE).lanes) {
+      expect(lane.markers, lane.lane).not.toContain("eas.json");
+      expect(lane.evidence, lane.lane).toEqual([]);
+      expect(lane.notes.join("\n"), lane.lane).not.toMatch(/this lane also carries/);
+    }
+  });
+
+  // n3, the other surface. The human rendering and `--json` say the same thing
+  // in the same words, which is the rule this file exists under: a field that
+  // only `--json` carries is a field a reader of the terminal cannot act on.
+  it("prints the carried file under its own word, apart from the markers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-eas-render-"));
+    try {
+      writeFileSync(join(dir, "app.json"), JSON.stringify({ expo: { name: "p" } }), "utf8");
+      writeFileSync(join(dir, "eas.json"), JSON.stringify({ build: {} }), "utf8");
+      const lines = renderDetect(detect(dir));
+      expect(lines).toContain("        marker: app.json");
+      expect(lines).toContain("        evidence: eas.json");
+      expect(lines, "the carried file is never listed as a marker").not.toContain(
+        "        marker: eas.json",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE METRO LANE ALONE RUNS ANYWHERE. The single-lane tree is the one case
+  // where a `hosts` block IS proposed for this stack, and it is every platform:
+  // the dev server and the linter need no Apple toolchain and no Android SDK.
+  // The three-lane tree gets none, which is the assertion two describes up.
+  it("proposes every platform for a managed tree, where the lanes cannot disagree", () => {
+    const proposal = detect(markerTree("expo")).proposal as unknown as Proposal;
+    expect(proposal.project.hosts).toEqual({ "*": ["darwin", "linux", "win32"] });
+    expect(proposal.project.defaultLane).toBe("expo");
+  });
+
+  // n2. THE PACK'S OWN QUALIFICATION OF THE BLOCK NEN JUST WROTE. `hosts` is
+  // keyed by verb and lists platforms, and this stack's whole difficulty is
+  // that the row cannot say what the pack says in prose: the same `*` row
+  // covers `expo start`, which runs anywhere, and `expo run:ios`, which needs
+  // macOS. Nen writes the pack's row and prints the pack's sentence beside it.
+  // Dropping the note leaves a maintainer a three-platform allowlist and no
+  // hint that a third of the verbs behind it are darwin-only.
+  it("prints the pack's own host note beside the hosts block it wrote", () => {
+    const report = detect(markerTree("expo"));
+    const note = report.notes.find((entry): boolean =>
+      entry.includes("the proposed 'hosts' block"),
+    );
+    expect(note).toBeDefined();
+    expect(note).toMatch(/the proposed 'hosts' block is the reference pack's own for the expo stack/);
+    // It is an ALLOWLIST, which is the thing the block's shape does not say.
+    expect(note).toMatch(/ALLOWLIST nen refuses to start outside/);
+    // And the pack's sentence is quoted, not paraphrased.
+    expect(note).toContain(profileById(loadProfilesPack(), "expo").hostNote);
+    expect(note).toMatch(/`expo run:ios` needs macOS with Xcode and CocoaPods/);
+  });
+
+  // The three-lane tree gets NO hosts block, so there is no block to qualify --
+  // and the note that fires instead is the one about the disagreement.
+  it("says nothing about a hosts block where it proposed none", () => {
+    const notes = detect(EXPO_BARE).notes.join("\n");
+    expect(notes).toMatch(/the lanes need different platforms/);
+    expect(notes).not.toMatch(/the proposed 'hosts' block/);
+  });
+});
+
+describe("nen shu detect -- the expo proposal, executed", () => {
+  // EVERY PROPOSED ROW, RUN, with the argv pinned as a literal: a golden that
+  // matches loosely is a golden that survives the change it exists to catch.
+  const ARGV: Readonly<Record<string, readonly string[]>> = {
+    dev: ["would run:     expo start"],
+    lint: ["would run:     expo lint"],
+  };
+
+  it("renders the Metro lane's rows back to the argv the pack states", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-expo-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const verbs = detect(dir).lanes.find((lane): boolean => lane.lane === "expo")?.verbs;
+      expect(commandRows(verbs)).toEqual(Object.keys(ARGV).sort());
+      for (const [verb, lines] of Object.entries(ARGV)) {
+        const result = await capture([verb, "--dry-run", "--lane", "expo"], dir);
+        expect(result.code, verb).toBe(0);
+        expect(
+          result.out.filter((line): boolean => line.startsWith("would run:")),
+          verb,
+        ).toEqual(lines);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses the build seat at exit 4, quoting the pack's own sentence back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-seat-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const result = await capture(["build", "--dry-run", "--lane", "expo"], dir);
+      expect(result.code).toBe(4);
+      expect(result.err.join("\n")).toMatch(/PROPOSED SEAT -- replace it/);
+      expect(result.err.join("\n")).toMatch(
+        /Conflating the two would make `nen shu build` launch an app/,
+      );
+      // And nothing was spawned to find that out.
+      expect(result.out).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // THE OTHER END OF THE WITHHOLDING. `detect` refuses to propose the row; the
+  // executor refuses to run it when a maintainer pastes the pack's own line in
+  // unedited. Neither guess is available anywhere in the family.
+  it("refuses a pasted run:{platform} at exit 2, and runs the value once stated", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-platform-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const path = join(dir, "nen", "contract.json");
+      const declaration = JSON.parse(readFileSync(path, "utf8")) as {
+        project: { verbs: Record<string, Record<string, unknown>> };
+      };
+      const expo = declaration.project.verbs["expo"] ?? {};
+      declaration.project.verbs["expo"] = expo;
+      expo["run"] = { exe: "expo", argv: ["run:{platform}"], why: "the pack's row, unedited" };
+      writeFileSync(path, JSON.stringify(declaration, null, 2), "utf8");
+      const pasted = await capture(["run", "--dry-run", "--lane", "expo"], dir);
+      expect(pasted.code).toBe(2);
+      expect(pasted.err.join("\n")).toMatch(
+        /'run' on lane 'expo' names a placeholder nen cannot substitute: \{platform\}/,
+      );
+
+      // And the same row with the value STATED runs, which is the whole shape
+      // of the answer: the repository decides, and then nen executes it.
+      expo["run"] = { exe: "expo", argv: ["run:ios"], why: "this repository's own choice" };
+      writeFileSync(path, JSON.stringify(declaration, null, 2), "utf8");
+      const stated = await capture(["run", "--dry-run", "--lane", "expo"], dir);
+      expect(stated.code).toBe(0);
+      expect(stated.out.filter((line): boolean => line.startsWith("would run:"))).toEqual([
+        "would run:     expo run:ios",
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

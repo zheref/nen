@@ -1,0 +1,8 @@
+{
+  "expo": {
+    "name": "placeholder",
+    "slug": "placeholder",
+    "ios": { "bundleIdentifier": "io.example.placeholder" },
+    "android": { "package": "io.example.placeholder" }
+  }
+}

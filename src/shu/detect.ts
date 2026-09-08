@@ -103,11 +103,44 @@ const APP_CONFIG = /^app\.config\.(js|mjs|cjs|ts)$/;
 const XCWORKSPACE = /\.xcworkspace$/;
 const XCODEPROJ = /\.xcodeproj$/;
 const CSPROJ = /\.csproj$/;
+const XCSCHEME = /\.xcscheme$/;
 
 /** The one element that separates a WinUI app from every other .NET project. */
 const WINUI_MARKER = "<UseWinUI>";
 /** The key an app manifest carries when the project is an Expo one. */
 const EXPO_MANIFEST_KEY = "expo";
+
+/**
+ * The cloud-build profile file that sits beside an Expo manifest.
+ *
+ * EVIDENCE, NEVER AN IDENTIFICATION, and the difference is the whole reason it
+ * is a separate constant. The reference pack lists it as a marker that
+ * "identifies an Expo project on its own", and `detect` deliberately declines
+ * that half: a tree carrying only this file has stated a build service's
+ * configuration and not which manifest, lane or platform anything runs on, and
+ * a lane proposed from it would be nen deciding what kind of project this is
+ * from an ancillary file. So its presence is recorded as a SECOND marker of a
+ * lane the manifest already identified, and `detect` notes it -- because the
+ * pack's `archive` and `release` seats were written about repositories that had
+ * NONE, and a maintainer reading those seats against a tree that has one needs
+ * to be told the premise differs here.
+ */
+const EAS_CONFIG = "eas.json";
+
+/**
+ * Where a SHARED Xcode scheme lives, inside a `.xcworkspace` or `.xcodeproj`.
+ *
+ * A path, which is the one class of fact this module's header argues it may
+ * carry: `xcshareddata/xcschemes/` means the same thing in every Xcode
+ * repository on earth. What sits BESIDE it -- `xcuserdata/` -- is deliberately
+ * not read: a scheme in there belongs to one developer's checkout rather than
+ * to the repository, and proposing a row from it would propose a name a
+ * colleague's clone does not have.
+ */
+const SHARED_SCHEMES: readonly string[] = ["xcshareddata", "xcschemes"];
+
+/** The file an `.xcodeproj` bundle keeps its target list in. */
+const PBXPROJ = "project.pbxproj";
 
 /**
  * Every stack id `matchesIn` below can answer with.
@@ -138,8 +171,21 @@ export interface DetectedLane {
    * the order they were found. Usually one; a tree carrying `next.config.js`
    * AND `next.config.mjs` matches twice and is ONE lane with two markers, not
    * two lanes with one each.
+   *
+   * IDENTIFYING PATHS ONLY. A file the pack calls a marker that this scan
+   * declines to identify a lane from is not one of these -- it is `evidence`
+   * below, and mixing the two made `markers` a list a reader could not act on:
+   * "delete the marker and the lane goes away" is true of every entry here and
+   * false of every entry there.
    */
   readonly markers: readonly string[];
+  /**
+   * The repo-relative paths this lane CARRIES that the pack names as markers of
+   * its stack and that nen did NOT identify the lane from -- `eas.json` beside
+   * an Expo manifest is the one shape in the pack today. Empty for almost every
+   * lane, and never a reason a lane exists.
+   */
+  readonly evidence: readonly string[];
   /** The proposed per-verb argv, empty when nothing could be cross-checked. */
   readonly verbs: Readonly<Record<string, unknown>>;
   readonly notes: readonly string[];
@@ -337,6 +383,18 @@ function relativePath(repoRoot: string, path: string): string {
 interface Match {
   readonly stack: string;
   readonly marker: string;
+  /**
+   * Whether this marker is what ANSWERED the stack, or a second file recorded
+   * beside one that did.
+   *
+   * The distinction exists for exactly one shape today and is worth a field
+   * rather than a convention: a file the reference pack names as a marker, that
+   * this scan declines to identify a lane from, and whose presence still
+   * changes how a reader should read the pack's own seats. `detect()` turns
+   * every non-identifying marker into a note quoting the pack's reason for the
+   * marker, so the fact is never recorded silently.
+   */
+  readonly identifying: boolean;
 }
 
 // ── the host-tool stacks, read off the catalogue ────────────────────────────
@@ -625,7 +683,10 @@ function matchesIn(
   const nestedBuilds = new Set<string>();
   const found: Match[] = [];
   const add = (stack: string, marker: string): void => {
-    found.push({ stack, marker: relativePath(repoRoot, marker) });
+    found.push({ stack, marker: relativePath(repoRoot, marker), identifying: true });
+  };
+  const alsoCarries = (stack: string, marker: string): void => {
+    found.push({ stack, marker: relativePath(repoRoot, marker), identifying: false });
   };
 
   for (const name of names) {
@@ -638,13 +699,22 @@ function matchesIn(
   // JS/TS manifest form, which cannot be read without executing it, is
   // confirmed against the dependency the repository declares instead.
   const appJson = names.includes("app.json") ? readJson(join(directory, "app.json")) : null;
+  let expoManifest: string | null = null;
   if (appJson !== null && appJson[EXPO_MANIFEST_KEY] !== undefined) {
-    add("expo", join(directory, "app.json"));
+    expoManifest = join(directory, "app.json");
   } else {
     const appConfig = names.find((name): boolean => APP_CONFIG.test(name));
     if (appConfig !== undefined && dependsOn(readJson(join(directory, "package.json")), EXPO_MANIFEST_KEY)) {
-      add("expo", join(directory, appConfig));
+      expoManifest = join(directory, appConfig);
     }
+  }
+  if (expoManifest !== null) {
+    add("expo", expoManifest);
+    // THE CLOUD-BUILD PROFILE IS RECORDED AND NEVER IDENTIFIES. See EAS_CONFIG:
+    // the pack says it identifies a project on its own, and this scan declines
+    // that half deliberately -- so it is a second marker of a lane the manifest
+    // already answered, and `detect()` notes it against the pack's own seats.
+    if (names.includes(EAS_CONFIG)) alsoCarries("expo", join(directory, EAS_CONFIG));
   }
 
   // Apple: the workspace is PREFERRED over the project, because a tree carrying
@@ -920,6 +990,20 @@ const PACKAGE_NAME = "{package}";
  * value is read out of the repository being scanned.
  */
 const UNIT_TEST_TASK = "{unitTestTask}";
+
+/**
+ * The one placeholder whose REASON is read out of the working tree.
+ *
+ * IT IS NOT A FOURTH ANSWERED TOKEN, and the asymmetry is the point: the three
+ * above are substituted, and this one is never substituted at all. A row naming
+ * it stays withheld exactly as before; the token is listed here only because it
+ * tells `detect` that this lane is one whose scheme and project files are worth
+ * READING for the note (`appleReason`). Naming a token to decide what to read
+ * is the same class of fact as naming `turbo.json` to decide where a task list
+ * lives -- a filename, not a command -- and it keeps the file reads off every
+ * lane that has no such files.
+ */
+const SCHEME_NAME = "{scheme}";
 
 /** Every token the pack may use, so a leftover one can be named exactly. */
 const PACK_TOKENS: readonly string[] = PLACEHOLDERS.map(
@@ -2013,6 +2097,342 @@ function leftoverTokens(steps: readonly ProposedStep[]): readonly string[] {
   return PACK_TOKENS.filter((token): boolean => text.includes(token));
 }
 
+// ── what a withheld row can still SHOW a maintainer ─────────────────────────
+//
+// Nothing below this line ever proposes anything. Every function here runs only
+// after a row has ALREADY been withheld, and its whole output is text in that
+// row's note. The distinction matters more here than anywhere else in the file,
+// because both readers are deliberately WIDER than the ones that answer a
+// token: they read a word that merely CONTAINS a token, and they read files
+// (`.xcscheme`, `project.pbxproj`) that no substitution consults. Reading a
+// half-understood shape into a PROPOSAL is how a command acquires an argument
+// nobody wrote -- `scriptAnswers` refuses exactly that, one screen up, and this
+// section does not weaken it. Reading it into a REASON is the opposite: it is
+// the difference between "nen cannot answer {platform}" and "nen cannot answer
+// {platform}, and here are the two values your own scripts spell in that
+// position".
+
+/** A word that EMBEDS a pack token rather than being one, with its literal halves. */
+interface EmbeddedToken {
+  readonly token: string;
+  readonly index: number;
+  readonly prefix: string;
+  readonly suffix: string;
+}
+
+/**
+ * Every position of a step whose word wraps a token in literal text.
+ *
+ * `run:{platform}` and `id={simUdid}` are the two shapes in the pack, and both
+ * are invisible to every other reader in this file: `PACK_TOKEN_SET.has(word)`
+ * is false for each, so `scriptAnswers` skips the position and the row is
+ * withheld naming a token with nothing else said about it.
+ */
+function embeddedTokens(step: ProposedStep): readonly EmbeddedToken[] {
+  const words = [step.exe, ...step.argv];
+  const found: EmbeddedToken[] = [];
+  words.forEach((word, index): void => {
+    if (PACK_TOKEN_SET.has(word)) return;
+    for (const token of PACK_TOKENS) {
+      const at = word.indexOf(token);
+      if (at === -1) continue;
+      found.push({
+        token,
+        index,
+        prefix: word.slice(0, at),
+        suffix: word.slice(at + token.length),
+      });
+    }
+  });
+  return found;
+}
+
+/** One value a declared script spells where the pack wrote an embedded token. */
+interface EmbeddedValue {
+  readonly value: string;
+  readonly key: string;
+  readonly command: string;
+}
+
+/**
+ * The values this lane's own scripts spell in an embedded token's position.
+ *
+ * THE MATCH IS THE STRICTEST ONE THAT CAN SEE ANYTHING: same word count, every
+ * other position either identical or a whole token the pack wrote, and at the
+ * embedded position a word that opens with the pack's literal prefix, closes
+ * with its literal suffix, and has something of its own in between. Against
+ * `expo run:{platform}` a `"web": "expo start --web"` disagrees on arity, a
+ * `"lint": "expo lint"` disagrees on the prefix, and `"ios": "expo run:ios"`
+ * and `"android": "expo run:android"` each contribute one value.
+ *
+ * TWO VALUES ARE NOT AN AMBIGUITY TO RESOLVE, because there is nothing here to
+ * resolve: the row stays withheld either way. They are two facts to REPORT, and
+ * reporting both is the point -- neither native lane is the other's default,
+ * which is precisely why the pack templated the position instead of picking.
+ */
+function embeddedValues(
+  step: ProposedStep,
+  embedded: EmbeddedToken,
+  manifest: Manifest,
+): readonly EmbeddedValue[] {
+  const words = [step.exe, ...step.argv];
+  const seen = new Set<string>();
+  const values: EmbeddedValue[] = [];
+  for (const script of manifest.scriptWords) {
+    if (script.words.length !== words.length) continue;
+    let usable = true;
+    for (let index = 0; index < words.length; index += 1) {
+      if (index === embedded.index) continue;
+      const word = words[index] ?? "";
+      const part = script.words[index] ?? "";
+      if (word === part || PACK_TOKEN_SET.has(word)) continue;
+      usable = false;
+      break;
+    }
+    if (!usable) continue;
+    const spelled = script.words[embedded.index] ?? "";
+    if (!spelled.startsWith(embedded.prefix) || !spelled.endsWith(embedded.suffix)) continue;
+    const value = spelled.slice(
+      embedded.prefix.length,
+      spelled.length - embedded.suffix.length,
+    );
+    if (value === "" || seen.has(value)) continue;
+    seen.add(value);
+    values.push({ value, key: script.key, command: script.words.join(" ") });
+  }
+  return [...values].sort((a, b): number => compareBytes(a.value, b.value));
+}
+
+/** One shared scheme, and the targets its two actions name. */
+interface SchemeFinding {
+  readonly name: string;
+  /** Lane-relative, forward-slashed, so the note points at a file. */
+  readonly file: string;
+  readonly buildTargets: readonly string[];
+  readonly testTargets: readonly TestTarget[];
+}
+
+/** A scheme's test entry: the target it names, and the product that target builds. */
+interface TestTarget {
+  readonly blueprint: string;
+  readonly buildable: string;
+  /**
+   * The reference carries `skipped = "YES"`.
+   *
+   * KEPT, NOT DROPPED. A skipped testable is excluded from a plain run of the
+   * scheme and still NAMES a target that has to exist for the reference to
+   * resolve, so the cross-check applies to it exactly as it does to the rest.
+   * The note says which kind it found, because "the target is missing AND the
+   * scheme skips it" is a different job of work from "the target is missing".
+   */
+  readonly skipped: boolean;
+}
+
+/**
+ * What an Apple lane's own files say about itself.
+ *
+ * READ ONLY TO EXPLAIN A WITHHOLDING. Nothing here is ever substituted into a
+ * row: a scheme name is a fact about the repository, but WHICH scheme a verb
+ * means is a decision, and a lane with two shared schemes has not made it. So
+ * the reader collects and the note reports.
+ */
+interface AppleLane {
+  /** `.xcworkspace` bundles at the lane root, byte-ordered. */
+  readonly workspaces: readonly string[];
+  /** `.xcodeproj` bundles at the lane root, byte-ordered. */
+  readonly projects: readonly string[];
+  readonly schemes: readonly SchemeFinding[];
+  /**
+   * Every native target name declared across EVERY project in the lane, or
+   * `null` when nen could not read even one of them.
+   *
+   * `null` is a different fact from "the list is empty" and must never be
+   * reported as one -- a cross-check nen could not perform is not a cross-check
+   * that passed, and it is not one that failed either.
+   *
+   * ALL OR NOTHING, AND THAT IS THE POINT. An earlier draft merged whatever
+   * projects happened to parse and left the rest out, which made a PARTIAL
+   * target list indistinguishable from a complete one: a lane holding a
+   * readable `A.xcodeproj` beside an unparsable `B.xcodeproj` reported every
+   * scheme whose test target lives in B as BROKEN ON A CLEAN CHECKOUT, on the
+   * strength of a list that never asked B a thing. One unreadable project
+   * withholds the whole cross-check, and `unreadableProjects` says which.
+   */
+  readonly targets: ReadonlySet<string> | null;
+  /**
+   * The `.xcodeproj` bundles whose target list nen could not read, byte-ordered
+   * (a filtered view of `projects`, which is already in that order).
+   *
+   * Non-empty exactly when `targets` is `null` and the lane has a project at
+   * all, and the note names these rather than every project in the lane: a
+   * maintainer sent to check three files when one is unreadable is a maintainer
+   * sent to the wrong two.
+   */
+  readonly unreadableProjects: readonly string[];
+}
+
+const BLUEPRINT_NAME = /BlueprintName\s*=\s*"([^"]*)"/g;
+const TEST_ACTION = /<TestAction\b[\s\S]*?<\/TestAction>/;
+const BUILD_ACTION = /<BuildAction\b[\s\S]*?<\/BuildAction>/;
+/**
+ * The OPENING TAG of an element, attributes captured whole.
+ *
+ * `(?:[^>"]|"[^"]*")*` walks to the first `>` that is not inside a quoted
+ * value, which is what makes the two readers below element-scoped rather than
+ * text-scoped: an attribute is read out of the tag it was written in, and never
+ * out of the tag after it.
+ */
+const TESTABLE_OPEN = /<TestableReference\b((?:[^>"]|"[^"]*")*)>/g;
+const BUILDABLE_OPEN = /<BuildableReference\b((?:[^>"]|"[^"]*")*)>/;
+const TESTABLE_CLOSE = "</TestableReference>";
+/**
+ * One attribute, read out of ONE tag's captured attribute text.
+ *
+ * Each is matched independently and none of them assumes a position, because
+ * Xcode's own writer does not fix one: `BuildableName` precedes `BlueprintName`
+ * in a scheme it wrote today and a hand-edited file may spell either first.
+ */
+const BLUEPRINT_ATTRIBUTE = /\bBlueprintName\s*=\s*"([^"]*)"/;
+const BUILDABLE_ATTRIBUTE = /\bBuildableName\s*=\s*"([^"]*)"/;
+const SKIPPED_ATTRIBUTE = /\bskipped\s*=\s*"([^"]*)"/;
+/** The section an `.xcodeproj` lists its native targets in, by its own delimiters. */
+const NATIVE_TARGETS =
+  /\/\* Begin PBXNativeTarget section \*\/([\s\S]*?)\/\* End PBXNativeTarget section \*\//;
+/** `name = Foo;` or `name = "Foo Bar";` -- the two spellings a project file uses. */
+const TARGET_NAME = /\bname\s*=\s*(?:"([^"]*)"|([A-Za-z0-9_.+-]+))\s*;/g;
+
+function attributesIn(text: string, pattern: RegExp): readonly string[] {
+  const out: string[] = [];
+  for (const match of text.matchAll(new RegExp(pattern.source, "g"))) {
+    const value = match[1];
+    if (value !== undefined && value !== "" && !out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * The test targets a `<TestAction>` names, each paired with the product ITS OWN
+ * reference builds.
+ *
+ * ONE `<TestableReference>` IS ONE UNIT, and that is the whole of this reader.
+ * The draft it replaces swept the test action for every `BlueprintName` and
+ * every `BuildableName`, de-duplicated each list on its own, and paired the two
+ * BY INDEX -- a pairing that holds only when the lists come out the same length
+ * in the same order, which real schemes break three ways:
+ *
+ *   * TWO TEST BUNDLES BUILT FROM ONE PRODUCT repeat a `BuildableName`, and
+ *     de-duplication drops the repeat: every blueprint after it slid onto the
+ *     NEXT reference's product, so the clause sent a maintainer to a bundle
+ *     some other, perfectly present target builds.
+ *   * A `<MacroExpansion>` inside the test action names the APP target, not a
+ *     test one. Swept flat it became a test target of its own, and a scheme
+ *     whose test action is fine was reported BROKEN ON A CLEAN CHECKOUT.
+ *   * A `skipped = "YES"` REFERENCE was indistinguishable from a running one,
+ *     because `skipped` is written on the testable and the flat sweep never
+ *     visited it -- so a note could not say which of the two it had found.
+ *
+ * The finding this clause exists to make is "the scheme names a target your
+ * project has not got", and a finding that names the wrong pair is worse than
+ * no finding: it is a maintainer sent to edit a file that is not broken. So the
+ * reader DESCENDS -- only a `<BuildableReference>` inside a
+ * `<TestableReference>` is a test target at all, and both names come off the
+ * same element.
+ */
+function testTargetsIn(testSection: string): readonly TestTarget[] {
+  const found: TestTarget[] = [];
+  for (const opening of testSection.matchAll(TESTABLE_OPEN)) {
+    const attributes = opening[1] ?? "";
+    // A self-closing `<TestableReference ... />` carries no reference to read,
+    // and reading on to the next `</TestableReference>` would take the FOLLOWING
+    // block's element as this one's -- the very misassociation being fixed.
+    if (attributes.trimEnd().endsWith("/")) continue;
+    const from = (opening.index ?? 0) + opening[0].length;
+    const closes = testSection.indexOf(TESTABLE_CLOSE, from);
+    const element = BUILDABLE_OPEN.exec(closes === -1 ? "" : testSection.slice(from, closes))?.[1];
+    const blueprint = BLUEPRINT_ATTRIBUTE.exec(element ?? "")?.[1] ?? "";
+    // A reference naming no target names nothing to cross-check.
+    if (blueprint === "") continue;
+    const target: TestTarget = {
+      blueprint,
+      buildable: BUILDABLE_ATTRIBUTE.exec(element ?? "")?.[1] ?? "",
+      skipped: (SKIPPED_ATTRIBUTE.exec(attributes)?.[1] ?? "").toUpperCase() === "YES",
+    };
+    // DE-DUPLICATION IS PER PAIR, NEVER PER NAME. Two references to the same
+    // (target, product) are one finding printed once; two references sharing a
+    // product are two findings and must both survive. And a pair a scheme names
+    // once skipped and once not is NOT skipped -- the scheme runs it.
+    const already = found.findIndex(
+      (entry): boolean =>
+        entry.blueprint === target.blueprint && entry.buildable === target.buildable,
+    );
+    if (already === -1) found.push(target);
+    else if (!target.skipped) found[already] = target;
+  }
+  return found;
+}
+
+function readScheme(laneDirectory: string, container: string, file: string): SchemeFinding {
+  const path = join(laneDirectory, container, ...SHARED_SCHEMES, file);
+  const text = readText(path) ?? "";
+  const testSection = TEST_ACTION.exec(text)?.[0] ?? "";
+  const buildSection = BUILD_ACTION.exec(text)?.[0] ?? "";
+  return {
+    name: file.replace(XCSCHEME, ""),
+    file: [container, ...SHARED_SCHEMES, file].join("/"),
+    buildTargets: attributesIn(buildSection, BLUEPRINT_NAME),
+    testTargets: testTargetsIn(testSection),
+  };
+}
+
+/** Every native target an `.xcodeproj` declares, or null when nen cannot tell. */
+function readTargets(laneDirectory: string, project: string): ReadonlySet<string> | null {
+  const text = readText(join(laneDirectory, project, PBXPROJ));
+  if (text === null) return null;
+  const section = NATIVE_TARGETS.exec(text)?.[1];
+  // FAIL CLOSED. A project file whose target section nen cannot find is one nen
+  // knows nothing about, and answering "no targets" from it would report every
+  // scheme in the lane as broken on the strength of an unfamiliar file format.
+  if (section === undefined) return null;
+  const targets = new Set<string>();
+  for (const match of section.matchAll(TARGET_NAME)) {
+    const name = match[1] ?? match[2];
+    if (name !== undefined && name !== "") targets.add(name);
+  }
+  return targets;
+}
+
+function readAppleLane(laneDirectory: string): AppleLane {
+  const entries = listDirectory(laneDirectory)
+    .filter((entry): boolean => entry.directory)
+    .map((entry): string => entry.name);
+  const workspaces = entries.filter((name): boolean => XCWORKSPACE.test(name));
+  const projects = entries.filter((name): boolean => XCODEPROJ.test(name));
+  const schemes: SchemeFinding[] = [];
+  for (const container of [...workspaces, ...projects]) {
+    for (const entry of listDirectory(join(laneDirectory, container, ...SHARED_SCHEMES))) {
+      if (entry.directory || !XCSCHEME.test(entry.name)) continue;
+      schemes.push(readScheme(laneDirectory, container, entry.name));
+    }
+  }
+  // THE UNION IS ALL OR NOTHING. Skipping the projects that would not parse
+  // and merging the rest builds a target list that LOOKS complete and is not,
+  // and `appleReason` reads a complete list as licence to call a scheme broken.
+  // So one unreadable project withholds the cross-check for the whole lane, and
+  // the names are kept so the note can say which file to go and look at.
+  let merged: Set<string> | null = null;
+  const unreadableProjects: string[] = [];
+  for (const project of projects) {
+    const declared = readTargets(laneDirectory, project);
+    if (declared === null) {
+      unreadableProjects.push(project);
+      continue;
+    }
+    merged = new Set([...(merged ?? []), ...declared]);
+  }
+  const targets = unreadableProjects.length > 0 ? null : merged;
+  return { workspaces, projects, schemes, targets, unreadableProjects };
+}
+
 /** What a `run <task>` in a step names, and WHO is being asked to run it. */
 interface RunClause {
   /** The program the task is handed to: the word before `run`. */
@@ -2204,6 +2624,176 @@ function packageReason(manifest: Manifest): string {
 }
 
 /**
+ * The reason clause an EMBEDDED token earns, or "" when nothing was found.
+ *
+ * WHY THIS IS WORTH A CLAUSE AND NOT A SHRUG. A withheld row naming
+ * `{platform}` tells a maintainer that nen will not guess and nothing else --
+ * yet the same manifest that failed to answer the token spells both of the
+ * values out, one per script, and a reader can see it in five seconds. The
+ * clause closes exactly that gap: it names every value the lane's own scripts
+ * put in that position, quotes the script that says so, and then says the one
+ * thing that has not changed -- nen is not choosing between them.
+ *
+ * IT NAMES WHERE THE ANSWER GOES, because a note that stops at "state it
+ * yourself" makes a reader go looking for the field. The row's own address in
+ * the declaration is `project.verbs.<lane>.<verb>`, which is where the proposal
+ * this note is printed beside already puts it.
+ */
+function embeddedReason(
+  steps: readonly ProposedStep[],
+  manifest: Manifest,
+  lane: string,
+  verb: string,
+): string {
+  const clauses: string[] = [];
+  for (const step of steps) {
+    for (const embedded of embeddedTokens(step)) {
+      const values = embeddedValues(step, embedded, manifest);
+      if (values.length === 0) continue;
+      clauses.push(
+        ` -- this lane's own scripts spell ${embedded.token}'s position ${
+          values.length === 1 ? "one way" : `${values.length} ways`
+        } (${values
+          .map((found): string => `${found.value}, in '${found.key}': ${found.command}`)
+          .join("; ")}), so nen can SEE the value${values.length === 1 ? "" : "s"} and still will not pick${
+          values.length === 1 ? " it up" : " one"
+        }: a script is what this repository runs by hand, and which of them a verb MEANS is a decision. State it under project.verbs.${lane}.${verb}${
+          values.length === 1 ? "" : ", or give each value a lane of its own"
+        }`,
+      );
+    }
+  }
+  return clauses.join("");
+}
+
+/**
+ * One missing test target, as the note names it: the blueprint the scheme
+ * asked for, then whatever else THAT SAME reference says about it.
+ *
+ * The product is the maintainer's landmark -- it is the name that appears in
+ * Xcode's own scheme editor beside the target -- so it is printed when the
+ * reference carries one, and printed from the reference that carried it.
+ * `skipped` is reported rather than filtered out or left silent: a skipped
+ * testable still names a target that must resolve, and a maintainer weighing
+ * "add the target" against "drop the reference" needs to know the scheme was
+ * not going to run it anyway.
+ */
+function testTargetLabel(target: TestTarget): string {
+  const aside = [target.buildable, target.skipped ? "skipped by the scheme" : ""].filter(
+    (part): boolean => part !== "",
+  );
+  return `'${target.blueprint}'${aside.length === 0 ? "" : ` (${aside.join(", ")})`}`;
+}
+
+/**
+ * The reason clause an Apple lane earns for a row still naming `{scheme}`.
+ *
+ * THE ROW IS WITHHELD EITHER WAY -- a destination and a simulator UDID are
+ * facts about the MACHINE that will run the command, and `detect` reads the
+ * working tree and spawns nothing. What this clause adds is everything the tree
+ * DOES say, and one thing it says that a maintainer filling the tokens in would
+ * otherwise discover from a failing build:
+ *
+ *   * THE SHARED SCHEMES, by name and by file, because that is the value the
+ *     row is missing and it is sitting in the checkout. Nen names them and does
+ *     not substitute one: a lane with two schemes has not said which a verb
+ *     means, and a lane with one has not said it either -- it has only made the
+ *     guess look safe.
+ *   * THE SCHEME'S OWN TEST ACTION AGAINST THE PROJECT'S TARGET LIST, which is
+ *     the finding this clause exists for. A scheme naming a test target the
+ *     project does not contain fails `test` on a CLEAN CHECKOUT, so the row is
+ *     not one token away from working -- it is broken upstream of the token,
+ *     and a note that named only the token would send a maintainer to fix the
+ *     wrong thing. The claim is made only from a COMPLETE target list: one
+ *     project file nen cannot parse yields `targets: null` for the whole lane,
+ *     and this names that file rather than reporting every scheme as broken
+ *     against the projects that happened to parse.
+ *   * WHICH CONTAINER THE LANE IS, because the reference row's own flag is for
+ *     a project and a CocoaPods lane is addressed as a workspace. That is the
+ *     pack's own warning about the token, restated against what is here.
+ */
+function appleReason(lane: AppleLane, leftover: readonly string[]): string {
+  const clauses: string[] = [];
+
+  if (lane.schemes.length === 0) {
+    clauses.push(
+      ` -- nen found no SHARED scheme in this lane (it looks in <container>/${SHARED_SCHEMES.join(
+        "/",
+      )}/, and a scheme under xcuserdata/ is one developer's checkout rather than this repository's), so there is nothing here for a reader to copy either`,
+    );
+  } else {
+    clauses.push(
+      ` -- the shared scheme${lane.schemes.length === 1 ? "" : "s"} nen can see here ${
+        lane.schemes.length === 1 ? "is" : "are"
+      } ${lane.schemes
+        .map((scheme): string => `'${scheme.name}' (${scheme.file})`)
+        .join(", ")}, and nen names ${
+        lane.schemes.length === 1 ? "it" : "them"
+      } rather than substituting: which scheme a verb means is this repository's decision, not a count`,
+    );
+  }
+
+  const targets = lane.targets;
+  if (targets === null && lane.projects.length > 0) {
+    const unreadable = lane.unreadableProjects;
+    const readable = lane.projects.filter((project): boolean => !unreadable.includes(project));
+    clauses.push(
+      ` -- nen could not read a native-target list out of ${unreadable
+        .map((project): string => `${project}/${PBXPROJ}`)
+        .join(
+          ", ",
+        )}, so it makes NO claim about whether this lane's schemes name targets that exist: a cross-check nen could not perform is not one that passed${
+        readable.length === 0
+          ? ""
+          : // THE PARTIAL READ IS THE INTERESTING CASE, so it says out loud that
+            // the readable projects were dropped ON PURPOSE. A maintainer who
+            // can see nen parsed A.xcodeproj would otherwise read the silence
+            // as "and A's targets checked out fine", which is the claim this
+            // whole clause exists to refuse.
+            `. ${readable.join(", ")} did parse, and ${
+              readable.length === 1 ? "its target list is" : "their target lists are"
+            } WITHHELD ALL THE SAME: a scheme's test target may live in the project nen could not read, so measuring these schemes against a target list missing ${
+              unreadable.length === 1 ? "one project" : "those projects"
+            } would report a working scheme as broken`
+      }`,
+    );
+  } else if (targets !== null) {
+    const broken = lane.schemes
+      .map((scheme): { scheme: SchemeFinding; missing: readonly TestTarget[] } => ({
+        scheme,
+        missing: scheme.testTargets.filter((target): boolean => !targets.has(target.blueprint)),
+      }))
+      .filter((entry): boolean => entry.missing.length > 0);
+    for (const { scheme, missing } of broken) {
+      clauses.push(
+        // THE FILE IS NAMED, NOT JUST THE SCHEME. A repository may keep a
+        // scheme of the same name in its `.xcworkspace` AND its `.xcodeproj`,
+        // and two byte-identical paragraphs read as one printed twice rather
+        // than as two findings about two files a maintainer must edit apart.
+        ` -- AND THAT SCHEME'S TEST ACTION IS BROKEN ON A CLEAN CHECKOUT: '${scheme.name}' (${scheme.file}) names ${missing
+          .map(testTargetLabel)
+          .join(", ")} in its test action, and this lane's project declares no such target -- it declares ${
+          targets.size === 0
+            ? "none nen could read"
+            : [...targets].sort(compareBytes).join(", ")
+        }. That is a finding about the CHECKOUT rather than about this proposal -- a test on that scheme fails before ${leftover.join(
+          ", ",
+        )} matters, because the scheme asks for a target the project does not contain`,
+      );
+    }
+  }
+
+  if (lane.workspaces.length > 0) {
+    clauses.push(
+      ` -- and this lane's container is a WORKSPACE (${lane.workspaces.join(
+        ", ",
+      )}), which the reference row's own flag does not address: the pack states that the flag changes with the container, so the value here is not simply that path`,
+    );
+  }
+  return clauses.join("");
+}
+
+/**
  * The pack's reference verbs for this lane, substituted and cross-checked, plus
  * a note for every row that was withheld and the reason it was.
  *
@@ -2263,6 +2853,11 @@ function proposeVerbs(
   const declaredOnly: string[] = [];
   const scope = laneScope(repoRoot, laneDirectory, hostStack);
   const hostResolved = new Map<string, string>();
+  // READ ONCE, AND ONLY WHERE A ROW ASKS FOR IT. Three of this stack's rows
+  // name the same token and would otherwise walk the same bundles three times,
+  // and a lane no row of which names it never opens a directory at all.
+  let apple: AppleLane | null = null;
+  const appleLane = (): AppleLane => (apple ??= readAppleLane(laneDirectory));
 
   for (const verb of pack.commandVerbs) {
     const cell = verbCell(profile, verb);
@@ -2383,6 +2978,13 @@ function proposeVerbs(
             : " -- package.json declares no 'packageManager' field, which is where nen reads that one from"
           : "",
         leftover.includes(PACKAGE_NAME) ? packageReason(manifest) : "",
+        // THE VALUES THE LANE'S OWN SCRIPTS SPELL where the pack embedded a
+        // token in a longer word, and the SCHEME/TARGET reading for a lane
+        // whose row names one. Both are note-only: see the section header above
+        // `embeddedTokens`. The Apple read is gated on the token so that no
+        // lane without such a row ever touches the filesystem for it.
+        embeddedReason(steps, manifest, lane, verb),
+        leftover.includes(SCHEME_NAME) ? appleReason(appleLane(), leftover) : "",
         // THE NEAR MISS IS NAMED. A script that agreed by word count and that
         // nothing corroborated is the most useful thing nen can say here: it is
         // the row a maintainer either confirms in one edit or recognises as the
@@ -2593,6 +3195,152 @@ function proposeVerbs(
   return { verbs, notes };
 }
 
+/**
+ * A note for every marker this lane CARRIES and was not IDENTIFIED by.
+ *
+ * ONE SHAPE PRODUCES ONE TODAY and the mechanism is still general, which is the
+ * right way round: `matchesIn` decides what is evidence and what identifies,
+ * and this reads the pack for the reason rather than restating it. A lane with
+ * a single marker -- every lane in the reference set but one -- produces
+ * nothing here, so no stack acquires a note by accident.
+ *
+ * WHAT THE NOTE IS FOR. The pack's `unsupported` seats quote observations about
+ * the repositories the catalogue read, and a maintainer meeting one in their own
+ * proposal has no way to tell which of those observations still holds. A file
+ * that is HERE and that the catalogue recorded as absent is exactly that signal,
+ * and it is the one a reader can act on: the seat is not merely a seat, it is a
+ * seat whose stated reason is already untrue of this tree.
+ */
+function evidenceNotes(profile: StackProfile, matches: readonly Match[]): readonly string[] {
+  const notes: string[] = [];
+  for (const match of matches) {
+    if (match.identifying) continue;
+    const name = match.marker.split("/").pop() ?? match.marker;
+    // The pattern is matched WHOLE and never globbed. A pack pattern carrying a
+    // `*` simply finds nothing here, which is honest: this file has no glob
+    // engine, and half-expanding one is how a note starts describing a file
+    // that is not there.
+    const declared = profile.markers.find((marker): boolean => marker.pattern === name);
+    /* c8 ignore next -- every evidence marker `matchesIn` records is one the pack declares */
+    if (declared === undefined) continue;
+    notes.push(
+      `this lane also carries ${match.marker}, which the reference pack names as a marker of this stack and which nen did NOT identify the lane from -- a lane proposed from that file alone would be nen deciding what kind of project this is from an ancillary one. It is reported because the pack's own seats below were written about repositories that had none, so a seat whose quoted reason turns on its absence is the first row to distrust here. The pack's reason for the marker: ${declared.why}`,
+    );
+  }
+  return notes;
+}
+
+/**
+ * A marker pattern that could name a CHILD DIRECTORY rather than a file in the
+ * lane: a single bare segment, no extension and no glob.
+ *
+ * THE CLASSIFICATION IS SYNTACTIC AND IT FAILS CLOSED, which is why a rule this
+ * blunt is safe here. Three patterns in the whole pack match it -- `ios` and
+ * `android` (expo), which are directories, and `gradlew` (gradle-android) and
+ * `Podfile` (xcode-ios), which are files. Reading a FILE as a directory marker
+ * can only make `nestedLaneNote` fire LESS: the gate below demands that every
+ * such pattern be present as a nested LANE, and no tree produces a lane whose
+ * directory is named `gradlew`. The misreading that would matter is the other
+ * one -- a directory read as a file, which would let the note fire on a partly
+ * met conjunction -- and it cannot happen for a pattern the pack writes as a
+ * bare name, because that is the only shape a lane's own directory name takes
+ * in the marker table.
+ */
+const DIRECTORY_MARKER = /^[^./\\*?{}[\]]+$/;
+
+/**
+ * The note a lane earns for the lanes found INSIDE it, when its own profile
+ * declares those directories as markers.
+ *
+ * THE GATE IS THE PACK'S MARKER TABLE, IN FULL, and both halves of that matter.
+ *
+ *   * IT IS THE MARKER TABLE rather than the nesting, which is what keeps this
+ *     from firing on every nested lane in existence. A workspace root with two
+ *     member lanes under `apps/` is a nesting nen already explains a different
+ *     way (the member list in `{package}`'s reason), and calling those two
+ *     "native siblings" would be nonsense. A profile that names a child
+ *     DIRECTORY among its own markers has said something much narrower: that
+ *     the directory being there means this lane is of a particular kind.
+ *   * IT IS THE TABLE IN FULL -- EVERY directory the profile names must be
+ *     present as a nested lane -- because the pack's `why` is a CONJUNCTION
+ *     ("`ios/` AND `android/` both present means the BARE workflow") and a note
+ *     that fires on `ios/` alone quotes a sentence that is not true of the tree
+ *     in front of it. A half-met conjunction is not a weaker version of the
+ *     claim; it is a different tree, and nen says nothing about it.
+ *
+ * THE PAYLOAD IS THE DECLARED CHILDREN AND NOTHING ELSE. An unrelated lane that
+ * happens to sit one directory down -- a `site/` Next.js build beside a bare
+ * Expo tree -- is not generated native output, and describing it as such was
+ * this note's first bug. Other nested lanes are still worth naming, so they get
+ * a clause of their own that says exactly what nen knows about them: the
+ * profile's markers do not name them, so nen relates them to nothing.
+ *
+ * WHAT THE READER GETS THAT THE LANE LIST DOES NOT ALREADY SAY: three lanes in
+ * one tree read as three independent builds, and `defaultLane: null` reads as
+ * nen being unable to choose. Neither is what this is. The native lanes are the
+ * SAME application, generated, and the verbs that drive them may well belong on
+ * the parent lane -- which is a decision, so nen states the relationship and
+ * makes none of it.
+ */
+function nestedLaneNote(
+  parent: DetectedLane,
+  parentProfile: StackProfile,
+  lanes: readonly DetectedLane[],
+): string | null {
+  const prefix = parent.cwd === "." ? "" : `${parent.cwd}/`;
+  const children = lanes.filter(
+    (lane): boolean =>
+      lane !== parent &&
+      lane.cwd.startsWith(prefix) &&
+      !lane.cwd.slice(prefix.length).includes("/") &&
+      lane.cwd !== parent.cwd,
+  );
+  const directoryMarkers = parentProfile.markers.filter((marker): boolean =>
+    DIRECTORY_MARKER.test(marker.pattern),
+  );
+  if (directoryMarkers.length === 0) return null;
+  const declared = directoryMarkers.map(
+    (marker): { lane: DetectedLane | undefined; pattern: string; why: string } => ({
+      lane: children.find((lane): boolean => lane.cwd.slice(prefix.length) === marker.pattern),
+      pattern: marker.pattern,
+      why: marker.why,
+    }),
+  );
+  // THE CONJUNCTION, ENFORCED. One missing directory and nen says nothing:
+  // the sentence this note quotes is about a tree that has them all.
+  if (declared.some((entry): boolean => entry.lane === undefined)) return null;
+  // The LANES are listed in the order the scan found them (byte-ordered by
+  // directory), and the MARKERS in the order the pack's own table states them.
+  // Both are fixed, so one tree always prints one sentence.
+  const named = new Set(declared.map((entry): string => entry.pattern));
+  const siblings = children.filter((lane): boolean => named.has(lane.cwd.slice(prefix.length)));
+  const others = children.filter((lane): boolean => !named.has(lane.cwd.slice(prefix.length)));
+  const one = siblings.length === 1;
+  const unrelated =
+    others.length === 0
+      ? ""
+      : ` nen also found ${others
+          .map((lane): string => `'${lane.lane}' (${lane.stack}, cwd ${lane.cwd})`)
+          .join(", ")} directly inside '${parent.lane}', and says nothing of the kind about ${
+          others.length === 1 ? "it" : "them"
+        }: this profile's markers do not name ${
+          others.length === 1 ? "that directory" : "those directories"
+        }, so nen relates ${others.length === 1 ? "it" : "them"} to nothing.`;
+  return `the lane '${parent.lane}' names ${declared
+    .map((entry): string => `'${entry.pattern}'`)
+    .join(" AND ")} among its OWN markers, and nen found a lane in ${
+    one ? "it" : "each of them"
+  }: ${siblings
+    .map((lane): string => `'${lane.lane}' (${lane.stack}, cwd ${lane.cwd})`)
+    .join(
+      ", ",
+    )}. ${one ? "It is a SIBLING LANE" : "They are SIBLING LANES"} of one application rather than ${
+    one ? "a separate project" : "separate projects"
+  }: generated native output committed beside the manifest that generates it. nen proposes each with its own stack's rows and relates them here without merging them -- whether a verb on '${parent.lane}' should drive a native lane, and which one, is a decision this repository makes.${unrelated} The pack's own ${
+    declared.length === 1 ? "reason for the marker" : "reasons for the markers"
+  }: ${declared.map((entry): string => `'${entry.pattern}' -- ${entry.why}`).join(" ")}`;
+}
+
 /** The `hosts` map a set of lanes agrees on, or null when they disagree. */
 function hostSignature(hosts: Readonly<Record<string, readonly string[]>>): string {
   return JSON.stringify(
@@ -2628,10 +3376,10 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
     // ONE LANE PER STACK PER DIRECTORY, whatever the marker count. A tree with
     // both `next.config.js` and `next.config.mjs` matched twice and used to
     // become two lanes, the second with a name nobody could have predicted.
-    const byStack = new Map<string, string[]>();
+    const byStack = new Map<string, Match[]>();
     for (const match of matches) {
       const markers = byStack.get(match.stack) ?? [];
-      markers.push(match.marker);
+      markers.push(match);
       byStack.set(match.stack, markers);
     }
     const stacks = [...byStack.keys()].sort(compareBytes);
@@ -2654,15 +3402,36 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
         platform,
         hostStacks.find((entry): boolean => entry.stack === stack),
       );
+      const found = byStack.get(stack) ?? [];
       lanes.push({
         lane,
         stack,
         cwd,
-        markers: byStack.get(stack) ?? [],
+        markers: found
+          .filter((match): boolean => match.identifying)
+          .map((match): string => match.marker),
+        evidence: found
+          .filter((match): boolean => !match.identifying)
+          .map((match): string => match.marker),
         verbs: proposed.verbs,
-        notes: proposed.notes,
+        // THE EVIDENCE-ONLY MARKERS COME FIRST, because they change how the
+        // rows BELOW them should be read: a seat whose quoted reason turns on a
+        // file this tree actually has is the first row a maintainer should
+        // distrust, and a note about it printed after eleven rows is a note
+        // read too late.
+        notes: [...evidenceNotes(profile, found), ...proposed.notes],
       });
     }
+  }
+
+  // The lanes a lane's OWN profile says should be there, related before the
+  // generic "several lanes were found" note below reads them as rivals.
+  for (const lane of lanes) {
+    const profile = profiles.get(lane.lane);
+    /* c8 ignore next -- every lane pushed above has its profile recorded */
+    if (profile === undefined) continue;
+    const note = nestedLaneNote(lane, profile, lanes);
+    if (note !== null) notes.push(note);
   }
 
   if (lanes.length > 0) {
@@ -2711,6 +3480,23 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
   let hosts: Readonly<Record<string, readonly string[]>> = {};
   if (signatures.size === 1 && lanes[0] !== undefined) {
     hosts = profiles.get(lanes[0].lane)?.hosts ?? {};
+    // THE PACK'S OWN QUALIFICATION OF THE BLOCK NEN JUST WROTE. `hosts` is a
+    // machine-readable allowlist keyed by verb, and the pack states in prose
+    // what that shape cannot: a managed Expo tree is written `{"*": [darwin,
+    // linux, win32]}` while the pack's note says `expo run:ios` needs macOS.
+    // Nen writes the row the pack states and prints the sentence beside it --
+    // narrowing the row from the note would be nen deciding a platform policy
+    // from prose, and dropping the note leaves the reader the row alone.
+    for (const stack of [...new Set(lanes.map((lane): string => lane.stack))].sort(compareBytes)) {
+      const note = profiles.get(
+        lanes.find((lane): boolean => lane.stack === stack)?.lane ?? "",
+      )?.hostNote;
+      /* c8 ignore next -- every lane's stack has a profile, and every profile a hostNote */
+      if (note === undefined || note === "") continue;
+      notes.push(
+        `the proposed 'hosts' block is the reference pack's own for the ${stack} stack, and it is an ALLOWLIST nen refuses to start outside -- not a claim that every platform in it can do every part of every verb. The pack's own note on the platforms: ${note}`,
+      );
+    }
   } else if (signatures.size > 1) {
     notes.push(
       `the lanes need different platforms (${lanes
@@ -2808,6 +3594,9 @@ export function renderDetect(report: DetectReport): readonly string[] {
   for (const lane of report.lanes) {
     lines.push(`  ${lane.lane}  (${lane.stack})  cwd ${lane.cwd}`);
     for (const marker of lane.markers) lines.push(`        marker: ${marker}`);
+    // PRINTED APART FROM THE MARKERS, under a word that says what it is: this
+    // file did not make the lane, and a reader who deletes it still has a lane.
+    for (const carried of lane.evidence) lines.push(`        evidence: ${carried}`);
     // THE TWO KINDS OF PROPOSED ROW ARE PRINTED APART, because they ask the
     // reader for opposite things: a command row is one to keep or correct, and
     // an `unsupported` row is a seat this repository's own answer goes into.
