@@ -37,15 +37,15 @@ on any integrity gap (unfetchable manifest, missing entry, digest mismatch)
 rather than falling back to an unverified download:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.2.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.2.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.3.0
 ```
 
 It prints the path to a verified, executable binary on stdout and nothing
 else, so it composes directly:
 
 ```
-nen="$(bash nen-bootstrap.sh --ref v0.2.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
 "$nen" --version
 ```
 
@@ -114,11 +114,11 @@ shell profile, or a CI job's setup step — and reuse the path; `nen bootstrap`
 is the in-CLI form of the same fetch, for re-pinning from an existing checkout:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.2.0)" && "$nen" --version
-nen bootstrap --ref v0.2.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.3.0)" && "$nen" --version
+nen bootstrap --ref v0.3.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
-Once a release is published for `v0.2.0`, the first prints `0.2.0`. Until then
+Once a release is published for `v0.3.0`, the first prints `0.3.0`. Until then
 both refuse at exit 6 — the tag exists but no release does, so there is no
 `SHA256SUMS` to verify a binary against, and assets exist only once a release
 is published, as [Install](#install) says. `--ref v0.1.0` resolves today.
@@ -286,9 +286,11 @@ nen: 'gh api repos/owner/name/pulls --jq '.[].number'' classifies as unknown ...
 [`docs/USAGE.md`](docs/USAGE.md) has every verb's arguments, exit codes and
 `--json` shape — `pr next-blocker`, `release preflight`, `tag cut` and the rest
 — plus six end-to-end workflows and a [day-to-day actions
-table](docs/USAGE.md#day-to-day-actions--todays-verbs): stack-aware developer
-verbs (`build`, `test`, `lint`, `dev`, `run`, `deploy`) do not exist in this
-release, and are tracked in [#91](https://github.com/zheref/nen/issues/91).
+table](docs/USAGE.md#day-to-day-actions--todays-verbs): the stack-aware
+developer verbs (`build`, `test`, `lint`, `dev`, `run`, `deploy`) ship in this
+release under the `nen shu` family, alongside `scaffold init` and `scaffold
+new`, which write the `nen/contract.json` those verbs read — proposed in
+[#91](https://github.com/zheref/nen/issues/91).
 
 ## The one-surface contract
 

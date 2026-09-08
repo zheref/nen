@@ -19,6 +19,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadProfilesPack, profileById } from "../profiles/pack.js";
 import { VerbUsageError } from "../cli/command.js";
+import { VERSION } from "../version.js";
 import {
   TEMPLATE_DIRECTORY,
   TEMPLATE_FILE,
@@ -488,11 +489,32 @@ describe("substitute", () => {
 // ── the ref a generated workflow may pin nen at ─────────────────────────────
 
 describe("templates/index.json's minimumNenRef", () => {
-  const CHANGELOG = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+  // `* text=auto` in .gitattributes leaves the working-tree line ending to the
+  // platform, so a Windows checkout hands this file CRLF and a heading captured
+  // by `(.+)$` below would carry a trailing `\r`. Normalise once, here, for the
+  // same reason ../cli/surface.test.ts does.
+  const CHANGELOG = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8").replace(/\r\n/g, "\n");
 
   /** Every released heading, newest first. `## vX.Y.Z -- <date>`. */
   const released = [...CHANGELOG.matchAll(/^## (v\d+\.\d+\.\d+)/gm)].map(
     (match): string => match[1] as string,
+  );
+
+  /** Every `## ` section in document order (newest first): its title and body. */
+  const heads = [...CHANGELOG.matchAll(/^## (.+)$/gm)];
+  const sections = heads.map((head, index): { title: string; body: string } => ({
+    title: (head[1] as string).trim(),
+    body: CHANGELOG.slice(
+      (head.index as number) + head[0].length,
+      index + 1 < heads.length
+        ? ((heads[index + 1] as RegExpMatchArray).index as number)
+        : CHANGELOG.length,
+    ),
+  }));
+
+  /** Newest first, so the LAST section naming the family is the earliest one. */
+  const carriers = sections.filter((section): boolean =>
+    section.body.includes("new family `nen shu`"),
   );
 
   it("is a well-formed tag with a reason beside it", () => {
@@ -501,35 +523,56 @@ describe("templates/index.json's minimumNenRef", () => {
     expect(minimum.why.length).toBeGreaterThan(80);
   });
 
-  it("is NEWER than every release the CHANGELOG has published", () => {
-    // THE GIT-FREE EVIDENCE, AND THE ARGUMENT FOR CHOOSING IT. The question the
-    // minimum answers is "which release first carried the verbs these templates
-    // call", and this repository has exactly one artifact that records when a
-    // verb SHIPPED: CHANGELOG.md, whose `## vX.Y.Z` headings are the published
-    // releases and whose `## Unreleased` section is what has not shipped yet. A
-    // constant in src/shu/command.ts was the alternative and is worse twice
-    // over -- it is a second place to write a fact that already has a place,
-    // and it would record what a developer TYPED rather than what was
-    // RELEASED, which is the fact the bootstrap actually depends on.
-    // `git ls-tree v0.2.0` is the direct evidence and is not available to a
-    // test: this suite runs on three platforms, on a checkout that may be
-    // shallow, with no network.
+  it("names a PUBLISHED release, no newer than this build's own version", () => {
+    // THE RULE, AND WHY IT CHANGED IN v0.3.0. The question the minimum answers
+    // is "which release first carried the verbs these templates call", and this
+    // repository has exactly one artifact that records when a verb SHIPPED:
+    // CHANGELOG.md, whose `## vX.Y.Z` headings are the published releases and
+    // whose `## Unreleased` section is what has not shipped yet. A constant in
+    // src/shu/command.ts was the alternative and is worse twice over -- it is a
+    // second place to write a fact that already has a place, and it would record
+    // what a developer TYPED rather than what was RELEASED, which is the fact
+    // the bootstrap actually depends on. `git ls-tree v0.3.0` is the direct
+    // evidence and is not available to a test: this suite runs on three
+    // platforms, on a checkout that may be shallow, with no network.
+    //
+    // WHAT THIS USED TO ASSERT, AND WHY THAT WAS TEMPORARY. Until v0.3.0 was
+    // cut, `nen shu` sat under `## Unreleased` and the minimum named a version
+    // that did not exist yet, so the rule was "STRICTLY NEWER than every
+    // released heading". That rule expires the moment the release it names is
+    // rolled into the CHANGELOG -- it would demand the minimum step forward to a
+    // version nobody has built, on every release, forever. The durable
+    // invariant is the one the minimum actually means: it names a version this
+    // binary can be (`minimum <= VERSION`) and, in the test below, the FIRST
+    // release whose section carries the family. `>` became `<=` against
+    // `v${VERSION}` and `toContain` against the released headings; nothing about
+    // templates/index.json's data moved.
     expect(released.length, "the changelog must carry released headings").toBeGreaterThan(0);
-    for (const version of released) {
-      expect(
-        compareNenRefs(minimumNenRef().ref, version),
-        `${minimumNenRef().ref} must be newer than the released ${version}`,
-      ).toBeGreaterThan(0);
-    }
+    expect(released, "the minimum must name a release the CHANGELOG has published").toContain(
+      minimumNenRef().ref,
+    );
+    expect(
+      compareNenRefs(minimumNenRef().ref, `v${VERSION}`),
+      `${minimumNenRef().ref} must not be newer than this build's own v${VERSION}`,
+    ).toBeLessThanOrEqual(0);
   });
 
-  it("is justified: the shu family is announced under '## Unreleased', not under a release", () => {
-    const firstRelease = `## ${released[0] as string}`;
-    const unreleased = CHANGELOG.slice(CHANGELOG.indexOf("## Unreleased"), CHANGELOG.indexOf(firstRelease));
-    expect(unreleased).toContain("new family `nen shu`");
-    // ...and nowhere in a released section, which is what makes "no published
-    // release carries these verbs" an observation rather than a claim.
-    expect(CHANGELOG.slice(CHANGELOG.indexOf(firstRelease))).not.toContain("new family `nen shu`");
+  it("is justified: it names the FIRST release whose section carries the `shu` family", () => {
+    expect(carriers.length, "some section must announce the family").toBeGreaterThan(0);
+    // Sections are newest first, so the earliest announcement is the last one.
+    const earliest = carriers[carriers.length - 1] as { title: string; body: string };
+    expect(earliest.title, "the family must be announced under a release, not `Unreleased`").toMatch(
+      /^v\d+\.\d+\.\d+/,
+    );
+    expect(earliest.title.startsWith(`${minimumNenRef().ref} `)).toBe(true);
+    // ...and nowhere in a section OLDER than that one, which is what makes "this
+    // is the first release carrying these verbs" an observation, not a claim.
+    const older = sections.slice(sections.indexOf(earliest) + 1);
+    for (const section of older) {
+      expect(section.body, `${section.title} must not announce the family`).not.toContain(
+        "new family `nen shu`",
+      );
+    }
   });
 
   it("compares refs NUMERICALLY, field by field", () => {
