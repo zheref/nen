@@ -18,7 +18,8 @@ import { runFamily } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
-import { INTERACTIVE_VERBS } from "./run.js";
+import { assertPreconditions, INTERACTIVE_VERBS } from "./run.js";
+import type { RenderedInvocation, RenderedPrecondition } from "./render.js";
 
 const TOKEN = "PLACEHOLDER_LANE_TOKEN";
 /** The one value the fixture declares for a child's environment. */
@@ -610,6 +611,74 @@ describe("nothing steps outside the tree --repo names", () => {
     expect(result.seams.calls).toEqual([]);
     expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.\/x'/);
     expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
+  });
+});
+
+// ── (c3) assertPreconditions asserts the pointer AS GIVEN ─────────────────
+//
+// A DIRECT UNIT TEST OF ./run.ts's `assertPreconditions`, not driven through
+// `withDeclaration` -- unlike everywhere else in this file. The contract this
+// pins ("whatever `RenderedPrecondition.pointer` says IS the value pointer,
+// and this function appends nothing to it") has no real declaration that
+// exercises the target-row half of it: `resolveTarget` in ./render.ts only
+// ever hands `assertPreconditions` an `env`-kind row for a target's
+// `requiresEnv`, and `env` never reaches `insideRepo` -- the one place a
+// pointer is rendered into a message -- so a real `nen shu deploy` can never
+// show the difference. Constructing a `path`-kind row shaped the way a target
+// row IS ADDRESSED (`project.targets.<name>.requiresEnv[<i>]`, already the
+// leaf) is the only way to prove `assertPreconditions` never appends `.value`
+// to a pointer that is already one.
+
+function planWith(preconditions: readonly RenderedPrecondition[]): RenderedInvocation {
+  return {
+    lane: "only",
+    stack: "placeholder-stack",
+    verb: "deploy",
+    target: null,
+    cwdRelative: ".",
+    steps: [],
+    env: {},
+    host: { platform: "linux", supported: true, declared: null },
+    preconditions,
+    artifacts: [],
+    why: null,
+  };
+}
+
+describe("assertPreconditions asserts entry.pointer verbatim", () => {
+  it("a lane-shaped pointer, which already carries '.value'", () => {
+    const plan = planWith([
+      {
+        kind: "path",
+        value: "../../etc/passwd",
+        why: null,
+        // What ./render.ts's `lanePreconditions` now builds: the leaf itself.
+        pointer: "project.preconditions.only[0].value",
+      },
+    ]);
+    expect(() => assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).toThrow(
+      /^project\.preconditions\.only\[0\]\.value names '\.\.\/\.\.\/etc\/passwd'/,
+    );
+  });
+
+  it("a target-shaped pointer, appending nothing -- the regression this pins", () => {
+    // No real declaration produces a `path`-kind row at this address (a
+    // target's `requiresEnv` is always `env`-kind); this constructs the shape
+    // directly to prove the function's own contract, independent of what
+    // today's callers happen to pass it.
+    const plan = planWith([
+      {
+        kind: "path",
+        value: "../../etc/passwd",
+        why: null,
+        // What ./render.ts's `resolveTarget` builds for a `requiresEnv` row:
+        // already the leaf, with NO '.value' to append.
+        pointer: "project.targets.production.requiresEnv[0]",
+      },
+    ]);
+    expect(() => assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).toThrow(
+      /^project\.targets\.production\.requiresEnv\[0\] names '\.\.\/\.\.\/etc\/passwd'/,
+    );
   });
 });
 

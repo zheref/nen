@@ -277,7 +277,7 @@ describe("resolveTarget", () => {
     });
     const resolved = resolveTarget(block, plan(block), "prod");
     expect(resolved.preconditions).toEqual([
-      { kind: "path", value: "deps", why: null, pointer: "project.preconditions.one[0]" },
+      { kind: "path", value: "deps", why: null, pointer: "project.preconditions.one[0].value" },
       {
         kind: "env",
         value: "A_TOKEN",
@@ -333,7 +333,7 @@ describe("resolveTarget", () => {
         kind: "env",
         value: "SHARED_TOKEN",
         why: "the lane's own",
-        pointer: "project.preconditions.one[0]",
+        pointer: "project.preconditions.one[0].value",
       },
       {
         kind: "env",

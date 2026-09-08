@@ -77,8 +77,15 @@ export interface RenderedPrecondition {
   readonly value: string | readonly string[];
   readonly why: string | null;
   /**
-   * Where in the declaration this row came from, e.g.
-   * `project.preconditions.web[1]` or `project.targets.staging.requiresEnv[0]`.
+   * Where the ASSERTED VALUE lives in the declaration, e.g.
+   * `project.preconditions.web[1].value` or
+   * `project.targets.staging.requiresEnv[0]`.
+   *
+   * ALWAYS THE LEAF, never the row that carries it -- the two examples above
+   * look different only because the two rows ARE shaped differently in the
+   * file (a lane precondition is `{ kind, value, why }`; a target's
+   * `requiresEnv` entry is the string itself), and a caller asserting the
+   * value reads this pointer as-is, with nothing appended.
    *
    * IT IS CARRIED RATHER THAN RECOMPUTED because two blocks now contribute
    * rows to one list. ./run.ts's assertion refuses a `path` that escapes the
@@ -86,7 +93,11 @@ export interface RenderedPrecondition {
    * index into the merged list -- so every row a TARGET contributed was
    * reported as `project.preconditions.<lane>[<i>]`, an address that does not
    * exist in the file. A refusal naming a place a reader cannot find is a
-   * refusal they cannot act on.
+   * refusal they cannot act on. A later revision then had ./run.ts append
+   * `.value` to this field to fix that -- correct for a lane row, but it made
+   * the SAME mistake for a target row, whose pointer was already the leaf:
+   * `project.targets.staging.requiresEnv[0].value` names nothing. The fix is
+   * this field being the leaf itself, always, so nothing downstream appends.
    */
   readonly pointer: string;
 }
@@ -421,6 +432,14 @@ export function renderInvocation(
  * Split out only so the pointer is built beside the index it is built from --
  * ./run.ts used to build it from the index into the MERGED list, which is the
  * defect `RenderedPrecondition.pointer` exists to close.
+ *
+ * THE POINTER NAMES THE VALUE, `.value` AND ALL -- `project.preconditions.
+ * <lane>[<i>].value`, not the row that carries it -- because that is the leaf
+ * ./run.ts's `assertPreconditions` asserts, and a target-contributed row
+ * (`project.targets.<name>.requiresEnv[<i>]`, built in `resolveTarget` below)
+ * already points at its own leaf directly. One field, one meaning: whatever a
+ * `RenderedPrecondition.pointer` says IS where the asserted value lives, and a
+ * caller never appends anything to find it.
  */
 function lanePreconditions(
   project: ProjectBlock,
@@ -431,7 +450,7 @@ function lanePreconditions(
       kind: entry.kind,
       value: entry.value,
       why: entry.why,
-      pointer: `project.preconditions.${lane}[${index}]`,
+      pointer: `project.preconditions.${lane}[${index}].value`,
     }),
   );
 }

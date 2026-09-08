@@ -209,7 +209,16 @@ export function assertPreconditions(
     // requires -- so an index into the MERGED list addressed the wrong file
     // position for every row of the second kind, naming a
     // `project.preconditions.<lane>[i]` that does not exist.
-    const pointer = `${entry.pointer}.value`;
+    //
+    // USED VERBATIM, WITH NOTHING APPENDED. `RenderedPrecondition.pointer` is
+    // ALWAYS the pointer to the value being asserted here -- a lane row's own
+    // pointer already carries `.value` (../render.ts's `lanePreconditions`),
+    // and a target's `requiresEnv` row already names its leaf directly
+    // (`project.targets.<name>.requiresEnv[<i>]`, no `.value` to append: the
+    // array element IS the string). Appending `.value` here used to fix the
+    // first shape and silently break the second, naming a file position that
+    // does not exist for every row a target contributed.
+    const pointer = entry.pointer;
     if (!ASSERTABLE_KINDS.includes(entry.kind)) {
       return { kind: entry.kind, value: entry.value, satisfied: null };
     }
