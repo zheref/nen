@@ -2216,6 +2216,16 @@ interface SchemeFinding {
 interface TestTarget {
   readonly blueprint: string;
   readonly buildable: string;
+  /**
+   * The reference carries `skipped = "YES"`.
+   *
+   * KEPT, NOT DROPPED. A skipped testable is excluded from a plain run of the
+   * scheme and still NAMES a target that has to exist for the reference to
+   * resolve, so the cross-check applies to it exactly as it does to the rest.
+   * The note says which kind it found, because "the target is missing AND the
+   * scheme skips it" is a different job of work from "the target is missing".
+   */
+  readonly skipped: boolean;
 }
 
 /**
@@ -2262,9 +2272,29 @@ interface AppleLane {
 }
 
 const BLUEPRINT_NAME = /BlueprintName\s*=\s*"([^"]*)"/g;
-const BUILDABLE_NAME = /BuildableName\s*=\s*"([^"]*)"/g;
 const TEST_ACTION = /<TestAction\b[\s\S]*?<\/TestAction>/;
 const BUILD_ACTION = /<BuildAction\b[\s\S]*?<\/BuildAction>/;
+/**
+ * The OPENING TAG of an element, attributes captured whole.
+ *
+ * `(?:[^>"]|"[^"]*")*` walks to the first `>` that is not inside a quoted
+ * value, which is what makes the two readers below element-scoped rather than
+ * text-scoped: an attribute is read out of the tag it was written in, and never
+ * out of the tag after it.
+ */
+const TESTABLE_OPEN = /<TestableReference\b((?:[^>"]|"[^"]*")*)>/g;
+const BUILDABLE_OPEN = /<BuildableReference\b((?:[^>"]|"[^"]*")*)>/;
+const TESTABLE_CLOSE = "</TestableReference>";
+/**
+ * One attribute, read out of ONE tag's captured attribute text.
+ *
+ * Each is matched independently and none of them assumes a position, because
+ * Xcode's own writer does not fix one: `BuildableName` precedes `BlueprintName`
+ * in a scheme it wrote today and a hand-edited file may spell either first.
+ */
+const BLUEPRINT_ATTRIBUTE = /\bBlueprintName\s*=\s*"([^"]*)"/;
+const BUILDABLE_ATTRIBUTE = /\bBuildableName\s*=\s*"([^"]*)"/;
+const SKIPPED_ATTRIBUTE = /\bskipped\s*=\s*"([^"]*)"/;
 /** The section an `.xcodeproj` lists its native targets in, by its own delimiters. */
 const NATIVE_TARGETS =
   /\/\* Begin PBXNativeTarget section \*\/([\s\S]*?)\/\* End PBXNativeTarget section \*\//;
@@ -2280,20 +2310,77 @@ function attributesIn(text: string, pattern: RegExp): readonly string[] {
   return out;
 }
 
+/**
+ * The test targets a `<TestAction>` names, each paired with the product ITS OWN
+ * reference builds.
+ *
+ * ONE `<TestableReference>` IS ONE UNIT, and that is the whole of this reader.
+ * The draft it replaces swept the test action for every `BlueprintName` and
+ * every `BuildableName`, de-duplicated each list on its own, and paired the two
+ * BY INDEX -- a pairing that holds only when the lists come out the same length
+ * in the same order, which real schemes break three ways:
+ *
+ *   * TWO TEST BUNDLES BUILT FROM ONE PRODUCT repeat a `BuildableName`, and
+ *     de-duplication drops the repeat: every blueprint after it slid onto the
+ *     NEXT reference's product, so the clause sent a maintainer to a bundle
+ *     some other, perfectly present target builds.
+ *   * A `<MacroExpansion>` inside the test action names the APP target, not a
+ *     test one. Swept flat it became a test target of its own, and a scheme
+ *     whose test action is fine was reported BROKEN ON A CLEAN CHECKOUT.
+ *   * A `skipped = "YES"` REFERENCE was indistinguishable from a running one,
+ *     because `skipped` is written on the testable and the flat sweep never
+ *     visited it -- so a note could not say which of the two it had found.
+ *
+ * The finding this clause exists to make is "the scheme names a target your
+ * project has not got", and a finding that names the wrong pair is worse than
+ * no finding: it is a maintainer sent to edit a file that is not broken. So the
+ * reader DESCENDS -- only a `<BuildableReference>` inside a
+ * `<TestableReference>` is a test target at all, and both names come off the
+ * same element.
+ */
+function testTargetsIn(testSection: string): readonly TestTarget[] {
+  const found: TestTarget[] = [];
+  for (const opening of testSection.matchAll(TESTABLE_OPEN)) {
+    const attributes = opening[1] ?? "";
+    // A self-closing `<TestableReference ... />` carries no reference to read,
+    // and reading on to the next `</TestableReference>` would take the FOLLOWING
+    // block's element as this one's -- the very misassociation being fixed.
+    if (attributes.trimEnd().endsWith("/")) continue;
+    const from = (opening.index ?? 0) + opening[0].length;
+    const closes = testSection.indexOf(TESTABLE_CLOSE, from);
+    const element = BUILDABLE_OPEN.exec(closes === -1 ? "" : testSection.slice(from, closes))?.[1];
+    const blueprint = BLUEPRINT_ATTRIBUTE.exec(element ?? "")?.[1] ?? "";
+    // A reference naming no target names nothing to cross-check.
+    if (blueprint === "") continue;
+    const target: TestTarget = {
+      blueprint,
+      buildable: BUILDABLE_ATTRIBUTE.exec(element ?? "")?.[1] ?? "",
+      skipped: (SKIPPED_ATTRIBUTE.exec(attributes)?.[1] ?? "").toUpperCase() === "YES",
+    };
+    // DE-DUPLICATION IS PER PAIR, NEVER PER NAME. Two references to the same
+    // (target, product) are one finding printed once; two references sharing a
+    // product are two findings and must both survive. And a pair a scheme names
+    // once skipped and once not is NOT skipped -- the scheme runs it.
+    const already = found.findIndex(
+      (entry): boolean =>
+        entry.blueprint === target.blueprint && entry.buildable === target.buildable,
+    );
+    if (already === -1) found.push(target);
+    else if (!target.skipped) found[already] = target;
+  }
+  return found;
+}
+
 function readScheme(laneDirectory: string, container: string, file: string): SchemeFinding {
   const path = join(laneDirectory, container, ...SHARED_SCHEMES, file);
   const text = readText(path) ?? "";
   const testSection = TEST_ACTION.exec(text)?.[0] ?? "";
   const buildSection = BUILD_ACTION.exec(text)?.[0] ?? "";
-  const blueprints = attributesIn(testSection, BLUEPRINT_NAME);
-  const buildables = attributesIn(testSection, BUILDABLE_NAME);
   return {
     name: file.replace(XCSCHEME, ""),
     file: [container, ...SHARED_SCHEMES, file].join("/"),
     buildTargets: attributesIn(buildSection, BLUEPRINT_NAME),
-    testTargets: blueprints.map(
-      (blueprint, index): TestTarget => ({ blueprint, buildable: buildables[index] ?? "" }),
-    ),
+    testTargets: testTargetsIn(testSection),
   };
 }
 
@@ -2580,6 +2667,25 @@ function embeddedReason(
 }
 
 /**
+ * One missing test target, as the note names it: the blueprint the scheme
+ * asked for, then whatever else THAT SAME reference says about it.
+ *
+ * The product is the maintainer's landmark -- it is the name that appears in
+ * Xcode's own scheme editor beside the target -- so it is printed when the
+ * reference carries one, and printed from the reference that carried it.
+ * `skipped` is reported rather than filtered out or left silent: a skipped
+ * testable still names a target that must resolve, and a maintainer weighing
+ * "add the target" against "drop the reference" needs to know the scheme was
+ * not going to run it anyway.
+ */
+function testTargetLabel(target: TestTarget): string {
+  const aside = [target.buildable, target.skipped ? "skipped by the scheme" : ""].filter(
+    (part): boolean => part !== "",
+  );
+  return `'${target.blueprint}'${aside.length === 0 ? "" : ` (${aside.join(", ")})`}`;
+}
+
+/**
  * The reason clause an Apple lane earns for a row still naming `{scheme}`.
  *
  * THE ROW IS WITHHELD EITHER WAY -- a destination and a simulator UDID are
@@ -2665,10 +2771,7 @@ function appleReason(lane: AppleLane, leftover: readonly string[]): string {
         // and two byte-identical paragraphs read as one printed twice rather
         // than as two findings about two files a maintainer must edit apart.
         ` -- AND THAT SCHEME'S TEST ACTION IS BROKEN ON A CLEAN CHECKOUT: '${scheme.name}' (${scheme.file}) names ${missing
-          .map(
-            (target): string =>
-              `'${target.blueprint}'${target.buildable === "" ? "" : ` (${target.buildable})`}`,
-          )
+          .map(testTargetLabel)
           .join(", ")} in its test action, and this lane's project declares no such target -- it declares ${
           targets.size === 0
             ? "none nen could read"

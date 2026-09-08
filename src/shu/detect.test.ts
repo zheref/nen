@@ -3231,6 +3231,212 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
     expect(note).toMatch(/<container>\/xcshareddata\/xcschemes\//);
     expect(note).toMatch(/a scheme under xcuserdata\/ is one developer's checkout/);
   });
+
+  // ── one testable is one unit ───────────────────────────────────────────────
+  //
+  // The reader these four cases pin replaced one that swept the whole test
+  // action for `BlueprintName`s and `BuildableName`s, de-duplicated each list
+  // apart, and paired them BY INDEX. That holds for the fixture's single
+  // testable and for nothing else a real repository ships: a shared product, a
+  // `<MacroExpansion>`, or a `skipped` reference each knock the two lists out
+  // of step, and the clause then names a pair the scheme never wrote.
+
+  /** The lane's shared scheme, rewritten with a `<TestAction>` body of your own. */
+  const withTestAction = (dir: string, body: string): void => {
+    writeFileSync(
+      join(dir, "ios", "Placeholder.xcodeproj", "xcshareddata", "xcschemes", "Placeholder.xcscheme"),
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<Scheme LastUpgradeVersion = "1430" version = "1.3">',
+        '   <BuildAction parallelizeBuildables = "YES">',
+        "   </BuildAction>",
+        '   <TestAction buildConfiguration = "Debug">',
+        "      <Testables>",
+        body,
+        "      </Testables>",
+        "   </TestAction>",
+        "</Scheme>",
+      ].join("\n"),
+      "utf8",
+    );
+  };
+
+  /** One `<TestableReference>`, written as Xcode writes one. */
+  const testable = (
+    blueprint: string,
+    buildable: string,
+    options: { readonly skipped?: boolean; readonly reversed?: boolean } = {},
+  ): string =>
+    [
+      `         <TestableReference skipped = "${options.skipped === true ? "YES" : "NO"}">`,
+      "            <BuildableReference",
+      '               BuildableIdentifier = "primary"',
+      // THE ORDER IS THE POINT of one case below: Xcode writes the buildable
+      // first today, and nothing about the format promises it always will.
+      ...(options.reversed === true
+        ? [
+            `               BlueprintName = "${blueprint}"`,
+            `               BuildableName = "${buildable}"`,
+          ]
+        : [
+            `               BuildableName = "${buildable}"`,
+            `               BlueprintName = "${blueprint}"`,
+          ]),
+      '               ReferencedContainer = "container:Placeholder.xcodeproj">',
+      "            </BuildableReference>",
+      "         </TestableReference>",
+    ].join("\n");
+
+  /** Extra native targets in the lane's own project, beside the fixture's `Placeholder`. */
+  const declare = (dir: string, targets: readonly string[]): void => {
+    const pbxproj = join(dir, "ios", "Placeholder.xcodeproj", "project.pbxproj");
+    writeFileSync(
+      pbxproj,
+      readFileSync(pbxproj, "utf8").replace(
+        "/* End PBXNativeTarget section */",
+        [
+          ...targets.flatMap((target, index): readonly string[] => [
+            `\t\tFACE000${index} /* ${target} */ = {`,
+            "\t\t\tisa = PBXNativeTarget;",
+            `\t\t\tname = ${target};`,
+            "\t\t};",
+          ]),
+          "/* End PBXNativeTarget section */",
+        ].join("\n"),
+      ),
+      "utf8",
+    );
+  };
+
+  /** A temp checkout of the bare lane, with a scheme and a target list of your own. */
+  const laneWhere = (
+    slug: string,
+    body: string,
+    targets: readonly string[],
+    read: (note: string) => void,
+  ): void => {
+    const dir = mkdtempSync(join(tmpdir(), `nen-expo-scheme-${slug}-`));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      withTestAction(dir, body);
+      if (targets.length > 0) declare(dir, targets);
+      read(iosNote(dir, "test"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  // MUTANT: restore the independent sweeps and the index pairing --
+  // `blueprints.map((blueprint, index) => ({ blueprint, buildable:
+  // buildables[index] ?? "" }))` -- and this goes red. `PlaceholderTests.xctest`
+  // is written twice and survives de-duplication once, so the third reference's
+  // product slides onto the second's blueprint and the note sends a maintainer
+  // to a bundle that a target the project DOES declare builds.
+  it("pairs a blueprint with the buildable from its OWN reference, not by index", () => {
+    laneWhere(
+      "shared-product",
+      [
+        testable("PlaceholderTests", "PlaceholderTests.xctest"),
+        // Two bundles built from one product: legal, shipped, and the shape
+        // that de-duplication silently collapsed.
+        testable("PlaceholderUITests", "PlaceholderTests.xctest"),
+        testable("PlaceholderSnapshotTests", "PlaceholderSnapshotTests.xctest"),
+      ].join("\n"),
+      ["PlaceholderTests", "PlaceholderSnapshotTests"],
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        expect(note, "the missing blueprint, with the product ITS reference names").toContain(
+          "names 'PlaceholderUITests' (PlaceholderTests.xctest) in its test action",
+        );
+        // The product of a target the project HAS must not be dragged into a
+        // finding about a target it has not.
+        expect(note, "a bundle no missing reference named").not.toContain(
+          "PlaceholderSnapshotTests.xctest",
+        );
+      },
+    );
+  });
+
+  // The two names are read off ONE element, so neither may depend on the order
+  // the element spells them in.
+  it("reads both names whichever order the reference writes them in", () => {
+    laneWhere(
+      "reversed",
+      testable("PlaceholderUITests", "PlaceholderUITests.xctest", { reversed: true }),
+      [],
+      (note): void => {
+        expect(note).toContain(
+          "names 'PlaceholderUITests' (PlaceholderUITests.xctest) in its test action",
+        );
+      },
+    );
+  });
+
+  // MUTANT: sweep every `<BuildableReference>` in the test action rather than
+  // only those inside a `<TestableReference>`, and this goes red -- the macro
+  // expansion's `Ghost` becomes a test target nobody declared, and a scheme
+  // whose test action is sound is reported BROKEN ON A CLEAN CHECKOUT.
+  it("does not read a MacroExpansion's reference as a test target", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-expo-scheme-macro-"));
+    try {
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      withTestAction(dir, testable("PlaceholderTests", "PlaceholderTests.xctest"));
+      // The macro expansion sits in the test action and OUTSIDE `<Testables>`,
+      // which is where Xcode puts it, and it names the app target rather than
+      // a test one.
+      const scheme = join(
+        dir,
+        "ios",
+        "Placeholder.xcodeproj",
+        "xcshareddata",
+        "xcschemes",
+        "Placeholder.xcscheme",
+      );
+      writeFileSync(
+        scheme,
+        readFileSync(scheme, "utf8").replace(
+          "      </Testables>",
+          [
+            "      </Testables>",
+            "      <MacroExpansion>",
+            "         <BuildableReference",
+            '            BuildableIdentifier = "primary"',
+            '            BuildableName = "Ghost.app"',
+            '            BlueprintName = "Ghost"',
+            '            ReferencedContainer = "container:Placeholder.xcodeproj">',
+            "         </BuildableReference>",
+            "      </MacroExpansion>",
+          ].join("\n"),
+        ),
+        "utf8",
+      );
+      declare(dir, ["PlaceholderTests"]);
+      const note = iosNote(dir, "test");
+      expect(note, "the one real testable resolves").not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+      expect(note, "a macro expansion is not a target the scheme tests").not.toContain("Ghost");
+      // The rest of the reason is untouched -- this withholds nothing.
+      expect(note).toMatch(/still names \{project\}, \{scheme\}, \{simUdid\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A skipped testable is excluded from the RUN and still names a target that
+  // has to exist, so the cross-check applies -- and the note says the scheme
+  // skips it, because that changes which repair a maintainer reaches for.
+  it("cross-checks a skipped testable all the same, and says that it is skipped", () => {
+    laneWhere(
+      "skipped",
+      testable("PlaceholderTests", "PlaceholderTests.xctest", { skipped: true }),
+      [],
+      (note): void => {
+        expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
+        expect(note).toContain(
+          "names 'PlaceholderTests' (PlaceholderTests.xctest, skipped by the scheme)",
+        );
+      },
+    );
+  });
 });
 
 describe("nen shu detect -- the expo markers themselves", () => {
