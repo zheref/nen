@@ -1,16 +1,14 @@
 {
-  "name": "@placeholder/partial",
+  "name": "@placeholder/untooled",
   "private": true,
   "packageManager": "pnpm@9.15.9",
   "scripts": {
     "build": "placeholder",
+    "test": "placeholder",
+    "lint": "placeholder",
     "dev": "placeholder"
   },
-  "dependencies": {
-    "next": "15.1.0"
-  },
   "devDependencies": {
-    "@biomejs/biome": "1.9.4",
-    "turbo": "2.3.3"
+    "next": "15.1.0"
   }
 }

@@ -14,17 +14,28 @@ import { join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams } from "../seam/scripted.js";
-import { loadProfilesPack, PLACEHOLDERS } from "../profiles/pack.js";
-import { detect, MARKER_STACKS, MAX_DEPTH, renderDetect } from "./detect.js";
+import { loadProfilesPack, PLACEHOLDERS, profileById, verbCell } from "../profiles/pack.js";
+import {
+  detect,
+  listDirectory,
+  MARKER_STACKS,
+  MAX_DEPTH,
+  renderDetect,
+  type Entry,
+} from "./detect.js";
 import {
   EMPTY_TREE,
+  GATSBY_SITE,
   markerTree,
   NEXTJS_MULTI,
   NEXTJS_PARTIAL,
   NEXTJS_SINGLE,
+  NEXTJS_UNTOOLED,
   NEXTJS_UNVERIFIED,
+  NEXTJS_WORKSPACES,
 } from "./fixtures/paths.js";
 import { shuCommand } from "./command.js";
+import { ASSERTABLE_KINDS } from "./run.js";
 
 interface Captured {
   readonly code: number;
@@ -54,6 +65,46 @@ interface Proposal {
   };
 }
 
+/**
+ * The two kinds of proposed row, split the way the reader has to read them.
+ *
+ * EVERY `commandVerbs` ROW IS NOW PROPOSED -- a cell the pack carries no command
+ * for arrives as an explicit `{"unsupported": "<the pack's reason>"}` seat, so
+ * that `--write` cannot produce the empty verb map ../schema/contract.ts
+ * refuses. These two helpers exist so that an assertion about "what nen stands
+ * behind as a command" stays an assertion about commands, rather than silently
+ * becoming an assertion about the pack's row count.
+ */
+function commandRows(verbs: Readonly<Record<string, unknown>> | undefined): readonly string[] {
+  return Object.entries(verbs ?? {})
+    .filter(([, row]): boolean => !(typeof row === "object" && row !== null && "unsupported" in row))
+    .map(([verb]): string => verb)
+    .sort();
+}
+
+function unsupportedRows(verbs: Readonly<Record<string, unknown>> | undefined): readonly string[] {
+  return Object.entries(verbs ?? {})
+    .filter((entry): boolean => typeof entry[1] === "object" && entry[1] !== null && "unsupported" in entry[1])
+    .map(([verb]): string => verb)
+    .sort();
+}
+
+function reasonOf(verbs: Readonly<Record<string, unknown>> | undefined, verb: string): string {
+  return String((verbs?.[verb] as { unsupported?: unknown } | undefined)?.unsupported ?? "");
+}
+
+/**
+ * The list `<pm> turbo run <task>` is actually checked against.
+ *
+ * A TURBO TASK IS NOT A PACKAGE.JSON SCRIPT, and a temp tree that wants the
+ * pack's `nextjs` rows proposed has to carry both -- which is the whole point
+ * of the check and the reason this constant is spelled out here rather than
+ * folded into a helper: a tree that omits it gets the row withheld, by name.
+ */
+const TURBO_JSON = JSON.stringify({
+  tasks: { build: {}, test: {}, lint: {}, dev: {} },
+});
+
 describe("nen shu detect -- the nextjs lane, end to end", () => {
   it("proposes one lane at the root, with the pack's five reference verbs", () => {
     const report = detect(NEXTJS_SINGLE);
@@ -62,13 +113,69 @@ describe("nen shu detect -- the nextjs lane, end to end", () => {
     expect(report.lanes[0]?.stack).toBe("nextjs");
     expect(report.lanes[0]?.cwd).toBe(".");
     expect(report.lanes[0]?.markers).toEqual(["next.config.mjs"]);
-    expect(Object.keys(report.lanes[0]?.verbs ?? {}).sort()).toEqual([
-      "build",
-      "dev",
-      "lint",
-      "run",
-      "test",
+    expect(commandRows(report.lanes[0]?.verbs)).toEqual(["build", "dev", "lint", "run", "test"]);
+    // And the four cells the pack carries no command for arrive as SEATS rather
+    // than as absences: `coverage` is missing from both lists because this
+    // fixture declares no `test:coverage` script, which is a withholding.
+    expect(unsupportedRows(report.lanes[0]?.verbs)).toEqual([
+      "archive",
+      "deploy",
+      "release",
+      "ui-test",
     ]);
+  });
+
+  it("proposes the pack's own reason, verbatim, inside a seat that says what it is", () => {
+    // The reason is QUOTED rather than summarised, because the executor prints
+    // this same string back at exit 4 -- ./render.ts's unsupported refusal reads
+    // `invocation.reason` -- so a sentence rewritten here is a sentence a
+    // developer is later told is their repository's own.
+    //
+    // AND THAT IS EXACTLY WHY THE QUOTE IS WRAPPED. render.ts prints it as "The
+    // declaration's own reason: <text>", which is true of a row a human wrote
+    // and false of this one: the quoted half is a CATALOGUE's observation about
+    // other repositories. So the row names itself, names the program that wrote
+    // it, and marks the quote as the pack's.
+    const pack = loadProfilesPack();
+    const profile = profileById(pack, "nextjs");
+    const verbs = detect(NEXTJS_SINGLE).lanes[0]?.verbs;
+    for (const verb of unsupportedRows(verbs)) {
+      const cell = verbCell(profile, verb);
+      const packReason =
+        cell.kind === "declared-only"
+          ? cell.reason
+          : cell.kind === "unsupported"
+            ? cell.invocation.kind === "unsupported"
+              ? cell.invocation.reason
+              : ""
+            : "";
+      expect(packReason, verb).not.toBe("");
+      expect(reasonOf(verbs, verb), verb).toBe(
+        `PROPOSED SEAT -- replace it. nen shu detect wrote this row because the reference pack proposes no command for '${verb}' on nextjs; nen never invents one. The pack's own reason: ${packReason}`,
+      );
+      // The wrapper opens the string, so it is the first thing read in the
+      // file, in `--json`, and in the exit-4 refusal alike.
+      expect(reasonOf(verbs, verb).startsWith("PROPOSED SEAT -- replace it."), verb).toBe(true);
+    }
+    // The two kinds, named: `release` is the pack saying a repository states
+    // the answer out loud, and `deploy` is the pack declining to pick between
+    // three observed shapes.
+    expect(reasonOf(verbs, "release")).toMatch(/there is no package or store pipeline/);
+    expect(reasonOf(verbs, "deploy")).toMatch(/THREE OBSERVED SHAPES, NONE A DEFAULT/);
+  });
+
+  it("writes a declaration whose every lane has at least one verb, which is the reader's rule", () => {
+    // THE DEFECT THIS CLOSES, from the other side: a lane whose every command
+    // row was withheld used to be written as `"verbs": { "<lane>": {} }`, and
+    // ../schema/contract.ts refuses that file by name on the very next `nen shu
+    // build`. A proposal that cannot be loaded is the failure ./detect.ts exists
+    // to prevent, arrived at backwards.
+    for (const tree of [NEXTJS_SINGLE, NEXTJS_UNVERIFIED, markerTree("gatsby"), markerTree("xcode")]) {
+      const proposal = detect(tree).proposal as unknown as Proposal;
+      for (const [lane, verbs] of Object.entries(proposal.project.verbs)) {
+        expect(Object.keys(verbs).length, `${tree} / ${lane}`).toBeGreaterThan(0);
+      }
+    }
   });
 
   it("proposes the pack's argv with {pm} substituted from package.json, and nowhere else from", () => {
@@ -122,11 +229,18 @@ describe("nen shu detect -- the nextjs lane, end to end", () => {
     expect(multi.project.defaultLane).toBeNull();
   });
 
-  it("proposes hosts for the stack, and every verb's row carries the pack's why", () => {
+  it("proposes hosts for the stack, and every COMMAND row carries the pack's why", () => {
     const proposal = detect(NEXTJS_SINGLE).proposal as unknown as Proposal;
     expect(proposal.project.hosts).toEqual({ "*": ["darwin", "linux", "win32"] });
-    for (const row of Object.values(proposal.project.verbs["nextjs"] ?? {})) {
-      expect((row as { why?: string }).why).toBeTruthy();
+    const verbs = proposal.project.verbs["nextjs"];
+    for (const verb of commandRows(verbs)) {
+      expect((verbs?.[verb] as { why?: string }).why, verb).toBeTruthy();
+    }
+    // An `unsupported` seat carries no `why`, and must not: the declaration's
+    // reader takes the reason from the `unsupported` string itself, and a second
+    // sentence beside it would be two answers to one question.
+    for (const verb of unsupportedRows(verbs)) {
+      expect(Object.keys(verbs?.[verb] as object), verb).toEqual(["unsupported"]);
     }
   });
 
@@ -137,10 +251,10 @@ describe("nen shu detect -- the nextjs lane, end to end", () => {
     // side of every proposed row. (The pack's prose says why it never proposes
     // one, which is a `why` a human reads, not a command anything runs.)
     const proposal = detect(NEXTJS_SINGLE).proposal as unknown as Proposal;
-    for (const row of Object.values(proposal.project.verbs["nextjs"] ?? {})) {
-      const steps = (row as { exe?: string; steps?: { exe: string }[] }).steps ?? [
-        { exe: (row as { exe: string }).exe },
-      ];
+    const verbs = proposal.project.verbs["nextjs"];
+    for (const verb of commandRows(verbs)) {
+      const row = verbs?.[verb] as { exe?: string; steps?: { exe: string }[] };
+      const steps = row.steps ?? [{ exe: row.exe }];
       for (const step of steps) expect(step.exe).not.toMatch(/^make$/i);
     }
   });
@@ -157,7 +271,7 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
   it("withholds every templated row when package.json states no packageManager", () => {
     const report = detect(NEXTJS_UNVERIFIED);
     expect(report.lanes).toHaveLength(1);
-    expect(report.lanes[0]?.verbs).toEqual({});
+    expect(commandRows(report.lanes[0]?.verbs)).toEqual([]);
     const notes = report.lanes[0]?.notes.join("\n") ?? "";
     // Named, not merely counted: a reader has to be able to see WHICH token
     // stayed and where its value would have come from.
@@ -175,6 +289,7 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
     const dir = mkdtempSync(join(tmpdir(), "nen-detect-scoped-pm-"));
     try {
       writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(join(dir, "turbo.json"), TURBO_JSON);
       writeFileSync(
         join(dir, "package.json"),
         JSON.stringify({
@@ -216,6 +331,7 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
     const dir = mkdtempSync(join(tmpdir(), "nen-detect-plain-pm-"));
     try {
       writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(join(dir, "turbo.json"), TURBO_JSON);
       writeFileSync(
         join(dir, "package.json"),
         JSON.stringify({
@@ -253,7 +369,7 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
       writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
       writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm" }));
       const report = detect(dir);
-      expect(report.lanes[0]?.verbs).toEqual({});
+      expect(commandRows(report.lanes[0]?.verbs)).toEqual([]);
       const notes = report.lanes[0]?.notes.join("\n") ?? "";
       expect(notes).toMatch(/'build' withheld: its reference command still names \{pm\}/);
       expect(notes).toMatch(/carries no '@version' nen can split an executable from/);
@@ -272,7 +388,7 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
       writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
       writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "@scope/pm" }));
       const report = detect(dir);
-      expect(report.lanes[0]?.verbs).toEqual({});
+      expect(commandRows(report.lanes[0]?.verbs)).toEqual([]);
       const notes = report.lanes[0]?.notes.join("\n") ?? "";
       expect(notes).toMatch(/carries no '@version' nen can split an executable from/);
       expect(notes).toMatch(/packageManager: "@scope\/pm"/);
@@ -281,37 +397,106 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
     }
   });
 
-  it("withholds the verbs whose task package.json declares no script for, naming each", () => {
+  it("withholds the verbs whose task the RUNNER's own config declares none of, naming each", () => {
     const report = detect(NEXTJS_PARTIAL);
-    // The tree declares `build` and `dev` as scripts and neither `test` nor
-    // `lint`, so exactly those two rows are withheld -- and `run`, which names
-    // no task at all, is proposed because its executable IS a dependency here.
-    expect(Object.keys(report.lanes[0]?.verbs ?? {}).sort()).toEqual(["build", "dev", "run"]);
+    // `<pm> turbo run <task>` hands the task to TURBO, so the list nen checks
+    // is turbo's own -- this tree's `turbo.json` declares `build` and `dev` and
+    // neither `test` nor `lint`, so exactly those two rows are withheld. `run`
+    // (`next start`) names no task at all and is proposed because its
+    // executable IS a dependency here.
+    expect(commandRows(report.lanes[0]?.verbs)).toEqual(["build", "dev", "run"]);
     const notes = report.lanes[0]?.notes.join("\n") ?? "";
-    expect(notes).toMatch(/'test' withheld: its reference command runs the task 'test'/);
-    expect(notes).toMatch(/'lint' withheld: its reference command runs the task 'lint'/);
+    expect(notes).toMatch(
+      /'test' withheld: 'pnpm turbo run test' hands the task 'test' to 'turbo', and this lane's turbo\.json declares no such task \(it declares: build, dev\)/,
+    );
+    expect(notes).toMatch(
+      /'lint' withheld: 'pnpm turbo run lint' hands the task 'lint' to 'turbo'/,
+    );
     expect(notes).toMatch(/a warning, never a proposal/);
+    // AND NOT AGAINST THE WRONG LIST. `package.json` declares no `test` script
+    // either, so a message naming package.json here would read as correct while
+    // proving nothing: the row must be refused for turbo's list, by name.
+    expect(notes).not.toMatch(/'test' withheld: its reference command runs the task/);
   });
 
-  it("proposes NOTHING for a manifest that declares a task runner and no scripts", () => {
-    // The header's claim -- "never proposes a command the repository cannot
-    // run" -- was false without this check: a manifest whose only script was
-    // `lint` still got a proposed `build`.
-    const dir = mkdtempSync(join(tmpdir(), "nen-detect-scripts-"));
+  it("withholds a turbo row when the lane has no turbo.json for nen to read at all", () => {
+    // THE MUTANT THIS KILLS: falling back to `package.json`'s scripts when the
+    // runner's own list is unreadable. `turbo run build` does not run the npm
+    // `build` script, so a manifest that declares one says nothing about this
+    // row -- and turbo itself fails on a tree with no turbo.json.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-no-turbo-json-"));
     try {
       writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
       writeFileSync(
         join(dir, "package.json"),
         JSON.stringify({
           packageManager: "pnpm@9.15.9",
+          scripts: { build: "placeholder", test: "placeholder", lint: "placeholder" },
+          devDependencies: { "@biomejs/biome": "1.9.4", next: "15.1.0", turbo: "2.3.3" },
+        }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).toEqual(["run"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(
+        /'build' withheld: 'pnpm turbo run build' hands the task 'build' to 'turbo', whose task list lives in turbo\.json -- and this lane has none for nen to read/,
+      );
+      expect(notes).toMatch(/withholds rather than confirming this row against the wrong list/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds a row whose manager hands the work to a tool the manifest never declares", () => {
+    // THE FALSE POSITIVE THIS CLOSES. `pnpm turbo run build` passes the
+    // executable check the moment package.json names pnpm -- and says nothing
+    // whatever about turbo, which is the program that has to be there. Same for
+    // `pnpm exec biome check .`.
+    const lane = detect(NEXTJS_UNTOOLED).lanes[0];
+    expect(commandRows(lane?.verbs)).toEqual(["run"]);
+    const notes = lane?.notes.join("\n") ?? "";
+    expect(notes).toMatch(
+      /'build' withheld: 'pnpm turbo run build' asks the package manager to run 'turbo', and this lane's package\.json declares no such dependency/,
+    );
+    expect(notes).toMatch(
+      /'lint' withheld: 'pnpm exec biome check \.' asks the package manager to run 'biome'/,
+    );
+    expect(notes).toMatch(/that is the program that has to be there/);
+  });
+
+  it("accepts a scoped dependency as the tool it publishes ('@biomejs/biome' answers for 'biome')", () => {
+    // A WIDENING AND NEVER A NARROWING: the scope belongs to the publisher, and
+    // an exact-string check would withhold every scoped tool in existence.
+    // NEXTJS_SINGLE declares `@biomejs/biome` and no bare `biome`.
+    const manifest = JSON.parse(
+      readFileSync(join(NEXTJS_SINGLE, "package.json"), "utf8"),
+    ) as { devDependencies: Record<string, string> };
+    expect(Object.keys(manifest.devDependencies)).toContain("@biomejs/biome");
+    expect(Object.keys(manifest.devDependencies)).not.toContain("biome");
+    expect(commandRows(detect(NEXTJS_SINGLE).lanes[0]?.verbs)).toContain("lint");
+  });
+
+  it("proposes NOTHING for a manifest that declares a task runner and one task", () => {
+    // The header's claim -- "never proposes a command the repository cannot
+    // run" -- was false without this check: a manifest whose only script was
+    // `lint` still got a proposed `build`. The list is turbo's own, which is
+    // the list `turbo run build` would consult.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-scripts-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(join(dir, "turbo.json"), JSON.stringify({ tasks: { lint: {} } }));
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          packageManager: "pnpm@9.15.9",
           scripts: { lint: "placeholder" },
-          devDependencies: { turbo: "2.3.3" },
+          devDependencies: { "@biomejs/biome": "1.9.4", turbo: "2.3.3" },
         }),
       );
       const report = detect(dir);
-      expect(Object.keys(report.lanes[0]?.verbs ?? {})).toEqual(["lint"]);
+      expect(commandRows(report.lanes[0]?.verbs)).toEqual(["lint"]);
       expect(report.lanes[0]?.notes.join("\n")).toMatch(
-        /'build' withheld: its reference command runs the task 'build'/,
+        /'build' withheld: 'pnpm turbo run build' hands the task 'build' to 'turbo', and this lane's turbo\.json declares no such task \(it declares: lint\)/,
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -323,7 +508,7 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
     try {
       writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
       const report = detect(dir);
-      expect(report.lanes[0]?.verbs).toEqual({});
+      expect(commandRows(report.lanes[0]?.verbs)).toEqual([]);
       expect(report.lanes[0]?.notes.join("\n")).toMatch(
         /'run' withheld: it runs 'next', and this lane has no readable package\.json/,
       );
@@ -360,7 +545,7 @@ describe("nen shu detect -- the cross-checks that keep a proposal honest", () =>
       writeFileSync(join(dir, "package.json"), "{ this is not json");
       const report = detect(dir);
       expect(report.lanes).toHaveLength(1);
-      expect(report.lanes[0]?.verbs).toEqual({});
+      expect(commandRows(report.lanes[0]?.verbs)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -386,10 +571,13 @@ describe("nen shu detect -- one marker per stack", () => {
       // These six trees carry a marker and nothing else, so every command cell
       // the pack has for them is withheld -- and the lane is still proposed,
       // because the SHAPE of the declaration is what a human needs first.
-      expect(lane?.verbs).toEqual({});
+      expect(commandRows(lane?.verbs)).toEqual([]);
       expect(lane?.notes.length, "a withheld map with no reason is the failure").toBeGreaterThan(0);
       for (const note of lane?.notes ?? []) {
-        expect(note).toMatch(/withheld|proposes no command/);
+        // Three shapes of note, and each is a REASON: a row withheld, the
+        // pack declining to choose, and a toolchain requirement nen will not
+        // turn into a precondition it would have to invent a value for.
+        expect(note).toMatch(/withheld|proposes no command|no precondition is proposed/);
       }
     });
   }
@@ -629,5 +817,897 @@ describe("nen shu detect -- what it proposes can be run", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── the nextjs row set, completed ───────────────────────────────────────────
+//
+// The rows PR 2 taught the executor to honour by declaration but `detect` did
+// not yet propose: the four cells the pack carries no command for, and
+// `coverage`, whose whole difficulty is that the pack states it as a SHAPE run
+// once per package rather than as one invocation.
+
+describe("nen shu detect -- the nextjs workspace shape", () => {
+  it("orders lanes and markers by NAME, so one tree always proposes one document", () => {
+    // REPRODUCED BEFORE IT WAS FIXED: this same fixture answered `nextjs, web,
+    // admin` from the CLI and `nextjs, admin, web` from the suite minutes
+    // apart, because `readdirSync` hands back the filesystem's own order and a
+    // checkout had rewritten the directory in between. Lane order is not
+    // cosmetic -- `laneName`'s collision suffixes are assigned in iteration
+    // order, so two lanes competing for one name could swap between two runs.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-order-"));
+    try {
+      // Created in an order that is NOT the sorted one, so a fixture that
+      // happened to be written alphabetically cannot make this pass by luck.
+      for (const name of ["zeta", "alpha", "middle"]) {
+        mkdirSync(join(dir, name), { recursive: true });
+        writeFileSync(join(dir, name, "next.config.js"), "module.exports = {};\n");
+      }
+      const lanes = detect(dir).lanes.map((lane): string => lane.lane);
+      expect(lanes).toEqual(["alpha", "middle", "zeta"]);
+      expect(detect(dir).lanes.map((lane): string => lane.lane)).toEqual(lanes);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    // And the same rule over a lane's MARKERS, which come out of one
+    // directory's listing rather than out of the walk.
+    const twice = mkdtempSync(join(tmpdir(), "nen-detect-order-markers-"));
+    try {
+      writeFileSync(join(twice, "next.config.mjs"), "export default {};\n");
+      writeFileSync(join(twice, "next.config.js"), "module.exports = {};\n");
+      expect(detect(twice).lanes[0]?.markers).toEqual(["next.config.js", "next.config.mjs"]);
+    } finally {
+      rmSync(twice, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes one lane per workspace member that carries a marker, plus the root's own", () => {
+    // A member WITHOUT a marker (packages/core) is a package, not a lane: it is
+    // named in the root's coverage note and gets no lane of its own, because a
+    // lane is a thing that can be built and that member declares no framework.
+    const report = detect(NEXTJS_WORKSPACES);
+    expect(report.lanes.map((lane): string => lane.lane)).toEqual(["nextjs", "admin", "web"]);
+    expect(report.lanes.map((lane): string => lane.cwd)).toEqual([".", "apps/admin", "apps/web"]);
+    expect(report.lanes.every((lane): boolean => lane.stack === "nextjs")).toBe(true);
+    const proposal = report.proposal as unknown as Proposal;
+    expect(proposal.project.defaultLane).toBeNull();
+    expect(report.notes.join("\n")).toMatch(/3 lanes were found/);
+  });
+
+  it("proposes coverage for the member that declares the task, with {package} from its own name", () => {
+    const verbs = detect(NEXTJS_WORKSPACES).lanes.find((lane): boolean => lane.lane === "web")?.verbs;
+    expect(verbs?.["coverage"]).toMatchObject({
+      exe: "pnpm",
+      argv: ["--filter", "@placeholder/web", "test:coverage"],
+    });
+    // `{package}` is answered from THIS manifest's `name` and from nowhere
+    // else -- not from the directory, not from the lane name, not from the pack.
+    expect(commandRows(verbs)).toContain("coverage");
+  });
+
+  it("withholds coverage from a member that declares no such task, naming the task", () => {
+    // THE MUTANT THIS KILLS: proposing the row on the strength of the package
+    // name alone. `admin` answers `{package}` perfectly well and still cannot
+    // run the command, because the task after the package name is one it does
+    // not declare.
+    const lane = detect(NEXTJS_WORKSPACES).lanes.find((entry): boolean => entry.lane === "admin");
+    expect(commandRows(lane?.verbs)).not.toContain("coverage");
+    expect(lane?.notes.join("\n")).toMatch(
+      /'coverage' withheld: its reference command asks the package '@placeholder\/admin' for the task 'test:coverage', and this lane's package\.json declares no such script/,
+    );
+  });
+
+  it("withholds coverage from the workspace ROOT and names the members it found", () => {
+    // A workspace root is the LIST of packages, never one of them. Answering
+    // `{package}` with the root's own name would propose a command that runs
+    // the root against itself -- a different command from the N this repository
+    // actually runs.
+    const lane = detect(NEXTJS_WORKSPACES).lanes.find((entry): boolean => entry.lane === "nextjs");
+    expect(commandRows(lane?.verbs)).not.toContain("coverage");
+    const notes = lane?.notes.join("\n") ?? "";
+    expect(notes).toMatch(/'coverage' withheld: its reference command still names \{package\}/);
+    expect(notes).toMatch(/declares this lane a WORKSPACE ROOT \(apps\/\*, packages\/\*\)/);
+    expect(notes).toMatch(/pnpm-workspace\.yaml beside it/);
+    // NAMED, not counted: the question the maintainer is being asked is "which
+    // of these, and in what order", and a count cannot be answered.
+    expect(notes).toMatch(/@placeholder\/admin, @placeholder\/web, @placeholder\/core/);
+    expect(notes).toMatch(/ONCE PER PACKAGE/);
+  });
+
+  it("reads the other spelling of the same statement -- package.json's own 'workspaces'", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-ws-array-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@placeholder/root",
+          packageManager: "pnpm@9.15.9",
+          workspaces: ["packages/*"],
+          scripts: { "test:coverage": "placeholder" },
+          devDependencies: { turbo: "2.3.3" },
+        }),
+      );
+      mkdirSync(join(dir, "packages", "one"), { recursive: true });
+      writeFileSync(
+        join(dir, "packages", "one", "package.json"),
+        JSON.stringify({ name: "@placeholder/one" }),
+      );
+      const lane = detect(dir).lanes[0];
+      // The root DOES declare `test:coverage`, so the task check would have
+      // passed: the row is withheld purely because this manifest is a list of
+      // packages rather than one of them.
+      expect(commandRows(lane?.verbs)).not.toContain("coverage");
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/package\.json's own 'workspaces'/);
+      expect(notes).toMatch(/@placeholder\/one/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the object spelling too, and falls back to a member's PATH when it states no name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-ws-object-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@placeholder/root",
+          packageManager: "pnpm@9.15.9",
+          workspaces: { packages: ["packages/*", "tools/solo"] },
+          scripts: { "test:coverage": "placeholder" },
+          devDependencies: { turbo: "2.3.3" },
+        }),
+      );
+      mkdirSync(join(dir, "packages", "nameless"), { recursive: true });
+      mkdirSync(join(dir, "tools", "solo"), { recursive: true });
+      const notes = detect(dir).lanes[0]?.notes.join("\n") ?? "";
+      // A member nen cannot read a name out of is still a member, and is named
+      // by the only thing that IS true about it: where it sits.
+      expect(notes).toMatch(/packages\/nameless/);
+      // A literal path in the pattern list is a member too, with no glob to
+      // expand -- the two forms are not a special case of each other.
+      expect(notes).toMatch(/tools\/solo/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats an unparseable workspace file as a workspace, not as its absence", () => {
+    // FAILING OPEN HERE WOULD ANSWER {package} WITH THE ROOT'S OWN NAME on the
+    // strength of a syntax error, which is the one direction this check must
+    // not fail in.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-ws-broken-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@placeholder/root",
+          packageManager: "pnpm@9.15.9",
+          scripts: { "test:coverage": "placeholder" },
+          devDependencies: { turbo: "2.3.3" },
+        }),
+      );
+      writeFileSync(join(dir, "pnpm-workspace.yaml"), "packages:\n\t- bad tab indent\n");
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).not.toContain("coverage");
+      expect(lane?.notes.join("\n")).toMatch(/which nen could not parse/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--lane selects each of the three lanes, and refuses one this tree does not declare", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-lane-"));
+    try {
+      cpSync(NEXTJS_WORKSPACES, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+
+      // No --lane at all: three lanes and no default, so nen refuses rather
+      // than picking the root because it happens to be first.
+      const bare = await capture(["build", "--dry-run"], dir);
+      expect(bare.code).toBe(2);
+      expect(bare.err.join("\n")).toMatch(/--lane is required/);
+
+      for (const lane of ["nextjs", "web", "admin"]) {
+        const built = await capture(["build", "--dry-run", "--lane", lane], dir);
+        expect(built.code, lane).toBe(0);
+        expect(built.out.join("\n"), lane).toContain("would run:     pnpm turbo run build");
+      }
+      // The cwd differs per lane, which is the half of `--lane` that is not the
+      // argv: the same command, run somewhere else.
+      const web = await capture(["build", "--dry-run", "--lane", "web"], dir);
+      expect(web.out.join("\n")).toContain(join(dir, "apps", "web"));
+
+      const bogus = await capture(["build", "--dry-run", "--lane", "packages"], dir);
+      expect(bogus.code).toBe(2);
+      expect(bogus.err.join("\n")).toMatch(/Declared: nextjs, admin, web/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- the nextjs golden suite, byte for byte", () => {
+  // EVERY PROPOSED ROW, RUN. `detect --write` then `--dry-run` on each verb the
+  // proposal carries, with the argv pinned as a literal string rather than as a
+  // pattern: a golden that matches loosely is a golden that survives the change
+  // it exists to catch.
+  const ARGV: Readonly<Record<string, readonly string[]>> = {
+    build: ["would run:     pnpm turbo run build"],
+    test: ["would run:     pnpm turbo run test"],
+    lint: ["would run:     pnpm exec biome check .", "would run:     pnpm turbo run lint"],
+    dev: ["would run:     pnpm turbo run dev"],
+    run: ["would run:     next start"],
+    coverage: ["would run:     pnpm --filter @placeholder/web test:coverage"],
+  };
+
+  it("renders every proposed command row back to the argv the pack states", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-nextjs-"));
+    try {
+      cpSync(NEXTJS_WORKSPACES, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const verbs = detect(dir).lanes.find((lane): boolean => lane.lane === "web")?.verbs;
+      // The golden's own key set is asserted against what was proposed, so a
+      // row that stopped being proposed fails here rather than silently going
+      // untested.
+      expect(commandRows(verbs)).toEqual(Object.keys(ARGV).sort());
+      for (const [verb, lines] of Object.entries(ARGV)) {
+        const result = await capture([verb, "--dry-run", "--lane", "web"], dir);
+        expect(result.code, verb).toBe(0);
+        expect(
+          result.out.filter((line): boolean => line.startsWith("would run:")),
+          verb,
+        ).toEqual(lines);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses every proposed unsupported row at exit 4, quoting the pack's own sentence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-nextjs-unsup-"));
+    try {
+      cpSync(NEXTJS_WORKSPACES, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const verbs = detect(dir).lanes.find((lane): boolean => lane.lane === "web")?.verbs;
+      expect(unsupportedRows(verbs)).toEqual(["archive", "deploy", "release", "ui-test"]);
+      for (const verb of ["archive", "release", "ui-test"]) {
+        const result = await capture([verb, "--dry-run", "--lane", "web"], dir);
+        expect(result.code, verb).toBe(4);
+        // THE WHOLE POINT OF THE STUB: the executor's refusal is the pack's
+        // sentence, arriving as the repository's own reason because it now sits
+        // in the repository's own file.
+        expect(result.err.join("\n"), verb).toContain(reasonOf(verbs, verb));
+      }
+      // `deploy` never reaches the verb: --target is checked FIRST by design
+      // (./run.ts states the order), and this proposal declares no target.
+      const withoutTarget = await capture(["deploy", "--dry-run", "--lane", "web"], dir);
+      expect(withoutTarget.code).toBe(2);
+      expect(withoutTarget.err.join("\n")).toMatch(/--target is required/);
+      const withTarget = await capture(
+        ["deploy", "--dry-run", "--lane", "web", "--target", "x"],
+        dir,
+      );
+      expect(withTarget.code).toBe(2);
+      expect(withTarget.err.join("\n")).toMatch(/declares no targets at all/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── the gatsby stack ────────────────────────────────────────────────────────
+
+describe("nen shu detect -- the gatsby lane, end to end", () => {
+  it("proposes one lane from the config marker, with the pack's five command rows", () => {
+    const report = detect(GATSBY_SITE);
+    expect(report.exitCode).toBe(0);
+    expect(report.lanes).toHaveLength(1);
+    expect(report.lanes[0]?.stack).toBe("gatsby");
+    expect(report.lanes[0]?.markers).toEqual(["gatsby-config.js"]);
+    expect(commandRows(report.lanes[0]?.verbs)).toEqual([
+      "archive",
+      "build",
+      "deploy",
+      "dev",
+      "run",
+    ]);
+    expect(unsupportedRows(report.lanes[0]?.verbs)).toEqual([
+      "coverage",
+      "lint",
+      "release",
+      "test",
+      "ui-test",
+    ]);
+  });
+
+  it("proposes the pack's argv, verbatim, for the three rows that carry no token", () => {
+    const verbs = detect(GATSBY_SITE).lanes[0]?.verbs as Record<
+      string,
+      { exe?: string; argv?: string[]; steps?: { exe: string; argv: string[] }[] }
+    >;
+    expect(verbs["build"]).toMatchObject({ exe: "gatsby", argv: ["build"] });
+    expect(verbs["dev"]).toMatchObject({ exe: "gatsby", argv: ["develop"] });
+    expect(verbs["run"]).toMatchObject({ exe: "gatsby", argv: ["serve"] });
+  });
+
+  it("answers {archiveScript} from the manifest's own script, and only from there", () => {
+    const verbs = detect(GATSBY_SITE).lanes[0]?.verbs as Record<
+      string,
+      { exe?: string; argv?: string[]; steps?: { exe: string; argv: string[] }[] }
+    >;
+    // The token is a PATH, and the one place `detect` can see a path this
+    // repository actually runs is a script whose command is this step, word
+    // for word, with the token in one position.
+    expect(verbs["archive"]).toMatchObject({
+      exe: "node",
+      argv: ["scripts/build-placeholder-pdf.mjs"],
+    });
+    expect(verbs["deploy"]?.steps).toEqual([
+      { exe: "node", argv: ["scripts/build-placeholder-pdf.mjs"] },
+      { exe: "gh-pages", argv: ["-d", "public", "-b", "gh-pages", "--dotfiles"] },
+    ]);
+    // AND NOT ONE PROPOSED ARGV CARRIES A PLACEHOLDER.
+    for (const verb of commandRows(verbs)) {
+      const row = verbs[verb] as {
+        exe?: string;
+        argv?: string[];
+        steps?: { exe: string; argv: string[] }[];
+      };
+      const steps = row.steps ?? [{ exe: row.exe ?? "", argv: row.argv ?? [] }];
+      for (const token of steps.flatMap((step): readonly string[] => [step.exe, ...step.argv])) {
+        expect(token, verb).not.toMatch(/\{[a-zA-Z]+\}/);
+      }
+    }
+  });
+
+  it("withholds the two rows that need {archiveScript} when no script names one", () => {
+    // THE MUTANT THIS KILLS: proposing `node {archiveScript}` unsubstituted,
+    // which the executor would then refuse at exit 2 -- a proposal a human
+    // pastes and then discovers is fiction.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-gatsby-noscript-"));
+    try {
+      writeFileSync(join(dir, "gatsby-config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@placeholder/site",
+          scripts: { build: "gatsby build" },
+          dependencies: { gatsby: "5.14.0" },
+        }),
+      );
+      const lane = detect(dir).lanes[0];
+      // The three rows that need no token are still proposed -- `gatsby` is a
+      // declared dependency here. Only the two that need the PATH are withheld.
+      expect(commandRows(lane?.verbs)).toEqual(["build", "dev", "run"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(
+        /'archive' withheld: its reference command still names \{archiveScript\}/,
+      );
+      expect(notes).toMatch(/'deploy' withheld: its reference command still names \{archiveScript\}/);
+      expect(notes).toMatch(/a guessed argument is a different command/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("withholds rather than choosing when two scripts answer the same token differently", () => {
+    // Rule 1 of ./detect.ts's header is not suspended because the two
+    // candidates arrived from one file.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-gatsby-ambiguous-"));
+    try {
+      writeFileSync(join(dir, "gatsby-config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@placeholder/site",
+          scripts: {
+            "pdf:one": "node scripts/one.mjs",
+            "pdf:two": "node scripts/two.mjs",
+          },
+          dependencies: { gatsby: "5.14.0" },
+        }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).not.toContain("archive");
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(
+        /'archive' withheld: 2 of this lane's own scripts share the shape of its reference command 'node \{archiveScript\}' and corroborate it/,
+      );
+      expect(notes).toMatch(
+        /\{archiveScript\} = scripts\/one\.mjs; \{archiveScript\} = scripts\/two\.mjs/,
+      );
+      expect(notes).toMatch(/nen resolves no ambiguity/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a token from a script whatever the token is, and never from the pack", () => {
+    // The scripts route is over TOKENS, not over one token. A manifest that
+    // spells the whole command out has said something stronger about itself
+    // than any single field does -- so a manager named only in a script answers
+    // `{pm}` too, and the row is proposed because the repository states it runs
+    // exactly this line. The value still comes from the repository and never
+    // from the catalogue, which is the property that matters.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-pm-from-script-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        // No `packageManager` field at all, and no dependency naming the
+        // manager either: the script is the whole evidence.
+        JSON.stringify({ name: "@placeholder/scripted", scripts: { build: "pnpm turbo run build" } }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(lane?.verbs["build"]).toMatchObject({ exe: "pnpm", argv: ["turbo", "run", "build"] });
+      // And the rows no script spells out stay withheld -- the route confirms
+      // the line it matched and nothing else.
+      expect(commandRows(lane?.verbs)).toEqual(["build"]);
+      expect(lane?.notes.join("\n")).toMatch(
+        /'test' withheld: its reference command still names \{pm\}/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("holds the executable cross-check for gatsby: the tool must be a declared dependency", () => {
+    // THE SHARED RULE, PROVED ON THE NEW STACK. A marker match is not evidence
+    // that the tool is installed; a dependency the manifest declares is.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-gatsby-nodep-"));
+    try {
+      writeFileSync(join(dir, "gatsby-config.js"), "module.exports = {};\n");
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "@placeholder/site", dependencies: { react: "18.3.1" } }),
+      );
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).toEqual([]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/'build' withheld: it runs 'gatsby'/);
+      expect(notes).toMatch(
+        /neither declares as a dependency, nor names as its packageManager, nor spells out verbatim as one of its own scripts/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries the pack's reason into each unsupported row, including the two the draft names", () => {
+    const verbs = detect(GATSBY_SITE).lanes[0]?.verbs;
+    const seat = (verb: string, packReason: string): string =>
+      `PROPOSED SEAT -- replace it. nen shu detect wrote this row because the reference pack proposes no command for '${verb}' on gatsby; nen never invents one. The pack's own reason: ${packReason}`;
+    expect(reasonOf(verbs, "test")).toBe(
+      seat("test", "No test script and no test-runner dependency."),
+    );
+    expect(reasonOf(verbs, "lint")).toBe(
+      seat("lint", "NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."),
+    );
+    expect(reasonOf(verbs, "ui-test")).toBe(seat("ui-test", "No UI or E2E runner of any kind."));
+    expect(reasonOf(verbs, "release")).toBe(seat("release", "No release lane of any kind."));
+    expect(reasonOf(verbs, "coverage")).toMatch(/nothing to instrument/);
+    // THE STACK IS NAMED, not just the verb: the same seat on two stacks has
+    // two different reasons behind it, and a reader who cannot see which stack
+    // this row came from cannot check the claim.
+    expect(reasonOf(verbs, "test")).toMatch(/proposes no command for 'test' on gatsby/);
+  });
+
+  it("proposes hosts of any, from the pack, for every verb", () => {
+    const proposal = detect(GATSBY_SITE).proposal as unknown as Proposal;
+    expect(proposal.project.hosts).toEqual({ "*": ["darwin", "linux", "win32"] });
+  });
+
+  it("proposes NO precondition for the browser, and says why rather than inventing one", () => {
+    // The design source cites a browser PROBED FOR BY PATH and names no
+    // environment variable at all -- and #116's own acceptance line asked for a
+    // `path` precondition here. Nen cannot write one: ../shu/run.ts resolves
+    // every declared path against the repository root and REFUSES one that
+    // escapes it (exit 2), so an installed browser's absolute location is not
+    // expressible as a precondition at all. The note says that rather than
+    // "unwise", because the two are different facts and only one is checkable.
+    const lane = detect(GATSBY_SITE).lanes[0];
+    const notes = lane?.notes.join("\n") ?? "";
+    expect(notes).toMatch(/no precondition is proposed for the 'browser'/);
+    expect(notes).toMatch(/\{browserPath\} is a value nen has nothing to read here/);
+    expect(notes).toMatch(
+      /'path' is not merely a bad choice here, it is one nen REFUSES: every path a declaration states is resolved against the repository root and one that escapes it exits 2 by name/,
+    );
+    expect(notes).toMatch(/The reference pack names no environment variable to assert instead/);
+    expect(notes).toMatch(/project\.preconditions\.gatsby/);
+    // THE KINDS COME FROM THE EXECUTOR, not from a sentence typed here: the
+    // note names exactly what ../shu/run.ts can assert, in its order.
+    expect(notes).toContain(
+      `nen asserts a precondition of kind ${ASSERTABLE_KINDS.map((kind): string => `'${kind}'`).join(" or ")} and performs neither`,
+    );
+    // The pack's own reason travels with it, so the note is the catalogue's
+    // sentence rather than this file's paraphrase of it.
+    expect(notes).toMatch(/never installs a browser/);
+    // AND NOTHING IS PROPOSED. The proposal carries no preconditions block at
+    // all, which is the assertion the note would otherwise merely describe.
+    const proposal = detect(GATSBY_SITE).proposal as unknown as Record<string, unknown>;
+    expect(Object.keys((proposal["project"] ?? {}) as object)).not.toContain("preconditions");
+  });
+
+  it("names no environment variable anywhere in the proposal, because the source cites none", () => {
+    // THE MUTANT THIS KILLS: inventing a plausible variable name. A precondition
+    // nen made up reads exactly like one the repository stated.
+    const rendered = renderDetect(detect(GATSBY_SITE)).join("\n");
+    // Case-SENSITIVE, and specifically the shapes an environment variable takes:
+    // the pack's own prose says the builder "avoids puppeteer", and forbidding
+    // the word would forbid the catalogue from explaining itself.
+    expect(rendered).not.toMatch(/PUPPETEER_EXECUTABLE_PATH|CHROME_PATH|CHROMIUM_PATH|EDGE_PATH|CHROME_BIN/);
+  });
+});
+
+describe("nen shu detect -- the gatsby golden suite, byte for byte", () => {
+  const ARGV: Readonly<Record<string, readonly string[]>> = {
+    build: ["would run:     gatsby build"],
+    dev: ["would run:     gatsby develop"],
+    run: ["would run:     gatsby serve"],
+    archive: ["would run:     node scripts/build-placeholder-pdf.mjs"],
+  };
+
+  it("renders every proposed command row back to the argv the pack cites", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-gatsby-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      for (const [verb, lines] of Object.entries(ARGV)) {
+        const result = await capture([verb, "--dry-run"], dir);
+        expect(result.code, verb).toBe(0);
+        expect(
+          result.out.filter((line): boolean => line.startsWith("would run:")),
+          verb,
+        ).toEqual(lines);
+      }
+      // `deploy` is the two-step row and it never reaches the steps: --target is
+      // checked FIRST by design, and a proposal declares no targets.
+      const deploy = await capture(["deploy", "--dry-run", "--target", "x"], dir);
+      expect(deploy.code).toBe(2);
+      expect(deploy.err.join("\n")).toMatch(/declares no targets at all/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses each unsupported row at exit 4, quoting the pack's reason back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-gatsby-unsup-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const verbs = detect(dir).lanes[0]?.verbs;
+      for (const verb of ["test", "ui-test", "lint", "release", "coverage"]) {
+        const result = await capture([verb, "--dry-run"], dir);
+        expect(result.code, verb).toBe(4);
+        expect(result.err.join("\n"), verb).toBe(
+          `nen shu ${verb}: '${verb}' is unsupported on lane 'gatsby' (gatsby). The declaration's own reason: ${reasonOf(verbs, verb)}`,
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a declaration the executor loads without a single hand edit", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-golden-gatsby-load-"));
+    try {
+      cpSync(GATSBY_SITE, dir, { recursive: true });
+      expect((await capture(["detect", "--write"], dir)).code).toBe(0);
+      const built = await capture(["build", "--dry-run", "--json"], dir);
+      expect(built.code).toBe(0);
+      const report = JSON.parse(built.out.join("\n")) as {
+        stack: string;
+        steps: readonly unknown[];
+      };
+      expect(report.stack).toBe("gatsby");
+      expect(report.steps).toEqual([
+        { exe: "gatsby", argv: ["build"], cwd: dir, exitCode: null, durationMs: null },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- the directory order one tree is proposed in", () => {
+  // THE SORT IS PINNED AGAINST AN INJECTED ENTRY LIST rather than against a
+  // real directory, and that is the whole point of the seam. A test that made
+  // files and read them back can only assert what THAT host's `readdirSync`
+  // happened to return -- and the two hosts disagree: this suite runs under
+  // Node and the shipped binary is Bun. Three files created `zulu`, `Beta`,
+  // `alpha`, one directory, the same second: node answered
+  // ["Beta","alpha","zulu"] and bun answered ["Beta","zulu","alpha"]. So a
+  // green suite over a real directory proves nothing about the binary a user
+  // runs, and deleting the sort entirely left every such test passing.
+  const scrambled: readonly { name: string; directory: boolean }[] = [
+    { name: "zulu", directory: true },
+    { name: "äpple", directory: true },
+    { name: "alpha", directory: true },
+    { name: "Beta", directory: true },
+  ];
+
+  it("sorts by BYTE order, not by locale -- 'Beta' before 'alpha', 'zulu' before 'apple'", () => {
+    const sorted = listDirectory("/ignored", (): readonly Entry[] => scrambled);
+    expect(sorted.map((entry): string => entry.name)).toEqual([
+      "Beta",
+      "alpha",
+      "zulu",
+      "äpple",
+    ]);
+    // THE TWO MUTANTS THIS KILLS, named. Deleting the sort leaves the injected
+    // order (`zulu` first). Swapping byte order for `localeCompare` puts
+    // `alpha` first and `apple` second, because a locale-aware collation folds
+    // case and diacritics -- which makes the written document depend on the
+    // machine's locale, the same class of bug as an unsorted read, one layer
+    // up and harder to see.
+    const byLocale = [...scrambled]
+      .sort((a, b): number => a.name.localeCompare(b.name))
+      .map((entry): string => entry.name);
+    expect(byLocale).not.toEqual(sorted.map((entry): string => entry.name));
+    expect(scrambled.map((entry): string => entry.name)).not.toEqual(
+      sorted.map((entry): string => entry.name),
+    );
+  });
+
+  it("answers an unreadable directory with nothing, rather than throwing", () => {
+    expect(listDirectory(join(tmpdir(), "nen-detect-no-such-directory-ever"))).toEqual([]);
+  });
+
+  it("orders two sibling lanes by byte order, and the written document with them", () => {
+    // The end-to-end consequence: `apps/Beta` before `apps/alpha`, in the lane
+    // list, in `--lane`'s refusal and in the key order of the file.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-order-"));
+    try {
+      for (const name of ["alpha", "Beta"]) {
+        mkdirSync(join(dir, "apps", name), { recursive: true });
+        writeFileSync(join(dir, "apps", name, "next.config.js"), "module.exports = {};\n");
+      }
+      expect(detect(dir).lanes.map((lane): string => lane.lane)).toEqual(["Beta", "alpha"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- a script answers a token only where something corroborates it", () => {
+  const gatsbyTree = (scripts: Readonly<Record<string, string>>): string => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-corroborate-"));
+    writeFileSync(join(dir, "gatsby-config.js"), "module.exports = {};\n");
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "site", scripts, dependencies: { gatsby: "5.14.0" } }),
+    );
+    return dir;
+  };
+
+  it("WITHHOLDS on a single arity collision, and names the near miss", () => {
+    // THE BLOCKER THIS CLOSES. `node {archiveScript}` spells out ONE word and
+    // asks for one, so every one-argument `node` script in the manifest agrees
+    // with it by arity. Before corroboration, this tree's `start` script
+    // answered the PDF-archive row: `archive` came out as `node server.js`,
+    // carrying the pack's own `why` about producing a PDF.
+    const dir = gatsbyTree({ start: "node server.js" });
+    try {
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).toEqual(["build", "dev", "run"]);
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes).toMatch(/'archive' withheld: its reference command still names \{archiveScript\}/);
+      // THE NEAR MISS IS NAMED, because "no script answers this" and "one has
+      // the same shape and nothing backs it up" are different facts.
+      expect(notes).toMatch(/one script shares its shape \('start': node server\.js\)/);
+      expect(notes).toMatch(/nothing corroborates the match/);
+      expect(notes).toMatch(/only from a script whose own KEY names what the row is for/);
+      // AND THE VALUE NEVER REACHES A ROW.
+      expect(JSON.stringify(lane?.verbs)).not.toContain("server.js");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ANSWERS from a script whose key names the intent, beside a collision that does not", () => {
+    // `resume:pdf` corroborates itself: the repository named the script after
+    // the file it runs, so `pdf` appears in the key AND in the value. `start`
+    // is the same collision as above and is not a competing answer -- it was
+    // never a candidate, which is why this is not nen resolving an ambiguity.
+    const dir = gatsbyTree({
+      start: "node server.js",
+      "resume:pdf": "node scripts/build-site-pdf.mjs",
+    });
+    try {
+      const lane = detect(dir).lanes[0];
+      expect(lane?.verbs["archive"]).toMatchObject({
+        exe: "node",
+        argv: ["scripts/build-site-pdf.mjs"],
+      });
+      expect(lane?.notes.join("\n")).not.toMatch(/'archive' withheld/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still WITHHOLDS when two corroborated scripts disagree -- corroboration is not a tiebreak", () => {
+    // Both keys name the intent and they answer differently, so this is a real
+    // ambiguity and the row is withheld with both candidates named. Rule 1 of
+    // detect.ts's header is not suspended by the corroboration rule; the rule
+    // decides what a CANDIDATE is, and runs before the ambiguity test.
+    const dir = gatsbyTree({
+      "archive:one": "node scripts/one.mjs",
+      "archive:two": "node scripts/two.mjs",
+    });
+    try {
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).not.toContain("archive");
+      expect(lane?.notes.join("\n")).toMatch(
+        /'archive' withheld: 2 of this lane's own scripts share the shape of its reference command/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("takes ARITY as corroboration where the step spells more of itself out than it asks for", () => {
+    // `{pm} turbo run build` states three words and asks for one, so a script
+    // agreeing with it has agreed about `turbo`, `run` and `build`. No key is
+    // needed, and this is the route that keeps the nextjs rows answerable from
+    // a manifest that names its manager only in a script.
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-shape-corroboration-"));
+    try {
+      writeFileSync(join(dir, "next.config.js"), "module.exports = {};\n");
+      writeFileSync(join(dir, "turbo.json"), TURBO_JSON);
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "shaped", scripts: { ship: "pnpm turbo run build" } }),
+      );
+      const lane = detect(dir).lanes[0];
+      // The KEY (`ship`) names nothing at all -- the shape is the whole
+      // corroboration, and it is enough.
+      expect(lane?.verbs["build"]).toMatchObject({ exe: "pnpm", argv: ["turbo", "run", "build"] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never matches a LONGER script by its first words -- the word count is an equality", () => {
+    // THE MUTANT THIS KILLS: loosening the arity test to a prefix match, which
+    // would answer `node {archiveScript}` from `node scripts/pdf.mjs --watch`
+    // and propose a one-shot archive that is really a watcher.
+    const dir = gatsbyTree({ "resume:pdf": "node scripts/pdf.mjs --watch" });
+    try {
+      const lane = detect(dir).lanes[0];
+      expect(commandRows(lane?.verbs)).toEqual(["build", "dev", "run"]);
+      expect(lane?.notes.join("\n")).toMatch(
+        /'archive' withheld: its reference command still names \{archiveScript\}/,
+      );
+      expect(JSON.stringify(lane?.verbs)).not.toContain("scripts/pdf.mjs");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- the workspace member list is a list of real, included packages", () => {
+  const workspaceTree = (packages: readonly string[]): string => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-members-"));
+    writeFileSync(join(dir, "next.config.mjs"), "export default {};\n");
+    writeFileSync(join(dir, "turbo.json"), TURBO_JSON);
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "root",
+        packageManager: "pnpm@9.15.9",
+        scripts: { build: "x", test: "x", lint: "x", dev: "x" },
+        devDependencies: { "@biomejs/biome": "1.9.4", next: "15.1.0", turbo: "2.3.3" },
+      }),
+    );
+    writeFileSync(
+      join(dir, "pnpm-workspace.yaml"),
+      `packages:\n${packages.map((entry): string => `  - "${entry}"\n`).join("")}`,
+    );
+    for (const name of ["web", "legacy"]) {
+      mkdirSync(join(dir, "apps", name), { recursive: true });
+      writeFileSync(
+        join(dir, "apps", name, "package.json"),
+        JSON.stringify({ name: `@site/${name}` }),
+      );
+    }
+    return dir;
+  };
+
+  const memberNote = (dir: string): string =>
+    detect(dir)
+      .lanes[0]?.notes.find((note): boolean => note.includes("WORKSPACE ROOT")) ?? "";
+
+  it("applies a negation AFTER expansion, so the list never names an excluded package", () => {
+    // `!apps/legacy` used to be skipped as a pattern nen could not read, while
+    // `apps/*` expanded it anyway -- so the note named the one package the
+    // repository had just said to leave out.
+    const dir = workspaceTree(["apps/*", "!apps/legacy"]);
+    try {
+      const note = memberNote(dir);
+      expect(note).toContain("@site/web");
+      expect(note).not.toContain("@site/legacy");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists only directories that are actually there", () => {
+    // A literal pattern was taken verbatim, so `vendor/one` was reported as a
+    // member of a tree with no `vendor/` at all -- nen reading a file back as
+    // though it were a fact about the disk.
+    const dir = workspaceTree(["apps/web", "vendor/one"]);
+    try {
+      const note = memberNote(dir);
+      // The PATTERNS are quoted verbatim -- that is the repository's own file.
+      // The MEMBERS are what nen resolved, and `vendor/one` is not one of them.
+      expect(note).toContain("(apps/web, vendor/one)");
+      expect(note).toContain("the members nen can see here are @site/web.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the patterns it could not read, and says a negation among them widens the list", () => {
+    const dir = workspaceTree(["apps/*", "tools/**", "!packages/*/legacy"]);
+    try {
+      const note = memberNote(dir);
+      expect(note).toContain("nen could not read tools/**, !packages/*/legacy");
+      expect(note).toMatch(/a NEGATION among them means the list may still name a package/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("nen shu detect -- the two kinds of proposed row are printed apart", () => {
+  it("prints the unsupported seats on their own line, never folded into 'verbs'", () => {
+    // THE MUTANT THIS KILLS: dropping the split. One combined list reads as
+    // "eleven verbs are ready", which is the reading that gets a seat shipped
+    // unedited -- and the seats are exactly the rows that need an edit.
+    const rendered = renderDetect(detect(NEXTJS_SINGLE)).join("\n");
+    expect(rendered).toMatch(/^ {8}verbs: {2}build, dev, lint, run, test$/m);
+    expect(rendered).toMatch(
+      /^ {8}unsupported \(the pack's reason, yours to replace\): {2}archive, deploy, release, ui-test$/m,
+    );
+    // And no seat appears on the `verbs:` line.
+    const verbsLine =
+      rendered.split("\n").find((line): boolean => line.trimStart().startsWith("verbs:")) ?? "";
+    for (const seat of ["archive", "deploy", "release", "ui-test"]) {
+      expect(verbsLine, seat).not.toContain(seat);
+    }
+  });
+});
+
+describe("nen shu detect -- the toolchain rows nen declines to propose a precondition for", () => {
+  it("says so for the gradle stacks too, whose probe names the wrapper token", () => {
+    // THE MUTANT THIS KILLS: gating the note on the pack's `kind` field, which
+    // classifies `{gw}` as host-conditional and so skipped the note entirely
+    // for the two stacks whose every command runs through that wrapper. The
+    // executor REFUSES `{gw}` by name (../shu/render.ts's REFUSED_PLACEHOLDERS,
+    // pinned against the pack in ./purity.test.ts), so a probe naming it is a
+    // probe nen cannot perform either: behaviour over prose.
+    for (const stack of ["gradle-android", "compose-desktop"]) {
+      const lane = detect(markerTree(stack)).lanes.find(
+        (entry): boolean => entry.stack === stack,
+      );
+      const notes = lane?.notes.join("\n") ?? "";
+      expect(notes, stack).toMatch(/no precondition is proposed for the 'gradle'/);
+      expect(notes, stack).toMatch(/its probe is '\{gw\} --version'/);
+      expect(notes, stack).toMatch(
+        /\{gw\} is the token the pack says nen resolves for itself from the platform -- and nen's own executor refuses it by name all the same/,
+      );
+    }
+  });
+
+  it("says so for the WinUI workload probe, which names a declaration-supplied token", () => {
+    const notes = detect(markerTree("winui")).lanes[0]?.notes.join("\n") ?? "";
+    expect(notes).toMatch(/no precondition is proposed for the 'visual-studio'/);
+    expect(notes).toMatch(/\{workload\} is a value nen has nothing to read here/);
+    // No such note for a probe that carries no token at all.
+    expect(notes).not.toMatch(/no precondition is proposed for the 'dotnet-sdk'/);
   });
 });

@@ -48,8 +48,18 @@ import { renderArgv, renderInvocation, type HostVerdict, type RenderedInvocation
  */
 export const INTERACTIVE_VERBS: readonly string[] = ["dev", "run"];
 
-/** The precondition kinds this release can assert. Everything else refuses. */
-const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
+/**
+ * The precondition kinds this release can assert. Everything else refuses.
+ *
+ * EXPORTED BECAUSE ./detect.ts HAS TO SAY THE SAME TWO WORDS. Its note about a
+ * toolchain row it will not propose a precondition for names the kinds nen can
+ * assert, and a hand-typed "'path' or 'env'" over there is a sentence that goes
+ * stale the day a third kind lands here, silently, with no test able to notice.
+ * The import direction is safe and deliberately one-way: `detect` reads this
+ * module, never the reverse, so nothing on the spawning path acquires an edge
+ * to the profiles pack (../profiles/inertness.test.ts sweeps for exactly that).
+ */
+export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
 
 export interface AssertedPrecondition {
   readonly kind: string;

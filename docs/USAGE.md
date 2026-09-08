@@ -3398,15 +3398,52 @@ stand behind, naming the row and the reason:
 
 | Check | A row is withheld when |
 |---|---|
-| **placeholders** | it still carries a pack token after substitution. Exactly two are substituted, both from the lane's own `package.json`: `{pm}` (the `packageManager` field with its version stripped) and `{packageManager}` (that field verbatim). `{scheme}`, `{destination}`, `{package}` and the rest are facts only your repository knows, and a guessed argument is a different command |
-| **the executable** | its `exe` is neither the package manager that `package.json` names nor a package it declares as a dependency. Those are the only two ways `detect` can *see* that a repository carries a program |
-| **the script** | its argv runs `run <task>` and `package.json` declares no such script. If the task lives somewhere `detect` does not read — a workspace member, a task runner's own config — the note says so and the row is yours to add by hand |
+| **placeholders** | it still carries a pack token after substitution. Four are answered, all of them from the lane's own `package.json`: `{pm}` (the `packageManager` field with its version stripped), `{packageManager}` (that field verbatim), `{package}` (the manifest's own `name`, and **only** when the manifest is not a workspace root), and any token a declared **script** answers — the next row says what makes a script an answer. `{scheme}`, `{destination}`, `{resultBundle}` and the rest are facts only your repository knows, and a guessed argument is a different command |
+| **corroboration** | a script agrees with the step by word count and at every position the pack spelled out, and *nothing else backs the match up*. Arity is a strong match for a step that spells most of itself out — `<pm> turbo run build` states three words and asks for one — and no match at all for one that does not: `node {archiveScript}` states **one** word and asks for one, so every one-argument `node` script in your manifest agrees with it, and a `"start": "node server.js"` answered the PDF-archive row. So a step whose literal words do not outnumber its token positions is answered only where the **script's own key** names the intent: a word of that key appearing in the verb, in the token's name, or in the value the script would answer with. `"resume:pdf": "node scripts/build-resume-pdf.mjs"` corroborates itself — you named the script after the file it runs; `"start"` says nothing that ties it to an archive, and the note names it as a near miss rather than proposing it |
+| **the executable, and the tool it hands the work to** | its `exe` is neither the package manager `package.json` names, nor a package it declares as a dependency, nor part of a step the manifest spells out **verbatim** as one of its own scripts. The third is the strongest — a manifest whose `scripts` block contains this exact line is the repository saying it runs *this line*, so such a step skips this check and the task check both. **And the check follows the work one hop further.** `pnpm turbo run build` passes on `exe` the moment your manifest names pnpm, and says nothing whatever about turbo — which is the program that has to be there; the same held for `pnpm exec biome check .`. The three hand-off forms (`npx <tool>`, `<pm> exec <tool>`, `<pm> <tool> run <task>`) are read one level in, and that tool must be a declared dependency. A scoped `@biomejs/biome` answers for the `biome` an argv names: the scope is the publisher's |
+| **the task, against the list its runner reads** | `run <task>` names a task, and *who* is asked to run it is the word before `run`. `<pm> run <task>` asks the package manager, whose list is your `scripts`. `<pm> turbo run <task>` asks **turbo**, whose list is your `turbo.json` (`tasks`, or `pipeline` in turbo 1) — you can have the npm script and not the turbo task, or the reverse, so looking a turbo task up in `scripts` validated the wrong list in both directions. Where `detect` cannot see the runner's list — no `turbo.json` in the lane, or a runner whose config filename it does not know — the row is withheld saying which, because *"could not check"* must never render as *"checked, and fine"*. And for a row `{package}` was answered in, the element *after* the package name is a task your manifest must declare |
+| **ambiguity** | two of the lane's own scripts corroborate the match and answer the same token differently. `detect` resolves no ambiguity, and one arriving from inside a single file is not a different kind of ambiguity: both candidates are named and the row is yours to state. Corroboration decides what a *candidate* is and runs first, so a coincidence of word count is never a competing answer |
 
 A proposal you paste and then discover is fiction is worse than an empty map
-with a reason. `detect` also names the cells the **pack itself** proposes no
-command for — `declared-only` and `unsupported` rows — because "the pack
-declined to choose for you" and "this proposal has a gap" are different facts
-and a reader who cannot tell them apart writes the row nen was avoiding.
+with a reason.
+
+**A cell the pack has no command for becomes an explicit seat, not a hole.**
+`declared-only` and `unsupported` rows are proposed as
+`{"unsupported": "<the pack's own reason, quoted>"}`, and three things follow
+from that. The declaration nen writes **loads**: a lane whose verb map is empty
+is a file nen's own reader refuses, so a tree whose every command row was
+withheld used to get a proposal the very next `nen shu build` rejected. The
+reason you read in the file is the same sentence the executor prints back at
+exit 4, because it *is* that repository's reason once the file is yours. And
+the note tells you which seats are `declared-only` — the pack **has** observed
+commands and declines to pick one, so those are the rows to replace first —
+because "the pack declined to choose for you" and "this proposal has a gap" are
+different facts and a reader who cannot tell them apart writes the row nen was
+avoiding. The text output prints the two kinds on separate lines for the same
+reason; `--json` is unchanged, and the split is read off each row's own shape.
+
+**And a precondition nen would have to invent a value for is never proposed.**
+Where a stack's toolchain entry probes for something `detect` has nothing to
+read — an installed browser binary, a Visual Studio workload, the Gradle
+wrapper token — it says so in a note, quotes the pack's reason, and proposes
+nothing. `path` is not merely the wrong choice for an installed binary, it is
+one nen **refuses**: every path a declaration states is resolved against the
+repository root and one that escapes it exits **2** by name, so a machine's
+absolute install location is not expressible as a precondition at all. And
+`detect` names no environment variable the reference does not cite. If your
+repository has one, state it yourself:
+`{"kind": "env", "value": "<NAME>"}` under `project.preconditions.<lane>`. The
+note appears for **every** toolchain probe carrying a pack token, `{gw}`
+included: the pack's prose calls that one "the token nen resolves itself", and
+the executor refuses it by name all the same — where the catalogue's prose and
+the program's behaviour disagree about what nen does, the behaviour is the fact.
+
+**Per-stack notes.** The two stacks `detect` proposes end to end:
+
+| Stack | What it proposes | What it withholds, and why |
+|---|---|---|
+| `nextjs` | `build`, `test`, `dev` (`<pm> turbo run <task>`), `run` (`next start`), `lint` (**two steps, in order** — the repo-wide format check, then the per-workspace fan-out), and `coverage` (`<pm> --filter <package> test:coverage`) where the lane resolves to one package that declares the task. Every workspace member carrying a `next.config.*` becomes its own lane, plus the root when the root has one, with `defaultLane: null` and `--lane` required. Seats for `ui-test`, `archive`, `deploy` (all `declared-only`) and `release` (`unsupported` — one observed repository says so in its own Makefile). | The four turbo rows unless your manifest declares **turbo** and your lane has a `turbo.json` declaring that task — `turbo run build` does not run the npm `build` script, and a manager the manifest names says nothing about the tool it hands the work to. `lint` likewise needs **biome** declared (`@biomejs/biome` counts). `coverage` on a **workspace root** — the root is the *list* of packages, not one of them, so answering `{package}` with its own name would propose a command the repository never runs; the note names every member it found, negations applied and missing directories dropped. `coverage` on a lane with no `test:coverage` script, naming the task. Any row whose `{pm}` cannot be read, because `package.json` states no `packageManager` (or states one with no `@version` to split). |
+| `gatsby` | `build` (`gatsby build`), `dev` (`gatsby develop`), `run` (`gatsby serve`), `archive` (`node <the script your package.json names>`) and the two-step `deploy` (that same archive step, then the pages push the pack cites). Seats for `test`, `ui-test`, `lint`, `release` and `coverage`, each with the pack's sentence — *"no test script and no test-runner dependency"*, *"NO LINTER OF ANY KIND EXISTS IN THIS REPOSITORY."* `hosts` is every platform. | `archive` and `deploy` when no declared script both matches the shape **and** corroborates it — `{archiveScript}` is a path, the one place `detect` can see a path this repository runs is its own `scripts` block, and `node {archiveScript}` is thin enough that arity alone would take the first one-argument `node` script in the file. A `resume:pdf` answers; a `start` is named as a near miss. Two corroborated scripts that disagree are an ambiguity, not a choice. `build`/`dev`/`run` when `gatsby` is not a declared dependency: a marker match is not evidence a tool is installed. And **no precondition for the locally installed browser** `archive` and `deploy` need — the reference probes for it *by path* and cites no environment variable, and a `path` precondition cannot name a location outside the repository at all, so `detect` reports the requirement in a note. |
 
 The scan is bounded, and both bounds can hide a real lane: it descends at most
 **three** directories below `--repo`, and it never enters `.git`, `.gradle`,
@@ -3431,14 +3468,16 @@ nen shu detect --repo ./two-app-monorepo
 repository:  /Users/…/two-app-monorepo
 declaration: /Users/…/two-app-monorepo/nen/contract.json  (absent)
 
-  web  (nextjs)  cwd web
-        marker: web/next.config.js
-        verbs:  build, dev, lint, run, test
-        ^ 'coverage' withheld: its reference command still names {package}, which only this repository can answer. nen never proposes an unsubstituted token: a guessed argument is a different command.
-        ^ the reference pack proposes no command for ui-test (two meanings), archive (evidence, not an artifact), release (declared n/a in the repo), deploy (three shapes, no default). …
   admin  (nextjs)  cwd admin
         marker: admin/next.config.js
         verbs:  build, dev, lint, run, test
+        unsupported (the pack's reason, yours to replace):  archive, deploy, release, ui-test
+        ^ 'coverage' withheld: its reference command asks the package '@acme/admin' for the task 'test:coverage', and this lane's package.json declares no such script. If the task is declared somewhere nen does not read -- a workspace member, a task runner's own config -- add the row by hand; a verb the project does not visibly carry is a warning, never a proposal.
+        ^ the reference pack proposes no command for ui-test (two meanings), archive (evidence, not an artifact), release (declared n/a in the repo), deploy (three shapes, no default). … ui-test, archive, deploy are declared-only rather than unsupported: the pack HAS observed commands for them and declines to pick one, so those rows are the first to replace.
+  web  (nextjs)  cwd web
+        marker: web/next.config.js
+        verbs:  build, dev, lint, run, test
+        unsupported (the pack's reason, yours to replace):  archive, deploy, release, ui-test
         ^ … (the same two notes)
 
 note: a lane's NAME is proposed from the directory it lives in (or from the stack id at the repository root) and is yours to change -- it is the token '--lane' takes, and nothing in nen reads meaning into it.
@@ -3450,15 +3489,19 @@ proposed nen/contract.json (nothing was written -- pass --write, or paste this):
   "$schema": "nen.contract/v0.1",
   "project": {
     "lanes": {
-      "web": { "stack": "nextjs", "cwd": "web" },
-      "admin": { "stack": "nextjs", "cwd": "admin" }
+      "admin": { "stack": "nextjs", "cwd": "admin" },
+      "web": { "stack": "nextjs", "cwd": "web" }
     },
     "defaultLane": null,
     …
   }
 }
 ```
-(run for real against a two-lane fixture tree; the proposal is elided at `…`)
+(run for real against a two-lane fixture tree; the proposal is elided at `…`.
+The lanes come out in **byte order** — `admin` before `web`, and `apps/Beta`
+before `apps/alpha` — because the directory listing every part of this verb
+walks is sorted here rather than left to the host: Node and Bun return the same
+directory in different orders, so one tree used to propose two documents.)
 
 ### `nen shu build`
 
@@ -4548,18 +4591,37 @@ declines to (`declared-only`, `unsupported`), and `detect` withholds anything it
 cannot cross-check against the repository's own `package.json`.
 [`docs/STACK-MATRIX.md`](STACK-MATRIX.md) is the cell-by-cell answer.
 
+**Two stacks are proposed end to end today: `nextjs` and `gatsby`.** For those,
+`detect` fills every row of the declaration — a command where the repository's
+own manifest confirms one, and an explicit `{"unsupported": "<the pack's
+reason>"}` seat where the pack has none, so the file it writes is one the
+executor loads with no hand edit. The other five stacks get the same lane, the
+same `hosts` block and **their own** seats — the count differs per stack, because
+it is the pack's own tally of cells it has no command for: `nextjs` has 4 and
+`gatsby` 5, `expo` 7, `gradle-android` 6, `xcode-ios` 7, `compose-desktop` 9,
+and `dotnet-winui` all 10. Their command rows are withheld with a reason each,
+because a `package.json` is the only thing `detect` can cross-check an argv
+against. **`expo` is the near miss and is worth naming**: it *does* carry one —
+a realistic Expo repository (an `app.json` with an `expo` key beside a manifest
+declaring `expo`) gets `dev` (`expo start`) and `lint` (`expo lint`) proposed end
+to end, and only `run` withheld, because `expo run:{platform}` names a lane
+neither of whose halves is the other's default. What the remaining four have in
+common is a build system `detect` cannot read: a Gradle wrapper, an Xcode
+project, an MSBuild project file. See [per-stack notes](#nen-shu-detect) under
+`shu detect`.
+
 | Action | Exists today? | Verb | Scope |
 |---|---|---|---|
 | build | **yes — any lane that declares one** | [`shu build`](#nen-shu-build) | Runs the `build` invocation the lane declares, in the lane's `cwd`, with `--dry-run` printing every step first. Nen's own binaries are still cross-compiled by `bun run build:<target>`, which is a package script, not a nen verb. |
 | test | **yes — any lane that declares one** | [`shu test`](#nen-shu-test), [`dev test`](#nen-dev-test) | `shu test` runs a *target project's* declared test invocation; `dev test` still spawns `bun run test` in *this* checkout. |
-| ui-test | **the verb exists; no stack ships a reference row** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form — but the pack proposes no default for any stack, because the observed repositories disagree about what this verb even means (a browser suite, or a static visual build). `detect` says so and withholds; the declaration decides. Nen runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
+| ui-test | **the verb exists; one stack ships a reference row** | [`shu ui-test`](#nen-shu-ui-test) | Runs the lane's declared UI/E2E invocation, including the multi-step form. **One stack ships a reference row**: `gradle-android`'s `{gw} verifyPaparazziDebug` — screenshot verification, and recording the baselines is a deliberately separate command the declaration states if it wants it. Everywhere else the pack proposes no default, and for two different reasons a reader should not conflate: `nextjs` is the *declined-to-choose* case (Playwright as two steps, or a Storybook static build — the observed repositories disagree about what this verb even means), and `gatsby` the *nothing-observed* one. `detect` proposes those as `unsupported` **seats** carrying the pack's own sentence, and the declaration decides. Nen runs no E2E tool of its own; [`quality tooling`](#nen-quality-tooling) *looks up* which one a scenario uses. |
 | lint | **yes — any lane that declares one** | [`shu lint`](#nen-shu-lint), [`dev lint`](#nen-dev-lint) | `shu lint` runs a *target project's* declared lint invocation (commonly two steps, in order); `dev lint` still spawns `bun run lint` in *this* checkout. |
-| archive | **the verb exists; no stack ships a reference row** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. Most lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. No signing material is ever synthesised. |
+| archive | **yes on `gatsby`; a seat elsewhere** | [`shu archive`](#nen-shu-archive) | Runs a lane's declared packaging step. `gatsby` is the one stack whose archive produces a real artifact, and `detect` proposes it — `node <the script your package.json names>` — reading the path out of the repository's own `scripts` block rather than guessing one. Most other lanes declare `{"unsupported": "<why>"}`, and the refusal quotes that sentence at exit 4. No signing material is ever synthesised. |
 | release | **mechanics, plus the verb** | [`shu release`](#nen-shu-release), [`release resolve-target`](#nen-release-resolve-target), [`release preflight`](#nen-release-preflight), [`release self-check`](#nen-release-self-check), [`changelog collate`](#nen-changelog-collate), [`changelog completeness`](#nen-changelog-completeness), [`tag cut`](#nen-tag-cut), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record) | `shu release` runs a lane's declared publication step where it has one. The rest is unchanged: preconditions, the changelog, the annotated tag, the consumer fan-out — a tag is not a release. |
 | dev (debug run) | **yes — any lane that declares one** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
-| deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`. There is no default target, ever. No stack ships a reference deploy row. |
-| coverage | **the verb exists; the reference rows are templated** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack's rows for it name a workspace or a result bundle nen cannot know, so `detect` withholds them with the token named and the declaration supplies it. Parsing the report the declaration names, and the never-a-gate `--threshold`, arrive with a later PR. |
+| deploy | **the verb exists; `--target` is mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`. There is no default target, ever — and `--target` is checked **before** the lane and the verb, so a proposal with no `targets` block answers that first. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. |
+| coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s row names a result bundle nen cannot know and is withheld with the token named. Parsing the report the declaration names, and the never-a-gate `--threshold`, arrive with a later PR. |
 | host toolchain | **no** | — | [`shu tools`](#nen-shu-tools) is declared, documented and refuses at exit 4: it is the one verb whose blast radius is the developer's machine, and it ships on its own (PR 4 of #91). [`shu warmup`](#nen-shu-warmup) refuses at 4 for the same kind of reason and arrives in PR 12. |
 
 The remaining work is tracked in

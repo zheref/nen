@@ -1,0 +1,7 @@
+# TEST FIXTURE -- the workspace ROOT's own statement of where its members live.
+# `nen shu detect` reads it for exactly one purpose: to know that this manifest
+# is the LIST of packages rather than one of them, so `{package}` is never
+# answered with the root's own name.
+packages:
+  - "apps/*"
+  - "packages/*"
