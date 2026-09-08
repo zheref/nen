@@ -12,6 +12,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 ### Added
 
 - **docs** — `docs/USAGE.md`: every verb of all 34 families with purpose, arguments, exit codes, `--json` notes and a real example; conventions stated once (`--repo`, `--target`, exit codes, `--dry-run`, taxonomy as data, the bootstrap); six end-to-end developer workflows; a day-to-day-actions cross-reference ([#102](https://github.com/zheref/nen/pull/102), closes #90)
+- **docs** — README gains a "Day to day" section: pin the binary once, set up a repository's taxonomy, and the six verbs a maintainer runs most, each runnable as printed ([#PR](link))
 
 ## v0.2.0 — 2026-09-07
 
