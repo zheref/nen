@@ -69,7 +69,7 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { PLACEHOLDERS } from "../profiles/pack.js";
+import { loadProfilesPack, PLACEHOLDERS, profileById, verbCell } from "../profiles/pack.js";
 import { INSTALLERS, type Installer } from "../schema/contract.js";
 import { ENABLED_INSTALLERS } from "./install.js";
 import { REFUSED_PLACEHOLDERS } from "./render.js";
@@ -252,6 +252,66 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
   it("finds the reference argv in the pack, where it belongs", () => {
     const pack = readFileSync(join(process.cwd(), "profiles", "nextjs.json"), "utf8");
     expect(pack.split("\n").flatMap(toolsNamedIn).length).toBeGreaterThan(0);
+  });
+
+  // ── the OTHER excluded module, held to the rule the sweep cannot ─────────
+  //
+  // `detect.ts` is off the execution path for a reason the header argues at
+  // length -- a FILENAME is a universal fact -- and the exclusion is about
+  // filenames and manifest keys. It was never a licence to name a PROGRAM, and
+  // the difference matters most for the stack whose reader is the biggest: the
+  // Apple lane's reader opens `.xcodeproj` and `.xcscheme` bundles, decides
+  // which container a flag addresses, and quotes the pack's rows back -- and it
+  // does all of that without ever spelling the programs those rows run.
+  //
+  // THE LIST IS READ OUT OF THE PACK, not typed here. A profile that gained a
+  // row running a new program would extend this test by itself; a hand list
+  // would go on checking yesterday's names. The sweep is the PLAIN TEXT of the
+  // module, comments included, which is the same discipline the rule above
+  // applies to every other file in this directory: a program named in a comment
+  // here is a program the next maintainer of this file could reach for.
+  //
+  // SCOPED TO THE APPLE PROFILE, and the scope is the honest part. The other
+  // six stacks' programs are words `detect.ts` legitimately carries for other
+  // reasons entirely -- `expo` and `gatsby` are STACK IDS in the marker table,
+  // `node` opens every import in the file -- so a pack-wide sweep here would
+  // report six false positives and be deleted within a week. This stack's
+  // programs collide with nothing: they are executables and nothing else, and
+  // this stack's reader is the largest one in the file, which is exactly where
+  // an argv would be easiest to justify to oneself.
+  it("names no program from the Apple profile's own rows inside the marker reader", () => {
+    const pack = loadProfilesPack();
+    const profile = profileById(pack, "xcode-ios");
+    const programs = new Set<string>();
+    for (const verb of pack.verbs) {
+      const cell = verbCell(profile, verb);
+      if (cell.kind === "command" && cell.invocation.kind === "command") {
+        programs.add(cell.invocation.exe.toLowerCase());
+      }
+      if (cell.kind === "steps" && cell.invocation.kind === "steps") {
+        for (const step of cell.invocation.steps) programs.add(step.exe.toLowerCase());
+      }
+    }
+    // The toolchain probes are programs too, and one of them is a program NO
+    // verb row runs -- so leaving them out would leave a name the rule is about.
+    for (const entry of Object.values(profile.toolchain)) {
+      const probe = entry.probe[0];
+      if (probe !== undefined) programs.add(probe.toLowerCase());
+    }
+    // A derived list that had quietly stopped containing the two names this
+    // rule was written for would make the sweep below vacuous.
+    expect([...programs].sort()).toEqual(["pod", "xcodebuild", "xcrun"]);
+
+    const source = readFileSync(join(SHU, "detect.ts"), "utf8").replace(/\r\n/g, "\n");
+    const offences: string[] = [];
+    source.split("\n").forEach((line, index): void => {
+      for (const word of line.split(TOKEN_SPLIT)) {
+        if (programs.has(word.toLowerCase())) {
+          offences.push(`shu/detect.ts:${index + 1}: ${word} -- in: ${line.trim()}`);
+        }
+      }
+    });
+    expect(offences).toEqual([]);
   });
 
   describe("the matcher itself", () => {
