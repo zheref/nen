@@ -3896,9 +3896,9 @@ nen epic next-wave --body-file epic-body.md --citation CON-25 \
 
 nen backlog fetch --repo-slug zheref/nen --limit 200 --json > rows.json
 
-# ordered-rows.json and board-rows.json are the CALLER's files, reshaped from
+# order-rows.json and board-rows.json are the CALLER's files, reshaped from
 # rows.json -- neither is any verb's output. See below.
-nen backlog order --rows-from ordered-rows.json --severity-order critical,high,medium,low --blocks 98
+nen backlog order --rows-from order-rows.json --severity-order critical,high,medium,low --blocks 98
 
 nen board build --repo-slug zheref/nen --rows-from board-rows.json --json > board.json
 nen board render --board-from board.json
