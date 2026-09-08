@@ -101,11 +101,27 @@ const CHILD_PROCESS: readonly string[] = ["child_process", "node:child_process"]
 
 const SENTINEL = "\u0000";
 
+// A second, distinct sentinel for a template literal's STATIC text -- the
+// parts between a backtick, `${` and `}` -- so `pathCallArguments` below can
+// read them without teaching `importSpecifiers` to treat a dynamic template
+// as a resolvable specifier. The specifier patterns hardcode `SENTINEL`
+// (`\u0000`) and so never match a `TEMPLATE_SENTINEL` (`\u0001`) token,
+// however it is placed in `code`.
+const TEMPLATE_SENTINEL = "\u0001";
+
 export interface Tokenized {
   /** Comments removed, string literals replaced by sentinels. */
   readonly code: string;
   /** The contents of each string literal, in the order they appeared. */
   readonly literals: readonly string[];
+  /**
+   * The static text of each template-literal chunk (the segment up to the
+   * next `${` or the closing backtick), in the order they appeared. A chunk
+   * is not a resolvable specifier -- it may sit beside an interpolation --
+   * but its text is still worth reading for a `profiles` path segment, which
+   * is what `pathCallArguments` does with it.
+   */
+  readonly templateLiterals: readonly string[];
 }
 
 // A `/` opens a regex literal unless the token before it could END an
@@ -145,11 +161,16 @@ export function opensRegex(codeSoFar: string): boolean {
 
 export function tokenize(source: string): Tokenized {
   const literals: string[] = [];
+  const templateLiterals: string[] = [];
   let code = "";
   // A stack, so `${...}` inside a template literal is scanned as CODE and a
   // template inside that is scanned as a template again.
   const stack: ("code" | "template")[] = ["code"];
   const braces: number[] = [0];
+  // One buffer per template-nesting level, pushed and popped alongside
+  // `stack`: the static text collected since the template opened, or since
+  // its last `${...}` closed.
+  const templateChunks: string[] = [];
   let index = 0;
 
   const emit = (text: string): void => {
@@ -177,17 +198,34 @@ export function tokenize(source: string): Tokenized {
     emit(`${SENTINEL}${literals.length - 1}${SENTINEL}`);
   };
 
+  // Emits the buffer collected for the CURRENT template-nesting level as a
+  // TEMPLATE_SENTINEL token, then resets it. Called at every `${` and at the
+  // closing backtick, so a multi-hole template (`` `a${x}b${y}c` ``) yields
+  // one chunk per gap: "a", "b" and "c".
+  const flushTemplateChunk = (): void => {
+    const level = templateChunks.length - 1;
+    const chunk = templateChunks[level] ?? "";
+    templateLiterals.push(chunk);
+    emit(`${TEMPLATE_SENTINEL}${templateLiterals.length - 1}${TEMPLATE_SENTINEL}`);
+    templateChunks[level] = "";
+  };
+
   while (index < source.length) {
     const mode = stack[stack.length - 1] ?? "code";
     const char = source[index] ?? "";
     const next = source[index + 1] ?? "";
 
     if (mode === "template") {
+      const level = templateChunks.length - 1;
       if (char === "\\") {
+        // Unescaped, same as `readQuoted`: `\` + the next char contributes
+        // that char to the chunk, not the backslash.
+        templateChunks[level] = (templateChunks[level] ?? "") + (source[index + 1] ?? "");
         index += 2;
         continue;
       }
       if (char === "$" && next === "{") {
+        flushTemplateChunk();
         stack.push("code");
         braces.push(0);
         // A space, so `}${` cannot fuse two identifiers into one token.
@@ -196,6 +234,8 @@ export function tokenize(source: string): Tokenized {
         continue;
       }
       if (char === "`") {
+        flushTemplateChunk();
+        templateChunks.pop();
         stack.pop();
         // ` 0 `: a template literal IS an expression, so a `/` after it is
         // division. Emitting nothing here would leave the preceding token
@@ -205,6 +245,7 @@ export function tokenize(source: string): Tokenized {
         continue;
       }
       if (char === "\n") code += "\n";
+      templateChunks[level] = (templateChunks[level] ?? "") + char;
       index += 1;
       continue;
     }
@@ -227,6 +268,7 @@ export function tokenize(source: string): Tokenized {
       continue;
     }
     if (char === "`") {
+      templateChunks.push("");
       stack.push("template");
       code += " ";
       index += 1;
@@ -271,7 +313,7 @@ export function tokenize(source: string): Tokenized {
     index += 1;
   }
 
-  return { code, literals };
+  return { code, literals, templateLiterals };
 }
 
 // ── specifiers ──────────────────────────────────────────────────────────────
@@ -316,13 +358,44 @@ export function importSpecifiers(source: string): string[] {
 // without an import graph having an edge to follow. Arguments are collected by
 // walking the parentheses, so a nested call (`join(dirname(x), "profiles")`)
 // contributes its literals too.
-const PATH_CALLS: readonly string[] = ["join", "resolve", "readFileSync", "readFile", "import"];
+//
+// EACH NAME IS MATCHED BY ITS CALLEE'S LAST IDENTIFIER SEGMENT, REGARDLESS OF
+// NAMESPACE PREFIX: a bare `readFileSync(...)`, a `fs.readFileSync(...)` and an
+// aliased `nodeFs.readFileSync(...)` (a `node:fs` default import can be named
+// anything) all read the filesystem the same way, and a rule that matched only
+// the bare form is a rule an import style walks straight through. `file` is the
+// one exception -- alone, it is far too common a method name to sweep
+// generically -- so it is matched ONLY as `Bun.file(...)`, the one namespace
+// this repository could plausibly write it under.
+const PATH_CALLS: readonly string[] = [
+  "join",
+  "resolve",
+  "readFileSync",
+  "readFile",
+  "readdirSync",
+  "existsSync",
+  "statSync",
+  "lstatSync",
+  "openSync",
+];
+
+const PATH_CALL_OPENERS: readonly RegExp[] = [
+  // The lookbehind excludes only a preceding identifier character (so
+  // `xreadFileSync(` is not a match) and, unlike the import-specifier
+  // patterns above, explicitly ALLOWS a preceding `.` -- that is exactly what
+  // lets `fs.readFileSync(` and `path.join(` through.
+  ...PATH_CALLS.map((call): RegExp => new RegExp(`(?<![\\w$])${call}\\s*\\(`, "g")),
+  // `import(...)` keeps its original, stricter match: a keyword, not a name
+  // that is ever legitimately namespaced.
+  /(?<![.\w$])import\s*\(/g,
+  // `Bun.file(...)` -- `file` alone is far too generic a method name to sweep.
+  /(?<![.\w$])Bun\s*\.\s*file\s*\(/g,
+];
 
 export function pathCallArguments(source: string): string[] {
-  const { code, literals } = tokenize(source);
+  const { code, literals, templateLiterals } = tokenize(source);
   const found: string[] = [];
-  for (const call of PATH_CALLS) {
-    const opener = new RegExp(`(?<![.\\w$])${call}\\s*\\(`, "g");
+  for (const opener of PATH_CALL_OPENERS) {
     for (const match of code.matchAll(opener)) {
       let depth = 1;
       let index = match.index + match[0].length;
@@ -335,6 +408,12 @@ export function pathCallArguments(source: string): string[] {
           if (end === -1) break;
           const literal = literals[Number(code.slice(index + 1, end))];
           if (literal !== undefined) found.push(literal);
+          index = end;
+        } else if (char === TEMPLATE_SENTINEL) {
+          const end = code.indexOf(TEMPLATE_SENTINEL, index + 1);
+          if (end === -1) break;
+          const chunk = templateLiterals[Number(code.slice(index + 1, end))];
+          if (chunk !== undefined) found.push(chunk);
           index = end;
         }
         index += 1;
@@ -707,6 +786,58 @@ describe("the profiles pack is inert", () => {
     expect(offenders).toEqual([]);
   });
 
+  describe("the widened path-call rule", () => {
+    // The rule originally matched only a BARE `readFileSync(` or `join(`, and
+    // so missed every namespaced form: `fs.readFileSync(...)`, `path.join(...)`,
+    // the same call reached through whatever an aliased `node:fs` default
+    // import happens to be named, and the newer Bun file-access name this
+    // repository has started to use. It now matches a call by its callee's
+    // LAST identifier segment regardless of namespace, and reads every string
+    // literal AND every template literal's static text for a `profiles`
+    // segment -- each fixture below is one such evasion, caught the same way
+    // the shipped-tree sweep above would catch it.
+    const READS: readonly { readonly what: string; readonly source: string }[] = [
+      {
+        what: "a namespaced fs.readFileSync(...) wrapping a bare join(...)",
+        source: [
+          'import * as fs from "node:fs";',
+          'import { join } from "node:path";',
+          'fs.readFileSync(join(root, "profiles", "x.json"));',
+        ].join("\n"),
+      },
+      {
+        what: "a namespaced path.join(...)",
+        source: [
+          'import * as path from "node:path";',
+          'path.join("profiles", id + ".json");',
+        ].join("\n"),
+      },
+      {
+        what: 'a "node:fs" default-import alias calling readFileSync',
+        source: [
+          'import * as fs from "node:fs";',
+          'fs.readFileSync(root + "/profiles/y.json", "utf8");',
+        ].join("\n"),
+      },
+      {
+        what: "a template-literal Bun.file(...) read",
+        source: "Bun.file(`profiles/${id}.json`);",
+      },
+    ];
+
+    for (const fixture of READS) {
+      it(`catches ${fixture.what}`, () => {
+        const module = scan("src/run/widened.ts", fixture.source);
+        expect(readsPackByPath(module)).toBe(true);
+      });
+    }
+
+    it("still passes a `docs` path built the same bare way", () => {
+      const module = scan("src/run/docs.ts", 'join(root, "docs");');
+      expect(readsPackByPath(module)).toBe(false);
+    });
+  });
+
   it("cannot spawn anything itself", () => {
     const edges = GRAPH.edges.get(PACK) ?? [];
     expect(edges.filter((edge): boolean => edge === SEAM)).toEqual([]);
@@ -838,6 +969,34 @@ describe("the tokenizer", () => {
     ]);
     expect(pathCallArguments('join(root, "docs")')).toEqual(["docs"]);
     expect(pathCallArguments('// join(root, "profiles")')).toEqual([]);
+  });
+
+  it("matches a call by its callee's last segment, whatever the namespace", () => {
+    // `fs.readFileSync(` and a bare `readFileSync(` are the same read; only
+    // the alias differs, and the alias is whatever an import statement named
+    // it. `xreadFileSync(` is NOT a match -- it is a different, longer name
+    // that merely ends the same way.
+    expect(pathCallArguments('fs.readFileSync("profiles/x.json")')).toEqual(["profiles/x.json"]);
+    expect(pathCallArguments('nodeFs.readFileSync("profiles/x.json")')).toEqual([
+      "profiles/x.json",
+    ]);
+    expect(pathCallArguments('xreadFileSync("profiles/x.json")')).toEqual([]);
+  });
+
+  it("reads a template literal's static text, split around each hole", () => {
+    // `${id}` contributes no literal of its own -- it is not statically
+    // known -- but the text on either side of it is read exactly like a
+    // quoted string.
+    expect(pathCallArguments("join(`profiles/${id}.json`)")).toEqual(["profiles/", ".json"]);
+  });
+
+  it("matches `Bun.file(...)` but not a bare, unrelated `file(...)`", () => {
+    // `file` alone is far too common a method name to sweep generically, so
+    // it is matched only in the one namespace this repository could
+    // plausibly write it under.
+    expect(pathCallArguments("Bun.file(`profiles/${id}.json`)")).toEqual(["profiles/", ".json"]);
+    expect(pathCallArguments('file("profiles/x.json")')).toEqual([]);
+    expect(pathCallArguments('config.file("profiles/x.json")')).toEqual([]);
   });
 });
 

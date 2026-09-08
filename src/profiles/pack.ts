@@ -555,6 +555,79 @@ function requireSummary(path: string, pointer: string, raw: Record<string, unkno
   return requireString(path, `${pointer}.summary`, raw["summary"]);
 }
 
+// ── cell forms ──────────────────────────────────────────────────────────────
+//
+// A verb's cell is exactly one of FIVE forms -- three the declaration's own
+// (`command`, `steps`, `unsupported`, parsed by ../schema/contract.ts) and two
+// that exist only in a catalogue (`declaredOnly`, `delegatesTo`; see
+// `ProfileVerb`'s doc comment above for what each means). Each form is named
+// here by the ONE key whose presence marks a raw cell as that form (`exe` for
+// `command`, since a cell never literally spells "command"), plus the small
+// set of companion keys it owns besides that marker and `source`, which every
+// form carries and which is read before any of this runs.
+//
+// ONE TABLE, ONE CHECK. `declaredOnly` and `delegatesTo` are the two forms
+// this file itself must police, because ../schema/contract.ts has never heard
+// of them -- and a cell mixing either with a key from another form (an `argv`
+// beside a `declaredOnly`, a `declaredOnly` beside a `delegatesTo`, a `why`
+// beside neither `command`, `steps` nor `delegatesTo`) is a mixed-form
+// authoring error the same way declaring two of `exe`/`steps`/`unsupported`
+// already is. `refuseStrayFormKeys` below reads this table rather than a
+// second, hand-maintained list of "the other keys" per form -- which is
+// exactly how `argv` and `why` went missing from those lists the first time --
+// so a SIXTH form joins the same check by adding one row here.
+interface CellForm {
+  readonly name: string;
+  /** The key whose presence marks a raw cell as this form. */
+  readonly marker: string;
+  /** Keys this form legitimately carries besides its marker and `source`. */
+  readonly ownKeys: readonly string[];
+}
+
+const CELL_FORMS: readonly CellForm[] = [
+  { name: "command", marker: "exe", ownKeys: ["argv", "why"] },
+  { name: "steps", marker: "steps", ownKeys: ["why"] },
+  { name: "unsupported", marker: "unsupported", ownKeys: [] },
+  { name: "declaredOnly", marker: "declaredOnly", ownKeys: [] },
+  { name: "delegatesTo", marker: "delegatesTo", ownKeys: ["why"] },
+];
+
+// Every key ANY form's marker or companion names -- the vocabulary a stray key
+// is drawn from. `summary` and `source` are deliberately absent: `summary` is
+// unread outside the two forms that abbreviate it and preserved everywhere
+// else (this file's header explains why), and `source` is common to every
+// cell rather than belonging to one form.
+const ALL_FORM_KEYS: readonly string[] = [
+  ...new Set(CELL_FORMS.flatMap((form): readonly string[] => [form.marker, ...form.ownKeys])),
+];
+
+/**
+ * Refuse a cell that carries a key belonging to a form OTHER than `formName`.
+ * Every key `ALL_FORM_KEYS` lists that is present on `raw` and not one of this
+ * form's own is named together in one refusal -- not just the first found, so
+ * a reader fixing the cell sees the whole mistake at once, not one key per
+ * re-run.
+ */
+function refuseStrayFormKeys(
+  path: string,
+  pointer: string,
+  raw: Record<string, unknown>,
+  formName: string,
+): void {
+  const form = CELL_FORMS.find((entry): boolean => entry.name === formName);
+  if (form === undefined) return;
+  const allowed = new Set<string>([form.marker, ...form.ownKeys]);
+  const strays = ALL_FORM_KEYS.filter(
+    (key): boolean => !allowed.has(key) && raw[key] !== undefined,
+  );
+  if (strays.length === 0) return;
+  throw new SchemaError(
+    path,
+    pointer,
+    `declares '${form.marker}' alongside ${strays.map((key): string => `'${key}'`).join(", ")}. A cell has exactly one form, and guessing which one wins is not this loader's to do`,
+  );
+}
+
 function parseVerb(
   path: string,
   pointer: string,
@@ -568,14 +641,7 @@ function parseVerb(
   // knows nothing about them and would report "expected one of exe, steps or
   // unsupported" for a cell that is neither malformed nor its business.
   if (raw["declaredOnly"] !== undefined) {
-    for (const other of ["exe", "steps", "unsupported", "delegatesTo"]) {
-      if (raw[other] === undefined) continue;
-      throw new SchemaError(
-        path,
-        pointer,
-        `declares both 'declaredOnly' and '${other}'. A cell has exactly one form, and guessing which one wins is not this loader's to do`,
-      );
-    }
+    refuseStrayFormKeys(path, pointer, raw, "declaredOnly");
     return {
       kind: "declared-only",
       reason: requireString(path, `${pointer}.declaredOnly`, raw["declaredOnly"]),
@@ -585,14 +651,7 @@ function parseVerb(
   }
 
   if (raw["delegatesTo"] !== undefined) {
-    for (const other of ["exe", "steps", "unsupported"]) {
-      if (raw[other] === undefined) continue;
-      throw new SchemaError(
-        path,
-        pointer,
-        `declares both 'delegatesTo' and '${other}'. A cell has exactly one form, and guessing which one wins is not this loader's to do`,
-      );
-    }
+    refuseStrayFormKeys(path, pointer, raw, "delegatesTo");
     const targets = requireArray(path, `${pointer}.delegatesTo`, raw["delegatesTo"]);
     if (targets.length === 0) {
       throw new SchemaError(
@@ -626,6 +685,12 @@ function parseVerb(
   }
 
   const invocation = parseInvocation(path, pointer, value);
+  // THE SAME CHECK, for the three forms ../schema/contract.ts already knows
+  // how to tell apart from each other. It cannot know about `declaredOnly` or
+  // `delegatesTo` -- so this closes the one gap borrowing `parseInvocation`
+  // leaves open, a stray `why` on an `unsupported` cell, without restating
+  // the exe/steps/unsupported exclusivity that file already owns.
+  refuseStrayFormKeys(path, pointer, raw, invocation.kind);
   if (invocation.kind === "unsupported") {
     return { kind: "unsupported", invocation, summary: requireSummary(path, pointer, raw), source };
   }

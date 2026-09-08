@@ -221,6 +221,78 @@ describe("a malformed pack file is refused, naming the file and the field", () =
     expect(error.message).toContain("exactly one form");
   });
 
+  // Every stray key a `declaredOnly` cell could carry, refused ONE AT A TIME.
+  // `argv` and `why` are the two the review found missing from the original
+  // check -- it enumerated `exe`, `steps`, `unsupported` and `delegatesTo` but
+  // not the two keys that belong to `command`, `steps` and `delegatesTo`
+  // themselves -- and the other four are re-asserted here so the shared table
+  // (`CELL_FORMS` in pack.ts) is pinned key by key, not just for the one
+  // combination ("declaredOnly" + "exe") the test above already covers.
+  const DECLARED_ONLY_STRAYS: readonly (readonly [string, Record<string, unknown>])[] = [
+    ["argv", { declaredOnly: "d", summary: "s", argv: ["a"], source: "s" }],
+    ["why", { declaredOnly: "d", summary: "s", why: "w", source: "s" }],
+    ["exe", { declaredOnly: "d", summary: "s", exe: "e", source: "s" }],
+    ["steps", { declaredOnly: "d", summary: "s", steps: [{ exe: "e", argv: ["x"] }], source: "s" }],
+    ["unsupported", { declaredOnly: "d", summary: "s", unsupported: "n", source: "s" }],
+    ["delegatesTo", { declaredOnly: "d", summary: "s", delegatesTo: ["test"], source: "s" }],
+  ];
+  for (const [key, cell] of DECLARED_ONLY_STRAYS) {
+    it(`refuses a declaredOnly cell that also carries '${key}'`, () => {
+      const error = refusal(() =>
+        parseProfile(AT, "example", VERBS, profile({
+          verbs: { build: cell, test: { unsupported: "n", summary: "n", source: "s" } },
+        })),
+      );
+      expect(error.pointer).toBe("verbs.build");
+      expect(error.message).toContain("exactly one form");
+      expect(error.message).toContain(`'${key}'`);
+    });
+  }
+
+  // The same, for `delegatesTo` -- except `why`, which `delegatesTo` legitimately
+  // carries itself (every shipped delegation does; see the pack's own `warmup`
+  // row), so `why` is not one of `delegatesTo`'s stray keys.
+  const DELEGATES_TO_STRAYS: readonly (readonly [string, Record<string, unknown>])[] = [
+    ["argv", { delegatesTo: ["test"], why: "w", argv: ["a"], source: "s" }],
+    ["exe", { delegatesTo: ["test"], why: "w", exe: "e", source: "s" }],
+    ["steps", { delegatesTo: ["test"], why: "w", steps: [{ exe: "e", argv: ["x"] }], source: "s" }],
+    ["unsupported", { delegatesTo: ["test"], why: "w", unsupported: "n", source: "s" }],
+    ["declaredOnly", { delegatesTo: ["test"], why: "w", declaredOnly: "d", source: "s" }],
+  ];
+  for (const [key, cell] of DELEGATES_TO_STRAYS) {
+    it(`refuses a delegatesTo cell that also carries '${key}'`, () => {
+      const error = refusal(() =>
+        parseProfile(AT, "example", VERBS, profile({
+          verbs: { build: cell, test: { unsupported: "n", summary: "n", source: "s" } },
+        })),
+      );
+      expect(error.pointer).toBe("verbs.build");
+      expect(error.message).toContain("exactly one form");
+      expect(error.message).toContain(`'${key}'`);
+    });
+  }
+
+  it("shares the mixed-form check across all five forms, not just the two catalogue-only ones", () => {
+    // The gap this check closes is not particular to `declaredOnly` and
+    // `delegatesTo`: an `unsupported` cell carrying a stray `why` -- a key no
+    // form of THIS shape reads -- is the same authoring mistake, and the
+    // shared table catches it too, with zero code written specifically for
+    // `unsupported`. That is the point of routing all five forms through one
+    // table: a sixth form added to it is checked, and checked against, from
+    // the same place.
+    const error = refusal(() =>
+      parseProfile(AT, "example", VERBS, profile({
+        verbs: {
+          build: { exe: "e", argv: ["a"], why: "w", source: "s" },
+          test: { unsupported: "n", summary: "n", why: "w", source: "s" },
+        },
+      })),
+    );
+    expect(error.pointer).toBe("verbs.test");
+    expect(error.message).toContain("exactly one form");
+    expect(error.message).toContain("'why'");
+  });
+
   it("refuses a delegation to nothing", () => {
     const error = refusal(() =>
       parseProfile(AT, "example", VERBS, profile({
