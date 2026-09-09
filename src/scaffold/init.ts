@@ -330,11 +330,13 @@ export interface BootstrapRef {
  *
  * AND THEN THE GREATER OF THAT AND `templates/index.json`'s `minimumNenRef`,
  * which is the whole point. `src/version.ts` says which nen WROTE the workflow;
- * the minimum says which nen can RUN it. While `nen shu` is unreleased those are
- * different numbers, and writing the first of them produced a workflow that was
- * red on the first push of every repository this verb ever scaffolded -- the
- * bootstrap refusing at exit 6 before a single verb ran, because the tag exists
- * and no release does.
+ * the minimum says which nen can RUN it. Between a version bump and the release
+ * that publishes it those are different numbers -- v0.3.0 shipped `nen shu`
+ * after this build's own version had already moved past the last published
+ * release, and writing that ref instead of the floor produced a workflow that
+ * was red on the first push of every repository this verb ever scaffolded --
+ * the bootstrap refusing at exit 6 before a single verb ran, because the tag
+ * exists and no release does.
  *
  * NEN CANNOT CHECK OFFLINE THAT THE REF IT WRITES HAS A RELEASE, and says so
  * rather than implying it did: whenever the written ref is not this build's own
