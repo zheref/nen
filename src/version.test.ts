@@ -21,7 +21,7 @@ describe("VERSION", () => {
     // is the exact string zheref/hatsu#1's D10 gate is meant to see. The
     // pre-release group stays optional (rather than dropped outright) so this
     // test does not need to change again for a future `-rc.N` or `-dev.N`
-    // cycle ahead of v0.2.0.
+    // cycle ahead of v0.3.0.
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
   });
 
