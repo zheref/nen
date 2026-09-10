@@ -271,6 +271,10 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
 
   it("refuses the always-mutating verbs by name", () => {
     expect(classifyCommand("nen pr cascade-main --repo .").classification).toBe("mutating");
+    // --no-push skips only the push step; the fetch+merge it still performs
+    // mutates the working tree and index, so it stays mutating rather than
+    // becoming this verb's first read-only form.
+    expect(classifyCommand("nen pr cascade-main --repo . --no-push").classification).toBe("mutating");
     expect(classifyCommand("nen pr retarget --target o/r --pr 1 --base main").classification).toBe("mutating");
     expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-reviewers a").classification).toBe("mutating");
     expect(classifyCommand("nen tag cut --name v1.0.0 --at abc123").classification).toBe("mutating");
@@ -783,6 +787,9 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     // matters -- every spelling of --install the real parser accepts is
     // refused, even sitting next to the gate.
     "shu tools": "nen shu tools --dry-run",
+    // A `"*"` ROW, so the key carries the wildcard the table keys it by and the
+    // base is the family alone -- `nen stop` takes no subcommand at all.
+    "stop *": "nen stop",
     "wake fire": "nen wake fire --repo-slug o/r --ref XX-PR-#1 --label wake",
     "wake verify": "nen wake verify --repo-slug o/r --now 2026-01-01T00:00:00Z --author-pattern x",
   };
@@ -1840,5 +1847,20 @@ describe("classifyInvocation -- refuse the WHOLE run, not the offending step", (
       "read-only",
       "mutating",
     ]);
+  });
+});
+
+describe("shu's launch targets do not move the dev/run rows", () => {
+  it("classifies '--target <name>' exactly as the bare form does", () => {
+    // A launch target ADDS two spawns to the bare form -- the declared device
+    // probe, and the after-steps -- so the targeted form is more mutating than
+    // the bare one and `dry-run-gated` already covers it. What must keep
+    // holding is the other half: `--dry-run` on either verb spawns nothing at
+    // all, the probe included, which is why it is certifiable in the first
+    // place.
+    expect(classifyCommand("nen shu dev --target sim").classification).toBe("mutating");
+    expect(classifyCommand("nen shu run --target bench").classification).toBe("mutating");
+    expect(classifyCommand("nen shu dev --target sim --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen shu run --target bench --dry-run").classification).toBe("read-only");
   });
 });

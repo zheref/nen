@@ -1,0 +1,50 @@
+{
+  "expectedFailures": 1,
+  "failedTests": 1,
+  "passedTests": 3,
+  "result": "Failed",
+  "skippedTests": 1,
+  "testFailures": [
+    {
+      "failureText": "XCTAssertEqual failed: (\"-1\") is not (\"0\")",
+      "targetName": "PlaceholderTests",
+      "testName": "refusesANegativeQuantity()"
+    }
+  ],
+  "testNodes": [
+    {
+      "name": "Placeholder",
+      "nodeType": "Test Plan",
+      "result": "Failed",
+      "children": [
+        {
+          "name": "PlaceholderTests",
+          "nodeType": "Unit test bundle",
+          "result": "Failed",
+          "children": [
+            {
+              "name": "CartTests",
+              "nodeType": "Test Suite",
+              "result": "Failed",
+              "children": [
+                { "name": "addsOneItem()", "nodeType": "Test Case", "result": "Passed", "duration": "0.012s" },
+                { "name": "addsTwoItems()", "nodeType": "Test Case", "result": "Passed", "duration": "0.021s" },
+                { "name": "refusesANegativeQuantity()", "nodeType": "Test Case", "result": "Failed", "duration": "1m 3s" }
+              ]
+            },
+            {
+              "name": "TotalsTests",
+              "nodeType": "Test Suite",
+              "result": "Passed",
+              "children": [
+                { "name": "sumsAnEmptyCart()", "nodeType": "Test Case", "result": "Expected Failure", "duration": "0.03s" }
+              ]
+            },
+            { "name": "appliesADiscount()", "nodeType": "Test Case", "result": "Skipped" }
+          ]
+        }
+      ]
+    }
+  ],
+  "totalTestCount": 5
+}

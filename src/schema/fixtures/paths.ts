@@ -78,3 +78,24 @@ export const SHU_COVERAGE_REPO = join(FIXTURES, "shu-coverage-repo");
  * from the suite in exchange for saving one directory.
  */
 export const SHU_EVIDENCE_REPO = join(FIXTURES, "shu-evidence-repo");
+
+/**
+ * A repository whose `nen/contract.json` gives `nen shu test-report` one lane
+ * per answer it has to have: a lane whose declared artifact is a report nen
+ * parses, one that declares no artifact at all, one whose declared report is a
+ * DIRECTORY of XML, one whose declared list carries two decoys before the real
+ * report, one whose report is not on disk, one whose directory holds XML that
+ * is not a test report, one whose directory holds no XML at all, and one that
+ * declares no `test` verb whatever.
+ *
+ * IT DECLARES NO `test-report` VERB, and that is the fixture's sharpest fact:
+ * this one reads `project.verbs.<lane>.test` and that row's `artifacts`, so a
+ * repository which has already said how its tests run has said everything the
+ * verb needs.
+ *
+ * SEPARATE FROM `SHU_REPO` FOR THE REASON `SHU_COVERAGE_REPO` IS: that fixture
+ * declares a `test` with no artifacts, which is the "declares none" case this
+ * verb must answer for, and adding a report to it would delete that case from
+ * the suite in exchange for saving one directory.
+ */
+export const SHU_TEST_REPORT_REPO = join(FIXTURES, "shu-test-report-repo");

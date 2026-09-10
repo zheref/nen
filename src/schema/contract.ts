@@ -287,6 +287,94 @@ export interface EvidenceBlock {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * The two verbs a launch target may hang off. CLOSED, and the same list
+ * ../shu/render.ts's `LAUNCH_VERBS` re-exports for the executor.
+ *
+ * A launch target says "start THIS lane's long-running verb, on THIS device,
+ * and then do these things". The only two long-running verbs are `dev` and
+ * `run` (../shu/run.ts's `INTERACTIVE_VERBS`), and a target naming any other
+ * one is a declaration nen could honour only by inventing what "launch a lint"
+ * would mean. Refused here, by pointer, naming both.
+ */
+export const LAUNCH_VERBS = ["dev", "run"] as const;
+
+export type LaunchVerb = (typeof LAUNCH_VERBS)[number];
+
+/**
+ * The DEVICE a launch target puts the build on, and how nen finds its id.
+ *
+ * `name` IS THE WHOLE MATCH, and it is the repository's own string: the name a
+ * developer reads in their own device list. Nen never guesses a device, so
+ * there is no "the only one connected" fallback and no prefix matching -- a
+ * name the probe's output does not carry is a refusal listing what the probe
+ * DID see, which is the one answer a reader can act on.
+ *
+ * `resolve` IS AN ORDINARY DECLARED STEP -- `{exe, argv}`, spawned through the
+ * same seam every other step goes through. Nen does not know what a device
+ * probe is called on any platform, and ../shu/purity.test.ts is what keeps
+ * that true: the probe is the repository's argv, never nen's.
+ *
+ * `kind` IS THE REPOSITORY'S OWN WORD and is not a closed set, with exactly one
+ * value nen reads: `simulator`. A simulated device has no id to look up -- its
+ * NAME is how the toolchain addresses it -- so `{"name": "...", "kind":
+ * "simulator"}` with no probe resolves to the name itself and spawns nothing.
+ * Every other kind without a probe is refused: nen will not invent an id.
+ */
+export interface LaunchDevice {
+  readonly name: string;
+  /** The repository's own word. `simulator` is the one value nen reads. */
+  readonly kind: string | null;
+  /** The declared probe whose output carries the id, or null. */
+  readonly resolve: { readonly exe: string; readonly argv: readonly string[] } | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * One LAUNCH TARGET, by the name `nen shu dev|run --target` takes.
+ *
+ * WHY THIS IS A SEPARATE BLOCK FROM `targets`. A deploy target says WHERE a
+ * build goes; a launch target says WHICH DEVICE a local run lands on, and what
+ * has to happen once the build exists to get it there. They share neither
+ * their keys nor their verbs, and folding them into one map would mean
+ * `--target production` on `dev` resolving to something -- a destination on a
+ * verb that sends nothing. Two blocks, two vocabularies, and a `--target` that
+ * names the wrong one is refused listing the right one.
+ *
+ * WHAT A TARGET CONTRIBUTES, AND NOTHING ELSE:
+ *
+ *   * `verb` -- which of the two long-running verbs this target launches
+ *     through. REQUIRED, because `dev` and `run` are different builds (debug
+ *     against production) and a target that did not say which would leave nen
+ *     guessing what the developer is holding.
+ *   * `args` -- appended to that verb's declared argv, in order, exactly as a
+ *     deploy target's `args` are, and refused on a multi-step row for the same
+ *     reason: which step reaches the device is not nen's guess.
+ *   * `device` -- the device, and how to find its id. See LaunchDevice.
+ *   * `after` -- the steps that run once the verb exits, each an ordinary
+ *     `{exe, argv}` in which `{device.id}` and `{artifact}` are substituted.
+ *     They are the repository's own commands: nen knows no install command and
+ *     no launch command for any platform.
+ *   * `unsupported` -- this target has no command line at all, in the
+ *     repository's own sentence, answered at exit 4 exactly as an unsupported
+ *     verb row is.
+ */
+export interface LaunchTarget {
+  readonly name: string;
+  /** Which long-running verb this target launches through. */
+  readonly verb: LaunchVerb | null;
+  /** Appended to that verb's declared argv, in order. Never an exe. */
+  readonly args: readonly string[];
+  readonly device: LaunchDevice | null;
+  /** Steps run after the verb exits. `{device.id}`/`{artifact}` substituted. */
+  readonly after: readonly { readonly exe: string; readonly argv: readonly string[] }[];
+  /** This target has no command line at all, in the repo's own words. */
+  readonly unsupported: string | null;
+  readonly why: string | null;
+  /** The entry exactly as the file states it, every key preserved. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface ProjectBlock {
   /** The review stack recorded for this repo, for cross-checking the registry. */
   readonly scenario: string | null;
@@ -300,6 +388,13 @@ export interface ProjectBlock {
   readonly profiles: Readonly<Record<string, unknown>>;
   /** The deploy destinations `--target` names. No default, ever. */
   readonly targets: Readonly<Record<string, DeployTarget>>;
+  /**
+   * The launch targets `dev`/`run`'s own `--target` names. No default, ever --
+   * and, unlike `deploy`'s, no REQUIREMENT either: `nen shu dev` with no
+   * `--target` runs the lane's declared `dev` exactly as it always has. An
+   * empty map is the ordinary state of a repository that has not declared any.
+   */
+  readonly launch: Readonly<Record<string, LaunchTarget>>;
   /** Per-verb allowlist of `process.platform` values; `*` means every verb. */
   readonly hosts: Readonly<Record<string, readonly string[]>>;
   /** `nen shu evidence`'s glob/mechanism declaration. `null` when absent. */
@@ -774,6 +869,12 @@ function optionalStrings(path: string, pointer: string, value: unknown): readonl
 /** The four keys `project.targets.<name>` is made of. Nen's, not the repo's. */
 const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "why"];
 
+/** The six keys `project.launch.<name>` is made of. */
+const LAUNCH_KEYS: readonly string[] = ["verb", "args", "device", "after", "unsupported", "why"];
+
+/** The three keys `project.launch.<name>.device` is made of. */
+const DEVICE_KEYS: readonly string[] = ["name", "kind", "resolve"];
+
 /**
  * True when one insertion, deletion or substitution turns `a` into `b`.
  *
@@ -784,8 +885,14 @@ const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "w
  * key falls inside it: `host`, `region`, `branch`, `url` and every other field
  * a repository might legitimately park here are three or more edits away from
  * all four names. Widening the radius would start refusing keys somebody meant.
+ *
+ * EXPORTED FOR ./workflow.ts, which applies the same rule to the closed key
+ * sets `nen/workflow.json`'s blocks are made of. The RULE is shared, for the
+ * reason `requireArgv` and `parseHosts` are shared: a second copy is a second
+ * rule the day either is widened. Each file keeps its OWN refusal SENTENCE,
+ * because a message naming the wrong block is a message a reader cannot act on.
  */
-function withinOneEdit(a: string, b: string): boolean {
+export function withinOneEdit(a: string, b: string): boolean {
   if (a === b) return true;
   if (Math.abs(a.length - b.length) > 1) return false;
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
@@ -809,6 +916,44 @@ function withinOneEdit(a: string, b: string): boolean {
 }
 
 /**
+ * How `key` misspells `known`, IN WORDS, or null when it does not.
+ *
+ * IT RETURNS THE SENTENCE RATHER THAN A BOOLEAN, and that is the whole reason
+ * this function is shaped the way it is. The rule catches three shapes, and a
+ * refusal that described all three as "one letter away" would be WRONG about
+ * two of them -- a maintainer told that `WHY` is one letter from `why`, or that
+ * `launches` is one letter from `launch`, is being handed a false clue about
+ * their own file while they are trying to fix it. So the phrase is decided
+ * where the match is decided, and there is no way to add a fourth shape without
+ * writing the words for it.
+ *
+ * THE THREE SHAPES, AND EACH ONE IS A TYPO A REVIEWER'S EYE SLIDES OVER:
+ *
+ *   * a CASE SLIP of any width -- `WHY`, `Launch`, `Device`. Checked FIRST,
+ *     because it is the strongest claim: the key is the same word. Three
+ *     substitutions is outside the distance radius below and is still the same
+ *     word, and a JSON key is case-sensitive everywhere in this family;
+ *   * distance 1 -- `arg`, `requireEnv`, `Args`, `resolver`, `verbs`. Checked
+ *     SECOND, so a one-letter plural (`verbs`, `devices`) is reported as the
+ *     letter it is rather than as a grammatical form nobody was thinking about;
+ *   * an ENGLISH PLURAL two letters out -- `launches`. That is the one key this
+ *     whole block is about and the distance rule alone let it through: a
+ *     `"launches": { … }` block would be preserved verbatim, read by nobody,
+ *     and `--target` would answer "this repository declares no launch targets"
+ *     about a file that plainly declares four.
+ */
+function nearMissOf(key: string, known: string): string | null {
+  const lower = key.toLowerCase();
+  const target = known.toLowerCase();
+  if (lower === target) return `differs from '${known}' only in case`;
+  if (withinOneEdit(key, known)) return `is one letter away from '${known}'`;
+  if (lower.replace(/(?:es|s)$/, "") === target.replace(/(?:es|s)$/, "")) {
+    return `is '${known}' with an English plural on it`;
+  }
+  return null;
+}
+
+/**
  * A key that is one typo away from a KNOWN set, refused by the name it meant.
  *
  * THIS IS THE HALF THAT WAS MISSING, and the header below promised it. Refusing
@@ -822,16 +967,22 @@ function withinOneEdit(a: string, b: string): boolean {
  * everywhere and is not in tension with the above: `{"host": "a"}`,
  * `{"region": "eu"}` and `{"$note": "..."}` are keys a repository MEANT, kept
  * verbatim on `raw` for a later release to read. The line between the two is
- * distance 1 from a key nen acts on -- close enough that no reader would spot
- * it, far enough that nothing deliberate lands there.
+ * `nearMissOf` above -- close enough that no reader would spot the difference,
+ * far enough that nothing deliberate lands there.
  *
  * GENERALISED OVER THE KNOWN SET rather than hard-coded to `project.targets`'
- * four, because `project.evidence` (../shu/evidence/) needs the identical
- * refusal over its own four keys and a second copy of this loop would be a
- * second rule that drifts the first time either widens. `describeConsequence`
- * is the one thing that legitimately differs between the two callers -- what a
- * silently-dropped key actually breaks -- so it is the caller's own sentence,
- * not a guess this function makes about a block it does not otherwise know.
+ * four, because FOUR blocks now have keys nen acts on: a deploy target's four,
+ * a launch target's six, a launch device's three, and `project.evidence`'s
+ * four. One rule, four call sites; a second copy would be a second rule that
+ * drifts the first time any one of them widens.
+ *
+ * `describeConsequence` is the one thing that legitimately differs between the
+ * callers -- what a silently-dropped key actually BREAKS -- so it is the
+ * caller's own sentence rather than a guess this function makes about a block
+ * it does not otherwise know. It DEFAULTS to the sentence that is true of any
+ * entry whose keys are read straight into an invocation, which is what both
+ * launch blocks want and what this function said before it took callers that
+ * break differently.
  */
 function refuseNearMissKey(
   path: string,
@@ -839,16 +990,17 @@ function refuseNearMissKey(
   raw: Readonly<Record<string, unknown>>,
   knownKeys: readonly string[],
   subject: string,
-  describeConsequence: (meant: string) => string,
+  describeConsequence: (meant: string) => string = (meant): string =>
+    `this entry would run with '${meant}' silently unset`,
 ): void {
   for (const key of Object.keys(raw)) {
     if (key.startsWith("$") || knownKeys.includes(key)) continue;
-    const meant = knownKeys.find((known): boolean => withinOneEdit(key, known));
+    const meant = knownKeys.find((known): boolean => nearMissOf(key, known) !== null);
     if (meant === undefined) continue;
     throw new SchemaError(
       path,
       `${pointer}.${key}`,
-      `is one letter away from '${meant}', which is a key nen reads, and is not a key nen reads. ${subject}'s keys are ${knownKeys.join(
+      `${nearMissOf(key, meant) ?? ""}, which IS a key nen reads, and is not itself one. ${subject}'s keys are ${knownKeys.join(
         ", ",
       )}; every OTHER key is preserved verbatim for a later release, and that is exactly why this one cannot be: '${key}' would be kept, read by nobody, and ${describeConsequence(meant)}. Fix the spelling, or rename the key to something that is not a near-miss of one of ${subject}'s keys`,
     );
@@ -1012,6 +1164,124 @@ function parseEvidence(path: string, value: unknown): EvidenceBlock {
   return { globs, mechanism, scene, suiteSuffix, raw };
 }
 
+/** One `{exe, argv}` pair, wherever a declaration states a bare step. */
+function parseStep(
+  path: string,
+  pointer: string,
+  value: unknown,
+): { exe: string; argv: readonly string[] } {
+  const raw = requireRecord(path, pointer, value);
+  return {
+    exe: requireString(path, `${pointer}.exe`, raw["exe"]),
+    argv: requireArgv(path, `${pointer}.argv`, raw["argv"]),
+  };
+}
+
+/** `project.launch.<name>.device`, or null when the target names no device. */
+function parseLaunchDevice(path: string, pointer: string, value: unknown): LaunchDevice | null {
+  if (value === undefined || value === null) return null;
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(path, pointer, raw, DEVICE_KEYS, "A device");
+  return {
+    // REQUIRED, AND IT IS THE WHOLE MATCH. A device block with no name is a
+    // block that says nothing nen can look for -- there is no "the only device
+    // connected" here, because "the only one" is a fact about a moment rather
+    // than about the declaration.
+    name: requireString(path, `${pointer}.name`, raw["name"]),
+    kind: optionalString(path, `${pointer}.kind`, raw["kind"]),
+    resolve:
+      raw["resolve"] === undefined || raw["resolve"] === null
+        ? null
+        : parseStep(path, `${pointer}.resolve`, raw["resolve"]),
+    raw,
+  };
+}
+
+/**
+ * `project.launch` -- the launch targets, PARSED rather than preserved.
+ *
+ * SAME THREE REFUSALS `project.targets` GETS, for the same reasons, and one
+ * more that is this block's own:
+ *
+ *   * a wrong TYPE under a right key (`"after": {}`) -- the readers below;
+ *   * a right type under a WRONG key one spelling out (`"arg"`, `"resolver"`,
+ *     `"Device"`) -- `refuseNearMissKey`, which names the key it meant;
+ *   * `unsupported` beside anything that would be RUN. A target with no command
+ *     line has no verb, no arguments, no device and no after-steps either, and
+ *     whichever half this loader chose to honour would be a choice about
+ *     somebody else's machine.
+ *   * `verb` IS REQUIRED on every target that is not `unsupported`, out of a
+ *     closed two-member set. `dev` and `run` are different BUILDS, and a target
+ *     that did not say which one it launches through would leave nen picking
+ *     between a debug binary and a production one.
+ *
+ * `$`-prefixed keys are metadata and are skipped; every other key preserves its
+ * whole entry on `raw`, as everywhere in this schema.
+ */
+function parseLaunch(path: string, value: unknown): Record<string, LaunchTarget> {
+  if (value === undefined || value === null) return {};
+  const record = requireRecord(path, "project.launch", value);
+  // `Object.create(null)` for `parseTargets`'s reason, verbatim: a target named
+  // `__proto__` on an ordinary object literal sets the prototype instead of
+  // adding an own property, so it would vanish from the map AND from the
+  // listing every refusal prints.
+  const launch: Record<string, LaunchTarget> = Object.create(null) as Record<string, LaunchTarget>;
+  for (const [name, entry] of Object.entries(record)) {
+    if (name.startsWith("$")) continue;
+    const pointer = `project.launch.${name}`;
+    const raw = requireRecord(path, pointer, entry);
+    refuseNearMissKey(path, pointer, raw, LAUNCH_KEYS, "A launch target");
+    const unsupported =
+      raw["unsupported"] === undefined || raw["unsupported"] === null
+        ? null
+        : // THE SENTENCE IS REQUIRED, NOT JUST THE KEY -- `parseInvocation`'s
+          // rule and `parseTargets`'s, in the same words, because this key
+          // answers at the same exit code.
+          requireString(path, `${pointer}.unsupported`, raw["unsupported"]);
+    if (unsupported !== null) {
+      const runnable = ["verb", "args", "device", "after"].filter(
+        (key): boolean => raw[key] !== undefined && raw[key] !== null,
+      );
+      if (runnable.length > 0) {
+        throw new SchemaError(
+          path,
+          pointer,
+          `declares 'unsupported' and also ${runnable.map((key): string => `'${key}'`).join(", ")}. A launch target that has no command line at all has no verb, arguments, device or after-steps either; state one or the other`,
+        );
+      }
+      launch[name] = {
+        name,
+        verb: null,
+        args: [],
+        device: null,
+        after: [],
+        unsupported,
+        why: optionalString(path, `${pointer}.why`, raw["why"]),
+        raw,
+      };
+      continue;
+    }
+    const after = raw["after"];
+    launch[name] = {
+      name,
+      verb: requireEnum(path, `${pointer}.verb`, raw["verb"], LAUNCH_VERBS),
+      args: optionalStrings(path, `${pointer}.args`, raw["args"]),
+      device: parseLaunchDevice(path, `${pointer}.device`, raw["device"]),
+      after:
+        after === undefined || after === null
+          ? []
+          : requireArray(path, `${pointer}.after`, after).map(
+              (step, index): { exe: string; argv: readonly string[] } =>
+                parseStep(path, `${pointer}.after[${index}]`, step),
+            ),
+      unsupported: null,
+      why: optionalString(path, `${pointer}.why`, raw["why"]),
+      raw,
+    };
+  }
+  return launch;
+}
+
 export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
   const raw = requireRecord(path, "project", value);
   if (raw["lanes"] === undefined) {
@@ -1026,6 +1296,31 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
       path,
       "project.verbs",
       "expected the per-lane verb map, got nothing (the field is absent). A project block with no verbs declares a stack nothing can be run against; state the verbs, using {\"unsupported\": \"<why>\"} for the ones this repository genuinely has none of",
+    );
+  }
+  // THE BLOCK KEY ITSELF IS GUARDED, and `launch` is the only project-level key
+  // this release guards, which is a scope rather than an inconsistency.
+  //
+  // `launch` is OPTIONAL and ABSENT MEANS `{}` -- so `"launches": { … }` or
+  // `"Launch": { … }` is preserved verbatim, read by nobody, and `nen shu dev
+  // --target iphone` answers "this repository declares no launch targets"
+  // about a file that plainly declares four. That is the same silence the
+  // per-entry guard below exists for, one level up, and it is worth catching
+  // where the block is NEW: nothing in the field can already be relying on a
+  // misspelling of a key that did not exist until this release.
+  //
+  // The older optional blocks (`targets`, `hosts`, `toolchain`, `profiles`)
+  // have the identical hole and are deliberately NOT swept here: widening this
+  // to them would refuse declarations already written against 0.3.0 -- a parked
+  // `"host"` or `"target"` key is a near-miss of a real one -- and that is a
+  // change with its own blast radius, not a rider on this one.
+  for (const key of Object.keys(raw)) {
+    if (key.startsWith("$") || key === "launch") continue;
+    if (nearMissOf(key, "launch") === null) continue;
+    throw new SchemaError(
+      path,
+      `project.${key}`,
+      `${nearMissOf(key, "launch") ?? ""}, the block nen reads for 'nen shu dev|run --target'. Preserved as an unknown key it would be read by nobody, and every --target this repository declares would be refused as undeclared. Spell it 'launch'`,
     );
   }
   const lanes = parseLanes(path, raw["lanes"]);
@@ -1047,6 +1342,7 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
         : parsePreconditions(path, raw["preconditions"], lanes),
     profiles: optionalRecord(path, "project.profiles", raw["profiles"]),
     targets: parseTargets(path, raw["targets"]),
+    launch: parseLaunch(path, raw["launch"]),
     hosts:
       raw["hosts"] === undefined || raw["hosts"] === null
         ? {}

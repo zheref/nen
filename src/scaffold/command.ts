@@ -18,6 +18,7 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { commaList } from "../cli/comma.js";
 import { ENV_VAR_NAME } from "../schema/contract.js";
+import { TRAILER_KEY } from "../schema/workflow.js";
 import {
   emit,
   requireRepoFlag,
@@ -44,7 +45,12 @@ import { freshTreeSupport, resolveStackId } from "./templates.js";
 // breaks out of the quoting (a quote character) -- refusing it here is both
 // safer and more honest than trying to escape a key that was never a valid
 // trailer key to begin with.
-const TRAILER_KEY = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
+//
+// THE RULE IS THE SCHEMA'S, IMPORTED RATHER THAN RESTATED. The same question
+// is asked of every key `nen/workflow.json`'s `commits` block lists, and those
+// keys reach the same hook by the same route (../schema/workflow.ts's
+// TRAILER_KEY) -- a second copy here would be a second rule the day either is
+// widened, exactly as MARKER_ENV_VAR below already avoids.
 // `--marker-env` asks the SAME question the declaration loader asks of the
 // variable names `project.targets.<name>.requiresEnv` and an `env` precondition
 // state (../schema/contract.ts's ENV_VAR_NAME): "is this a name an environment
@@ -134,12 +140,26 @@ convention, never a literal shipped here. Each must be a legal git trailer key
 interpolated into the generated hook script. They are required on 'init' and
 optional on 'new', where omitting them makes the hook a printed post-step.
 
---hook-path defaults to .git/hooks/commit-msg. When a DIFFERENT hook already
-exists there, init REFUSES rather than overwriting it silently; pass --force
-to replace it (the existing hook is backed up to '<path>.bak' first). A hook
-with identical generated content is left alone either way (idempotent). The
-same refuse-rather-than-overwrite rule covers the CI workflow, the declaration
-and a conflicting migration -- all at exit 1, with no --force for any of them.
+--hook-path defaults to .git/hooks/commit-msg, and names the DIRECTORY both
+generated hooks go in: the trunk guard is written as 'pre-commit' beside it,
+with no flag of its own. When a DIFFERENT hook already exists at either path,
+init REFUSES rather than overwriting it silently; pass --force to replace it
+(the existing hook is backed up to '<path>.bak' first). A hook with identical
+generated content is left alone either way (idempotent). The same
+refuse-rather-than-overwrite rule covers the CI workflow, the declaration and a
+conflicting migration -- all at exit 1, with no --force for any of them.
+
+BOTH HOOKS ARE MADE OUT OF nen/workflow.json, and 'init' writes that file into
+absence when there is none. The commit-msg guard bakes in, as data, every
+attribution trailer the policy does not admit -- so it needs no nen on PATH at
+the moment of commit; the pre-commit guard bakes in branch.base and refuses a
+commit made on it. A policy file that is already there WINS and is never
+overwritten (the hooks are generated from it); one that is there and MALFORMED
+refuses the whole run at exit 2, before the first write, naming the pointer.
+The written default admits exactly the two trailer keys --agent-trailer and
+--run-trailer named, so a repository that also uses one of the other
+attribution trailers adds it to commits.allowedAttributionTrailers and re-runs.
+'.gitignore' upkeep appends the policy's reports.dir beside '.nen/'.
 
 --dry-run prints every write, every migration and every post-step, and
 performs none. It spawns NOTHING, probes included: the toolchain check is
@@ -246,6 +266,7 @@ function renderInit(result: ScaffoldInitResult, dry: boolean): readonly string[]
   const created = `${dry ? "would create" : "created"} directories`;
   lines.push(`${created}: ${result.createdDirectories.join(", ") || "(none -- all already existed)"}`);
   lines.push(`hook: ${result.hookOutcome} (${result.hookWritten})`);
+  lines.push(`pre-commit: ${result.preCommitOutcome} (${result.preCommitWritten})`);
   if (result.canonValuesWritten !== null) lines.push(`canon-values: ${result.canonValuesWritten}`);
   lines.push(`stack: ${result.stack ?? "(several -- see the lanes below)"}`);
   for (const entry of result.migrated) {
@@ -354,7 +375,16 @@ function runInit(context: CommandContext): number {
   );
   relayProse(context, [...result.notes, ...(result.tools?.lines ?? [])]);
   if (result.exitCode !== 0) {
-    context.io.err(`nen: ${result.hookError ?? "a write was refused -- see the report above"}`);
+    // THE HOOK ERRORS FIRST, IN ORDER, BECAUSE THEY ARE THE ONES A CALLER
+    // CANNOT SEE IN THE ROWS. Every other refusal is a `refused:` line in the
+    // report above with its own sentence; a hook refusal carries the `--force`
+    // instruction, which is the one piece of advice this summary line exists to
+    // repeat. Both are named when both refused -- a run that installed neither
+    // guard must not report only one of them.
+    const failure =
+      [result.hookError, result.preCommitError].filter((error): boolean => error !== null).join(" ") ||
+      "a write was refused -- see the report above";
+    context.io.err(`nen: ${failure}`);
   }
   return result.exitCode;
 }

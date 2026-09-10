@@ -1,0 +1,72 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "nen's own self-declaration: what `nen shu` runs when it is pointed at THIS repository. No `dependency` block -- nen does not pin itself to a released version of itself, and there is no bootstrap to re-fetch from inside the checkout that builds it. `stack` has no member for a Bun-native CLI among the seven this release's reference pack documents (compose-desktop, dotnet-winui, expo, gatsby, gradle-android, nextjs, xcode-ios); the field is a free string everywhere it is read (src/schema/contract.ts's `parseLanes` calls `requireString`, not `requireEnum`), so `bun-cli` is written as the honest name for this stack rather than borrowed from one of the seven.",
+
+  "project": {
+    "lanes": {
+      "nen": { "stack": "bun-cli", "cwd": "." }
+    },
+    "defaultLane": "nen",
+
+    "preconditions": {
+      "nen": [
+        {
+          "kind": "path",
+          "value": "node_modules",
+          "why": "The dependency install has been run (`bun install`). Nen asserts this and never performs it -- an install runs this project's own scripts."
+        }
+      ]
+    },
+
+    "verbs": {
+      "nen": {
+        "build": {
+          "exe": "bun",
+          "argv": ["run", "typecheck"],
+          "why": "There is no compile step for a `bun run` binary; `tsc --noEmit` is the closest fact this repository has to a build -- the same check `bun run typecheck` runs in CI."
+        },
+        "test": {
+          "exe": "bun",
+          "argv": ["run", "test"],
+          "why": "`vitest run`, the one test harness (vitest.config.ts's own header)."
+        },
+        "lint": {
+          "exe": "bun",
+          "argv": ["run", "lint"],
+          "why": "`eslint .`."
+        },
+        "coverage": {
+          "exe": "bunx",
+          "argv": [
+            "vitest",
+            "run",
+            "--coverage",
+            "--coverage.provider=v8",
+            "--coverage.reporter=text",
+            "--coverage.reporter=lcov"
+          ],
+          "artifacts": ["coverage/lcov.info"],
+          "why": "v8 coverage over the same suite `test` runs, with an `lcov` reporter added so `nen shu coverage` has a format it reads; `text` is kept so a human running this by hand still sees the per-file table on stdout."
+        },
+        "dev": {
+          "exe": "bun",
+          "argv": ["src/index.ts", "--help"],
+          "why": "There is no server to run in dev mode -- `nen` is a one-shot CLI. `--help` is the fastest real invocation that exercises the entry point without needing a target repository or GitHub credentials."
+        },
+        "archive": {
+          "exe": "bun",
+          "argv": ["run", "build:darwin-arm64"],
+          "artifacts": ["dist/nen-darwin-arm64"],
+          "why": "The one compiled binary this machine's host can produce (`bun build --compile --target=bun-darwin-arm64`); `linux-x64` and `windows-x64` are the other two release targets and are left to CI, which builds all three."
+        },
+        "ui-test": { "unsupported": "nen is a CLI with no UI surface; there is no browser or simulator suite to run." },
+        "run": { "unsupported": "nen has no production/staging serve mode distinct from `dev` -- it is a one-shot binary invocation, not a long-running server." },
+        "release": { "unsupported": "publishing is `nen tag cut` plus a GitHub Release the maintainer creates by hand; there is no single local publish step nen can declare for itself." },
+        "deploy": { "unsupported": "nen ships as release binaries fetched by `bootstrap/nen.sh`, not as a deploy to a named destination." }
+      }
+    },
+
+    "profiles": {},
+    "targets": {}
+  }
+}

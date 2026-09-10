@@ -1,0 +1,77 @@
+{
+  "$comment": "templates/workflow.json -- the default `nen/workflow.json` document `nen scaffold init` and `nen scaffold new` write into absence, and the ONE place those bytes are written down. It is DATA for the same reason every other file under templates/ is: src/scaffold/ carries no name it did not have to, and a reviewer can read every byte nen would write into somebody's repository without reading a line of TypeScript. src/scaffold/templates.ts's `defaultWorkflowDocument()` is the only reader; it overlays exactly two values the CALLER states -- `iteration.lane` (the lane being scaffolded) and `commits.allowedAttributionTrailers` (the trailer keys --agent-trailer/--run-trailer named) -- and copies the rest verbatim.",
+  "$defaults": "Every value under `document` except `models` restates the default src/schema/workflow.ts applies when the file is ABSENT, and src/scaffold/workflow-default.test.ts pins that agreement in both directions so the two cannot drift. `models` is the exception on purpose: nen has no default for it, because a default there would be nen inventing a name. The pack states a starting matrix a maintainer edits or deletes; the loader, reading a file that omits the block, answers with an empty one.",
+  "document": {
+    "$schema": "nen.workflow/v0.1",
+    "$comment": "Written by `nen scaffold init`. This file is POLICY -- what the delivery loop's parameters are. What nen EXECUTES lives in nen/contract.json. Every key here is optional and carries the default nen applies when it is absent; delete anything you do not want to state. `nen schema check` validates it.",
+    "branch": {
+      "template": "{model}/{persona}/{descriptor}",
+      "base": "main"
+    },
+    "iteration": {
+      "checks": ["build"],
+      "lane": null
+    },
+    "tests": {
+      "required": ["test"],
+      "extra": []
+    },
+    "coverage": {
+      "minimum": 80,
+      "recommended": 85,
+      "ideal": 90,
+      "scope": "touched"
+    },
+    "launch": {
+      "default": null,
+      "fallback": null
+    },
+    "reports": {
+      "dir": "Reports",
+      "retain": "final-only",
+      "template": "rikugan",
+      "captures": "Reports/captures"
+    },
+    "notifications": {
+      "rungs": ["push", "os", "sound"],
+      "sound": "Glass"
+    },
+    "commits": {
+      "allowedAttributionTrailers": [],
+      "forbiddenTrailers": []
+    },
+    "monitor": {
+      "maxCycles": 20,
+      "pollSeconds": 300
+    },
+    "models": {
+      "$comment": "An open map at both levels: a surface is whatever you call it, a tier likewise. nen validates that every leaf is a string and reads nothing else -- these aliases are for whoever asks the question, not for nen.",
+      "rule": "latest alias only, never a version; subagents never on the frontier tier",
+      "claude": {
+        "frontier": "fable",
+        "deep": "opus",
+        "fast": "sonnet",
+        "economy": "haiku"
+      },
+      "codex": {
+        "frontier": "astra",
+        "deep": "sol",
+        "fast": "terra",
+        "economy": "luna"
+      },
+      "cursor": {
+        "frontier": "grok",
+        "deep": "grok",
+        "fast": "composer",
+        "economy": "composer",
+        "note": "surface-native aliases only; provider models on this surface are reserved for its own review bot"
+      },
+      "roles": {
+        "reviewer": "deep",
+        "worker": "fast",
+        "measurer": "fast",
+        "orchestrator": "frontier"
+      }
+    }
+  }
+}

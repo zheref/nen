@@ -56,6 +56,7 @@ import { COMMANDS, findCommand } from "./cli/registry.js";
 import { RepoRootError } from "./repo/root.js";
 import { LEGACY_FALLBACK_REMOVED_IN } from "./schema/source.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
+import { WORKFLOW_FILE } from "./schema/workflow.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
@@ -115,10 +116,13 @@ else.
 const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
 
 Load and validate the target repository's nen/ files -- nen/labels.json,
-nen/repos.json, nen/colors.yml, nen/gates.json and the optional
-nen/contract.json -- and report each one's verdict: ok, or FAIL naming what is
-wrong. A file found only under the legacy schemas/ directory still loads and is
-reported as such; that fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.
+nen/repos.json, nen/colors.yml, nen/gates.json, the optional nen/contract.json
+and the optional nen/workflow.json -- and report each one's verdict: ok, or
+FAIL naming what is wrong. An absent nen/workflow.json is an ok row reading
+'absent (defaults apply)': every parameter of that file has a default, so a
+repository that states no policy still runs under one. A file found only under
+the legacy schemas/ directory still loads and is reported as such; that
+fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.
 
   --repo <path>    The target repository's working-tree root. Defaults to the
                    current directory.
@@ -409,11 +413,24 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     // contents. Nen read the 'nen/' one. Delete the legacy copy" asserts three
     // things nen does not know when it could not open one of the two files --
     // and nominates for deletion the copy that may be the only readable one.
-    const unreadable = report.checks.some((check): boolean => !check.ok && check.required);
+    //
+    // A FOURTH ONE, FOR THE ONE FILE THAT DOES HAVE A FALLBACK. Every sentence
+    // below rests on "nen has no built-in copy", which is true of a TAXONOMY
+    // and false of `nen/workflow.json` -- that file's every parameter has a
+    // default (see src/schema/workflow.ts on why a policy default invents
+    // nobody's vocabulary). So when the policy is the only required row that
+    // failed, the refusal says the true thing instead: nen has a default and is
+    // deliberately not applying it over a policy this repository states and nen
+    // could not parse.
+    const failed = report.checks.filter((check): boolean => !check.ok && check.required);
+    const unreadable = failed.some((check): boolean => check.file !== WORKFLOW_FILE);
+    const policyOnly = failed.length > 0 && !unreadable;
     const unverified = report.checks.some((check): boolean => check.shadow === "unknown");
     io.err(
       unreadable
         ? `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`
+        : policyOnly
+        ? `${PROGRAM}: this repository's '${WORKFLOW_FILE}' is present and could not be read -- the pointer is named above. Every parameter in that file HAS a default, and nen is deliberately not applying one: a policy this repository states and nen cannot parse is not a policy nen may quietly replace with its own.`
         : unverified
           ? `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', and nen could not read one of the two to compare them. It will not say which copy it served or which one to delete on evidence it does not have -- fix the unreadable path named above, then re-run. The schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`
           : `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', with DIFFERENT contents. Nen read the 'nen/' one. Delete the legacy copy, or reconcile it -- the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`,

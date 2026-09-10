@@ -184,7 +184,10 @@ describe("the taxonomy layer is byte-identical to v0.2.0", () => {
       `created directories: ${join(root, "src")}, ${join(root, "tests")}, ${join(root, ".git", "hooks")}, ${join(root, ".claude")}`,
     );
     expect(result.out[1]).toBe(`hook: installed (${join(root, ".git", "hooks", "commit-msg")})`);
-    expect(result.out[2]).toBe(`canon-values: ${join(root, ".claude", "canon-values.yml")}`);
+    // The trunk guard's own line sits between the two, because it is the
+    // second HOOK and the summary lists the hooks together.
+    expect(result.out[2]).toBe(`pre-commit: installed (${join(root, ".git", "hooks", "pre-commit")})`);
+    expect(result.out[3]).toBe(`canon-values: ${join(root, ".claude", "canon-values.yml")}`);
   });
 
   it("writes the same hook bytes and the same canon-values bytes", async () => {
@@ -491,9 +494,9 @@ describe(".gitignore upkeep", () => {
     expect(after).toContain(".nen/");
   });
 
-  it("adds nothing when the entry is already there", async () => {
+  it("adds nothing when BOTH entries are already there", async () => {
     const root = tempCopy(NEXTJS_SINGLE);
-    const theirs = "dist\n.nen/\n";
+    const theirs = "dist\n.nen/\nReports/\n";
     writeFileSync(join(root, ".gitignore"), theirs, "utf8");
     await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
     expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(theirs);
@@ -751,12 +754,16 @@ describe("nen scaffold new", () => {
     );
     expect(result.code).toBe(0);
     expect(tree(dir)).toEqual([
+      ".git/",
+      ".git/hooks/",
+      ".git/hooks/pre-commit",
       ".github/",
       ".github/workflows/",
       ".github/workflows/nen-shu.yml",
       ".gitignore",
       "nen/",
       "nen/contract.json",
+      "nen/workflow.json",
       "next.config.ts",
       "package.json",
     ]);
@@ -807,7 +814,11 @@ describe("nen scaffold new", () => {
 
     const without = join(tempEmpty(), "b");
     const result = await capture(["scaffold", "new", "--stack", "nextjs", "--name", "b", "--dir", without], null);
-    expect(existsSync(join(without, ".git"))).toBe(false);
+    // NO COMMIT-MSG HOOK WITHOUT THE CONVENTION IT WOULD ENFORCE -- but the
+    // TRUNK GUARD is still written, because it enforces `branch.base` rather
+    // than a trailer pair and every repository has a trunk.
+    expect(existsSync(join(without, ".git", "hooks", "commit-msg"))).toBe(false);
+    expect(existsSync(join(without, ".git", "hooks", "pre-commit"))).toBe(true);
     expect(result.out.join("\n")).toMatch(/scaffold init --repo .* --agent-trailer <key>/);
   });
 
@@ -1203,9 +1214,9 @@ describe(".gitignore upkeep preserves the file it is appending to", () => {
     expect(after.split("\n").every((line): boolean => line === "" || line.endsWith("\r"))).toBe(true);
   });
 
-  it("recognises an entry that is already there in a CRLF file, and adds nothing", async () => {
+  it("recognises entries that are already there in a CRLF file, and adds nothing", async () => {
     const root = tempCopy(NEXTJS_SINGLE);
-    const theirs = "dist\r\n.nen/\r\n";
+    const theirs = "dist\r\n.nen/\r\nReports/\r\n";
     writeFileSync(join(root, ".gitignore"), theirs, "utf8");
     await capture(["scaffold", "init", "--stack", "nextjs", ...TRAILERS], root);
     expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(theirs);
