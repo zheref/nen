@@ -9,8 +9,9 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
-`scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
+with the `nen` spelling. This document covers the **v0.4.0 line** (`report`,
+`shu test-report`, `shu evidence` and the `nen/workflow.json` policy file are
+new in it, and none of them is in v0.3.0): 36 command
 families, 88 verbs, every flag checked against the binary this repository
 builds.
 
@@ -394,8 +395,8 @@ has actually been published for that tag — not the moment
 [`tag cut`](#nen-tag-cut) runs. Fetch the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.3.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.4.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.4.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -403,7 +404,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)"
 "$nen" --version
 ```
 
@@ -5625,10 +5626,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.3.0 --source zheref/nen
+nen bootstrap --ref v0.4.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/v0.3.0/nen-linux-x64
+/home/me/.cache/nen/v0.4.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -6382,8 +6383,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.4.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)"
 "$nen" --version
 ```
 
@@ -6394,7 +6395,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.3.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.4.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash
