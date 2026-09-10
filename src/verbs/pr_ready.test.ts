@@ -561,8 +561,8 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
     gateLine: "not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)",
     firstFailing: "mergeable",
     conjuncts: [
-      { id: "mergeable", order: 1, clause: "CON-42/1", title: "Mergeable", status: "failed", reason: "not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)" },
-      { id: "checks-green", order: 2, clause: "CON-32(a)", title: "Every reported check green", status: "unevaluated", reason: null },
+      { id: "mergeable", order: 1, clause: "CON-42/1", title: "Mergeable", status: "failed", reason: "not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)", note: null },
+      { id: "checks-green", order: 2, clause: "CON-32(a)", title: "Every reported check green", status: "unevaluated", reason: null, note: null },
     ],
     caveats: [{ id: "addressed-is-approximated", clause: "CON-32(c)", text: "Approximated." }],
     remedy: null,
@@ -577,6 +577,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       excludeRun: null,
       deliveryPr: false,
       identities: { source: "schema", path: "/repo/nen/gates.json" },
+      dependabotCarveOut: false,
       warnings: [],
       evaluatedAt: "2025-01-01T00:00:00Z",
       generator: { program: "nen", version: "0.0.0", executable: "/opt/nen/nen-linux-x64" },

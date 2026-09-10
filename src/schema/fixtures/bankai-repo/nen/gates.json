@@ -39,6 +39,11 @@
   ],
   "default_approvers": ["sasuke", "tenma"],
   "base_reviewers": ["sasuke", "tenma", "copilot"],
+  "dependabot_carve_out": {
+    "$comment": "CON-30's review carve-out (zheref/nen#18). The dependency bot opens pull requests nothing re-requests a review on; the repository shims the two review contexts to success instead, and this is what lets the decider READ that shim rather than each caller re-deriving the exemption. Satisfied by PRESENCE of both contexts, green -- never by their absence.",
+    "author_pattern": { "pattern": "^dependabot(\\[bot\\])?$", "ignoreCase": true },
+    "satisfied_by_context": ["sasuke / audit", "tenma / review"]
+  },
   "delivery": {
     "author_pattern": { "pattern": "(^|/)roy-bankai(\\[bot\\])?$", "ignoreCase": true },
     "head_ref_prefixes": ["integration/"],
