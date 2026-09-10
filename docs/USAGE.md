@@ -6005,7 +6005,7 @@ here.) A pre-release *inside* the range is still inside it: `0.8.1-rc.1`
 satisfies `0.7` on a 0.8.0 build.
 
 The floor is printed on **every** run, beside the binary's own version
-(`compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)`),
+(`compat floor:  0.7  (the lowest dependency.minimum nen 0.8.0 satisfies)`),
 and carried as `compatibleMinorFloor` in `--json` — including in a report whose
 declaration has no `dependency` block, because *"do I owe a repin"* is a
 question about nen and not about the declaration that asked. When a `minimum`
@@ -6140,7 +6140,7 @@ nen shu tools --repo ./web-app
 ```text
 lane:          web  (nextjs)
 mode:          check
-compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)
+compat floor:  0.7  (the lowest dependency.minimum nen 0.8.0 satisfies)
   ok       node    22.11.0  pinned >=20.19.0  (tested minimum 20.19.0)
   MISSING  pnpm    --       pinned 9.15.9     (tested minimum 9.15.9)
                             install: corepack enable
@@ -6155,7 +6155,12 @@ compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)
 (exit 5; the summary and the two lines are on stderr)
 
 **Example — the `nen` row and its floor.** Two declarations, identical but for
-`minimum`, checked by a v0.7.0 binary that is also what the host has:
+`minimum`, checked by a v0.8.0 binary that is also what the host has — the
+same v0.7.0 pair the compatibility floor was introduced against ([#200](https://github.com/zheref/nen/pull/200)),
+re-run one release later. **v0.8.0 kept the floor at `0.7`** (its CHANGELOG
+declares no breaking consumer notes), so the "at the floor" pin below now
+demonstrates the widening itself: its admitted ceiling moves from `<0.8.0` to
+`<0.9.0` with no repin:
 
 ```bash
 nen shu tools --repo ./pinned-0.6
@@ -6163,9 +6168,9 @@ nen shu tools --repo ./pinned-0.6
 ```text
 lane:          app  (nextjs)
 mode:          check
-compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)
-  WRONG    nen   0.7.0  pinned >=0.6.0 <0.7.0
-                 verify-only: install by hand -- the bootstrap this repository pins installs v0.7.0. Re-pinning nen is the bootstrap's job and this repository's decision; this verb reports the version and never changes it. minimum '0.6' is below this build's compatibility floor '0.7' -- the 0.7 line declared breaking consumer notes, so no 0.7.0 binary satisfies a pin under '0.7', whatever the host answers. Repin to '0.7'. A pin at or above the floor is satisfied by every later 0.x release that keeps it, so a repin is owed again when the floor moves and not when the minor does.
+compat floor:  0.7  (the lowest dependency.minimum nen 0.8.0 satisfies)
+  WRONG    nen   0.8.0  pinned >=0.6.0 <0.7.0
+                 verify-only: install by hand -- the bootstrap this repository pins installs v0.7.0. Re-pinning nen is the bootstrap's job and this repository's decision; this verb reports the version and never changes it. minimum '0.6' is below this build's compatibility floor '0.7' -- the 0.7 line declared breaking consumer notes, so no 0.8.0 binary satisfies a pin under '0.7', whatever the host answers. Repin to '0.7'. A pin at or above the floor is satisfied by every later 0.x release that keeps it, so a repin is owed again when the floor moves and not when the minor does.
 ```
 exit 5
 
@@ -6175,13 +6180,14 @@ nen shu tools --repo ./pinned-0.7
 ```text
 lane:          app  (nextjs)
 mode:          check
-compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)
-  ok       nen   0.7.0  pinned >=0.7.0 <0.8.0
+compat floor:  0.7  (the lowest dependency.minimum nen 0.8.0 satisfies)
+  ok       nen   0.8.0  pinned >=0.7.0 <0.9.0
 ```
 exit 0
 
-(both run live against `dist/nen-darwin-arm64` built from this branch, with that
-binary on `PATH` as the `version_probe`'s `nen`)
+(both run live against `dist/nen-darwin-arm64` built from
+`sonnet/kurapika/usage-floor-examples`, with that binary on `PATH` as the
+`version_probe`'s `nen`)
 
 ### `nen shu warmup`
 
