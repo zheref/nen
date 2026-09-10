@@ -33,8 +33,10 @@
       "captures": "Reports/captures"
     },
     "notifications": {
+      "$comment": "turn decides how loud an ORDINARY (no-gate) turn is: 'rung1' rings only the first rung 'rungs' lists, 'all' rings every rung 'rungs' lists on every turn -- a gate always rings everything 'rungs' lists regardless.",
       "rungs": ["push", "os", "sound"],
-      "sound": "Glass"
+      "sound": "Glass",
+      "turn": "rung1"
     },
     "commits": {
       "allowedAttributionTrailers": [],
