@@ -55,7 +55,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Fixed
 
-- **shadow** — `src/shadow/run.ts` applies the `$`-prefix metadata skip when it key-walks `targets.json`'s `closedOraclePrs`. It was the last key-walked map in shipped code that had not, and the file documented the hazard in prose instead — *"a stray string-valued key would be walked as a repo name"* — which is a note about a defect rather than a guard against one: a `$comment` placed inside that map became a repository the shadow window tried to fetch pull requests from (closes #80).
+- **shadow** — `src/shadow/run.ts` applies the `$`-prefix metadata skip when it key-walks `targets.json`'s `closedOraclePrs`. It was the last key-walked map in shipped code that had not, and the file documented the hazard in prose instead — *"a stray string-valued key would be walked as a repo name"* — which is a note about a defect rather than a guard against one: a `$comment` placed inside that map became a repository the shadow window tried to fetch pull requests from (closes [#80](https://github.com/zheref/nen/issues/80), [#193](https://github.com/zheref/nen/pull/193)).
 
   The convention is `src/schema/source.ts`'s and it names the obligation it creates — *"the next loader that key-walks a data map inherits this same obligation"* — so this is that inheritance rather than a new rule. That header now also records where it is applied: `src/repos.ts`'s two call sites, `src/schema/contract.ts`'s five, and this one. `targets.json`'s comment moves from warning about the walk to describing it. Pinned by three tests, including the one that says what would otherwise have happened.
 
