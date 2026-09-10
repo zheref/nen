@@ -826,8 +826,14 @@ const DEVICE_KEYS: readonly string[] = ["name", "kind", "resolve"];
  * key falls inside it: `host`, `region`, `branch`, `url` and every other field
  * a repository might legitimately park here are three or more edits away from
  * all four names. Widening the radius would start refusing keys somebody meant.
+ *
+ * EXPORTED FOR ./workflow.ts, which applies the same rule to the closed key
+ * sets `nen/workflow.json`'s blocks are made of. The RULE is shared, for the
+ * reason `requireArgv` and `parseHosts` are shared: a second copy is a second
+ * rule the day either is widened. Each file keeps its OWN refusal SENTENCE,
+ * because a message naming the wrong block is a message a reader cannot act on.
  */
-function withinOneEdit(a: string, b: string): boolean {
+export function withinOneEdit(a: string, b: string): boolean {
   if (a === b) return true;
   if (Math.abs(a.length - b.length) > 1) return false;
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];

@@ -37,12 +37,23 @@ import {
   inspectShadow,
   resolveSchemaFile,
 } from "../schema/source.js";
+import { SchemaError } from "../schema/errors.js";
+import {
+  WORKFLOW_FILE,
+  loadWorkflow,
+  parseWorkflow,
+  refusedTrailerKeys,
+  type Workflow,
+} from "../schema/workflow.js";
 import { detect, type DetectReport } from "../shu/detect.js";
 import { PROGRAM, VERSION } from "../version.js";
-import { renderCommitMsgHook, writeHookFile, type HookSpec } from "./hook.js";
+import { renderCommitMsgHook, renderPreCommitHook, writeHookFile, type HookSpec } from "./hook.js";
 import {
   NEN_REF,
+  TEMPLATE_DIRECTORY,
+  WORKFLOW_TEMPLATE_FILE,
   compareNenRefs,
+  defaultWorkflowDocument,
   minimumNenRef,
   stackHosts,
   substitute,
@@ -57,6 +68,18 @@ export const GITIGNORE_FILE = ".gitignore";
 
 /** The one line `.gitignore` upkeep appends, and the comment above it. */
 export const GITIGNORE_ENTRY = ".nen/";
+
+/**
+ * The file name of the generated trunk guard, beside the commit-msg hook.
+ *
+ * IT TAKES NO FLAG OF ITS OWN. `--hook-path` names the commit-msg hook, and
+ * this one is written into that path's DIRECTORY -- so a caller who points the
+ * first at `.husky/commit-msg` gets `.husky/pre-commit`, and one who points it
+ * at a temporary directory in a test gets both there. A second flag would be a
+ * second way to write the two hooks to two unrelated places, which is a
+ * repository with one guard installed and the other somewhere nobody looks.
+ */
+export const PRE_COMMIT_HOOK = "pre-commit";
 
 /**
  * The taxonomy files the `schemas/` -> `nen/` migration covers.
@@ -183,6 +206,11 @@ export interface ScaffoldInitResult {
    */
   readonly hookOutcome: HookOutcome;
   readonly hookError: string | null;
+  /** Where the trunk guard went -- ./PRE_COMMIT_HOOK beside the commit-msg hook. */
+  readonly preCommitWritten: string;
+  /** The same four outcomes, decided the same way, for the trunk guard. */
+  readonly preCommitOutcome: HookOutcome;
+  readonly preCommitError: string | null;
   readonly canonValuesWritten: string | null;
   /** The lane set this run declared, or null when nothing was written. */
   readonly stack: string | null;
@@ -295,6 +323,22 @@ function proposeProject(
     stack: named,
     notes,
   };
+}
+
+/**
+ * The lane this run's proposal declares as its default, or null.
+ *
+ * IT IS READ BACK OFF THE PROPOSAL rather than recomputed from the detect
+ * report, so `nen/workflow.json`'s `iteration.lane` and `nen/contract.json`'s
+ * `project.defaultLane` cannot name two different lanes. `null` is the honest
+ * answer for an ambiguous tree -- the same answer the declaration gives -- and
+ * it means the policy states no lane, so `--lane` decides.
+ */
+function declaredLane(document: Record<string, unknown>): string | null {
+  const project = document["project"];
+  if (project === null || typeof project !== "object" || Array.isArray(project)) return null;
+  const lane = (project as Record<string, unknown>)["defaultLane"];
+  return typeof lane === "string" && lane !== "" ? lane : null;
 }
 
 /** What a repository's own `dependency` block pins nen at, or null. */
@@ -504,7 +548,50 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   const stack = proposed.stack;
   notes.push(...proposed.notes);
 
-  // ── 2. directories, the hook and the canon-values template ─────────────────
+  // ── 1b. the policy, resolved BEFORE the first write too ────────────────────
+  //
+  // BOTH GENERATED HOOKS ARE MADE OUT OF IT -- the commit-msg guard bakes in
+  // the attribution trailers this repository refuses, the pre-commit guard
+  // bakes in the name of its trunk -- and `.gitignore` upkeep takes its second
+  // entry from `reports.dir`. So the policy is decided here, with the stack,
+  // rather than at the step that writes the file.
+  //
+  // AN EXISTING POLICY WINS, AND A MALFORMED ONE STOPS THE RUN BEFORE IT
+  // STARTS. A repository that already states a policy has decided something,
+  // and hooks generated from nen's defaults would enforce a policy nobody
+  // wrote; a file that is there and cannot be read is the same problem with no
+  // honest way out, so it refuses HERE, at exit 2, with the pointer -- leaving
+  // the repository exactly as it was, which is this step's whole rule.
+  const workflowDocument = defaultWorkflowDocument({
+    lane: declaredLane(proposed.document),
+    // THE CALLER'S OWN TWO KEYS, and the only attribution trailers a freshly
+    // scaffolded repository admits until somebody edits the file.
+    // `--agent-trailer` and `--run-trailer` are what THIS invocation says mark
+    // an automated commit; writing anything else into the allow-list would be
+    // nen shipping a convention, which ./hook.ts's header refuses to do.
+    allowedAttributionTrailers: [options.hook.agentTrailer, options.hook.runTrailer],
+  });
+  const workflowBody = `${JSON.stringify(workflowDocument, null, 2)}\n`;
+  // Parsed OUTSIDE the try below, deliberately: the default document is nen's
+  // own data (`templates/workflow.json`, pinned valid by
+  // ./workflow-default.test.ts), so a failure here is a defect in this binary
+  // and must never be reported as a defect in the target repository's file.
+  const defaultPolicy = parseWorkflow(
+    `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`,
+    workflowDocument,
+  );
+  let policy: Workflow;
+  try {
+    const loaded = loadWorkflow(root);
+    policy = loaded.present ? loaded.workflow : defaultPolicy;
+  } catch (error) {
+    if (!(error instanceof SchemaError)) throw error;
+    throw new VerbUsageError(
+      `this repository's ${WORKFLOW_FILE} could not be read: ${error.message}. Both generated hooks are made out of that policy -- which attribution trailers a commit may carry, and which branch is the trunk -- so nen will not scaffold around a file it cannot read, and has changed nothing. Fix the file ('${PROGRAM} schema check --repo ${root}' prints the whole verdict), then re-run.`,
+    );
+  }
+
+  // ── 2. directories, the hooks and the canon-values template ────────────────
   //
   // Unchanged from v0.2.0, in the same order, producing the same bytes.
   const createdDirectories: string[] = [];
@@ -517,53 +604,95 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   step(dirname(hookPath), (): void => {
     ensureDir(dirname(hookPath), createdDirectories, dry);
   });
-  const desiredHook = renderCommitMsgHook(options.hook);
-  // "refused" until a branch below says otherwise: a step whose write the
-  // filesystem rejected has not installed a hook, and the summary line must not
-  // claim it did.
-  let hookOutcome: HookOutcome = "refused";
-  let hookError: string | null = null;
-  const existingHook = existingText(hookPath);
-  if (existingHook !== null && existingHook === desiredHook) {
-    // Same content already installed -- nothing to do, and nothing to back up.
-    hookOutcome = "unchanged";
-    record(hookPath, "skipped", "the same generated hook is already installed");
-  } else if (existingHook !== null && options.force !== true) {
-    // A DIFFERENT hook already lives here. Writing over it unconditionally
-    // would destroy whatever the project already had installed -- with no
-    // guard, no backup and no record -- for a script that has no way to know
-    // whether that hook was load-bearing. Refuse; --force is the explicit
-    // override, and even then a backup is written first (below).
-    hookOutcome = "refused";
-    hookError = `a different commit-msg hook already exists at '${hookPath}' -- refusing to overwrite it. Pass --force to replace it (the existing hook is backed up to '${hookPath}.bak' first).`;
-    record(hookPath, "refused", hookError);
-  } else if (dry) {
-    hookOutcome = "would-install";
-    record(
-      hookPath,
-      "would-create",
-      existingHook === null
-        ? "no hook is installed there"
-        : "--force would replace a different hook, backing it up to <path>.bak first",
-    );
-  } else {
-    step(hookPath, (): void => {
-      if (existingHook !== null) {
+  /**
+   * One generated hook, under the four outcomes this verb has.
+   *
+   * ONE LADDER FOR BOTH HOOKS, and the reason is the `--force` promise rather
+   * than the line count. "A DIFFERENT hook already there is refused; --force
+   * replaces it after writing a .bak first" is one sentence `--help` makes
+   * about this verb, and two hand-written copies of it are two places it can
+   * quietly stop being true. The trunk guard arrived second; a second copy of
+   * this ladder is exactly how it would have got a subtly different one.
+   *
+   * `refused` UNTIL A BRANCH SAYS OTHERWISE: a step whose write the filesystem
+   * rejected has not installed a hook, and the summary line must not claim it
+   * did.
+   */
+  const installHook = (
+    path: string,
+    desired: string,
+    what: string,
+  ): { outcome: HookOutcome; error: string | null } => {
+    const existing = existingText(path);
+    if (existing !== null && existing === desired) {
+      // Same content already installed -- nothing to do, nothing to back up.
+      record(path, "skipped", `the same generated ${what} hook is already installed`);
+      return { outcome: "unchanged", error: null };
+    }
+    if (existing !== null && options.force !== true) {
+      // A DIFFERENT hook already lives here. Writing over it unconditionally
+      // would destroy whatever the project already had installed -- with no
+      // guard, no backup and no record -- for a script that has no way to know
+      // whether that hook was load-bearing. Refuse; --force is the explicit
+      // override, and even then a backup is written first (below).
+      const error = `a different ${what} hook already exists at '${path}' -- refusing to overwrite it. Pass --force to replace it (the existing hook is backed up to '${path}.bak' first).`;
+      record(path, "refused", error);
+      return { outcome: "refused", error };
+    }
+    if (dry) {
+      record(
+        path,
+        "would-create",
+        existing === null
+          ? "no hook is installed there"
+          : "--force would replace a different hook, backing it up to <path>.bak first",
+      );
+      return { outcome: "would-install", error: null };
+    }
+    let outcome: HookOutcome = "refused";
+    step(path, (): void => {
+      if (existing !== null) {
         // --force: back up what was there before replacing it, RAW. A backup
         // that normalised the line endings of the file it is preserving would
         // be a backup the caller cannot restore byte for byte.
-        writeFileSync(`${hookPath}.bak`, rawText(hookPath) ?? existingHook, "utf8");
+        writeFileSync(`${path}.bak`, rawText(path) ?? existing, "utf8");
       }
-      // ONE HOOK WRITER for both verbs (./hook.ts), and the mode is the reason:
-      // `git` silently skips a `commit-msg` hook that is not executable.
-      writeHookFile(hookPath, desiredHook);
-      hookOutcome = "installed";
-      record(hookPath, "created", existingHook === null ? "installed" : "--force replaced a different hook");
+      // ONE HOOK WRITER for every hook and both verbs (./hook.ts), and the mode
+      // is the reason: `git` silently skips a hook that is not executable.
+      writeHookFile(path, desired);
+      outcome = "installed";
+      record(path, "created", existing === null ? "installed" : "--force replaced a different hook");
     });
-    if (hookOutcome === "refused") {
-      hookError = `the commit-msg hook at '${hookPath}' could not be written -- see the refused row above.`;
-    }
-  }
+    return {
+      outcome,
+      error:
+        outcome === "refused"
+          ? `the ${what} hook at '${path}' could not be written -- see the refused row above.`
+          : null,
+    };
+  };
+
+  const commitMsg = installHook(
+    hookPath,
+    // THE REFUSED LIST IS RESOLVED ONCE, HERE, AND BAKED INTO THE SCRIPT. The
+    // hook then needs no nen on PATH at the moment of commit, and cannot drift
+    // from the policy between runs -- and `nen commit format` answers the same
+    // question from the same function, so the CLI cannot admit a trailer the
+    // hook then rejects.
+    renderCommitMsgHook(options.hook, refusedTrailerKeys(policy.commits)),
+    "commit-msg",
+  );
+  const hookOutcome = commitMsg.outcome;
+  const hookError = commitMsg.error;
+  // THE TRUNK GUARD GOES BESIDE THE COMMIT-MSG HOOK, in the same directory the
+  // caller pointed `--hook-path` at -- see PRE_COMMIT_HOOK's own note on why it
+  // takes no flag of its own.
+  const preCommitPath = join(dirname(hookPath), PRE_COMMIT_HOOK);
+  const preCommit = installHook(
+    preCommitPath,
+    renderPreCommitHook(policy.branch.base),
+    PRE_COMMIT_HOOK,
+  );
 
   let canonValuesWritten: string | null = null;
   if (canonValuesPath !== null) {
@@ -722,6 +851,52 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     }
   }
 
+  // ── 4b. nen/workflow.json, INTO ABSENCE ONLY ───────────────────────────────
+  //
+  // THE SAME RULE THE DECLARATION FOLLOWS, and for a stronger version of the
+  // same reason. A policy that is there is a policy somebody decided, and this
+  // run has already been generated FROM it (step 1b): overwriting it would
+  // replace a repository's own rules with nen's suggestion, and the hooks on
+  // disk would then enforce the rules that were just deleted. Identical bytes
+  // are `skipped`, so a second run changes nothing; anything else is `refused`,
+  // with the document printed so a caller can diff it by eye.
+  const workflowResolved = resolveSchemaFile(root, WORKFLOW_FILE);
+  const existingWorkflow = existingText(workflowResolved.canonical.path);
+  if (existingWorkflow === workflowBody) {
+    record(workflowResolved.canonical.path, "skipped", "the same policy is already there");
+  } else if (workflowResolved.canonical.present) {
+    record(
+      workflowResolved.canonical.path,
+      "skipped",
+      `${workflowResolved.canonical.relative} already states this repository's policy, and this run was generated FROM it -- the hooks above enforce what that file says. nen never overwrites it; edit it and re-run to regenerate the hooks.`,
+    );
+  } else if (dry) {
+    record(workflowResolved.canonical.path, "would-create", "no policy is there yet");
+    notes.push(workflowBody.trimEnd());
+  } else {
+    // `nen/` again, and a symlinked `nen/` again sends this write out of the
+    // tree while the report says otherwise -- the same real-path rule the
+    // declaration is held to, for the same reason.
+    const escape = symlinkEscape(
+      root,
+      workflowResolved.canonical.path,
+      workflowResolved.canonical.relative,
+    );
+    if (escape !== null) {
+      record(workflowResolved.canonical.path, "refused", escape);
+    } else {
+      step(workflowResolved.canonical.path, (): void => {
+        mkdirSync(dirname(workflowResolved.canonical.path), { recursive: true });
+        writeFileSync(workflowResolved.canonical.path, workflowBody, "utf8");
+        record(
+          workflowResolved.canonical.path,
+          "created",
+          "the delivery policy, written into absence -- every key in it carries nen's own default, so editing one line changes one thing",
+        );
+      });
+    }
+  }
+
   // ── 5. the stack's CI workflow ─────────────────────────────────────────────
   const template = stack === null ? null : templateForStack(stack);
   if (stack === null) {
@@ -790,30 +965,57 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   } catch (error) {
     unreadable = error;
   }
-  const alreadyIgnored =
-    gitignore !== null &&
-    gitignore.replace(/\r\n/g, "\n").split("\n").some((line): boolean => line.trim() === GITIGNORE_ENTRY);
+  // TWO ENTRIES NOW, AND THE SECOND ONE IS THE POLICY'S. `.nen/` is nen's own
+  // generated output; the reports directory is the loop's, and it is read from
+  // `reports.dir` rather than written here because a repository that renamed it
+  // in its policy would otherwise get the wrong line ignored -- silently, since
+  // an ignored directory that does not exist looks exactly like one that does.
+  //
+  // EACH ENTRY IS DECIDED SEPARATELY. A repository that already ignores `.nen/`
+  // and not the reports directory must get the one line it is missing, not a
+  // `skipped` row about the one it has; and the file is still only ever
+  // APPENDED to, never rewritten and never reordered.
+  const ignoreEntries: readonly { readonly entry: string; readonly why: string }[] = [
+    {
+      entry: GITIGNORE_ENTRY,
+      why: "# nen writes generated output here; committed configuration lives in nen/.",
+    },
+    {
+      entry: `${policy.reports.dir}/`,
+      why: `# ${WORKFLOW_FILE}'s reports.dir -- generated reports, never committed.`,
+    },
+  ];
+  const normalised = gitignore === null ? [] : gitignore.replace(/\r\n/g, "\n").split("\n");
+  const missing = ignoreEntries.filter(
+    (candidate): boolean => !normalised.some((line): boolean => line.trim() === candidate.entry),
+  );
+  const names = missing.map((candidate): string => `'${candidate.entry}'`).join(" and ");
   const eol = gitignore !== null && gitignore.includes("\r\n") ? "\r\n" : "\n";
   const gitignoreBlock = [
-    "# nen writes generated output here; committed configuration lives in nen/.",
-    GITIGNORE_ENTRY,
+    ...missing.flatMap((candidate): string[] => [candidate.why, candidate.entry]),
     "",
   ].join(eol);
   if (unreadable !== null) {
     record(
       gitignorePath,
       "refused",
-      `'${GITIGNORE_FILE}' could not be read (${errnoOf(unreadable)}), so nen cannot tell whether '${GITIGNORE_ENTRY}' is already there -- and it will not append to a file it could not read. Every step before this one stands and is reported above.`,
+      `'${GITIGNORE_FILE}' could not be read (${errnoOf(unreadable)}), so nen cannot tell whether ${ignoreEntries
+        .map((candidate): string => `'${candidate.entry}'`)
+        .join(" and ")} are already there -- and it will not append to a file it could not read. Every step before this one stands and is reported above.`,
     );
-  } else if (alreadyIgnored) {
-    record(gitignorePath, "skipped", `'${GITIGNORE_ENTRY}' is already ignored`);
+  } else if (missing.length === 0) {
+    record(
+      gitignorePath,
+      "skipped",
+      `${ignoreEntries.map((candidate): string => `'${candidate.entry}'`).join(" and ")} are already ignored`,
+    );
   } else if (dry) {
     record(
       gitignorePath,
       gitignore === null ? "would-create" : "would-append",
       gitignore === null
-        ? `create it, ignoring '${GITIGNORE_ENTRY}'`
-        : `append '${GITIGNORE_ENTRY}'; nothing else in the file is touched`,
+        ? `create it, ignoring ${names}`
+        : `append ${names}; nothing else in the file is touched`,
     );
   } else {
     const prefix = gitignore === null || gitignore === "" || /\r?\n$/.test(gitignore) ? "" : eol;
@@ -822,7 +1024,7 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
       record(
         gitignorePath,
         gitignore === null ? "created" : "appended",
-        gitignore === null ? `created, ignoring '${GITIGNORE_ENTRY}'` : `appended '${GITIGNORE_ENTRY}'`,
+        gitignore === null ? `created, ignoring ${names}` : `appended ${names}`,
       );
     });
   }
@@ -857,6 +1059,9 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     hookWritten: hookPath,
     hookOutcome,
     hookError,
+    preCommitWritten: preCommitPath,
+    preCommitOutcome: preCommit.outcome,
+    preCommitError: preCommit.error,
     canonValuesWritten,
     stack,
     writes,

@@ -14,6 +14,9 @@ const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AU
 // come out exactly as they did before this change.
 const STACK = "nextjs";
 
+// A lane id the proposal ends up declaring for this stack, so the policy's
+// `iteration.lane` can be asserted against something real.
+
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "nen-scaffold-"));
 }
@@ -122,5 +125,176 @@ describe("renderCanonValuesTemplate", () => {
 
   it("omits the scenario field when not given", () => {
     expect(renderCanonValuesTemplate(undefined)).not.toContain("scenario:");
+  });
+});
+
+// ── the policy file and the two hooks made out of it ────────────────────────
+
+describe("scaffoldInit -- nen/workflow.json", () => {
+  function policyOf(root: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(root, "nen", "workflow.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it("writes the default policy into absence, with the scaffolded lane in it", () => {
+    const root = tempRoot();
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const policy = policyOf(root);
+    expect((policy["iteration"] as Record<string, unknown>)["lane"]).toBe(STACK);
+    expect((policy["coverage"] as Record<string, unknown>)["minimum"]).toBe(80);
+  });
+
+  it("admits exactly the two trailer keys the caller stated, and no others", () => {
+    // nen ships no trailer convention, so the allow-list can only be the
+    // caller's own -- the same rule ./hook.ts's header states about the hook.
+    const root = tempRoot();
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    expect(
+      (policyOf(root)["commits"] as Record<string, unknown>)["allowedAttributionTrailers"],
+    ).toEqual(["X-Agent", "X-Run"]);
+  });
+
+  it("is idempotent: a second run reports 'skipped' and rewrites nothing", () => {
+    const root = tempRoot();
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const before = readFileSync(join(root, "nen", "workflow.json"), "utf8");
+    const second = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    expect(readFileSync(join(root, "nen", "workflow.json"), "utf8")).toBe(before);
+    expect(
+      second.writes.find((write): boolean => write.path === "nen/workflow.json")?.action,
+    ).toBe("skipped");
+  });
+
+  it("NEVER overwrites a policy somebody wrote -- and generates the hooks FROM it", () => {
+    const root = tempRoot();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    const theirs = JSON.stringify({
+      branch: { base: "trunk" },
+      commits: { allowedAttributionTrailers: ["Signed-off-by"] },
+    });
+    writeFileSync(join(root, "nen", "workflow.json"), theirs);
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    expect(readFileSync(join(root, "nen", "workflow.json"), "utf8")).toBe(theirs);
+    // The trunk guard names THEIR trunk...
+    expect(readFileSync(result.preCommitWritten, "utf8")).toContain('base="trunk"');
+    // ...and the commit-msg guard admits THEIR trailer while refusing the rest.
+    const hook = readFileSync(result.hookWritten, "utf8");
+    expect(hook).not.toContain("^Signed-off-by:");
+    expect(hook).toContain("^Co-Authored-By:");
+  });
+
+  it("refuses the whole run, before the first write, on a MALFORMED policy", () => {
+    // Both hooks are made out of that file; scaffolding around one nen cannot
+    // read would install guards enforcing a policy nobody wrote.
+    const root = tempRoot();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "workflow.json"), '{"coverage":{"minimum":95,"ideal":10}}');
+    expect((): unknown =>
+      scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK }),
+    ).toThrow(/could not be read/);
+    // Nothing was written: not the hook, not the declaration.
+    expect(existsSync(join(root, ".git", "hooks", "commit-msg"))).toBe(false);
+    expect(existsSync(join(root, "nen", "contract.json"))).toBe(false);
+  });
+});
+
+describe("scaffoldInit -- the pre-commit trunk guard", () => {
+  it("installs it beside the commit-msg hook, in that hook's own directory", () => {
+    const root = tempRoot();
+    const result = scaffoldInit({
+      root,
+      platform: "linux",
+      directories: [],
+      hook: HOOK,
+      stack: STACK,
+      hookPath: "custom/hooks/commit-msg",
+    });
+    expect(result.preCommitWritten).toBe(join(root, "custom", "hooks", "pre-commit"));
+    expect(result.preCommitOutcome).toBe("installed");
+    expect(readFileSync(result.preCommitWritten, "utf8")).toContain('base="main"');
+  });
+
+  it("is idempotent, and reports 'unchanged' rather than 'installed' on a second run", () => {
+    const root = tempRoot();
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const second = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    expect(second.preCommitOutcome).toBe("unchanged");
+  });
+
+  it("REFUSES to clobber a different pre-commit hook, and --force backs it up first", () => {
+    const root = tempRoot();
+    const path = join(root, ".git", "hooks", "pre-commit");
+    mkdirSync(dirname(path), { recursive: true });
+    const theirs = "#!/bin/sh\n# THE PROJECT OWNS THIS HOOK\nexit 0\n";
+    writeFileSync(path, theirs);
+
+    const refused = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    expect(refused.preCommitOutcome).toBe("refused");
+    expect(refused.preCommitError).toMatch(/--force/);
+    expect(refused.exitCode).toBe(1);
+    expect(readFileSync(path, "utf8")).toBe(theirs);
+
+    const forced = scaffoldInit({
+      root,
+      platform: "linux",
+      directories: [],
+      hook: HOOK,
+      stack: STACK,
+      force: true,
+    });
+    expect(forced.preCommitOutcome).toBe("installed");
+    expect(readFileSync(`${path}.bak`, "utf8")).toBe(theirs);
+  });
+
+  it("writes neither hook on a dry run, and says 'would-install' for both", () => {
+    const root = tempRoot();
+    const result = scaffoldInit({
+      root,
+      platform: "linux",
+      directories: [],
+      hook: HOOK,
+      stack: STACK,
+      dryRun: true,
+    });
+    expect(result.hookOutcome).toBe("would-install");
+    expect(result.preCommitOutcome).toBe("would-install");
+    expect(existsSync(result.preCommitWritten)).toBe(false);
+    expect(existsSync(join(root, "nen", "workflow.json"))).toBe(false);
+    expect(
+      result.writes.find((write): boolean => write.path === "nen/workflow.json")?.action,
+    ).toBe("would-create");
+  });
+});
+
+describe("scaffoldInit -- .gitignore carries the reports directory too", () => {
+  it("appends the policy's reports.dir beside '.nen/'", () => {
+    const root = tempRoot();
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const ignored = readFileSync(join(root, ".gitignore"), "utf8");
+    expect(ignored).toContain(".nen/");
+    expect(ignored).toContain("Reports/");
+  });
+
+  it("reads the DIRECTORY out of an existing policy rather than assuming one", () => {
+    const root = tempRoot();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ reports: { dir: "out/reports" } }));
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const ignored = readFileSync(join(root, ".gitignore"), "utf8");
+    expect(ignored).toContain("out/reports/");
+    expect(ignored).not.toContain("\nReports/");
+  });
+
+  it("adds only the entry that is MISSING when the file already carries the other", () => {
+    const root = tempRoot();
+    writeFileSync(join(root, ".gitignore"), "dist\n.nen/\n", "utf8");
+    scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const ignored = readFileSync(join(root, ".gitignore"), "utf8");
+    expect(ignored.startsWith("dist\n.nen/\n")).toBe(true);
+    expect(ignored).toContain("Reports/");
+    // ...and it did not append a second `.nen/`.
+    expect(ignored.split("\n").filter((line): boolean => line === ".nen/")).toHaveLength(1);
   });
 });
