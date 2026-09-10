@@ -2764,8 +2764,21 @@ describe("a device is READY, not merely present", () => {
     });
     expect(result.code).toBe(5);
     const err = result.err.join("\n");
-    expect(err).toContain("nen read no state for it");
+    expect(err).toContain("nen read no single state for it");
     expect(err).toContain("field 2 of the device's own row (counting from 1)");
+  });
+
+  it("refuses when two rows carrying the name disagree about the state", async () => {
+    // NOT AN ID AMBIGUITY -- neither row offers one -- but two answers to "what
+    // state is this device in", and nen reports neither rather than acting on
+    // the row that happened to print first.
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001   ready", "PH0000000001   unpaired")],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("nen read no single state for it");
+    expect(result.err.join("\n")).toContain("two rows carrying this name disagree about it");
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --long"]);
   });
 
   it("reads a JSON probe's state off the device's own object", async () => {

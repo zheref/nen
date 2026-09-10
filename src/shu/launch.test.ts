@@ -379,6 +379,51 @@ describe("findDevice reads a device's STATE where the declaration says it is", (
     expect(findDevice("Placeholder A", out, byPath("state")).readiness).toBeNull();
   });
 
+  it("reports a state two AGREEING rows both carry, in either shape", () => {
+    // ONE DEVICE DESCRIBED TWICE is a real shape -- the same handset seen over
+    // two transports, the same id printed twice -- and it is not an ambiguity
+    // about the state when both rows say the same word.
+    const json = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+    ]);
+    expect(findDevice("Placeholder A", json, byPath("state")).readiness).toBe("ready");
+    // A row that carried NOTHING at the position is not disagreement: it says
+    // nothing, and the row that did say something is the answer.
+    const partial = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1" },
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+    ]);
+    expect(findDevice("Placeholder A", partial, byPath("state")).readiness).toBe("ready");
+  });
+
+  it("reports NO state when two rows for one name DISAGREE about it", () => {
+    // THE COMPLEMENT OF THE RULE ABOVE, and it is `findDevice`'s own "nen picks
+    // neither" applied to the second fact a row carries: two rows that are not
+    // an id ambiguity (one id reached twice, or no ids at all) can still name
+    // two states, and answering with the first would refuse -- or permit -- a
+    // launch on a row nen chose.
+    const json = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+      { name: "Placeholder A", udid: "AAAA-1", state: "unpaired" },
+    ]);
+    expect(findDevice("Placeholder A", json, byPath("state")).readiness).toBeNull();
+    // Two id-less rows on the plain side, which is the same fact seen the other
+    // way: neither is the device's row more than the other is.
+    const lines = ["PH0000000001   ready", "PH0000000001   unpaired"].join("\n");
+    const lookup = findDevice("PH0000000001", lines, byField(2));
+    expect(lookup.id).toBeNull();
+    expect(lookup.readiness).toBeNull();
+  });
+
+  it("reads the id-bearing row alone when only one line offers an id", () => {
+    // The summary-line shape: a heading naming the device above its table. Only
+    // the row offers an id, so the heading is not a second opinion about the
+    // state -- it is not the device's row at all.
+    const withHeading = ["Found 1: PH0000000001", "PH0000000001   ready   usb:1-2"].join("\n");
+    expect(findDevice("PH0000000001", withHeading, byField(2)).readiness).toBe("ready");
+  });
+
   it("reports NO state when the name matched two rows, in either shape", () => {
     // Two candidates are two rows, so "this device's state" names two values
     // and nen reports neither -- the ambiguity is the refusal in any case.

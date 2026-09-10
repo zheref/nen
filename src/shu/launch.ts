@@ -436,6 +436,26 @@ function linesOf(text: string): readonly string[] {
 }
 
 /**
+ * ONE state, out of every reading the matching rows offered, or null.
+ *
+ * AGREEMENT OR NOTHING, and the rule is `findDevice`'s own "nen picks neither"
+ * applied to the second fact a row carries. A name can be matched by more than
+ * one row without that being an id AMBIGUITY -- the same device described twice
+ * is one device, and rows carrying no id at all are not competing candidates --
+ * but "this device's state" still names two values whenever those rows disagree,
+ * and answering with the first would refuse (or permit) a launch on a row nen
+ * chose. Readings that are absent are not disagreement: a row that carried
+ * nothing at the declared position says nothing, and one that did says it.
+ */
+function agreedReading(values: readonly (string | null)[]): string | null {
+  // DESTRUCTURED RATHER THAN COUNTED, so every arm below is one a test can
+  // reach: nothing read (`only` undefined -- an empty position, or no rule's
+  // shape matched), one thing read, and two that disagree.
+  const [only, second] = [...new Set(values.filter((value): value is string => value !== null))];
+  return second === undefined ? (only ?? null) : null;
+}
+
+/**
  * Find one device's id in whatever its declared probe printed.
  *
  * JSON FIRST, TEXT SECOND, AND THE PROBE DECIDES WHICH -- not the declaration
@@ -484,7 +504,7 @@ export function findDevice(
       found: true,
       id: ids[0] ?? null,
       ambiguous: [],
-      readiness: candidates[0]?.readiness ?? null,
+      readiness: agreedReading(candidates.map((match): string | null => match.readiness)),
       saw,
       sawKind: "names",
     };
@@ -509,21 +529,24 @@ export function findDevice(
     return { found: true, id: null, ambiguous: withIds, readiness: null, saw: lines, sawKind: "lines" };
   }
   const only = withIds[0];
-  // THE ROW THE STATE IS READ FROM is the one the id came off, and -- when no
-  // line offered an id at all -- the first line carrying the name. That second
-  // case is not a fallback for its own sake: a device whose state is the reason
-  // it is unusable routinely prints a row with NO id on it, and answering "the
-  // probe gave nen no id" about a phone whose screen is showing an unanswered
-  // pairing prompt is the true sentence that helps least.
-  const row = only ?? matching[0];
+  // WHICH ROWS THE STATE IS READ FROM. The row the id came off, when one line
+  // offered one -- that line IS the device's row and the narrowing above has
+  // already said so. When NO line offered an id, every line carrying the name
+  // is a candidate and they have to AGREE: a device whose state is the reason
+  // it is unusable routinely prints a row with no id on it (answering "the
+  // probe gave nen no id" about a phone showing an unanswered pairing prompt is
+  // the true sentence that helps least), but two such rows disagreeing about
+  // the state is two answers, and nen reports neither.
+  const rows = only === undefined ? matching : [only];
+  const field = ready === null ? null : ready.field;
   return {
     found: true,
     id: only === undefined ? null : idOnLine(only, name),
     ambiguous: [],
     readiness:
-      ready === null || ready.field === null || row === undefined
+      field === null
         ? null
-        : fieldOnLine(row, ready.field),
+        : agreedReading(rows.map((line): string | null => fieldOnLine(line, field))),
     saw: lines,
     sawKind: "lines",
   };

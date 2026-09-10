@@ -1878,7 +1878,7 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
       EXIT_TOOL_NOT_INSTALLED,
       `the device '${device.name}' is ${
         lookup.readiness === null
-          ? `on the probe's list and nen read no state for it: project.launch.${launch.name}.device.readyWhen looks at ${readWhere(rule)}, and nothing there carried a value`
+          ? `on the probe's list and nen read no single state for it: project.launch.${launch.name}.device.readyWhen looks at ${readWhere(rule)}, and nothing there carried a value nen could read as one -- either the position is empty, or two rows carrying this name disagree about it and nen reports neither`
           : `on the probe's list and its state is '${lookup.readiness}', which is not one project.launch.${launch.name}.device.readyWhen accepts`
       }. Accepted: ${rule.in.map((state): string => `'${state}'`).join(", ")} -- read from ${readWhere(rule)}, which is how nen reads a probe that prints ${readShape(rule)}. A device that is PRESENT is not a device that is READY: every step this launch would run next addresses it by id, and nen will not report the probe green and let each of them fail one at a time. ${
         // NO "IT SAW NOTHING" ARM HERE, unlike the absence refusal above: this
