@@ -11,6 +11,14 @@
 // EVERY FLAG IS REPORTED, NOT JUST THE FIRST. "Present all flags AT ONCE" is
 // the skill's own instruction, so a file matching two reasons (an ignored
 // binary, say) carries both rather than whichever check ran first.
+//
+// A GIT-IGNORED PATH IS A FACT, NOT A QUESTION (zheref/nen#169). It cannot be
+// staged without `-f`, so there is nothing for a human to answer yes or no
+// to -- unlike every other reason here, which flags something a plain `git
+// add` COULD put in a commit. `triageStage` therefore returns it in its own
+// `ignored` bucket rather than `flagged`: a repository with a large ignored
+// tree (`node_modules/`, a generated `.cursor/` mirror) no longer buries the
+// handful of rows that genuinely need a decision under thousands that don't.
 
 export interface StatusEntry {
   readonly path: string;
@@ -71,6 +79,19 @@ export interface FlaggedFile {
 export interface TriageResult {
   readonly clean: readonly string[];
   readonly flagged: readonly FlaggedFile[];
+  /**
+   * Git-ignored paths, kept OUT of `flagged` (zheref/nen#169). An ignored
+   * path is a FACT, not a question -- it cannot be staged without `-f`, so
+   * there is nothing for a human to say yes or no to, and burying it among
+   * paths that DO need a decision (an untracked-in-scope file, a
+   * secret-shaped one) was the bug this bucket fixes. Every other reason
+   * still computed for the entry travels with it here rather than being
+   * dropped: a secret-shaped file inside an ignored tree still carries
+   * `secret-shape` alongside `ignored`, recorded and never silently lost --
+   * it is simply never counted toward `flagged`, because an ignored path can
+   * never end up in a commit regardless of its name.
+   */
+  readonly ignored: readonly FlaggedFile[];
 }
 
 export interface TriageOptions {
@@ -98,6 +119,7 @@ export function triageStage(entries: readonly StatusEntry[], options: TriageOpti
 
   const clean: string[] = [];
   const flagged: FlaggedFile[] = [];
+  const ignored: FlaggedFile[] = [];
 
   for (const entry of entries) {
     const reasons: FlagReason[] = [];
@@ -114,9 +136,14 @@ export function triageStage(entries: readonly StatusEntry[], options: TriageOpti
       if (!mentioned.includes(basename.toLowerCase())) reasons.push("unmentioned-deletion");
     }
 
-    if (reasons.length === 0) clean.push(entry.path);
+    // An ignored path is routed here FIRST, ahead of the empty-reasons check
+    // below -- `entry.ignored` always pushed "ignored" above, so this branch
+    // can never see an empty `reasons` array. It never falls through to
+    // `flagged`, whatever else it also matched (zheref/nen#169).
+    if (entry.ignored) ignored.push({ path: entry.path, reasons });
+    else if (reasons.length === 0) clean.push(entry.path);
     else flagged.push({ path: entry.path, reasons });
   }
 
-  return { clean, flagged };
+  return { clean, flagged, ignored };
 }

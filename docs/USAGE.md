@@ -107,6 +107,27 @@ inconsistency across the surface, and it is tracked as
 the portable habit is to pass an absolute path to any of the flags in this
 table, or to run the verb from the directory those paths are relative to.
 
+### Containment
+
+Every path a declaration states is repo-root-relative, and nen refuses one that
+leaves the tree `--repo` pointed at — at exit **2**, before anything is spawned,
+read or written, naming the pointer that stated it. The test is against the path
+the **kernel would actually reach**, `realpath`-resolved, not against its
+spelling: `build/payload` reads as plainly inside the repository and is refused
+just the same when `build/` is a symlink to somewhere else — and the refusal
+names the link and where it points
+([zheref/nen#157](https://github.com/zheref/nen/issues/157)). A symlink that
+stays inside the tree is ordinary and allowed — the question is where the path
+lands, never whether a link was involved. It holds for
+`project.lanes.<lane>.cwd`, a `path` precondition, every `artifacts[i]`, a
+[`project.launch.<name>.artifact`](#nen-shu-dev), a step's `stdoutTo`, the
+coverage and test reports [`shu coverage`](#nen-shu-coverage) and
+[`shu test-report`](#nen-shu-test-report) read back, and — the flag-stated
+member of the same family — [`report render --out`](#nen-report-render).
+`nen schema check` does **not** answer it: the loader has no filesystem, so a
+`cwd` of `../../../../etc` reads as a well-formed declaration and is refused at
+the moment of use instead. Pointers are checked at load; paths at use.
+
 ### `--target <owner/name>` names the GitHub repository
 
 A verb that calls `gh` needs the repository on GitHub, which is a different
@@ -520,7 +541,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
-| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, ignored, binary, out-of-scope and unmentioned-deletion files before staging | git status --porcelain | yes |
+| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
 | [`board`](#family-board) | [`nen board build`](#nen-board-build) | assembles a Board from already-computed rows (gate from 'gate derive', colour from 'color status') | local file (--rows-from) | yes |
@@ -1350,16 +1371,26 @@ one/two/three together`, blank line, `Closes: #99`)
 **`nen stage`**
 
 Flags what should never be staged blind, tensho §3's own table: secret
-shapes, git-ignored files, binaries, out-of-scope paths and unmentioned
-deletions. It detects, never decides — the yes to stage a flagged file is
-always the human's.
+shapes, binaries, out-of-scope paths and unmentioned deletions. It detects,
+never decides — the yes to stage a flagged file is always the human's. A
+git-ignored path is reported separately, never as a flag: it cannot be staged
+without `-f`, so there is nothing to ask.
 
 ### `nen stage triage`
 
 Reads `git status --porcelain=v1 -z --ignored -uall` and reasons over every
 entry: a secret-looking name (`.env`, `*.pem`, `*.key`, `credentials*`), a
-git-ignored file, a binary, a path outside `--scope`, or a deleted path whose
-basename `--mentions` never names.
+binary, a path outside `--scope`, or a deleted path whose basename
+`--mentions` never names — each of these is FLAGGED, needing a human's yes
+before it is staged. A git-ignored entry is a FACT rather than a question (a
+plain `git add` cannot stage it at all) and is reported in its own `ignored`
+bucket instead: a repository with a large ignored tree (`node_modules/`, a
+generated surface mirror under `.cursor/`) no longer buries the handful of
+rows that actually need a decision under thousands that don't
+([#169](https://github.com/zheref/nen/issues/169)). An entry that is BOTH —
+a secret-shaped file inside an ignored directory, say — stays in `ignored`
+with every reason it matched, `secret-shape` included, and never appears in
+`flagged`.
 
 **Usage**
 
@@ -1377,11 +1408,15 @@ nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
 | `--json` | no | machine-readable triage | — |
 
 **Output and exit codes** — human lines: `clean: <n> file(s)` then each
-clean path, and (if any) `flagged: <n> file(s) -- never staged without an
-explicit yes` then each flagged path with its reason tags; `--json`
-top-level keys: `clean[]`, `flagged[]` (each `{ path, reasons[] }`). Exit 0
-when nothing is flagged, exit 1 when anything is flagged or the underlying
-`git status` fails, exit 2 on a missing `--repo`.
+clean path; `ignored: <n> file(s), not listed` (a count only — this verb has
+no `--verbose` flag, so the ignored paths themselves are never printed in
+text, only under `--json`); and (if any) `flagged: <n> file(s) -- never
+staged without an explicit yes` then each flagged path with its reason tags.
+`--json` top-level keys: `clean[]`, `flagged[]` and `ignored[]` (each of the
+latter two `{ path, reasons[] }`). **The exit code follows `flagged` only**:
+exit 0 when nothing is flagged — including a tree that is entirely
+ignored rows — exit 1 when anything is flagged or the underlying `git
+status` fails, exit 2 on a missing `--repo`.
 
 **Example**
 
@@ -1391,10 +1426,41 @@ nen stage triage --repo . --scope "src/,docs/"
 ```text
 clean: 1 file(s)
   src/a.ts
+ignored: 2 file(s), not listed
 flagged: 1 file(s) -- never staged without an explicit yes
   .env  [secret-shape, out-of-scope]
 ```
-(from a real run against a throwaway scratch git repository with a committed, in-scope `src/a.ts` carrying an uncommitted edit alongside an untracked `.env`)
+(from a real run against a throwaway scratch git repository: a committed,
+in-scope `src/a.ts` carrying an uncommitted edit, an untracked `.env`, and a
+`node_modules/` — ignored via `.gitignore` — holding both an ordinary file
+and its own `.env`, which the `--json` form below shows still carries
+`secret-shape` inside the `ignored` bucket)
+
+```bash
+nen stage triage --repo . --scope "src/,docs/" --json
+```
+```json
+{
+  "clean": ["src/a.ts"],
+  "flagged": [{ "path": ".env", "reasons": ["secret-shape", "out-of-scope"] }],
+  "ignored": [
+    { "path": "node_modules/leftpad/.env", "reasons": ["ignored", "secret-shape", "out-of-scope"] },
+    { "path": "node_modules/leftpad/index.js", "reasons": ["ignored", "out-of-scope"] }
+  ]
+}
+```
+
+A tree with only ignored rows — the shape a `node_modules/` or a generated
+surface mirror produces — now exits 0 instead of flooding `flagged`:
+
+```bash
+nen stage triage --repo .
+```
+```text
+clean: 0 file(s)
+ignored: 2 file(s), not listed
+```
+(exit 0 — same scratch repository, with the in-scope edit and the untracked `.env` committed away first, leaving only the ignored `node_modules/` tree dirty)
 
 ## Backlog & boards
 
@@ -6995,9 +7061,12 @@ empty reading.
 nen stage triage --repo . --scope "src/,docs/" --mentions "$(cat commit-draft.txt)"
 ```
 
-Exit 1 whenever anything is flagged: a secret-shaped name, a git-ignored file, a
-binary, a path outside `--scope`, or a deleted path your draft never mentions.
-The yes to stage a flagged file is always yours.
+Exit 1 whenever anything is flagged: a secret-shaped name, a binary, a path
+outside `--scope`, or a deleted path your draft never mentions. The yes to
+stage a flagged file is always yours. A git-ignored path is reported
+separately (`ignored: <n> file(s), not listed`) and never moves this exit
+code — a tree that is entirely `node_modules/` or a generated mirror is
+exit 0.
 
 ```bash
 # 3. Shape the commit message.
