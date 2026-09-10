@@ -56,21 +56,26 @@ describe("resolveSchemaFile", () => {
     expect(resolved.legacy?.present).toBe(false);
   });
 
-  it("falls back to schemas/ when only schemas/ is there", () => {
+  it("resolves to the CANONICAL path even when only schemas/ is there -- there is no fallback left to serve it", () => {
+    // MUTATION GUARD, the fallback's replacement. Through v0.4.0 this case
+    // resolved to the legacy path and `readSchemaFile` read it; from v0.5.0 the
+    // canonical path is the answer regardless, and it is `readSchemaFile`'s job
+    // (below) to refuse rather than open the file this resolves to.
     const root = scratch();
-    const legacy = write(root, "schemas/labels.json", "{}");
+    write(root, "schemas/labels.json", "{}");
     const resolved = resolveSchemaFile(root, LABELS_FILE);
-    expect(resolved.location).toBe("schemas");
-    expect(resolved.path).toBe(legacy);
-    expect(resolved.relative).toBe("schemas/labels.json");
+    expect(resolved.location).toBe("nen");
+    expect(resolved.path).toBe(schemaPath(root, LABELS_FILE));
+    expect(resolved.relative).toBe("nen/labels.json");
     expect(resolved.canonical.present).toBe(false);
+    // The legacy candidate is still DETECTED -- present on disk -- even though
+    // it is never the one resolved. Detection and reading are two different
+    // questions now.
+    expect(resolved.legacy?.present).toBe(true);
+    expect(resolved.legacy?.relative).toBe("schemas/labels.json");
   });
 
-  it("nen/ WINS when both are there -- the order is the whole point of the map", () => {
-    // MUTATION GUARD. Swap the precedence in `resolveSchemaFile` and this is
-    // the assertion that goes red: a repository that has migrated but not yet
-    // deleted the old copy must be served the NEW file, or the migration
-    // silently does nothing.
+  it("nen/ WINS when both are there, and there is no other file left that could win", () => {
     const root = scratch();
     const canonical = write(root, LABELS_FILE, '{"which":"nen"}');
     write(root, "schemas/labels.json", '{"which":"schemas"}');
@@ -124,13 +129,17 @@ describe("resolveSchemaFile", () => {
     expect(resolved.canonical.present).toBe(false);
   });
 
-  it("reads the un-migrated fixture repository entirely through the fallback", () => {
-    // The `legacy-repo` fixture is the only thing in this tree keeping the old
-    // layout alive; when the map goes in v0.5.0, this test goes with it.
+  it("resolves the un-migrated fixture repository to nen/ for every file, even though only schemas/ carries them", () => {
+    // `legacy-repo` carries all four files under `schemas/` and none under
+    // `nen/` -- through v0.4.0 this proved the fallback; now it proves the
+    // fallback is gone. `readSchemaFile`'s own describe block below is where
+    // this repository's REFUSAL is proved.
     for (const file of [LABELS_FILE, "nen/repos.json", COLORS_FILE, GATES_FILE]) {
       const resolved = resolveSchemaFile(LEGACY_REPO, file);
-      expect(resolved.location, file).toBe("schemas");
-      expect(resolved.relative, file).toBe(resolved.legacy?.relative);
+      expect(resolved.location, file).toBe("nen");
+      expect(resolved.relative, file).toBe(file);
+      expect(resolved.canonical.present, file).toBe(false);
+      expect(resolved.legacy?.present, file).toBe(true);
     }
   });
 
@@ -213,8 +222,9 @@ describe("inspectShadow, when the comparison cannot be made at all", () => {
     // difference is a decision on the record rather than an accident of Node's
     // API. `throwIfNoEntry: false` suppresses ENOTDIR alongside ENOENT, so a
     // path whose `nen` component is a FILE reads as "nothing is there" -- which
-    // is the honest answer, since nothing can live under it -- and the fallback
-    // answers normally. The same holds on Windows, which reports
+    // is the honest answer, since nothing can live under it -- and the refusal
+    // below names the migration exactly as it would for a repository with no
+    // `nen` entry at all. The same holds on Windows, which reports
     // ERROR_PATH_NOT_FOUND (mapped to ENOENT) where POSIX reports ENOTDIR: two
     // errnos, one behaviour, no platform divergence to account for.
     const root = scratch();
@@ -222,9 +232,10 @@ describe("inspectShadow, when the comparison cannot be made at all", () => {
     writeFileSync(join(root, "nen"), "not a directory");
     const resolved = resolveSchemaFile(root, LABELS_FILE);
     expect(resolved.canonical.present).toBe(false);
-    expect(resolved.location).toBe("schemas");
+    expect(resolved.location).toBe("nen");
+    expect(resolved.legacy?.present).toBe(true);
     expect(inspectShadow(resolved).state).toBe("none");
-    expect(readSchemaFile(root, LABELS_FILE).text).toBe('{"labels":[]}');
+    expect(() => readSchemaFile(root, LABELS_FILE)).toThrow(/nen scaffold init --accept-detected/);
   });
 
   it.skipIf(!POSIX)("answers 'unknown' for a symlink that points at itself", () => {
@@ -269,17 +280,29 @@ describe("readSchemaFile", () => {
     expect(result.legacy).toBe(false);
   });
 
-  it("records that a read came from the LEGACY location", () => {
+  it("REFUSES when only the legacy schemas/ location has the file, naming the migration", () => {
+    // THE FALLBACK'S REPLACEMENT, PROVED. Through v0.4.0 this exact setup
+    // returned the legacy text at exit 0; from v0.5.0 a `schemas/`-only file is
+    // the SAME repository state as no file at all, and the one thing that
+    // changes is that the refusal names the way out.
     const root = scratch();
     write(root, "schemas/labels.json", "{}");
-    const result = readSchemaFile(root, LABELS_FILE);
-    expect(result.text).toBe("{}");
-    expect(result.path).toBe(schemaPath(root, "schemas/labels.json"));
-    expect(result.location).toBe("schemas");
-    expect(result.legacy).toBe(true);
+    try {
+      readSchemaFile(root, LABELS_FILE);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchemaError);
+      const message = (error as SchemaError).message;
+      expect(message).toContain(ABSENT_FILE_MARKER);
+      expect(message).toContain("'nen/labels.json'");
+      expect(message).toContain("'schemas/labels.json'");
+      expect(message).toContain("nen scaffold init --accept-detected");
+      expect(message).toContain("v0.5.0");
+      expect((error as SchemaError).path).toBe(schemaPath(root, LABELS_FILE));
+    }
   });
 
-  it("phrases an ABSENT file with the marker checkTaxonomy branches on", () => {
+  it("phrases an ABSENT file with the marker checkTaxonomy branches on, and names NO legacy path when there is none", () => {
     // LOAD-BEARING WORDING, not prose. `checkTaxonomy` distinguishes "the file
     // is not there" (tolerable for an optional schema) from "the file is there
     // and is wrong" (never tolerable) by looking for this marker. If the ENOENT
@@ -288,9 +311,9 @@ describe("readSchemaFile", () => {
     // the report -- silently, which is the whole failure class this repository's
     // loaders exist to avoid.
     //
-    // TWO CANDIDATE PATHS, STILL ONE SENTENCE. The fallback added a second
-    // place to look; it must not add a second ENOENT message, or the marker
-    // stops being a reliable discriminator.
+    // A REPOSITORY WITH NEITHER COPY GETS NO MIGRATION SENTENCE. There is
+    // nothing to migrate, so naming `schemas/labels.json` here would send an
+    // operator looking for a file that was never there.
     const root = scratch();
     try {
       readSchemaFile(root, LABELS_FILE);
@@ -300,11 +323,9 @@ describe("readSchemaFile", () => {
       const message = (error as SchemaError).message;
       expect(message).toContain(ABSENT_FILE_MARKER);
       expect(message.split(ABSENT_FILE_MARKER).length - 1).toBe(1);
-      // BOTH locations are named, so an operator who has not migrated is not
-      // told to create a file they already have.
       expect(message).toContain("'nen/labels.json'");
-      expect(message).toContain("'schemas/labels.json'");
-      expect(message).toContain("v0.5.0");
+      expect(message).not.toContain("schemas/labels.json");
+      expect(message).not.toContain("v0.5.0");
       // and it stays actionable
       expect(message).toMatch(/--repo/);
       expect(message).toMatch(/no built-in copy/);
@@ -327,10 +348,10 @@ describe("readSchemaFile", () => {
     }
   });
 
-  it("does NOT fall through to schemas/ when nen/ is present and broken", () => {
-    // `nen/` winning means winning even when it loses: a directory (or an
-    // unreadable file) where `nen/labels.json` belongs is a defect to report,
-    // not a reason to quietly serve the legacy copy.
+  it("reports a broken nen/ file as broken, never as absent -- there is nothing left to fall through to", () => {
+    // `nen/` is the only path `resolveSchemaFile` ever answers now, so a
+    // directory (or an unreadable file) where `nen/labels.json` belongs is
+    // simply a defect to report by its own errno.
     const root = scratch();
     mkdirSync(schemaPath(root, LABELS_FILE), { recursive: true });
     write(root, "schemas/labels.json", "{}");
@@ -344,25 +365,24 @@ describe("readSchemaFile", () => {
   });
 
   it.skipIf(!POSIX)(
-    "A THROW COUNTS AS PRESENT: an unreadable nen/ copy fails loudly, it does not fall back",
+    "A THROW COUNTS AS PRESENT: an unreadable nen/ copy fails loudly, by its own errno",
     () => {
-      // THE MUTATION GUARD FOR THE FALLBACK'S SAFETY, not for `isPresent`'s
-      // catch specifically -- `lstatSync` does not follow a symlink, so a
-      // SELF-REFERENTIAL `nen/labels.json` is stat'able (it exists, as a
-      // symlink) and `isPresent` answers `true` from its SUCCESS branch, not
-      // its catch. What this still guards is what happens next: the cycle is
-      // still there, so the read below still throws ELOOP, and that failure
-      // must stay loud rather than being swallowed and re-routed to
-      // `schemas/`. (The DANGLING-symlink test below is the one that actually
-      // exercises `isPresent`'s catch branch and its ENOTDIR fold-in.)
+      // THE MUTATION GUARD FOR `isPresent`'S "a throw counts as present" rule,
+      // not for `isPresent`'s catch branch specifically -- `lstatSync` does not
+      // follow a symlink, so a SELF-REFERENTIAL `nen/labels.json` is stat'able
+      // (it exists, as a symlink) and `isPresent` answers `true` from its
+      // SUCCESS branch, not its catch. What this still guards is what happens
+      // next: the cycle is still there, so the read below still throws ELOOP,
+      // and that failure must stay loud -- named by its real errno -- rather
+      // than being folded into "absent". (The DANGLING-symlink test below is
+      // the one that actually exercises `isPresent`'s catch branch and its
+      // ENOTDIR fold-in.)
       //
-      // Route `isPresent` back through `statSync` and nothing else in the
-      // suite notices -- while a repository whose `nen/labels.json` is an
-      // ELOOP symlink starts being served the STALE `schemas/` taxonomy,
-      // silently, at exit 0. That is the exact failure the fallback was most
-      // likely to introduce and the one it was designed not to have: a broken
-      // canonical file is a defect to report, never a reason to quietly read
-      // the old one.
+      // Route `isPresent` back through `statSync` and `resolved.canonical.present`
+      // would flip to `false` for this case, and a broken canonical file would
+      // be reported "not found" instead of by its real errno -- the wrong
+      // finding for an operator to act on, even though `resolveSchemaFile` no
+      // longer has a `schemas/` path to serve instead.
       //
       // A SELF-REFERENTIAL SYMLINK is the cheapest portable way to build an
       // entry whose READ, not whose stat, fails with a cycle. Windows is
@@ -394,25 +414,23 @@ describe("readSchemaFile", () => {
   );
 
   it.skipIf(!POSIX)(
-    "A DANGLING symlink counts as present too: it fails loudly with ENOENT, it does not fall back",
+    "A DANGLING symlink counts as present too: it fails loudly with ENOENT, by its own path",
     () => {
       // THE FAILURE THIS FIX CLOSES, alongside the ELOOP case above. `statSync`
       // follows a symlink to its target; a `nen/labels.json` that points at a
       // file which does not exist resolved, under `statSync`, to a plain ENOENT
       // on the TARGET -- suppressed by `throwIfNoEntry: false` exactly like a
-      // genuinely missing entry, so the dangling symlink read as ABSENT and the
-      // resolver silently served the stale `schemas/` copy: the exact
-      // stale-taxonomy failure the "a throw counts as present" rule exists to
-      // prevent, reached by a path that rule did not cover. `lstatSync` stats
-      // the symlink ITSELF, which is there no matter what it points to, so it
-      // now counts as present and `nen/` still wins; the read below is what
-      // follows the link, and it still reports the real ENOENT -- loudly,
-      // naming `nen/labels.json`, and still actionable (`--repo`, "add the
-      // file") rather than silently returning the legacy text.
+      // genuinely missing entry, so `canonical.present` would read `false` for a
+      // file that is, in fact, right there and broken. `lstatSync` stats the
+      // symlink ITSELF, which is there no matter what it points to, so it now
+      // counts as present; the read below is what follows the link, and it
+      // still reports the real ENOENT -- loudly, naming `nen/labels.json`, and
+      // still actionable (`--repo`, "add the file").
       //
-      // Revert `isPresent` to `statSync` and this goes red: `resolved.location`
-      // becomes `"schemas"`, and `readSchemaFile` returns the stale legacy text
-      // instead of throwing.
+      // Revert `isPresent` to `statSync` and this goes red: `canonical.present`
+      // becomes `false` for a symlink that is genuinely there, so this specific
+      // dangling entry would be reported as though `nen/labels.json` had never
+      // been created at all.
       //
       // Windows is skipped for the same reason as the ELOOP test above:
       // creating a symlink there needs a privilege ordinary CI does not hold.
@@ -475,9 +493,24 @@ describe("readSchemaJson", () => {
     }
   });
 
-  it("carries the read's location through to the caller", () => {
+  it("refuses, naming the migration, when only the legacy location carries the file", () => {
     const root = scratch();
     write(root, "schemas/repos.json", "{}");
-    expect(readSchemaJson(root, "nen/repos.json").location).toBe("schemas");
+    try {
+      readSchemaJson(root, "nen/repos.json");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchemaError);
+      const message = (error as SchemaError).message;
+      expect(message).toContain(ABSENT_FILE_MARKER);
+      expect(message).toContain("'schemas/repos.json'");
+      expect(message).toContain("nen scaffold init --accept-detected");
+    }
+  });
+
+  it("carries `location: \"nen\"` through to the caller on every successful read", () => {
+    const root = scratch();
+    write(root, "nen/repos.json", "{}");
+    expect(readSchemaJson(root, "nen/repos.json").location).toBe("nen");
   });
 });

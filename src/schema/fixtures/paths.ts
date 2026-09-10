@@ -20,9 +20,12 @@ export const ALT_REPO = join(FIXTURES, "alt-repo");
 
 /**
  * The un-migrated layout: the same four files as `bankai-repo`, still under
- * `schemas/` and absent from `nen/`. It exists so the fallback is proved
- * against a repository root rather than a temp directory, and it is deleted in
- * v0.5.0 together with the legacy map in ../source.ts.
+ * `schemas/` and absent from `nen/`. The `schemas/` fallback it once proved is
+ * gone as of v0.5.0; it is kept -- with its `nen/`-side files never added --
+ * because it is now the fixture that proves the OPPOSITE fact: this repository
+ * refuses exactly as an absent one would, and the refusal names the migration
+ * (`nen scaffold init --accept-detected`). It exists so that refusal is proved
+ * against a real repository root rather than a temp directory built by hand.
  */
 export const LEGACY_REPO = join(FIXTURES, "legacy-repo");
 
