@@ -152,7 +152,7 @@
         "unsupported": "the push to the default branch IS the deploy here, through the hosting provider's git integration. There is no command line for nen to run, and inventing one that looked plausible is the failure this row exists to refuse."
       }
     },
-    "$launch": "The LAUNCH targets, a different block from `targets` and a different vocabulary: that one says where a build is SENT, this one says which DEVICE a local run lands on. Six rows, one per answer the resolver has to have -- a simulated device (no probe: the name IS the id), a probed device (the seam is scripted with its output), a target declared for the OTHER verb, a target with no command line at all, one that overrides BOTH the lane its verb is read from and the path {artifact} stands for, and one whose lane does not sit at the repository root.",
+    "$launch": "The LAUNCH targets, a different block from `targets` and a different vocabulary: that one says where a build is SENT, this one says which DEVICE a local run lands on. Seven rows, one per answer the resolver has to have -- a simulated device (no probe: the name IS the id), a probed device (the seam is scripted with its output), a target declared for the OTHER verb, a target with no command line at all, one that overrides BOTH the lane its verb is read from and the path {artifact} stands for, one whose device declares WHICH STATES COUNT AS READY, and one whose lane does not sit at the repository root.",
     "launch": {
       "sim": {
         "verb": "dev",
@@ -190,6 +190,16 @@
           { "exe": "placeholder-installer", "argv": ["install", "--device", "{device.id}", "{artifact}"] }
         ],
         "why": "BOTH OVERRIDES AT ONCE, because in the field they arrive together. `lane` sends the verb to the `device` lane rather than to `defaultLane`'s `web` -- a device build is a different declared row from the one a developer iterates in -- and `artifact` names the SECOND of that row's two artifacts, because `{artifact}` is the first and the first is not what an installer takes."
+      },
+      "paired": {
+        "verb": "dev",
+        "device": {
+          "name": "PH0000000001",
+          "resolve": { "exe": "placeholder-device-tool", "argv": ["list", "--long"] },
+          "readyWhen": { "field": 2, "in": ["ready"] }
+        },
+        "after": [{ "exe": "placeholder-installer", "argv": ["install", "--device", "{device.id}"] }],
+        "why": "PRESENT IS NOT READY. This device is named by a serial rather than by a friendly name, because that is the shape of the listing whose SECOND column is the state -- the pairing prompt on the device's own screen decides that column, and a launch that matched the name alone resolved an id off a row whose every later command was going to be refused. `readyWhen` states which of the probe's own words count; the other rows here declare none, and are unchanged by it."
       },
       "nested": {
         "verb": "dev",

@@ -1068,6 +1068,171 @@ describe("project.launch", () => {
     }
   });
 
+  // ── readyWhen: which of a probe's own states count as ready ───────────────
+  //
+  // A NAME MATCH ANSWERS "IS IT PLUGGED IN"; the state beside the name answers
+  // "will it take a build", and they are different facts. Every refusal below
+  // is at LOAD, by pointer, for the reason the rest of this block is: a rule
+  // nen could not read is a rule it would discover it could not read with
+  // somebody's phone in their hand.
+
+  const PROBED = {
+    name: "PH0000000001",
+    resolve: { exe: "placeholder-probe", argv: ["list"] },
+  } as const;
+
+  it("reads both shapes of the rule, and leaves it null when absent", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        launch: {
+          plain: { verb: "dev", device: { ...PROBED, readyWhen: { field: 2, in: ["ready"] } } },
+          json: {
+            verb: "dev",
+            device: { ...PROBED, readyWhen: { path: "connection.state", in: ["a", "b"] } },
+          },
+          none: { verb: "dev", device: PROBED },
+        },
+      },
+    });
+    const plain = contract.project?.launch["plain"]?.device?.readyWhen;
+    expect(plain?.field).toBe(2);
+    expect(plain?.path).toBeNull();
+    expect(plain?.in).toEqual(["ready"]);
+    const json = contract.project?.launch["json"]?.device?.readyWhen;
+    expect(json?.field).toBeNull();
+    expect(json?.path).toBe("connection.state");
+    expect(json?.in).toEqual(["a", "b"]);
+    // ABSENT MEANS EXACTLY WHAT IT MEANT BEFORE THE KEY EXISTED: a row that
+    // carries the name is taken as the device.
+    expect(contract.project?.launch["none"]?.device?.readyWhen).toBeNull();
+  });
+
+  it("refuses a rule that names BOTH positions, or NEITHER", () => {
+    const both = refusal({
+      project: {
+        ...PROJECT,
+        launch: {
+          box: { verb: "dev", device: { ...PROBED, readyWhen: { field: 2, path: "s", in: ["r"] } } },
+        },
+      },
+    });
+    expect(both.pointer).toBe("project.launch.box.device.readyWhen");
+    expect(both.message).toContain("BOTH 'field' and 'path'");
+    const neither = refusal({
+      project: {
+        ...PROJECT,
+        launch: { box: { verb: "dev", device: { ...PROBED, readyWhen: { in: ["r"] } } } },
+      },
+    });
+    expect(neither.pointer).toBe("project.launch.box.device.readyWhen");
+    expect(neither.message).toContain("neither 'field' nor 'path'");
+  });
+
+  it("refuses a field position below 1: the row's first token is field 1", () => {
+    // A ZERO-INDEXED DECLARATION IS THE SLIP THIS REFUSES BY NAME. Accepted, it
+    // would read one column to the left of the state on every launch -- which
+    // on the ordinary two-column listing is the device's own serial, a string
+    // no `in` set will ever carry, so every launch would refuse and the file
+    // would look right.
+    for (const field of [0, -1, 1.5, "2"]) {
+      const error = refusal({
+        project: {
+          ...PROJECT,
+          launch: {
+            box: { verb: "dev", device: { ...PROBED, readyWhen: { field, in: ["r"] } } },
+          },
+        },
+      });
+      expect(error.pointer, String(field)).toBe("project.launch.box.device.readyWhen.field");
+      expect(error.message, String(field)).toContain("counting the row's first token as 1");
+    }
+  });
+
+  it("refuses an accepted set that is empty, or carries an empty string", () => {
+    const empty = refusal({
+      project: {
+        ...PROJECT,
+        launch: { box: { verb: "dev", device: { ...PROBED, readyWhen: { field: 2, in: [] } } } },
+      },
+    });
+    expect(empty.pointer).toBe("project.launch.box.device.readyWhen.in");
+    expect(empty.message).toContain("no state this probe can report would ever count as ready");
+    const blank = refusal({
+      project: {
+        ...PROJECT,
+        launch: { box: { verb: "dev", device: { ...PROBED, readyWhen: { field: 2, in: [""] } } } },
+      },
+    });
+    // AN EMPTY ENTRY IS A STATE NOTHING CAN EVER MATCH, refused by the same
+    // non-empty-string rule every declared string in this schema gets, and at
+    // the entry's OWN pointer rather than the list's.
+    expect(blank.pointer).toBe("project.launch.box.device.readyWhen.in[0]");
+    expect(blank.message).toContain("expected a non-empty string");
+    // And the wrong TYPE under the key, by pointer like every other shape.
+    const typed = refusal({
+      project: {
+        ...PROJECT,
+        launch: {
+          box: { verb: "dev", device: { ...PROBED, readyWhen: { field: 2, in: "ready" } } },
+        },
+      },
+    });
+    expect(typed.pointer).toBe("project.launch.box.device.readyWhen.in");
+  });
+
+  it("refuses a rule on a device with no probe, which would never be read", () => {
+    // THE `artifact`-WITH-NO-TOKEN RULE, APPLIED HERE. A simulated device is
+    // resolved from its own name with nothing spawned, so there is no output
+    // for a readiness rule to read -- and a key that is never read while
+    // reading in the file like a safety check is worse than an absent one.
+    const error = refusal({
+      project: {
+        ...PROJECT,
+        launch: {
+          box: {
+            verb: "dev",
+            device: { name: "Bench", kind: "simulator", readyWhen: { field: 2, in: ["ready"] } },
+          },
+        },
+      },
+    });
+    expect(error.pointer).toBe("project.launch.box.device.readyWhen");
+    expect(error.message).toContain("no 'resolve' probe");
+  });
+
+  it("refuses a key one spelling away from one the rule reads", () => {
+    for (const [key, meant] of [
+      ["fields", "field"],
+      ["paths", "path"],
+      ["Field", "field"],
+    ] as const) {
+      const error = refusal({
+        project: {
+          ...PROJECT,
+          launch: {
+            box: {
+              verb: "dev",
+              device: { ...PROBED, readyWhen: { field: 2, in: ["r"], [key]: "x" } },
+            },
+          },
+        },
+      });
+      expect(error.pointer, key).toBe(`project.launch.box.device.readyWhen.${key}`);
+      expect(error.message, key).toContain(meant);
+      expect(error.message, key).toContain("A readiness rule's keys are field, path, in");
+    }
+    // AND THE KEY ITSELF, on the device, where a case slip is the natural one.
+    const cased = refusal({
+      project: {
+        ...PROJECT,
+        launch: { box: { verb: "dev", device: { ...PROBED, readywhen: { field: 2, in: ["r"] } } } },
+      },
+    });
+    expect(cased.pointer).toBe("project.launch.box.device.readywhen");
+    expect(cased.message).toContain("differs from 'readyWhen' only in case");
+  });
+
   it("refuses a misspelling of the BLOCK KEY, which no other guard would catch", () => {
     // `"launches": {...}` parses cleanly, is preserved as an unknown key, and
     // makes every --target this repository declares answer "not declared". The

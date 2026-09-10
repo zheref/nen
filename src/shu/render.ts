@@ -29,6 +29,7 @@ import { VerbUsageError } from "../cli/command.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import {
   LAUNCH_VERBS,
+  type DeviceReadiness,
   type Invocation,
   type ProjectBlock,
   type StallGuard,
@@ -236,6 +237,16 @@ export interface ResolvedDevice {
   readonly kind: string | null;
   /** The id the probe reported, or null when nothing was probed. */
   readonly id: string | null;
+  /**
+   * Which of the probe's own states count as ready, or null for "any".
+   *
+   * IT IS THE DECLARATION'S RULE AND NOT A READING, so it is the same on a dry
+   * run as on a real one -- unlike `id`, which is null until something has been
+   * probed. That is what lets `--dry-run` print the rule beside the probe: a
+   * caller checking a launch before they let it run can see which state the
+   * device will have to be in, without a device being connected at all.
+   */
+  readonly readyWhen: DeviceReadiness | null;
 }
 
 /**
@@ -1215,7 +1226,12 @@ export function resolveLaunch(
       device:
         target.device === null
           ? null
-          : { name: target.device.name, kind: target.device.kind, id: null },
+          : {
+              name: target.device.name,
+              kind: target.device.kind,
+              id: null,
+              readyWhen: target.device.readyWhen,
+            },
       // NEITHER CARRIES A `stdoutTo`, AND THE LOADER DOES NOT LET THEM: a
       // probe's stdout is the document nen searches for a device id, and an
       // after-step follows a verb that already owned this terminal. The field

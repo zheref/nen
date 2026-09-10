@@ -412,6 +412,8 @@ export type LaunchVerb = (typeof LAUNCH_VERBS)[number];
  * NAME is how the toolchain addresses it -- so `{"name": "...", "kind":
  * "simulator"}` with no probe resolves to the name itself and spawns nothing.
  * Every other kind without a probe is refused: nen will not invent an id.
+ *
+ * `readyWhen` IS THE DIFFERENCE BETWEEN PRESENT AND READY. See DeviceReadiness.
  */
 export interface LaunchDevice {
   readonly name: string;
@@ -419,6 +421,57 @@ export interface LaunchDevice {
   readonly kind: string | null;
   /** The declared probe whose output carries the id, or null. */
   readonly resolve: { readonly exe: string; readonly argv: readonly string[] } | null;
+  /** Which of the probe's own states count as ready, or null for "any". */
+  readonly readyWhen: DeviceReadiness | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * WHICH OF A PROBE'S OWN STATES COUNT AS READY -- the one fact a name match
+ * cannot carry, and the one that decides whether every later step addresses a
+ * device that will answer it.
+ *
+ * A DEVICE LIST IS NOT A LIST OF USABLE DEVICES. The same row that says a
+ * handset is attached also says whether the pairing prompt on its screen has
+ * been accepted, whether it is locked, whether it is still booting. Matching the
+ * NAME answers "is it plugged in"; the state beside the name answers "will it
+ * take a build". Without this key nen read the first and reported it as the
+ * second, so a launch resolved an id, printed exit 0 at the probe, and every
+ * command after it failed against a device that was never going to answer.
+ *
+ * TWO SHAPES, BECAUSE A PROBE'S OUTPUT IS ONE OF TWO SHAPES (../shu/launch.ts):
+ *
+ *   * `{"field": <n>, "in": [...]}` for a probe that prints LINES. `field` is a
+ *     whitespace-separated position on the device's own row, counted FROM ONE
+ *     the way every column-oriented tool on a terminal counts them -- field 1 is
+ *     the first token, which on the ordinary two-column device listing is the
+ *     name itself and on a wider one is whatever the row leads with.
+ *   * `{"path": "<key>", "in": [...]}` for a probe that prints JSON. `path` is
+ *     read off the object whose own `name` matched, dotted for a nested one
+ *     (`connection.state`), and -- exactly as the ID is -- off an enclosing
+ *     object when the matched one does not carry it, because the shape the
+ *     larger toolchains print puts the name in one sub-object and the state in
+ *     its sibling.
+ *
+ * EXACTLY ONE OF THE TWO, and `in` is required beside it: a rule naming both
+ * positions would have nen choose which to read from a document it has not seen
+ * yet, and a rule naming neither, or accepting nothing, is a key with no effect
+ * dressed as a safety check. All four refusals are at LOAD, by pointer.
+ *
+ * THE VALUES ARE COMPARED AS STRINGS, verbatim -- no case fold, no trimming
+ * beyond the whitespace split -- for `device.name`'s reason: the state words are
+ * the probe's own vocabulary, and nen deciding that two spellings mean the same
+ * thing is nen guessing about somebody else's device. A JSON `true` or `3` at
+ * the named path is rendered and compared as `"true"` and `"3"`, so a boolean
+ * readiness flag is declarable without a second shape.
+ */
+export interface DeviceReadiness {
+  /** A whitespace-separated position on the matched line, counted from 1. */
+  readonly field: number | null;
+  /** A dotted key path read off the matched JSON object. */
+  readonly path: string | null;
+  /** The states that count as ready. Non-empty; compared as whole strings. */
+  readonly in: readonly string[];
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -821,12 +874,16 @@ function requirePositiveInteger(
   pointer: string,
   value: unknown,
   unit: string,
+  // THE SUBJECT IS THE CALLER'S, for `refuseNearMissKey`'s reason: the rule is
+  // one rule, and a message about a "stall budget" read by somebody debugging a
+  // device readiness rule names a block their file does not carry.
+  subject = "A stall budget",
 ): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw new SchemaError(
       path,
       pointer,
-      `expected a POSITIVE whole number of ${unit}, got ${describeValue(value)}. A stall budget nen could not act on -- zero, a fraction, a negative, a string -- is a declaration nen refuses rather than rounds`,
+      `expected a POSITIVE whole number of ${unit}, got ${describeValue(value)}. ${subject} nen could not act on -- zero, a fraction, a negative, a string -- is a declaration nen refuses rather than rounds`,
     );
   }
   return value;
@@ -1213,8 +1270,11 @@ const LAUNCH_KEYS: readonly string[] = [
   "why",
 ];
 
-/** The three keys `project.launch.<name>.device` is made of. */
-const DEVICE_KEYS: readonly string[] = ["name", "kind", "resolve"];
+/** The four keys `project.launch.<name>.device` is made of. */
+const DEVICE_KEYS: readonly string[] = ["name", "kind", "resolve", "readyWhen"];
+
+/** The three keys a `readyWhen` rule is made of. Two positions and a set. */
+const READY_KEYS: readonly string[] = ["field", "path", "in"];
 
 /**
  * True when one insertion, deletion or substitution turns `a` into `b`.
@@ -1527,11 +1587,82 @@ function parseStep(
   };
 }
 
+/**
+ * `project.launch.<name>.device.readyWhen`, or null when the device declares no
+ * readiness rule at all -- which is every declaration written before the key
+ * existed, and means exactly what it meant then: a row that carries the name is
+ * taken as the device.
+ *
+ * REFUSED AT LOAD, BY POINTER, FOR ALL FOUR SHAPES A RULE CAN BE WRONG IN, and
+ * the reason is the reason every other launch key is validated here rather than
+ * at the run: a rule this loader let through is a rule nen would discover it
+ * could not read with somebody's phone in their hand, at the one moment they
+ * are least able to go and read a schema.
+ */
+function parseReadyWhen(path: string, pointer: string, value: unknown): DeviceReadiness | null {
+  if (value === undefined || value === null) return null;
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(
+    path,
+    pointer,
+    raw,
+    READY_KEYS,
+    "A readiness rule",
+    (meant): string => `the device would be taken as ready with '${meant}' silently unset`,
+  );
+  const hasField = raw["field"] !== undefined && raw["field"] !== null;
+  const hasPath = raw["path"] !== undefined && raw["path"] !== null;
+  if (hasField === hasPath) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `states ${hasField ? "BOTH 'field' and 'path'" : "neither 'field' nor 'path'"}, and a readiness rule is exactly one of the two. 'field' reads a whitespace-separated position on the device's own LINE, counted from 1; 'path' reads a dotted key off the device's own JSON OBJECT. Which of the two applies is decided by what the probe printed, not by the declaration, so a rule naming both would leave nen choosing between them against a document it has not seen yet${hasField ? "" : " -- and a rule naming neither says where to look nowhere at all"}`,
+    );
+  }
+  const accepted = requireArray(path, `${pointer}.in`, raw["in"]).map(
+    (entry, index): string => requireString(path, `${pointer}.in[${index}]`, entry),
+  );
+  if (accepted.length === 0) {
+    throw new SchemaError(
+      path,
+      `${pointer}.in`,
+      "is empty, so no state this probe can report would ever count as ready and every launch through this target would refuse. A readiness rule states which of the probe's OWN words mean 'this device will take a build'; if every one of them does, drop 'readyWhen' rather than listing none",
+    );
+  }
+  return {
+    field: hasField
+      ? requirePositiveInteger(
+          path,
+          `${pointer}.field`,
+          raw["field"],
+          "fields, counting the row's first token as 1",
+          "A field position",
+        )
+      : null,
+    path: hasPath ? requireString(path, `${pointer}.path`, raw["path"]) : null,
+    in: accepted,
+    raw,
+  };
+}
+
 /** `project.launch.<name>.device`, or null when the target names no device. */
 function parseLaunchDevice(path: string, pointer: string, value: unknown): LaunchDevice | null {
   if (value === undefined || value === null) return null;
   const raw = requireRecord(path, pointer, value);
   refuseNearMissKey(path, pointer, raw, DEVICE_KEYS, "A device");
+  const readyWhen = parseReadyWhen(path, `${pointer}.readyWhen`, raw["readyWhen"]);
+  if (readyWhen !== null && (raw["resolve"] === undefined || raw["resolve"] === null)) {
+    // A KEY WITH NOTHING TO READ IS REFUSED, exactly as a launch target's
+    // `artifact` with no `{artifact}` token is. `readyWhen` is a rule about a
+    // PROBE'S OUTPUT, and a device with no probe produces none: its name is its
+    // id and nothing is spawned, so the rule would sit in the file looking like
+    // a safety check while never being consulted -- which is worse than absent.
+    throw new SchemaError(
+      path,
+      `${pointer}.readyWhen`,
+      "is declared on a device with no 'resolve' probe. A readiness rule reads a state out of the PROBE'S output, and a device with no probe is resolved from its own name with nothing spawned -- so this rule would never be read, while reading in the file exactly like a check that is protecting the launch. Give the device a 'resolve' probe whose output carries the state, or drop 'readyWhen'",
+    );
+  }
   return {
     // REQUIRED, AND IT IS THE WHOLE MATCH. A device block with no name is a
     // block that says nothing nen can look for -- there is no "the only device
@@ -1543,6 +1674,7 @@ function parseLaunchDevice(path: string, pointer: string, value: unknown): Launc
       raw["resolve"] === undefined || raw["resolve"] === null
         ? null
         : parseStep(path, `${pointer}.resolve`, raw["resolve"]),
+    readyWhen,
     raw,
   };
 }

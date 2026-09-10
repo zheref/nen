@@ -1743,7 +1743,9 @@ describe("dev/run --target: the flag is OPTIONAL and names a device", () => {
     const result = await capture(["dev", "--target", "nope"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("is not declared under project.launch");
-    expect(result.err.join("\n")).toContain("Declared: bench, farm, handset, install, nested, sim.");
+    expect(result.err.join("\n")).toContain(
+      "Declared: bench, farm, handset, install, nested, paired, sim.",
+    );
     expect(result.seams.calls).toEqual([]);
   });
 
@@ -1811,7 +1813,15 @@ describe("a launch dry run prints all three thirds and spawns nothing", () => {
     };
     expect(report.target.name).toBe("handset");
     expect(report.target.verb).toBe("dev");
-    expect(report.target.device).toEqual({ name: "Placeholder Handset Pro", kind: null, id: null });
+    expect(report.target.device).toEqual({
+      name: "Placeholder Handset Pro",
+      kind: null,
+      id: null,
+      // NULL RATHER THAN ABSENT, exactly as `lane` and `artifact` are: a reader
+      // that had to tell "this device declares no readiness rule" from "this
+      // release does not publish the key" would be reading two contracts.
+      readyWhen: null,
+    });
     expect(report.target.after).toEqual([
       {
         exe: "placeholder-installer",
@@ -2501,6 +2511,153 @@ describe("a launch target may name the artifact {artifact} stands for", () => {
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("declares an artifact and no after-step names {artifact}");
+  });
+});
+
+// ── (i.3) readiness: the state beside the name, and what it refuses ────────
+//
+// A NAME MATCH ANSWERS "IS IT PLUGGED IN". The row that carries the name also
+// carries a STATE, and until `readyWhen` existed nen read the first and reported
+// it as the second -- so a launch resolved an id off an unusable row, printed
+// exit 0 at the probe, and every command after it failed one at a time against a
+// device that was never going to answer. The fixture's `paired` target is the
+// one row here that declares the rule; every other row declares none and is
+// unchanged by it, which is the half these tests have to prove as well.
+
+describe("a device is READY, not merely present", () => {
+  /** The fixture's probe, printing one row per device with the state second. */
+  function rows(...lines: readonly string[]): ScriptedCall {
+    return {
+      match: "placeholder-device-tool list --long",
+      result: { code: 0, stdout: lines.join("\n") },
+    };
+  }
+
+  it("prints the rule beside the device on a dry run, and spawns nothing", async () => {
+    const result = await capture(["dev", "--target", "paired", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(
+      "readiness:     field 2 of the device's own row (counting from 1) must be one of: ready  (project.launch.paired.device.readyWhen)",
+    );
+    // THE RULE IS THE DECLARATION'S, not a reading, so it is knowable with no
+    // device connected at all -- which is what makes it worth printing beside a
+    // probe that has not run.
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("says nothing at all on a target that declares no rule", async () => {
+    const result = await capture(["dev", "--target", "handset", "--dry-run"]);
+    expect(result.out.join("\n")).not.toContain("readiness:");
+  });
+
+  it("launches when the row's state is one the declaration accepts", async () => {
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [
+        rows("PH0000000009   ready   usb:1-1", "PH0000000001   ready   usb:1-2"),
+        ok("pnpm exec next dev"),
+        ok("placeholder-installer install --device usb:1-2"),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams).at(-1)).toBe("placeholder-installer install --device usb:1-2");
+  });
+
+  it("refuses at 5 naming the device, the state seen, the states accepted, and what the probe offered", async () => {
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001   unpaired", "PH0000000009   ready   usb:1-1")],
+    });
+    expect(result.code).toBe(5);
+    const err = result.err.join("\n");
+    expect(err).toContain("the device 'PH0000000001' is on the probe's list and its state is 'unpaired'");
+    expect(err).toContain("project.launch.paired.device.readyWhen accepts");
+    expect(err).toContain("Accepted: 'ready'");
+    expect(err).toContain("field 2 of the device's own row");
+    // THE SAME DISCIPLINE THE ABSENCE REFUSAL FOLLOWS: it lists what the probe
+    // DID offer, which is what turns "it did not work" into "answer the prompt".
+    expect(err).toContain("PH0000000001   unpaired | PH0000000009   ready   usb:1-1");
+    // AND NOTHING AFTER THE PROBE RAN. An unscripted call throws here, so the
+    // recorded list being the probe alone is the assertion.
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --long"]);
+  });
+
+  it("answers the readiness refusal BEFORE the missing-id one", async () => {
+    // THE ROW THIS KEY EXISTS FOR carries no id at all -- an unanswered pairing
+    // prompt is exactly the state a listing abbreviates -- and "the probe gave
+    // nen no id" is then the true sentence that helps least.
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001   unpaired")],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("its state is 'unpaired'");
+    expect(result.err.join("\n")).not.toContain("gave nen no id for it");
+  });
+
+  it("refuses when nothing at all stood at the declared position, quoting where it looked", async () => {
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001")],
+    });
+    expect(result.code).toBe(5);
+    const err = result.err.join("\n");
+    expect(err).toContain("nen read no state for it");
+    expect(err).toContain("field 2 of the device's own row (counting from 1)");
+  });
+
+  it("reads a JSON probe's state off the device's own object", async () => {
+    const project = launchable({
+      box: {
+        verb: "dev",
+        device: {
+          name: "Placeholder Handset Pro",
+          resolve: { exe: "placeholder-device-tool", argv: ["list", "--json"] },
+          readyWhen: { path: "connection.state", in: ["connected"] },
+        },
+        after: [{ exe: "placeholder-installer", argv: ["install", "{device.id}"] }],
+      },
+    });
+    const probe = (state: string): ScriptedCall => ({
+      match: "placeholder-device-tool list --json",
+      result: {
+        code: 0,
+        stdout: JSON.stringify([
+          { name: "Placeholder Handset Pro", udid: "U-1", connection: { state } },
+        ]),
+      },
+    });
+    const green = await withDeclaration(project, ["dev", "--target", "box"], {
+      script: [
+        probe("connected"),
+        ok("placeholder-tool serve"),
+        ok("placeholder-installer install U-1"),
+      ],
+    });
+    expect(green.code).toBe(0);
+    const red = await withDeclaration(project, ["dev", "--target", "box"], {
+      script: [probe("unavailable")],
+    });
+    expect(red.code).toBe(5);
+    expect(red.err.join("\n")).toContain("its state is 'unavailable'");
+    expect(red.err.join("\n")).toContain(
+      "read from 'connection.state' on the device's own object, which is how nen reads a probe that prints JSON",
+    );
+    // The names listing, not the lines one, because this probe printed JSON.
+    expect(red.err.join("\n")).toContain("The probe reported: 'Placeholder Handset Pro'");
+  });
+
+  it("carries the rule in the --dry-run --json document, null where none is declared", async () => {
+    const declared = await capture(["dev", "--target", "paired", "--dry-run", "--json"]);
+    const report = JSON.parse(declared.out.join("\n")) as {
+      target: { device: { readyWhen: { field: number | null; path: string | null; in: readonly string[] } | null } };
+    };
+    expect(report.target.device.readyWhen).toMatchObject({
+      field: 2,
+      path: null,
+      in: ["ready"],
+    });
+    const bare = await capture(["dev", "--target", "handset", "--dry-run", "--json"]);
+    const other = JSON.parse(bare.out.join("\n")) as {
+      target: { device: { readyWhen: unknown } };
+    };
+    expect(other.target.device.readyWhen).toBeNull();
   });
 });
 
