@@ -267,6 +267,18 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
+  // Review finding (PR #141, Copilot): --no-push sits in this family's SHARED
+  // boolean flag set (there is no per-subcommand table here yet), so without
+  // this guard it parsed cleanly and was silently ignored on every other `pr`
+  // subcommand -- misleading a caller who carried it over from a
+  // `cascade-main` invocation. Fires before dispatch, so no other flag this
+  // subcommand needs has to be supplied for the test to isolate this refusal.
+  it("refuses --no-push on any subcommand other than cascade-main", async () => {
+    const result = await capture(["pr", "ready", "--no-push"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--no-push is only read by 'pr cascade-main'/);
+  });
+
   it("retarget requires --base", async () => {
     const result = await capture(["pr", "retarget", "--target", "o/n", "--pr", "1"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);

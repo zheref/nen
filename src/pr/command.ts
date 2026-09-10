@@ -310,6 +310,18 @@ export const prCommand: Command = {
       "retarget",
       "request-reviews",
     ]);
+    // --no-push sits in this family's shared boolean set (above) only because
+    // that set has no per-subcommand table (review finding, PR #141) -- so
+    // without this, it would parse cleanly and be silently ignored on every
+    // OTHER `pr` subcommand, misleading a caller who carried it over from a
+    // `cascade-main` invocation. A minimal, local refusal here, rather than
+    // the full foreign-flag table `shu`/`issue` have (../shu/command.ts,
+    // ../issue/command.ts), because this family has no such table for any of
+    // its other subcommand-specific flags yet (`--delivery-pr` has the same
+    // gap) and growing one is a bigger change than this flag's own PR.
+    if (subcommand !== "cascade-main" && context.args.booleans.has("no-push")) {
+      throw new VerbUsageError("--no-push is only read by 'pr cascade-main'.");
+    }
     switch (subcommand) {
       case "ready":
         return ready(context);
