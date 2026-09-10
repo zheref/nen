@@ -55,7 +55,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Fixed
 
-- **issue** — `nen issue chain-position` and `terminus` label every result with **the number the caller typed**, on the success path as well as the refusal one. GitHub redirects a transferred object, so `--issue 925` can be answered by a payload numbered 926 — and the two renderings of one run disagreed about which it was: text printed `#925` (the command renders the typed argument) while `--json`'s `issue` field carried 926, off `summary.number` (closes #85).
+- **issue** — `nen issue chain-position` and `terminus` label every result with **the number the caller typed**, on the success path as well as the refusal one. GitHub redirects a transferred object, so `--issue 925` can be answered by a payload numbered 926 — and the two renderings of one run disagreed about which it was: text printed `#925` (the command renders the typed argument) while `--json`'s `issue` field carried 926, off `summary.number` (closes [#85](https://github.com/zheref/nen/issues/85), [#194](https://github.com/zheref/nen/pull/194)).
 
   The caller's number was already the rule everywhere else. `requireIssue`'s refusal, `NotAnIssueError.numbers` and `--json`'s `{ issue, refused: true }` all promise "the number AS THE CALLER SPELLED IT" — #82 and its follow-up made the refusal paths agree and did not touch the success path. This settles it once, for both classifiers, and for the evidence lines a caller reads as well as the field a program parses: a verdict labelled with a number the caller never typed is a verdict they cannot look up.
 
