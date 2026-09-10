@@ -355,6 +355,20 @@ describe("the traps each format sets", () => {
     });
     expect(XCCOV.parse(text, "x").total.lines.percent).toBe(82.35);
   });
+
+  it("xccov: refuses text that is not readable as JSON", () => {
+    expect(() => XCCOV.parse("{ not json", "x")).toThrow(/x: is not readable as JSON/);
+  });
+
+  it("xccov: refuses JSON that parses to something other than an object", () => {
+    expect(() => XCCOV.parse("[]", "x")).toThrow(/x: is JSON, but not an object/);
+    expect(() => XCCOV.parse("5", "x")).toThrow(/x: is JSON, but not an object/);
+  });
+
+  it("xccov: refuses a targets[] entry that is not an object", () => {
+    const text = JSON.stringify({ coveredLines: 0, executableLines: 0, targets: ["not an object"] });
+    expect(() => XCCOV.parse(text, "x")).toThrow(/x: targets\[0\] is not an object/);
+  });
 });
 
 // ── the --touched-only descent: targets[].files[] ───────────────────────────
@@ -433,6 +447,20 @@ describe("xccov: parseXccovFiles descends into targets[].files[]", () => {
 
   it("refuses a report with no 'targets' array at all, same as parse()", () => {
     expect(() => parseXccovFiles("{}", "x")).toThrow(/has no "targets" array/);
+  });
+
+  it("refuses a targets[] entry that is not an object", () => {
+    const text = JSON.stringify({ coveredLines: 0, executableLines: 0, targets: [42] });
+    expect(() => parseXccovFiles(text, "x")).toThrow(/x: targets\[0\] is not an object/);
+  });
+
+  it("refuses a files[] entry that is not an object", () => {
+    const text = JSON.stringify({
+      coveredLines: 0,
+      executableLines: 0,
+      targets: [{ name: "App.app", files: ["not an object"] }],
+    });
+    expect(() => parseXccovFiles(text, "x")).toThrow(/x: targets\[0\]\.files\[0\] is not an object/);
   });
 
   it("refuses a file entry with neither 'path' nor 'name'", () => {
