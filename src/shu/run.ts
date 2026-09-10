@@ -271,12 +271,43 @@ function entryExists(path: string): boolean {
  * `nen scaffold init`, which asks the same question of a path a FLAG states.
  * Only the refusal is written here, because a message that named neither a
  * declaration pointer nor a flag would name nothing a caller can act on.
+ *
+ * BOTH OF THAT MODULE'S QUESTIONS ARE ASKED, AND THE SECOND IS THE ONE A TEXT
+ * CANNOT ANSWER (zheref/nen#157). `containedPath` is lexical, so `build/payload`
+ * passed it while `<root>/build` was a symlink to somewhere else entirely and
+ * every line nen printed still said `build/payload` -- a check reporting clean
+ * about a property it never tested, which is the failure mode this repository
+ * refuses everywhere else. `realContainment` resolves the deepest EXISTING
+ * ancestor through every link and compares the result against the REAL root, so
+ * the answer is about the path the kernel would reach rather than about the
+ * spelling. Asking it here settles every caller at once -- a lane's `cwd`, a
+ * `path` precondition, a verb's `artifacts[i]`, a launch target's `artifact`, a
+ * step's `stdoutTo`, the coverage and test reports read back after a run --
+ * which is the shared-rather-than-copied posture the comment above argues for.
+ *
+ * IT IS A RUN-TIME CHECK, AND ONLY A RUN-TIME ONE. ../schema/contract.ts
+ * contains no path when the declaration LOADS, by design: the loader has no
+ * filesystem, so the only question it could answer is the lexical one it would
+ * then have to answer again here, against a tree that may have changed since.
+ * Pointers are checked at load; paths are checked at the moment of use.
  */
 export function insideRepo(repoRoot: string, value: string, pointer: string): string {
   const absolute = containedPath(repoRoot, value);
   if (absolute === null) {
     throw new VerbUsageError(
       `${pointer} names '${value}', which resolves outside the repository at ${repoRoot}. Every path a declaration states is relative to the repository root, and nen will not step outside the tree --repo pointed it at.`,
+    );
+  }
+  const containment = realContainment(repoRoot, absolute);
+  if (!containment.contained) {
+    // THE LINK IS NAMED, NOT JUST THE VERDICT. "outside the repository" about a
+    // path that reads as plainly inside it is a sentence nobody can act on; the
+    // ancestor that redirected it and where it points are the two facts that
+    // turn the refusal into a fix. `?? absolute` is a belt only -- a lexically
+    // contained path that fails the real test always has a link -- and it keeps
+    // the sentence well-formed rather than printing `null`.
+    throw new VerbUsageError(
+      `${pointer} names '${value}', which really resolves to '${containment.real}', outside the repository at ${repoRoot}: '${containment.link ?? absolute}' is a symlink pointing at '${containment.target ?? containment.real}'. nen touches only what its report says it touches, so this path is refused rather than followed.`,
     );
   }
   return absolute;
@@ -1081,10 +1112,11 @@ export async function runVerb(
  *     rather than as a refusal naming the declaration.
  *   * A SYMLINK THAT LEAVES THE TREE. `nen/reports` linked to `/tmp/elsewhere`
  *     makes `nen/reports/coverage.json` land outside the repository while every
- *     line nen printed still said `nen/reports/coverage.json`. ../repo/contain
- *     .ts's `realContainment` is the same check `nen scaffold init` makes
- *     before it writes, and for the same reason: nen writes what its report
- *     says it writes.
+ *     line nen printed still said `nen/reports/coverage.json`. That half is no
+ *     longer asked here: `insideRepo` above asks ../repo/contain.ts's
+ *     `realContainment` for EVERY declared path (zheref/nen#157), so a second
+ *     copy of the test in this function would be the copy that drifts the day
+ *     either one is widened -- the exact argument its own comment makes.
  */
 function refuseUnwritableRedirect(step: RenderedStep, repoRoot: string): void {
   if (step.stdoutTo === null) return;
@@ -1094,12 +1126,6 @@ function refuseUnwritableRedirect(step: RenderedStep, repoRoot: string): void {
   // does not exist is a refusal a reader cannot act on.
   const { path: declared, pointer } = step.stdoutTo;
   const absolute = insideRepo(repoRoot, declared, pointer);
-  const containment = realContainment(repoRoot, absolute);
-  if (!containment.contained) {
-    throw new VerbUsageError(
-      `${pointer} names '${declared}', which would be written to '${containment.real}', outside the repository at ${repoRoot}: '${containment.link ?? absolute}' is a symlink pointing at '${containment.target ?? containment.real}'. nen writes what its report says it writes, so this write is refused rather than followed.`,
-    );
-  }
   // THE WALK IS UP THE PATH, NOT ONE `lstat` ON IT, and the reason is a
   // platform difference that a single stat cannot see. An ancestor directory
   // that is really a FILE makes this write certain to fail -- POSIX says so

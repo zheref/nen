@@ -21,7 +21,7 @@
 //      shadows the `.xml` declared after it.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -490,6 +490,60 @@ describe("a report whose rows name absolute paths", () => {
       expect(result.out.join("\n")).not.toContain(root);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── the report this verb READS is a declared path too ───────────────────────
+
+describe("a declared report a symlink walks out of the tree", () => {
+  it("refuses at exit 2, naming the link and where it points (zheref/nen#157)", async () => {
+    // `--from-artifacts` IS THE ONE FORM THAT NEVER REACHES THE EXECUTOR, so it
+    // is the one form whose containment cannot be somebody else's: this verb
+    // opens the declared file itself. A `reports/` linked elsewhere would have
+    // had nen parse a suite outside the tree it was pointed at, and relativise
+    // its rows against a root that had nothing to do with it -- while every
+    // line printed still said `reports/results.json`.
+    const root = mkdtempSync(join(tmpdir(), "nen-test-report-link-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-test-report-elsewhere-"));
+    try {
+      mkdirSync(join(root, "nen"), { recursive: true });
+      writeFileSync(
+        join(root, "nen", "contract.json"),
+        JSON.stringify({
+          $schema: "nen.contract/v0.1",
+          project: {
+            lanes: { web: { stack: "nextjs", cwd: "." } },
+            defaultLane: "web",
+            preconditions: {},
+            verbs: {
+              web: {
+                test: { exe: "placeholder", argv: ["test"], artifacts: ["reports/results.json"] },
+              },
+            },
+            profiles: {},
+            targets: {},
+            hosts: { "*": ["darwin", "linux", "win32"] },
+          },
+        }),
+      );
+      writeFileSync(
+        join(elsewhere, "results.json"),
+        JSON.stringify({ testResults: [] }),
+      );
+      symlinkSync(elsewhere, join(root, "reports"), "dir");
+      const result = await capture(["test-report", "--from-artifacts"], { repo: root });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain(
+        "project.verbs.web.test.artifacts names 'reports/results.json'",
+      );
+      expect(result.err.join("\n")).toMatch(/is a symlink pointing at/);
+      // AND NOTHING WAS PARSED. A document about a file outside the tree is the
+      // outcome this refusal exists to replace.
+      expect(result.out.join("\n")).not.toContain("tests:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
     }
   });
 });
