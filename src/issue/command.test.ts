@@ -779,16 +779,22 @@ describe("nen issue comment -- the general comment primitive", () => {
         { repoFlag: repoDir, json: true },
       );
       expect(result.code).toBe(0);
-      const parsed = JSON.parse(result.out.join("\n")) as { body: string };
+      const parsed = JSON.parse(result.out.join("\n")) as { body: string; argv: string[] };
       expect(parsed.body).toBe("the file under --repo\n");
       // AND THE PATH HANDED TO `gh` IS THE SAME ONE (Copilot, PR #197). The
-      // dry-run transcript carries the argv, so this asserts that the resolved
+      // dry-run document carries the argv, so this asserts that the resolved
       // absolute path travels onward rather than the typed relative string --
       // previewing one file while posting another would re-open the split this
       // whole change closes.
-      const printed = result.out.join("\n");
-      expect(printed).toContain(join(repoDir, "rel.md"));
-      expect(printed).not.toContain('"rel.md"');
+      //
+      // ASSERTED ON THE PARSED ARRAY, never on the rendered text. A Windows
+      // path carries backslashes and JSON escapes every one of them, so
+      // searching the document's TEXT for `C:\Users\...` fails on exactly one
+      // of the three CI lanes -- the platform-conditional assertion this
+      // repository's own test headers keep warning about, and it went red on
+      // windows-latest before this line was written this way.
+      expect(parsed.argv).toContain(join(repoDir, "rel.md"));
+      expect(parsed.argv).not.toContain("rel.md");
     } finally {
       process.chdir(previous);
     }
