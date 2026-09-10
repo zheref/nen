@@ -52,6 +52,29 @@ describe("nen parse <skill> -- the generic --grammar/--line engine (main's own f
     expect((await capture(["parse", "my-skill"])).code).toBe(2);
   });
 
+  // zheref/nen#170: `--line ""` used to be refused ("the line must open with
+  // the literal 'at'") on a grammar whose only clause is optional, while
+  // `--line "at"` exited 0 with the clause absent -- so the ORDINARY
+  // invocation of such a skill was the one spelling a caller had to know.
+  it("accepts an EMPTY --line when every clause of the grammar is optional", async () => {
+    const empty = await capture(["parse", "jutaisho", "--grammar", "at [<gate:G2|G4>]", "--line", ""]);
+    expect(empty.code).toBe(0);
+    expect(empty.out).toEqual(["gate: (clause absent)"]);
+    expect(empty.err).toEqual([]);
+
+    // Identical to the bare-literal spelling, which is the point.
+    const bare = await capture(["parse", "jutaisho", "--grammar", "at [<gate:G2|G4>]", "--line", "at"]);
+    expect(bare.code).toBe(0);
+    expect(bare.out).toEqual(empty.out);
+  });
+
+  it("still refuses an empty --line at exit 2 when the grammar requires a clause", async () => {
+    const result = await capture(["parse", "backlog-state", "--grammar", "<repo>[@<gate:G1|G2>]", "--line", ""]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/<repo> is required and the line does not supply it/);
+    expect(result.err.join("\n")).toContain("backlog-state <repo>");
+  });
+
   // zheref/nen#30: a single-slot template's `[ ... ]` clause used to collapse
   // into the first slot and exit 0 -- 'BC@G9' came back as repo='BC@G9', ok:true.
   it("splits a bracketed clause after the template's only leading slot (zheref/nen#30)", async () => {

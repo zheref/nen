@@ -27,6 +27,14 @@ describe("requestReviews", () => {
     expect(result.ok).toBe(false);
   });
 
+  // zheref/nen#95: the refusal used to name --reviewers, which belongs to
+  // `pr ready`/`pr next-blocker` -- this verb's own flag is --add-reviewers.
+  it("names this verb's OWN flag, --add-reviewers, not --reviewers (zheref/nen#95)", () => {
+    const result = requestReviews(new ScriptedSeams([]), TARGET, 9, []);
+    expect(result.message).toMatch(/--add-reviewers/);
+    expect(result.message).not.toMatch(/--reviewers\b/);
+  });
+
   it("reports success reading gh's own exit code", () => {
     const seams = new ScriptedSeams([
       { match: `gh ${requestReviewsArgv(TARGET, 9, ["copilot"]).join(" ")}`, result: {} },

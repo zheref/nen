@@ -228,7 +228,11 @@ verbs:
   warmup      Warm a WORKING COPY for iteration, in this order: check it is
               clean, fetch, fast-forward the trunk, cut the branch you name
               from its fresh tip, then verify the declared build (and, with
-              --tests, the declared tests). THE ONLY VERB IN THIS FAMILY THAT
+              --tests, the declared tests). IN A LINKED WORKTREE the trunk is
+              usually checked out in ANOTHER worktree, where git refuses to
+              force-move it: the local fast-forward is then SKIPPED, the
+              worktree holding it is named, and --branch is cut from
+              ${WARMUP_REMOTE}/<trunk> exactly as it always was. THE ONLY VERB IN THIS FAMILY THAT
               MUTATES GIT STATE, so --repo is required and every step refuses
               rather than guessing: a dirty tree, an operation half-finished, a
               detached HEAD carrying commits nothing else reaches, an absent
@@ -416,15 +420,20 @@ flags:
                    certify read-only. On 'deploy' it is the EXPLICIT spelling
                    of what that verb does anyway without --run, and giving both
                    --run and --dry-run is exit 2. On 'warmup' it prints every git command
-                   AND every delegated toolchain command, in order, and runs
-                   none of them -- not even the fetch. That form still
-                   classifies MUTATING in izanami's table, unlike the other
-                   verbs' dry runs, and deliberately: a warm-up is not a thing
-                   anyone watches, so the fail-closed answer costs nothing.
-                   Because it reads no git state, three of its lines say what a
-                   real run would do differently -- which fast-forward shape
-                   applies, that '${DEFAULT_TRUNK}' is an assumption, and that the
-                   orphan-commit count is asked only on a detached HEAD.
+                   AND every delegated toolchain command, in order, and MUTATES
+                   nothing -- not the fetch, not a ref, not a file. It performs
+                   exactly ONE command, and the list is closed: 'git worktree
+                   list --porcelain', which decides whether the trunk can be
+                   fast-forwarded here at all and is the one thing the plan
+                   cannot honestly guess at. That row carries its real exit
+                   code; every other row is a plan, and 'dryRun' on the report
+                   says which form this is. That form still classifies MUTATING
+                   in izanami's table, unlike the other verbs' dry runs, and
+                   deliberately: a warm-up is not a thing anyone watches, so the
+                   fail-closed answer costs nothing. Two of its lines still say
+                   what a real run would decide differently -- that
+                   '${DEFAULT_TRUNK}' is an assumption, and that the orphan-commit count is
+                   asked only on a detached HEAD.
   --only <t[,t]>   'tools' only. Check (and install) just these tools, by the
                    name the declaration gives them. A name it does not declare
                    is exit 2 listing the ones it does -- an empty report is not
@@ -603,15 +612,17 @@ flags:
                    the after-steps.
                    On 'warmup' it is a different contract again
                    ('${WARMUP_CONTRACT}'), keys in order:
-                   { contract, repo, trunk, remote, branch, discard, steps,
-                     lane, exitCode }, where each steps[] row is
+                   { contract, repo, trunk, remote, branch, discard, dryRun,
+                     steps, lane, exitCode }, where each steps[] row is
                    { kind, argv, exitCode, durationMs, note } and 'kind' is
                    git | build | test. 'argv' is the WHOLE command line,
                    executable first, and is EMPTY on the row of a delegated
                    verb the executor refused before it rendered one. 'exitCode'
                    and 'durationMs' are null exactly when nothing was run -- a
-                   dry run, a step the run never reached, or that same
-                   unrendered row -- and 'lane' is null when the repository
+                   planned step of a dry run, a step the run never reached, or
+                   that same unrendered row (a dry run's ONE real command, the
+                   worktree list, carries a real code like any other) -- and
+                   'lane' is null when the repository
                    carries no declaration, which is reported and is not a
                    failure. 'lane' is resolved from the declaration on the
                    BRANCH this verb cut, re-read after the checkout, because

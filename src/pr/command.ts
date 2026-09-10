@@ -35,6 +35,7 @@ import { readJsonFile, readTextFile } from "../cli/inputs.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
+import type { Seams } from "../seam/exec.js";
 import { parseTarget, type Target } from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import { checkBody, type BodyRequirement } from "./bodycheck.js";
@@ -44,6 +45,7 @@ import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
+import { fetchPrAndKnownBots, isCollaborator, requestBotReviews, type PrAndKnownBots } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 
 function requireTarget(context: CommandContext): Target {
@@ -72,7 +74,7 @@ nen pr fetch --target <owner/name> --pr <n>
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
-nen pr request-reviews --target <owner/name> --pr <n> --add-reviewers a,b
+nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots id,id] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 
 ready:
@@ -150,9 +152,32 @@ retarget:
   gh pr edit --base, for a stacked PR after its predecessor merges.
 
 request-reviews:
-  gh pr edit --add-reviewer, once per name. Request on the MAINTAINER's
-  user token -- a bot token silently no-ops on this call (S6); this verb
-  cannot enforce which credential ran it, only warn.
+  Two routes, chosen per name -- 'gh pr edit --add-reviewer' (once per
+  name) for a User or a Team, and GitHub's 'requestReviews' GraphQL
+  mutation (botIds, one call for every bot named or resolved) for a Bot,
+  because 'gh pr edit --add-reviewer' resolves through
+  'requestReviewsByLogin', which never resolves a Bot reviewer at all
+  (zheref/nen#160). Request on the MAINTAINER's user token -- a bot
+  token silently no-ops on the user route (S6); this verb cannot
+  enforce which credential ran it, only warn.
+  --add-reviewers <a,b>  Logins, resolved one by one: a login this pull
+                         request already knows as a Bot (its own
+                         reviewRequests or timelineItems) is routed to
+                         the bot mutation; a login that reads as a
+                         collaborator of --target is routed to
+                         'gh pr edit --add-reviewer'; a login that
+                         resolves to NEITHER is refused (exit 2), naming
+                         it, and pointing at --add-bots.
+  --add-bots <id,id>     Bot NODE IDS (GraphQL global ids, e.g.
+                         'BOT_xxxxxxxxxxxx'), passed straight through to
+                         the mutation's botIds -- the one way to request
+                         a bot this pull request has never seen, since
+                         nothing short of the id resolves one (see
+                         ./bots.ts's header).
+  --dry-run              Resolution still runs (this verb is not
+                         network-free even here) but nothing is
+                         requested; prints which route -- bot or user --
+                         each name or id went to instead.
 
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
@@ -318,6 +343,7 @@ export const prCommand: Command = {
       "trunk",
       "base",
       "add-reviewers",
+      "add-bots",
       "body-file",
     ],
     booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run"],
@@ -346,14 +372,20 @@ export const prCommand: Command = {
     if (subcommand !== "cascade-main" && context.args.booleans.has("no-push")) {
       throw new VerbUsageError("--no-push is only read by 'pr cascade-main'.");
     }
-    // Same shape, same reason, for edit-body's own two flags:
-    // `--dry-run` and `--body-file` would otherwise parse cleanly and be
-    // silently ignored on every other `pr` subcommand.
-    if (subcommand !== "edit-body" && context.args.booleans.has("dry-run")) {
-      throw new VerbUsageError("--dry-run is only read by 'pr edit-body'.");
+    // Same shape, same reason, for edit-body's own two flags -- and, since
+    // zheref/nen#160, request-reviews' own --dry-run too (its resolution
+    // reads GitHub the same way edit-body's certifying read does, so it
+    // earns the identical dry-run-gated shape rather than a bespoke one):
+    // a flag left unguarded here would parse cleanly and be silently
+    // ignored on every OTHER `pr` subcommand.
+    if (subcommand !== "edit-body" && subcommand !== "request-reviews" && context.args.booleans.has("dry-run")) {
+      throw new VerbUsageError("--dry-run is only read by 'pr edit-body' and 'pr request-reviews'.");
     }
     if (subcommand !== "edit-body" && context.args.values["body-file"] !== undefined) {
       throw new VerbUsageError("--body-file is only read by 'pr edit-body'.");
+    }
+    if (subcommand !== "request-reviews" && context.args.values["add-bots"] !== undefined) {
+      throw new VerbUsageError("--add-bots is only read by 'pr request-reviews'.");
     }
     switch (subcommand) {
       case "ready":
@@ -512,17 +544,141 @@ function doRetarget(context: CommandContext): number {
   return result.ok ? 0 : 1;
 }
 
+/** One `--add-reviewers`/`--add-bots` entry's resolved destination, for --dry-run and --json alike. */
+interface ReviewerRoute {
+  readonly name: string;
+  readonly via: "add-reviewers" | "add-bots";
+  readonly route: "bot" | "user";
+  /** The bot's resolved node id -- only ever set on a "bot" route. */
+  readonly id: string | null;
+}
+
+function routeLine(route: ReviewerRoute): string {
+  // The id is shown only when it is NEW information -- resolved from a
+  // --add-reviewers LOGIN. On an --add-bots route `route.id` is always the
+  // same string as `route.name`; repeating it would tell the reader nothing
+  // `--add-bots BOT_x -> bot [add-bots]` does not already say.
+  const showId = route.route === "bot" && route.id !== null && route.via === "add-reviewers";
+  const detail = route.route === "bot" ? `bot${showId ? ` (id ${route.id})` : ""}` : "user";
+  return `  ${route.name} -> ${detail} [${route.via}]`;
+}
+
+/**
+ * Resolves every `--add-reviewers` login to a route, refusing (exit 2) any
+ * that resolves to neither. See ./bots.ts's header for why a Bot and a User
+ * need two different reads to tell apart, and why a login that resolves to
+ * neither is refused here rather than handed to `gh pr edit --add-reviewer`
+ * on the chance it works.
+ *
+ * Returns `null` for `known` when there is nothing to resolve (`logins` is
+ * empty) -- the one call this makes (fetchPrAndKnownBots) is skipped
+ * entirely rather than spent finding out a bot never named needs no id.
+ */
+function resolveReviewerLogins(
+  seams: Seams,
+  target: Target,
+  prNumber: number,
+  logins: readonly string[],
+): { readonly known: PrAndKnownBots | null; readonly routes: readonly ReviewerRoute[]; readonly resolvedBotIds: readonly string[]; readonly userLogins: readonly string[] } {
+  if (logins.length === 0) return { known: null, routes: [], resolvedBotIds: [], userLogins: [] };
+
+  const known = fetchPrAndKnownBots(seams, target, prNumber);
+  const routes: ReviewerRoute[] = [];
+  const resolvedBotIds: string[] = [];
+  const userLogins: string[] = [];
+  const unresolved: string[] = [];
+
+  for (const login of logins) {
+    const bot = known.bots.find((candidate): boolean => candidate.login.toLowerCase() === login.toLowerCase());
+    if (bot !== undefined) {
+      resolvedBotIds.push(bot.id);
+      routes.push({ name: login, via: "add-reviewers", route: "bot", id: bot.id });
+      continue;
+    }
+    if (isCollaborator(seams, target, login)) {
+      userLogins.push(login);
+      routes.push({ name: login, via: "add-reviewers", route: "user", id: null });
+      continue;
+    }
+    unresolved.push(login);
+  }
+
+  if (unresolved.length > 0) {
+    throw new VerbUsageError(
+      `${unresolved.map((login): string => `'${login}'`).join(", ")} ${
+        unresolved.length === 1 ? "does" : "do"
+      } not resolve to a Bot already known to ${target.slug}#${prNumber} (its own reviewRequests or timelineItems) or a collaborator of ${
+        target.slug
+      }. A login this pull request has never requested a review from, or received one from, cannot be told apart from a genuine typo -- if ${
+        unresolved.length === 1 ? "it is a bot's" : "any of these is a bot's"
+      } login, name it by its node id with --add-bots instead.`,
+    );
+  }
+
+  return { known, routes, resolvedBotIds, userLogins };
+}
+
 function doRequestReviews(context: CommandContext): number {
   const target = requireTarget(context);
   const prNumber = requirePr(context);
-  const reviewers = commaList(context.args.values["add-reviewers"]);
-  const result = requestReviews(context.seams, target, prNumber, reviewers);
-  if (context.json) {
-    context.io.out(JSON.stringify(result, null, 2));
-    return result.ok ? 0 : 1;
+  const reviewerLogins = commaList(context.args.values["add-reviewers"]);
+  const explicitBotIds = commaList(context.args.values["add-bots"]);
+  const dryRun = context.args.booleans.has("dry-run");
+
+  if (reviewerLogins.length === 0 && explicitBotIds.length === 0) {
+    const message =
+      "no reviewers named -- --add-reviewers takes a comma-separated list of logins, or --add-bots a comma-separated list of node ids";
+    emit(context.io, context.json, { ok: false, message }, [message]);
+    return 1;
   }
-  context.io.out(result.message);
-  return result.ok ? 0 : 1;
+
+  // RESOLUTION RUNS EVEN UNDER --dry-run -- the same "not network-free"
+  // shape edit-body's own --dry-run already has (it still certifies the
+  // number over GitHub): the whole point of resolving before requesting is
+  // that a caller learns where each name WOULD go, or that one resolves to
+  // neither, without this verb ever attempting a write `gh` would refuse.
+  const { known, routes: reviewerRoutes, resolvedBotIds, userLogins } = resolveReviewerLogins(
+    context.seams,
+    target,
+    prNumber,
+    reviewerLogins,
+  );
+  const botRoutes: ReviewerRoute[] = explicitBotIds.map((id): ReviewerRoute => ({ name: id, via: "add-bots", route: "bot", id }));
+  const routes = [...reviewerRoutes, ...botRoutes];
+  // Deduped by id: an id named twice (once via --add-bots, once resolved
+  // from a --add-reviewers login the mutation already knows by that same
+  // id) is one entry in botIds, not two -- `union:true` does not need the
+  // duplicate and a repeated id tells a reader nothing a single one does not.
+  const botIds = [...new Set([...resolvedBotIds, ...explicitBotIds])];
+
+  if (dryRun) {
+    const lines = [`would request review on ${target.slug}#${prNumber}:`, ...routes.map(routeLine)];
+    emit(context.io, context.json, { ok: true, dryRun: true, routing: routes, message: lines.join("\n") }, lines);
+    return 0;
+  }
+
+  const results: Array<{ readonly ok: boolean; readonly message: string }> = [];
+  if (userLogins.length > 0) {
+    results.push(requestReviews(context.seams, target, prNumber, userLogins));
+  }
+  if (botIds.length > 0) {
+    // `known` is already populated whenever any --add-reviewers login
+    // resolved to a bot; a caller who named bots ONLY via --add-bots never
+    // triggered that read, so the pull request's own node id -- the
+    // mutation's pullRequestId -- is fetched here instead.
+    const pullRequestId = known?.pullRequestId ?? fetchPrAndKnownBots(context.seams, target, prNumber).pullRequestId;
+    results.push(requestBotReviews(context.seams, target, prNumber, pullRequestId, botIds));
+  }
+
+  const ok = results.every((result): boolean => result.ok);
+  const lines = results.map((result): string => result.message);
+  // JOINED WITH A NEWLINE, matching the human rendering line for line
+  // (Copilot review, PR #174) -- both routes running in the same call
+  // prints two lines to the terminal, and `--json`'s `message` field
+  // silently collapsing them with a space would be a fact the human
+  // rendering states plainly and the JSON rendering blurs.
+  emit(context.io, context.json, { ok, routing: routes, message: lines.join("\n") }, lines);
+  return ok ? 0 : 1;
 }
 
 /**

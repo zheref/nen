@@ -8,6 +8,8 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
+import { collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsArgv } from "./bots.js";
+import { requestReviewsArgv } from "./reviewers.js";
 import { prCommand } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 
@@ -578,20 +580,169 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     });
   });
 
-  it("request-reviews adds one --add-reviewer per name", async () => {
+  // zheref/nen#160: a Bot reviewer (Copilot's own `copilot-pull-request-reviewer`
+  // login) cannot travel `requestReviewsByLogin` (what `gh pr edit
+  // --add-reviewer` uses), so every `--add-reviewers` login is now resolved
+  // FIRST -- against this pull request's own known bots, then against
+  // --target's collaborators -- before either route is called.
+  const KNOWN_BOTS_TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
+  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_1", reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
+  const KNOWN_BOT_COPILOT = {
+    stdout: JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            id: "PR_1",
+            reviewRequests: { nodes: [] },
+            timelineItems: { nodes: [{ author: { __typename: "Bot", login: "copilot-pull-request-reviewer", id: "BOT_1" } }] },
+          },
+        },
+      },
+    }),
+  };
+  const collaboratorFound = (login: string, id: string): Partial<{ stdout: string }> => ({
+    stdout: JSON.stringify({ data: { repository: { collaborators: { nodes: [{ login, id }] } } } }),
+  });
+  const COLLABORATOR_NONE = { stdout: JSON.stringify({ data: { repository: { collaborators: { nodes: [] } } } }) };
+  const botMutationOk = (logins: readonly string[]): Partial<{ stdout: string }> => ({
+    stdout: JSON.stringify({
+      data: {
+        requestReviews: {
+          pullRequest: {
+            reviewRequests: {
+              nodes: logins.map((login, index): unknown => ({
+                requestedReviewer: { __typename: "Bot", login, id: `BOT_${index + 1}` },
+              })),
+            },
+          },
+        },
+      },
+    }),
+  });
+
+  it("resolves a login this pull request already knows as a bot and routes it through the requestReviews mutation's botIds, never gh pr edit --add-reviewer", async () => {
     const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
       {
-        match: "gh pr edit 9 --repo zheref/nen --add-reviewer copilot --add-reviewer sasuke",
-        result: {},
+        match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`,
+        result: botMutationOk(["copilot-pull-request-reviewer"]),
       },
     ];
     const result = await capture(
-      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "copilot,sasuke"],
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "copilot-pull-request-reviewer"],
       null,
       new ScriptedSeams(script),
     );
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/requested copilot, sasuke/);
+    expect(result.out.join("\n")).toMatch(/copilot-pull-request-reviewer/);
+  });
+
+  it("resolves a login as a collaborator and requests it through gh pr edit --add-reviewer, unchanged from before", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+      { match: `gh ${requestReviewsArgv(KNOWN_BOTS_TARGET, 9, ["sasuke"]).join(" ")}`, result: {} },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "sasuke"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/requested sasuke/);
+  });
+
+  it("--add-bots routes a node id straight to botIds, with no --add-reviewers resolution at all", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`, result: botMutationOk(["some-other-bot"]) },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/some-other-bot/);
+  });
+
+  it("folds an --add-bots id resolved from --add-reviewers AND an explicit --add-bots id into ONE mutation call", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      {
+        match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1", "BOT_2"]).join(" ")}`,
+        result: botMutationOk(["copilot-pull-request-reviewer", "some-other-bot"]),
+      },
+    ];
+    const result = await capture(
+      [
+        "pr",
+        "request-reviews",
+        "--target",
+        "zheref/nen",
+        "--pr",
+        "9",
+        "--add-reviewers",
+        "copilot-pull-request-reviewer",
+        "--add-bots",
+        "BOT_2",
+      ],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+  });
+
+  it("--dry-run resolves (still reads GitHub) but requests nothing, and prints which route each name went to", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+    ];
+    const result = await capture(
+      [
+        "pr",
+        "request-reviews",
+        "--target",
+        "zheref/nen",
+        "--pr",
+        "9",
+        "--add-reviewers",
+        "copilot-pull-request-reviewer,sasuke",
+        "--dry-run",
+      ],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/copilot-pull-request-reviewer -> bot \(id BOT_1\) \[add-reviewers\]/);
+    expect(out).toMatch(/sasuke -> user \[add-reviewers\]/);
+  });
+
+  it("refuses (exit 2) a login that resolves to neither a known bot nor a collaborator, naming it and pointing at --add-bots", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "ghost").join(" ")}`, result: COLLABORATOR_NONE },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "ghost"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/'ghost'/);
+    expect(result.err.join("\n")).toMatch(/--add-bots/);
+  });
+
+  // zheref/nen#95, generalized: the empty-input refusal now names BOTH flags
+  // this verb reads, and needs no network call to answer -- STUB_SEAMS never
+  // fires.
+  it("the no-reviewers refusal names --add-reviewers AND --add-bots, not the sibling verbs' --reviewers", async () => {
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9"], null);
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/--add-reviewers/);
+    expect(result.out.join("\n")).toMatch(/--add-bots/);
+    expect(result.out.join("\n")).not.toMatch(/--reviewers takes/);
   });
 });
 

@@ -5,6 +5,7 @@ import { classifyWorkingCopy, readWorkingCopyState, WcStateError, type WcState }
 function state(overrides: Partial<WcState> = {}): WcState {
   return {
     branch: "main",
+    detachedAt: null,
     isTrunk: true,
     dirty: false,
     aheadOfBase: 0,
@@ -69,17 +70,45 @@ describe("readWorkingCopyState -- gathers the evidence via git", () => {
   });
 
   // Review finding: a failed git command used to be silently read as empty
-  // output, which then defaulted to a confident (and wrong) reading -- a
-  // detached HEAD or an invalid --base made 'rev-list' fail, but
-  // `Number("") === 0` turned that into a clean `aheadOfBase: 0`, and a failed
-  // 'git status' turned into zero uncommitted paths (a DIRTY tree reported as
-  // clean). Every one of these must now throw rather than manufacture a zero.
-  it("throws when 'git symbolic-ref' fails (detached HEAD), rather than reading an empty branch name", () => {
+  // output, which then defaulted to a confident (and wrong) reading -- an
+  // invalid --base made 'rev-list' fail, but `Number("") === 0` turned that
+  // into a clean `aheadOfBase: 0`, and a failed 'git status' turned into zero
+  // uncommitted paths (a DIRTY tree reported as clean). Every one of these must
+  // throw rather than manufacture a zero. A DETACHED HEAD is not one of them
+  // any more (zheref/nen#163): it is a fact about the checkout, asked a second
+  // question and answered, not a reading nen had to guess at.
+  it("classifies a DETACHED HEAD with branch: null and the short sha, rather than refusing", () => {
     const seams = new ScriptedSeams([
       { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
+      { match: "git rev-parse --short HEAD", result: { stdout: "1a2b3c4\n" } },
+      { match: "git status --porcelain=v1 -uall", result: { stdout: " M src/a.ts\n" } },
+      { match: "git rev-list --count main..HEAD", result: { stdout: "1\n" } },
+      { match: "git log main..HEAD --format=%s", result: { stdout: "a commit\n" } },
+    ]);
+    const result = readWorkingCopyState(seams, "/repo", "main");
+    expect(result.branch).toBeNull();
+    expect(result.detachedAt).toBe("1a2b3c4");
+    // Standing on no branch means standing on no TRUNK, whatever --base says.
+    expect(result.isTrunk).toBe(false);
+    expect(result.dirty).toBe(true);
+    expect(classifyWorkingCopy(result).case).toBe("on-branch-dirty");
+    expect(classifyWorkingCopy(result).evidence.join(" ")).toContain("on a detached HEAD at 1a2b3c4");
+  });
+
+  it("a detached HEAD is never must-move, even when --base would name the commit it sits on", () => {
+    const detached = state({ branch: null, detachedAt: "1a2b3c4", isTrunk: false, dirty: true, uncommittedPaths: ["a.ts"] });
+    expect(classifyWorkingCopy(detached).case).toBe("on-branch-dirty");
+  });
+
+  it("still refuses when HEAD names no branch AND resolves to no commit", () => {
+    // The other case the old refusal was folding in: a repository with no
+    // commits yet. There is no working copy state to classify there.
+    const seams = new ScriptedSeams([
+      { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
+      { match: "git rev-parse --short HEAD", result: { code: 128, stderr: "fatal: ambiguous argument 'HEAD'" } },
     ]);
     expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(WcStateError);
-    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(/detached HEAD/);
+    expect(() => readWorkingCopyState(seams, "/repo", "main")).toThrow(/resolves to no commit/);
   });
 
   it("throws when 'git status' fails, rather than reporting a possibly-dirty tree as clean", () => {

@@ -9,6 +9,15 @@
 // token no-ops -- is an operational fact about WHICH CREDENTIAL runs `gh`, not
 // something this module can enforce from inside a single `gh` call; it is
 // carried in the usage text (src/pr/verb.ts) as a warning instead.
+//
+// USERS AND TEAMS ONLY (zheref/nen#160). `gh pr edit --add-reviewer` resolves
+// a login through GitHub's `requestReviewsByLogin` mutation, which never
+// resolves a `Bot` -- Copilot's own reviewer login included. ../pr/command.ts's
+// doRequestReviews() resolves each `--add-reviewers` login BEFORE it reaches
+// this module, and only a login that resolves as a collaborator (a User) is
+// still handed to requestReviews() below; one that resolves as a Bot is
+// routed to ./bots.ts's requestBotReviews() instead, through a different
+// GraphQL mutation entirely. See that module's header for the whole story.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
@@ -30,8 +39,13 @@ export function requestReviews(
   prNumber: number,
   reviewers: readonly string[],
 ): RequestReviewsResult {
+  // NAMES THIS VERB'S OWN FLAG, `--add-reviewers` -- not `--reviewers`, which
+  // belongs to `pr ready`/`pr next-blocker`. This refusal was written when
+  // the flag here was still spelled `--reviewers` and never updated when it
+  // became `--add-reviewers` (zheref/nen#95); the behaviour was always
+  // correct -- nothing requested, exit 1 -- only the flag it named was wrong.
   if (reviewers.length === 0) {
-    return { ok: false, message: "no reviewers named -- --reviewers takes a comma-separated list" };
+    return { ok: false, message: "no reviewers named -- --add-reviewers takes a comma-separated list" };
   }
   const result = seams.run(GH, [...requestReviewsArgv(target, prNumber, reviewers)]);
   if (result.code !== 0) {

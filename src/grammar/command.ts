@@ -58,7 +58,17 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
                        [ ... ]           an optional trailing clause
                        [+]               an optional literal suffix on the
                                          slot just declared
-  --line <text>      The invocation to parse.
+  --line <text>      The invocation to parse. MAY BE EMPTY when every clause
+                     of the grammar is optional: 'at [<gate>]' accepts
+                     --line "" and --line "at" identically, both reporting
+                     'gate: (clause absent)', because the invocation with
+                     nothing in it is the ordinary one for a skill whose only
+                     clause is optional. A grammar carrying a REQUIRED clause
+                     still refuses an empty line at exit 2, naming the slot.
+
+The echo names every clause the template declares, filled or not: a supplied
+slot as '<name>: <value>', one nobody filled as '<name>: (clause absent)', and
+a literal-only clause the line carried as '[<literal>]: present'.
 
 Exit 0 when the line parses, 2 when it does not -- a refusal is a usage error,
 and the corrected line is printed on stderr so a caller can paste it.

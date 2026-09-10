@@ -62,9 +62,11 @@ describe("parseInvocation", () => {
     ]);
   });
 
-  it("echoes the parse, one clause per line", () => {
+  it("echoes the parse, one clause per line -- including the optional ones nobody filled", () => {
+    // zheref/nen#170: a slot simply MISSING from the echo cannot be told apart
+    // from a template that never declared it.
     const result = parseInvocation("myskill", grammar, "bc@g2");
-    expect(result.echo).toEqual(["repo: bc", "gate: G2"]);
+    expect(result.echo).toEqual(["repo: bc", "gate: G2", "mode: (clause absent)"]);
   });
 
   it("refuses an unparseable enumerated value and lists the valid set", () => {
@@ -239,7 +241,43 @@ describe("parseInvocation -- single-slot templates with a bracketed clause (zher
     it("refuses a line that does not open with the literal", () => {
       const result = parseInvocation("tensho", grammar, "main");
       expect(result.ok).toBe(false);
-      expect(result.problems[0]).toMatch(/must open with the literal 'onto'/);
+      // Since zheref/nen#170 this grammar requires NOTHING, so the refusal
+      // offers both ways out rather than only the literal: 'main' is neither
+      // the clause nor the empty line.
+      expect(result.problems[0]).toMatch(/must open with 'onto' to supply <target-branch>, or omit that clause entirely/);
+      expect(result.corrected).toBe("tensho onto");
+    });
+
+    it("an EMPTY line parses, with the clause absent, exactly as the bare literal does", () => {
+      // The whole of zheref/nen#170. `at [<gate>]` is the same shape, and the
+      // empty invocation is the ORDINARY one for a skill whose only clause is
+      // optional -- a caller should not have to know to spell a bare 'onto'.
+      const empty = parseInvocation("tensho", grammar, "");
+      const bare = parseInvocation("tensho", grammar, "onto");
+      expect(empty.ok).toBe(true);
+      expect(empty.slots).toEqual([]);
+      expect(empty.missing).toEqual([]);
+      expect(empty.echo).toEqual(["target-branch: (clause absent)"]);
+      expect(empty.corrected).toBe("tensho onto");
+      // Identical, field for field, but for the line each was given.
+      expect({ ...empty, line: "" }).toEqual({ ...bare, line: "" });
+    });
+  });
+
+  describe("an empty line, against a grammar that requires something (zheref/nen#170)", () => {
+    it("still refuses, naming the required slot", () => {
+      const grammar = parseTemplate("<repo>[@<gate:G1|G2>]");
+      const result = parseInvocation("backlog-state", grammar, "");
+      expect(result.ok).toBe(false);
+      expect(result.problems.join(" ")).toMatch(/<repo> is required and the line does not supply it/);
+      expect(result.corrected).toBe("backlog-state <repo>");
+    });
+
+    it("refuses one required slot even when every OTHER clause is optional", () => {
+      const grammar = parseTemplate("at [<gate:G2|G4>] until <condition>");
+      const result = parseInvocation("jutaisho", grammar, "");
+      expect(result.ok).toBe(false);
+      expect(result.problems.join(" ")).toMatch(/<condition> is required/);
     });
   });
 

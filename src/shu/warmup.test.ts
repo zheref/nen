@@ -113,6 +113,7 @@ const RESET = "git reset --hard";
 const CLEAN = "git clean -fd";
 const REMOTES = "git remote";
 const TRUNK_REF = "git show-ref --verify --quiet refs/heads/main";
+const WORKTREES = "git worktree list --porcelain";
 const FETCH = "git fetch origin";
 const ANCESTOR = "git merge-base --is-ancestor main origin/main";
 const FF_REF = "git branch --force main origin/main";
@@ -137,6 +138,21 @@ const DECLARED_TEST = "pnpm exec vitest run";
  */
 const PROOF_TREE = "git add -A -- .";
 
+// ── the worktree list, in the three shapes that decide the fast-forward ─────
+//
+// `git worktree list --porcelain` is one `<key> <value>` per line with a blank
+// line between records, and the fixtures below are that format verbatim --
+// zheref/nen#168's whole point is that the human `git worktree list` columns
+// are not what nen reads.
+
+/** A repository whose ONLY worktree is this one, standing on 'some-branch'. */
+const WT_NOBODY = `worktree ${SHU_REPO}\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/some-branch\n\n`;
+/** The primary checkout of this same repository, standing on 'main'. */
+const OTHER_WORKTREE = "/Users/someone/Code/nen";
+const WT_ELSEWHERE = `worktree ${OTHER_WORKTREE}\nHEAD 2222222222222222222222222222222222222222\nbranch refs/heads/main\n\nworktree ${SHU_REPO}\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/some-branch\n\n`;
+/** This very checkout, standing on the trunk, with a detached worktree beside it. */
+const WT_HERE = `worktree ${SHU_REPO}\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree ${OTHER_WORKTREE}\nHEAD 3333333333333333333333333333333333333333\ndetached\n\n`;
+
 /** The order every git call runs in on a clean tree that is not on the trunk. */
 const CLEAN_ORDER: readonly string[] = [
   HEAD,
@@ -144,6 +160,7 @@ const CLEAN_ORDER: readonly string[] = [
   STATUS,
   REMOTES,
   TRUNK_REF,
+  WORKTREES,
   NAME_OK,
   LOCAL_REF,
   FETCH,
@@ -173,6 +190,7 @@ function happyPath(overrides: readonly ScriptedCall[] = []): readonly ScriptedCa
     ok(STATUS),
     ok(REMOTES, "origin\n"),
     ok(TRUNK_REF),
+    ok(WORKTREES, WT_NOBODY),
     ok(NAME_OK, `${BRANCH}\n`),
     { match: LOCAL_REF, result: { code: 1 } },
     ok(FETCH),
@@ -468,6 +486,7 @@ describe("a dirty working copy", () => {
       STATUS,
       REMOTES,
       TRUNK_REF,
+      WORKTREES,
       NAME_OK,
       LOCAL_REF,
       RESET,
@@ -716,7 +735,7 @@ describe("every refusal is exit 2 with the evidence, and the document follows th
     });
     expect(result.code).toBe(2);
     expect(result.out).toEqual([]);
-    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, STATUS, REMOTES, TRUNK_REF, NAME_OK]);
+    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, STATUS, REMOTES, TRUNK_REF, WORKTREES, NAME_OK]);
     expect(argvOf(result.seams)).not.toContain(RESET);
     expect(argvOf(result.seams)).not.toContain(CLEAN);
     expect(argvOf(result.seams)).not.toContain(FETCH);
@@ -1234,7 +1253,7 @@ describe("a repository that declares nothing", () => {
   });
 });
 
-// ── (g) --dry-run spawns NOTHING ────────────────────────────────────────────
+// ── (g) --dry-run mutates NOTHING, and runs exactly ONE read ────────────────
 
 describe("--dry-run", () => {
   const PLANNED: readonly string[] = [
@@ -1244,6 +1263,7 @@ describe("--dry-run", () => {
     STATUS,
     REMOTES,
     TRUNK_REF,
+    WORKTREES,
     NAME_OK,
     LOCAL_REF,
     FETCH,
@@ -1253,7 +1273,10 @@ describe("--dry-run", () => {
     SWITCH,
   ];
 
-  it("records zero calls on the seam -- not even the fetch", async () => {
+  it("records exactly ONE call on the seam -- the read-only worktree list, and nothing else", async () => {
+    // zheref/nen#168. The list of commands a dry run performs is CLOSED and it
+    // is this one: it reads no working copy, moves no ref and writes nothing.
+    // Not the fetch, not the status, not a single probe beyond it.
     for (const argv of [
       ["warmup", "--branch", BRANCH, "--dry-run"],
       ["warmup", "--branch", BRANCH, "--dry-run", "--tests"],
@@ -1262,7 +1285,7 @@ describe("--dry-run", () => {
     ]) {
       const result = await capture(argv, { script: happyPath() });
       expect(result.code, argv.join(" ")).toBe(0);
-      expect(result.seams.calls, argv.join(" ")).toEqual([]);
+      expect(argvOf(result.seams), argv.join(" ")).toEqual([WORKTREES]);
     }
   });
 
@@ -1284,13 +1307,14 @@ describe("--dry-run", () => {
     });
     const report = JSON.parse(result.out.join("\n")) as { steps: readonly { argv: string[] }[] };
     const printed = report.steps.map((step): string => step.argv.join(" "));
-    expect(printed.slice(0, 11)).toEqual([
+    expect(printed.slice(0, 12)).toEqual([
       HEAD,
       ORPHANS,
       IN_PROGRESS,
       STATUS,
       REMOTES,
       TRUNK_REF,
+      WORKTREES,
       NAME_OK,
       LOCAL_REF,
       RESET,
@@ -1309,12 +1333,15 @@ describe("--dry-run", () => {
     expect(text).toMatch(/is git half-way through something\?/);
   });
 
-  it("prints 'would run', never 'ran', and reports no exit code for anything", async () => {
+  it("prints 'would run' for every PLANNED row, and 'ran' for the one row that really ran", async () => {
+    // The prefix is per ROW, not per table: calling the worktree read a plan
+    // would be false, and calling the other twelve a run would be worse.
     const result = await capture(["warmup", "--branch", BRANCH, "--dry-run"], { script: happyPath() });
     const text = result.out.join("\n");
     expect(text).toMatch(/^would run: {5}git branch --show-current$/m);
-    expect(text).not.toMatch(/^ran:/m);
-    expect(text).not.toMatch(/-- exit /);
+    expect(text).toMatch(/^ran: {11}git worktree list --porcelain {2}-- exit 0 in \d+ms$/m);
+    expect(text.match(/^ran:/gm)).toHaveLength(1);
+    expect(text.match(/-- exit /g)).toHaveLength(1);
   });
 
   it("still prints the git plan when the verification half would not pass, and says which is which", async () => {
@@ -1333,7 +1360,7 @@ describe("--dry-run", () => {
       { script: happyPath(), platform: "linux" },
     );
     expect(result.code).toBe(3);
-    expect(result.seams.calls).toEqual([]);
+    expect(argvOf(result.seams)).toEqual([WORKTREES]);
     expect(result.out.join("\n")).toMatch(/would run: {5}git fetch origin/);
     expect(result.err.join("\n")).toMatch(/nothing ran, and the declared 'build' would not pass/);
   });
@@ -1353,9 +1380,124 @@ describe("--dry-run", () => {
     expect(result.err.join("\n")).toMatch(/the executor answered 2, reported above; warmup exits 1/);
   });
 
-  it("says which line a real run would spell differently, rather than reading git to find out", async () => {
+  it("states ONE fast-forward line rather than describing two and guessing which", async () => {
+    // Before zheref/nen#168 this row said "a dry run reads no git state, so it
+    // cannot know which". It reads one thing now, and that one thing is
+    // precisely what decides this line -- so the plan states it.
     const result = await capture(["warmup", "--branch", BRANCH, "--dry-run"], { script: happyPath() });
-    expect(result.out.join("\n")).toMatch(/a dry run reads no git state, so it cannot know which/);
+    const text = result.out.join("\n");
+    expect(text).toMatch(/would run: {5}git branch --force main origin\/main/);
+    expect(text).not.toMatch(/git merge --ff-only/);
+    expect(text).not.toMatch(/cannot know which/);
+  });
+});
+
+// ── (g2) the trunk, checked out somewhere else (zheref/nen#168) ─────────────
+//
+// THE STANDARD LINKED-WORKTREE SHAPE: a primary checkout standing on the trunk,
+// the effort in its own worktree beside it. `git branch --force main
+// origin/main` is refused by git there -- 'cannot force update the branch
+// 'main' used by worktree at ...' -- and it used to be refused AFTER the fetch,
+// half-way through a run, with no branch cut.
+
+describe("the trunk checked out in ANOTHER worktree", () => {
+  it("skips the local fast-forward, says which worktree holds it, and cuts from origin/main anyway", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([ok(WORKTREES, WT_ELSEWHERE)]),
+    });
+    expect(result.code).toBe(0);
+    const argv = argvOf(result.seams);
+    expect(argv).not.toContain(FF_REF);
+    expect(argv).not.toContain(FF_MERGE);
+    // The cut is unchanged: it always came off the fetched remote-tracking ref.
+    expect(argv).toContain(FETCH);
+    expect(argv).toContain(SWITCH);
+    expect(result.out.join("\n")).toContain(
+      `trunk held by worktree ${OTHER_WORKTREE}; cutting from origin/main directly`,
+    );
+    expect(result.err.join("\n")).toContain(`trunk held by worktree ${OTHER_WORKTREE}`);
+  });
+
+  it("--dry-run reaches the SAME decision, and the plan and the real run agree line for line", async () => {
+    const script = happyPath([ok(WORKTREES, WT_ELSEWHERE)]);
+    const planned = await capture(["warmup", "--branch", BRANCH, "--dry-run", "--json"], { script });
+    const real = await capture(["warmup", "--branch", BRANCH, "--json"], { script });
+
+    const plannedArgv = (JSON.parse(planned.out.join("\n")) as { steps: readonly { argv: string[] }[] }).steps.map(
+      (step): string => step.argv.join(" "),
+    );
+    const ranArgv = (JSON.parse(real.out.join("\n")) as { steps: readonly { argv: string[] }[] }).steps.map(
+      (step): string => step.argv.join(" "),
+    );
+    expect(plannedArgv).not.toContain(FF_REF);
+    expect(plannedArgv).not.toContain(FF_MERGE);
+    // The git half of the plan IS the git half of the run -- that is the whole
+    // claim `--dry-run` makes, and the defect was that it was not true here.
+    // ORPHANS is the one planned row a real run may not reach: it is asked only
+    // on a detached HEAD, which the plan says in its own note and this fixture
+    // is not. Every other git line matches, in order.
+    expect(plannedArgv.filter((line): boolean => line.startsWith("git ") && line !== ORPHANS)).toEqual(
+      ranArgv.filter((line): boolean => line.startsWith("git ")),
+    );
+    expect(planned.out.join("\n")).toContain(
+      `trunk held by worktree ${OTHER_WORKTREE}; cutting from origin/main directly`,
+    );
+  });
+
+  it("still fast-forwards with a merge when THIS checkout is the one on the trunk", async () => {
+    const real = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([ok(HEAD, "main\n"), ok(WORKTREES, WT_HERE), ok(FF_MERGE)]),
+    });
+    expect(real.code).toBe(0);
+    expect(argvOf(real.seams)).toContain(FF_MERGE);
+    expect(argvOf(real.seams)).not.toContain(FF_REF);
+
+    // And the plan says the same, from the paths alone -- it has not read HEAD.
+    const planned = await capture(["warmup", "--branch", BRANCH, "--dry-run", "--json"], {
+      script: happyPath([ok(WORKTREES, WT_HERE)]),
+    });
+    const argv = (JSON.parse(planned.out.join("\n")) as { steps: readonly { argv: string[] }[] }).steps.map(
+      (step): string => step.argv.join(" "),
+    );
+    expect(argv).toContain(FF_MERGE);
+    expect(argv).not.toContain(FF_REF);
+  });
+
+  it("matches the FULL ref, so a branch called 'feat/main' is not mistaken for the trunk", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([
+        ok(WORKTREES, `worktree ${OTHER_WORKTREE}\nHEAD 4444444444444444444444444444444444444444\nbranch refs/heads/feat/main\n\n`),
+      ]),
+    });
+    expect(result.code).toBe(0);
+    expect(argvOf(result.seams)).toContain(FF_REF);
+  });
+
+  it("reads the path as git printed it, trailing space and all", async () => {
+    // The porcelain form is data whose exact bytes matter: a directory name
+    // ending in a space is rare and entirely legal, and a trimmed path names a
+    // directory that does not exist.
+    const spaced = "/Users/someone/Code/nen ";
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([
+        ok(WORKTREES, `worktree ${spaced}\nHEAD 5555555555555555555555555555555555555555\nbranch refs/heads/main\n\n`),
+      ]),
+    });
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(`trunk held by worktree ${spaced};`);
+  });
+
+  it("refuses at exit 2 -- BEFORE the fetch -- when the worktree list does not answer", async () => {
+    // Fail-closed, this file's discipline everywhere: an unanswered question is
+    // never read as "nothing else holds the trunk". That reading is what made
+    // the fast-forward fail half-way through a run that had already fetched.
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([{ match: WORKTREES, result: { code: 128, stderr: "fatal: not a git repository" } }]),
+    });
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/could not list this repository's worktrees/);
+    expect(argvOf(result.seams)).not.toContain(FETCH);
   });
 });
 
@@ -1372,6 +1514,7 @@ describe("the --json contract", () => {
       "remote",
       "branch",
       "discard",
+      "dryRun",
       "steps",
       "lane",
       "exitCode",
@@ -1381,6 +1524,7 @@ describe("the --json contract", () => {
     expect(report["remote"]).toBe("origin");
     expect(report["branch"]).toBe(BRANCH);
     expect(report["discard"]).toBe(false);
+    expect(report["dryRun"]).toBe(false);
     expect(report["lane"]).toBe("web");
     expect(report["exitCode"]).toBe(0);
   });
