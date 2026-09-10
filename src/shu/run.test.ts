@@ -2305,6 +2305,57 @@ describe("stdoutTo writes a step's stdout to the declared file", () => {
     );
   });
 
+  it("names the STEP's own pointer when a multi-step row's redirect is unwritable", async () => {
+    // A refusal naming `project.verbs.only.build.stdoutTo` for a key that is
+    // really at `…steps[1].stdoutTo` sends a reader to a file position that
+    // does not exist. The pointer is carried from the renderer for exactly this.
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-ptr-"));
+    try {
+      mkdirSync(join(dir, "nen", "out", "second.json"), { recursive: true });
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({
+          $schema: "nen.contract/v0.1",
+          project: oneLane({}, {
+            steps: [
+              { exe: "placeholder-tool", argv: ["first"] },
+              { exe: "placeholder-tool", argv: ["second"], stdoutTo: "nen/out/second.json" },
+            ],
+          }),
+        }),
+      );
+      const result = await capture(["build"], { repo: dir });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("project.verbs.only.build.steps[1].stdoutTo");
+      expect(result.err.join("\n")).not.toContain("project.verbs.only.build.stdoutTo");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses at exit 2, not a stack trace, when the path cannot be inspected", async () => {
+    // An ancestor of the declared path is a FILE, so `lstat` answers ENOTDIR
+    // rather than "nothing there" -- and the write a few steps later is certain
+    // to fail. Letting the errno escape would end the verb as a crash instead of
+    // as this family's exit 2 with the declaration named.
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-enotdir-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      // `nen/out` is a FILE, and the declaration writes `nen/out/report.json`.
+      writeFileSync(join(dir, "nen", "out"), "not a directory");
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane({}, REDIRECTED) }),
+      );
+      const result = await capture(["build"], { repo: dir });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/nen cannot tell what is at that path: ENOTDIR/);
+      expect(spawned(result.seams)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("says '(none declared)' beside artifacts when no step redirects", async () => {
     const result = await capture(["build", "--dry-run"]);
     expect(result.out.join("\n")).toMatch(/stdout to:\s+\(none declared\)/);

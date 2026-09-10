@@ -561,7 +561,41 @@ describe("stdoutTo reaches the rendered step, and is refused where it cannot", (
       project({ verbs: { one: { build: { exe: "tool", argv: ["go"], stdoutTo: "out/log.json" } } } }),
       request,
     );
-    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"], stdoutTo: "out/log.json" }]);
+    expect(rendered.steps).toEqual([
+      {
+        exe: "tool",
+        argv: ["go"],
+        // THE POINTER IS THE `{exe, argv}` FORM'S: the key sits directly on the
+        // invocation, with no `steps[<i>]` in the middle.
+        stdoutTo: { path: "out/log.json", pointer: "project.verbs.one.build.stdoutTo" },
+      },
+    ]);
+  });
+
+  it("points at the STEP's own key on a multi-step row, not the invocation's", () => {
+    // A refusal naming `project.verbs.one.build.stdoutTo` for a key that is
+    // really at `…steps[1].stdoutTo` sends a reader to a file position that
+    // does not exist, which is the whole reason this pointer is carried rather
+    // than rebuilt from the lane and the verb.
+    const rendered = renderInvocation(
+      project({
+        verbs: {
+          one: {
+            build: {
+              steps: [
+                { exe: "tool", argv: ["first"] },
+                { exe: "tool", argv: ["second"], stdoutTo: "out/second.json" },
+              ],
+            },
+          },
+        },
+      }),
+      request,
+    );
+    expect(rendered.steps[1]?.stdoutTo).toEqual({
+      path: "out/second.json",
+      pointer: "project.verbs.one.build.steps[1].stdoutTo",
+    });
   });
 
   it("carries it PER STEP on a multi-step row, leaving the others null", () => {
@@ -580,7 +614,7 @@ describe("stdoutTo reaches the rendered step, and is refused where it cannot", (
       }),
       request,
     );
-    expect(rendered.steps.map((step): string | null => step.stdoutTo)).toEqual([
+    expect(rendered.steps.map((step): string | null => step.stdoutTo?.path ?? null)).toEqual([
       null,
       "out/second.json",
     ]);
@@ -598,7 +632,11 @@ describe("stdoutTo reaches the rendered step, and is refused where it cannot", (
     });
     const plan = renderInvocation(block, { lane: null, verb: "deploy", platform: "linux" });
     expect(resolveTarget(block, plan, "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish", "--prod"], stdoutTo: "out/deploy.json" },
+      {
+        exe: "tool",
+        argv: ["publish", "--prod"],
+        stdoutTo: { path: "out/deploy.json", pointer: "project.verbs.one.deploy.stdoutTo" },
+      },
     ]);
   });
 

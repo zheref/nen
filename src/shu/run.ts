@@ -602,7 +602,7 @@ function unrun(step: RenderedStep, cwd: string): ShuStepReport {
     exe: step.exe,
     argv: step.argv,
     cwd,
-    stdoutTo: step.stdoutTo,
+    stdoutTo: step.stdoutTo?.path ?? null,
     exitCode: null,
     durationMs: null,
   };
@@ -809,7 +809,7 @@ export async function runVerb(
   // decided from the text alone was already decided when the file LOADED, and
   // "is something already sitting at this path" is a fact about the moment of
   // the run rather than about the declaration.
-  for (const step of plan.steps) refuseUnwritableRedirect(step, repoRoot, plan);
+  for (const step of plan.steps) refuseUnwritableRedirect(step, repoRoot);
 
   const launch = launchOf(plan);
   if (launch !== null) {
@@ -837,24 +837,39 @@ export async function runVerb(
  *     before it writes, and for the same reason: nen writes what its report
  *     says it writes.
  */
-function refuseUnwritableRedirect(
-  step: RenderedStep,
-  repoRoot: string,
-  plan: RenderedInvocation,
-): void {
+function refuseUnwritableRedirect(step: RenderedStep, repoRoot: string): void {
   if (step.stdoutTo === null) return;
-  const pointer = `project.verbs.${plan.lane}.${plan.verb}.stdoutTo`;
-  const absolute = insideRepo(repoRoot, step.stdoutTo, pointer);
+  // THE POINTER IS THE STEP'S OWN, carried from ../shu/render.ts, because a
+  // `{steps}` row states this key at `…steps[<i>].stdoutTo` and a `{exe, argv}`
+  // row states it at `…stdoutTo` -- and a refusal naming a file position that
+  // does not exist is a refusal a reader cannot act on.
+  const { path: declared, pointer } = step.stdoutTo;
+  const absolute = insideRepo(repoRoot, declared, pointer);
   const containment = realContainment(repoRoot, absolute);
   if (!containment.contained) {
     throw new VerbUsageError(
-      `${pointer} names '${step.stdoutTo}', which would be written to '${containment.real}', outside the repository at ${repoRoot}: '${containment.link ?? absolute}' is a symlink pointing at '${containment.target ?? containment.real}'. nen writes what its report says it writes, so this write is refused rather than followed.`,
+      `${pointer} names '${declared}', which would be written to '${containment.real}', outside the repository at ${repoRoot}: '${containment.link ?? absolute}' is a symlink pointing at '${containment.target ?? containment.real}'. nen writes what its report says it writes, so this write is refused rather than followed.`,
     );
   }
-  const entry = lstatSync(absolute, { throwIfNoEntry: false });
+  // `throwIfNoEntry: false` COVERS ONLY ENOENT, which is the ordinary case here
+  // -- the file has not been written yet. Everything else still throws: an
+  // EACCES on a parent, or an ENOTDIR because an ancestor of this path is a
+  // FILE. Both are certain to fail the write a few steps later, and letting
+  // them escape would end the verb as a stack trace rather than as this
+  // family's exit 2 -- so the errno is caught and named here, where the
+  // declaration that asked for it can be named beside it.
+  let entry;
+  try {
+    entry = lstatSync(absolute, { throwIfNoEntry: false });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "an unknown error";
+    throw new VerbUsageError(
+      `${pointer} names '${declared}', and nen cannot tell what is at that path: ${code}. This step's stdout is written there as a file, so a path nen cannot even inspect is one it will not promise to write -- most often an ancestor directory that is really a file (ENOTDIR), or one this user cannot read (EACCES). Fix the path, or the permissions on it.`,
+    );
+  }
   if (entry !== undefined && entry.isDirectory()) {
     throw new VerbUsageError(
-      `${pointer} names '${step.stdoutTo}', and a DIRECTORY is already there. nen writes this step's stdout to that path as a file; it will not remove a directory to make room for one, and discovering this after the tool had run would mean spending the whole build to learn it. Name a file, or move what is in the way.`,
+      `${pointer} names '${declared}', and a DIRECTORY is already there. nen writes this step's stdout to that path as a file; it will not remove a directory to make room for one, and discovering this after the tool had run would mean spending the whole build to learn it. Name a file, or move what is in the way.`,
     );
   }
 }
@@ -931,18 +946,9 @@ function relay(context: CommandContext, stdout: string, stderr: string): void {
  * later reader -- `nen shu coverage`, most likely -- opens the file and decides
  * for itself, exactly as it would if a shell had written it.
  */
-function writeRedirect(
-  step: RenderedStep,
-  stdout: string,
-  repoRoot: string,
-  plan: RenderedInvocation,
-): void {
+function writeRedirect(step: RenderedStep, stdout: string, repoRoot: string): void {
   if (step.stdoutTo === null) return;
-  const absolute = insideRepo(
-    repoRoot,
-    step.stdoutTo,
-    `project.verbs.${plan.lane}.${plan.verb}.stdoutTo`,
-  );
+  const absolute = insideRepo(repoRoot, step.stdoutTo.path, step.stdoutTo.pointer);
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(absolute, stdout, "utf8");
 }
@@ -975,7 +981,7 @@ function runCaptured(
     // read below. A tool that printed half a report and then failed leaves that
     // half on disk, which is what a redirect does and what a reader debugging
     // the failure wants; a step that never STARTED wrote nothing to write.
-    if (!result.spawnFailed) writeRedirect(step, result.stdout, repoRoot, plan);
+    if (!result.spawnFailed) writeRedirect(step, result.stdout, repoRoot);
     // `result.code` is MEANINGLESS on a spawn failure (../seam/exec.ts's own
     // words for it) -- typically -1, a value with no exit-code meaning at all --
     // and `durationMs` measured nothing since the process never started. Both
@@ -986,7 +992,7 @@ function runCaptured(
       exe: step.exe,
       argv: step.argv,
       cwd,
-      stdoutTo: step.stdoutTo,
+      stdoutTo: step.stdoutTo?.path ?? null,
       exitCode: result.spawnFailed ? null : result.code,
       durationMs: result.spawnFailed ? null : durationMs,
     });

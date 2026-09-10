@@ -88,14 +88,22 @@ export interface RenderedStep {
   readonly exe: string;
   readonly argv: readonly string[];
   /**
-   * The repo-relative file this step's stdout is written to, or null.
+   * Where this step's stdout goes, and WHERE IN THE FILE that was said.
    *
    * IT IS PART OF THE STEP AND NOT A SIDE TABLE, because `--dry-run` prints the
    * steps and the whole promise of a dry run is that what it prints is what
    * runs. A file a step writes that the dry run did not mention is a file that
    * appeared without being approved.
+   *
+   * `pointer` IS CARRIED RATHER THAN RECOMPUTED, for `RenderedPrecondition
+   * .pointer`'s reason one field down: a `{exe, argv}` row states the key at
+   * `project.verbs.<lane>.<verb>.stdoutTo` and a `{steps}` row states it at
+   * `…steps[<i>].stdoutTo`, and the two are indistinguishable once the row has
+   * been flattened into a step list. ./run.ts refuses an unwritable redirect BY
+   * POINTER, and a refusal naming a file position that does not exist is one a
+   * reader cannot act on.
    */
-  readonly stdoutTo: string | null;
+  readonly stdoutTo: { readonly path: string; readonly pointer: string } | null;
 }
 
 /** A precondition as the declaration states it, before anything asserts it. */
@@ -353,13 +361,29 @@ export function declaredHostsFor(project: ProjectBlock, verb: string): readonly 
   return wildcard ?? null;
 }
 
-function stepsOf(invocation: Invocation): readonly RenderedStep[] {
+function stepsOf(invocation: Invocation, pointer: string): readonly RenderedStep[] {
   if (invocation.kind === "command") {
-    return [{ exe: invocation.exe, argv: invocation.argv, stdoutTo: invocation.stdoutTo }];
+    return [
+      {
+        exe: invocation.exe,
+        argv: invocation.argv,
+        stdoutTo:
+          invocation.stdoutTo === null
+            ? null
+            : { path: invocation.stdoutTo, pointer: `${pointer}.stdoutTo` },
+      },
+    ];
   }
   if (invocation.kind === "steps") {
     return invocation.steps.map(
-      (step): RenderedStep => ({ exe: step.exe, argv: step.argv, stdoutTo: step.stdoutTo }),
+      (step, index): RenderedStep => ({
+        exe: step.exe,
+        argv: step.argv,
+        stdoutTo:
+          step.stdoutTo === null
+            ? null
+            : { path: step.stdoutTo, pointer: `${pointer}.steps[${index}].stdoutTo` },
+      }),
     );
   }
   /* c8 ignore next -- the `unsupported` arm is refused before it reaches here */
@@ -478,8 +502,8 @@ function refuseStdoutToOnLongRunning(
   if (first === undefined) return;
   throw new VerbUsageError(
     `'${verb}' on lane '${lane}' declares 'stdoutTo' (${declared
-      .map((step): string => `'${step.stdoutTo ?? ""}'`)
-      .join(", ")}), and '${verb}' is long-running: nen inherits this terminal and hands it to the child, so the child's output goes to the screen and nen never sees it. There is nothing for nen to write to '${first.stdoutTo ?? ""}'. Put the step that produces this file under a CAPTURED verb -- every verb but ${LAUNCHING_VERBS.join(" and ")} -- or drop 'stdoutTo' and let the child print to the terminal, which is what a long-running verb is for. The long-running verbs are: ${LAUNCHING_VERBS.join(", ")}.`,
+      .map((step): string => `'${step.stdoutTo?.path ?? ""}'`)
+      .join(", ")}), and '${verb}' is long-running: nen inherits this terminal and hands it to the child, so the child's output goes to the screen and nen never sees it. There is nothing for nen to write to '${first.stdoutTo?.path ?? ""}'. Put the step that produces this file under a CAPTURED verb -- every verb but ${LAUNCHING_VERBS.join(" and ")} -- or drop 'stdoutTo' and let the child print to the terminal, which is what a long-running verb is for. The long-running verbs are: ${LAUNCHING_VERBS.join(", ")}.`,
   );
 }
 
@@ -527,7 +551,7 @@ export function renderInvocation(
   }
 
   const pointer = `project.verbs.${lane}.${request.verb}`;
-  const steps = stepsOf(invocation);
+  const steps = stepsOf(invocation, pointer);
   refuseUnsubstituted(steps, lane, request.verb);
   refuseStdoutToOnLongRunning(steps, lane, request.verb);
 
