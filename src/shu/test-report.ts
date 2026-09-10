@@ -256,11 +256,11 @@ function ranSomething(run: ShuReport): boolean {
  * that stdout carries exactly one JSON document. It is not discarded: see this
  * file's header for where it goes in each mode.
  */
-export function runTestReport(
+export async function runTestReport(
   context: CommandContext,
   repoRoot: string,
   options: TestReportOptions,
-): number {
+): Promise<number> {
   // TWO WAYS OF SAYING "RUN NOTHING" IS NOT A CLEARER INSTRUCTION THAN ONE.
   // `--dry-run` renders the command and parses nothing; `--from-artifacts`
   // renders no command and parses what is on disk. A caller who typed both has
@@ -281,7 +281,7 @@ export function runTestReport(
 
   let exitCode: number;
   try {
-    exitCode = runVerb(context, repoRoot, {
+    exitCode = await runVerb(context, repoRoot, {
       verb: SOURCE_VERB,
       lane: options.lane,
       dryRun: options.dryRun,

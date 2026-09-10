@@ -397,13 +397,13 @@ export function mapDelegated(code: number): number {
  * an empty argv (nothing was rendered), null code and duration (nothing ran)
  * and the executor's own sentence as its note.
  */
-function delegate(
+async function delegate(
   context: CommandContext,
   repoRoot: string,
   verb: "build" | "test",
   lane: string,
   dryRun: boolean,
-): Delegated {
+): Promise<Delegated> {
   const captured: string[] = [];
   const sink: Io = { out: (line): void => void captured.push(line), err: context.io.err };
   const sub: CommandContext = {
@@ -419,7 +419,7 @@ function delegate(
   try {
     // `target`/`run` are `deploy`'s and this verb delegates only 'build' and
     // 'test': a warm-up verifies a working copy and never sends one anywhere.
-    code = runVerb(sub, repoRoot, { verb, lane, dryRun, target: null, run: false });
+    code = await runVerb(sub, repoRoot, { verb, lane, dryRun, target: null, run: false });
   } catch (error) {
     // The family's own codes come back as themselves; a usage refusal is 2, as
     // it is everywhere else. Anything else -- a malformed declaration, say --
@@ -559,7 +559,11 @@ function openProject(repoRoot: string): OpenedDeclaration | null {
   }
 }
 
-export function runWarmup(context: CommandContext, repoRoot: string, options: WarmupOptions): number {
+export async function runWarmup(
+  context: CommandContext,
+  repoRoot: string,
+  options: WarmupOptions,
+): Promise<number> {
   // THE FLAGS FIRST, BEFORE ANYTHING IS READ OR WRITTEN -- ./run.ts's own
   // ordering rule, and it matters more here than there: a caller who mistyped
   // `--lane` must not have their working copy cleaned before being told so.
@@ -583,8 +587,8 @@ export function runWarmup(context: CommandContext, repoRoot: string, options: Wa
   const trunk = options.from ?? DEFAULT_TRUNK;
 
   return options.dryRun
-    ? planWarmup(context, repoRoot, options, trunk, lane)
-    : performWarmup(context, repoRoot, options, trunk, lane);
+    ? await planWarmup(context, repoRoot, options, trunk, lane)
+    : await performWarmup(context, repoRoot, options, trunk, lane);
 }
 
 /**
@@ -598,13 +602,13 @@ export function runWarmup(context: CommandContext, repoRoot: string, options: Wa
  * such thing as a list of harmless things somebody else will not eventually add
  * to. ./warmup.test.ts asserts the seam records zero calls for this path.
  */
-function planWarmup(
+async function planWarmup(
   context: CommandContext,
   repoRoot: string,
   options: WarmupOptions,
   trunk: string,
   lane: string | null,
-): number {
+): Promise<number> {
   const steps: WarmupStep[] = [];
   const plan = (argv: readonly string[], note: string | null): void =>
     void steps.push({ kind: "git", argv: [GIT, ...argv], exitCode: null, durationMs: null, note });
@@ -674,7 +678,7 @@ function planWarmup(
   let exitCode = 0;
   if (lane !== null) {
     for (const verb of verificationVerbs(options.tests)) {
-      const delegated = delegate(context, repoRoot, verb, lane, true);
+      const delegated = await delegate(context, repoRoot, verb, lane, true);
       steps.push(...delegated.rows);
       if (delegated.refusal !== null) {
         context.io.err(`${PROGRAM} shu warmup: the declared '${verb}' verification refused: ${delegated.refusal}`);
@@ -705,13 +709,13 @@ function skippedVerification(repoRoot: string, branch: string, dryRun: boolean):
 }
 
 /** The real run. Every git call goes through one seam, in this order. */
-function performWarmup(
+async function performWarmup(
   context: CommandContext,
   repoRoot: string,
   options: WarmupOptions,
   trunk: string,
   earlyLane: string | null,
-): number {
+): Promise<number> {
   const git = gitRunner(context, repoRoot);
   const steps = git.steps;
   let lane = earlyLane;
@@ -1117,7 +1121,7 @@ function performWarmup(
 
   // ── 7. the verification, delegated ───────────────────────────────────────
   for (const verb of verificationVerbs(options.tests)) {
-    const delegated = delegate(context, repoRoot, verb, lane, false);
+    const delegated = await delegate(context, repoRoot, verb, lane, false);
     steps.push(...delegated.rows);
     if (delegated.refusal !== null) {
       context.io.err(`${PROGRAM} shu warmup: the declared '${verb}' verification refused: ${delegated.refusal}`);
