@@ -104,6 +104,26 @@ describe("findDevice, over JSON output", () => {
     expect(findDevice("Placeholder A", out).found).toBe(false);
     expect(findDevice("placeholder a pro", out).found).toBe(false);
   });
+
+  it("matches a name's typographic apostrophe EXACTLY -- U+2019, never U+0027", () => {
+    // macOS names a paired phone with ITS OWN curly apostrophe -- the same
+    // character autocorrect writes for a possessive, U+2019 RIGHT SINGLE
+    // QUOTATION MARK ("Sergio’s iPhone") -- never the straight U+0027 a
+    // keyboard's apostrophe key types. `findDevice` performs no Unicode
+    // normalisation anywhere in this file: `===` compares UTF-16 code units,
+    // so two characters that look identical on screen but carry different
+    // code points are two different strings to it, exactly as a name typed
+    // in the wrong CASE already is (the test above). A declaration written
+    // with the wrong apostrophe gets the SAME refusal as any other unmatched
+    // name -- "the phone is asleep or you renamed it" -- never a silent
+    // match a reader's eye could not have told apart on screen.
+    const curly = "Sergio’s iPhone";
+    const straight = "Sergio's iPhone";
+    expect(curly).not.toBe(straight); // the fixture states two DIFFERENT strings
+    const out = JSON.stringify([{ name: curly, udid: "U-1" }]);
+    expect(findDevice(curly, out)).toMatchObject({ found: true, id: "U-1" });
+    expect(findDevice(straight, out).found).toBe(false);
+  });
 });
 
 describe("findDevice, over plain output", () => {

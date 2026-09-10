@@ -990,7 +990,22 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   color: { subcommands: { status: RO("resolves a colour by the repository's own precedence") } },
-  commit: { subcommands: { format: RO("formats and validates a message; never runs git commit") } },
+  commit: {
+    subcommands: {
+      format: RO("formats and validates a message; never runs git commit"),
+      // READ-ONLY, WITH THE WHOLE OF WHAT IT DOES STATED. It reads
+      // `.nen/proof/<lane>.json` and hashes the working copy through git
+      // plumbing -- `git add -A` into a SCRATCH index it removes, then
+      // `git write-tree`. The repository's own index is not read or written, no
+      // ref moves, and no tracked file changes; the unreferenced objects git
+      // writes for file contents are what `git status` already writes, and gc
+      // collects them. Nothing a later reader observes as a change, which is
+      // what this table's read-only row means.
+      check: RO(
+        "reads a lane's build proof and hashes the working copy through git plumbing (a scratch index, never the repository's own); it writes no file, moves no ref and refuses no commit",
+      ),
+    },
+  },
   dev: { subcommands: { test: DEV_FORWARDING_CHECKER, lint: DEV_FORWARDING_CHECKER, replay: DEV_CHECKER } },
   effort: { subcommands: { classify: RO("classifies an effort -- pure computation") } },
   epic: { subcommands: { "next-wave": GATED(["--out"], "writes the rewritten body to --out") } },
@@ -1013,6 +1028,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // that provably sends nothing (../issue/command.ts prints the argv and
       // the exact bytes and returns before postComment).
       comment: DRY("posts a caller-supplied comment on GitHub unless --dry-run is given"),
+      // Dry-run-gated for the same reason 'attach-sub' below is: --dry-run
+      // STILL reads GitHub (to certify the number is an issue, not a pull
+      // request), but that read never writes -- the same "still reads GitHub"
+      // shape the shared --dry-run-discipline table already documents for
+      // this family's other two certifying verbs.
+      "edit-body": DRY("replaces an issue's body via gh issue edit --body-file unless --dry-run is given; --dry-run still reads GitHub to certify the number is an issue"),
       "attach-sub": DRY("attaches sub-issues unless --dry-run is given"),
       "consolidate-close": DRY("attaches and closes issues unless --dry-run is given"),
       "chain-position": RO("computes a chain position -- pure computation"),
@@ -1057,6 +1078,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
       "request-reviews": MUT("gh pr edit --add-reviewer"),
+      // Dry-run-gated, the same shape 'issue edit-body' carries: --dry-run
+      // still reads GitHub (repos/<t>/pulls/<n>, to certify the number IS a
+      // pull request) but that read never writes.
+      "edit-body": DRY("replaces a pull request's body via gh pr edit --body-file unless --dry-run is given; --dry-run still reads GitHub to certify the number is a pull request"),
     },
   },
   quality: {
@@ -1278,6 +1303,18 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       ),
     },
   },
+  surface: {
+    subcommands: {
+      // TWO-TOKEN KEYS, tried before a one-token one, exactly as `canon mirror
+      // generate|check` are: the two halves of this pair sit on opposite sides
+      // of the read/write line, and a family-wide row would have to take the
+      // pessimistic answer and lose the watchable half.
+      "mirror generate": DRY("writes and deletes mirror files under --out unless --dry-run is given"),
+      "mirror check": RO(
+        "regenerates the mirror in memory and diffs the committed one; unlike 'canon mirror check' it has no report-writing flag at all, so there is nothing to gate",
+      ),
+    },
+  },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
   wake: {
     subcommands: {
@@ -1291,7 +1328,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       until: RO("re-classifies its own --command against this very table before the first observation"),
     },
   },
-  wc: { subcommands: { classify: RO("classifies the working copy over git reads") } },
+  wc: {
+    subcommands: {
+      classify: RO("classifies the working copy over git reads"),
+      squash: MUT("resets the branch and commits -- git reset --soft plus git commit -F"),
+    },
+  },
 };
 
 // The three commands ../index.ts answers BEFORE the registry (its own header

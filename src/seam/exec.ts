@@ -40,6 +40,25 @@
 // optional for the reason every member here is: a seam nobody has to provide is a
 // seam a test can silently fall through to the real one on.
 //
+// AND A WATCHED PROCESS IS A THIRD SEAM, for the same reason the second one is
+// a seam at all. `run` hands back one buffer when the child is already over, so
+// a caller cannot ask "has this said anything in the last minute" -- the only
+// answer it ever has is "it is over, and here is everything". `runInteractive`
+// gives up the output entirely. Neither can carry a stall guard, which is
+// arithmetic over the INSTANTS output arrived at, so `runStreamed` is its own
+// member: the child's stdout and stderr reach the caller as they arrive, each
+// chunk carrying the millisecond it landed on, and a caller may ask to be
+// consulted on a fixed interval with the two numbers it would otherwise have to
+// keep itself. It answers a PROMISE, because there is no synchronous way to
+// watch a process that is still running.
+//
+// WHAT IT DOES NOT DO IS KILL ANYTHING. The watcher is consulted and its
+// verdict is honoured; nen never signals the child it started, on any path, at
+// any budget. What to do about a stalled process is the target repository's own
+// declared command (../shu/render.ts's `onStall`), spawned through `run` like
+// every other declared step, and this seam is only what makes the question
+// answerable.
+//
 // THE HOST PLATFORM IS A SEAM FOR THE SAME REASON THE CLOCK IS. `nen shu` refuses
 // a verb whose declaration allows only `darwin` when it is running on `linux`
 // (exit 3), and a test that read `process.platform` directly could only prove that
@@ -47,7 +66,7 @@
 // exits 3" and "msbuild on darwin exits 3" would each be provable on exactly one
 // of the three CI lanes, which is the same as not being provable at all.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants as osConstants } from "node:os";
 
 /** The two external tools this binary is allowed to know about (D16). */
@@ -106,10 +125,121 @@ export type InteractiveRunner = (
   options?: Omit<RunOptions, "stdin">,
 ) => InteractiveResult;
 
+/**
+ * One piece of a watched child's output, with the instant it arrived.
+ *
+ * A CHUNK IS NOT A LINE, and this seam does not pretend otherwise: a write can
+ * split a line in half and two writes can share one. Assembling lines is the
+ * caller's, which is also why nothing is EOL-normalized here -- a `\r\n` can
+ * straddle two chunks, and normalizing each half separately would leave the
+ * stray `\r` this repository's `normalizeEol` exists to remove. A caller that
+ * joins chunks and then normalizes complete lines gets the right answer on
+ * every host; one that normalized per chunk would not.
+ */
+export interface StreamedChunk {
+  readonly stream: "stdout" | "stderr";
+  readonly text: string;
+  /** Milliseconds since this child was started, by the seam's own clock. */
+  readonly atMs: number;
+}
+
+/**
+ * The two numbers a watcher decides on: how long the child has been running,
+ * and how long it has been silent.
+ *
+ * BOTH, NEVER ONE. A stall guard that acted on silence alone would kill a
+ * healthy compile that legitimately went quiet for a stretch early on, which is
+ * the exact mistake the operational canon this exists for calls out by name.
+ */
+export interface OutputWindow {
+  readonly elapsedMs: number;
+  readonly quietMs: number;
+}
+
+/**
+ * What a watcher answers.
+ *
+ *   * `watch`   -- nothing to do; ask me again next tick.
+ *   * `reset`   -- I have just done something about it; start the quiet window
+ *     again from now. (Not from the tick's own instant: whatever the watcher
+ *     did took time, and that time was not silence anybody should be judged on.)
+ *   * `stop`    -- stop asking. The child keeps running and is still waited
+ *     for; only the watching ends.
+ *   * `abandon` -- stop asking AND stop waiting. The child is left running,
+ *     untouched: nen releases its own hold on it (the pipes it was reading and
+ *     the reference keeping this process alive) and answers `code: null,
+ *     abandoned: true`. This is what "nen never kills what it started" costs on
+ *     the one path where waiting forever is the alternative -- a caller that has
+ *     spent every remedy the repository declared and is still being told
+ *     nothing. It hands the terminal back and says the process is still there.
+ */
+export type WatchVerdict = "watch" | "reset" | "stop" | "abandon";
+
+/** How often a watcher is consulted when the caller names no interval. */
+export const DEFAULT_POLL_MS = 5_000;
+
+export interface StreamedOptions extends Omit<RunOptions, "stdin"> {
+  /** Every chunk, as it arrives. Absent: the output is dropped. */
+  readonly onOutput?: (chunk: StreamedChunk) => void;
+  /**
+   * Consulted every `pollMs` while the child is alive. Absent: no timer is
+   * created at all, and this runner is a plain streaming spawn.
+   */
+  readonly onWindow?: (window: OutputWindow) => WatchVerdict;
+  readonly pollMs?: number;
+}
+
+/** What a watched child answers with. Its output went to `onOutput`. */
+export interface StreamedResult {
+  /**
+   * The child's own exit code (or 128 + the signal's number when killed), and
+   * `null` when this runner stopped waiting -- see `abandoned`. Never a
+   * sentinel: a caller must branch on the field that says what happened.
+   */
+  readonly code: number | null;
+  readonly signal: string | null;
+  /** Same meaning as CommandResult's: the binary could not be started at all. */
+  readonly spawnFailed: boolean;
+  /** True when the watcher answered `abandon` and the child was left running. */
+  readonly abandoned: boolean;
+  /** Wall time from spawn to close (or to being abandoned), by the seam's clock. */
+  readonly durationMs: number;
+}
+
+/**
+ * Run a child and WATCH it: output relayed as it arrives, each chunk stamped,
+ * and an optional watcher consulted on a fixed interval.
+ *
+ * It never kills what it started. See this file's header.
+ */
+export type StreamedRunner = (
+  command: string,
+  args: readonly string[],
+  options?: StreamedOptions,
+) => Promise<StreamedResult>;
+
+/**
+ * The window arithmetic, in the one place both runners read it from.
+ *
+ * IT IS SHARED RATHER THAN COPIED because ./scripted.ts replays a timeline
+ * against the same rule the real runner applies to a real clock -- and a stall
+ * guard tested against a second, hand-written copy of "elapsed" and "quiet"
+ * would be tested against a fixture's opinion rather than against the seam.
+ */
+export function outputWindow(
+  startedAtMs: number,
+  lastOutputAtMs: number,
+  atMs: number,
+): OutputWindow {
+  return { elapsedMs: atMs - startedAtMs, quietMs: atMs - lastOutputAtMs };
+}
+
 export interface Seams {
   readonly run: Runner;
   /** A long-running child, on this terminal. See InteractiveRunner. */
   readonly runInteractive: InteractiveRunner;
+  /** A watched child, whose output arrives stamped. See StreamedRunner. */
+  readonly runStreamed: StreamedRunner;
   /** The instant this invocation reasons about. Read once per verb, not per row. */
   readonly now: () => Date;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -206,18 +336,11 @@ export const spawnInteractiveRunner: InteractiveRunner = (
     }
     const signal = result.signal ?? null;
     return {
-      // `status` is null exactly when a signal killed the child. 128 + the
-      // signal number is the shell's own convention -- SIGINT is 2, so a
-      // SIGINT kill is 130 -- and `os.constants.signals` is where node exposes
-      // that number for every OTHER signal too, rather than this file hand-
-      // maintaining its own table. A signal name the current platform's
-      // `os.constants.signals` does not carry (there is no such name in
-      // practice, but the map is platform-built, not guaranteed exhaustive)
-      // falls back to the bare 128 instead of throwing: "it was killed" is
-      // still true even when nen cannot name the number.
-      code:
-        result.status ??
-        (signal === null ? 1 : 128 + (osConstants.signals[signal] ?? 0)),
+      // `exitCodeOf` below carries the convention -- SIGINT is 2, so a SIGINT
+      // kill is 130 -- and it is shared with the streamed runner rather than
+      // written twice: two copies of one rule are two rules the day either is
+      // touched.
+      code: exitCodeOf(result.status ?? null, signal),
       signal,
       spawnFailed: false,
     };
@@ -232,10 +355,129 @@ export const spawnInteractiveRunner: InteractiveRunner = (
   }
 };
 
+/**
+ * The signal-to-code convention, shared by the two runners that can see one.
+ *
+ * `status` is null exactly when a signal killed the child; 128 + the signal
+ * number is the shell's own convention, and `os.constants.signals` is where
+ * node exposes that number rather than this file hand-maintaining a table.
+ */
+// A signal name the current platform's `os.constants.signals` does not carry
+// (there is no such name in practice, but the map is platform-built and not
+// guaranteed exhaustive) falls back to the bare 128 rather than throwing: "it
+// was killed" is still true even when nen cannot name the number.
+function exitCodeOf(status: number | null, signal: NodeJS.Signals | null): number {
+  if (status !== null) return status;
+  /* c8 ignore next -- a child that reports neither a code nor a signal */
+  if (signal === null) return 1;
+  return 128 + (osConstants.signals[signal] ?? 0);
+}
+
+/**
+ * The watched runner. Output is relayed as it arrives; nothing is buffered for
+ * a caller to read afterwards, because a caller that wanted the whole buffer
+ * wanted `run`.
+ *
+ * THE TIMER IS CREATED ONLY WHEN SOMEBODY IS WATCHING. A streamed run with no
+ * `onWindow` is a plain spawn with its output relayed, and creating an interval
+ * nobody reads would keep this process's event loop busy for the length of a
+ * build to call a function that does not exist.
+ *
+ * NOTHING HERE SIGNALS THE CHILD, on any path. A watcher that answers `stop` is
+ * answered by ending the WATCHING; the child runs to its own end and is waited
+ * for, and the result is its own exit code. See this file's header for why that
+ * rule is the seam's and not the caller's.
+ */
+export const spawnStreamedRunner: StreamedRunner = (command, args, options = {}) =>
+  new Promise<StreamedResult>((resolve): void => {
+    const startedAt = Date.now();
+    const child = spawn(command, [...args], {
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options.env === undefined
+        ? {}
+        : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let lastOutputAt = startedAt;
+    let timer: NodeJS.Timeout | null = null;
+    const stopWatching = (): void => {
+      if (timer === null) return;
+      clearInterval(timer);
+      timer = null;
+    };
+    const relay =
+      (stream: StreamedChunk["stream"]) =>
+      (data: Buffer | string): void => {
+        const at = Date.now();
+        lastOutputAt = at;
+        options.onOutput?.({ stream, text: data.toString(), atMs: at - startedAt });
+      };
+    child.stdout?.on("data", relay("stdout"));
+    child.stderr?.on("data", relay("stderr"));
+
+    const onWindow = options.onWindow;
+    if (onWindow !== undefined) {
+      timer = setInterval((): void => {
+        const verdict = onWindow(outputWindow(startedAt, lastOutputAt, Date.now()));
+        // AFTER the watcher returned, not at the tick it was asked on: whatever
+        // it did (spawning a declared remedy, say) took time, and counting that
+        // time as silence would fire the next verdict early.
+        if (verdict === "reset") lastOutputAt = Date.now();
+        if (verdict === "stop") stopWatching();
+        if (verdict === "abandon") {
+          stopWatching();
+          // LET GO, DO NOT KILL. `unref` drops the reference that keeps this
+          // process alive for the child's sake and destroying the two pipes
+          // drops the reads that would keep it alive for the OUTPUT's; the
+          // child itself is untouched and keeps running with no parent
+          // listening. `child.kill()` is what this repository will not do.
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.unref();
+          resolve({
+            code: null,
+            signal: null,
+            spawnFailed: false,
+            abandoned: true,
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      }, options.pollMs ?? DEFAULT_POLL_MS);
+    }
+
+    child.on("error", (error: Error): void => {
+      stopWatching();
+      options.onOutput?.({ stream: "stderr", text: error.message, atMs: Date.now() - startedAt });
+      resolve({
+        code: -1,
+        signal: null,
+        spawnFailed: true,
+        abandoned: false,
+        durationMs: Date.now() - startedAt,
+      });
+    });
+    // `close` RATHER THAN `exit`: `exit` fires when the process ends and `close`
+    // when its pipes are drained, and a caller told the run was over while a
+    // last chunk was still in flight would report a build's final line after its
+    // own report.
+    child.on("close", (status: number | null, signal: NodeJS.Signals | null): void => {
+      stopWatching();
+      resolve({
+        code: exitCodeOf(status, signal),
+        signal,
+        spawnFailed: false,
+        abandoned: false,
+        durationMs: Date.now() - startedAt,
+      });
+    });
+  });
+
 export function defaultSeams(): Seams {
   return {
     run: spawnRunner,
     runInteractive: spawnInteractiveRunner,
+    runStreamed: spawnStreamedRunner,
     now: (): Date => new Date(),
     env: process.env,
     platform: process.platform,

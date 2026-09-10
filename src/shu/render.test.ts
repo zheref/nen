@@ -78,7 +78,7 @@ describe("renderInvocation", () => {
 
   it("renders a single-command verb as one step, exe apart from argv", () => {
     const rendered = renderInvocation(project(), request);
-    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"] }]);
+    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"], stall: null }]);
     expect(rendered.lane).toBe("one");
     expect(rendered.stack).toBe("stack-a");
     expect(rendered.cwdRelative).toBe(".");
@@ -276,14 +276,16 @@ describe("resolveTarget", () => {
   it("appends the target's args to the declared argv, in the declared order", () => {
     const block = deployable({ prod: { args: ["--env", "production"] } });
     const resolved = resolveTarget(block, plan(block), "prod");
-    expect(resolved.steps).toEqual([{ exe: "tool", argv: ["publish", "--env", "production"] }]);
+    expect(resolved.steps).toEqual([
+      { exe: "tool", argv: ["publish", "--env", "production"], stall: null },
+    ]);
     expect(resolved.target).toEqual({ name: "prod", args: ["--env", "production"], requiresEnv: [] });
   });
 
   it("leaves the argv alone for a name-only target -- naming it is the requirement", () => {
     const block = deployable({ prod: {} });
     expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish"] },
+      { exe: "tool", argv: ["publish"], stall: null },
     ]);
   });
 
@@ -381,7 +383,7 @@ describe("resolveTarget", () => {
     // it does in a lane's argv.
     const ordinary = deployable({ prod: { args: ["--define={\"NODE_ENV\":\"production\"}"] } });
     expect(resolveTarget(ordinary, plan(ordinary), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish", "--define={\"NODE_ENV\":\"production\"}"] },
+      { exe: "tool", argv: ["publish", "--define={\"NODE_ENV\":\"production\"}"], stall: null },
     ]);
   });
 
@@ -460,7 +462,7 @@ describe("resolveTarget", () => {
     // with one step does not ask anyone to guess.
     const block = deployable({ prod: { args: ["--prod"] } }, { steps: [{ exe: "tool", argv: ["publish"] }] });
     expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish", "--prod"] },
+      { exe: "tool", argv: ["publish", "--prod"], stall: null },
     ]);
   });
 
@@ -508,7 +510,7 @@ describe("resolveTarget", () => {
     // And the plan it was handed is untouched: a target is resolved ONTO a
     // plan, not INTO one.
     expect(before.target).toBeNull();
-    expect(before.steps).toEqual([{ exe: "tool", argv: ["publish"] }]);
+    expect(before.steps).toEqual([{ exe: "tool", argv: ["publish"], stall: null }]);
   });
 });
 

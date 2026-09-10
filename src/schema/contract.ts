@@ -164,17 +164,63 @@ export interface Lane {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * `stall` -- what nen does about a step that stops making progress, in the
+ * repository's own words.
+ *
+ * NEN NEVER KNOWS WHAT TO KILL, AND THIS BLOCK IS WHY IT DOES NOT HAVE TO.
+ * Some toolchains hang: a compiler process wedges, the build stops emitting
+ * anything and never finishes, and the fix is to kill the wedged GRANDCHILD and
+ * let the build respawn it. Which process that is, and how it is named, is
+ * knowledge about a toolchain -- exactly the knowledge ../shu/run.ts and
+ * ../shu/render.ts are forbidden to carry. So the repository declares the
+ * remedy as an ordinary argv (`onStall`), nen runs it through the same seam
+ * every other declared step goes through, and nen's own contribution is the two
+ * numbers that decide WHEN.
+ *
+ * BOTH BUDGETS, NEVER ONE, and that is the whole discipline of the thing: a
+ * guard that acted on silence alone would fire at a healthy build that
+ * legitimately went quiet early on. `elapsedMs` is how long the step has been
+ * running; `quietMs` is how long it has produced no output; the remedy runs only
+ * once BOTH are past. Both are required and both are positive integers -- a
+ * default for either would be nen deciding what "too long" means for somebody
+ * else's build.
+ *
+ * `maxStrikes` IS HOW MANY TIMES THE REMEDY MAY RUN, defaulting to 2, because a
+ * guard with no ceiling is a loop. Nen never kills the child it started, at any
+ * strike count: see ../shu/run.ts.
+ */
+export interface StallGuard {
+  readonly elapsedMs: number;
+  readonly quietMs: number;
+  /** The repository's own remedy. Argv, never a string: there is no shell. */
+  readonly onStall: { readonly exe: string; readonly argv: readonly string[] };
+  readonly maxStrikes: number;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/** One step of a `steps` invocation, with its own optional stall guard. */
+export interface InvocationStep {
+  readonly exe: string;
+  readonly argv: readonly string[];
+  /** This step's own guard, or null -- the invocation's applies otherwise. */
+  readonly stall: StallGuard | null;
+}
+
 export type Invocation =
   | {
       readonly kind: "command";
       readonly exe: string;
       readonly argv: readonly string[];
+      readonly stall: StallGuard | null;
       readonly why: string | null;
       readonly raw: Readonly<Record<string, unknown>>;
     }
   | {
       readonly kind: "steps";
-      readonly steps: readonly { readonly exe: string; readonly argv: readonly string[] }[];
+      readonly steps: readonly InvocationStep[];
+      /** The guard every step of this invocation runs under, or null. */
+      readonly stall: StallGuard | null;
       readonly why: string | null;
       readonly raw: Readonly<Record<string, unknown>>;
     }
@@ -616,6 +662,71 @@ function requireDeclaredLane(
   );
 }
 
+/** The keys a `stall` block reads. Everything else there is a near-miss risk. */
+const STALL_KEYS: readonly string[] = ["elapsedMs", "quietMs", "onStall", "maxStrikes"];
+
+/** How many times a declared remedy may run when the declaration says nothing. */
+export const DEFAULT_MAX_STRIKES = 2;
+
+/**
+ * A positive whole number of milliseconds, or a refusal by pointer.
+ *
+ * ZERO IS REFUSED ALONG WITH THE NEGATIVES, and it is the one worth stating: a
+ * `quietMs` of 0 is a guard that fires on the first tick of every build, and a
+ * `elapsedMs` of 0 removes the half of the rule that tells a hung compile apart
+ * from a quiet one. A budget that cannot mean what it says is a defect in the
+ * declaration, not a number to round up.
+ */
+function requirePositiveInteger(
+  path: string,
+  pointer: string,
+  value: unknown,
+  unit: string,
+): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `expected a POSITIVE whole number of ${unit}, got ${describeValue(value)}. A stall budget nen could not act on -- zero, a fraction, a negative, a string -- is a declaration nen refuses rather than rounds`,
+    );
+  }
+  return value;
+}
+
+/**
+ * `stall`, wherever an invocation or one of its steps declares one.
+ *
+ * VALIDATED AT LOAD, BY POINTER, rather than where it is acted on: a budget
+ * this loader let through is a budget nen would discover it could not read
+ * halfway into somebody's build, with a child already running.
+ */
+export function parseStall(path: string, pointer: string, value: unknown): StallGuard | null {
+  if (value === undefined || value === null) return null;
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(
+    path,
+    pointer,
+    raw,
+    STALL_KEYS,
+    "A stall guard",
+    (meant): string => `the step would run with '${meant}' silently unset`,
+  );
+  return {
+    elapsedMs: requirePositiveInteger(path, `${pointer}.elapsedMs`, raw["elapsedMs"], "milliseconds"),
+    quietMs: requirePositiveInteger(path, `${pointer}.quietMs`, raw["quietMs"], "milliseconds"),
+    // AN ARGV INVOCATION, EXACTLY LIKE EVERY OTHER DECLARED STEP -- `{exe,
+    // argv}`, parsed by the same reader, so a remedy written as a string
+    // ("pkill -9 …") is refused with the same sentence a verb's argv would get.
+    // Nen has no shell to hand it to.
+    onStall: parseStep(path, `${pointer}.onStall`, raw["onStall"]),
+    maxStrikes:
+      raw["maxStrikes"] === undefined || raw["maxStrikes"] === null
+        ? DEFAULT_MAX_STRIKES
+        : requirePositiveInteger(path, `${pointer}.maxStrikes`, raw["maxStrikes"], "runs"),
+    raw,
+  };
+}
+
 export function parseInvocation(path: string, pointer: string, value: unknown): Invocation {
   const raw = requireRecord(path, pointer, value);
   const hasUnsupported = raw["unsupported"] !== undefined;
@@ -657,14 +768,20 @@ export function parseInvocation(path: string, pointer: string, value: unknown): 
     }
     return {
       kind: "steps",
-      steps: steps.map((step, index): { exe: string; argv: readonly string[] } => {
+      steps: steps.map((step, index): InvocationStep => {
         const at = `${pointer}.steps[${index}]`;
         const record = requireRecord(path, at, step);
         return {
           exe: requireString(path, `${at}.exe`, record["exe"]),
           argv: requireArgv(path, `${at}.argv`, record["argv"]),
+          // A STEP MAY CARRY ITS OWN GUARD, and the invocation's applies to the
+          // ones that do not. A multi-step row is routinely one slow compile
+          // and three fast bookkeeping commands, and giving the fast ones the
+          // compile's budget would be declaring a guard that can never fire.
+          stall: parseStall(path, `${at}.stall`, record["stall"]),
         };
       }),
+      stall: parseStall(path, `${pointer}.stall`, raw["stall"]),
       why,
       raw,
     };
@@ -673,6 +790,7 @@ export function parseInvocation(path: string, pointer: string, value: unknown): 
     kind: "command",
     exe: requireString(path, `${pointer}.exe`, raw["exe"]),
     argv: requireArgv(path, `${pointer}.argv`, raw["argv"]),
+    stall: parseStall(path, `${pointer}.stall`, raw["stall"]),
     why,
     raw,
   };
