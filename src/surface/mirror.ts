@@ -44,7 +44,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { hasValue, renderFrontmatter, splitDocument } from "./frontmatter.js";
+import { hasValue, inlineValue, renderFrontmatter, splitDocument } from "./frontmatter.js";
 import { invocationFor, type SurfaceRow } from "./rules.js";
 
 /** A refusal this module raises; the command layer turns it into exit 2. */
@@ -153,7 +153,7 @@ export function readSourceAgents(agentsDir: string): readonly SourceAgent[] {
     const text = readFileSync(file, "utf8");
     const stem = entry.slice(0, -".md".length);
     const named = splitDocument(text).entries.find((candidate): boolean => candidate.key === "name");
-    const inline = named === undefined ? "" : (named.lines[0] ?? "").slice("name:".length).trim();
+    const inline = named === undefined ? "" : inlineValue(named);
     agents.push({ stem, name: inline === "" ? stem : inline, relative: entry, text });
   }
   return agents;
