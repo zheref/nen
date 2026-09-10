@@ -84,6 +84,52 @@ function shippedFiles(dir: string, found: string[] = []): string[] {
   return found;
 }
 
+// The keywords a VALUE may follow, so a `/` after one opens a regex rather than
+// dividing by something.
+//
+// Asking only whether the previous CHARACTER is an identifier character gets
+// `return /HTTP (404|410)\b/.test(stderr)` (src/issue/subissue.ts) wrong -- the
+// character before that `/` is the `n` of `return`, so the scanner called it
+// division and read the regex body as code. Harmless for that particular
+// regex, which carries no quote; not harmless for the next one that does, which
+// is the whole failure this scanner is being fixed for (found in review of the
+// pull request that fixed it). So the question is asked of the previous TOKEN.
+const VALUE_KEYWORDS: ReadonlySet<string> = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+]);
+
+// Whether a `/` at `at` sits where a VALUE may begin -- i.e. opens a regex
+// literal rather than dividing.
+//
+// A `)`, a `]` or a digit before it is division, always. An identifier before it
+// is division UNLESS that identifier is one of the keywords above, which is the
+// case a character-level test cannot see. `if (x) /re/.test(y)` is the one shape
+// still read as division, stated rather than hidden: it is rare, and the
+// spanning-quote guard below catches the consequence if it ever appears.
+function opensValue(source: string, at: number, previousSignificant: string): boolean {
+  if (previousSignificant === "") return true;
+  if (!/[A-Za-z0-9_$)\]]/.test(previousSignificant)) return true;
+  if (!/[A-Za-z_$]/.test(previousSignificant)) return false;
+  let index = at - 1;
+  while (index >= 0 && /\s/.test(source[index] ?? "")) index -= 1;
+  const end = index;
+  while (index >= 0 && /[A-Za-z0-9_$]/.test(source[index] ?? "")) index -= 1;
+  return VALUE_KEYWORDS.has(source.slice(index + 1, end + 1));
+}
+
 // Where a regex literal ENDS, starting at the `/` that opens it, or -1 when the
 // text from there is not one.
 //
@@ -130,10 +176,12 @@ function regexLiteralEnd(source: string, start: number): number {
 //
 //   * A regex containing a QUOTE character -- `/["']/`, the shape any CSV or
 //     TSV splitter is written with -- was read as an opening quote. A `/` opens
-//     a regex only where a VALUE may begin: never straight after an identifier,
-//     a number, a `)` or a `]`, the four things a division sign follows. That is
-//     the standard disambiguation and it is decidable without parsing; a `/`
-//     that opens nothing terminable on its own line is division too.
+//     a regex only where a VALUE may begin: never after a number, a `)`, a `]`
+//     or an identifier -- unless that identifier is a KEYWORD a value may follow
+//     (`return /re/`, `typeof`, `case`, `yield`, ...), which is why the question
+//     is asked of the previous TOKEN and not the previous character. That is the
+//     standard disambiguation and it is decidable without parsing; a `/` that
+//     opens nothing terminable on its own line is division too.
 //   * A `${...}` substitution holds ORDINARY CODE, and that code can open
 //     another template literal -- arbitrarily deep. Read flat, the inner
 //     template's opening backtick closes the OUTER one, and everything after it
@@ -269,7 +317,7 @@ export function scanSource(source: string): Scan {
       continue;
     }
 
-    if (char === "/" && !/[A-Za-z0-9_$)\]]/.test(previousSignificant)) {
+    if (char === "/" && opensValue(source, index, previousSignificant)) {
       const end = regexLiteralEnd(source, index);
       if (end !== -1) {
         // Emitted VERBATIM: a regex literal is executable code and its own
@@ -824,6 +872,21 @@ describe("stripComments", () => {
     const scan = scanSource("const half = total / 2;\nconst rest = items[0] / 3;\n");
     expect(scan.code).toContain("total / 2");
     expect(scan.code).toContain("items[0] / 3");
+  });
+
+  it("reads a regex after a KEYWORD, where a character-level test says division", () => {
+    // `return /HTTP (404|410)\b/.test(stderr)` is real shipped code
+    // (src/issue/subissue.ts). The character before its `/` is the `n` of
+    // `return`, so asking the previous CHARACTER calls it division and reads
+    // the regex body as code -- harmless for that one, which carries no quote,
+    // and the exact silent swallow this file exists to prevent for the next one
+    // that does.
+    for (const keyword of ["return", "typeof", "case", "yield", "await", "throw", "in", "of"]) {
+      const scan = scanSource(`${keyword} /["']/;\nconst a = "sasuke";\n`);
+      expect(scan.spanningQuotes, keyword).toEqual([]);
+      expect(scan.unterminated, keyword).toBeNull();
+      expect(scan.code, keyword).toContain('"sasuke"');
+    }
   });
 
   it("follows a template literal into its `${...}` and back out", () => {
