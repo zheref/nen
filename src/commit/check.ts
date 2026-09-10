@@ -28,7 +28,13 @@
 import { emit, requireRepoFlag, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { workingTreeHash } from "../repo/tree.js";
-import { proofRelativePath, readProof, type BuildProof } from "../shu/proof.js";
+import {
+  PROOF_CONTRACT,
+  PROOF_VERB,
+  proofRelativePath,
+  readProof,
+  type BuildProof,
+} from "../shu/proof.js";
 
 /** `nen.commit.check/v0.1` -- KEY ORDER IS THE CONTRACT; ./check.test.ts pins it. */
 export const CHECK_CONTRACT = "nen.commit.check/v0.1";
@@ -57,6 +63,23 @@ export interface ProofCheckReport {
  * has to know it has two hashes, and a file whose `treeHash` is a number would
  * otherwise compare unequal and be reported as a moved tree -- the wrong
  * difference, and the one a caller would act on by rebuilding forever.
+ *
+ * THE VALUES ARE CHECKED AND NOT ONLY THE TYPES, which is the difference
+ * between "this parses" and "this is a proof THIS release can answer from".
+ * Three of them decide a verdict rather than describe one:
+ *
+ *   * `contract` -- a document of another version is a document whose fields
+ *     may mean something else. Nen reads the one contract it wrote, refuses
+ *     any other by name, and does not guess forward or backward.
+ *   * `verb` and `exitCode` -- the file asserts, in itself, that a GREEN BUILD
+ *     produced it. `nen shu build` only ever writes `build` and `0`, so any
+ *     other pair reached this file by hand, and honouring it would let an
+ *     edited line turn a red build into a green verdict.
+ *   * an empty `lane` or `treeHash` -- a hash that is the empty string
+ *     compares unequal to every real tree, so it would be reported as a moved
+ *     tree forever: a damaged file wearing a legitimate difference's clothes.
+ *
+ * `at` is described rather than decided on and is only checked for its type.
  */
 function narrow(document: unknown): { proof: BuildProof | null; wrong: string | null } {
   if (document === null) return { proof: null, wrong: null };
@@ -72,17 +95,33 @@ function narrow(document: unknown): { proof: BuildProof | null; wrong: string | 
   if (typeof raw["exitCode"] !== "number") {
     return { proof: null, wrong: "its 'exitCode' is not a number" };
   }
-  return {
-    proof: {
-      contract: raw["contract"] as string,
-      lane: raw["lane"] as string,
-      verb: raw["verb"] as string,
-      treeHash: raw["treeHash"] as string,
-      at: raw["at"] as string,
-      exitCode: raw["exitCode"] as number,
-    },
-    wrong: null,
+  const proof: BuildProof = {
+    contract: raw["contract"] as string,
+    lane: raw["lane"] as string,
+    verb: raw["verb"] as string,
+    treeHash: raw["treeHash"] as string,
+    at: raw["at"] as string,
+    exitCode: raw["exitCode"] as number,
   };
+  if (proof.contract !== PROOF_CONTRACT) {
+    return {
+      proof: null,
+      wrong: `its contract is '${proof.contract}' and this release reads '${PROOF_CONTRACT}'`,
+    };
+  }
+  if (proof.verb !== PROOF_VERB || proof.exitCode !== 0) {
+    return {
+      proof: null,
+      wrong: `it records '${proof.verb}' at exit ${proof.exitCode}, and a build proof is only ever '${PROOF_VERB}' at exit 0 -- nen writes no other, so this one was edited`,
+    };
+  }
+  for (const [field, value] of [
+    ["lane", proof.lane],
+    ["treeHash", proof.treeHash],
+  ] as const) {
+    if (value.trim() === "") return { proof: null, wrong: `its '${field}' is empty` };
+  }
+  return { proof, wrong: null };
 }
 
 /**

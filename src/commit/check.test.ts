@@ -149,6 +149,30 @@ describe("nen commit check --require-proof", () => {
     expect(wrongShape.err.join("\n")).toContain("its 'treeHash' is not a string");
   });
 
+  it("refuses a proof whose VALUES say it is not one, not only whose types are wrong", async () => {
+    // A file that parses is not a file this release can answer from. Each of
+    // these decides a verdict rather than describing one: another contract may
+    // mean something else by the same fields, and `verb`/`exitCode` are the
+    // file's own assertion that a GREEN BUILD produced it -- nen writes no
+    // other pair, so any other reached the disk by hand.
+    const other = await check(["check", "--require-proof", "web"], {
+      proof: { contract: "nen.shu.proof/v9.9" } as Proof,
+    });
+    expect(other.code).toBe(1);
+    expect(other.err.join("\n")).toContain("this release reads 'nen.shu.proof/v0.1'");
+
+    const red = await check(["check", "--require-proof", "web"], { proof: { exitCode: 1 } as Proof });
+    expect(red.code).toBe(1);
+    expect(red.err.join("\n")).toContain("a build proof is only ever 'build' at exit 0");
+
+    // An empty hash compares unequal to every real tree, so left alone it would
+    // be reported as a moved tree forever -- a damaged file wearing a
+    // legitimate difference's clothes.
+    const empty = await check(["check", "--require-proof", "web"], { proof: { treeHash: "" } as Proof });
+    expect(empty.code).toBe(1);
+    expect(empty.err.join("\n")).toContain("its 'treeHash' is empty");
+  });
+
   it("hashes the tree exactly as the build did -- same calls, same exclusion", async () => {
     const run = await check(["check", "--require-proof", "web"]);
     expect(run.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([

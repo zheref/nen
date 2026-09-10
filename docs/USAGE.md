@@ -3602,6 +3602,8 @@ nen commit check --repo <path> --require-proof <lane> [--json]
 | `1` | one of the three differences, **named**: there is no proof (which is also what a red build since the last green one looks like), it records a different lane, or the tree has moved since the build. Not 2: the invocation was correct and the answer is a fact about the repository |
 | `2` | `--require-proof` or `--repo` missing, a lane that escapes the tree, a flag this subcommand does not read, or a proof file that is present and is not valid JSON -- nen will not read a damaged proof as a missing one |
 
+A proof is checked for its **values** and not only its field types: another `contract` may mean something else by the same fields, and `verb`/`exitCode` are the file's own assertion that a **green build** produced it (nen writes no pair but `build`/`0`, so any other reached the disk by hand). Each is exit 1 saying which, rather than a verdict computed from a document nen cannot stand behind.
+
 **It reports and blocks nothing.** No commit is refused, no file is written, no
 ref moves. Read the code and decide, as with
 [`shu coverage --threshold`](#nen-shu-coverage)'s `met`.

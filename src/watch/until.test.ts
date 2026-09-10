@@ -14,7 +14,7 @@ class QueueSeams implements Seams {
     throw new Error("watch until never spawns an interactive child -- it observes");
   };
   runStreamed: Seams["runStreamed"] = (): never => {
-    throw new Error("watch until never spawns an watched child -- it observes");
+    throw new Error("watch until never spawns a watched child -- it observes");
   };
   constructor(queue: readonly CommandResult[]) {
     this.queue = [...queue];
