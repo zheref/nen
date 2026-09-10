@@ -39,7 +39,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Fixed
 
-- **effort** — `nen effort classify --help` names **every** value the verb can return. It described itself as "senkei §3's five-class taxonomy", listed six names, and returned seven: `undecidable` — reachable from an entry with no stage label, no mode label, no PR and no live integration branch — appeared in neither the count nor the list, so a caller reading only `--help` had no signal it existed at all (closes #53).
+- **effort** — `nen effort classify --help` names **every** value the verb can return. It described itself as "senkei §3's five-class taxonomy", listed six names, and returned seven: `undecidable` — reachable from an entry with no stage label, no mode label, no PR and no live integration branch — appeared in neither the count nor the list, so a caller reading only `--help` had no signal it existed at all (closes [#53](https://github.com/zheref/nen/issues/53), [#186](https://github.com/zheref/nen/pull/186)).
 
   The taxonomy is still five, and that is the point rather than a hedge: `delivering, building, stalled, queued, idle` are senkei's classes, while `state-machine-violation` and `undecidable` are answers ABOUT the taxonomy rather than members of it — the first says two stage labels contradict each other, the second that nothing here places the object anywhere. The help now says both halves, names all seven, and states that a caller switching on the class must handle the two; `docs/USAGE.md` drops the note that had been carrying this gap as prose since it was found.
 
