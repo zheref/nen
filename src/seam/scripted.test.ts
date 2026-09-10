@@ -99,6 +99,141 @@ describe("ScriptedSeams", () => {
     expect(new ScriptedSeams([]).platform).toBe(process.platform);
     expect(new ScriptedSeams([], { platform: "win32" }).platform).toBe("win32");
   });
+
+  // ── the watched seam, on a clock the test owns ────────────────────────────
+  //
+  // THE POINT OF THE TIMELINE IS THAT NOTHING SLEEPS. A three-minute budget and
+  // a one-minute quiet window are two numbers; replaying them costs no
+  // milliseconds, and a stall guard proved this way is proved against the same
+  // `outputWindow` the real runner uses rather than against a fixture's own
+  // opinion of what "quiet" means.
+  describe("runStreamed", () => {
+    it("replays chunks with their instants and answers the scripted code", async () => {
+      const seams = new ScriptedSeams([
+        {
+          match: "tool build",
+          result: {
+            code: 0,
+            stream: {
+              events: [
+                { atMs: 10, stream: "stdout", text: "compiling\n" },
+                { atMs: 20, stream: "stderr", text: "a warning\n" },
+              ],
+              exitAtMs: 30,
+            },
+          },
+        },
+      ]);
+      const seen: string[] = [];
+      const result = await seams.runStreamed("tool", ["build"], {
+        onOutput: (chunk): void => void seen.push(`${chunk.atMs}:${chunk.stream}:${chunk.text.trim()}`),
+      });
+      expect(seen).toEqual(["10:stdout:compiling", "20:stderr:a warning"]);
+      expect(result).toEqual({
+        code: 0,
+        signal: null,
+        spawnFailed: false,
+        abandoned: false,
+        durationMs: 30,
+      });
+      expect(seams.calls).toEqual([
+        {
+          command: "tool",
+          args: ["build"],
+          interactive: false,
+          streamed: true,
+          cwd: null,
+          env: null,
+        },
+      ]);
+    });
+
+    it("computes elapsed and quiet from the timeline, and honours 'reset'", async () => {
+      const seams = new ScriptedSeams([
+        {
+          match: "tool build",
+          result: {
+            code: 0,
+            stream: {
+              events: [
+                { atMs: 100, stream: "stdout", text: "a line\n" },
+                { atMs: 200 },
+                { atMs: 400 },
+                { atMs: 500 },
+              ],
+            },
+          },
+        },
+      ]);
+      const windows: string[] = [];
+      await seams.runStreamed("tool", ["build"], {
+        onWindow: (window): "watch" | "reset" => {
+          windows.push(`${window.elapsedMs}/${window.quietMs}`);
+          // The second tick answers `reset`, so the third measures its quiet
+          // from THAT tick rather than from the last real output.
+          return windows.length === 2 ? "reset" : "watch";
+        },
+      });
+      expect(windows).toEqual(["200/100", "400/300", "500/100"]);
+    });
+
+    it("stops consulting after 'stop' but plays the child out", async () => {
+      const seams = new ScriptedSeams([
+        {
+          match: "tool build",
+          result: { code: 7, stream: { events: [{ atMs: 10 }, { atMs: 20 }], exitAtMs: 50 } },
+        },
+      ]);
+      let asked = 0;
+      const result = await seams.runStreamed("tool", ["build"], {
+        onWindow: (): "stop" => {
+          asked += 1;
+          return "stop";
+        },
+      });
+      expect(asked).toBe(1);
+      expect(result.code).toBe(7);
+      expect(result.abandoned).toBe(false);
+    });
+
+    it("stops the timeline dead on 'abandon', with no code to report", async () => {
+      const seams = new ScriptedSeams([
+        {
+          match: "tool build",
+          result: { code: 0, stream: { events: [{ atMs: 10 }, { atMs: 999 }], exitAtMs: 1000 } },
+        },
+      ]);
+      const result = await seams.runStreamed("tool", ["build"], {
+        onWindow: (): "abandon" => "abandon",
+      });
+      expect(result).toEqual({
+        code: null,
+        signal: null,
+        spawnFailed: false,
+        abandoned: true,
+        durationMs: 10,
+      });
+    });
+
+    it("answers an entry with no timeline as one chunk and an immediate exit", async () => {
+      const seams = new ScriptedSeams([
+        { match: "tool build", result: { code: 0, stdout: "done\n" } },
+      ]);
+      const seen: string[] = [];
+      const result = await seams.runStreamed("tool", ["build"], {
+        onOutput: (chunk): void => void seen.push(chunk.text),
+      });
+      expect(seen).toEqual(["done\n"]);
+      expect(result.durationMs).toBe(0);
+    });
+
+    it("throws on an unscripted watched call, naming which seam it was", async () => {
+      const seams = new ScriptedSeams([]);
+      await expect(seams.runStreamed("tool", ["build"])).rejects.toThrow(
+        /unscripted streamed subprocess: 'tool build'/,
+      );
+    });
+  });
 });
 
 describe("the recorded port probe", () => {

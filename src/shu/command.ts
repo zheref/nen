@@ -1061,35 +1061,20 @@ export const shuCommand: Command = {
   summary: "Stack-aware developer verbs, from the target repo's own declaration.",
   usage: USAGE,
   flags: SHU_FLAGS,
-  // THREE VERBS ANSWER SYNCHRONOUSLY AND THE REST ANSWER WITH A PROMISE, which
-  // is exactly what ../cli/command.ts types `run` as and what ../index.ts's
-  // `runFamily` awaits either way.
-  //
-  // THE SPLIT IS NOT A STYLE CHOICE. One precondition kind reaches the network
-  // -- a `port` row is asserted by opening a TCP connection to loopback
-  // (../seam/exec.ts's `probePort`), and node offers no synchronous way to ask
-  // -- so every verb that goes through ./run.ts's executor is async. `detect`,
-  // `tools` and `evidence` do not go through it, and one caller depends on
-  // that: ../scaffold/command.ts calls THIS dispatcher for `shu tools` from
-  // inside a synchronous report builder and refuses an answer it cannot read.
-  // Making all fifteen async to keep the shape uniform would have broken
-  // `nen scaffold init` for a reason no reader of either file could see.
+  // NOT AN `async` FUNCTION, AND THAT IS DELIBERATE. Three of the fifteen verbs
+  // -- `detect`, `tools`, `evidence` -- spawn nothing that has to be WATCHED and
+  // stay synchronous under the hood, and one of them is called from another
+  // family: ../scaffold/command.ts runs `shu tools` through this very
+  // dispatcher and checks that what comes back is a number. Making the whole
+  // method async would have turned that check into a permanent failure for a
+  // verb whose behaviour did not change. So the synchronous verbs return
+  // numbers and the executing ones return the promise ../shu/run.ts now
+  // answers with (../cli/command.ts's `run` is typed for exactly this), with
+  // one refusal mapping shared by both paths.
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("shu", context.args, SHU_SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);
     const repoRoot = resolveRepoRoot({ repoFlag: context.repoFlag });
-    // ONE MAPPING, TWO PATHS. This family's own codes (3/4/5) are returned
-    // rather than thrown past ../index.ts's runFamily -- which maps every error
-    // it does not know to 1 or 2, correctly, for every family that has only
-    // those -- and a refusal raised inside a promise must land in the same
-    // place as one raised before it.
-    const refused = (error: unknown): number => {
-      if (error instanceof ShuRefusal) {
-        context.io.err(`${PROGRAM} shu ${subcommand}: ${error.message}`);
-        return error.code;
-      }
-      throw error;
-    };
 
     try {
       if (subcommand === "detect") return runDetect(context, repoRoot);
@@ -1114,97 +1099,110 @@ export const shuCommand: Command = {
         );
       }
 
-      return executeSubcommand(context, repoRoot, subcommand).catch(refused);
+      if (subcommand === "coverage") {
+        // THE JOIN, exactly as `tools` above and for the same rule: the
+        // advisory catalogue values are read HERE -- this file imports no seam
+        // -- and handed across as strings that can only land in a message.
+        // ../profiles/inertness.test.ts is what keeps that a property of the
+        // program rather than a sentence in a header.
+        return refusalCode(context, subcommand, runCoverage(context, repoRoot, {
+          lane: context.args.values["lane"] ?? null,
+          dryRun: context.args.booleans.has("dry-run"),
+          threshold: context.args.values["threshold"] ?? null,
+          touched: context.args.booleans.has("touched"),
+          base: context.args.values["base"] ?? null,
+          advisories: coverageAdvisories(),
+        }));
+      }
+
+      if (subcommand === "test-report") {
+        return refusalCode(context, subcommand, runTestReport(context, repoRoot, {
+          lane: context.args.values["lane"] ?? null,
+          dryRun: context.args.booleans.has("dry-run"),
+          fromArtifacts: context.args.booleans.has("from-artifacts"),
+        }));
+      }
+
+      if (subcommand === "warmup") {
+        // `--repo` IS REQUIRED HERE AND NOWHERE ELSE IN THIS FAMILY, because
+        // this is the one verb that mutates git state. Every other `shu` verb
+        // spawns something inside a directory and can honestly default to the
+        // one the caller is standing in; this one fetches into a repository,
+        // moves a branch ref and checks out a new branch, and a verb that does
+        // that to "wherever this process happens to be" is a verb that will
+        // eventually do it to the wrong checkout (zheref/nen#28's rule, applied
+        // where the blast radius is largest).
+        return refusalCode(context, subcommand, runWarmup(
+          context,
+          assertRepoRoot({
+            repoFlag: requireRepoFlag(
+              context,
+              "It names the working copy this verb cleans, fetches into and cuts a branch in. There is no default: the one verb in this family that mutates git state never picks a repository for you.",
+            ),
+          }),
+          {
+            branch: requireValue(
+              context.args,
+              "branch",
+              "'shu warmup' cuts the branch YOU name, from the trunk's fresh tip. Nen never invents a branch name.",
+            ),
+            from: context.args.values["from"] ?? null,
+            discard: context.args.booleans.has("discard"),
+            tests: context.args.booleans.has("tests"),
+            lane: context.args.values["lane"] ?? null,
+            dryRun: context.args.booleans.has("dry-run"),
+          },
+        ));
+      }
+
+      // NEVER A DEFAULT TARGET, not even when there is exactly one -- a deploy
+      // that picks its own destination is the one mistake in this family whose
+      // blast radius is other people's users. THE REQUIREMENT IS NOT CHECKED
+      // HERE, though it used to be: a usage gate in front of the declaration
+      // made a written `deploy` seat unreachable, because a lane that will
+      // never deploy answered "--target is required" instead of its own reason.
+      // ./run.ts's `runVerb` header carries the order and the argument.
+      return refusalCode(context, subcommand, runVerb(context, repoRoot, {
+        verb: subcommand,
+        lane: context.args.values["lane"] ?? null,
+        dryRun: context.args.booleans.has("dry-run"),
+        target: context.args.values["target"] ?? null,
+        // AND NEVER AN IMPLIED --run. `refuseForeignFlags` above has already
+        // refused this flag on every verb but 'deploy', so reading it
+        // unconditionally here cannot turn another verb's line into an action.
+        run: context.args.booleans.has("run"),
+      }));
     } catch (error) {
-      return refused(error);
+      return shuRefusalCode(context, subcommand, error);
     }
   },
 };
 
 /**
- * The twelve verbs that reach ./run.ts's executor, and therefore a promise.
+ * This family's own codes (3/4/5) are RETURNED, not thrown past ../index.ts's
+ * `runFamily` -- which maps every error it does not know to 1 or 2, correctly,
+ * for every family that has only those.
  *
- * SPLIT OUT OF THE DISPATCHER ABOVE rather than inlined as an `async` arm,
- * because an `async` arm inside a synchronous `run` is a shape a reader has to
- * decode: this way the signature says which half of the family it serves, and
- * the caller's one `.catch` is visible beside the one `try`.
+ * ONE MAPPING FOR BOTH PATHS. A verb that answers synchronously raises through
+ * the `try` above; one that answers with a promise REJECTS it, and a `catch`
+ * block cannot see that. `refusalCode` below attaches the same mapping to the
+ * promise, so a `ShuRefusal` means the same thing whichever half of this
+ * dispatcher produced it -- which it did not, for one release, on every
+ * executing verb.
  */
-async function executeSubcommand(
+function shuRefusalCode(context: CommandContext, subcommand: string, error: unknown): number {
+  if (error instanceof ShuRefusal) {
+    context.io.err(`${PROGRAM} shu ${subcommand}: ${error.message}`);
+    return error.code;
+  }
+  throw error;
+}
+
+/** The same mapping, on the promise an executing verb answers with. */
+function refusalCode(
   context: CommandContext,
-  repoRoot: string,
   subcommand: string,
+  pending: Promise<number>,
 ): Promise<number> {
-  if (subcommand === "coverage") {
-    // THE JOIN, exactly as `tools` above and for the same rule: the
-    // advisory catalogue values are read HERE -- this file imports no seam
-    // -- and handed across as strings that can only land in a message.
-    // ../profiles/inertness.test.ts is what keeps that a property of the
-    // program rather than a sentence in a header.
-    return await runCoverage(context, repoRoot, {
-      lane: context.args.values["lane"] ?? null,
-      dryRun: context.args.booleans.has("dry-run"),
-      threshold: context.args.values["threshold"] ?? null,
-      touched: context.args.booleans.has("touched"),
-      base: context.args.values["base"] ?? null,
-      advisories: coverageAdvisories(),
-    });
-  }
-
-  if (subcommand === "test-report") {
-    return await runTestReport(context, repoRoot, {
-      lane: context.args.values["lane"] ?? null,
-      dryRun: context.args.booleans.has("dry-run"),
-      fromArtifacts: context.args.booleans.has("from-artifacts"),
-    });
-  }
-
-  if (subcommand === "warmup") {
-    // `--repo` IS REQUIRED HERE AND NOWHERE ELSE IN THIS FAMILY, because
-    // this is the one verb that mutates git state. Every other `shu` verb
-    // spawns something inside a directory and can honestly default to the
-    // one the caller is standing in; this one fetches into a repository,
-    // moves a branch ref and checks out a new branch, and a verb that does
-    // that to "wherever this process happens to be" is a verb that will
-    // eventually do it to the wrong checkout (zheref/nen#28's rule, applied
-    // where the blast radius is largest).
-    return await runWarmup(
-      context,
-      assertRepoRoot({
-        repoFlag: requireRepoFlag(
-          context,
-          "It names the working copy this verb cleans, fetches into and cuts a branch in. There is no default: the one verb in this family that mutates git state never picks a repository for you.",
-        ),
-      }),
-      {
-        branch: requireValue(
-          context.args,
-          "branch",
-          "'shu warmup' cuts the branch YOU name, from the trunk's fresh tip. Nen never invents a branch name.",
-        ),
-        from: context.args.values["from"] ?? null,
-        discard: context.args.booleans.has("discard"),
-        tests: context.args.booleans.has("tests"),
-        lane: context.args.values["lane"] ?? null,
-        dryRun: context.args.booleans.has("dry-run"),
-      },
-    );
-  }
-
-  // NEVER A DEFAULT TARGET, not even when there is exactly one -- a deploy
-  // that picks its own destination is the one mistake in this family whose
-  // blast radius is other people's users. THE REQUIREMENT IS NOT CHECKED
-  // HERE, though it used to be: a usage gate in front of the declaration
-  // made a written `deploy` seat unreachable, because a lane that will
-  // never deploy answered "--target is required" instead of its own reason.
-  // ./run.ts's `runVerb` header carries the order and the argument.
-  return await runVerb(context, repoRoot, {
-    verb: subcommand,
-    lane: context.args.values["lane"] ?? null,
-    dryRun: context.args.booleans.has("dry-run"),
-    target: context.args.values["target"] ?? null,
-    // AND NEVER AN IMPLIED --run. `refuseForeignFlags` above has already
-    // refused this flag on every verb but 'deploy', so reading it
-    // unconditionally here cannot turn another verb's line into an action.
-    run: context.args.booleans.has("run"),
-  });
+  return pending.catch((error: unknown): number => shuRefusalCode(context, subcommand, error));
 }

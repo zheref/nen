@@ -79,7 +79,7 @@ describe("renderInvocation", () => {
 
   it("renders a single-command verb as one step, exe apart from argv", () => {
     const rendered = renderInvocation(project(), request);
-    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"], stdoutTo: null }]);
+    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"], stdoutTo: null, stall: null }]);
     expect(rendered.lane).toBe("one");
     expect(rendered.stack).toBe("stack-a");
     expect(rendered.cwdRelative).toBe(".");
@@ -278,7 +278,7 @@ describe("resolveTarget", () => {
     const block = deployable({ prod: { args: ["--env", "production"] } });
     const resolved = resolveTarget(block, plan(block), "prod");
     expect(resolved.steps).toEqual([
-      { exe: "tool", argv: ["publish", "--env", "production"], stdoutTo: null },
+      { exe: "tool", argv: ["publish", "--env", "production"], stdoutTo: null, stall: null },
     ]);
     expect(resolved.target).toEqual({ name: "prod", args: ["--env", "production"], requiresEnv: [] });
   });
@@ -286,7 +286,7 @@ describe("resolveTarget", () => {
   it("leaves the argv alone for a name-only target -- naming it is the requirement", () => {
     const block = deployable({ prod: {} });
     expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish"], stdoutTo: null },
+      { exe: "tool", argv: ["publish"], stdoutTo: null, stall: null },
     ]);
   });
 
@@ -395,7 +395,7 @@ describe("resolveTarget", () => {
     // it does in a lane's argv.
     const ordinary = deployable({ prod: { args: ["--define={\"NODE_ENV\":\"production\"}"] } });
     expect(resolveTarget(ordinary, plan(ordinary), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish", "--define={\"NODE_ENV\":\"production\"}"], stdoutTo: null },
+      { exe: "tool", argv: ["publish", "--define={\"NODE_ENV\":\"production\"}"], stdoutTo: null, stall: null },
     ]);
   });
 
@@ -474,7 +474,7 @@ describe("resolveTarget", () => {
     // with one step does not ask anyone to guess.
     const block = deployable({ prod: { args: ["--prod"] } }, { steps: [{ exe: "tool", argv: ["publish"] }] });
     expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish", "--prod"], stdoutTo: null },
+      { exe: "tool", argv: ["publish", "--prod"], stdoutTo: null, stall: null },
     ]);
   });
 
@@ -522,7 +522,7 @@ describe("resolveTarget", () => {
     // And the plan it was handed is untouched: a target is resolved ONTO a
     // plan, not INTO one.
     expect(before.target).toBeNull();
-    expect(before.steps).toEqual([{ exe: "tool", argv: ["publish"], stdoutTo: null }]);
+    expect(before.steps).toEqual([{ exe: "tool", argv: ["publish"], stdoutTo: null, stall: null }]);
   });
 });
 
@@ -565,6 +565,7 @@ describe("stdoutTo reaches the rendered step, and is refused where it cannot", (
       {
         exe: "tool",
         argv: ["go"],
+        stall: null,
         // THE POINTER IS THE `{exe, argv}` FORM'S: the key sits directly on the
         // invocation, with no `steps[<i>]` in the middle.
         stdoutTo: { path: "out/log.json", pointer: "project.verbs.one.build.stdoutTo" },
@@ -635,6 +636,7 @@ describe("stdoutTo reaches the rendered step, and is refused where it cannot", (
       {
         exe: "tool",
         argv: ["publish", "--prod"],
+        stall: null,
         stdoutTo: { path: "out/deploy.json", pointer: "project.verbs.one.deploy.stdoutTo" },
       },
     ]);
@@ -663,7 +665,7 @@ describe("stdoutTo reaches the rendered step, and is refused where it cannot", (
       project({ verbs: { one: { dev: { exe: "tool", argv: ["serve"] } } } }),
       { lane: null, verb: "dev", platform: "linux" },
     );
-    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["serve"], stdoutTo: null }]);
+    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["serve"], stall: null, stdoutTo: null }]);
   });
 
   it("refuses a long-running MULTI-STEP row on the first offending step", () => {

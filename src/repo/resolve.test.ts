@@ -152,6 +152,9 @@ describe("resolve", () => {
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
         },
+        runStreamed: (): never => {
+          throw new Error("resolve makes no watched subprocess call");
+        },
         platform: "linux",
       },
       token: "KP",
@@ -176,6 +179,9 @@ describe("resolve", () => {
         probePort: noPortProbe,
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
+        },
+        runStreamed: (): never => {
+          throw new Error("resolve makes no watched subprocess call");
         },
         platform: "linux",
       },
@@ -204,6 +210,9 @@ describe("resolve", () => {
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
         },
+        runStreamed: (): never => {
+          throw new Error("resolve makes no watched subprocess call");
+        },
         platform: "linux",
       },
       token: null,
@@ -230,6 +239,9 @@ describe("resolve", () => {
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
         },
+        runStreamed: (): never => {
+          throw new Error("resolve makes no watched subprocess call");
+        },
         platform: "linux",
       },
       token: null,
@@ -254,6 +266,9 @@ describe("resolve", () => {
           probePort: noPortProbe,
           runInteractive: (): never => {
             throw new Error("resolve makes no interactive subprocess call");
+          },
+          runStreamed: (): never => {
+            throw new Error("resolve makes no watched subprocess call");
           },
           platform: "linux",
         },

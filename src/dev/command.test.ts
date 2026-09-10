@@ -28,6 +28,9 @@ async function capture(argv: readonly string[], repoFlag: string | null): Promis
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },
+    runStreamed: (): never => {
+      throw new Error("this verb has no watched form");
+    },
     platform: "linux",
   };
   const code = await runFamily(devCommand, argv, repoFlag, false, io, seams);

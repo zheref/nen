@@ -28,6 +28,9 @@ async function capture(argv: readonly string[]): Promise<{ code: number; out: st
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },
+    runStreamed: (): never => {
+      throw new Error("this verb has no watched form");
+    },
     platform: "linux",
   };
   const code = await runFamily(splitCommand, argv, null, false, io, seams);

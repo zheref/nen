@@ -19,6 +19,9 @@ const STUB_SEAMS: Seams = {
   runInteractive: (): never => {
     throw new Error("this verb has no interactive form");
   },
+  runStreamed: (): never => {
+    throw new Error("this verb has no watched form");
+  },
   platform: "linux",
 };
 

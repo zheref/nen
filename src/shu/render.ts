@@ -27,7 +27,12 @@
 
 import { VerbUsageError } from "../cli/command.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
-import { LAUNCH_VERBS, type Invocation, type ProjectBlock } from "../schema/contract.js";
+import {
+  LAUNCH_VERBS,
+  type Invocation,
+  type ProjectBlock,
+  type StallGuard,
+} from "../schema/contract.js";
 import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, usesToken } from "./launch.js";
 
 /**
@@ -83,6 +88,36 @@ export const TARGETED_VERBS: readonly string[] = ["deploy"];
  */
 export const LAUNCHING_VERBS: readonly string[] = [...LAUNCH_VERBS];
 
+/**
+ * The verbs a `stall` guard may be declared on.
+ *
+ * WHY IT IS A LIST AND NOT "every verb". A guard is arithmetic over the output
+ * a step produces, so it can only exist where nen is READING that output:
+ *
+ *   * `dev` and `run` hand this terminal to the child (./run.ts's
+ *     `INTERACTIVE_VERBS`) and nen never sees a byte of what they print. A
+ *     budget there could only ever be measured against silence nen cannot
+ *     observe, which is a guard that never fires -- worse than none, because
+ *     the declaration says one is in place.
+ *   * `release` and `deploy` put bytes on somebody else's infrastructure. A
+ *     remedy command fired at the midpoint of a publish is nen intervening in
+ *     the one operation in this family that cannot be undone by running it
+ *     again, and this release will not do that on a JSON file's say-so.
+ *
+ * Everything else here is a captured, local, repeatable step, which is exactly
+ * where a hung toolchain is somebody's afternoon. A `stall` declared anywhere
+ * else is refused at load, by pointer, rather than accepted and never honoured.
+ */
+export const STALL_GUARDED_VERBS: readonly string[] = [
+  "build",
+  "test",
+  "ui-test",
+  "lint",
+  "archive",
+  "coverage",
+  "test-report",
+];
+
 /** One command, as it will be spawned: exe apart from argv, never a string. */
 export interface RenderedStep {
   readonly exe: string;
@@ -104,6 +139,16 @@ export interface RenderedStep {
    * reader cannot act on.
    */
   readonly stdoutTo: { readonly path: string; readonly pointer: string } | null;
+  /**
+   * The guard this step runs under, or absent/null for none.
+   *
+   * OPTIONAL RATHER THAN REQUIRED because a step is also what a device probe
+   * and a launch after-step are, and neither is watched: `dev` and `run` hand
+   * over the terminal, so there is no output for a budget to be measured
+   * against. A guard reaching one of those would be a promise nen could not
+   * keep, and the type says which steps can carry one by which ones set it.
+   */
+  readonly stall?: StallGuard | null;
 }
 
 /** A precondition as the declaration states it, before anything asserts it. */
@@ -361,12 +406,21 @@ export function declaredHostsFor(project: ProjectBlock, verb: string): readonly 
   return wildcard ?? null;
 }
 
+/**
+ * The steps, each carrying the guard it will run under.
+ *
+ * THE STEP'S OWN GUARD WINS OVER THE INVOCATION'S, and an invocation-level one
+ * reaches every step that declares none. That is the only composition rule
+ * here: nothing is merged field by field, because half a budget from one place
+ * and half from another is a guard nobody can read off the file.
+ */
 function stepsOf(invocation: Invocation, pointer: string): readonly RenderedStep[] {
   if (invocation.kind === "command") {
     return [
       {
         exe: invocation.exe,
         argv: invocation.argv,
+        stall: invocation.stall,
         stdoutTo:
           invocation.stdoutTo === null
             ? null
@@ -379,6 +433,7 @@ function stepsOf(invocation: Invocation, pointer: string): readonly RenderedStep
       (step, index): RenderedStep => ({
         exe: step.exe,
         argv: step.argv,
+        stall: step.stall ?? invocation.stall,
         stdoutTo:
           step.stdoutTo === null
             ? null
@@ -388,6 +443,29 @@ function stepsOf(invocation: Invocation, pointer: string): readonly RenderedStep
   }
   /* c8 ignore next -- the `unsupported` arm is refused before it reaches here */
   return [];
+}
+
+/**
+ * A `stall` on a verb that cannot honour one is refused, never ignored.
+ *
+ * The alternative -- accepting it and watching nothing -- is the failure this
+ * whole family is written against: a declaration that says a guard is in place
+ * and a binary that quietly does not have one. The refusal names both the verb
+ * and the set, because the fix is either to move the guard or to accept that
+ * this verb's output is not nen's to watch.
+ */
+function refuseUnguardableStall(
+  steps: readonly RenderedStep[],
+  lane: string,
+  verb: string,
+): void {
+  if (STALL_GUARDED_VERBS.includes(verb)) return;
+  if (!steps.some((step): boolean => (step.stall ?? null) !== null)) return;
+  throw new VerbUsageError(
+    `'${verb}' on lane '${lane}' declares a 'stall' guard, and nen cannot honour one on this verb. A stall guard is arithmetic over the output a step produces, so it exists only where nen READS that output: ${STALL_GUARDED_VERBS.join(
+      ", ",
+    )}. The two long-running verbs hand this terminal to the child, so nen sees nothing to measure; 'release' and 'deploy' put bytes somewhere nen will not intervene mid-flight. Remove the block under project.verbs.${lane}.${verb}, or declare it on the verb whose output you meant to watch.`,
+  );
 }
 
 /**
@@ -553,6 +631,7 @@ export function renderInvocation(
   const pointer = `project.verbs.${lane}.${request.verb}`;
   const steps = stepsOf(invocation, pointer);
   refuseUnsubstituted(steps, lane, request.verb);
+  refuseUnguardableStall(steps, lane, request.verb);
   refuseStdoutToOnLongRunning(steps, lane, request.verb);
 
   return {
@@ -660,11 +739,11 @@ function appendArgs(
       }), and '${plan.verb}' on lane '${plan.lane}' declares ${plan.steps.length} steps. nen will not guess which of them reaches ${reaches}: write those arguments into the step that does, under project.verbs.${plan.lane}.${plan.verb}, and drop this target's 'args' -- or declare a single-step ${plan.verb} row.`,
     );
   }
-  // `stdoutTo` SURVIVES THE APPEND. A target adds arguments to a step; it does
-  // not change where that step's output goes, and dropping the field here would
-  // silently turn a declared file write back into terminal output the moment
-  // somebody named a target.
-  return [{ exe: first.exe, argv: [...first.argv, ...args], stdoutTo: first.stdoutTo }];
+  // SPREAD RATHER THAN REBUILT, so a field this step carries that is not `argv`
+  // -- a stall guard today, whatever a later release adds -- survives having a
+  // destination appended. Rebuilding the object silently dropped whatever the
+  // rebuild did not name.
+  return [{ ...first, argv: [...first.argv, ...args] }];
 }
 
 /**

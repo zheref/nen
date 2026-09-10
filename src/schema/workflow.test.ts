@@ -75,7 +75,11 @@ describe("loadWorkflow -- an absent file is a POLICY, not an error", () => {
       template: "rikugan",
       captures: "Reports/captures",
     });
-    expect(workflow.notifications).toMatchObject({ rungs: ["push", "os", "sound"], sound: "Glass" });
+    expect(workflow.notifications).toMatchObject({
+      rungs: ["push", "os", "sound"],
+      sound: "Glass",
+      turn: "rung1",
+    });
     expect(workflow.commits).toMatchObject({
       allowedAttributionTrailers: [],
       forbiddenTrailers: [],
@@ -175,6 +179,8 @@ describe("a near-miss key is refused, because an unknown one is PRESERVED", () =
     [{ commits: { forbiddenTrailer: ["X"] } }, "commits.forbiddenTrailer", "forbiddenTrailers"],
     [{ monitor: { maxCycle: 5 } }, "monitor.maxCycle", "maxCycles"],
     [{ coverages: {} }, "coverages", "coverage"],
+    [{ notifications: { turns: "rung1" } }, "notifications.turns", "turn"],
+    [{ notifications: { Turn: "rung1" } }, "notifications.Turn", "turn"],
   ])("refuses %j at its own pointer", (document, pointer, meant) => {
     const error = refusal(document);
     expect(error.pointer).toBe(pointer);
@@ -267,6 +273,29 @@ describe("reports paths are repo-relative and inert", () => {
     expect(loadWorkflow(repoWith({ reports: { dir: "docs/reports" } })).workflow.reports.dir).toBe(
       "docs/reports",
     );
+  });
+});
+
+describe("notifications.turn -- how loud an ordinary (no-gate) turn is", () => {
+  it("defaults to 'rung1' when the key is absent", () => {
+    expect(loadWorkflow(repoWith({ notifications: { sound: "Ping" } })).workflow.notifications.turn).toBe(
+      "rung1",
+    );
+  });
+
+  it("accepts 'all', a repository asking to be interrupted every turn", () => {
+    const { workflow } = loadWorkflow(repoWith({ notifications: { turn: "all" } }));
+    expect(workflow.notifications.turn).toBe("all");
+  });
+
+  it("refuses a value outside the closed two-value set, by pointer", () => {
+    const error = refusal({ notifications: { turn: "always" } });
+    expect(error.pointer).toBe("notifications.turn");
+    expect(error.message).toContain("rung1, all");
+  });
+
+  it("refuses a value of the wrong type", () => {
+    expect(refusal({ notifications: { turn: true } }).pointer).toBe("notifications.turn");
   });
 });
 

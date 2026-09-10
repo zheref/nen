@@ -1547,7 +1547,15 @@ describe("nen shu detect -- the gatsby golden suite, byte for byte", () => {
       };
       expect(report.stack).toBe("gatsby");
       expect(report.steps).toEqual([
-        { exe: "gatsby", argv: ["build"], cwd: dir, stdoutTo: null, exitCode: null, durationMs: null },
+        {
+          exe: "gatsby",
+          argv: ["build"],
+          cwd: dir,
+          stdoutTo: null,
+          exitCode: null,
+          durationMs: null,
+          stall: null,
+        },
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -10,16 +10,18 @@
 // answered every unknown call with `{code: 0, stdout: ""}` would let a verb
 // make an extra `gh` call -- a second create, a stray label -- and still
 // pass, which is exactly the class of defect these verbs exist to prevent.
-import type {
-  CommandResult,
-  InteractiveResult,
-  InteractiveRunner,
-  PortProbe,
-  PortVerdict,
-  Runner,
-  Seams,
+import {
+  outputWindow,
+  type CommandResult,
+  type InteractiveResult,
+  type InteractiveRunner,
+  type PortProbe,
+  type PortVerdict,
+  type Runner,
+  type Seams,
+  type StreamedResult,
+  type StreamedRunner,
 } from "./exec.js";
-
 /**
  * The port probe for a family that never opens one, which is every family but
  * `shu`.
@@ -40,9 +42,39 @@ export const noPortProbe: PortProbe = (port): Promise<PortVerdict> => {
   );
 };
 
+/**
+ * ONE MOMENT IN A WATCHED CHILD'S LIFE, on a clock the test owns.
+ *
+ * A chunk of output (`stream` + `text`) or -- with neither -- a bare TICK: the
+ * instant the watcher is consulted at. That is the whole of what a stall guard
+ * reacts to, so a scripted run is a list of these and nothing else, and a test
+ * about a three-minute budget costs no milliseconds at all.
+ */
+export interface ScriptedStreamEvent {
+  /** Milliseconds since the child started. Ascending, in the test's own units. */
+  readonly atMs: number;
+  readonly stream?: "stdout" | "stderr";
+  readonly text?: string;
+}
+
+/** What a scripted child does while it runs, and when it stops. */
+export interface ScriptedStream {
+  readonly events: readonly ScriptedStreamEvent[];
+  /** The instant it exits. Defaults to the last event's. */
+  readonly exitAtMs?: number;
+}
+
 export interface ScriptedCall {
   readonly match: string;
-  readonly result: Partial<CommandResult>;
+  readonly result: Partial<CommandResult> & {
+    /**
+     * The timeline `runStreamed` replays for this call. Absent: a streamed
+     * call answers with this entry's `stdout`/`stderr` as one chunk at 0ms and
+     * exits immediately -- which is what a step with no stall guard, driven
+     * through the streaming seam, actually looks like from the caller's side.
+     */
+    readonly stream?: ScriptedStream;
+  };
 }
 
 export interface RecordedRun {
@@ -55,6 +87,16 @@ export interface RecordedRun {
    * for, which a single flat list of argv would erase.
    */
   readonly interactive: boolean;
+  /**
+   * True when the call went through `runStreamed` rather than `run`.
+   *
+   * A SECOND COLUMN RATHER THAN A THIRD VALUE IN THE FIRST, because the two
+   * ask different questions: `interactive` is "did nen give up the output"
+   * (false for both captured seams) and this is "was the child watched while
+   * it ran". Folding them into one enum would have re-typed every existing
+   * assertion to say the thing it already said.
+   */
+  readonly streamed?: boolean;
   /**
    * The working directory the caller asked for, or null when it asked for
    * none (the child then inherits this process's own).
@@ -140,7 +182,7 @@ export class ScriptedSeams implements Seams {
    * differ from the first -- a fixture that could only ever give one answer
    * could not tell a discard that worked from one that silently did not.
    */
-  private find(command: string, args: readonly string[], what: string): Partial<CommandResult> {
+  private find(command: string, args: readonly string[], what: string): ScriptedCall["result"] {
     const key = [command, ...args].join(" ");
     const matching = this.script.filter((entry): boolean => entry.match === key);
     if (matching.length === 0) {
@@ -197,6 +239,81 @@ export class ScriptedSeams implements Seams {
       code: found.code ?? 0,
       signal: null,
       spawnFailed: found.spawnFailed ?? false,
+    };
+  };
+
+  /**
+   * The recorded WATCHED child: the same script, keyed the same way, replaying
+   * a timeline the entry states instead of a real clock.
+   *
+   * THE ARITHMETIC IS THE SEAM'S OWN (`outputWindow`), not a second copy of it
+   * here. What a test drives is WHEN things happened; what decides `elapsedMs`
+   * and `quietMs` from those instants is the one function the real runner also
+   * calls, so a stall guard proved against this fixture is proved against the
+   * rule that ships. The verdicts are honoured exactly as the real runner
+   * honours them, `reset` included -- and a scripted run has no wall clock, so
+   * `reset` restarts the quiet window at the tick's own instant.
+   *
+   * IT RECORDS `interactive: false`, because that column answers "did nen keep
+   * the output" and a watched child's output is nen's. A test that needs to
+   * tell the two captured seams apart reads `streamed`.
+   */
+  runStreamed: StreamedRunner = async (command, args, options = {}): Promise<StreamedResult> => {
+    this.calls.push({
+      command,
+      args,
+      interactive: false,
+      streamed: true,
+      cwd: options.cwd ?? null,
+      env: options.env ?? null,
+    });
+    const found = this.find(command, args, "streamed subprocess");
+    if (found.spawnFailed === true) {
+      return { code: -1, signal: null, spawnFailed: true, abandoned: false, durationMs: 0 };
+    }
+    const timeline = found.stream ?? {
+      events: [
+        ...(found.stdout === undefined
+          ? []
+          : [{ atMs: 0, stream: "stdout" as const, text: found.stdout }]),
+        ...(found.stderr === undefined
+          ? []
+          : [{ atMs: 0, stream: "stderr" as const, text: found.stderr }]),
+      ],
+    };
+    let lastOutputAt = 0;
+    let watching = options.onWindow !== undefined;
+    let last = 0;
+    for (const event of timeline.events) {
+      last = event.atMs;
+      if (event.stream !== undefined && event.text !== undefined) {
+        lastOutputAt = event.atMs;
+        options.onOutput?.({ stream: event.stream, text: event.text, atMs: event.atMs });
+        continue;
+      }
+      if (!watching || options.onWindow === undefined) continue;
+      const verdict = options.onWindow(outputWindow(0, lastOutputAt, event.atMs));
+      if (verdict === "reset") lastOutputAt = event.atMs;
+      if (verdict === "stop") watching = false;
+      if (verdict === "abandon") {
+        // THE TIMELINE STOPS HERE, exactly as the real runner stops reading:
+        // the scripted child is "still running" and nen has let go of it, so
+        // there is no exit code to report and no later event to replay.
+        return {
+          code: null,
+          signal: null,
+          spawnFailed: false,
+          abandoned: true,
+          durationMs: event.atMs,
+        };
+      }
+    }
+    return {
+      code: found.code ?? 0,
+      signal: null,
+      spawnFailed: false,
+      abandoned: false,
+      durationMs: timeline.exitAtMs ?? last,
     };
   };
 
