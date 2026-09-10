@@ -1925,6 +1925,111 @@ function ghApiMethodVerdict(spelling: string, value: string | undefined): Classi
  * a second positional, a bare `-`, a `--` terminator -- none of them is a
  * shape this row has been shown to apply to.
  */
+/**
+ * The one token a folded `--jq` value is replaced by.
+ *
+ * Scan-faithful by construction (letters and a hyphen), and shaped so it can
+ * never be mistaken for a flag or an endpoint if the walk ever changed: it is
+ * consumed as `--jq`'s value and read no further.
+ */
+const JQ_PLACEHOLDER = "jq-expression";
+
+const JQ_FLAGS: ReadonlySet<string> = new Set(["--jq", "-q"]);
+
+/**
+ * Fold a SINGLE-QUOTED `--jq` value into one inert placeholder token, so the
+ * commonest `gh api` read stops refusing (zheref/nen#78).
+ *
+ * WHY THIS IS SOUND, and it is the whole of the argument. In every shell this
+ * file's header names, `'...'` with no `'` and no newline inside is exactly ONE
+ * word and its content is literal: no expansion, no substitution, no word
+ * splitting, nothing. So a whitespace-delimited span of that shape contributes
+ * exactly one argument, whatever characters it carries -- and replacing it with
+ * a token the scan CAN read changes neither the argument vector's length nor
+ * any other word in it. The absence claims `gh api`'s read-only verdict rests
+ * on (no non-GET method, no field flag, not graphql) are then scanned over a
+ * line the shell would agree with, which is exactly what the faithfulness gate
+ * asks for. The gate is not weakened; the line is made provable.
+ *
+ * NARROW ON PURPOSE, three times over:
+ *
+ *   * ONLY single quotes. A double-quoted span expands `$x`, `` `cmd` `` and
+ *     `\`; it is one word to the shell but not an inert one, and this fold's
+ *     entire claim is inertness.
+ *   * ONLY `--jq`/`-q`, not every quoted span on the line. A general fold would
+ *     also swallow `-X 'DELETE'`, and while that would arrive at MUTATING
+ *     rather than a wrong read, it would silently re-answer the adversarial
+ *     repro zheref/nen#70 pinned. This closes the ergonomic case that issue
+ *     names and leaves that one exactly where its own review put it.
+ *   * ONLY a whole token. `--jq'.name'` is one word `--jq.name` to the shell,
+ *     not a flag and its value, so it is left alone and refuses as before.
+ *
+ * Applied to the `gh api` row's own copy of the line, never to the general
+ * classifier's: a quoted span elsewhere is a different question with a
+ * different answer.
+ */
+export function foldQuotedJqValue(line: string): string {
+  const parts = line.split(/([ \t]+)/);
+  for (let index = 0; index < parts.length; index += 1) {
+    const token = parts[index] ?? "";
+    // ONE TOKEN, folded in place. Three spellings, because pflag accepts three
+    // and they are the same safe shape (Copilot, PR #191): the long `--jq=`,
+    // the shorthand `-q=`, and the shorthand with its value ATTACHED. That last
+    // one has no long-flag twin -- `--jq'.name'` is the single word `--jq.name`
+    // to a shell, an unknown long flag rather than a flag and its value, and
+    // still refuses -- while `-q'.name'` is `-q.name`, which pflag reads as
+    // `-q` carrying `.name`, exactly as the unquoted form already does here.
+    const inline = /^(--jq=|-q=|-q)('[^'\n\r]*')$/.exec(token);
+    if (inline !== null) {
+      parts[index] = `${inline[1] ?? ""}${JQ_PLACEHOLDER}`;
+      continue;
+    }
+    if (!JQ_FLAGS.has(token)) continue;
+    // `--jq '<expr>'` -- the flag, its whitespace, then the value. The value
+    // may itself contain spaces (`--jq '.a | .b'`), in which case the split
+    // above cut it into several parts and the span runs from the part that
+    // OPENS the quote to the one that closes it.
+    const openIndex = index + 2;
+    const open = parts[openIndex];
+    if (open === undefined || !open.startsWith("'")) continue;
+    const closeIndex = findQuoteClose(parts, openIndex);
+    if (closeIndex === undefined) continue;
+    parts.splice(openIndex, closeIndex - openIndex + 1, JQ_PLACEHOLDER);
+    index = openIndex;
+  }
+  return parts.join("");
+}
+
+/**
+ * The index of the part that closes a single-quoted span opened at `from`, or
+ * undefined when the span is not one provable word.
+ *
+ * A span qualifies only if it carries EXACTLY the two quotes -- the one that
+ * opens it and the one that closes it -- and no newline. Anything else is a
+ * shape this fold has not proven anything about, and an unproven span is left
+ * alone to refuse as before rather than guessed at.
+ */
+function findQuoteClose(parts: readonly string[], from: number): number | undefined {
+  const first = parts[from] ?? "";
+  // `'x'` closes in its own part; `''` is an empty value and closes too.
+  if (first.length >= 2 && first.endsWith("'") && !first.slice(1, -1).includes("'")) {
+    return /[\n\r]/.test(first) ? undefined : from;
+  }
+  if (first.slice(1).includes("'")) return undefined;
+  for (let index = from + 1; index < parts.length; index += 1) {
+    const part = parts[index] ?? "";
+    if (/[\n\r]/.test(part)) return undefined;
+    const at = part.indexOf("'");
+    if (at === -1) continue;
+    // The closing quote must END the part: `'.a' x` closes at `'.a'`, while
+    // `'.a'x` is `.ax` to the shell -- one word with the flag's value glued to
+    // more text, which is not the shape this folds.
+    if (at !== part.length - 1) return undefined;
+    return index;
+  }
+  return undefined;
+}
+
 function classifyGhApi(scanLine: string, faithful: boolean): ClassifyResult {
   const unresolved = (reason: string): ClassifyResult => ({ classification: "unknown", reason });
   // `gh` and `api` are the two tokens GH_API already matched.
@@ -2035,7 +2140,7 @@ function classifyGhApi(scanLine: string, faithful: boolean): ClassifyResult {
   // round one's three regexes entirely).
   if (!faithful) {
     return unresolved(
-      `gh api claims read-only because every flag on the line walks to a read (no non-GET method, no -f/-F/--field/--raw-field/--input value, not graphql), but ${UNFAITHFUL} -- a quoted or escaped method (\`-X 'DELETE'\`) is one word to this walk and the bare flag to a real shell, so only the scan-faithful form is provably a GET`,
+      `gh api claims read-only because every flag on the line walks to a read (no non-GET method, no -f/-F/--field/--raw-field/--input value, not graphql), but ${UNFAITHFUL} -- a quoted or escaped method (\`-X 'DELETE'\`) is one word to this walk and the bare flag to a real shell, so only the scan-faithful form is provably a GET. A SINGLE-QUOTED --jq value is the one exception and is already folded before this check (\`gh api repos/o/r --jq '.name'\` reads as read-only); a DOUBLE-quoted one is not, because a $ or a backtick inside it is the shell's to expand -- respell it with single quotes, or run the bare read under the watch and apply jq to its output downstream`,
     );
   }
   return { classification: "read-only", reason: "gh api with no write method, no field flags, and not graphql -- GET by default" };
@@ -2066,7 +2171,14 @@ export function classifyCommand(command: string): ClassifyResult {
   // returning only the mutating half restores the name without letting a
   // read-only certification out ahead of the metacharacter check, which is the
   // one thing the seam exists to prevent.
-  const ghApi = GH_API.test(trimmed) ? classifyGhApi(scanLine, isScanFaithfulLine(scanLine)) : undefined;
+  // FOLDED FIRST, and only for this row (zheref/nen#78). A single-quoted `--jq`
+  // value is provably one inert word, so replacing it with a readable token
+  // makes the line provable without weakening what is proven -- see
+  // foldQuotedJqValue for why that is sound and why it is this narrow.
+  const ghApiLine = GH_API.test(trimmed) ? foldQuotedJqValue(scanLine) : scanLine;
+  const ghApi = GH_API.test(trimmed)
+    ? classifyGhApi(ghApiLine, isScanFaithfulLine(ghApiLine))
+    : undefined;
   if (ghApi?.classification === "mutating") return ghApi;
 
   // THE METACHARACTER SEAM (zheref/nen#70). ONE guard, ahead of every branch

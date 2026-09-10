@@ -1256,9 +1256,76 @@ describe("classifyCommand -- the gh/git rows' own scan-dependence (#70)", () => 
   // same trade #31 made for every flag-dependent nen verb, and the caller's
   // way out is the unquoted form below -- pinned so the cost stays visible and
   // a future widening has to argue with a test rather than with a comment.
-  it("over-refuses a quoted gh api --jq, and admits the unquoted form", () => {
-    expect(classifyCommand("gh api repos/o/r --jq '.name'").classification).toBe("unknown");
-    expect(classifyCommand("gh api repos/o/r --jq .name").classification).toBe("read-only");
+  // zheref/nen#78 CHANGED THE FIRST HALF OF THIS, deliberately. The
+  // over-refusal was disclosed and pinned by #70 round two as the price of the
+  // faithfulness gate; what it landed on is the commonest `gh api` read
+  // spelling there is, so the row now folds a SINGLE-QUOTED --jq value into one
+  // inert placeholder before scanning. That is not a weaker gate: a `'...'`
+  // span with no inner quote is exactly one word to every shell and its content
+  // is literal, so the fold changes neither the argument vector's length nor
+  // any other word in it -- it makes the line provable rather than proving less.
+  it("admits a single-quoted gh api --jq, and every spelling of it", () => {
+    for (const line of [
+      "gh api repos/o/r --jq '.name'",
+      "gh api repos/o/r --jq='.name'",
+      "gh api repos/o/r -q '.name'",
+      // pflag takes a shorthand value three ways, and all three are the same
+      // safe shape (Copilot, PR #191).
+      "gh api repos/o/r -q='.name'",
+      "gh api repos/o/r -q'.name'",
+      "gh api repos/o/r -q.name",
+      "gh api repos/o/r --jq '.items[] .name'",
+      "gh api repos/o/r --jq ''",
+      "gh api repos/o/r --jq .name",
+    ]) {
+      expect(classifyCommand(line).classification, line).toBe("read-only");
+    }
+  });
+
+  it("still refuses a --jq carrying a METACHARACTER, at the seam that owns that", () => {
+    // `--jq '.a | .b'` is one literal word to a shell -- but the metacharacter
+    // seam is a WHOLE-LINE check that runs before any row vouches for
+    // anything, and this fold deliberately does not reach past its own row to
+    // move it. The refusal a caller gets is the right one and says what to do.
+    const result = classifyCommand("gh api repos/o/r --jq '.items[] | .name'");
+    expect(result.classification).toBe("unknown");
+    expect(result.reason).toContain("hands part of this line to the SHELL");
+    expect(result.reason).toContain("Watch the bare read");
+  });
+
+  it("still refuses a DOUBLE-quoted --jq: one word, but not an inert one", () => {
+    // The fold's whole claim is inertness, and `"..."` expands `$x`, a
+    // backtick and a backslash. One word is not the same as one literal word.
+    expect(classifyCommand('gh api repos/o/r --jq ".name"').classification).toBe("unknown");
+    expect(classifyCommand('gh api repos/o/r --jq "$(id)"').classification).toBe("unknown");
+  });
+
+  it("folds only a WHOLE token, so --jq'.name' is left as the one word it is", () => {
+    // `--jq'.name'` is the single word `--jq.name` to a shell -- an unknown
+    // LONG flag, not a flag and its value. Its shorthand twin is different and
+    // folds: `-q'.name'` is `-q.name`, which pflag reads as `-q` carrying
+    // `.name`, exactly as the unquoted spelling already did. The asymmetry is
+    // pflag's, not this fold's.
+    expect(classifyCommand("gh api repos/o/r --jq'.name'").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r -q'.name'").classification).toBe("read-only");
+  });
+
+  it("folds the value and nothing else, so the rest of the line still decides", () => {
+    // The fold must not launder the line: every other absence claim is still
+    // scanned, and each of these still answers the way it did before.
+    expect(classifyCommand("gh api repos/o/r --jq '.a' -f title=x").classification).toBe("mutating");
+    expect(classifyCommand("gh api repos/o/r --jq '.a' -X DELETE").classification).toBe("mutating");
+    expect(classifyCommand("gh api repos/o/r -q='.a' -X DELETE").classification).toBe("mutating");
+    expect(classifyCommand("gh api graphql --jq '.data'").classification).toBe("mutating");
+    // And #70's own adversarial repro is untouched: the fold is scoped to --jq,
+    // so a quoted METHOD is still the unprovable line that issue pinned.
+    expect(classifyCommand("gh api repos/o/r -X 'DELETE'").classification).toBe("unknown");
+  });
+
+  it("names the workaround in the refusal, rather than only the rule", () => {
+    const reason = classifyCommand('gh api repos/o/r --jq ".name"').reason;
+    expect(reason).toContain("respell it with single quotes");
+    expect(reason).toContain("apply jq to its output downstream");
   });
 });
 
