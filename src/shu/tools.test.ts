@@ -32,13 +32,18 @@ import {
   compareVersions,
   extractVersion,
   MAX_FOUND,
+  minimumBelowFloor,
   parseVersion,
   parsePin,
+  renderMinimum,
   satisfiesMinimum,
   parseMinimum,
   satisfiesPin,
+  thisBuild,
   truncate,
+  type Build,
 } from "./toolchain.js";
+import { COMPATIBLE_MINOR_FLOOR, VERSION } from "../version.js";
 
 /**
  * A `ScriptedSeams` whose repeated entries answer IN ORDER.
@@ -184,6 +189,7 @@ interface Report {
   readonly lane: string | null;
   readonly stack: string | null;
   readonly mode: string;
+  readonly compatibleMinorFloor: string;
   readonly summary: Summary;
   readonly tools: readonly Row[];
   readonly exitCode: number;
@@ -523,7 +529,9 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
     const floor = parseMinimum("0.3", "dependency.minimum");
     expect(satisfiesMinimum(floor, "0.3.0")).toBe(true);
     expect(satisfiesMinimum(floor, "0.3.9")).toBe(true);
-    // OUT OF RANGE IN BOTH DIRECTIONS -- the caveat the contract states.
+    // OUT OF RANGE IN BOTH DIRECTIONS -- the caveat the contract states, and
+    // still the rule for a pin BELOW this build's compatibility floor (`0.3`
+    // is; see the floor block below, where a pin at or above it widens).
     expect(satisfiesMinimum(floor, "0.2.9")).toBe(false);
     expect(satisfiesMinimum(floor, "0.4.0")).toBe(false);
   });
@@ -600,6 +608,204 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
     });
     expect(above.code).toBe(5);
     expect(row(above, "nen")).toMatchObject({ state: "present-but-wrong-version", found: "0.4.0" });
+  });
+
+  // ── the compatibility floor (the ruling of 2026-09-10) ───────────────────
+  //
+  // "Exact minor is fine, unless there is a breaking change." The old rule owed
+  // a repin PR in every consuming repository on EVERY minor, breaking or not,
+  // because nothing in the binary said which releases had broken anything.
+  // `COMPATIBLE_MINOR_FLOOR` is that missing fact, and these are its branches.
+  // Every case here names a SYNTHETIC build, so the rule is proved for release
+  // lines that do not exist yet rather than only for the one being shipped.
+
+  /** A build that is not this one: a version and the floor it declares. */
+  function buildAt(version: string, floor: string): Build {
+    const parsed = parseVersion(version);
+    if (parsed === null) throw new Error(`'${version}' is not a version`);
+    return { version: parsed, floor: parseMinimum(floor, "COMPATIBLE_MINOR_FLOOR") };
+  }
+
+  it("accepts a pin AT the floor from a later minor that kept the floor", () => {
+    // The whole point of the change: a v0.8.0 that declared no breaking notes
+    // keeps the floor at 0.7 -- and a consumer pinned `"0.7"` reads it without
+    // a repin PR, which the old exact-minor rule made impossible.
+    const build = buildAt("0.8.0", "0.7");
+    const floor = parseMinimum("0.7", "dependency.minimum");
+    expect(satisfiesMinimum(floor, "0.7.0", build)).toBe(true);
+    expect(satisfiesMinimum(floor, "0.7.9", build)).toBe(true);
+    expect(satisfiesMinimum(floor, "0.8.0", build)).toBe(true);
+    expect(renderMinimum(floor, build)).toBe(">=0.7.0 <0.9.0");
+  });
+
+  it("refuses a pin BELOW the floor, and the refusal names the rule", () => {
+    // v0.7.0's own notes ARE breaking (exit codes, path resolution), so the
+    // floor it ships is its own minor and a `"0.6"` pin is refused exactly as
+    // it was before -- with a sentence saying why, which it did not have.
+    const build = buildAt("0.8.0", "0.7");
+    const floor = parseMinimum("0.6", "dependency.minimum");
+    expect(satisfiesMinimum(floor, "0.8.0", build)).toBe(false);
+    expect(satisfiesMinimum(floor, "0.7.0", build)).toBe(false);
+    // Its own minor still satisfies it: the pin is not nonsense, it is behind.
+    expect(satisfiesMinimum(floor, "0.6.4", build)).toBe(true);
+    expect(renderMinimum(floor, build)).toBe(">=0.6.0 <0.7.0");
+    expect(minimumBelowFloor(floor, build)).toMatch(
+      /minimum '0\.6' is below this build's compatibility floor '0\.7'/,
+    );
+    expect(minimumBelowFloor(floor, build)).toMatch(/declared breaking consumer notes/);
+    expect(minimumBelowFloor(floor, build)).toMatch(/Repin to '0\.7'/);
+    // A pin AT or ABOVE the floor is not a refusal at all, so it gets no
+    // sentence: a way out printed on a row that has nowhere to go is noise.
+    expect(minimumBelowFloor(parseMinimum("0.7", "dependency.minimum"), build)).toBeNull();
+  });
+
+  it("refuses a pin ABOVE this build's own minor, floor or no floor", () => {
+    // A floor is a floor and never a ceiling. `0.9` is at or above 0.7, and a
+    // 0.8.0 binary still does not satisfy it -- the version it has is the
+    // version it has.
+    const build = buildAt("0.8.0", "0.7");
+    const floor = parseMinimum("0.9", "dependency.minimum");
+    expect(satisfiesMinimum(floor, "0.8.0", build)).toBe(false);
+    expect(satisfiesMinimum(floor, "0.9.0", build)).toBe(true);
+    expect(renderMinimum(floor, build)).toBe(">=0.9.0 <0.10.0");
+  });
+
+  it("keeps the EXACT minor for a version this build cannot speak for", () => {
+    // The floor says which releases broke something UP TO THIS ONE and nothing
+    // about a release that has not happened: a 0.8.0 binary asked about a
+    // 0.9.0 on the host has no way to know what 0.9.0 changed, so it answers
+    // under the old exact-minor rule rather than guessing "compatible" -- the
+    // fail-OPEN direction, in the one range where compatibility is least
+    // guaranteed.
+    const build = buildAt("0.8.0", "0.7");
+    expect(satisfiesMinimum(parseMinimum("0.7", "dependency.minimum"), "0.9.0", build)).toBe(false);
+    // And in the other direction: an old pin is still satisfied by the old
+    // binary that answers it, which is what stops the floor becoming a false
+    // refusal about a host this build never shipped against.
+    const later = buildAt("0.9.0", "0.9");
+    expect(satisfiesMinimum(parseMinimum("0.8", "dependency.minimum"), "0.8.0", later)).toBe(true);
+  });
+
+  it("does not let a PRE-RELEASE of the next minor slip under the ceiling", () => {
+    // `0.9.0-rc.1` is `< 0.9.0` under full semver precedence, so it used to
+    // slip inside a `<0.9.0` ceiling -- an observed binary on the 0.9 LINE,
+    // admitted by a build with no idea what 0.9 broke. The pre-floor code had
+    // the same hole one minor down, so this is a standing defect closed rather
+    // than one the widening introduced.
+    const build = buildAt("0.8.0", "0.7");
+    expect(satisfiesMinimum(parseMinimum("0.7", "dependency.minimum"), "0.9.0-rc.1", build)).toBe(
+      false,
+    );
+    expect(satisfiesMinimum(parseMinimum("0.3", "dependency.minimum"), "0.4.0-rc.1", build)).toBe(
+      false,
+    );
+    expect(satisfiesMinimum(parseMinimum("1.4", "dependency.minimum"), "2.0.0-rc.1", build)).toBe(
+      false,
+    );
+    // A pre-release INSIDE the range is still inside it: the ceiling reads the
+    // numbers, it does not refuse every pre-release there is.
+    expect(satisfiesMinimum(parseMinimum("0.7", "dependency.minimum"), "0.8.1-rc.1", build)).toBe(
+      true,
+    );
+    // And the FLOOR keeps full precedence in the other direction: a release
+    // candidate is not the release it precedes.
+    expect(satisfiesMinimum(parseMinimum("0.8", "dependency.minimum"), "0.8.0-rc.1", build)).toBe(
+      false,
+    );
+  });
+
+  it("leaves the >=1.0 rule exactly where it was", () => {
+    // Above major zero the breaking-change vehicle is the MAJOR, so the floor
+    // has nothing to say and must not be consulted: `1.4` means
+    // `>=1.4.0 <2.0.0` under a 0.x build and under a 1.x one alike.
+    for (const build of [buildAt("0.8.0", "0.7"), buildAt("1.9.0", "1.0")]) {
+      const floor = parseMinimum("1.4", "dependency.minimum");
+      expect(satisfiesMinimum(floor, "1.4.0", build)).toBe(true);
+      expect(satisfiesMinimum(floor, "1.9.9", build)).toBe(true);
+      expect(satisfiesMinimum(floor, "1.3.9", build)).toBe(false);
+      expect(satisfiesMinimum(floor, "2.0.0", build)).toBe(false);
+      expect(renderMinimum(floor, build)).toBe(">=1.4.0 <2.0.0");
+    }
+  });
+
+  it("renders the exact range it applies -- the table cannot contradict the verdict", () => {
+    // A row that printed `>=0.7.0 <0.8.0` beside a SATISFIED `0.8.0` would be a
+    // report disagreeing with itself in two adjacent columns, which is the
+    // failure this sweep exists to make impossible: for every pin and every
+    // observed version, the rendered range and the verdict agree.
+    const build = buildAt("0.8.0", "0.7");
+    for (const pin of ["0.5", "0.6", "0.7", "0.8", "0.9"]) {
+      const floor = parseMinimum(pin, "dependency.minimum");
+      const range = /^>=0\.(\d+)\.0 <0\.(\d+)\.0$/.exec(renderMinimum(floor, build));
+      expect(range, pin).not.toBeNull();
+      for (const minor of [4, 5, 6, 7, 8, 9, 10]) {
+        for (const patch of [0, 3]) {
+          const found = `0.${minor}.${patch}`;
+          const inRange = minor >= Number(range?.[1]) && minor < Number(range?.[2]);
+          expect(satisfiesMinimum(floor, found, build), `${pin} vs ${found}`).toBe(inRange);
+        }
+      }
+    }
+  });
+
+  it("changes NO verdict at the floor this release ships", () => {
+    // The floor is seeded at v0.7.0's own minor because v0.7.0's notes are
+    // breaking. While the floor EQUALS this build's minor the widened rule and
+    // the old exact-minor rule agree on every input, which is the claim that
+    // makes this release safe to install under an unchanged pin -- proved here
+    // rather than asserted in a changelog.
+    const build = thisBuild();
+    expect(COMPATIBLE_MINOR_FLOOR).toBe(`${build.version.numbers[0]}.${build.version.numbers[1]}`);
+    for (const pin of ["0.3", "0.6", "0.7", "0.8"]) {
+      const floor = parseMinimum(pin, "dependency.minimum");
+      expect(renderMinimum(floor, build), pin).toBe(`>=0.${floor.minor}.0 <0.${floor.minor + 1}.0`);
+      for (const minor of [floor.minor - 1, floor.minor, floor.minor + 1]) {
+        if (minor < 0) continue;
+        expect(satisfiesMinimum(floor, `0.${minor}.2`, build), `${pin} vs 0.${minor}.2`).toBe(
+          minor === floor.minor,
+        );
+      }
+    }
+  });
+
+  it("prints the floor beside the binary's own version, on every run", async () => {
+    const text = await capture([], { script: ALL_PRESENT });
+    expect(text.out.join("\n")).toContain(
+      `compat floor:  ${COMPATIBLE_MINOR_FLOOR}  (the lowest dependency.minimum nen ${VERSION} satisfies)`,
+    );
+  });
+
+  it("says so on the row when the declaration's pin is below the floor", async () => {
+    // End to end, through the real dispatch: the host has exactly the binary
+    // this build IS, and the row is still WRONG -- so the way out has to say
+    // that it is the PIN that is behind and not the machine, or a reader goes
+    // and installs the version they already have.
+    const result = await withDeclaration(
+      {
+        $schema: "nen.contract/v0.1",
+        dependency: {
+          minimum: "0.1",
+          pinned_ref: "v0.1.0",
+          version_probe: ["nen", "--version"],
+          bootstrap: {
+            url: "https://example.invalid/nen.sh",
+            script_path_in_source: "bootstrap/nen.sh",
+          },
+        },
+        project: {
+          lanes: { only: { stack: "nextjs", cwd: "." } },
+          defaultLane: "only",
+          verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] } } },
+        },
+      },
+      [],
+      { script: [{ match: "nen --version", result: { stdout: `${VERSION}\n`, code: 0 } }] },
+    );
+    expect(result.code).toBe(5);
+    expect(result.out.join("\n")).toMatch(
+      /minimum '0\.1' is below this build's compatibility floor '0\.7'/,
+    );
+    expect(result.out.join("\n")).toMatch(/Repin to '0\.7'/);
   });
 
   it("reports a nen that will not start as missing, and never tries to install it", async () => {
@@ -1062,11 +1268,16 @@ describe("--json -- one object, in one key order", () => {
       "lane",
       "stack",
       "mode",
+      "compatibleMinorFloor",
       "summary",
       "tools",
       "exitCode",
     ]);
     expect(report(result).contract).toBe("nen.shu.tools/v0.1");
+    // A FACT ABOUT THE BINARY, carried on every report -- including one whose
+    // declaration has no `dependency` block at all, because "do I owe a repin"
+    // is a question about nen and not about the declaration that asked.
+    expect(report(result).compatibleMinorFloor).toBe(COMPATIBLE_MINOR_FLOOR);
   });
 
   it("pins every row's key order", async () => {

@@ -160,7 +160,17 @@ export interface BootstrapPin {
 }
 
 export interface DependencyBlock {
-  /** `MAJOR.MINOR`. What the range means is the repository's own prose. */
+  /**
+   * `MAJOR.MINOR`. This loader reads the string and interprets none of it.
+   *
+   * WHAT RANGE IT STANDS FOR IS `../shu/toolchain.ts`'s ANSWER, and no longer
+   * the declaration's prose alone: at major zero the range's top depends on
+   * the reading build's own `COMPATIBLE_MINOR_FLOOR` (`docs/USAGE.md`, "The
+   * `0.x` rule, and the compatibility floor"). The declaration's
+   * `minimum_semantics` / `zero_major_caveat` prose is preserved verbatim and
+   * printed as the row's `why`, where it belongs -- as the repository's own
+   * account of its pin, never as the rule nen applies.
+   */
   readonly minimum: string;
   /** The ref the bootstrap installs when the contract is unsatisfied. */
   readonly pinnedRef: string;

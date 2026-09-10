@@ -2,6 +2,13 @@
 // version out of what a probe answered, and decide whether it satisfies the pin
 // a declaration states. Pure: no seam, no filesystem, no clock, no catalogue.
 //
+// IT READS TWO LITERALS FROM ../version.ts AND NOTHING ELSE FROM ANYWHERE.
+// `VERSION` and `COMPATIBLE_MINOR_FLOOR` are compiled INTO the binary, so
+// reading them is arithmetic on a constant rather than a fourth kind of input:
+// the `dependency.minimum` rule cannot be evaluated without knowing which
+// releases declared breaking consumer notes, and the only honest place for that
+// fact is data the build carries about itself (see that file's header).
+//
 // IT NAMES NO TOOL AND NO INSTALLER. ./purity.test.ts sweeps this file with
 // every other module on the execution path; what it knows about is the closed
 // `versionFrom` enum ../schema/contract.ts publishes and the shape of a number.
@@ -26,6 +33,7 @@
 
 import { VerbUsageError } from "../cli/command.js";
 import type { VersionFrom } from "../schema/contract.js";
+import { COMPATIBLE_MINOR_FLOOR, VERSION } from "../version.js";
 
 /**
  * What one tool's row says about the host.
@@ -319,23 +327,83 @@ export interface Floor {
 }
 
 /**
+ * This build's own identity, as the two facts a `minimum` is judged against.
+ *
+ * IT IS A VALUE RATHER THAN AN IMPORT AT EVERY CALL SITE so a test can hand
+ * this module a SYNTHETIC build and read the rule's answers for a release line
+ * that does not exist yet. Every exported function below defaults it to the
+ * real one, so no caller has to know the rule needs it.
+ */
+export interface Build {
+  /** The binary's own version -- ../version.ts's `VERSION`, parsed. */
+  readonly version: ParsedVersion;
+  /** The lowest `minimum` pin this build satisfies -- `COMPATIBLE_MINOR_FLOOR`. */
+  readonly floor: Floor;
+}
+
+/**
+ * The running build, read once per call out of the two literals ../version.ts
+ * ships.
+ *
+ * BOTH ARE PARSED HERE RATHER THAN AT MODULE LOAD, because a malformed literal
+ * must fail the one comparison that needs it -- naming the pointer, at exit 2,
+ * the way every other refusal in this file does -- and never take the whole CLI
+ * down before `--help` can print. ../version.test.ts is what keeps the literals
+ * well-formed; this is what keeps a mistake in them survivable.
+ */
+export function thisBuild(): Build {
+  const version = parseVersion(VERSION);
+  if (version === null) {
+    throw new VerbUsageError(
+      `this build's own VERSION is '${VERSION}', which is not a version -- src/version.ts is the one place it is written and src/version.test.ts is what guards it.`,
+    );
+  }
+  return { version, floor: parseMinimum(COMPATIBLE_MINOR_FLOOR, "COMPATIBLE_MINOR_FLOOR") };
+}
+
+/** A floor as a declaration spells it: `0.7`, never `0.7.0`. */
+export function renderFloor(floor: Floor): string {
+  return `${floor.major}.${floor.minor}`;
+}
+
+/**
+ * Whether the zero-major COMPATIBILITY FLOOR applies to this comparison at all.
+ *
+ * It applies only when the pin and this build are both on a zero-major line,
+ * which is the one line the caveat is about. Above major zero the vehicle has
+ * moved and the range rule below carries the whole answer.
+ */
+function floorApplies(floor: Floor, build: Build): boolean {
+  return floor.major === 0 && build.floor.major === 0 && (build.version.numbers[0] ?? 0) === 0;
+}
+
+/** This build's own minor, for the zero-major arm. */
+function buildMinor(build: Build): number {
+  return build.version.numbers[1] ?? 0;
+}
+
+/**
  * The `dependency` block's `MAJOR.MINOR` floor, under the contract's own rule.
  *
  * THE ZERO-MAJOR CAVEAT IS THE CONTRACT'S, NOT NEN'S, and it is stated in every
  * declaration that carries the block: at major zero the MINOR is the
- * breaking-change vehicle, so `0.3` means `>=0.3.0 <0.4.0` EXACTLY -- a higher
- * minor is out of range in BOTH directions. Above zero the vehicle moves one
- * component up, so `1.4` means `>=1.4.0 <2.0.0`: the same rule, one component
- * along, rather than a second rule nen invented for a case the prose did not
- * spell out.
+ * breaking-change vehicle. Until v0.7.0 nen read that as `0.3` meaning
+ * `>=0.3.0 <0.4.0` EXACTLY -- out of range in BOTH directions -- which made
+ * every minor release, breaking or not, owe a repin PR in every consuming
+ * repository. The maintainer's ruling of 2026-09-10 is the narrower reading
+ * this file now implements: exact minor is fine, UNLESS there is a breaking
+ * change, and which releases had one is a fact the binary ships
+ * (`COMPATIBLE_MINOR_FLOOR`) rather than a fact it guesses. Above zero the
+ * vehicle moves one component up, so `1.4` still means `>=1.4.0 <2.0.0`,
+ * untouched by any of this.
  *
  * THE FLOOR IS EXACTLY TWO COMPONENTS, and a third is REFUSED rather than
  * dropped. `0.3.5` used to parse and silently become `0.3` -- a floor a
  * repository wrote to exclude `0.3.4`, applied as one that admits it, with no
  * line of output saying so. There is no reading of `MAJOR.MINOR.PATCH` under
- * this block's own zero-major rule (`0.3` means `>=0.3.0 <0.4.0` EXACTLY), so
- * the honest answer to a third component is to name the pointer and refuse:
- * a comparison nen quietly weakened is a comparison nobody made.
+ * this block's zero-major rule in either its old or its new form, so the honest
+ * answer to a third component is to name the pointer and refuse: a comparison
+ * nen quietly weakened is a comparison nobody made.
  *
  * A LEADING `v` IS ACCEPTED AND NORMALISED AWAY, exactly as `parseVersion`
  * accepts it everywhere else in this file -- and `renderMinimum` renders the
@@ -346,30 +414,110 @@ export function parseMinimum(minimum: string, pointer: string): Floor {
   const floor = parseVersion(minimum);
   if (floor === null || floor.numbers.length !== 2) {
     throw new VerbUsageError(
-      `${pointer} is '${minimum}', which is not the MAJOR.MINOR floor this block states. It is exactly two components: at major zero it means '>=0.M.0 <0.(M+1).0' exactly -- the minor is the breaking-change vehicle there -- and above zero it means '>=X.Y.0 <(X+1).0.0'. A third component has no reading under that rule and is refused rather than dropped, because a floor nen quietly widened is a comparison nobody made.`,
+      `${pointer} is '${minimum}', which is not the MAJOR.MINOR floor this block states. It is exactly two components: at major zero it means '>=0.M.0' up to the minor of the build reading it, and no further back than that build's compatibility floor -- the minor is the breaking-change vehicle there -- and above zero it means '>=X.Y.0 <(X+1).0.0'. A third component has no reading under either rule and is refused rather than dropped, because a floor nen quietly widened is a comparison nobody made.`,
     );
   }
   return { major: floor.numbers[0] ?? 0, minor: floor.numbers[1] ?? 0 };
 }
 
-/** The range a floor stands for, spelled out. Rendered, never re-parsed. */
-export function renderMinimum(floor: Floor): string {
-  const ceiling = floor.major === 0 ? `0.${floor.minor + 1}.0` : `${floor.major + 1}.0.0`;
-  return `>=${floor.major}.${floor.minor}.0 <${ceiling}`;
+/**
+ * The exclusive top of the range a floor admits, as a minor, on a zero-major
+ * line -- and the ONE place the widening is decided.
+ *
+ * A PIN AT OR ABOVE THIS BUILD'S FLOOR REACHES UP TO THIS BUILD'S OWN MINOR,
+ * and no further. The floor says which releases declared breaking consumer
+ * notes UP TO AND INCLUDING this one, and it says nothing whatever about a
+ * release that has not happened yet -- so a `0.7` pin is satisfied by the
+ * 0.7 and 0.8 lines when THIS binary is 0.8.0 with a floor of `0.7`, and a
+ * 0.9.0 answered by a probe is out of range to a 0.7.0 binary asking the
+ * question, because a 0.7.0 binary has no way to know what 0.9.0 broke.
+ * Guessing "compatible" there would be the fail-OPEN read of the one range
+ * where compatibility is least guaranteed (zheref/nen#83's rule, applied to a
+ * comparison rather than to an extraction).
+ *
+ * A PIN BELOW THE FLOOR, OR ABOVE THIS BUILD, KEEPS THE OLD EXACT MINOR. Its
+ * own minor is the only one it admits: `0.6` against a floor of `0.7` still
+ * means `>=0.6.0 <0.7.0`, which is what makes the refusal below a refusal
+ * rather than a re-interpretation, and `0.9` against a 0.7.0 build still means
+ * `>=0.9.0 <0.10.0`, because an older binary must not certify a newer line.
+ */
+function zeroMajorCeilingMinor(floor: Floor, build: Build): number {
+  const live = floor.minor >= build.floor.minor && floor.minor <= buildMinor(build);
+  return (live ? buildMinor(build) : floor.minor) + 1;
 }
 
-/** Whether an observed version falls inside the range a floor stands for. */
-export function satisfiesMinimum(floor: Floor, found: string): boolean {
+/**
+ * The range a floor stands for, spelled out. Rendered, never re-parsed.
+ *
+ * IT IS THE EXACT RANGE `satisfiesMinimum` APPLIES, which is why it takes the
+ * same build: a table that printed `>=0.7.0 <0.8.0` beside a satisfied `0.8.0`
+ * would be a report contradicting itself in two adjacent columns.
+ * ./tools.test.ts sweeps both functions over the same versions and fails
+ * when they disagree by one input.
+ */
+export function renderMinimum(floor: Floor, build: Build = thisBuild()): string {
+  const numbers = ceilingOf(floor, build).numbers;
+  return `>=${floor.major}.${floor.minor}.0 <${numbers[0] ?? 0}.${numbers[1] ?? 0}.${numbers[2] ?? 0}`;
+}
+
+/** The exclusive ceiling a floor stands for, as one parsed version. */
+function ceilingOf(floor: Floor, build: Build): ParsedVersion {
+  if (floor.major !== 0) return { numbers: [floor.major + 1, 0, 0], prerelease: null };
+  const minor = floorApplies(floor, build) ? zeroMajorCeilingMinor(floor, build) : floor.minor + 1;
+  return { numbers: [0, minor, 0], prerelease: null };
+}
+
+/**
+ * Whether an observed version falls inside the range a floor stands for.
+ *
+ * THE TWO BOUNDS READ A PRE-RELEASE DIFFERENTLY, ON PURPOSE, and each way
+ * round is the fail-CLOSED one for its own end.
+ *
+ * The FLOOR keeps semver precedence in full, so `0.7.0-rc.1` does not satisfy
+ * `0.7`: a release candidate is not the release, and a floor is a statement
+ * about what has shipped.
+ *
+ * The CEILING COMPARES THE NUMBERS ONLY. Under full precedence `0.9.0-rc.1` is
+ * `< 0.9.0` and slipped inside a `<0.9.0` ceiling -- an observed binary on the
+ * 0.9 LINE, admitted by a build with no idea what 0.9 broke, which is the exact
+ * hole this file's rule exists to close. The pre-floor code had it too
+ * (`0.4.0-rc.1` satisfied a `0.3` pin), so this closes a standing defect rather
+ * than one the widening introduced. At major zero the MINOR is the
+ * breaking-change vehicle, so what matters at the top of the range is which
+ * minor a version is ON and not where it sits inside it -- which is also the
+ * convention every semver range implementation settled on: a pre-release
+ * satisfies a range only where the range names a pre-release at that same
+ * tuple, and a `minimum` names none.
+ */
+export function satisfiesMinimum(floor: Floor, found: string, build: Build = thisBuild()): boolean {
   const observed = parseVersion(found);
   if (observed === null) return false;
   if (compareVersions(observed, { numbers: [floor.major, floor.minor, 0], prerelease: null }) < 0) {
     return false;
   }
-  const ceiling: ParsedVersion =
-    floor.major === 0
-      ? { numbers: [0, floor.minor + 1, 0], prerelease: null }
-      : { numbers: [floor.major + 1, 0, 0], prerelease: null };
-  return compareVersions(observed, ceiling) < 0;
+  const asReleased: ParsedVersion = { numbers: observed.numbers, prerelease: null };
+  return compareVersions(asReleased, ceilingOf(floor, build)) < 0;
+}
+
+/**
+ * WHY THIS BUILD CAN NEVER SATISFY THIS PIN, in words -- or null when it can.
+ *
+ * IT IS A FACT ABOUT THE DECLARATION AND THE BINARY, NOT ABOUT THE HOST, which
+ * is why it is answered before the probe runs and why it names no observed
+ * version. A `minimum` below this build's compatibility floor is refused
+ * whatever `nen --version` prints, and a reader who is told only "WRONG" beside
+ * the version they just installed has been told the least useful true thing in
+ * the report.
+ *
+ * IT NAMES THE REPIN AND THE RULE THAT NOW GOVERNS IT. The old rule owed a
+ * repin on every minor; this one owes it only when the floor moves, and the
+ * sentence says so, because the reader's real question is "will I be here
+ * again in a fortnight".
+ */
+export function minimumBelowFloor(floor: Floor, build: Build = thisBuild()): string | null {
+  if (!floorApplies(floor, build) || floor.minor >= build.floor.minor) return null;
+  const wanted = renderFloor(build.floor);
+  return `minimum '${renderFloor(floor)}' is below this build's compatibility floor '${wanted}' -- the ${wanted} line declared breaking consumer notes, so no ${VERSION} binary satisfies a pin under '${wanted}', whatever the host answers. Repin to '${wanted}'. A pin at or above the floor is satisfied by every later 0.x release that keeps it, so a repin is owed again when the floor moves and not when the minor does.`;
 }
 
 /** One row's verdict: the state, whether it counts as satisfied, what was seen. */

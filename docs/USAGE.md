@@ -2840,6 +2840,43 @@ reachability questions the cut depends on. It never cuts the tag itself
 (`nen tag cut` does that) and never decides whether a held or live-chore
 release should proceed — those stay human calls.
 
+<a id="the-release-time-floor-step"></a>
+
+**One release-time step is nen's own and is not a verb: the compatibility
+floor.** `src/version.ts` ships `COMPATIBLE_MINOR_FLOOR` — `MAJOR.MINOR`, the
+lowest `dependency.minimum` pin the build satisfies
+([`nen shu tools`](#the-compatibility-floor) is what reads it). The cut that
+writes `## vX.Y.0` decides it, in the **same commit** as `VERSION` and
+`package.json`:
+
+- the new section's `### Breaking / consumer notes` carries **at least one
+  bullet that is not the repin sentence** → set the floor to **`X.Y`**, this
+  release's own minor;
+- it carries none, or has no such section → **leave the floor where it is**.
+  That is the whole benefit: consumers pinned at or above it read the new binary
+  with no repin PR.
+
+The pin bullet itself changes with the rule. It used to be owed
+unconditionally — *"repin `0.6` → `0.7`"* on every minor. Now it is owed **only
+when the floor moved**, and the section carries one bullet either way, under a
+**dedicated bold lead-in the guard below matches on**:
+
+- the floor moved → `- **Repin: \`"0.6"\` → \`"0.7"\`, and \`v0.6.0\` → \`v0.7.0\`.** …`
+- the floor stayed → `- **No repin: the compatibility floor stays \`0.7\`.** A repository pinned \`0.7\` needs no change …`
+
+The lead-in must *begin* `Repin:` or `No repin:` — the guard treats any other
+bullet in that section as a real breaking note, which is the safe way for it to
+be wrong.
+
+`src/version.test.ts` is the guard, and it fails the build when the two
+disagree: it reads CHANGELOG.md's **topmost released section** and asserts that
+a release declaring breaking notes moved the floor to its own minor, and that
+one declaring none did not move it above. This is a test rather than a
+[`release preflight`](#nen-release-preflight) row on purpose — preflight is
+repo-agnostic and runs against any repository's cut point, while the floor is a
+literal compiled into *this* binary and can only be reconciled against *this*
+repository's changelog.
+
 ### `nen release preflight`
 
 Checks every row of getsuga §2's precondition table: the `RELEASE_HOLD`
@@ -5913,16 +5950,67 @@ nen shu tools --install [--only <tool[,tool]>] [--dry-run] [--json]
 
 The **`nen` row** comes from the `dependency` block instead, when there is one:
 its `version_probe` argv, compared against `minimum` under the contract's own
-**zero-major rule** — at major zero the MINOR is the breaking-change vehicle, so
-`0.3` means `>=0.3.0 <0.4.0` *exactly*, out of range in both directions; above
-zero the vehicle moves one component up, so `1.4` means `>=1.4.0 <2.0.0`. The
-floor is **exactly two components**: `0.3.5` is exit 2 naming the pointer, not a
-floor silently widened to `0.3` — a comparison nen quietly weakened is a
-comparison nobody made. A leading `v` is accepted and normalised away. It is
-always `verify-only`: re-pinning nen is [`nen bootstrap`](#family-bootstrap)'s job
-and the consuming repository's decision, and the row prints the `pinned_ref` its
-bootstrap would install. A `project.toolchain` entry of the same name wins, and
-the row is then not synthesised.
+**zero-major rule**. The floor is **exactly two components**: `0.3.5` is exit 2
+naming the pointer, not a floor silently widened to `0.3` — a comparison nen
+quietly weakened is a comparison nobody made. A leading `v` is accepted and
+normalised away. It is always `verify-only`: re-pinning nen is
+[`nen bootstrap`](#family-bootstrap)'s job and the consuming repository's
+decision, and the row prints the `pinned_ref` its bootstrap would install. A
+`project.toolchain` entry of the same name wins, and the row is then not
+synthesised.
+
+<a id="the-compatibility-floor"></a>
+
+**The `0.x` rule, and the compatibility floor.** Above major zero the
+breaking-change vehicle is the MAJOR, so `1.4` means `>=1.4.0 <2.0.0` and
+nothing below applies. **At major zero the vehicle is the MINOR**, and until
+v0.7.0 nen read that at its strictest: `0.6` meant `>=0.6.0 <0.7.0` *exactly*,
+out of range in both directions, so **every** minor release — breaking or not —
+owed a repin PR in every consuming repository. The maintainer's ruling of
+2026-09-10 narrows it to *exact minor is fine, unless there is a breaking
+change*, and the fact that makes the distinction decidable is one the binary
+**ships**: `COMPATIBLE_MINOR_FLOOR` (`src/version.ts`), the lowest `minimum`
+pin this build satisfies. A release whose CHANGELOG section declares breaking
+consumer notes sets it to its own minor; a release that declares none leaves it
+where it was, and thereby goes on accepting the pins already written.
+
+A `minimum` of `0.A`, read by a build whose version is `0.V.p` and whose floor
+is `0.F`, admits:
+
+| `minimum` | this build | floor | admits | why |
+|---|---|---|---|---|
+| `0.7` | 0.7.0 | 0.7 | `>=0.7.0 <0.8.0` | the pin is at the floor; this build's own minor is the top |
+| `0.7` | 0.8.0 | 0.7 | `>=0.7.0 <0.9.0` | v0.8.0 declared no breaking notes and kept the floor, so the pin still holds — **no repin** |
+| `0.6` | 0.7.0 | 0.7 | `>=0.6.0 <0.7.0` | below the floor: v0.7.0's notes are breaking, so no 0.7.x satisfies it — exit **5**, repin to `0.7` |
+| `0.9` | 0.8.0 | 0.7 | `>=0.9.0 <0.10.0` | a floor is never a ceiling: this build is simply older than the pin |
+| `1.4` | any | any | `>=1.4.0 <2.0.0` | above major zero the floor is not consulted at all |
+
+Two properties are worth stating outright. **A pin's own minor always satisfies
+it** — the widening only ever adds versions. And **a version this build cannot
+speak for keeps the old exact-minor rule**: a 0.8.0 binary asked about a 0.9.0
+on the host has no way to know what 0.9.0 broke, so it refuses rather than
+guessing "compatible", which is the fail-open read of the one range where
+compatibility is least guaranteed. The rendered `pinned` range is the *exact*
+range the verdict applies, and a test sweeps both over the same versions, so the
+table can never print a range that disagrees with its own `ok`/`WRONG`.
+
+**A pre-release is read differently at each end of the range**, each way round
+being the fail-closed one for that end. The **floor** keeps semver precedence in
+full, so `0.7.0-rc.1` does not satisfy `0.7` — a release candidate is not the
+release. The **ceiling** compares the numbers only, so `0.9.0-rc.1` does *not*
+sit under a `<0.9.0` ceiling: it is a binary on the 0.9 line, and the minor is
+what the whole rule turns on. (Under plain precedence it did, and so did
+`0.4.0-rc.1` against a `0.3` pin before this release — a standing hole, closed
+here.) A pre-release *inside* the range is still inside it: `0.8.1-rc.1`
+satisfies `0.7` on a 0.8.0 build.
+
+The floor is printed on **every** run, beside the binary's own version
+(`compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)`),
+and carried as `compatibleMinorFloor` in `--json` — including in a report whose
+declaration has no `dependency` block, because *"do I owe a repin"* is a
+question about nen and not about the declaration that asked. When a `minimum`
+is below the floor the row's `remedy` says so in words and names the repin: no
+version of that binary can satisfy it, whatever the host answers.
 
 **The four row states**
 
@@ -5999,10 +6087,14 @@ claim is wrong: that run would have probed, installed nothing and exited 0 with
 narrowed one that can install nothing has none.
 
 **`--json`** is a different contract from the rest of the family:
-`{ contract, lane, stack, mode, summary, tools, exitCode }` with `contract` =
-`nen.shu.tools/v0.1` and `mode` one of `check` / `install` / `dry-run`. **It
-carries every value the table prints** — the human rendering is derived *from*
-this object, not beside it, so the two cannot come apart.
+`{ contract, lane, stack, mode, compatibleMinorFloor, summary, tools, exitCode }`
+with `contract` = `nen.shu.tools/v0.1` and `mode` one of `check` / `install` /
+`dry-run`. **It carries every value the table prints** — the human rendering is
+derived *from* this object, not beside it, so the two cannot come apart.
+`compatibleMinorFloor` is `MAJOR.MINOR`, the lowest `dependency.minimum` pin
+this build satisfies ([the compatibility floor](#the-compatibility-floor)); it
+is present on every report, including one whose declaration has no `dependency`
+block.
 
 `summary` is `{ checked, satisfied, missing, wrong, notProbed, installed,
 refused, notInstallable }`. The four state counts always sum to `checked`.
@@ -6017,7 +6109,7 @@ install, why }`, in that order:
 
 | Field | Meaning |
 |---|---|
-| `pinned` | The declaration's pin, normalised — an exact version, `>=X.Y.Z`, or the two-sided range a `dependency.minimum` floor stands for. |
+| `pinned` | The declaration's pin, normalised — an exact version, `>=X.Y.Z`, or the two-sided range a `dependency.minimum` floor stands for. That range is the **exact** one the verdict on the same row applies, floor included, so a satisfied `0.8.0` never sits beside a `<0.8.0`. |
 | `versionFrom` | The member that read the version. It is what makes a satisfied row with no `found` readable: `path-exists` means presence *was* the check. |
 | `probe` | The declared probe argv, rendered exactly as `--dry-run` prints it. |
 | `probeOutput` | The first line the probe printed, **only** on a row that says "present, version unknown" — the one case where the output is the finding. Null everywhere else, including on satisfied rows, where `found` is the answer. Capped at 200 characters. |
@@ -6048,6 +6140,7 @@ nen shu tools --repo ./web-app
 ```text
 lane:          web  (nextjs)
 mode:          check
+compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)
   ok       node    22.11.0  pinned >=20.19.0  (tested minimum 20.19.0)
   MISSING  pnpm    --       pinned 9.15.9     (tested minimum 9.15.9)
                             install: corepack enable
@@ -6060,6 +6153,35 @@ mode:          check
 ```
 
 (exit 5; the summary and the two lines are on stderr)
+
+**Example — the `nen` row and its floor.** Two declarations, identical but for
+`minimum`, checked by a v0.7.0 binary that is also what the host has:
+
+```bash
+nen shu tools --repo ./pinned-0.6
+```
+```text
+lane:          app  (nextjs)
+mode:          check
+compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)
+  WRONG    nen   0.7.0  pinned >=0.6.0 <0.7.0
+                 verify-only: install by hand -- the bootstrap this repository pins installs v0.7.0. Re-pinning nen is the bootstrap's job and this repository's decision; this verb reports the version and never changes it. minimum '0.6' is below this build's compatibility floor '0.7' -- the 0.7 line declared breaking consumer notes, so no 0.7.0 binary satisfies a pin under '0.7', whatever the host answers. Repin to '0.7'. A pin at or above the floor is satisfied by every later 0.x release that keeps it, so a repin is owed again when the floor moves and not when the minor does.
+```
+exit 5
+
+```bash
+nen shu tools --repo ./pinned-0.7
+```
+```text
+lane:          app  (nextjs)
+mode:          check
+compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)
+  ok       nen   0.7.0  pinned >=0.7.0 <0.8.0
+```
+exit 0
+
+(both run live against `dist/nen-darwin-arm64` built from this branch, with that
+binary on `PATH` as the `version_probe`'s `nen`)
 
 ### `nen shu warmup`
 
