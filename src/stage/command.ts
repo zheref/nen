@@ -4,23 +4,39 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { GIT, outputLines } from "../seam/exec.js";
 import { commaList } from "../cli/comma.js";
-import { requireRepoFlag, requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
-import { parseStatusPorcelain, triageStage } from "./triage.js";
+import {
+  requireRepoFlag,
+  requireSubcommand,
+  VerbUsageError,
+  type Command,
+  type CommandContext,
+} from "../cli/command.js";
+import { statSync } from "node:fs";
+import { join } from "node:path";
+import { DEFAULT_LARGE_BYTES, parseStatusPorcelain, triageStage } from "./triage.js";
 
 const USAGE = `nen stage triage -- flag what should never be staged blind, tensho §3.
 
 usage:
   nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
+                   [--large-bytes <n>]
 
-  --scope     path prefixes considered in-scope for this change. Omit to skip
-              the out-of-scope check entirely (no scope declared, nothing to
-              compare against).
-  --mentions  free text (a commit message draft, a PR description) searched
-              for a deleted path's basename -- an unmentioned deletion is
-              flagged, never silently staged.
+  --scope        path prefixes considered in-scope for this change. Omit to
+                 skip the out-of-scope check entirely (no scope declared,
+                 nothing to compare against).
+  --mentions     free text (a commit message draft, a PR description)
+                 searched for a deleted path's basename -- an unmentioned
+                 deletion is flagged, never silently staged.
+  --large-bytes  bytes at or above which a file is flagged 'large'. Default
+                 ${DEFAULT_LARGE_BYTES} (1 MiB): no ordinary source file trips
+                 it, and a multi-megabyte accident does. A file this verb
+                 could not measure -- a deletion -- is never flagged large,
+                 because "not measured" must not read as "measured and small".
 
 Detects, never decides: secret shapes (.env, *.pem, *.key, credentials*),
-binaries, out-of-scope paths and unmentioned deletions -- these are FLAGGED,
+local-config filenames (the '.local' infix -- settings.local.json, .env.local,
+config.local.yml), files at or over --large-bytes, binaries, out-of-scope
+paths and unmentioned deletions -- these are FLAGGED,
 and 'a flagged file is never committed without an explicit yes', a yes this
 verb never gives. A git-ignored path is a FACT rather than a question -- it
 cannot be staged without -f, so there is nothing to ask -- and is reported
@@ -30,9 +46,9 @@ all-ignored tree is exit 0.`;
 
 export const stageCommand: Command = {
   name: "stage",
-  summary: "Flag secrets, binaries and unmentioned deletions before staging; report ignored paths separately.",
+  summary: "Flag secrets, local config, oversized files, binaries and unmentioned deletions before staging.",
   usage: USAGE,
-  flags: { values: ["scope", "mentions"], booleans: [] },
+  flags: { values: ["scope", "mentions", "large-bytes"], booleans: [] },
   run(context: CommandContext): number {
     requireSubcommand("stage", context.args, ["triage"]);
     // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
@@ -50,10 +66,36 @@ export const stageCommand: Command = {
       context.io.err(`nen: could not read working-copy status: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
       return 1;
     }
+    const rawLarge = context.args.values["large-bytes"];
+    const largeBytes = rawLarge === undefined ? DEFAULT_LARGE_BYTES : Number(rawLarge);
+    if (!Number.isInteger(largeBytes) || largeBytes <= 0) {
+      throw new VerbUsageError(
+        `--large-bytes takes a positive whole number of bytes -- got '${rawLarge}'. It is the size at or above which a file is flagged for a human to look at, so a zero or negative one would flag every file and say nothing.`,
+      );
+    }
+
     const entries = parseStatusPorcelain(result.stdout);
+    // MEASURED HERE, NOT IN THE PURE MODULE. ./triage.ts has no filesystem --
+    // that is what makes every one of its branches testable as data -- so the
+    // sizes are read at this seam and handed in. A path that cannot be stat'd
+    // (a deletion, a broken symlink) simply contributes no entry, and the
+    // detector treats an absent size as "not measured" rather than as small.
+    const sizes = new Map<string, number>();
+    for (const entry of entries) {
+      if (entry.indexStatus === "D" || entry.worktreeStatus === "D") continue;
+      try {
+        const stats = statSync(join(root, ...entry.path.split("/")));
+        if (stats.isFile()) sizes.set(entry.path, stats.size);
+      } catch {
+        // Unmeasurable is not small. Nothing is recorded for this path.
+      }
+    }
+
     const triage = triageStage(entries, {
       scopePrefixes: commaList(context.args.values["scope"]),
       mentionedText: context.args.values["mentions"] ?? "",
+      sizes,
+      largeBytes,
     });
 
     if (context.json) {
