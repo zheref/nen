@@ -68,7 +68,7 @@ nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready]
 nen pr body-check --body-from <path> --requirements-from <path>
 nen pr fetch --target <owner/name> --pr <n>
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
-nen pr cascade-main --repo <path> [--trunk main]
+nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> --add-reviewers a,b
 
@@ -137,6 +137,11 @@ next-blocker:
 cascade-main:
   Merges (never rebases) the trunk into the current branch and pushes on a
   clean merge. Reports a conflict rather than resolving it.
+  --no-push                   Fetch and merge exactly as always, then stop --
+                              never push. Still mutates the working tree and
+                              index (the merge happens); --json gains
+                              'noPush: true'. Exit codes are unchanged: 0 on a
+                              clean merge, 1 on a conflict.
 
 retarget:
   gh pr edit --base, for a stacked PR after its predecessor merges.
@@ -292,7 +297,7 @@ export const prCommand: Command = {
       "base",
       "add-reviewers",
     ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr"],
+    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push"],
   },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("pr", context.args, [
@@ -305,6 +310,18 @@ export const prCommand: Command = {
       "retarget",
       "request-reviews",
     ]);
+    // --no-push sits in this family's shared boolean set (above) only because
+    // that set has no per-subcommand table (review finding, PR #141) -- so
+    // without this, it would parse cleanly and be silently ignored on every
+    // OTHER `pr` subcommand, misleading a caller who carried it over from a
+    // `cascade-main` invocation. A minimal, local refusal here, rather than
+    // the full foreign-flag table `shu`/`issue` have (../shu/command.ts,
+    // ../issue/command.ts), because this family has no such table for any of
+    // its other subcommand-specific flags yet (`--delivery-pr` has the same
+    // gap) and growing one is a bigger change than this flag's own PR.
+    if (subcommand !== "cascade-main" && context.args.booleans.has("no-push")) {
+      throw new VerbUsageError("--no-push is only read by 'pr cascade-main'.");
+    }
     switch (subcommand) {
       case "ready":
         return ready(context);
@@ -417,12 +434,25 @@ function cascade(context: CommandContext): number {
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the repository whose current branch the trunk is merged into."),
   });
-  const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main");
+  const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main", {
+    noPush: context.args.booleans.has("no-push"),
+  });
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.error !== null || result.conflicted ? 1 : 0;
   }
   for (const line of result.log) context.io.out(line);
+  // The placeholder deliberately claims nothing about WHY a side is empty --
+  // it covers both "the merge base resolved and this range genuinely had no
+  // commits" and "the merge base itself could not be resolved, so this range
+  // was never computed at all" (../pr/cascade.ts's collectConflicts()). Only
+  // --json's ours[]/theirs[] arrays exist to tell those two apart.
+  const commitList = (commits: readonly string[]): string => (commits.length === 0 ? "(no commits found)" : commits.join(", "));
+  for (const conflict of result.conflicts) {
+    context.io.out(`  ${conflict.path}  (${conflict.kind})`);
+    context.io.out(`    ours:   ${commitList(conflict.ours)}`);
+    context.io.out(`    theirs: ${commitList(conflict.theirs)}`);
+  }
   if (result.error !== null) {
     context.io.err(`nen: ${result.error}`);
     return 1;

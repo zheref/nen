@@ -267,6 +267,18 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
+  // Review finding (PR #141, Copilot): --no-push sits in this family's SHARED
+  // boolean flag set (there is no per-subcommand table here yet), so without
+  // this guard it parsed cleanly and was silently ignored on every other `pr`
+  // subcommand -- misleading a caller who carried it over from a
+  // `cascade-main` invocation. Fires before dispatch, so no other flag this
+  // subcommand needs has to be supplied for the test to isolate this refusal.
+  it("refuses --no-push on any subcommand other than cascade-main", async () => {
+    const result = await capture(["pr", "ready", "--no-push"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--no-push is only read by 'pr cascade-main'/);
+  });
+
   it("retarget requires --base", async () => {
     const result = await capture(["pr", "retarget", "--target", "o/n", "--pr", "1"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
@@ -289,9 +301,99 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const script: readonly ScriptedCall[] = [
       { match: "git fetch origin main", result: {} },
       { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: {} },
     ];
     const result = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(script));
     expect(result.code).toBe(1);
+  });
+
+  it("cascade-main --no-push merges cleanly, never calls push, and says so in the log and --json", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: {} },
+    ];
+    const result = await capture(["pr", "cascade-main", "--no-push"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/not pushed \(--no-push\)/);
+
+    const jsonResult = await capture(
+      ["pr", "cascade-main", "--no-push", "--json"],
+      BANKAI_REPO,
+      new ScriptedSeams(script),
+    );
+    expect(jsonResult.code).toBe(0);
+    const parsed = JSON.parse(jsonResult.out.join("\n"));
+    expect(parsed).toMatchObject({ noPush: true, pushed: false, conflicted: false, conflicts: [] });
+  });
+
+  it("cascade-main --json without --no-push carries noPush: false and conflicts: []", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: {} },
+      { match: "git push", result: {} },
+    ];
+    const result = await capture(["pr", "cascade-main", "--json"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n"));
+    expect(parsed).toMatchObject({ noPush: false, pushed: true, conflicts: [] });
+  });
+
+  it("cascade-main lists conflicts[] as text (path, kind, both sides' commits) and in --json", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: { stdout: "src/a.ts\n" } },
+      { match: "git ls-files -u", result: { stdout: "100644 aaa 2\tsrc/a.ts\n100644 bbb 3\tsrc/a.ts\n" } },
+      { match: "git merge-base HEAD origin/main", result: { stdout: "base123\n" } },
+      { match: "git log --format=%H base123..HEAD -- src/a.ts", result: { stdout: "ours1\n" } },
+      { match: "git log --format=%H base123..origin/main -- src/a.ts", result: { stdout: "theirs1\n" } },
+    ];
+    const textResult = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(textResult.code).toBe(1);
+    const text = textResult.out.join("\n");
+    expect(text).toMatch(/src\/a\.ts\s+\(add-add\)/);
+    expect(text).toMatch(/ours:\s+ours1/);
+    expect(text).toMatch(/theirs:\s+theirs1/);
+
+    const jsonResult = await capture(["pr", "cascade-main", "--json"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(jsonResult.code).toBe(1);
+    const parsed = JSON.parse(jsonResult.out.join("\n"));
+    expect(parsed.conflicts).toEqual([{ path: "src/a.ts", kind: "add-add", ours: ["ours1"], theirs: ["theirs1"] }]);
+  });
+
+  // Review finding (PR #141, Copilot): the text placeholder for an empty
+  // ours[]/theirs[] used to read "(no commits since the merge base)" even
+  // when the merge base itself could not be resolved -- claiming a specific
+  // reason (a resolved, genuinely empty range) that may not be the true one.
+  // Both scenarios below must render the SAME neutral text, which names no
+  // reason at all.
+  it("cascade-main's text placeholder for an empty commit list never claims a specific reason", async () => {
+    const resolvedButEmpty: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: { stdout: "a.ts\n" } },
+      { match: "git ls-files -u", result: { stdout: "100644 aaa 2\ta.ts\n100644 bbb 3\ta.ts\n" } },
+      { match: "git merge-base HEAD origin/main", result: { stdout: "base123\n" } },
+      { match: "git log --format=%H base123..HEAD -- a.ts", result: {} },
+      { match: "git log --format=%H base123..origin/main -- a.ts", result: {} },
+    ];
+    const resolvedResult = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(resolvedButEmpty));
+    const resolvedText = resolvedResult.out.join("\n");
+    expect(resolvedText).toMatch(/ours:\s+\(no commits found\)/);
+    expect(resolvedText).toMatch(/theirs:\s+\(no commits found\)/);
+    expect(resolvedText).not.toMatch(/merge base/);
+
+    const unresolvedBase: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: { stdout: "a.ts\n" } },
+      { match: "git ls-files -u", result: { stdout: "100644 aaa 2\ta.ts\n100644 bbb 3\ta.ts\n" } },
+      { match: "git merge-base HEAD origin/main", result: { code: 1, stderr: "fatal: no merge base" } },
+    ];
+    const unresolvedResult = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(unresolvedBase));
+    const unresolvedText = unresolvedResult.out.join("\n");
+    expect(unresolvedText).toMatch(/ours:\s+\(no commits found\)/);
+    expect(unresolvedText).toMatch(/theirs:\s+\(no commits found\)/);
   });
 
   // zheref/nen#20: `--gates` PARSED cleanly on next-blocker (the name sits in

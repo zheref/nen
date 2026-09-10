@@ -449,7 +449,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns | caller-supplied --body-from/--requirements-from files | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
-| [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge | git (fetch/merge/push, reaches origin) | yes |
+| [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | gh pr edit --add-reviewer, once per name | github (gh) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
@@ -792,14 +792,15 @@ nen pr next-blocker --target o/n --pr 9 --repo . --gates src/schema/fixtures/alt
 ### `nen pr cascade-main`
 
 Merges (never rebases) the trunk into the current branch and pushes on a
-clean merge. A conflict is reported, never resolved — this verb does not run
-`git merge --abort`, does not pick a side, and does not push when conflict
-markers remain.
+clean merge, unless `--no-push` says to stop before that step. A conflict is
+reported, never resolved — this verb does not run `git merge --abort`, does
+not pick a side, and does not push when conflict markers remain, `--no-push`
+or not.
 
 **Usage**
 
 ```text
-nen pr cascade-main --repo <path> [--trunk main]
+nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 ```
 
 **Arguments**
@@ -808,25 +809,69 @@ nen pr cascade-main --repo <path> [--trunk main]
 |---|---|---|---|
 | `--repo <path>` | **yes** | the repository whose current branch the trunk is merged into | unbracketed in usage; omitted is refused at exit 2 — this verb mutates whatever it is pointed at (#28) |
 | `--trunk <branch>` | no | the trunk branch | default `main` |
+| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every OTHER `pr` subcommand — this family has no per-subcommand flag table yet, so it would otherwise parse cleanly and be silently ignored |
 | `--json` | no | machine-readable cascade result | — |
 
 **Output and exit codes** — human lines are the `log[]` entries (`fetched
 origin/<trunk>`, `merged origin/<trunk> cleanly` or the conflict note,
-`pushed`); `--json` top-level keys: `conflicted`, `pushed`, `log[]`, `error`.
-Exit 0 on a clean merge + push, exit 1 on a conflict, a fetch failure, or a
-push failure, exit 2 on a missing `--repo`.
+`pushed` or, under `--no-push`, `not pushed (--no-push)`), followed by one
+block per conflict when the merge failed:
+
+```text
+  <path>  (<kind>)
+    ours:   <commit>, <commit>, ...
+    theirs: <commit>, ...
+```
+
+`--json` top-level keys: `conflicted`, `pushed`, `noPush`, `log[]`, `error`,
+`conflicts[]`. `noPush` echoes whether `--no-push` was given (`false`
+otherwise, never omitted). `conflicts[]` is `[]` except on a conflicted
+merge, where it carries one entry per unmerged path from `git diff
+--name-only --diff-filter=U`:
+
+| Field | Meaning |
+|---|---|
+| `path` | the unmerged path |
+| `kind` | `both-modified`, `add-add`, `modify-delete` (we kept/modified it, the trunk deleted it) or `delete-modify` (we deleted it, the trunk kept/modified it) — read off `git ls-files -u`'s stage table (1 = merge base, 2 = ours, 3 = theirs) |
+| `ours[]` / `theirs[]` | commit SHAs that touched `path` since the merge base, on the current branch and on `origin/<trunk>` respectively (`git log --format=%H <mergeBase>..<ref> -- <path>`); both empty when the merge base itself could not be resolved |
+
+Exit 0 on a clean merge (pushed, or not under `--no-push`), exit 1 on a
+conflict, a fetch failure, or a push failure, exit 2 on a missing `--repo`.
 
 **Example**
 
+Run live against a throwaway repository constructed with one real conflict
+of each of the four kinds (`shared.txt` edited on both sides, `new-file.txt`
+added independently on both sides, `kept-by-us.txt` edited on the current
+branch and deleted on the trunk, `kept-by-them.txt` deleted on the current
+branch and edited on the trunk):
+
 ```bash
-nen pr cascade-main --repo .
+nen pr cascade-main --repo . --no-push
 ```
 ```text
 fetched origin/main
 merge left conflicts -- resolve them, then commit and push yourself; this cascade never picks a side
+  kept-by-them.txt  (delete-modify)
+    ours:   d798f724277267e7c7b5dcdcf028169b8c2bf457
+    theirs: 10b2def54dd1dc04544adb22841b7f4b06b464d0
+  kept-by-us.txt  (modify-delete)
+    ours:   d7104738412d0285b84a6eb9ec41e52398ed2cef
+    theirs: 09ff5277dfeba95cc9ab73c4539d75f3c6bd600c
+  new-file.txt  (add-add)
+    ours:   551d51ae42e491ca936f7ab2409be653eb3f1f2c
+    theirs: bb41fa9abe38decb9551bdf827bf1bf6be38313f
+  shared.txt  (both-modified)
+    ours:   ae8526a586bd231d2a636ddfcf5647508e250fdd
+    theirs: 908565a7847a327d013b87ada35844f467665761
 ```
-exit 1 (conflict)
-(from `src/pr/command.test.ts`: `git fetch origin main` scripted to succeed, `git merge --no-edit origin/main` scripted to return exit 1 with `CONFLICT` on stderr — this verb reaches GitHub via `git fetch`/`git push`, so it was not run live here)
+exit 1 (conflict; `git status` in the fixture agrees: "deleted by us" for
+`kept-by-them.txt` and "deleted by them" for `kept-by-us.txt`, the same
+direction this verb's `delete-modify`/`modify-delete` names encode). The
+same fixture's non-conflicting branch, merged with `--no-push`, prints
+`fetched origin/main`, `merged origin/main cleanly`, `not pushed
+(--no-push)` at exit 0 and leaves no `origin/<branch>` update behind; the
+bare form (no `--no-push`) prints `pushed` in its place and does push.
 
 ### `nen pr retarget`
 
