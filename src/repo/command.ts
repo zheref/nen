@@ -1,7 +1,7 @@
 // src/repo/command.ts -- `nen repo resolve`, `nen repo inventory`, `nen repo
 // scenario`.
 
-import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext, requireTargetFlag } from "../cli/command.js";
 import { ABSENT_FILE_MARKER, openTaxonomy } from "../schema/taxonomy.js";
 import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
@@ -12,9 +12,7 @@ import { inventoryRepo } from "./inventory.js";
 import { resolveScenario } from "./scenario.js";
 
 function requireTarget(context: CommandContext): Target {
-  const raw = context.args.values["target"];
-  if (raw === undefined) throw new Error("--target owner/name is required.");
-  return parseTarget(raw);
+  return parseTarget(requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API."));
 }
 
 /**

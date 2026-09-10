@@ -30,6 +30,7 @@ import {
   VerbUsageError,
   type Command,
   type CommandContext,
+  requireTargetFlag,
 } from "../cli/command.js";
 import { readJsonFile, readTextFile } from "../cli/inputs.js";
 import { commaList } from "../cli/comma.js";
@@ -49,13 +50,7 @@ import { fetchPrAndKnownBots, isCollaborator, requestBotReviews, type PrAndKnown
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 
 function requireTarget(context: CommandContext): Target {
-  const raw = context.args.values["target"];
-  if (raw === undefined) {
-    throw new Error(
-      "--target owner/name is required. It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.",
-    );
-  }
-  return parseTarget(raw);
+  return parseTarget(requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API."));
 }
 
 function requirePr(context: CommandContext): number {

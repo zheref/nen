@@ -24,6 +24,7 @@ import {
   VerbUsageError,
   type Command,
   type CommandContext,
+  requireTargetFlag,
 } from "../cli/command.js";
 import {
   closedSince,
@@ -293,13 +294,7 @@ function refuseForeignFlags(context: CommandContext, subcommand: string): void {
 }
 
 function requireTarget(context: CommandContext): Target {
-  const raw = context.args.values["target"];
-  if (raw === undefined) {
-    throw new Error(
-      "--target owner/name is required. It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.",
-    );
-  }
-  return parseTarget(raw);
+  return parseTarget(requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API."));
 }
 
 const USAGE = `nen issue -- reconcile the backlog, then file into it.

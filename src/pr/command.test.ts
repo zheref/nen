@@ -227,10 +227,18 @@ describe("nen pr body-check", () => {
 // ready/staleness/body-check (zheref/nen#3, zheref/nen#4). ---
 
 describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI wiring", () => {
-  it("requires --target", async () => {
+  // zheref/nen#93: EXIT 2, not 1. Four families each kept a private
+  // `requireTarget` that threw a plain Error, so sixteen verbs answered a
+  // forgotten flag with "the thing you asked for did not work" instead of "you
+  // typed it wrong" -- and a retry wrapper honouring that distinction retries a
+  // 1 forever. One shared `requireTargetFlag` now answers for all of them, the
+  // way every OTHER required flag in these same families already did.
+  it("requires --target, as a USAGE error", async () => {
     const result = await capture(["pr", "fetch", "--pr", "1"], null);
-    expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/--target/);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--target owner\/name is required/);
+    // The sentence worth saying, kept: which of the two flags this is.
+    expect(result.err.join("\n")).toMatch(/--repo names a checkout on disk/);
   });
 
   it("requires a valid --pr", async () => {

@@ -133,8 +133,16 @@ describe("nen repo resolve -- dispatches through the union registry", () => {
 });
 
 describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged into this family)", () => {
-  it("requires --target (a runtime refusal, matching issueCommand's own requireTarget)", async () => {
-    expect((await capture(["repo", "inventory"])).code).toBe(1);
+  // zheref/nen#93: EXIT 2, not 1. Four families each kept a private
+  // `requireTarget` that threw a plain Error, so sixteen verbs answered a
+  // forgotten flag with "the thing you asked for did not work" instead of "you
+  // typed it wrong" -- and a retry wrapper honouring that distinction retries a
+  // 1 forever. One shared `requireTargetFlag` now answers for all of them, the
+  // way every OTHER required flag in these same families already did.
+  it("requires --target, as a USAGE error like every other required flag here", async () => {
+    const result = await capture(["repo", "inventory"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--target owner\/name is required/);
   });
 
   it("inventory requires --epic-label once --target is given", async () => {

@@ -36,8 +36,16 @@ describe("nen labels sync -- CLI wiring", () => {
     expect(result.seams.calls).toEqual([]);
   });
 
-  it("requires --target", async () => {
-    expect((await capture(["labels", "sync"])).code).toBe(1);
+  // zheref/nen#93: EXIT 2, not 1. Four families each kept a private
+  // `requireTarget` that threw a plain Error, so sixteen verbs answered a
+  // forgotten flag with "the thing you asked for did not work" instead of "you
+  // typed it wrong" -- and a retry wrapper honouring that distinction retries a
+  // 1 forever. One shared `requireTargetFlag` now answers for all of them, the
+  // way every OTHER required flag in these same families already did.
+  it("requires --target, as a USAGE error", async () => {
+    const result = await capture(["labels", "sync"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--target owner\/name is required/);
   });
 
   // zheref/nen#28: sync's usage line lists --repo unbracketed, so omitting it
