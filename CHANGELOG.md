@@ -6,7 +6,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Added
 
-- **stage** — `nen stage triage` gains the two detectors two consuming skills were each compensating for by eye: **`local-config`** and **`large`**. `hatsu:tensho` and `hatsu:jujisho` independently kept a local-config check and a file-size check in their own text on top of this verb's five detectors, and two skills compensating the same way is the shape of a gap rather than a preference (closes #57).
+- **stage** — `nen stage triage` gains the two detectors two consuming skills were each compensating for by eye: **`local-config`** and **`large`**. `hatsu:tensho` and `hatsu:jujisho` independently kept a local-config check and a file-size check in their own text on top of this verb's five detectors, and two skills compensating the same way is the shape of a gap rather than a preference (closes [#57](https://github.com/zheref/nen/issues/57), [#189](https://github.com/zheref/nen/pull/189)).
 
   `local-config` matches the `.local` infix a dozen tools agree means "this machine's copy, not the project's" — `settings.local.json`, `.env.local`, `config.local.yml`, a bare `notes.local`. It is a FILENAME check, exactly like the secret shape beside it and for the same reason: cheap enough to run on every file every time, which is the whole value of running it at all. It is deliberately NOT a directory rule — `.claude/` and `.vscode/` hold committed project configuration as often as personal settings, and flagging every file in them would bury the rows that need a decision under the ones that do not, which is the defect #169's `ignored` bucket exists to undo. `src/localisation.ts` and `src/local/index.ts` are left alone.
 
