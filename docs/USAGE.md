@@ -13,7 +13,7 @@ with the `nen` spelling. This document covers the **v0.6.0 line** (it adds no
 family and no verb — `pr request-reviews --add-bots`, a launch device's
 `readyWhen`, real-root containment for every declared path, `stage triage`'s
 `ignored` bucket and `commits.runTrailer` are what is new in it): 37 command
-families, 94 verbs, every flag checked against the binary this repository
+families, 95 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -522,7 +522,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 94 verbs, grouped as the README groups them. **Reads** is what a
+All 95 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -552,6 +552,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`epic`](#family-epic) | [`nen epic next-wave`](#nen-epic-next-wave) | flips a completed child, redraws the progress bar, computes the next releasable wave | local file (--body-file), optional write (--out) | yes |
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file and explicit caps | local file (--efforts) | yes |
+| [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `.nen/loop/<id>.json` under --repo (reads and writes) | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
@@ -1998,6 +1999,48 @@ local: 1/2 occupied, 1 free
 freed: BC-IS-#110
 ```
 (from a real run against a hand-written `efforts.json`)
+
+### `nen loop iterate`
+
+Claims one iteration of an izanagi loop against the cap its own invocation states, and refuses the claim past it. [`parse izanagi`](#nen-parse-skill) refuses an invocation with no `up to <N>` — which makes the cap's presence and shape nen's business — and then never sees iteration 2; [`watch until --max-iterations`](#nen-watch-until) is a different, optional bound on **izanami's** read-only loop, whose own help says so. So the count of how many times the *mutating* task had actually run lived entirely in the caller's own prose, with no nen-side backstop against a caller that miscounts (zheref/nen#47).
+
+nen is a stateless CLI and the loop belongs to the caller; what nen owns is the **count**. The caller claims each iteration *before* performing it, and the cap is enforced by the claim being refused rather than by anyone remembering.
+
+**Usage**
+
+```text
+nen loop iterate --id <id> --line "<task> until <condition> up to <N>"
+                 [--release <why>] [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--id <id>` | yes | This loop's own label, and the name of its ledger. | One path segment: 1–100 characters of `[A-Za-z0-9._-]`, starting with a letter or digit, no `..`. **Refused, never sanitised** — two ids mangled to one segment would silently share a cap between two loops, which is the failure this verb exists to prevent. |
+| `--line "<...>"` | yes | The invocation, restated on **every** claim and parsed by the izanagi grammar. | A claim whose line differs from the running one is refused (exit 2), naming both: a cap a caller can raise by re-typing the line with a bigger N is not a cap. It also catches the honest version — a second loop reusing an id that already belongs to a different task. |
+| `--release <why>` | no | End the loop instead of claiming: the condition became true, or a gate ended it. | The reason is required text; an empty one records that a loop stopped and not why. Releasing twice is not an error; claiming after a release is. A loop at its cap can always still be released — the way out is never blocked. |
+| `--repo <path>` | no | The repository the ledger lives under. | Ledger path is `.nen/loop/<id>.json` — the dot-prefixed generated tree, never the committed `nen/`, the same rule [`stop --mark`](#nen-stop) follows. |
+| `--json` | no | One machine document per claim. | `{ contract: "nen.loop.iterate/v0.1", id, claimed, capReached, task, condition, cap, iterations, remaining, released, releaseReason, startedAt, lastAt, path }`. |
+
+**Output and exit codes** — `iteration <n>/<cap> -- <task> until <condition>` on a claim, `released <id> after <n>/<cap> iteration(s): <why>` on a release. Exit **0** on either. Exit **1** when the cap is REACHED — an answer, not a failure: izanagi's cap is grammar rather than a default precisely so that reaching it is a decision to bring to a human, never a bound to raise and re-run. Exit **2** for a malformed `--id`, a `--line` the grammar refuses, a changed line, a claim after a release, or a ledger that cannot be read (refused rather than started again: a loop whose count nen cannot read has an unknown number of writes behind it, and beginning at 1 would hand out a whole cap's worth more).
+
+**Example**
+
+```bash
+nen loop iterate --id sweep --line "address the backlog until it is empty up to 3"
+```
+```text
+iteration 1/3 -- address the backlog until it is empty
+  2 remaining after this one; ledger /repo/.nen/loop/sweep.json
+```
+The fourth claim, after three:
+```text
+nen: loop 'sweep' has claimed all 3 iteration(s) its invocation allowed, so this claim is REFUSED.
+nen:   address the backlog until it is empty up to 3
+nen: This is the cap doing its job, not a failure: izanagi's cap is grammar rather than a default precisely so that reaching it is a decision to bring back to a human, never a bound to raise and re-run. End the loop with --release <why>, and take what it reached to the gate.
+```
+(from a real run against a temporary `--repo`)
 
 <a id="family-warmup"></a>
 
