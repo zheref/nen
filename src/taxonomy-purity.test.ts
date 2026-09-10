@@ -84,28 +84,124 @@ function shippedFiles(dir: string, found: string[] = []): string[] {
   return found;
 }
 
+// Where a regex literal ENDS, starting at the `/` that opens it, or -1 when the
+// text from there is not one.
+//
+// Scanning is the ordinary rule and nothing more: a `\` escapes the next
+// character, a `[` opens a character class in which a `/` is an ordinary
+// character, and the literal closes at the first unescaped `/` outside a class.
+// An unterminated one is not a regex at all -- a regex literal cannot span a
+// newline -- so a `/` whose line has no closing partner answers -1 and the
+// caller treats it as the division sign it must have been.
+function regexLiteralEnd(source: string, start: number): number {
+  let index = start + 1;
+  let inClass = false;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === "\n") return -1;
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (inClass) {
+      if (char === "]") inClass = false;
+    } else if (char === "[") {
+      inClass = true;
+    } else if (char === "/") {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
 // Replace every comment with an equal number of newlines, so reported line
 // numbers still point at the real line.
 //
 // It tracks single-quoted, double-quoted and template strings, because a `//`
-// inside a string is not a comment. It does NOT track regex literals: a `//`
-// inside one would be an empty regex, which is not valid in any of these
-// sources, and a `/` that opens a regex is only mistaken for a comment when the
-// next character is also `/`.
-export function stripComments(source: string): string {
+// inside a string is not a comment.
+//
+// IT TRACKS REGEX LITERALS AND `${...}` NESTING TOO, and neither is cosmetic
+// (zheref/nen#12 item 1). Both are ways this scanner used to open a string that
+// was never a string and then swallow every line until the next matching quote
+// -- hiding all of it from the sweep, SILENTLY: the sweep still passed, over
+// less code, and nothing said so. The mechanism that makes "names are data" a
+// proved claim must not fail quietly.
+//
+//   * A regex containing a QUOTE character -- `/["']/`, the shape any CSV or
+//     TSV splitter is written with -- was read as an opening quote. A `/` opens
+//     a regex only where a VALUE may begin: never straight after an identifier,
+//     a number, a `)` or a `]`, the four things a division sign follows. That is
+//     the standard disambiguation and it is decidable without parsing; a `/`
+//     that opens nothing terminable on its own line is division too.
+//   * A `${...}` substitution holds ORDINARY CODE, and that code can open
+//     another template literal -- arbitrarily deep. Read flat, the inner
+//     template's opening backtick closes the OUTER one, and everything after it
+//     is scanned as code: in `src/verbs/pr_ready.ts` the apostrophe in a nested
+//     template's prose then opened a string that ran eighty lines down the file.
+//     That was live on main, found by the guard below rather than by reading.
+//     So the state is a stack, not a flag.
+// AND WHATEVER IT CONCLUDES, THE SCAN REPORTS ITS OWN QUOTE STATE. That is the
+// loud half, and it is the part that matters more than the heuristic: the
+// failure was never that one case scanned wrong, it was that scanning wrong cost
+// the sweep an unbounded run of lines and said nothing. `Scan.unterminated` is
+// asserted null for every shipped file below, so a construct that confuses this
+// scanner in future reddens the build instead of quietly shrinking its reach.
+export interface Scan {
+  /** The source with every comment gone and line numbering preserved. */
+  readonly code: string;
+  /** The quote this scan was still inside when the file ended, or null. */
+  readonly unterminated: string | null;
+  /**
+   * 1-based line numbers where the scan carried a `'` or `"` string ACROSS a
+   * newline. In TypeScript that is impossible -- only a template literal spans
+   * lines -- so every entry is the scanner having mistaken something for an
+   * opening quote, which is precisely the swallow this file must not do
+   * silently. Asserted empty for every shipped file.
+   */
+  readonly spanningQuotes: readonly number[];
+}
+
+export function scanSource(source: string): Scan {
   let out = "";
   let index = 0;
+  let line = 1;
+  // A simple `'`/`"` string, which cannot nest and cannot span a line.
   let quote: string | null = null;
+  let previousSignificant = "";
+  const spanningQuotes: number[] = [];
+
+  // The nesting stack. A template literal can hold a `${...}` substitution, that
+  // substitution holds ORDINARY CODE, and that code can open another template --
+  // arbitrarily deep. A flat scanner reads the second template's opening
+  // backtick as the FIRST one's closing backtick, ends the string half-way
+  // through a substitution, and reads the rest of the line as code (see
+  // `src/verbs/pr_ready.ts`, where the apostrophe in a nested template's prose
+  // then opened a string that ran on for eighty lines). So the state is a stack.
+  type Frame = { kind: "code" } | { kind: "template" } | { kind: "sub"; depth: number };
+  const stack: Frame[] = [{ kind: "code" }];
+  const top = (): Frame => stack[stack.length - 1] as Frame;
 
   while (index < source.length) {
     const char = source[index] ?? "";
     const next = source[index + 1] ?? "";
+    if (char === "\n") line += 1;
 
     if (quote !== null) {
       out += char;
       if (char === "\\") {
         out += next;
+        if (next === "\n") line += 1;
         index += 2;
+        continue;
+      }
+      // A `'`/`"` string cannot contain a newline in TypeScript. Reaching one
+      // means this scanner opened a string that was never one, so the line is
+      // recorded and the string is abandoned rather than swallowing the file.
+      if (char === "\n") {
+        spanningQuotes.push(line - 1);
+        quote = null;
+        index += 1;
         continue;
       }
       if (char === quote) quote = null;
@@ -113,9 +209,44 @@ export function stripComments(source: string): string {
       continue;
     }
 
-    if (char === '"' || char === "'" || char === "`") {
+    if (top().kind === "template") {
+      out += char;
+      if (char === "\\") {
+        out += next;
+        if (next === "\n") line += 1;
+        index += 2;
+        continue;
+      }
+      if (char === "`") {
+        stack.pop();
+        previousSignificant = "`";
+        index += 1;
+        continue;
+      }
+      if (char === "$" && next === "{") {
+        out += next;
+        stack.push({ kind: "sub", depth: 0 });
+        previousSignificant = "{";
+        index += 2;
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+
+    // Code, or the inside of a `${...}` substitution -- which is code.
+    if (char === '"' || char === "'") {
       quote = char;
       out += char;
+      previousSignificant = char;
+      index += 1;
+      continue;
+    }
+
+    if (char === "`") {
+      stack.push({ kind: "template" });
+      out += char;
+      previousSignificant = char;
       index += 1;
       continue;
     }
@@ -128,17 +259,52 @@ export function stripComments(source: string): string {
     if (char === "/" && next === "*") {
       index += 2;
       while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) {
-        if (source[index] === "\n") out += "\n";
+        if (source[index] === "\n") {
+          out += "\n";
+          line += 1;
+        }
         index += 1;
       }
       index += 2;
       continue;
     }
 
+    if (char === "/" && !/[A-Za-z0-9_$)\]]/.test(previousSignificant)) {
+      const end = regexLiteralEnd(source, index);
+      if (end !== -1) {
+        // Emitted VERBATIM: a regex literal is executable code and its own
+        // contents are exactly what this sweep searches.
+        out += source.slice(index, end + 1);
+        previousSignificant = "/";
+        index = end + 1;
+        continue;
+      }
+    }
+
+    const frame = top();
+    if (frame.kind === "sub" && char === "{") frame.depth += 1;
+    if (frame.kind === "sub" && char === "}") {
+      if (frame.depth === 0) {
+        out += char;
+        stack.pop();
+        previousSignificant = "}";
+        index += 1;
+        continue;
+      }
+      frame.depth -= 1;
+    }
+
     out += char;
+    if (!/\s/.test(char)) previousSignificant = char;
     index += 1;
   }
-  return out;
+
+  const open = stack.length > 1 ? "`" : null;
+  return { code: out, unterminated: quote ?? open, spanningQuotes };
+}
+
+export function stripComments(source: string): string {
+  return scanSource(source).code;
 }
 
 // Replace every `#` comment in a POSIX shell source with nothing, so the shell
@@ -445,14 +611,21 @@ interface Swept {
   readonly label: string;
   readonly code: string;
   readonly kind: "ts" | "shell";
+  /** The quote the scanner ended this file inside, or null. Asserted below. */
+  readonly unterminated: string | null;
+  /** Lines where a `'`/`"` string ran across a newline. Asserted empty below. */
+  readonly spanningQuotes: readonly number[];
 }
 
 function swept(): Swept[] {
   const rows: Swept[] = shippedFiles(SRC).map((file): Swept => {
+    const scan = scanSource(readSource(file));
     return {
       label: `src/${relative(SRC, file).split(sep).join("/")}`,
-      code: stripComments(readSource(file)),
+      code: scan.code,
       kind: "ts",
+      unterminated: scan.unterminated,
+      spanningQuotes: scan.spanningQuotes,
     };
   });
   // The shipped shell, swept under the same code-not-comments rule. It is ONE
@@ -460,7 +633,13 @@ function swept(): Swept[] {
   // shell surface -- a directory walk here would be a walk over one entry and
   // would quietly start sweeping the next `.sh` somebody adds for a different
   // purpose without anyone deciding it should be.
-  rows.push({ label: "bootstrap/nen.sh", code: stripShellComments(readSource(SHELL)), kind: "shell" });
+  rows.push({
+    label: "bootstrap/nen.sh",
+    code: stripShellComments(readSource(SHELL)),
+    kind: "shell",
+    unterminated: null,
+    spanningQuotes: [],
+  });
   return rows;
 }
 
@@ -478,6 +657,42 @@ describe("§3: names are data", () => {
     expect(names).toContain("src/schema/labels.ts");
     // The shipped shell is in the sweep, not merely reachable by it.
     expect(names).toContain("bootstrap/nen.sh");
+  });
+
+  it("scans every shipped file to its END, inside no string", () => {
+    // zheref/nen#12 item 1, the loud half. A scanner that mistakes something for
+    // an opening quote does not stop -- it swallows every line until the next
+    // matching character and hides all of it, and the sweep still passes, over
+    // less code, saying nothing. `/["']/` -- the shape any CSV or TSV splitter
+    // is written with -- was exactly such a construct before this scanner
+    // learned regex literals.
+    //
+    // So the property is asserted rather than reasoned about: whatever the
+    // heuristic concludes about a `/`, no shipped file may end inside a string.
+    // A future construct that confuses the scanner is a red test.
+    const offences = files
+      .filter((file): boolean => file.unterminated !== null)
+      .map((file): string => `${file.label}: ends inside a ${file.unterminated} string`);
+    expect(offences).toEqual([]);
+  });
+
+  it("carries no quoted string across a newline", () => {
+    // The second half of the same guard, for a confusion that RE-BALANCES before
+    // EOF and so escapes the check above -- which `/["']/` does, opening on the
+    // `"` and closing on the next one somewhere further down the file.
+    //
+    // The invariant is a fact about the language rather than a threshold: a `'`
+    // or `"` string cannot contain a newline in TypeScript. Only a template
+    // literal spans lines. So a scan that carried one across a line break did
+    // not find a string -- it found something it mistook for one, and everything
+    // between is code this sweep never looked at.
+    const offences: string[] = [];
+    for (const file of files) {
+      for (const line of file.spanningQuotes) {
+        offences.push(`${file.label}:${line}: a quoted string ran past the end of its line`);
+      }
+    }
+    expect(offences).toEqual([]);
   });
 
   for (const { what, pattern, scope } of FORBIDDEN) {
@@ -592,6 +807,41 @@ describe("stripComments", () => {
 
   it("preserves line numbering across a multi-line block comment", () => {
     expect(stripComments("a\n/* x\ny\n*/\nb").split("\n").length).toBe(5);
+  });
+
+  it("reads a regex literal as a regex, not as an opening quote", () => {
+    // The shape zheref/nen#12 item 1 named: a splitter's character class. Read
+    // flat, the `"` opens a string and everything after it vanishes.
+    const scan = scanSource('const split = /["\']/;\nconst a = "sasuke";\n');
+    expect(scan.unterminated).toBeNull();
+    expect(scan.spanningQuotes).toEqual([]);
+    expect(scan.code).toContain('"sasuke"');
+  });
+
+  it("still reads a `/` after a value as division, not as a regex", () => {
+    // The other half of the disambiguation: over-eager regex detection would
+    // swallow real code just as thoroughly as the bug it replaces.
+    const scan = scanSource("const half = total / 2;\nconst rest = items[0] / 3;\n");
+    expect(scan.code).toContain("total / 2");
+    expect(scan.code).toContain("items[0] / 3");
+  });
+
+  it("follows a template literal into its `${...}` and back out", () => {
+    const scan = scanSource("const a = `x ${cond ? `y '\''s z` : \"\"} w`;\nconst b = \"sasuke\";\n");
+    expect(scan.unterminated).toBeNull();
+    expect(scan.spanningQuotes).toEqual([]);
+    expect(scan.code).toContain('"sasuke"');
+  });
+
+  it("reports the line where a quoted string ran past its own end", () => {
+    // The scanner cannot be right about every construct forever; what it must
+    // never do is be wrong in silence.
+    const scan = scanSource("const a = 'unclosed\nconst b = 1;\n");
+    expect(scan.spanningQuotes).toEqual([1]);
+  });
+
+  it("reports an unterminated template literal at EOF", () => {
+    expect(scanSource("const a = `open").unterminated).toBe("`");
   });
 });
 

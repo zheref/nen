@@ -46,15 +46,31 @@ const CANONICAL = /is canonical \(no older open duplicate\) — no-op\.\n?$/;
 
 // Raw `number\ttitle` lines, gh's own `-q '... | @tsv'` shape, exactly as
 // recorded in the fixture's one `gh issue list` subprocess entry.
+//
+// A ROW WITH NO NUMBER IS SKIPPED, exactly as the recorded script skips it. The
+// shell reads each row with `IFS=$'\t' read num title` and then guards on
+// `[ -n "$num" ]`, so a row whose first field is empty -- which is what a
+// LEADING TAB produces, every field having shifted left -- contributes no
+// candidate at all. This reader used to take `Number("")`, get `0`, and keep the
+// row as issue number zero: a candidate the recording never had, and one that
+// would win any lowest-number comparison it entered (zheref/nen#12 item 3).
+//
+// The divergence is latent rather than live -- the two fixtures that pin the
+// shell's field-splitting are excluded from the imported slice, for reasons
+// MANIFEST.json now states accurately -- and closing it costs one line. A replay
+// harness that can disagree with the recording it replays is worth less than the
+// recording.
 function parseTsvCandidates(tsv: string): readonly Candidate[] {
-  return tsv
-    .split("\n")
-    .filter((line): boolean => line !== "")
-    .map((line): Candidate => {
-      const tab = line.indexOf("\t");
-      if (tab === -1) throw new ReplayFixtureError(`malformed TSV row (no tab): '${line}'`);
-      return { number: Number(line.slice(0, tab)), title: line.slice(tab + 1) };
-    });
+  const rows: Candidate[] = [];
+  for (const line of tsv.split("\n")) {
+    if (line === "") continue;
+    const tab = line.indexOf("\t");
+    if (tab === -1) throw new ReplayFixtureError(`malformed TSV row (no tab): '${line}'`);
+    const number = line.slice(0, tab);
+    if (number === "") continue;
+    rows.push({ number: Number(number), title: line.slice(tab + 1) });
+  }
+  return rows;
 }
 
 export function parseDedupeFixture(raw: unknown, id: string): DedupeFixture {
