@@ -7537,18 +7537,40 @@ observation errors stop the watch regardless of `--max-iterations`: a
 permanently broken observation (bad usage, no auth, no such binary) must never
 masquerade as "not yet true".
 
-The allowlist is deliberately literal about what it can prove. `gh api` with a
-quoted `--jq` argument is refused:
+The allowlist is deliberately literal about what it can prove. The scan walks
+whitespace tokens, and a quoted or escaped argument is one word to that walk and
+something else to a real shell (`-X 'DELETE'` is the worked example), so a line
+it cannot read faithfully is refused rather than assumed to be a GET.
+
+**A single-quoted `--jq` is the one exception, and it reads** — the commonest
+`gh api` read spelling there is ([#78](https://github.com/zheref/nen/issues/78)):
 
 ```
-$ nen watch until --command "gh api repos/zheref/nen/pulls --jq '.[].number'" --max-iterations 1
-nen: 'gh api repos/zheref/nen/pulls --jq '.[].number'' classifies as unknown ...
+$ nen parse izanami "gh api repos/zheref/nen/pulls --jq '.[].number' until it is empty"
+until: it is empty
+  [read-only] gh api repos/zheref/nen/pulls --jq '.[].number'
 ```
 
-exit 2. The scan walks whitespace tokens, and a quoted or escaped argument is
-one word to that walk and something else to a real shell (`-X 'DELETE'` is the
-worked example), so only the quote-free form is provably a GET. Drop the quotes
-or use a command the table can classify.
+A `'...'` span with no inner quote and no newline is exactly **one word** to
+every shell this table has been checked against, and its content is literal — no
+expansion, no substitution, no word splitting. So the row folds it into one
+inert placeholder before scanning, which changes neither the argument vector's
+length nor any other word in it: the gate is not weakened, the line is made
+provable. `--jq='<expr>'`, `-q '<expr>'` and a value containing spaces all fold
+the same way.
+
+Three shapes still refuse, each for its own reason:
+
+| shape | why |
+|---|---|
+| `--jq ".name"` | double quotes expand `$x`, a backtick and `\` — one word, but not an *inert* one, and inertness is the whole claim. **Respell it with single quotes**, or watch the bare read and apply `jq` to its output downstream — the refusal now says both. |
+| `--jq'.name'` | `--jq.name` to a shell: one word, an unknown long flag, not a flag and its value. |
+| `--jq '.a \| .b'` | a metacharacter is refused by the whole-line seam that runs *before* any row vouches for anything, and this fold deliberately does not reach past its own row to move it. |
+
+A quoted **method** (`-X 'DELETE'`) is still `unknown`, unchanged: the fold is
+scoped to `--jq` precisely so the adversarial repro
+[#70](https://github.com/zheref/nen/issues/70) pinned stays where its own review
+put it.
 
 ```bash
 # 3. Check a skill invocation against its published grammar, before running it.
