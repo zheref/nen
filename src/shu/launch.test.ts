@@ -105,7 +105,7 @@ describe("findDevice, over JSON output", () => {
     expect(findDevice("placeholder a pro", out).found).toBe(false);
   });
 
-  it("matches a name's typographic apostrophe BYTE-FOR-BYTE -- U+2019, never U+0027", () => {
+  it("matches a name's typographic apostrophe EXACTLY -- U+2019, never U+0027", () => {
     // macOS names a paired phone with ITS OWN curly apostrophe -- the same
     // character autocorrect writes for a possessive, U+2019 RIGHT SINGLE
     // QUOTATION MARK ("Sergio’s iPhone") -- never the straight U+0027 a
