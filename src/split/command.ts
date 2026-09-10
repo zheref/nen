@@ -1,8 +1,8 @@
 // src/split/command.ts -- `nen split verify`: the jujisho completeness proof.
 
-import { readFileSync } from "node:fs";
+
 import { resolveRepoRoot } from "../repo/root.js";
-import { resolveAgainstRepo } from "../cli/inputs.js";
+import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { verifySplit } from "./verify.js";
 
@@ -55,27 +55,39 @@ export const splitCommand: Command = {
     }
 
     // Resolved against --repo's root, one base for every path flag
-    // (zheref/nen#100), and resolved BEFORE the try so a malformed --repo stays
-    // the usage error it is rather than becoming "could not read --original".
-    // A diff is read RAW: its hunk headers count bytes, so normalising line
-    // endings here would make the comparison disagree with the file.
+    // (zheref/nen#100), and resolved BEFORE the read so a malformed --repo
+    // stays the usage error it is rather than becoming "could not read
+    // --original".
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-    let original: string;
-    try {
-      original = readFileSync(resolveAgainstRepo(root, originalPath), "utf8");
-    } catch (error) {
-      context.io.err(`nen: could not read --original '${originalPath}': ${String(error)}`);
-      return 1;
-    }
-    const branches: string[] = [];
-    for (const path of branchPaths) {
-      try {
-        branches.push(readFileSync(resolveAgainstRepo(root, path), "utf8"));
-      } catch (error) {
-        context.io.err(`nen: could not read branch diff '${path}': ${String(error)}`);
-        return 1;
-      }
-    }
+    // READ THROUGH THE SHARED READER, so an unreadable diff is the named exit-2
+    // refusal every other path flag gives rather than exit 1 (zheref/nen#101).
+    // A mistyped `--original` is "you typed it wrong", and this verb's whole
+    // answer is a comparison between files: one of them being absent is not a
+    // verdict about a split, it is a question that was never asked.
+    //
+    // `raw: true` -- this verb decides by comparing hunk TEXT for identity, so
+    // the bytes must be the file's own. Normalising `\r\n` to `\n` on one side
+    // of a comparison and not the other reports every hunk of a CRLF branch as
+    // `altered`; normalising both sides would hide a real line-ending change
+    // between them. Either way the answer would be about a rewriting this
+    // process did rather than about the split. (Copilot, PR #198: an earlier
+    // version of this note said hunk headers "count bytes" -- they count LINES.
+    // The reason to read raw is identity of the text, not arithmetic in the
+    // header.)
+    const original = readTextFile(
+      resolveAgainstRepo(root, originalPath),
+      root,
+      "--original names the diff every branch is compared against, so an unreadable one is refused rather than compared against nothing.",
+      true,
+    );
+    const branches = branchPaths.map((path): string =>
+      readTextFile(
+        resolveAgainstRepo(root, path),
+        root,
+        `--branches listed '${path}', and it could not be read -- a branch missing from the comparison would read as a hunk nobody carried.`,
+        true,
+      ),
+    );
 
     const result = verifySplit(original, branches);
     if (context.json) {

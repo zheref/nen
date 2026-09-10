@@ -116,10 +116,30 @@ describe("nen split verify -- CLI wiring", () => {
     expect((await capture(["split", "verify"])).code).toBe(2);
   });
 
-  it("reports a missing file loudly rather than crashing", async () => {
+  // zheref/nen#101 MOVED THIS FROM 1 TO 2, deliberately. A mistyped path is
+  // "you typed it wrong", not "the thing you asked for did not work", and this
+  // verb's whole answer is a comparison between files: one of them being absent
+  // is a question that was never asked rather than a verdict that came out
+  // negative. It reads through the shared reader now, so the refusal names the
+  // RESOLVED path and says what the file was for, like every other path flag.
+  it("refuses a missing file at exit 2, naming the resolved path and its purpose", async () => {
     const result = await capture(["split", "verify", "--original", "/nope/original.diff", "--branches", "/nope/a.diff"]);
-    expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/could not read/);
+    expect(result.code).toBe(2);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/could not read '\/nope\/original\.diff'/);
+    expect(said).toMatch(/ENOENT/);
+    expect(said).toMatch(/every branch is compared against/);
+  });
+
+  it("names the BRANCH that could not be read, not merely that one could not", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-split-"));
+    const original = join(dir, "original.diff");
+    writeFileSync(original, "diff --git a/x b/x\n", "utf8");
+    const result = await capture([
+      "split", "verify", "--original", original, "--branches", "/nope/b.diff",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/\/nope\/b\.diff/);
   });
 
   it("refuses an unknown subcommand", async () => {

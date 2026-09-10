@@ -1350,12 +1350,16 @@ one line per `MISSING`/`DUPLICATED`/`ALTERED`/`EXTRA` hunk; `--json`
 top-level keys: `ok`, `filesInOriginal`, `filesInBranches`, `missing[]`,
 `duplicated[]`, `altered[]`, `extra[]`, `error`. Exit 0 when every hunk lands
 in exactly one branch, unaltered, with nothing extra; exit 1 on any missing,
-duplicated, altered or extra hunk, on an unreadable `--original`/branch file,
-and on an `--original` naming zero hunks — that last one is a refusal, not a
+duplicated, altered or extra hunk, and on an `--original` naming zero hunks — that last one is a refusal, not a
 usage error, because the flag was spelled correctly and the file was read: it
 just did not prove anything (`src/split/command.ts`; under `--json` the exit is
 `result.ok ? 0 : 1`, so the zero-hunk refusal is exit 1 there too, with the
-sentence in the `error` key). Exit 2 only on a missing `--original`/`--branches`
+sentence in the `error` key). An **unreadable** `--original` or branch file is
+exit **2**, not 1 ([#101](https://github.com/zheref/nen/issues/101)): this
+verb's whole answer is a comparison between files, so one of them being absent
+is a question that was never asked rather than a verdict that came out
+negative — and the refusal names the resolved path, the errno, and which of the
+two files it was. Exit 2 also on a missing `--original`/`--branches`
 or a `--branches` that names no paths at all.
 
 **Example**
@@ -3050,13 +3054,13 @@ fragment name **in the order it was written into the section** — newest-first
 by the leading `<n>-` prefix, the same order the section itself reads, so the
 manifest can be cross-checked against it line for line. `--json` top-level
 keys: `version`, `theme`, `fragments[]` (that same order), `written`. Exit 0 on any completed run — there is no "drift" verdict here,
-only "wrote/didn't write". Exit 2 on a missing required flag. Exit 1 on an
-unreadable `--changelog`: the read at `src/changelog/command.ts:130` is
-unguarded, so the ENOENT escapes as a raw
-`nen changelog: ENOENT: no such file or directory, open '<resolved path>'`
-rather than the exit-2 named refusal a mistyped path deserves, in both text
-and `--json` mode. Tracked as
-[zheref/nen#101](https://github.com/zheref/nen/issues/101).
+only "wrote/didn't write". Exit **2** on a missing required flag, and on an
+unreadable `--changelog` or fragment: the read goes through the shared reader,
+so a mistyped path is the named refusal every other path flag gives —
+`could not read '<resolved path>' (ENOENT). --changelog names the file this
+verb REWRITES, so an unreadable one is refused rather than collated into
+nothing.` It used to escape as a raw errno at exit 1
+([#101](https://github.com/zheref/nen/issues/101)).
 
 **Example**
 
@@ -3985,9 +3989,9 @@ nen canon mirror generate --rules-dir <dir> --canon-values <path>
 | `--header-template <template>` | yes | `{ref}`/`{scenario}`/`{file}` placeholders. | Caller's own convention. |
 | `--not-mirrored a,b` | yes (may be empty) | Rule files excluded from mirroring. | |
 | `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2). |
-| `--repo <path>` | no | Not used -- this verb operates purely on the paths given. | |
+| `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values` and `--out-dir` resolve against this root, not the process's directory; an absolute value is used as-is. It used to say "not used", which was true before that change and is the sentence a caller passing relative paths from outside the repository would have been misled by. |
 
-**Output and exit codes** -- prints `written: <list>`, `unchanged: <list>`, `deleted (orphaned): <list>` (each `(none)` when empty). `--json`: `{ written, unchanged, deleted }`. Exit 0 always on a completed run (there is no "drift" concept here, only "wrote/didn't write"); exit **1** on an unreadable `--canon-values` (`src/canon/command.ts:193-197` prints `nen: could not read --canon-values '<path>': <errno>` and returns 1, not the exit-2 named refusal a mistyped path deserves — tracked as [zheref/nen#101](https://github.com/zheref/nen/issues/101)); exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a rules-dir generation error.
+**Output and exit codes** -- prints `written: <list>`, `unchanged: <list>`, `deleted (orphaned): <list>` (each `(none)` when empty). `--json`: `{ written, unchanged, deleted }`. Exit 0 always on a completed run (there is no "drift" concept here, only "wrote/didn't write"); exit **2** on an unreadable `--canon-values` — the shared reader's named refusal, `could not read '<resolved path>' (ENOENT). --canon-values names the vocabulary every mirrored rule is keyed by, ...`, where it used to be a raw errno at exit 1 ([#101](https://github.com/zheref/nen/issues/101)); exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a rules-dir generation error.
 
 **Example**
 
@@ -4032,7 +4036,7 @@ nen canon mirror check --rules-dir <dir> --canon-values <path>
 | `--scenario <name>` | no | Same override as `generate`. | |
 | `--markdown-out <path>` | no | Also write the report as a markdown table. | Written regardless of `--json`. |
 
-**Output and exit codes** -- prints `ok: <n>`, `missing: <list>`, `extra: <list>`, `stale: <list>`, `hand-edited: <list>`. `--json`: the full report, same four buckets plus `ok`. Exit 0 when missing/extra/stale/hand-edited are all empty; exit 1 on any drift, and also on an unreadable `--canon-values` — the same shared reader `generate` uses (`src/canon/command.ts:193-197`) returns 1 rather than the exit-2 named refusal a mistyped path deserves, which means an unreadable values file and real drift are indistinguishable by exit code alone; read the stderr line, or `--json`'s absence, to tell them apart. Tracked as [zheref/nen#101](https://github.com/zheref/nen/issues/101). Exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a regeneration error.
+**Output and exit codes** -- prints `ok: <n>`, `missing: <list>`, `extra: <list>`, `stale: <list>`, `hand-edited: <list>`. `--json`: the full report, same four buckets plus `ok`. Exit 0 when missing/extra/stale/hand-edited are all empty; exit **1** on any drift. An unreadable `--canon-values` is exit **2**, not 1 — which matters here more than on `generate`: while both answered 1, an unreadable values file and real drift were indistinguishable by exit code alone, and a caller had to read the stderr line to tell a typo from a finding ([#101](https://github.com/zheref/nen/issues/101)). Exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a regeneration error.
 
 **Example**
 
@@ -7058,7 +7062,7 @@ nen surface mirror generate --source <dir> --surface codex|cursor --out <dir>
 | `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused. On a surface that keeps personas as **files**, a persona that would mirror to an **empty frontmatter block** — no fence in the source, or a fence holding only keys that surface does not read — is refused at exit 2: the file written would carry no frontmatter at all, and there would be nothing for the surface to route on. On a surface whose personas are **prose** (the appendix), the same file is fine, because frontmatter is not a concept there |
 | `--invocation-prefix <p>` | no | the **source's own** invocation namespace, e.g. `myplugin:` | caller data, never a literal in this binary (§3), for the same reason [`canon mirror generate`](#nen-canon-mirror-generate)'s `--header-template` is a flag. Without it nothing is rewritten; with it, mentions of skills *outside* the mirrored set are rewritten too, because a half-rewritten document is worse than an unrewritten one |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
-| `--repo <path>` | no | Not used — this verb operates purely on the paths given. | |
+| `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values`, `--mirror-dir` and `--markdown-out` resolve against this root, not the process's directory; an absolute value is used as-is. |
 
 **Output and exit codes** — prints `surface:`, `out:`, then `written:`,
 `unchanged:` and `deleted (orphaned):` (each `(none)` when empty); the row's
