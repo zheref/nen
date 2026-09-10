@@ -167,6 +167,35 @@ verdict. [`pr ready`](#nen-pr-ready)'s JSON carries a `contract` field,
 `"nen.pr.ready/v0.1"`, precisely so a consumer can tell a future breaking
 change from a compatible one.
 
+**Which shapes carry a `contract`, and why not all of them.**
+[#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
+here is the ruling rather than the silence. A `contract` field is **earned by a
+shape a consumer must be able to REFUSE on** — one where reading an unrecognised
+document half-understood is worse than not reading it at all. Twenty-two shapes
+qualify today and declare one:
+
+`nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.1` ·
+`nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ready/v0.1` ·
+`nen.report.data/v0.1` · `nen.report.render/v0.1` · `nen.scaffold.init/v0.1` ·
+`nen.scaffold.new/v0.1` · `nen.shu.<verb>/v0.1` (per executing verb) ·
+`nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
+`nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` ·
+`nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` ·
+`nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` ·
+`nen.wc.squash/v0.1` · `nen.workflow/v0.1`
+
+Every one of them is read by a **program** that acts on it: a gate decides a
+merge, a hook rings a bell, a scaffolder writes a file, a coverage ladder bands
+a row. The rest are **diagnostics a caller reads once** — a verdict, a table, a
+plan — where a missing key is visible immediately and an unrecognised one costs
+nothing. Stamping a version on all ninety-two would create ninety-two things to
+version, ninety-two decisions about what counts as breaking, and no consumer
+asking for any of it: a promise nobody made and everybody would then have to
+keep. **The rule going forward** is the one above — a new shape gains a
+`contract` when something must refuse it, in the same change that gives it that
+consumer — and the shape of every `--json` document, contract or not, is stated
+in its own section below and held there by `src/cli/json-shape.test.ts`.
+
 Three verbs have no `--json` because they have no result of their own to
 render: [`dev test`](#nen-dev-test) and [`dev lint`](#nen-dev-lint) inherit
 their subprocess's stdio, and [`bootstrap`](#nen-bootstrap) prints only the
@@ -1337,6 +1366,8 @@ knows whether to move it before opening a PR (`classify`, read-only); and
 folds a branch's own commits into one before it is pushed (`squash`, aka's
 own residue — the only verb in this family that writes anything).
 
+
+`--json`: the full `VerifyResult` — `{ ok, error, missing[], duplicated[], altered[], extra[], filesInOriginal, filesInBranches }`, where each entry of the four arrays carries `{ path, header }` and `duplicated` adds `branches[]`, `altered` adds `branch` and `diff`.
 ### `nen wc classify`
 
 Reports one of `must-move` (on the trunk, dirty), `on-branch-dirty` (on a
@@ -1818,6 +1849,8 @@ zheref/bankai-core -- generated 2026-09-07T22:56:32.507Z
 ```
 (from a real run against the `board.json` produced by the `board build` example above)
 
+
+`--json`: the `Board` — `{ repo, generatedAt, rows[] }`, where `generatedAt` is the caller's own `Seams.now()` and never the live clock, so a rendering is reproducible.
 ### `nen board diff`
 
 Answers "what changed between these two board snapshots", field by field, matched by row id — for a
@@ -1981,6 +2014,8 @@ Counts the two concurrency budgets — CI and local — from a caller-supplied e
 caps. It never starts, stops, or drives anything; it reports occupancy and which efforts are still
 holding a slot, and by which plane's own freeing rule.
 
+
+`--json`: an ARRAY, one entry per input row — each input object merged with its `effortClass` and `evidence[]`.
 ### `nen loop slots`
 
 Answers "how many concurrency slots does each plane have free right now". A CI slot frees the moment
@@ -2138,6 +2173,8 @@ true. It is izanami's loop, ported: fetch, evaluate, report one line, pace, stop
 by name, to watch anything that classifies as mutating; a task that needs to act belongs to
 `nen parse izanagi` instead.
 
+
+`--json`: `{ current, pinFindings[], questionSweep }`, where `questionSweep` is `{ checked: false }` when no sweep ran and `{ checked: true, gaps[] }` when one did — never a silent "no gaps".
 ### `nen watch until`
 
 Answers "has this condition become true yet", by repeating one command and testing its output or exit
@@ -2372,6 +2409,8 @@ Loads and validates the files a target repository is expected to carry under `ne
 `nen/contract.json` — and reports each file's own verdict. `nen` has no built-in copy of any of them to
 fall back on: an absent or malformed file is reported by name, never guessed past.
 
+
+`--json`: an ARRAY of `{ from, to, status, message }`, one per rename attempted.
 ### `nen schema check`
 
 Answers "can this repository's taxonomy be read at all, and by which files": every REQUIRED file
@@ -2556,6 +2595,8 @@ consumer's live GitHub backlog, and reads back one target's recorded scenario. R
 exact and case-insensitive, never a prefix match: an unknown token is an error naming what the registry
 does contain, never a guess at "the closest match".
 
+
+`--json`: the resolution — `{ category, precedence[], present[], unknown[], resolved, outranked[], reason }`. `resolved` is `null` and `reason` says why when the precedence cannot rank the set.
 ### `nen repo resolve`
 
 Answers "which repository/repositories does this token name, per this registry" — a product code
@@ -2723,6 +2764,8 @@ nen ref format --repo src/schema/fixtures/bankai-repo --code KP --kind PR --numb
 ```
 (from a real run against `src/schema/fixtures/bankai-repo`)
 
+
+`--json`: `{ ref, token, glyph, mark, unknownState }`.
 ### `nen ref parse`
 
 Answers "what does this token mean" — the inverse of `format`. A token that does not match
@@ -3117,6 +3160,8 @@ are affected by the GitHub Actions workflows a release range changed. It
 never opens a repin PR itself — `compute` reports the set and `record`
 appends it to an audit ledger for a caller to act on.
 
+
+`--json`: `{ ok, pushed, log[], error }` — `error` is `null` on success, and `pushed` says whether the tag reached the remote as distinct from whether it was created.
 ### `nen fanout compute`
 
 `changed-workflows(vPrev..vNew)` INTERSECT each registered consumer's
@@ -4252,6 +4297,39 @@ Stack-aware developer verbs. Every one of them runs what the TARGET REPOSITORY d
 present with no `project` block, is exit 2 naming the file; `nen shu detect`
 proposes one.
 
+<a id="shu-run-report"></a>
+**The shared `--json` run report.** Every `shu` verb that EXECUTES a declared
+invocation emits one object with the same top-level keys, in this order:
+
+```text
+{ contract, lane, stack, verb, target, steps, cwd, env, host,
+  preconditions, exitCode, durationMs, artifacts, log }
+```
+
+`contract` is `nen.shu.<verb>/v0.1` — per verb, so a consumer that recognises
+`nen.shu.build/v0.1` is never handed a `test` report by accident. `build` adds
+one key after `log`: `proof`, the `.nen/proof/<lane>.json` a green build records
+(`null` when the build was not green or nothing was run). `target` is `null`
+unless a destination or a device was resolved — on [`deploy`](#nen-shu-deploy) it is
+`{ name, args, requiresEnv }` (variable **names**, never a value), and on
+[`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) with `--target` it is
+`{ name, verb, lane, args, artifact, device, probe, after }`. `env` carries
+variable **names** only. `steps[].exitCode` is the **tool's** code and is `null`
+when nothing was run, which is how a reader tells a dry run from a real one;
+`exitCode` is nen's own. Under `--json` a step's own output goes to **stderr**,
+so stdout stays exactly one document.
+
+Five verbs of this family answer a **different** contract instead, because they
+report on something other than a run: [`detect`](#nen-shu-detect)
+(`nen.shu.detect/v0.1`), [`tools`](#nen-shu-tools) (`nen.shu.tools/v0.1`),
+[`coverage`](#nen-shu-coverage) (`nen.shu.coverage/v0.1`),
+[`test-report`](#nen-shu-test-report) (`nen.shu.test-report/v0.1`),
+[`evidence`](#nen-shu-evidence) (`nen.shu.evidence/v0.1`) and
+[`warmup`](#nen-shu-warmup) (`nen.shu.warmup/v0.1`). Each is documented in its
+own section. `--json` is **refused** on `dev` and `run` unless `--dry-run` is
+also given: those two hand this terminal to the child, and one object followed
+by a server's log lines is not a document.
+
 | Field | Meaning |
 |---|---|
 | `project.lanes` | `{ "<lane>": { "stack": "<id>", "cwd": "<repo-relative>" } }`. A stack is a **per-lane** property: one repository is routinely several builds. |
@@ -4781,7 +4859,7 @@ nen shu build [--repo <path>] [--lane <name>] [--dry-run] [--json]
 | `--lane <name>` | no | Which lane to build. | Defaults to `project.defaultLane`; exit 2 naming every declared lane when neither is given. |
 | `--dry-run` | no | Print every step and run nothing. | The argv printed **is** the argv that would be spawned — same rendering, same plan. |
 
-**Output and exit codes** — the report, as text or `--json`. `0`/`1`/`2`/`3`/`4`/`5` as the family's table above.
+**Output and exit codes** — the report, as text or `--json`. `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.build/v0.1"`.
 
 **A green build records the tree it proved.** When every step exits 0, this verb
 writes `.nen/proof/<lane>.json` (creating the directory):
@@ -4870,12 +4948,14 @@ then parses the results file it names under `artifacts`.
 nen shu test [--repo <path>] [--lane <name>] [--dry-run] [--json]
 ```
 
-**Output and exit codes** — as `build`. Like every executing verb in this family it is **`dry-run-gated`** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository — a declared test task may well write, and one keystroke separates a golden-image check from its recorder — so the bare form is never certified, while the dry run is, because rendering and spawning nothing is a property of nen rather than a claim about that argv.
+**Output and exit codes** — as `build`, and `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.test/v0.1"`. Like every executing verb in this family it is **`dry-run-gated`** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository — a declared test task may well write, and one keystroke separates a golden-image check from its recorder — so the bare form is never certified, while the dry run is, because rendering and spawning nothing is a property of nen rather than a claim about that argv.
 
 ### `nen shu ui-test`
 
 Run the lane's UI/E2E suite. Same shape as `test`, same `dry-run-gated` classification. Multi-step declarations are common here — a browser download step before the suite itself — and every step is printed by `--dry-run` and run in order.
 
+
+**Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.ui-test/v0.1"`.
 ### `nen shu lint`
 
 Run the lane's linter and format check. Same shape as `test`, same `dry-run-gated` classification — a check mode and its `--write` twin differ by one flag *in the declaration*, which is exactly why nen does not certify the bare form.
@@ -4891,14 +4971,20 @@ would run:     pnpm turbo run lint
 ```
 (the two `would run:` lines of a two-step declaration; the rest of the report is elided)
 
+
+**Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.lint/v0.1"`.
 ### `nen shu archive`
 
 Produce the lane's distributable artifact. Across the stacks this family is designed for, most lanes declare `{ "unsupported": "<why>" }` here, and the refusal quotes that sentence at exit 4.
 
+
+**Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.archive/v0.1"`.
 ### `nen shu release`
 
 Publish the artifact, where the lane declares a publication step. Nen never synthesises signing material — no export options, no keystore, no provisioning profile, no notarization credential — and a lane that has no publication step says so in its own words.
 
+
+**Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.release/v0.1"`.
 ### `nen shu dev`
 
 Start the lane's **debug** build for local iteration. Long-running: nen prints the pre-flight report as text, then inherits this terminal and hands it to the child, so the report's `steps[].exitCode` and `exitCode` are `null` and `log.mode` is `"interactive"`. Ctrl-C reaches the child; nen stays alive to report. `--dry-run` starts nothing at all.
@@ -5043,6 +5129,8 @@ log:           dry run -- nothing was executed, so there is no output to capture
 
 Start the lane's **production or staging** build, locally. The distinguishing property against `dev` is the build configuration, not the lifetime — `run` is long-running too, goes through the same interactive seam, refuses `--json` without `--dry-run` for the same reason, and takes the same optional `--target`. A launch target declares which of the two verbs it belongs to; naming a `dev` target on `run` (or the reverse) is exit 2, because the two are different builds and nen carries a target across in neither direction. That check runs **before the lane's own row is read**, so it is the answer even on a lane where the other verb is `unsupported` or undeclared — see [which refusal answers first](#nen-shu-dev).
 
+
+**Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.run/v0.1"`.
 ### `nen shu deploy`
 
 Send a build to a declared, **named** target. It is the one verb in this family
@@ -5188,6 +5276,8 @@ about the tree, because a deploy destination is not a fact any checkout carries.
 The lane's notes carry the reference pack's own word on `deploy` for that stack,
 the shape to write, and the rule that a credential value never goes into a file
 that is committed.
+
+**Output and exit codes** — the report, as text or `--json`; `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.deploy/v0.1"`.
 ### `nen shu coverage`
 
 Run the lane's coverage command — through the same executor as every other verb,
@@ -5774,6 +5864,8 @@ branch that changed no `__Snapshots__/**/*.png` file prints `evidence: no
 changed file under project.evidence.globs against main...HEAD` and still
 exits `0`)
 
+
+`--json`: a contract of its own — `{ contract: "nen.shu.evidence/v0.1", base, mechanism, rows[], suites[] }`, keys in that order. There is no `lane`, `stack`, `steps`, `cwd`, `env` or `host`: this verb runs no declared invocation, so none of those questions apply. Each `rows[]` entry is `{ suite, scene, path, status }`.
 ### `nen shu tools`
 
 Check the **host** toolchain this repository pins, and — only with `--install`,
