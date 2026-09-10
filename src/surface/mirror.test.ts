@@ -431,6 +431,30 @@ describe("checking -- the four drift classes", () => {
     expect(mirrorReportOk(checkSurfaceMirror(out, files, row("cursor")))).toBe(true);
   });
 
+  it("round-trips a CRLF source: generate, then check, with no drift", () => {
+    // `* text=auto` means a Windows checkout hands the generator `\r\n`. The
+    // marker is written with a bare `\n` and read back off a `split("\n")`, so
+    // the one thing that must hold is that a fresh generation of a CRLF source
+    // equals what was written -- otherwise every file on one platform would
+    // read as hand-edited.
+    const source = tempDir();
+    mkdirSync(join(source, "windows"));
+    writeFileSync(
+      join(source, "windows", "SKILL.md"),
+      "---\r\nname: windows\r\ndescription: written on a CRLF checkout\r\n---\r\n\r\n# windows\r\n",
+    );
+    const files = generateSurfaceMirror({
+      row: row("codex"),
+      skills: readSourceSkills(source),
+      agents: [],
+      invocationPrefix: null,
+    });
+    const out = tempDir();
+    writeSurfaceMirror(out, files, row("codex"));
+    expect(readMarker(readFileSync(join(out, "windows", "SKILL.md"), "utf8"))).toBe("codex");
+    expect(mirrorReportOk(checkSurfaceMirror(out, files, row("codex")))).toBe(true);
+  });
+
   it("creates the parent directory of a file it has never written", () => {
     const out = join(tempDir(), "not", "there", "yet");
     writeSurfaceMirror(out, generate("codex"), row("codex"));
