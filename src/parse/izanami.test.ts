@@ -271,6 +271,10 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
 
   it("refuses the always-mutating verbs by name", () => {
     expect(classifyCommand("nen pr cascade-main --repo .").classification).toBe("mutating");
+    // --no-push skips only the push step; the fetch+merge it still performs
+    // mutates the working tree and index, so it stays mutating rather than
+    // becoming this verb's first read-only form.
+    expect(classifyCommand("nen pr cascade-main --repo . --no-push").classification).toBe("mutating");
     expect(classifyCommand("nen pr retarget --target o/r --pr 1 --base main").classification).toBe("mutating");
     expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-reviewers a").classification).toBe("mutating");
     expect(classifyCommand("nen tag cut --name v1.0.0 --at abc123").classification).toBe("mutating");

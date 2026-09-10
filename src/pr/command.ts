@@ -68,7 +68,7 @@ nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready]
 nen pr body-check --body-from <path> --requirements-from <path>
 nen pr fetch --target <owner/name> --pr <n>
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
-nen pr cascade-main --repo <path> [--trunk main]
+nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> --add-reviewers a,b
 
@@ -137,6 +137,11 @@ next-blocker:
 cascade-main:
   Merges (never rebases) the trunk into the current branch and pushes on a
   clean merge. Reports a conflict rather than resolving it.
+  --no-push                   Fetch and merge exactly as always, then stop --
+                              never push. Still mutates the working tree and
+                              index (the merge happens); --json gains
+                              'noPush: true'. Exit codes are unchanged: 0 on a
+                              clean merge, 1 on a conflict.
 
 retarget:
   gh pr edit --base, for a stacked PR after its predecessor merges.
@@ -292,7 +297,7 @@ export const prCommand: Command = {
       "base",
       "add-reviewers",
     ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr"],
+    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push"],
   },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("pr", context.args, [
@@ -417,12 +422,19 @@ function cascade(context: CommandContext): number {
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the repository whose current branch the trunk is merged into."),
   });
-  const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main");
+  const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main", {
+    noPush: context.args.booleans.has("no-push"),
+  });
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.error !== null || result.conflicted ? 1 : 0;
   }
   for (const line of result.log) context.io.out(line);
+  for (const conflict of result.conflicts) {
+    context.io.out(`  ${conflict.path}  (${conflict.kind})`);
+    context.io.out(`    ours:   ${conflict.ours.length === 0 ? "(no commits since the merge base)" : conflict.ours.join(", ")}`);
+    context.io.out(`    theirs: ${conflict.theirs.length === 0 ? "(no commits since the merge base)" : conflict.theirs.join(", ")}`);
+  }
   if (result.error !== null) {
     context.io.err(`nen: ${result.error}`);
     return 1;

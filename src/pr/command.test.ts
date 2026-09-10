@@ -289,9 +289,64 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const script: readonly ScriptedCall[] = [
       { match: "git fetch origin main", result: {} },
       { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: {} },
     ];
     const result = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(script));
     expect(result.code).toBe(1);
+  });
+
+  it("cascade-main --no-push merges cleanly, never calls push, and says so in the log and --json", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: {} },
+    ];
+    const result = await capture(["pr", "cascade-main", "--no-push"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/not pushed \(--no-push\)/);
+
+    const jsonResult = await capture(
+      ["pr", "cascade-main", "--no-push", "--json"],
+      BANKAI_REPO,
+      new ScriptedSeams(script),
+    );
+    expect(jsonResult.code).toBe(0);
+    const parsed = JSON.parse(jsonResult.out.join("\n"));
+    expect(parsed).toMatchObject({ noPush: true, pushed: false, conflicted: false, conflicts: [] });
+  });
+
+  it("cascade-main --json without --no-push carries noPush: false and conflicts: []", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: {} },
+      { match: "git push", result: {} },
+    ];
+    const result = await capture(["pr", "cascade-main", "--json"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n"));
+    expect(parsed).toMatchObject({ noPush: false, pushed: true, conflicts: [] });
+  });
+
+  it("cascade-main lists conflicts[] as text (path, kind, both sides' commits) and in --json", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: { stdout: "src/a.ts\n" } },
+      { match: "git ls-files -u", result: { stdout: "100644 aaa 2\tsrc/a.ts\n100644 bbb 3\tsrc/a.ts\n" } },
+      { match: "git merge-base HEAD origin/main", result: { stdout: "base123\n" } },
+      { match: "git log --format=%H base123..HEAD -- src/a.ts", result: { stdout: "ours1\n" } },
+      { match: "git log --format=%H base123..origin/main -- src/a.ts", result: { stdout: "theirs1\n" } },
+    ];
+    const textResult = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(textResult.code).toBe(1);
+    const text = textResult.out.join("\n");
+    expect(text).toMatch(/src\/a\.ts\s+\(add-add\)/);
+    expect(text).toMatch(/ours:\s+ours1/);
+    expect(text).toMatch(/theirs:\s+theirs1/);
+
+    const jsonResult = await capture(["pr", "cascade-main", "--json"], BANKAI_REPO, new ScriptedSeams(script));
+    expect(jsonResult.code).toBe(1);
+    const parsed = JSON.parse(jsonResult.out.join("\n"));
+    expect(parsed.conflicts).toEqual([{ path: "src/a.ts", kind: "add-add", ours: ["ours1"], theirs: ["theirs1"] }]);
   });
 
   // zheref/nen#20: `--gates` PARSED cleanly on next-blocker (the name sits in

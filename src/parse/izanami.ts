@@ -1033,7 +1033,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // matter which module a refactor touches first.
       fetch: RO("one typed PR snapshot -- gh reads only (its REST reviews call pins --method GET)"),
       "next-blocker": RO("reports the first blocking condition -- reads only (same pinned-GET fetch)"),
-      "cascade-main": MUT("merges the trunk into the branch and pushes"),
+      "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
       "request-reviews": MUT("gh pr edit --add-reviewer"),
     },

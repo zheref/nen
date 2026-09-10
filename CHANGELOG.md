@@ -4,6 +4,10 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Added
+
+- **pr** — `nen pr cascade-main` gains `--no-push`: fetch and merge exactly as it always has, then stop — never push, with the log saying `not pushed (--no-push)` and `--json` gaining `noPush: true` (`false` on every other call, never omitted). A conflicted merge's `--json` also gains `conflicts[]`, one entry per unmerged path from `git diff --name-only --diff-filter=U`: `kind` (`both-modified`, `add-add`, `modify-delete`, `delete-modify`) read off `git ls-files -u`'s stage table, and `ours[]`/`theirs[]` — the commits each side contributed to that path since the merge base (`git log --format=%H <mergeBase>..<ref> -- <path>`). Text output lists the same, one block per file. Neither flag changes the existing rule: this verb never runs `git merge --abort`, never picks a side, and never pushes over a conflict. `--no-push` still merges locally — a working-tree/index mutation — so izanami's automation-policy table keeps `cascade-main` `mutating` in every spelling, `--no-push` included ([#138](https://github.com/zheref/nen/pull/138))
+
 ## v0.3.0 — 2026-09-08
 
 ### Fixed
