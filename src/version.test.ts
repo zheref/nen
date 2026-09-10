@@ -174,14 +174,32 @@ describe("COMPATIBLE_MINOR_FLOOR", () => {
     expect(isPinBullet("Repin: this one has no lead-in")).toBe(false);
   });
 
-  it("reads v0.7.0's section as breaking, which is why the floor is seeded there", () => {
-    // The seed, stated as a fact about the file rather than as a constant this
-    // test would also have to be edited to change: v0.7.0 moved exit codes and
-    // the base every relative own-path flag resolves against, so its notes are
-    // breaking and the floor it ships is its own minor. Nothing pinned before
-    // this release changes behaviour because of the widening.
-    expect(release.breaking.filter((bullet): boolean => !isPinBullet(bullet)).length)
-      .toBeGreaterThan(0);
-    expect(release.breaking.some(isPinBullet)).toBe(true);
+  it("requires the cut to write exactly one pin bullet, whichever way the floor went", () => {
+    // WHAT THIS ASSERTION USED TO BE, AND WHY IT COULD NOT SURVIVE v0.8.0.
+    // Through the v0.7.0 line it read "v0.7.0's section is breaking, which is
+    // why the floor is seeded there" -- a true statement about the topmost
+    // section for exactly as long as v0.7.0 WAS the topmost section. The v0.8.0
+    // cut put a non-breaking release above it, and neither repair was
+    // available: re-pointing it at v0.7.0 BY NAME breaks this file's own rule
+    // (it reads the topmost released section AND NO OTHER, because older
+    // sections are history already shipped in binaries it cannot reach), while
+    // re-asserting `substantive > 0` on whatever is topmost would assert that
+    // every release from here on is a breaking one -- the exact claim
+    // COMPATIBLE_MINOR_FLOOR exists to stop making.
+    //
+    // WHAT GENERALISES IS THE OTHER HALF, and it is a rule docs/USAGE.md's
+    // release section states outright: the pin bullet is written EITHER WAY --
+    // `Repin:` when the floor moved, `No repin:` when it stayed -- so a reader
+    // is never left to infer the outcome from a section that says nothing. The
+    // test above decides whether the floor is RIGHT; this one decides whether
+    // the cut SAID SO, which is a distinct failure the other cannot see: a
+    // release that moves the floor correctly and omits the repin sentence
+    // hands every consumer an exit 5 with no instruction in the changelog.
+    // Exactly one, because two pin bullets are two answers to a question with
+    // one.
+    expect(
+      release.breaking.filter(isPinBullet),
+      `v${release.version} must carry exactly one pin bullet, with a bold lead-in beginning "Repin:" or "No repin:"`,
+    ).toHaveLength(1);
   });
 });

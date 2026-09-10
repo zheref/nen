@@ -748,14 +748,19 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
     }
   });
 
-  it("changes NO verdict at the floor this release ships", () => {
-    // The floor is seeded at v0.7.0's own minor because v0.7.0's notes are
-    // breaking. While the floor EQUALS this build's minor the widened rule and
-    // the old exact-minor rule agree on every input, which is the claim that
-    // makes this release safe to install under an unchanged pin -- proved here
-    // rather than asserted in a changelog.
-    const build = thisBuild();
-    expect(COMPATIBLE_MINOR_FLOOR).toBe(`${build.version.numbers[0]}.${build.version.numbers[1]}`);
+  it("changes NO verdict for a build sitting AT its own floor", () => {
+    // WHY THIS NO LONGER READS `thisBuild()`. Through v0.7.0 -- the release
+    // that SEEDED the floor -- `COMPATIBLE_MINOR_FLOOR` was this build's own
+    // minor, so the widened rule and the old exact-minor rule agreed on every
+    // input and that agreement could be read straight off the shipping binary.
+    // v0.8.0 ends the coincidence deliberately: it declares no breaking note,
+    // so the floor stays `0.7` while its own minor is 8. The two rules
+    // diverging there is not a regression for this case to catch -- it IS the
+    // feature, and the `accepts a pin AT the floor` case above is where it is
+    // proved. So the agreement is asserted where it is still claimed: of a
+    // build whose floor is its own minor, the state every SEEDING release is
+    // in, and a synthetic build like every other case in this block.
+    const build = buildAt("0.8.0", "0.8");
     for (const pin of ["0.3", "0.6", "0.7", "0.8"]) {
       const floor = parseMinimum(pin, "dependency.minimum");
       expect(renderMinimum(floor, build), pin).toBe(`>=0.${floor.minor}.0 <0.${floor.minor + 1}.0`);
@@ -766,6 +771,27 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
         );
       }
     }
+  });
+
+  it("ships a floor THIS build can stand on, and a pin at it reads this binary", () => {
+    // The one case in this block that reads the shipping binary, because it is
+    // a claim about what the release in hand hands a consumer rather than about
+    // the rule in the abstract. ../version.test.ts reconciles the constant
+    // against the CHANGELOG prose it summarises; this reconciles it against the
+    // comparator that consumes it. A floor above this build's own minor would
+    // admit NOTHING -- every pin at or above it is also above this build, and
+    // every pin below it is refused by the floor -- and a pin AT the floor
+    // being satisfied by this very version is exactly what the changelog means
+    // when it says a pinned repository owes no repin.
+    const build = thisBuild();
+    expect(COMPATIBLE_MINOR_FLOOR).toBe(`${build.floor.major}.${build.floor.minor}`);
+    expect(build.floor.major).toBe(build.version.numbers[0]);
+    expect(build.floor.minor).toBeLessThanOrEqual(build.version.numbers[1] ?? 0);
+    const pin = parseMinimum(COMPATIBLE_MINOR_FLOOR, "dependency.minimum");
+    expect(satisfiesMinimum(pin, VERSION, build)).toBe(true);
+    expect(renderMinimum(pin, build)).toBe(
+      `>=${build.floor.major}.${build.floor.minor}.0 <${build.floor.major}.${(build.version.numbers[1] ?? 0) + 1}.0`,
+    );
   });
 
   it("prints the floor beside the binary's own version, on every run", async () => {
