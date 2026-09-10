@@ -11,7 +11,7 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
 `scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
-families, 88 verbs, every flag checked against the binary this repository
+families, 89 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -436,7 +436,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 88 verbs, grouped as the README groups them. **Reads** is what a
+All 89 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -506,6 +506,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) -- never its content | nen/workflow.json under --repo, and only when the invocation carries a --trailer: the attribution-trailer policy | yes |
+| [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -3509,7 +3510,7 @@ OK -- method block is complete.
 
 **`nen commit`**
 
-Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. Reads and writes nothing on disk or over the network.
+Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. `format` reads and writes nothing on disk or over the network beyond the trailer policy; `check` reads one build proof and asks git for a tree hash, and writes nothing at all.
 
 ### `nen commit format`
 
@@ -3561,6 +3562,66 @@ Closes: #29
 ```
 (run for real)
 
+### `nen commit check`
+
+Answers ONE question: **is this working copy the one a green build proved?**
+[`nen shu build`](#nen-shu-build) records `.nen/proof/<lane>.json` when every
+step exits 0 -- the lane, the moment, and the git **tree** it built -- and
+removes it when the build comes out red, so a proof never outlives the tree it
+proved. This reads that file and compares its tree against this working copy's,
+computed the same way: a **scratch index**, never yours (`git add -A`, then
+`git rm --cached` for `.nen/`, then `git write-tree`).
+
+**It is what makes "never commit over a red build" affordable.** The alternative
+is rebuilding before every commit, or believing a sentence in a transcript.
+
+**Usage**
+
+```text
+nen commit check --repo <path> --require-proof <lane> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--require-proof <lane>` | yes | The lane whose build proof to check. | No default, ever: nen never picks a lane. A lane that resolves outside the tree is exit 2. |
+| `--repo <path>` | yes | The working copy this answers about. | Required for [`shu warmup`](#nen-shu-warmup)'s reason applied to the other verb whose whole answer is about which directory it ran in: "wherever this process happens to be" is not a working copy anybody named. |
+
+**Output and exit codes** -- `--json` is one object,
+`{ contract, repo, lane, path, proof, treeHash, ok, difference, exitCode }`
+(`nen.commit.check/v0.1`), where `proof` is the document as read (or `null`) and
+`treeHash` is the tree **now**.
+
+| Code | Meaning |
+|---|---|
+| `0` | the proof is there, it is that lane's, and its tree is this tree |
+| `1` | one of the three differences, **named**: there is no proof (which is also what a red build since the last green one looks like), it records a different lane, or the tree has moved since the build. Not 2: the invocation was correct and the answer is a fact about the repository |
+| `2` | `--require-proof` or `--repo` missing, a lane that escapes the tree, a flag this subcommand does not read, or a proof file that is present and is not valid JSON -- nen will not read a damaged proof as a missing one |
+
+**It reports and blocks nothing.** No commit is refused, no file is written, no
+ref moves. Read the code and decide, as with
+[`shu coverage --threshold`](#nen-shu-coverage)'s `met`.
+
+```bash
+nen shu build --repo . && nen commit check --repo . --require-proof nen
+```
+```text
+lane:      nen
+tree:      a63bdbfee2ae9182d83cf09afe3f29718fbf02d0
+proof:     .nen/proof/nen.json  tree a63bdbfee2ae9182d83cf09afe3f29718fbf02d0 at 2026-09-10T06:58:24.364Z
+verdict:   OK -- this working copy is the one the build proved green.
+```
+exit 0. Then one edited file later:
+
+```text
+lane:      nen
+tree:      de1f5cd3bdecb39016bd9267b25423b3275d09b6
+proof:     .nen/proof/nen.json  tree a63bdbfee2ae9182d83cf09afe3f29718fbf02d0 at 2026-09-10T06:58:24.364Z
+verdict:   NOT PROVED -- the tree has moved since the build: it proved a63bdbfee2ae9182d83cf09afe3f29718fbf02d0 at 2026-09-10T06:58:24.364Z, and this working copy is de1f5cd3bdecb39016bd9267b25423b3275d09b6. Whatever changed since is unbuilt -- run 'nen shu build --lane nen' again.
+```
+exit 1. (both run for real, against this repository)
+
 ## Stack-aware developer verbs
 
 Build, test, lint, run and ship a *project* — as opposed to every other family
@@ -3599,7 +3660,8 @@ proposes one.
 |---|---|
 | `project.lanes` | `{ "<lane>": { "stack": "<id>", "cwd": "<repo-relative>" } }`. A stack is a **per-lane** property: one repository is routinely several builds. |
 | `project.defaultLane` | Which lane `--lane` defaults to. `null` is legal and means `--lane` is required — even when there is exactly one lane, so a second lane arriving later cannot silently change what a scripted `nen shu build` builds. |
-| `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported) and `artifacts` (repo-relative paths the verb produces, which nen reports and never creates). |
+| `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported), `artifacts` (repo-relative paths the verb produces, which nen reports and never creates) and `stall` (below). |
+| `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `test`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. `--dry-run` prints it as an `on stall:` line under the step it guards. |
 | `project.preconditions` | `{ "<lane>": [ { kind, value, why } ] }`. Nen **asserts** these and **never performs** them. |
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
 | `project.targets` | `{ "<name>": { args, requiresEnv, unsupported, why } }` — the deploy destinations, and a **project-level** map rather than a per-lane one. `--target` must name a key of it, and there is no default — not even when there is exactly one. The **command** stays in `project.verbs.<lane>.deploy`, where every other verb's command is; a target says where that command sends it. `args` are appended to that argv, in order — refused on a multi-step row (which step reaches the destination is a guess), and refused, like any other argv, when they carry one of the reference pack's own placeholder tokens. `requiresEnv` names variables that must be **set**, asserted exactly as a precondition of kind `env` is — the value is never read, compared, logged or printed, so a credential belongs in the environment and never in this file; each entry is held to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) at load, because a name no environment could carry is a row that could only ever report `FAIL`. Repeats are collapsed, and a variable the lane's own preconditions already declare is asserted **once**. `unsupported` is the destination that has **no command line at all** (a hosting provider's own push integration, a CI action): exit 4 in the repository's own words, and the sentence is required rather than just the key. All four keys are optional; `{}` is a legal name-only target, and naming it is still mandatory. **Unknown keys are preserved** here as everywhere in this schema — with one exception: a key that misspells one of the four is **refused by pointer, naming the key it meant and which misspelling it is** — one letter out (`arg`, `requireEnv`), the same word in a different case (`Args`, `WHY`), or that key with an English plural on it — because preserving it means the flag was accepted, nothing was appended, and a different command deployed at exit 0. **Target names are the repository's own** and nen constrains them no more than it constrains a lane name: a name carrying a space or a leading `-` is legal, is listed verbatim in every refusal, and a leading `-` reaches `--target` only through the `--target=<name>` spelling. See [`nen shu deploy`](#nen-shu-deploy). |
@@ -3643,7 +3705,7 @@ more. See also the [Exit codes](#exit-codes) convention.
 
 **`--json`**, on every verb that executes one, is one object with these keys, in
 this order: `{ contract, lane, stack, verb, target, steps, cwd, env, host,
-preconditions, exitCode, durationMs, artifacts, log }`. `contract` is
+preconditions, exitCode, durationMs, artifacts, log, proof }`. `contract` is
 `nen.shu.<verb>/v0.1`. `env` is variable **names** only, never values.
 `target` is `null` on every verb but [`deploy`](#nen-shu-deploy), where it is
 `{ name, args, requiresEnv }` — the destination that was resolved, what it
@@ -3652,6 +3714,19 @@ appended to the argv, and the variable names it requires. Never a value of one.
 run — which is how a `--json` reader tells a dry run from a real one; `exitCode`
 is nen's. Under `--json` a step's own output is relayed to **stderr**, so stdout
 stays exactly one document.
+
+`steps[].stall` is `null` unless that step declares a guard, and otherwise
+`{ elapsedMs, quietMs, maxStrikes, onStall, strikes, at, stalled }` — the
+budgets as declared, then what happened: how many times the remedy ran, how many
+**milliseconds into the step** each firing was (`at`, never a wall clock, so two
+runs of one build compare), and whether the budgets were breached again with
+none left. Spending every strike and finishing green is the guard **working**;
+`stalled` is the separate verdict, and a stalled step reports `exitCode: null`
+because the child never gave one — nen stopped waiting rather than killing it.
+
+`proof` is the build proof this run wrote, or `null`. Only
+[`shu build`](#nen-shu-build) ever fills it; it is on every verb's document for
+the reason `target` is — one family, one document shape.
 
 [`shu coverage`](#nen-shu-coverage) and
 [`shu test-report`](#nen-shu-test-report) are the two executing verbs whose
@@ -4105,6 +4180,34 @@ nen shu build [--repo <path>] [--lane <name>] [--dry-run] [--json]
 
 **Output and exit codes** — the report, as text or `--json`. `0`/`1`/`2`/`3`/`4`/`5` as the family's table above.
 
+**A green build records the tree it proved.** When every step exits 0, this verb
+writes `.nen/proof/<lane>.json` (creating the directory):
+
+```json
+{ "contract": "nen.shu.proof/v0.1", "lane": "nen", "verb": "build",
+  "treeHash": "a63bdbfee2ae9182d83cf09afe3f29718fbf02d0",
+  "at": "2026-09-10T06:58:24.364Z", "exitCode": 0 }
+```
+
+`treeHash` is git's own tree object for this **working copy** — not the index:
+the build ran against the files on disk with nothing staged, and a check run a
+moment before a commit sees everything staged, so an index-based hash would
+disagree every time. It is computed through the seam with a **scratch index**
+(`GIT_INDEX_FILE` under `.nen/`, removed afterwards) — `git add -A`, then
+`git rm --cached` for `.nen/`, then `git write-tree` — so the repository's own
+index is never read or written, no ref moves, and nen's own artifacts cannot
+change the number they are used to compute. [`nen commit
+check`](#nen-commit-check) reads it back and computes the same hash the same way.
+
+It is a **fact, not a gate**: nothing here reads a proof, and no verb refuses
+because one is absent. A **dry run writes nothing** — it ran no build, so it
+learned nothing about this tree — and a build that comes out **red removes** an
+existing proof, because a stale proof is a green answer to a question that has
+since been answered red. A proof that cannot be written is one line on stderr
+and a still-green build: a marker file may not fail a compile. `nen shu warmup`
+delegates its verification build through this same executor, so a green warm-up
+records a proof too.
+
 **Example**
 
 ```bash
@@ -4124,6 +4227,31 @@ artifacts:     packages/app/.output (absent)
 log:           dry run -- nothing was executed, so there is no output to capture and no tool exit code to report.
 ```
 (run for real, against the executor's own fixture declaration)
+
+**Example — a step that stops making progress.** A lane declaring
+`"stall": { "elapsedMs": 2000, "quietMs": 1000, "maxStrikes": 2, "onStall": {…} }`
+against a step that never prints anything:
+
+```bash
+nen shu build --repo /tmp/demo
+```
+```text
+step 1 of 1 has produced no output for 2009ms and has been running 2009ms -- past this repository's declared budget (elapsedMs 2000, quietMs 1000). Running its declared remedy, strike 1 of 2: echo 'the repository'\''s own remedy ran'
+the repository's own remedy ran
+step 1 of 1 has produced no output for 1500ms and has been running 3516ms -- past this repository's declared budget (elapsedMs 2000, quietMs 1000). Running its declared remedy, strike 2 of 2: echo 'the repository'\''s own remedy ran'
+the repository's own remedy ran
+step 1 of 1 is STALLED: 2 of 2 declared remedies have run and it has still produced nothing for 1002ms (4519ms in). nen does not kill what it started, and will not wait on it either -- the process is STILL RUNNING and is yours to stop. What nen ran is this repository's own project.verbs declaration, nothing nen chose.
+lane:          demo  (demo-stack)
+verb:          build
+host:          darwin -- supported (the declaration constrains no platform)
+preconditions: (none declared)
+ran:           sleep 20  -- STALLED, still running (nen stopped waiting)
+on stall:      after 2000ms elapsed AND 1000ms with no output: echo 'the repository'\''s own remedy ran'  (up to 2 times; ran 2 at 2009ms, 3516ms; STALLED -- every remedy spent)
+…
+step 1 of 1 stalled: sleep 20 -- every one of the 2 declared remedies ran and it went quiet again. nen exits 1; the step itself was never killed and has no exit code to report.
+```
+exit 1, in 4.6 seconds against a child that had 20 to go. (run for real; the
+report's unchanged rows are elided at `…`.)
 
 ### `nen shu test`
 
