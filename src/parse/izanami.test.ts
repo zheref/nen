@@ -352,6 +352,20 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen issue attach-sub --target o/r --parent 1 --children 2 --dry-run").classification).toBe("read-only");
   });
 
+  // zheref/nen#160: request-reviews grew --dry-run the same day it grew
+  // --add-bots -- resolution (is this login a known bot, a collaborator)
+  // still reads GitHub under --dry-run, but only the bare form's write
+  // (gh pr edit --add-reviewer / the requestReviews mutation) makes it
+  // mutating. Line 279 above already pins the bare form; this pins the gate.
+  it("pr request-reviews is dry-run-gated, like edit-body just below it in the same family", () => {
+    expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-reviewers a --dry-run").classification).toBe(
+      "read-only",
+    );
+    expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-bots BOT_1 --dry-run").classification).toBe(
+      "read-only",
+    );
+  });
+
   // zheref/nen#29's new verb. It POSTS to a public timeline, so it is gated
   // exactly like its issue-family siblings -- read-only only in the explicit
   // --dry-run form, never inferred from "it only comments".

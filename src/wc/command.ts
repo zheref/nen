@@ -33,10 +33,19 @@ Reports one of: must-move (on the trunk, dirty), on-branch-dirty (on a branch
 with uncommitted work -- whether it is the SAME effort as the branch's
 existing commits is a judgement this verb hands you evidence for, never
 decides), on-branch-clean (nothing to commit). Exits 0 for any of those three
--- this is a report, not a guard. A git command that FAILS (a detached HEAD,
-a --base that does not resolve) is never folded into one of the three cases
-as an empty/zero reading; it is reported as an error on stderr and exits
-non-zero instead, in both plain and --json invocations.
+-- this is a report, not a guard. A git command that FAILS (a --base that
+does not resolve, an unreadable status) is never folded into one of the three
+cases as an empty/zero reading; it is reported as an error on stderr and
+exits non-zero instead, in both plain and --json invocations.
+
+A DETACHED HEAD IS CLASSIFIED LIKE ANY OTHER WORKING COPY, not refused: the
+classification is decided by trunk-or-not and dirty-or-not, and a detached
+HEAD answers both (it is standing on no branch, so it is never the trunk).
+'branch' is then null in --json and the text output reads
+'branch: (detached HEAD at <short sha>)'. A worktree added with --detach, a
+bisect and a rebase step are all ordinary working copies. The one refusal
+left is a HEAD that names no branch AND resolves to no commit -- a repository
+with no commits yet, where there is nothing to classify.
 
 squash:
   nen wc squash --repo <path> --onto <ref> --message-file <file>
@@ -210,6 +219,12 @@ export const wcCommand: Command = {
       return 0;
     }
     context.io.out(`case: ${result.case}`);
+    // THE BRANCH IS A LINE OF ITS OWN, and it is the same line on every path:
+    // a name, or where a detached HEAD is standing. A reader who has to infer
+    // "detached" from the absence of a branch name is a reader who will not.
+    context.io.out(
+      `branch: ${state.branch === null ? `(detached HEAD at ${state.detachedAt ?? "(unknown)"})` : state.branch}`,
+    );
     for (const line of result.evidence) context.io.out(`  ${line}`);
     return 0;
   },

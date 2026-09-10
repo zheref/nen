@@ -1077,7 +1077,15 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "next-blocker": RO("reports the first blocking condition -- reads only (same pinned-GET fetch)"),
       "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
-      "request-reviews": MUT("gh pr edit --add-reviewer"),
+      // Dry-run-gated (zheref/nen#160), the same shape 'edit-body' just
+      // below carries: --dry-run still reads GitHub -- resolving every
+      // --add-reviewers login against this pull request's own known bots
+      // and --target's collaborators -- but that resolution never writes;
+      // only the bare form's gh pr edit --add-reviewer / requestReviews
+      // mutation call does.
+      "request-reviews": DRY(
+        "requests a User/Team via gh pr edit --add-reviewer and a Bot via GitHub's requestReviews mutation (botIds) unless --dry-run is given; --dry-run still reads GitHub to resolve each --add-reviewers login",
+      ),
       // Dry-run-gated, the same shape 'issue edit-body' carries: --dry-run
       // still reads GitHub (repos/<t>/pulls/<n>, to certify the number IS a
       // pull request) but that read never writes.
