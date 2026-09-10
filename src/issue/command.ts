@@ -445,10 +445,18 @@ usage:
                      [--integration-prefix <prefix>] [--trunk main]
       Where an issue sits on its delivery chain, and which object is the
       terminus that ends the run. --chain-labels roles: idea, researched,
-      approved-team, approved-direct, building, in-review, epic, chore. An
-      unparseable --chain-labels entry (no '=', an unknown role, an empty
-      label) exits 2 rather than being silently dropped. Exits 1 when the
-      answer is 'undecidable' -- that is a refusal, not a result; 0 otherwise.
+      approved-team, approved-direct, building, in-review, epic, chore.
+      FOUR OF THE EIGHT CAN REFUSE A VERDICT and the other four cannot:
+      building, in-review, idea and epic decide whether an issue that matched
+      nothing is really 'routable', so an unmapped one is 'undecidable' rather
+      than a guess. researched, approved-team, approved-direct and chore are
+      reported under unmappedRoles when absent and never block an answer, so a
+      taxonomy that genuinely lacks one needs no placeholder for it. A position
+      a MAPPED role positively matches is decided before any of this is
+      consulted. An unparseable --chain-labels entry (no '=', an unknown role,
+      an empty label) exits 2 rather than being silently dropped. Exits 1 when
+      the answer is 'undecidable' -- that is a refusal, not a result; 0
+      otherwise.
       Both verbs also REFUSE (exit 1) when --issue <n> turns out to name a
       pull request: GitHub numbers issues and PRs in one sequence and serves
       both from issues/{n}, and a delivery-chain position is defined only for

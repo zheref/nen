@@ -305,3 +305,51 @@ describe("chainPosition / terminus -- refuse a pull request outright (issue #25)
     expect(caught?.numbers).toEqual([925]);
   });
 });
+
+// zheref/nen#55. The report behind that issue was written against pinned v0.1.0
+// and read the refusal as "any unmapped role refuses the whole call", which is
+// what a caller reasonably concludes from a message that names roles and does
+// not say which ones matter. These pin the narrower rule that already holds, so
+// it cannot quietly widen again.
+describe("classifyChainPosition -- FOUR roles can refuse a verdict, and four cannot", () => {
+  const open = {
+    number: 918,
+    title: "t",
+    state: "open",
+    labels: ["mode:build"],
+    isPullRequest: false,
+    id: 1,
+  } as unknown as Parameters<typeof classifyChainPosition>[0];
+
+  function mapOf(spec: string): Parameters<typeof classifyChainPosition>[1] {
+    return parseRoleMap(spec.split(",")).map;
+  }
+
+  it("decides with only the four critical roles mapped", () => {
+    const result = classifyChainPosition(
+      open,
+      mapOf("building=stage:building,in-review=stage:in-review,idea=kind:idea,epic=kind:epic"),
+    );
+    expect(result.position).toBe("routable");
+    // The other four are REPORTED, not required -- which is the whole of the
+    // per-call verbosity #55 objected to.
+    expect(result.unmappedRoles).toEqual(["researched", "approved-team", "approved-direct", "chore"]);
+  });
+
+  it("refuses when a critical role is missing, and names which four can do that", () => {
+    const result = classifyChainPosition(open, mapOf("idea=kind:idea"));
+    expect(result.position).toBe("undecidable");
+    const evidence = result.evidence.join(" ");
+    expect(evidence).toContain("building, in-review, epic");
+    // And says the other four are optional, so a caller is not left inferring
+    // that it must supply a placeholder for a role its taxonomy lacks.
+    expect(evidence).toContain("are optional and never block a verdict");
+  });
+
+  it("decides a matched position with NO roles mapped at all, because it never reaches the check", () => {
+    // Partial credit already exists wherever the labels answer the question:
+    // every branch above the routable fall-through returns first.
+    const closed = { ...(open as object), state: "closed" } as typeof open;
+    expect(classifyChainPosition(closed, mapOf("idea=kind:idea")).position).toBe("closed");
+  });
+});
