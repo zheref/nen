@@ -684,6 +684,21 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
 
+**Provenance — which binary decided it.** Every report says which `nen`
+produced it: `meta.generator` carries `program`, `version` and `executable`
+(the resolved path of the running process), and `--explain` renders them as a
+`decided by nen <version> (<path>) at <timestamp>` line. `nen --version` says
+which nen a caller *believes* it has; `executable` says which file actually
+answered — a checksum-verified binary under the bootstrap cache
+(`~/.cache/nen/<source>/<ref>/…`), a locally built one, or `bun src/index.ts`
+out of a working tree, all three of which can carry the same version string and
+different behaviour. It is deliberately **not** a checkout SHA: a compiled
+binary has no checkout at evaluation time, and its bytes are already verifiable
+against the published `SHA256SUMS` for a ref. It is deliberately **not** printed
+on stderr on every invocation either — every verb in this binary shares one
+stderr that callers treat as diagnostics, and `pr ready` is not privileged among
+them; the report carries it, and a caller that wants it reads the report.
+
 **Output and exit codes** — human line is `<repo>#<pr>: <gateLine>` (or the
 full conjunct table with `--explain`); `--json` top-level keys: `contract`,
 `verdict` (`ready`\|`not-ready`\|`unevaluated`), `gateLine`, `firstFailing`,

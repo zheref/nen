@@ -162,6 +162,12 @@ export interface PrReadyInput {
 export interface PrReadyDeps {
   /** `date -u +%Y-%m-%dT%H:%M:%SZ`, injected so a report is reproducible. */
   readonly now: () => string;
+  /**
+   * The path of the executable that is deciding this verdict. Injected for the
+   * same reason `now` is: a report a test asserts on must not carry a value
+   * that changes with the machine. See "provenance" below for what it answers.
+   */
+  readonly executable: () => string;
   /** Opens the transport. Returns a message instead of throwing on a bad token. */
   readonly openSource: (
     tokenEnvVar: string,
@@ -170,6 +176,10 @@ export interface PrReadyDeps {
 
 export const defaultDeps: PrReadyDeps = {
   now: (): string => new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+  // `process.execPath`, NOT `import.meta.url`: a compiled bun binary's
+  // `import.meta.url` is `/$bunfs/...`, a path on no filesystem, which is the
+  // whole reason ../taxonomy-purity.test.ts forbids that constant outright.
+  executable: (): string => process.execPath,
   openSource: (
     tokenEnvVar,
   ): { readonly ok: true; readonly source: PrStateSource } | { readonly ok: false; readonly message: string } => {
@@ -211,6 +221,48 @@ export const defaultDeps: PrReadyDeps = {
 //     than each keeping its own copy to drift.
 //   * `meta` is context, never evidence. Nothing in it is a conjunct and
 //     nothing in it may be read as one.
+//
+// ── provenance: what it is here, and what it is NOT (zheref/nen#16) ─────────
+//
+// bankai-core's `cli/src/ports/pr_ready_gate.ts` -- the file this readiness
+// core is adopted from -- gained a self-reported provenance line in BC-PR-#934,
+// answering "which copy of me decided this" on every invocation. The question
+// was real there: the shell script could be sourced from a real checkout or
+// from a plugin-cache MIRROR of one, so which bytes ran was genuinely ambiguous
+// and only the tree and commit could settle it.
+//
+// NEN'S ANSWER TO THE SAME QUESTION IS DIFFERENT, because nen's ambiguity is:
+//
+//   * NOT a checkout SHA. A compiled binary has no checkout at evaluation time
+//     and no `.git` to read -- `import.meta.url` inside one is `/$bunfs/...`,
+//     which is why ../taxonomy-purity.test.ts forbids that constant outright.
+//     Asking a released binary which commit built it would mean baking an
+//     answer in at build time that a locally-built one would state just as
+//     confidently and just as unverifiably.
+//   * NOT a checkout-vs-cache CLASS either, which is bankai-core#938's
+//     shell-only half and stays N/A here (D16/AK-11: Akatsuki has no host for a
+//     bash-tree self-identification guard).
+//   * IT IS THE VERSION AND THE PATH. `nen --version` says which nen a caller
+//     BELIEVES it has; `meta.generator.executable` says which file actually
+//     produced this verdict -- a checksum-verified binary under the bootstrap
+//     cache (`~/.cache/nen/<source>/<ref>/...`), a locally built one, or `bun
+//     src/index.ts` out of a working tree. Those three can carry the same
+//     `version` string and different behaviour, and that is the whole of what
+//     is ambiguous about a nen verdict. The version is verifiable against the
+//     published SHA256SUMS for a ref; the path is what says WHICH of them ran.
+//
+// WHERE IT SURFACES: in `--json`'s `meta.generator` (already carried `program`
+// and `version`; `executable` is ADDITIVE and therefore does not bump v0.1, by
+// this contract's own rule above), and in `--explain`, which is the rendering a
+// human reads at a gate and which named the binary nowhere at all.
+//
+// WHERE IT DELIBERATELY DOES NOT: on stderr, unconditionally, the way the shell
+// printed it. The shell had no structured output to put it in, so stderr was
+// the only place left; nen has one, and every verb in this binary shares one
+// stderr that callers already treat as diagnostics. `pr ready` is not
+// privileged among thirty-odd verbs, and a provenance line on every invocation
+// of one of them is a line the other thirty would each have to justify not
+// printing. The report carries it; a caller that wants it reads the report.
 export const CONTRACT = "nen.pr.ready/v0.1";
 
 export type Verdict = "ready" | "not-ready" | "unevaluated";
@@ -242,7 +294,17 @@ export interface ReadyMeta {
   readonly identities: { readonly source: "schema" | "flags"; readonly path: string | null };
   readonly warnings: readonly string[];
   readonly evaluatedAt: string;
-  readonly generator: { readonly program: string; readonly version: string };
+  /**
+   * WHICH BINARY DECIDED THIS. See the provenance note above the contract.
+   * `executable` is additive at v0.1 and carries the resolved path of the
+   * process that produced the report, never a checkout SHA -- nen has no
+   * checkout at evaluation time.
+   */
+  readonly generator: {
+    readonly program: string;
+    readonly version: string;
+    readonly executable: string;
+  };
 }
 
 // ── ref resolution ──────────────────────────────────────────────────────────
@@ -674,6 +736,14 @@ export function renderExplain(report: ReadyReport): string[] {
       report.meta.identities.path ?? "from --reviewers (reduced: no review checks, no carve-outs)"
     }`,
   );
+  // WHICH BINARY DECIDED THIS, on the rendering a human reads at a gate
+  // (zheref/nen#16). `--json` has carried `program`/`version` since v0.1 and
+  // this line has carried neither, so the one output a maintainer actually
+  // looks at was the one that could not say whether the verdict came from the
+  // bootstrap-cached binary or from a working tree.
+  lines.push(
+    `  decided by ${report.meta.generator.program} ${report.meta.generator.version} (${report.meta.generator.executable}) at ${report.meta.evaluatedAt}`,
+  );
   if (report.meta.excludeRun !== null) {
     lines.push(`  excluding the checks of Actions run ${report.meta.excludeRun} (CON-36 clause 3)`);
   }
@@ -799,6 +869,7 @@ export async function prReady(
       unevaluatedReport(
         ref,
         deps.now(),
+        deps.executable(),
         identities,
         policy,
         excludeRun,
@@ -830,6 +901,7 @@ export async function prReady(
       unevaluatedReport(
         ref,
         deps.now(),
+        deps.executable(),
         identities,
         policy,
         excludeRun,
@@ -848,6 +920,7 @@ export async function prReady(
       unevaluatedReport(
         ref,
         deps.now(),
+        deps.executable(),
         identities,
         policy,
         excludeRun,
@@ -885,7 +958,7 @@ export async function prReady(
       identities: { source: identities.source, path: identities.path },
       warnings: [...flagWarnings, ...fetched.warnings],
       evaluatedAt: deps.now(),
-      generator: { program: PROGRAM, version: VERSION },
+      generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
     },
   };
   return emit(io, json, explain, report);
@@ -901,6 +974,7 @@ function splitCsv(csv: string): string[] {
 function unevaluatedReport(
   ref: ResolvedRef,
   now: string,
+  executable: string,
   identities: ResolvedIdentities,
   policy: RoundPolicy,
   excludeRun: string,
@@ -944,7 +1018,7 @@ function unevaluatedReport(
       identities: { source: identities.source, path: identities.path },
       warnings,
       evaluatedAt: now,
-      generator: { program: PROGRAM, version: VERSION },
+      generator: { program: PROGRAM, version: VERSION, executable },
     },
   };
 }
