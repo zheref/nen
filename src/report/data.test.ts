@@ -180,21 +180,21 @@ describe("nen report data refuses rather than reporting an empty answer", () => 
     expect(captured.seams.calls).toHaveLength(1);
   });
 
-  it("refuses a failed 'git log' rather than reporting a branch with nothing on it", async () => {
+  it("refuses a failed 'git log' at exit 1 -- git itself failing, not a mistyped flag -- rather than reporting a branch with nothing on it", async () => {
     const captured = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main"], [
       ...script().slice(0, 2),
       { match: `git log main..HEAD --format=${LOG_FORMAT}`, result: { code: 128, stderr: "fatal: bad object\n" } },
     ]);
-    expect(captured.code).toBe(2);
+    expect(captured.code).toBe(1);
     expect(captured.err.join("\n")).toMatch(/Refusing to report an empty commit list/);
   });
 
-  it("refuses a failed 'git diff' rather than reporting a branch that changed nothing", async () => {
+  it("refuses a failed 'git diff' at exit 1 -- git itself failing, not a mistyped flag -- rather than reporting a branch that changed nothing", async () => {
     const captured = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main"], [
       ...script().slice(0, 3),
       { match: "git diff --name-status main...HEAD", result: { code: 128, stderr: "fatal: bad object\n" } },
     ]);
-    expect(captured.code).toBe(2);
+    expect(captured.code).toBe(1);
     expect(captured.err.join("\n")).toMatch(/Refusing to report an empty file list/);
   });
 

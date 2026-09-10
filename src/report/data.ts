@@ -173,11 +173,19 @@ export function assertBase(seams: Seams, root: string, base: string): void {
   );
 }
 
-/** `git log <base>..HEAD`, newest first, as git orders it. */
+/**
+ * `git log <base>..HEAD`, newest first, as git orders it.
+ *
+ * NOT A `VerbUsageError`. `--base` is already known to resolve (`assertBase`
+ * runs first) -- a failure here is git itself refusing ('not a git
+ * repository', a corrupt object), never a mistyped flag, so it is a plain
+ * `Error` and falls to `runFamily`'s "anything else is exit 1", matching this
+ * family's own documented contract (`command.ts`'s `USAGE`, docs/USAGE.md).
+ */
 export function readCommits(seams: Seams, root: string, base: string): readonly ReportCommit[] {
   const result = git(seams, root, ["log", `${base}..HEAD`, `--format=${LOG_FORMAT}`]);
   if (result.code !== 0) {
-    throw new VerbUsageError(
+    throw new Error(
       `could not read the commits on this branch ('git log ${base}..HEAD' failed: ${result.stderr}). Refusing to report an empty commit list, which would read as a branch with nothing on it.`,
     );
   }
@@ -194,6 +202,10 @@ export function readCommits(seams: Seams, root: string, base: string): readonly 
  * since the branch was cut does not show up as this effort's changes. That is
  * the same set a pull request shows, which is the set a report about a pull
  * request is describing.
+ *
+ * NOT A `VerbUsageError`, for the same reason as `readCommits` above: `--base`
+ * is already known to resolve, so a failure here is git itself refusing, not a
+ * mistyped flag, and falls to `runFamily`'s "anything else is exit 1".
  */
 export function readFiles(
   seams: Seams,
@@ -203,7 +215,7 @@ export function readFiles(
 ): readonly ReportFile[] {
   const result = git(seams, root, ["diff", "--name-status", `${base}...HEAD`]);
   if (result.code !== 0) {
-    throw new VerbUsageError(
+    throw new Error(
       `could not read the changed files ('git diff --name-status ${base}...HEAD' failed: ${result.stderr}). Refusing to report an empty file list, which would read as a branch that changed nothing.`,
     );
   }
@@ -259,7 +271,7 @@ export function tierOf(path: string, tiers: TierTable | null): string | null {
 /**
  * A PREFIX OR A GLOB, decided by whether the pattern has a metacharacter in it.
  *
- * A pattern with no `*` or `?` is a PATH PREFIX, matched on SEGMENT boundARIES:
+ * A pattern with no `*` or `?` is a PATH PREFIX, matched on SEGMENT BOUNDARIES:
  * `src/report` claims `src/report/data.ts` and does not claim `src/reporting.ts`
  * -- a bare `startsWith` would claim both, and a tier table that silently
  * over-claims is worse than one that misses, because the over-claim is invisible
