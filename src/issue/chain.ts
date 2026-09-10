@@ -237,7 +237,11 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
   if (unmappedCritical.length > 0) {
     const optional = CHAIN_ROLES.filter((role): boolean => !CRITICAL_ROLES.includes(role));
     evidence.push(
-      `role(s) ${unmappedCritical.join(", ")} were never mapped, so 'routable' cannot be told apart from 'building'/'in-review'/'idea'/'epic' for this issue -- a run that reads a building issue as routable releases it twice. Supply --chain-labels for each; guessing which label means 'building' is exactly what this check exists to refuse.`,
+      // DERIVED FROM CRITICAL_ROLES, not restated (Copilot, PR #187). That
+      // constant is the source of truth for which roles can refuse, and a
+      // hard-coded list beside it is a second place the answer lives -- which
+      // is how a message comes to describe a rule the code stopped following.
+      `role(s) ${unmappedCritical.join(", ")} were never mapped, so 'routable' cannot be told apart from ${CRITICAL_ROLES.map((role): string => `'${role}'`).join("/")} for this issue -- a run that reads a building issue as routable releases it twice. Supply --chain-labels for each; guessing which label means '${CRITICAL_ROLES[0] ?? "building"}' is exactly what this check exists to refuse.`,
     );
     // WHICH ROLES ARE ACTUALLY REQUIRED, said here rather than left to be
     // inferred (zheref/nen#55). Only these four can ever produce this refusal,

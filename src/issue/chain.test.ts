@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { NotAnIssueError, type IssueSummary } from "./subissue.js";
-import { chainPosition, classifyChainPosition, classifyTerminus, parseRoleMap, terminus } from "./chain.js";
+import {
+  chainPosition,
+  classifyChainPosition,
+  classifyTerminus,
+  CRITICAL_ROLES,
+  parseRoleMap,
+  terminus,
+} from "./chain.js";
 
 function issue(overrides: Partial<IssueSummary> = {}): IssueSummary {
   return { number: 1, id: 1, title: "t", state: "open", labels: [], isPullRequest: false, ...overrides };
@@ -344,6 +351,9 @@ describe("classifyChainPosition -- FOUR roles can refuse a verdict, and four can
     // And says the other four are optional, so a caller is not left inferring
     // that it must supply a placeholder for a role its taxonomy lacks.
     expect(evidence).toContain("are optional and never block a verdict");
+    // DERIVED from CRITICAL_ROLES rather than restated, so the sentence cannot
+    // describe a rule the code stopped following (Copilot, PR #187).
+    expect(evidence).toContain(CRITICAL_ROLES.map((role): string => `'${role}'`).join("/"));
   });
 
   it("decides a matched position with NO roles mapped at all, because it never reaches the check", () => {
