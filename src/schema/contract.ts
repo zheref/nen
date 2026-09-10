@@ -439,9 +439,29 @@ export interface LaunchDevice {
  *     through. REQUIRED, because `dev` and `run` are different builds (debug
  *     against production) and a target that did not say which would leave nen
  *     guessing what the developer is holding.
+ *   * `lane` -- which lane that verb is read from, when it is not the one the
+ *     invocation already resolved. OPTIONAL, and absent means the lane
+ *     `--lane` named or, with no flag, `project.defaultLane`. It exists because
+ *     A DEVICE BUILD IS ROUTINELY A DIFFERENT LANE FROM THE ONE A DEVELOPER
+ *     ITERATES IN: the simulator build and the device-destination build are two
+ *     declared rows with two argvs and two artifact sets, and a launch target
+ *     that could not say which lane it belongs to would install whatever the
+ *     default lane happened to produce. Refused here when it names no declared
+ *     lane, by pointer -- the same rule `project.defaultLane` gets.
  *   * `args` -- appended to that verb's declared argv, in order, exactly as a
  *     deploy target's `args` are, and refused on a multi-step row for the same
  *     reason: which step reaches the device is not nen's guess.
+ *   * `artifact` -- the repo-relative path `{artifact}` stands for, INSTEAD OF
+ *     the first entry of the verb's own `artifacts`. OPTIONAL, and absent
+ *     leaves that rule exactly as it was. It exists because "the first
+ *     artifact" is the right answer for the thing a lane BUILDS and the wrong
+ *     one for the thing a device INSTALLS -- a build routinely produces both,
+ *     in that order -- and the alternative is writing the path literally into
+ *     every after-step, where it stops being a fact the declaration states
+ *     once. It is a path, so it is refused outside the tree (../shu/run.ts's
+ *     `insideRepo`, which is where a repository root exists to compare it
+ *     against), and the shape refusals -- a non-string, an empty string -- are
+ *     here.
  *   * `device` -- the device, and how to find its id. See LaunchDevice.
  *   * `after` -- the steps that run once the verb exits, each an ordinary
  *     `{exe, argv}` in which `{device.id}` and `{artifact}` are substituted.
@@ -455,8 +475,18 @@ export interface LaunchTarget {
   readonly name: string;
   /** Which long-running verb this target launches through. */
   readonly verb: LaunchVerb | null;
+  /**
+   * The lane that verb is read from, or null for "the one already resolved".
+   * A declared lane, always -- `parseLaunch` refuses one that is not.
+   */
+  readonly lane: string | null;
   /** Appended to that verb's declared argv, in order. Never an exe. */
   readonly args: readonly string[];
+  /**
+   * What `{artifact}` stands for, repo-relative, or null for the verb's own
+   * first `artifacts` entry.
+   */
+  readonly artifact: string | null;
   readonly device: LaunchDevice | null;
   /** Steps run after the verb exits. `{device.id}`/`{artifact}` substituted. */
   readonly after: readonly { readonly exe: string; readonly argv: readonly string[] }[];
@@ -1162,8 +1192,26 @@ function optionalStrings(path: string, pointer: string, value: unknown): readonl
 /** The four keys `project.targets.<name>` is made of. Nen's, not the repo's. */
 const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "why"];
 
-/** The six keys `project.launch.<name>` is made of. */
-const LAUNCH_KEYS: readonly string[] = ["verb", "args", "device", "after", "unsupported", "why"];
+/**
+ * The eight keys `project.launch.<name>` is made of.
+ *
+ * `lane` AND `artifact` JOINING THE SET IS WHAT MAKES `lanes` AND `artifacts`
+ * REFUSALS, and that is the point of adding them here rather than reading them
+ * off `raw`: an English plural is exactly the misspelling `refuseNearMissKey`
+ * exists for, and a `"artifacts": ["..."]` on a launch target would otherwise be
+ * preserved, read by nobody, and install the verb's first artifact while the
+ * file plainly names another one.
+ */
+const LAUNCH_KEYS: readonly string[] = [
+  "verb",
+  "lane",
+  "args",
+  "artifact",
+  "device",
+  "after",
+  "unsupported",
+  "why",
+];
 
 /** The three keys `project.launch.<name>.device` is made of. */
 const DEVICE_KEYS: readonly string[] = ["name", "kind", "resolve"];
@@ -1516,11 +1564,28 @@ function parseLaunchDevice(path: string, pointer: string, value: unknown): Launc
  *     closed two-member set. `dev` and `run` are different BUILDS, and a target
  *     that did not say which one it launches through would leave nen picking
  *     between a debug binary and a production one.
+ *   * `lane` NAMES A DECLARED LANE OR IT IS REFUSED, by pointer, listing the
+ *     ones that are -- `project.defaultLane`'s own rule, applied here for the
+ *     same reason. A lane resolved at RUN time instead would put the refusal
+ *     behind `--target`, so a repository whose launch block names a lane it
+ *     renamed last week would load clean and refuse only when somebody tried to
+ *     launch. This block is loaded by `nen schema check`; that is where the
+ *     mistake is cheap.
+ *   * `artifact` IS A NON-EMPTY STRING. The containment check lives in
+ *     ../shu/run.ts, which has a repository root to compare a path against;
+ *     what is refused here is the shape, and an EMPTY string specifically --
+ *     `""` would substitute into an after-step as nothing at all, turning
+ *     `install <path>` into `install` and leaving a caller with a tool's own
+ *     usage message instead of nen's.
  *
  * `$`-prefixed keys are metadata and are skipped; every other key preserves its
  * whole entry on `raw`, as everywhere in this schema.
  */
-function parseLaunch(path: string, value: unknown): Record<string, LaunchTarget> {
+function parseLaunch(
+  path: string,
+  value: unknown,
+  lanes: Readonly<Record<string, Lane>>,
+): Record<string, LaunchTarget> {
   if (value === undefined || value === null) return {};
   const record = requireRecord(path, "project.launch", value);
   // `Object.create(null)` for `parseTargets`'s reason, verbatim: a target named
@@ -1541,20 +1606,22 @@ function parseLaunch(path: string, value: unknown): Record<string, LaunchTarget>
           // answers at the same exit code.
           requireString(path, `${pointer}.unsupported`, raw["unsupported"]);
     if (unsupported !== null) {
-      const runnable = ["verb", "args", "device", "after"].filter(
+      const runnable = ["verb", "lane", "args", "artifact", "device", "after"].filter(
         (key): boolean => raw[key] !== undefined && raw[key] !== null,
       );
       if (runnable.length > 0) {
         throw new SchemaError(
           path,
           pointer,
-          `declares 'unsupported' and also ${runnable.map((key): string => `'${key}'`).join(", ")}. A launch target that has no command line at all has no verb, arguments, device or after-steps either; state one or the other`,
+          `declares 'unsupported' and also ${runnable.map((key): string => `'${key}'`).join(", ")}. A launch target that has no command line at all has no verb, lane, arguments, artifact, device or after-steps either; state one or the other`,
         );
       }
       launch[name] = {
         name,
         verb: null,
+        lane: null,
         args: [],
+        artifact: null,
         device: null,
         after: [],
         unsupported,
@@ -1564,10 +1631,22 @@ function parseLaunch(path: string, value: unknown): Record<string, LaunchTarget>
       continue;
     }
     const after = raw["after"];
+    const lane = optionalString(path, `${pointer}.lane`, raw["lane"]);
+    if (lane !== null) requireDeclaredLane(path, `${pointer}.lane`, lane, lanes);
+    const artifact = optionalString(path, `${pointer}.artifact`, raw["artifact"]);
+    if (artifact === "") {
+      throw new SchemaError(
+        path,
+        `${pointer}.artifact`,
+        "is an empty string. It is the repo-relative path {artifact} stands for, and an empty one would substitute into an after-step as nothing at all -- leaving the installer a shorter command line and the caller a tool's own usage message instead of a refusal from nen. Write the path, or drop the key and let {artifact} be the verb's first declared artifact",
+      );
+    }
     launch[name] = {
       name,
       verb: requireEnum(path, `${pointer}.verb`, raw["verb"], LAUNCH_VERBS),
+      lane,
       args: optionalStrings(path, `${pointer}.args`, raw["args"]),
+      artifact,
       device: parseLaunchDevice(path, `${pointer}.device`, raw["device"]),
       after:
         after === undefined || after === null
@@ -1669,7 +1748,7 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
         : parsePreconditions(path, raw["preconditions"], lanes),
     profiles: optionalRecord(path, "project.profiles", raw["profiles"]),
     targets: parseTargets(path, raw["targets"]),
-    launch: parseLaunch(path, raw["launch"]),
+    launch: parseLaunch(path, raw["launch"], lanes),
     hosts:
       raw["hosts"] === undefined || raw["hosts"] === null
         ? {}

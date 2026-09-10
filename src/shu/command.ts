@@ -293,8 +293,9 @@ the declaration:
                           unsupported  this destination has no command line at
                                        all (a provider's git integration, a CI
                                        action). Exit 4, in the repo's words.
-  project.launch        { "<name>": { verb, args, device, after, unsupported,
-                        why } }, the LAUNCH targets 'dev' and 'run' take. A
+  project.launch        { "<name>": { verb, lane, args, artifact, device,
+                        after, unsupported, why } }, the LAUNCH targets 'dev'
+                        and 'run' take. A
                         different block from project.targets and a different
                         vocabulary: that one says where a build is SENT, this
                         one says which DEVICE a local run lands on. --target is
@@ -305,9 +306,27 @@ the declaration:
                                        this target launches through. Required.
                                        Naming it on the other one is exit 2 --
                                        they are different builds.
+                          lane         which declared lane the verb, the args
+                                       and the after-steps are read from. Absent
+                                       means the lane the invocation resolved,
+                                       exactly as before the key existed. An
+                                       undeclared lane is refused at LOAD, by
+                                       pointer; an explicit --lane that
+                                       disagrees is exit 2 naming both, because
+                                       nen picks between two stated facts
+                                       nowhere.
                           args         appended to that verb's argv, in order.
                                        Refused on a multi-step row, as a deploy
-                                       target's are.
+                                       target's are. {device.id} and {artifact}
+                                       are substituted in 'after' only, so
+                                       either token written here is exit 2.
+                          artifact     a repo-relative path that replaces the
+                                       verb's first 'artifacts' entry as what
+                                       {artifact} stands for -- the first is
+                                       what the lane BUILT and an installer
+                                       wants what it SIGNED. Refused outside the
+                                       tree, refused empty, and refused when no
+                                       after-step names {artifact} at all.
                           device       { name, kind, resolve }. 'name' is
                                        matched EXACTLY against what the probe
                                        printed; nen never picks a device, not
@@ -333,7 +352,9 @@ the declaration:
                           after        [{ exe, argv }] run once the verb exits 0,
                                        in order, with {device.id} and {artifact}
                                        substituted -- {artifact} being the FIRST
-                                       entry of the verb's own 'artifacts'.
+                                       entry of the verb's own 'artifacts', or
+                                       'artifact' above where the target names
+                                       one.
                                        Naming {artifact} on a verb that declares
                                        none, or {device.id} with no device, is
                                        exit 2: a token nothing can fill must not
@@ -489,10 +510,15 @@ flags:
                    as it always has, so a repository declaring its first launch
                    target changes nothing about the line anyone ran yesterday.
                    Given, the verb becomes three things in order: the declared
-                   device probe (captured, so nen can read it), the lane's own
-                   verb (interactive, as ever, with the target's 'args'
-                   appended), and the target's 'after' steps with {device.id}
-                   and {artifact} substituted. --dry-run prints all three as
+                   device probe (captured, so nen can read it), the verb
+                   (interactive, as ever, with the target's 'args' appended),
+                   and the target's 'after' steps with {device.id} and
+                   {artifact} substituted. WHICH LANE those three are read from
+                   is project.launch.<name>.lane where the target names one --
+                   read before anything is rendered, so a target whose own lane
+                   is the only one declaring the verb is reachable without
+                   --lane -- and otherwise the lane this invocation resolved.
+                   --dry-run prints all three as
                    'would run:' with the tokens UNFILLED and one 'substitutes:'
                    line saying what each stands for -- nothing is spawned, the
                    probe included, so there is no id for nen to have printed.
@@ -564,7 +590,9 @@ flags:
                    -- the destination, what it appended to the argv, and the
                    variable NAMES it requires. Never a value of one. On 'dev'
                    and 'run' with --target it is
-                   { name, verb, args, device, probe, after }, where 'device'
+                   { name, verb, lane, args, artifact, device, probe, after },
+                   where 'lane' and 'artifact' are the target's own overrides
+                   and are BOTH null on a target declaring neither, 'device'
                    is { name, kind, id } and 'id' is null exactly when nothing
                    was probed (every dry run), and 'after' carries the steps
                    as they would spawn -- tokens unfilled on a dry run,

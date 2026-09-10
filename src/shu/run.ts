@@ -62,6 +62,7 @@ import {
   ASSERTABLE_KINDS,
   isLaunchTarget,
   LAUNCHING_VERBS,
+  launchLane,
   renderArgv,
   renderInvocation,
   resolveLaunch,
@@ -433,7 +434,14 @@ function substitutionNotes(report: ShuReport): readonly string[] {
         ? `${DEVICE_ID_TOKEN} <- '${name}' itself -- a simulated device is addressed by its name, so nothing is probed`
         : `${DEVICE_ID_TOKEN} <- the id of device '${name}', read from the probe above`;
     }
-    /* c8 ignore next -- `tokensUsed` returns only this family's two tokens */
+    // THE OVERRIDE IS NAMED AS AN OVERRIDE, not just printed. A reader checking
+    // this line already knows the rule is "the verb's first artifact"; a path
+    // that is not that one, printed with no explanation, reads as nen having
+    // taken the wrong entry rather than as the declaration having said so.
+    if (target.artifact !== null) {
+      return `${ARTIFACT_TOKEN} <- ${target.artifact}  (project.launch.${target.name}.artifact, not the verb's own)`;
+    }
+    /* c8 ignore next -- `resolveLaunch` refuses {artifact} when the verb declares none AND the target overrides none, so artifacts[0] is here */
     return `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
   });
   return [labelled("substitutes", notes.join("; "))];
@@ -469,6 +477,12 @@ export function renderReport(report: ShuReport): readonly string[] {
           launch.args.length === 0
             ? "  (appends no argument)"
             : `  (appends: ${renderArgv({ exe: launch.args[0] as string, argv: launch.args.slice(1) })})`
+        }${
+          // THE LANE, ONLY WHEN THE TARGET CHOSE IT. `lane:` two lines up
+          // already carries the name; what it cannot say is whose decision it
+          // was, and a cross-lane launch that looked like the caller's own
+          // `--lane` is the one thing a reader of this report would misread.
+          launch.lane === null ? "" : `  -- on lane '${launch.lane}', which this target declares`
         }`,
       ),
     );
@@ -849,8 +863,21 @@ export async function runVerb(
 ): Promise<number> {
   refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
+  // THE TARGET'S LANE IS READ BEFORE ANYTHING IS RENDERED, and that ordering is
+  // the whole point of the key. Rendered on the invocation's lane first, a
+  // target whose OWN lane is the only one declaring the verb was refused by the
+  // lane it had explicitly overridden -- `lane 'web' declares no 'dev'`, exit 4,
+  // sending the maintainer to fix a row the declaration had already routed
+  // around, and leaving `--lane device` (the flag this key exists to make
+  // unnecessary) as the only way through. `launchLane` answers null for every
+  // case whose refusal must come first -- an undeclared target, a seated one,
+  // one belonging to the other verb -- so those still speak in ./render.ts's own
+  // words, on the lane the caller named.
+  const declaredLane = LAUNCHING_VERBS.includes(options.verb)
+    ? launchLane(project, options.verb, options.target)
+    : null;
   const rendered = renderInvocation(project, {
-    lane: options.lane,
+    lane: declaredLane ?? options.lane,
     verb: options.verb,
     platform: context.seams.platform,
   });
@@ -863,9 +890,23 @@ export async function runVerb(
   const plan = TARGETED_VERBS.includes(options.verb)
     ? resolveTarget(project, rendered, options.target)
     : LAUNCHING_VERBS.includes(options.verb) && options.target !== null
-      ? resolveLaunch(project, rendered, options.target)
+      ? resolveLaunch(project, rendered, options.target, options.lane)
       : rendered;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
+  // THE TARGET'S OWN ARTIFACT IS A PATH, SO IT IS HELD TO EVERY OTHER DECLARED
+  // PATH'S RULE -- and it is checked HERE, before the dry-run report is emitted,
+  // because a `--dry-run` that printed `install ../../etc/passwd` as the thing
+  // it would run has already told a caller the declaration is fine. The rule
+  // itself is ../repo/contain.ts's, shared rather than copied: a second
+  // containment test is a second rule the day either one is widened.
+  const declaredArtifact = launchOf(plan);
+  if (declaredArtifact !== null && declaredArtifact.artifact !== null) {
+    insideRepo(
+      repoRoot,
+      declaredArtifact.artifact,
+      `project.launch.${declaredArtifact.name}.artifact`,
+    );
+  }
   const preconditions = await assertPreconditions(plan, repoRoot, context.seams);
 
   const unmet = preconditions.filter((entry): boolean => entry.satisfied !== true);
@@ -1619,7 +1660,12 @@ function runLaunch(
     deviceId = launch.device.name;
   }
 
-  const artifact = plan.artifacts[0] ?? null;
+  // THE TARGET'S OWN ARTIFACT WINS OVER THE VERB'S FIRST ONE, and the fallback
+  // is unchanged for every target that declares none: "the first entry of the
+  // verb's artifacts" is the right answer for the thing a lane BUILDS and the
+  // wrong one for the thing a device INSTALLS, and a build routinely produces
+  // both. ../schema/contract.ts's `LaunchTarget.artifact` carries the argument.
+  const artifact = launch.artifact ?? plan.artifacts[0] ?? null;
   const after = substituteSteps(launch.after, { deviceId, artifact });
   const resolved: RenderedInvocation = {
     ...plan,
