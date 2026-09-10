@@ -6172,7 +6172,11 @@ compat floor:  0.7  (the lowest dependency.minimum nen 0.8.0 satisfies)
   WRONG    nen   0.8.0  pinned >=0.6.0 <0.7.0
                  verify-only: install by hand -- the bootstrap this repository pins installs v0.7.0. Re-pinning nen is the bootstrap's job and this repository's decision; this verb reports the version and never changes it. minimum '0.6' is below this build's compatibility floor '0.7' -- the 0.7 line declared breaking consumer notes, so no 0.8.0 binary satisfies a pin under '0.7', whatever the host answers. Repin to '0.7'. A pin at or above the floor is satisfied by every later 0.x release that keeps it, so a repin is owed again when the floor moves and not when the minor does.
 ```
-exit 5
+```text
+1 of 1 declared tool is missing or not the pinned version. None of them has an installer nen runs in this release: each row above names what to do instead. nen never installs a toolchain on a repository's say-so.
+```
+
+(exit 5; the second block is on stderr, exactly as in the `--repo ./web-app` example above)
 
 ```bash
 nen shu tools --repo ./pinned-0.7
@@ -6185,9 +6189,8 @@ compat floor:  0.7  (the lowest dependency.minimum nen 0.8.0 satisfies)
 ```
 exit 0
 
-(both run live against `dist/nen-darwin-arm64` built from
-`sonnet/kurapika/usage-floor-examples`, with that binary on `PATH` as the
-`version_probe`'s `nen`)
+(both run live against `dist/nen-darwin-arm64`, built from a v0.8.0 checkout,
+with that binary on `PATH` as the `version_probe`'s `nen`)
 
 ### `nen shu warmup`
 
