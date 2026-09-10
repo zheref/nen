@@ -98,7 +98,7 @@ export function renderCommitMsgHook(
   const refusals = refusedTrailers
     .map(
       (key): string => `
-if grep -qiE '^${key}:' "\\$msg_file"; then
+if grep -qiE '^${key}:' "\$msg_file"; then
   echo "commit-msg: this message carries a '${key}:' trailer, which this repository's nen/workflow.json does not list under commits.allowedAttributionTrailers." >&2
   exit 1
 fi

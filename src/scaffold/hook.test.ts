@@ -32,6 +32,20 @@ describe("renderCommitMsgHook -- the refused attribution trailers, baked in as d
     expect(renderCommitMsgHook(SPEC, [])).toBe(renderCommitMsgHook(SPEC));
   });
 
+  it("greps THE MESSAGE FILE, expanded -- not a literal '$msg_file'", () => {
+    // The bug this pins, found by running the generated hook against real git:
+    // an over-escaped `\\$` in the TypeScript template emitted `"\\$msg_file"`,
+    // which a shell reads as the literal filename `$msg_file`. Every grep then
+    // failed with "No such file or directory", every `if` was false, and the
+    // guard silently refused nothing while `git commit` reported success --
+    // the worst available failure for a guard. Asserting the PATTERN alone
+    // could not see it, which is why the argument is asserted too, and why
+    // ./hook.integration.test.ts runs the script for real.
+    const script = renderCommitMsgHook(SPEC, ["Co-Authored-By"]);
+    expect(script).toContain(`grep -qiE '^Co-Authored-By:' "$msg_file"`);
+    expect(script).not.toContain('\\$msg_file');
+  });
+
   it("greps for each refused key CASE-INSENSITIVELY, and names it in the refusal", () => {
     const script = renderCommitMsgHook(SPEC, ["Co-Authored-By", "Claude-Session"]);
     expect(script).toContain("grep -qiE '^Co-Authored-By:'");
