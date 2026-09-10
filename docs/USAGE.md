@@ -9,8 +9,9 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
-`scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
+with the `nen` spelling. This document covers the **v0.4.0 line** (`report`,
+`shu test-report`, `shu evidence` and the `nen/workflow.json` policy file are
+new in it, and none of them is in v0.3.0): 36 command
 families, 88 verbs, every flag checked against the binary this repository
 builds.
 
@@ -253,8 +254,8 @@ one-character difference is what keeps a build log out of a review.
 
 **The legacy `schemas/` location.** Before v0.3 the four taxonomy files lived in
 a `schemas/` directory. Nen still reads them from there when `nen/` does not
-carry them, so an un-migrated repository keeps working for the whole v0.3 line;
-that fallback is **removed in v0.4.0**. It is read-only — nothing in nen writes
+carry them, so an un-migrated repository keeps working through the v0.4 line;
+that fallback is **removed in v0.5.0**. It is read-only — nothing in nen writes
 to `schemas/` — and [`schema check`](#nen-schema-check) is where the migration
 state is reported: a file read from the legacy location gets a `warn` row naming
 the canonical path, and a file present in BOTH with different bytes is a
@@ -394,8 +395,8 @@ has actually been published for that tag — not the moment
 [`tag cut`](#nen-tag-cut) runs. Fetch the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.3.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.4.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.4.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -403,7 +404,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)"
 "$nen" --version
 ```
 
@@ -1901,7 +1902,7 @@ default over a policy the repository states and nen could not parse.
 
 It is also where the `schemas/` → `nen/` migration is reported. A file read from the legacy `schemas/`
 location gets a `warn` row printed at the path it was actually read from, followed by an indented
-`^ legacy location…` line naming the canonical path and the v0.4.0 removal. A file present in BOTH
+`^ legacy location…` line naming the canonical path and the v0.5.0 removal. A file present in BOTH
 places whose bytes DIFFER is a **shadowed leftover**: the row FAILS the report even though the file
 loaded, because `nen/` won the read and the copy somebody may still be editing is the one nen ignores.
 Identical bytes in both places is an `ok` row with a note saying the deletion is free. The comparison
@@ -1979,17 +1980,17 @@ nen schema check --repo src/schema/fixtures/legacy-repo
 ```text
 repository: /path/to/src/schema/fixtures/legacy-repo
   warn  schemas/labels.json  13 labels
-        ^ legacy location. Move it to 'nen/labels.json'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/labels.json'; the schemas/ fallback is removed in v0.5.0.
   warn  schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
-        ^ legacy location. Move it to 'nen/repos.json'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/repos.json'; the schemas/ fallback is removed in v0.5.0.
   warn  schemas/colors.yml  3 categories, 13 values
-        ^ legacy location. Move it to 'nen/colors.yml'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/colors.yml'; the schemas/ fallback is removed in v0.5.0.
   warn  schemas/gates.json  5 reviewer identities
-        ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.5.0.
   ok    nen/contract.json  absent (optional)
   ok    nen/workflow.json  absent (defaults apply)
 ```
-exit 0 — an un-migrated repository still passes for the whole v0.3 line.
+exit 0 — an un-migrated repository still passes through the v0.4 line.
 (from a real run against the bundled fixture repo)
 
 <a id="family-color"></a>
@@ -5625,10 +5626,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.3.0 --source zheref/nen
+nen bootstrap --ref v0.4.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/v0.3.0/nen-linux-x64
+/home/me/.cache/nen/v0.4.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -6382,8 +6383,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.4.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)"
 "$nen" --version
 ```
 
@@ -6394,7 +6395,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.3.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.4.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash

@@ -1,6 +1,6 @@
 {
   "$schema": "nen.workflow/v0.1",
-  "$comment": "Hatsu policy for this repository. NOT READ BY nen 0.3.0 -- `nen schema check` has no row for this file yet, and no verb loads it; it is data hatsu's skills (breath, rasengan, kokusen, gyo, ...) read directly. zheref/nen#108's design adds a loader and a `nen schema check` row for it in 0.4.0, at which point this document is validated rather than merely present.",
+  "$comment": "Hatsu policy for this repository. Validated by `nen schema check` from 0.4.0 (zheref/nen#146 added the schema and loader); `nen shu coverage` reads the ladder, `nen commit format` the trailer policy, and hatsu's skills (breath, rasengan, kokusen, gyo, ...) read the rest directly.",
 
   "branch": { "template": "{model}/{persona}/{descriptor}", "base": "main" },
   "iteration": { "checks": ["build", "lint"], "lane": "nen" },

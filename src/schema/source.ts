@@ -43,7 +43,7 @@ export const CONTRACT_FILE = "nen/contract.json";
  * The release that deletes the fallback below, named once so every message
  * that promises it quotes the same version rather than four hand-typed copies.
  */
-export const LEGACY_FALLBACK_REMOVED_IN = "v0.4.0";
+export const LEGACY_FALLBACK_REMOVED_IN = "v0.5.0";
 
 /**
  * THE ONE EXCEPTION TO "NO SEARCH ORDER", AND IT IS TIME-BOXED.
@@ -51,8 +51,8 @@ export const LEGACY_FALLBACK_REMOVED_IN = "v0.4.0";
  * Through v0.2.0 the four taxonomy files lived under `schemas/`. From v0.3.0
  * the canonical directory is `nen/` (zheref/nen#108), and `schemas/` is read
  * only as a fallback, when `nen/` does not answer -- so that a repository
- * which has not migrated keeps working for the whole v0.3 line. The fallback
- * is removed in v0.4.0 (`LEGACY_FALLBACK_REMOVED_IN`): at that point this map
+ * which has not migrated keeps working through the v0.4 line. The fallback
+ * is removed in v0.5.0 (`LEGACY_FALLBACK_REMOVED_IN`): at that point this map
  * and the `legacy-repo` fixture that pins it are deleted together, and any test
  * still depending on either goes red.
  *
@@ -84,7 +84,7 @@ const LEGACY_LOCATION: Readonly<Record<string, string>> = {
  * written list is a list that falls behind. `nen scaffold init` migrates by
  * iterating this: a fifth entry added to `LEGACY_LOCATION` is a fifth file the
  * scaffold copies, with no edit anywhere else, and -- more to the point -- an
- * entry REMOVED here (which is what v0.4.0's deletion of the fallback is) stops
+ * entry REMOVED here (which is what v0.5.0's deletion of the fallback is) stops
  * being migrated in the same commit rather than becoming a copy of a file
  * nothing reads any more.
  */
