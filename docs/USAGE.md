@@ -6026,9 +6026,19 @@ nen parse <skill> --grammar <template> --line <invocation>
 |---|---|---|---|
 | `<skill>` (positional) | yes | The skill name; used only to build the corrected line. | Any name other than `futon`/`izanagi`/`izanami`. |
 | `--grammar <template>` | yes | The template, exactly as the skill documents it. | A template the engine cannot split unambiguously is a usage error (exit 2), same as an unparseable `--line`. |
-| `--line <text>` | yes | The invocation to parse. | |
+| `--line <text>` | yes | The invocation to parse. | **May be empty** when every clause of the grammar is optional -- see below. |
 
-**Output and exit codes** -- on a match, echoes the parse one clause per line (`<slot>: <value>[ (+)]`, `[<clause>]: present`). On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
+**An empty `--line` is a complete invocation when nothing is required.** For a
+grammar whose every slot is bracketed (`at [<gate:…>]`), `--line ""` and
+`--line "at"` parse **identically**, both reporting `gate: (clause absent)` at
+exit 0: the invocation with nothing in it is the ordinary one for a skill whose
+only clause is optional, and a caller should not have to know to spell a bare
+`at`. This holds however the template writes the separator -- inside the
+brackets (`[onto <slot>]`) or outside them (`at [<gate>]`). A grammar carrying a
+**required** clause is unaffected: an empty line still refuses at exit 2, naming
+the slot, with the corrected line to paste.
+
+**Output and exit codes** -- on a match, echoes the parse one clause per line: a supplied slot as `<slot>: <value>[ (+)]`, an optional slot nobody filled as `<slot>: (clause absent)`, and a literal-only clause the line carried as `[<clause>]: present`. On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`; `slots[]` still carries only what the line supplied, so the `(clause absent)` line is the report rather than the data. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
 
 **Example**
 
@@ -6040,6 +6050,31 @@ target: app
 env: prod
 ```
 (run for real)
+
+**Example — the two spellings of "no clause"** (both run for real)
+
+```bash
+nen parse jutaisho --grammar "at [<gate:G2|G4>]" --line ""
+```
+```text
+gate: (clause absent)
+```
+```bash
+nen parse jutaisho --grammar "at [<gate:G2|G4>]" --line "at"
+```
+```text
+gate: (clause absent)
+```
+```bash
+nen parse backlog-state --grammar "<repo>[@<gate:G1|G2>]" --line ""
+```
+```text
+nen parse: <repo> is required and the line does not supply it.
+
+Corrected line:
+  backlog-state <repo>
+```
+(exit 0, exit 0, exit 2: `<repo>` is required, so the empty line is still a refusal there)
 
 ### `nen parse futon`
 
