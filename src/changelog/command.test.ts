@@ -92,6 +92,57 @@ describe("nen changelog collate", () => {
     expect(result.code).toBe(0);
     expect(readFileSync(changelog, "utf8")).toContain("### v1.1.0 — theme");
   });
+
+  // zheref/nen#34, reproduced at its own fixture size. The section was rendered
+  // from `sortFragments` -- newest-first by the leading `<n>-` prefix -- and the
+  // manifest was printed from `readdirSync` order, so the two disagreed by
+  // construction at ANY fragment count. Nothing was ever dropped; the record a
+  // caller cross-checks the section against simply described a different order
+  // from the one written, which is worse than no record.
+  it("prints the manifest in the order the fragments were WRITTEN, newest-first", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, "### Unreleased\n_(nothing awaiting release.)_\n");
+    const fragmentDir = join(dir, "changelog.d");
+    mkdirSync(fragmentDir);
+    // Created in ASCENDING order, which is also the order readdir reports them.
+    for (const [name, body] of [
+      ["10-a.md", "- FRAG-10.\n"],
+      ["20-b.md", "- FRAG-20.\n"],
+      ["30-c.md", "- FRAG-30.\n"],
+    ]) {
+      writeFileSync(join(fragmentDir, name as string), body as string);
+    }
+    const result = await capture(
+      ["changelog", "collate", "--version", "v0.2.0", "--theme", "order probe", "--changelog", changelog, "--fragment-dir", "changelog.d", "--write"],
+      dir,
+    );
+    expect(result.code).toBe(0);
+    // The manifest, and the written section, in ONE order.
+    expect(result.out.slice(1)).toEqual(["  30-c.md", "  20-b.md", "  10-a.md"]);
+    const written = readFileSync(changelog, "utf8");
+    expect(written.indexOf("FRAG-30")).toBeLessThan(written.indexOf("FRAG-20"));
+    expect(written.indexOf("FRAG-20")).toBeLessThan(written.indexOf("FRAG-10"));
+  });
+
+  it("carries the same order into --json's fragments[]", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, "### Unreleased\n_(nothing awaiting release.)_\n");
+    const fragmentDir = join(dir, "changelog.d");
+    mkdirSync(fragmentDir);
+    writeFileSync(join(fragmentDir, "10-a.md"), "- FRAG-10.\n");
+    writeFileSync(join(fragmentDir, "30-c.md"), "- FRAG-30.\n");
+    const result = await capture(
+      ["changelog", "collate", "--version", "v0.2.0", "--theme", "t", "--changelog", changelog, "--fragment-dir", "changelog.d", "--json"],
+      dir,
+    );
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out.join("\n")) as { fragments: string[] }).fragments).toEqual([
+      "30-c.md",
+      "10-a.md",
+    ]);
+  });
 });
 
 describe("nen changelog completeness", () => {

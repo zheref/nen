@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { CollateError, collateIntoChangelog, renderDatedSection, sortFragments } from "./collate.js";
 
 describe("sortFragments", () => {
+  it("is IDEMPOTENT -- applied twice it is the same order as once", () => {
+    // Relied upon rather than assumed: `collateIntoChangelog` sorts whatever it
+    // is handed (its own guarantee about the section it renders) and
+    // ../changelog/command.ts sorts to decide the one order it reports
+    // (zheref/nen#34). Two applications, one order -- and if that ever stopped
+    // being true, the manifest and the section would part company again.
+    const input = [
+      { name: "10-a.md", content: "a" },
+      { name: "30-c.md", content: "c" },
+      { name: "no-prefix.md", content: "z" },
+      { name: "20-b.md", content: "b" },
+    ];
+    const once = sortFragments(input);
+    expect(sortFragments(once)).toEqual(once);
+    expect(once.map((f): string => f.name)).toEqual([
+      "30-c.md",
+      "20-b.md",
+      "10-a.md",
+      "no-prefix.md",
+    ]);
+  });
+
   it("sorts newest-first by leading numeric prefix, no-prefix last", () => {
     const fragments = [
       { name: "5-old.md", content: "" },
