@@ -47,7 +47,33 @@ export interface CoverageMeasure {
 /** One row beneath the total: a package, a target, a file -- the format's unit. */
 export interface CoverageTarget extends CoverageMeasure {
   readonly name: string;
+  /**
+   * Whether THIS ROW cleared `--threshold`, under `--touched` only.
+   *
+   * ABSENT rather than `undefined`-valued everywhere else: every parser above
+   * constructs a row with no such key at all, and ../touched.ts is the one
+   * place that adds it -- by spreading a threshold's own `met` onto a row it
+   * has decided a touched file belongs to. A row from a plain (non-`--touched`)
+   * `nen shu coverage` therefore never carries this key, which is what keeps
+   * ../coverage.test.ts's "keys of a row" pin unchanged for that path.
+   */
+  readonly met?: boolean | null;
+  /**
+   * Which rung of `nen/workflow.json`'s coverage ladder this row is on, under
+   * `--touched` when `--threshold` was NOT given and that file declares one.
+   *
+   * MUTUALLY EXCLUSIVE WITH `met`, IN PRACTICE: `met` answers an EXPLICIT
+   * `--threshold`, `band` is the ladder's own stand-in for a repository that
+   * declared a policy instead of typing a number on the command line, and
+   * ../ladder.ts is the one place that adds it -- absent (not merely
+   * `undefined`-valued) on every row this whole family already produced,
+   * exactly as `met` is.
+   */
+  readonly band?: CoverageBand | null;
 }
+
+/** `nen/workflow.json`'s four rungs, in ascending order. */
+export type CoverageBand = "under-minimum" | "minimum" | "recommended" | "ideal";
 
 /** What a parser returns: the total, and the rows beneath it. */
 export interface ParsedCoverage {

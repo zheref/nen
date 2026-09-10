@@ -246,7 +246,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
-| `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the reports directory, the model matrix. See [`nen/workflow.json`](#nenworkflowjson) | [`commit format`](#nen-commit-format) (the trailer policy), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
+| `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the reports directory, the model matrix. See [`nen/workflow.json`](#nenworkflowjson) | [`commit format`](#nen-commit-format) (the trailer policy), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
 `nen/` holds committed configuration only. Generated output goes to a
 dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
@@ -518,7 +518,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu dev`](#nen-shu-dev) | start a lane's DEBUG build; long-running, on this terminal. With `--target <name>` it launches a declared DEVICE instead: the declared probe, the verb, then the target's after-steps | nen/contract.json (project block, plus project.launch for `--target`); inherits stdio unless --dry-run; spawns the declared device probe and after-steps only with `--target` | yes |
 | [`shu`](#family-shu) | [`nen shu run`](#nen-shu-run) | start a lane's PRODUCTION build locally; long-running, on this terminal. Takes the same optional `--target` | nen/contract.json (project block, plus project.launch for `--target`); inherits stdio unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- TWO flags and no single-flag path to acting: --target is required and has no default, --run is required before anything is sent, and a lane whose deploy is a seat refuses with its own reason whatever --target says | nen/contract.json (project block + project.targets: the destination's args, the env NAMES it requires, or the sentence saying it has no command line); spawns the declared argv only with --run | yes |
-| [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name | yes |
+| [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code; `--touched --base <ref>` narrows the rows to the files a change touched (a git-diff read after the run) and, with `--threshold` absent, bands each row against `nen/workflow.json`'s coverage ladder -- or, where that file is absent, nen's published 80/85/90 defaults -- instead; never gating either way | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name (and, under `--touched` with no `--threshold`, `nen/workflow.json` through the shared loader) | yes |
 | [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu evidence`](#nen-shu-evidence) | match `git diff --name-status <base>...HEAD` against project.evidence.globs, deriving each survivor's suite/scene and grouping suite -> scenes; empty is exit 0, never an error | git diff (through the seam only -- no declared invocation, no lane); nen/contract.json (project.evidence) | yes |
 | [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
@@ -3741,7 +3741,7 @@ stays exactly one document.
 `--json` document is **not** that shape: each runs through the same executor and
 then parses what the run produced, so their stdout carries
 `nen.shu.coverage/v0.1` — `{ contract, lane, stack, total, targets, threshold,
-report, exitCode }` — and `nen.shu.test-report/v0.1` — `{ contract, lane, stack,
+report, exitCode, touched, ladder }` — and `nen.shu.test-report/v0.1` — `{ contract, lane, stack,
 report, tests, passed, failed, skipped, total, exitCode }` — and the executor's
 own report is rendered to **stderr** instead, where every argv, duration and
 precondition row still is. Nothing is lost and stdout is still exactly one
@@ -4450,7 +4450,7 @@ classification as `test`: a coverage run writes its report tree by definition.
 **Usage**
 
 ```text
-nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--dry-run] [--json]
+nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref>] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -4458,8 +4458,10 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--dry-ru
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--lane <name>` | no | Which lane to measure. | Defaults to `project.defaultLane`, as everywhere else in this family. |
-| `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. |
-| `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. |
+| `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. Under `--touched`, also reported **per row**, and giving it OVERRIDES the workflow-file ladder below for that run. |
+| `--touched` | no | Narrow `targets` to the rows a change touched. | Requires `--base`; given without it, **exit 2**. With `--threshold` absent, also loads `nen/workflow.json`'s coverage ladder (defaulting to 80/85/90 when that file is absent) and bands each row; a malformed policy is exit 1 before anything is spawned. See below. |
+| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. |
+| `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
 first path under `project.verbs.<lane>.coverage.artifacts` whose **format** it
@@ -4529,8 +4531,8 @@ clamped to 100%.
 when there was no number to compare. The exit code is the **run's**, in both
 directions: coverage under the bar still exits 0 when the tool exited 0. nen does
 not decide whether a number is good enough — the policy that prompted this flag
-scopes its bar to *the files a pull request touched*, a git-diff-aware judgement
-no coverage report can answer. Read `met` and decide.
+scopes its bar to *the files a pull request touched*, which is exactly what
+`--touched` below answers. Read `met` and decide.
 
 The comparison is on the **counts**, not on the rounded percentage the table
 prints: 19 999 of 25 000 lines displays as `80.00%` and is **not** met at
@@ -4551,14 +4553,90 @@ path.
 per *file*, so a large repository prints a long table; `--json` carries the same
 rows. Pipe it (`| head`), or read `total` alone, until a `--top <n>` exists.
 
+**`--touched --base <ref>` narrows `targets` to the rows a change touched.**
+After the run and the parse above, nen computes `git diff --name-only
+<base>...HEAD` **in the repository root** and filters the per-target table down
+to the rows that diff names — the same *files a pull request touched* scope
+`--threshold`'s own policy already talks about, made real. `--touched` requires
+`--base`; either flag given without the other is **exit 2**, before anything
+runs.
+
+The match depends on what a row **is**:
+
+- **File-grain formats** (`istanbul-summary`, `lcov`) match a touched path by
+  plain equality against the row's own (already repo-relative) name.
+- **Package-grain formats** (`cobertura`, `jacoco`) name a row after a
+  *package*, not a file, so a touched file matches when its own path contains
+  that package's segments, in order, with the file itself left over —
+  "this touched file sits **under** that package". The text rendering says so
+  (`-- rows matched BY PACKAGE, not by file`); `--json` does not carry the
+  grain, because it already follows from `report.format`.
+- **`xccov-report`** is read at **file** grain here only: nen descends
+  `targets[].files[]` instead of stopping at the target row, because "this
+  whole app/framework was touched" is true of nearly every diff and would
+  keep almost the entire table. The file path is relativised the same way
+  every other format's row name is.
+
+`--json` gains a ninth key, `touched: { base, files, matched, unmatched }`
+(`files` is everything git named; `matched` and `unmatched` partition it —
+their lengths always sum to `files.length`), and each **row** gains its own
+`met` when `--threshold` is also given — the aggregate `threshold.met` above
+still answers for the whole report; a row's `met` answers for that row alone,
+both compared on the **counts**, never the rounded percentage. **This still
+never gates**: the exit code is the run's, exactly as bare `--threshold` is.
+
+`--dry-run --touched` still computes and reports the touched set: that read is
+`git diff`, not the declared tool, so a preview costs nothing — `targets` is
+still empty, because nothing was parsed to filter.
+
+**The ladder — `nen/workflow.json`'s `coverage.{minimum,recommended,ideal}`,
+when `--threshold` is not given.** The design's own shape for that file states
+`"coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope":
+"touched" }` — a policy about the files a change touched, the same scope
+`--touched` already reads. So under `--touched`, with no explicit `--threshold`
+to override it, nen reads that block and reports each row's **band** instead of
+`met`: `under-minimum` / `minimum` / `recommended` / `ideal`, on the same
+inclusive-at-the-boundary, counts-not-percentage comparison `--threshold`'s own
+`met` uses. `--json` gains a tenth key, `ladder: { minimum, recommended, ideal,
+source, present }`, or `null`.
+
+**The file is read by the one loader, and an absent file is a ladder.** These
+are the same `src/schema/workflow.ts` numbers `nen schema check` validates and
+`nen commit format` reads its trailer policy from — there is no second reader of
+`nen/workflow.json` in this binary. Every key in that file is optional and every
+default is published, so a repository that has never written one is banded
+against **80 / 85 / 90** rather than not banded at all: `ladder.present` is
+`false` there, and the text line reads `nen/workflow.json is absent — these are
+nen's defaults`, so a rung a repository *chose* is never mistaken for one nen
+*assumed*. A partial `coverage` block takes the published default for each rung
+it omits. `source` is the repo-relative `nen/workflow.json`, never the absolute
+path the loader hands back — this document gets pasted into issues, and the row
+names are already relativised for exactly that reason.
+
+**A malformed policy is exit 1, before the coverage tool is spawned.** The
+ladder is loaded alongside `--threshold`'s number and `--touched`'s flag
+pairing, at the top of the run rather than in the middle of the report: a file
+that is present and unreadable, or that states a `coverage` block nen cannot
+read (a string where a number belongs, a ladder that does not ascend, a key one
+letter away from one nen reads), is a refusal naming the pointer — and a refusal
+a caller has to sit through a whole coverage build to hear is one delivered at
+the worst possible moment.
+
+`ladder: null` is a fact about the **invocation**, never about the repository.
+An explicit `--threshold` wins where both exist — it is the caller overriding
+the file's policy for this one run, not a second number to reconcile against it
+— and a plain (non-`--touched`) run never reads the file at all: **this too
+still never gates.**
+
 **`--json`** is a different contract from the other executing verbs
 (`nen.shu.coverage/v0.1`), keys in order: `{ contract, lane, stack, total,
-targets, threshold, report, exitCode }`. `percent` is computed from the counts
-(two decimals) rather than read out of the file — three of the five formats carry
-a percentage of their own, rounded three different ways, one of them as a
-fraction — and it is `null` for a report about no code, because 0 of 0 is neither
-100% nor 0%. **A dry run is told by `exitCode: 0` with `total: null`**; nothing
-else produces that pair. The executor's own report goes to stderr in this mode.
+targets, threshold, report, exitCode, touched, ladder }`. `percent` is computed
+from the counts (two decimals) rather than read out of the file — three of the five
+formats carry a percentage of their own, rounded three different ways, one of
+them as a fraction — and it is `null` for a report about no code, because 0 of 0
+is neither 100% nor 0%. **A dry run is told by `exitCode: 0` with `total:
+null`**; nothing else produces that pair. The executor's own report goes to
+stderr in this mode.
 
 **Example**
 
@@ -4585,6 +4663,88 @@ threshold:     80% -- met. This is REPORTED and never enforced: nen exits 0 here
 ```
 (run against this repository's own coverage fixture declaration; the same run
 with `--threshold 95` prints `95% -- NOT met` and still exits **0**)
+
+**Example — `--touched`**
+
+```bash
+nen shu coverage --touched --base <base> --threshold 80
+```
+```text
+lane:          web  (nextjs)
+verb:          coverage
+host:          darwin -- supported (declared: darwin, linux, win32)
+preconditions: (none declared)
+ran:           pnpm --filter @placeholder/core test:coverage  -- exit 0 in 208ms
+cwd:           /…/shu-coverage-repo
+env:           (none added)
+artifacts:     coverage/coverage-summary.json
+log:           not captured to a file -- each step's own stdout and stderr were relayed as it finished. A .nen/logs/ transcript is not in this release (zheref/nen#91).
+report:        coverage/coverage-summary.json  (istanbul-summary)
+total:         lines 82.35% (14/17)   branches 75.00% (3/4)
+targets:
+  lines           branches      met  target
+  84.62% (11/13)  75.00% (3/4)  met  packages/core/src/index.ts
+threshold:     80% -- met. This is REPORTED and never enforced: nen exits 0 here, and the threshold moved that by nothing.
+touched:       base <base>: 2 files (1 matched, 1 unmatched)
+  unmatched: README.md
+```
+(run against a copy of this repository's own coverage fixture, in a REAL git
+history: `<base>` is the commit before one that edited
+`packages/core/src/index.ts` and added `README.md`. `packages/app/src/main.ts`
+is untouched by that commit, so its row is gone from the table entirely — not
+merely marked unmet. `--json` for the same run:)
+
+```json
+{
+  "targets": [
+    { "name": "packages/core/src/index.ts", "lines": { "covered": 11, "total": 13, "percent": 84.62 },
+      "branches": { "covered": 3, "total": 4, "percent": 75 }, "met": true }
+  ],
+  "threshold": { "value": 80, "met": true },
+  "touched": {
+    "base": "<base>",
+    "files": ["README.md", "packages/core/src/index.ts"],
+    "matched": ["packages/core/src/index.ts"],
+    "unmatched": ["README.md"]
+  }
+}
+```
+(elided to the keys this example is about; the full document still carries all
+ten, `ladder: null` among them since `--threshold` was given)
+
+**Example — the ladder, no `--threshold`**
+
+```bash
+nen shu coverage --touched --base <base>
+```
+```text
+lane:          web  (nextjs)
+verb:          coverage
+host:          darwin -- supported (declared: darwin, linux, win32)
+preconditions: (none declared)
+ran:           pnpm --filter @placeholder/core test:coverage  -- exit 0 in 1181ms
+cwd:           /…/shu-coverage-repo
+env:           (none added)
+artifacts:     coverage/coverage-summary.json
+log:           not captured to a file -- each step's own stdout and stderr were relayed as it finished. A .nen/logs/ transcript is not in this release (zheref/nen#91).
+report:        coverage/coverage-summary.json  (istanbul-summary)
+total:         lines 82.35% (14/17)   branches 75.00% (3/4)
+targets:
+  lines           branches      band           target
+  75.00% (3/4)    --            under-minimum  packages/app/src/main.ts
+  84.62% (11/13)  75.00% (3/4)  minimum        packages/core/src/index.ts
+ladder:        nen/workflow.json -- minimum 80% / recommended 85% / ideal 90%. REPORTED per row as 'band', and never enforced: nen exits 0 here, whatever the bands say.
+touched:       base <base>: 2 files (2 matched, 0 unmatched)
+```
+(run against a copy of this repository's own coverage fixture, with a real
+`nen/workflow.json` declaring `{"coverage":{"minimum":80,"recommended":85,
+"ideal":90,"scope":"touched"}}`, and `<base>` the commit before one that
+touched both files. No `--threshold` was given, so `threshold` is absent from
+the text and `null` in `--json`, and `ladder` carries the three numbers
+instead — with `present: true`, because the file was really there. Delete that
+file and the same run prints `nen/workflow.json is absent — these are nen's
+defaults` and the identical three rungs, because 80/85/90 is what the loader
+answers with)
 
 ### `nen shu test-report`
 
