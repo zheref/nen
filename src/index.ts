@@ -98,7 +98,7 @@ global options:
 // way a registry family's `command.usage` does -- these two are it, read by
 // `run()` below rather than by ../cli/command.ts's mergeFlags path a
 // registered family goes through.
-const BOOTSTRAP_USAGE = `${PROGRAM} bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script <path>] [--repo <path>]
+export const BOOTSTRAP_USAGE = `${PROGRAM} bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script <path>] [--repo <path>]
 
 Fetch, checksum-verify and cache a pinned ${PROGRAM} binary. There is
 deliberately no default and no 'latest': a bootstrap that picked the newest
@@ -110,7 +110,25 @@ else.
   --source <owner/name>    GitHub repository to fetch release assets from.
   --cache-dir <dir>        Cache root.
   --script <path>          The bootstrap script, when not under --repo.
-  --repo <path>            The target repository's working-tree root.`;
+  --repo <path>            The target repository's working-tree root.
+
+Exit codes are a PUBLISHED CONTRACT -- this command relays the script's own,
+and adds exactly one of its own on top (zheref/nen#58). A caller branching on
+them does not have to discover any of these empirically:
+
+  0  the path on stdout is a verified binary.
+  2  usage: a flag is missing or malformed. Nothing was attempted.
+  3  unsupported host: no binary is published for this OS/arch.
+  4  the binary could not be DOWNLOADED. The only retryable one.
+  5  SECURITY: the bytes did not verify, or could not be. Never retry --
+     a mismatching binary does not become trustworthy by being asked for again.
+  6  the SHA256SUMS manifest was unfetchable, missing, malformed, or silent
+     about this artifact. Never retry, for the same reason.
+  7  THIS WRAPPER could not run the script at all -- no 'bash' on PATH, or no
+     'bootstrap/nen.sh' under --repo and none named by --script. It is the one
+     code the script itself can never return, which is why it is 7 rather than
+     1: "the bootstrap failed" and "the bootstrap never ran" are different
+     facts, and only the first says anything about the release you asked for.`;
 
 const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
 

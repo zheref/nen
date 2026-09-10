@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BOOTSTRAP_USAGE } from "../index.js";
 import {
   bootstrapArgv,
   BootstrapExit,
@@ -810,5 +811,33 @@ describe.skipIf(!BASH)("bootstrap/nen.sh -- sha256_of parses each tool's output"
       shWithTool(dir, "shadow", `checksum_matches '${posixPath(file)}' '${"b".repeat(64)}'`)
         .status,
     ).not.toBe(0);
+  });
+});
+
+// zheref/nen#58. `nen bootstrap` exits 7 when it cannot find the script it
+// needs, and `--help` named no exit code at all -- so a caller scripting around
+// it had to discover 7's meaning empirically, and could not tell "the bootstrap
+// failed" from "the bootstrap never ran". The help now carries the whole table;
+// this is what keeps it carrying it.
+describe("nen bootstrap --help -- the exit contract is published, not discovered", () => {
+  it("names every code BootstrapExit declares", () => {
+    // A LIST checked against the source of truth, not a sentence: the codes are
+    // a published contract (../supply/bootstrap.ts's own words), and a help
+    // text that documents six of seven is the shape of this defect returning.
+    for (const [name, code] of Object.entries(BootstrapExit)) {
+      expect(BOOTSTRAP_USAGE, `${name} (${code})`).toMatch(new RegExp(`^\\s*${code}\\s`, "m"));
+    }
+  });
+
+  it("says what 7 is, and that it is not the script's", () => {
+    // The specific gap: 7 is the one code the script itself can never return,
+    // and the distinction is the whole reason it is not 1.
+    expect(BOOTSTRAP_USAGE).toMatch(/THIS WRAPPER could not run the script/);
+    expect(BOOTSTRAP_USAGE).toMatch(/the bootstrap never ran/);
+  });
+
+  it("says which code is retryable, and which must never be", () => {
+    expect(BOOTSTRAP_USAGE).toMatch(/The only retryable one/);
+    expect(BOOTSTRAP_USAGE).toMatch(/Never retry/);
   });
 });
