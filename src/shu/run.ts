@@ -50,6 +50,7 @@ import {
   ASSERTABLE_KINDS,
   isLaunchTarget,
   LAUNCHING_VERBS,
+  launchLane,
   renderArgv,
   renderInvocation,
   resolveLaunch,
@@ -302,14 +303,15 @@ function substitutionNotes(report: ShuReport): readonly string[] {
         ? `${DEVICE_ID_TOKEN} <- '${name}' itself -- a simulated device is addressed by its name, so nothing is probed`
         : `${DEVICE_ID_TOKEN} <- the id of device '${name}', read from the probe above`;
     }
-    /* c8 ignore next -- `tokensUsed` returns only this family's two tokens */
     // THE OVERRIDE IS NAMED AS AN OVERRIDE, not just printed. A reader checking
     // this line already knows the rule is "the verb's first artifact"; a path
     // that is not that one, printed with no explanation, reads as nen having
     // taken the wrong entry rather than as the declaration having said so.
-    return target.artifact !== null
-      ? `${ARTIFACT_TOKEN} <- ${target.artifact}  (project.launch.${target.name}.artifact, not the verb's own)`
-      : `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
+    if (target.artifact !== null) {
+      return `${ARTIFACT_TOKEN} <- ${target.artifact}  (project.launch.${target.name}.artifact, not the verb's own)`;
+    }
+    /* c8 ignore next -- `resolveLaunch` refuses {artifact} when the verb declares none AND the target overrides none, so artifacts[0] is here */
+    return `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
   });
   return [labelled("substitutes", notes.join("; "))];
 }
@@ -616,8 +618,21 @@ function refuseImpossibleFlags(context: CommandContext, options: RunOptions): vo
 export function runVerb(context: CommandContext, repoRoot: string, options: RunOptions): number {
   refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
+  // THE TARGET'S LANE IS READ BEFORE ANYTHING IS RENDERED, and that ordering is
+  // the whole point of the key. Rendered on the invocation's lane first, a
+  // target whose OWN lane is the only one declaring the verb was refused by the
+  // lane it had explicitly overridden -- `lane 'web' declares no 'dev'`, exit 4,
+  // sending the maintainer to fix a row the declaration had already routed
+  // around, and leaving `--lane device` (the flag this key exists to make
+  // unnecessary) as the only way through. `launchLane` answers null for every
+  // case whose refusal must come first -- an undeclared target, a seated one,
+  // one belonging to the other verb -- so those still speak in ./render.ts's own
+  // words, on the lane the caller named.
+  const declaredLane = LAUNCHING_VERBS.includes(options.verb)
+    ? launchLane(project, options.verb, options.target)
+    : null;
   const rendered = renderInvocation(project, {
-    lane: options.lane,
+    lane: declaredLane ?? options.lane,
     verb: options.verb,
     platform: context.seams.platform,
   });

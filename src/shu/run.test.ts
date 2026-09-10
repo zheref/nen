@@ -2065,6 +2065,154 @@ describe("a launch target may name its own lane, and the verb is read from THAT 
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toContain("lane:          device");
   });
+
+  it("reaches a target whose lane is the ONLY one declaring the verb", async () => {
+    // THE CASE THE FIXTURE CANNOT MAKE, and the one the key exists for. In the
+    // fixture `web` declares its own `dev`, so the override is a preference:
+    // the launch renders on `web` first and would have worked either way. Here
+    // the default lane declares no `dev` at all, so if the target's lane is
+    // read AFTER the invocation has been rendered, the run is refused at exit 4
+    // by the very lane the declaration overrode -- and `--lane device`, the flag
+    // this key exists to make unnecessary, becomes the only way through.
+    const project = {
+      lanes: {
+        web: { stack: "placeholder-web", cwd: "." },
+        device: { stack: "placeholder-device", cwd: "." },
+      },
+      defaultLane: "web",
+      verbs: {
+        web: { build: { exe: "placeholder-web-tool", argv: ["build"] } },
+        device: {
+          dev: {
+            exe: "placeholder-build-tool",
+            argv: ["build"],
+            artifacts: ["build/Placeholder.app"],
+          },
+        },
+      },
+      launch: {
+        install: {
+          verb: "dev",
+          lane: "device",
+          after: [{ exe: "placeholder-installer", argv: ["install", "{artifact}"] }],
+        },
+      },
+    };
+    const result = await withDeclaration(project, ["dev", "--target", "install", "--dry-run"], {
+      platform: "darwin",
+    });
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain("lane:          device");
+    expect(result.out.join("\n")).toContain("would run:     placeholder-build-tool build");
+    // AND WITHOUT THE FIX this is the line that came back instead:
+    expect(result.err.join("\n")).not.toContain("lane 'web' (placeholder-web) declares no 'dev'");
+  });
+
+  it("still lets the target's OWN refusals speak first, on the caller's lane", async () => {
+    // `launchLane` answers null for a seat, for the other verb and for an
+    // undeclared name, so each of those sentences is still about the lane the
+    // caller named rather than one they never typed.
+    const project = {
+      lanes: {
+        web: { stack: "placeholder-web", cwd: "." },
+        device: { stack: "placeholder-device", cwd: "." },
+      },
+      defaultLane: "web",
+      verbs: {
+        web: { dev: { exe: "placeholder-web-tool", argv: ["dev"] } },
+        device: { dev: { exe: "placeholder-build-tool", argv: ["build"] } },
+      },
+      launch: {
+        // A SEATED TARGET CARRIES NO `lane` -- the loader refuses the pair -- so
+        // this is the arm where there is nothing for `launchLane` to read.
+        seated: { unsupported: "no device is wired up yet." },
+        // AND THIS ONE HAS A LANE and belongs to the other verb, which is the
+        // arm where `launchLane` has a value and deliberately does not use it.
+        shipped: {
+          verb: "run",
+          lane: "device",
+          after: [{ exe: "placeholder-installer", argv: ["put"] }],
+        },
+      },
+    };
+    const seat = await withDeclaration(project, ["dev", "--target", "seated", "--dry-run"], {
+      platform: "darwin",
+    });
+    expect(seat.code).toBe(4);
+    expect(seat.err.join("\n")).toContain("no device is wired up yet.");
+    expect(seat.err.join("\n")).toContain("on lane 'web' (placeholder-web)");
+
+    const other = await withDeclaration(project, ["dev", "--target", "shipped", "--dry-run"], {
+      platform: "darwin",
+    });
+    expect(other.code).toBe(2);
+    expect(other.err.join("\n")).toContain(
+      "launch target 'shipped' is declared for 'run', and this is 'dev'",
+    );
+  });
+});
+
+describe("a launch token written into `args` is refused, not delivered as itself", () => {
+  it("refuses {artifact} in project.launch.<name>.args at exit 2", async () => {
+    // SUBSTITUTION REACHES `after` AND NOWHERE ELSE. `unsubstituted` cannot
+    // catch this: it filters on the REFUSED set, which excludes both launch
+    // tokens by construction, so before this refusal the token reached the
+    // child argv verbatim.
+    const project = oneLane(
+      {
+        verbs: {
+          only: {
+            dev: {
+              exe: "placeholder-tool",
+              argv: ["serve"],
+              artifacts: ["build/Placeholder.app"],
+            },
+          },
+        },
+        launch: {
+          box: {
+            verb: "dev",
+            args: ["--out", "{artifact}"],
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+          },
+        },
+      },
+      undefined,
+    );
+    const result = await withDeclaration(project, ["dev", "--target", "box", "--dry-run"], {
+      platform: "darwin",
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(
+      "launch target 'box' names {artifact} in project.launch.box.args",
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses {device.id} there too, and names both when both are written", async () => {
+    const project = oneLane(
+      {
+        verbs: { only: { dev: { exe: "placeholder-tool", argv: ["serve"] } } },
+        launch: {
+          box: {
+            verb: "dev",
+            args: ["--device", "{device.id}"],
+            device: { name: "Placeholder Simulator", kind: "simulator" },
+            after: [{ exe: "placeholder-installer", argv: ["put", "{device.id}"] }],
+          },
+        },
+      },
+      undefined,
+    );
+    const result = await withDeclaration(project, ["dev", "--target", "box", "--dry-run"], {
+      platform: "darwin",
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(
+      "launch target 'box' names {device.id} in project.launch.box.args",
+    );
+    expect(result.err.join("\n")).toContain("in the target's 'after' steps only");
+  });
 });
 
 describe("a launch target may name the artifact {artifact} stands for", () => {
