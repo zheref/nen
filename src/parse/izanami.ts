@@ -1288,6 +1288,18 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       ),
     },
   },
+  surface: {
+    subcommands: {
+      // TWO-TOKEN KEYS, tried before a one-token one, exactly as `canon mirror
+      // generate|check` are: the two halves of this pair sit on opposite sides
+      // of the read/write line, and a family-wide row would have to take the
+      // pessimistic answer and lose the watchable half.
+      "mirror generate": DRY("writes and deletes mirror files under --out unless --dry-run is given"),
+      "mirror check": RO(
+        "regenerates the mirror in memory and diffs the committed one; unlike 'canon mirror check' it has no report-writing flag at all, so there is nothing to gate",
+      ),
+    },
+  },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
   wake: {
     subcommands: {
