@@ -140,6 +140,42 @@ export function requireRepoFlag(context: CommandContext, why: string): string {
 }
 
 /**
+ * `--target owner/name`, refused by name at exit **2** when the invocation
+ * carried none (zheref/nen#93).
+ *
+ * ONE HELPER, WHERE THERE WERE FOUR. `repo`, `labels`, `pr` and `issue` each
+ * kept a private `requireTarget` that threw a plain `Error`, so sixteen verbs
+ * answered a missing `--target` with exit **1** -- "the thing you asked for did
+ * not work" -- when the truth is "you typed it wrong". ../index.ts's own header
+ * draws that line, and it is not decoration: a retry wrapper honouring the
+ * distinction retries a 1 and gives up on a 2, so the wrong code turns a
+ * forgotten flag into a loop. Every OTHER required flag in those same families
+ * already exited 2 through `requireValue`, which is what made the odd one out
+ * hard to see.
+ *
+ * IT RETURNS THE RAW VALUE, and the four families parse it through
+ * `parseCallerToken` -- so a MALFORMED `--target` exits 2 as well as an absent
+ * one. It did not, before: `parseTarget`'s `TargetError` is not a
+ * `VerbUsageError`, so `--target not-a-slug` came back as exit 1 while
+ * `--target` missing came back as exit 2 after this helper landed, which would
+ * have replaced one inconsistency with a narrower one (Copilot, PR #195). They
+ * are the same mistake -- a typo in a flag -- and `parseCallerToken`'s own
+ * docblock already names that class.
+ *
+ * `why` is the family's own sentence about what the flag is FOR -- the pr and
+ * issue families say the thing worth saying, that `--target` is the GitHub side
+ * of a pair whose other half, `--repo`, names a checkout on disk and never
+ * addresses the API.
+ */
+export function requireTargetFlag(context: CommandContext, why = ""): string {
+  const raw = context.args.values["target"];
+  if (raw === undefined || raw.trim() === "") {
+    throw new VerbUsageError(`--target owner/name is required.${why === "" ? "" : ` ${why}`}`);
+  }
+  return raw;
+}
+
+/**
  * A CALLER-TYPED TOKEN parsed at the command boundary: the domain parser's own
  * refusal is re-raised as a VerbUsageError, message intact, so it exits 2
  * (zheref/nen#10 item 3).

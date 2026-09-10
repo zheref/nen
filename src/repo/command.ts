@@ -1,20 +1,25 @@
 // src/repo/command.ts -- `nen repo resolve`, `nen repo inventory`, `nen repo
 // scenario`.
 
-import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext, requireTargetFlag, parseCallerToken } from "../cli/command.js";
 import { ABSENT_FILE_MARKER, openTaxonomy } from "../schema/taxonomy.js";
 import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
-import { parseTarget, type Target } from "../github/target.js";
+import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { resolve, RepoResolutionError, type Resolution } from "./resolve.js";
 import { assertRepoRoot, resolveRepoRoot } from "./root.js";
 import { inventoryRepo } from "./inventory.js";
 import { resolveScenario } from "./scenario.js";
 
 function requireTarget(context: CommandContext): Target {
-  const raw = context.args.values["target"];
-  if (raw === undefined) throw new Error("--target owner/name is required.");
-  return parseTarget(raw);
+  const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
+  // A MALFORMED value is the same mistake as a missing one -- a typo in a flag
+  // -- so `parseTarget`'s own refusal is re-raised as a usage error and exits 2
+  // rather than 1 (zheref/nen#93; Copilot, PR #195).
+  return parseCallerToken(
+    (): Target => parseTarget(raw),
+    (error: unknown): boolean => error instanceof TargetError,
+  );
 }
 
 /**

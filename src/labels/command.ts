@@ -2,15 +2,20 @@
 
 import { assertRepoRoot } from "../repo/root.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
-import { parseTarget, type Target } from "../github/target.js";
-import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { parseTarget, type Target , TargetError} from "../github/target.js";
+import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext, requireTargetFlag, parseCallerToken } from "../cli/command.js";
 import { syncLabels } from "./sync.js";
 import { parseRenameMap, renameLabels } from "./rename.js";
 
 function requireTarget(context: CommandContext): Target {
-  const raw = context.args.values["target"];
-  if (raw === undefined) throw new Error("--target owner/name is required.");
-  return parseTarget(raw);
+  const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
+  // A MALFORMED value is the same mistake as a missing one -- a typo in a flag
+  // -- so `parseTarget`'s own refusal is re-raised as a usage error and exits 2
+  // rather than 1 (zheref/nen#93; Copilot, PR #195).
+  return parseCallerToken(
+    (): Target => parseTarget(raw),
+    (error: unknown): boolean => error instanceof TargetError,
+  );
 }
 
 const USAGE = `nen labels -- create-or-update sync, and rename-in-place migration.

@@ -30,13 +30,15 @@ import {
   VerbUsageError,
   type Command,
   type CommandContext,
+  requireTargetFlag,
+  parseCallerToken,
 } from "../cli/command.js";
 import { readJsonFile, readTextFile } from "../cli/inputs.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
 import type { Seams } from "../seam/exec.js";
-import { parseTarget, type Target } from "../github/target.js";
+import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import { checkBody, type BodyRequirement } from "./bodycheck.js";
 import { computeStaleness, type VerifiedWake } from "./staleness.js";
@@ -49,13 +51,14 @@ import { fetchPrAndKnownBots, isCollaborator, requestBotReviews, type PrAndKnown
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 
 function requireTarget(context: CommandContext): Target {
-  const raw = context.args.values["target"];
-  if (raw === undefined) {
-    throw new Error(
-      "--target owner/name is required. It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.",
-    );
-  }
-  return parseTarget(raw);
+  const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
+  // A MALFORMED value is the same mistake as a missing one -- a typo in a flag
+  // -- so `parseTarget`'s own refusal is re-raised as a usage error and exits 2
+  // rather than 1 (zheref/nen#93; Copilot, PR #195).
+  return parseCallerToken(
+    (): Target => parseTarget(raw),
+    (error: unknown): boolean => error instanceof TargetError,
+  );
 }
 
 function requirePr(context: CommandContext): number {
