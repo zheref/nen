@@ -43,6 +43,7 @@ import {
   loadWorkflow,
   parseWorkflow,
   refusedTrailerKeys,
+  trailerAdmitted,
   type Workflow,
 } from "../schema/workflow.js";
 import { detect, type DetectReport } from "../shu/detect.js";
@@ -564,12 +565,15 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   // the repository exactly as it was, which is this step's whole rule.
   const workflowDocument = defaultWorkflowDocument({
     lane: declaredLane(proposed.document),
-    // THE CALLER'S OWN TWO KEYS, and the only attribution trailers a freshly
-    // scaffolded repository admits until somebody edits the file.
-    // `--agent-trailer` and `--run-trailer` are what THIS invocation says mark
-    // an automated commit; writing anything else into the allow-list would be
-    // nen shipping a convention, which ./hook.ts's header refuses to do.
-    allowedAttributionTrailers: [options.hook.agentTrailer, options.hook.runTrailer],
+    // THE CALLER'S OWN KEY, and the only attribution trailer a freshly
+    // scaffolded repository admits until somebody edits the file. What
+    // `--agent-trailer` resolved to (this invocation's own value, or its
+    // default) is what marks an automated commit; writing anything else into
+    // the allow-list would be nen shipping a convention, which ./hook.ts's
+    // header refuses to do. `--run-trailer` is a SEPARATE, OPTIONAL key -- it
+    // is never itself an attribution trailer, so it never joins this list.
+    allowedAttributionTrailers: [options.hook.agentTrailer],
+    runTrailer: options.hook.runTrailer,
   });
   const workflowBody = `${JSON.stringify(workflowDocument, null, 2)}\n`;
   // Parsed OUTSIDE the try below, deliberately: the default document is nen's
@@ -674,12 +678,22 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
 
   const commitMsg = installHook(
     hookPath,
-    // THE REFUSED LIST IS RESOLVED ONCE, HERE, AND BAKED INTO THE SCRIPT. The
-    // hook then needs no nen on PATH at the moment of commit, and cannot drift
-    // from the policy between runs -- and `nen commit format` answers the same
+    // THE REFUSED LIST, AND WHETHER THE REQUIRED KEY IS ADMITTED, ARE BOTH
+    // RESOLVED ONCE, HERE, AND BAKED INTO THE SCRIPT. The hook then needs no
+    // nen on PATH at the moment of commit, and cannot drift from the policy
+    // between runs -- and `nen commit format` answers the refused-list
     // question from the same function, so the CLI cannot admit a trailer the
-    // hook then rejects.
-    renderCommitMsgHook(options.hook, refusedTrailerKeys(policy.commits)),
+    // hook then rejects. A policy that does not admit `--agent-trailer`'s own
+    // resolved key (the repository's own `nen/workflow.json`, read above,
+    // WINS over what this invocation asked for) generates a hook whose
+    // automated half refuses every automated commit, naming the missing
+    // policy, rather than one that checks for a trailer nobody could add
+    // without it also being refused.
+    renderCommitMsgHook(
+      options.hook,
+      refusedTrailerKeys(policy.commits),
+      trailerAdmitted(policy.commits, options.hook.agentTrailer),
+    ),
     "commit-msg",
   );
   const hookOutcome = commitMsg.outcome;

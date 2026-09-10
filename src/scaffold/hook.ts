@@ -19,14 +19,28 @@
 // the trailer on every commit) would make every human commit fail a hook
 // installed by a scaffold nobody read the fine print of.
 //
-// THE TRAILER NAMES ARE CALLER DATA. Which two trailer keys this hook
-// enforces, and which environment variable marks an automated commit, are
-// supplied by the caller (../scaffold/verb.ts's flags) -- this system serves
-// more than one target, and a literal 'Akatsuki-Agent' baked into shipped
-// code would be exactly the persona-naming violation §3 exists to catch, even
-// though this specific pair is Akatsuki's own by design (the caller is free
-// to pass exactly that pair; the point is that THIS module does not assume
-// it).
+// THE TRAILER NAMES ARE CALLER DATA. Which trailer key this hook requires,
+// which second one it requires alongside it (if any), and which environment
+// variable marks an automated commit, are supplied by the caller
+// (../scaffold/command.ts's flags) -- this system serves more than one
+// target, and a literal 'Akatsuki-Agent' baked into THIS module would be
+// exactly the persona-naming violation §3 exists to catch, even though this
+// specific pair is Akatsuki's own by design (../scaffold/command.ts's
+// `--agent-trailer` default names it, one layer up, where a caller who wants
+// a different key already has the flag that overrides it; the point is that
+// THIS module does not assume it).
+//
+// v0.6.0 (zheref/nen#167): THE AUTOMATED HALF NOW REQUIRES exactly ONE
+// trailer -- ../schema/workflow.ts's `commits.runTrailer` makes a second one
+// an OPTIONAL obligation a repository opts into, rather than a pair this hook
+// always demanded. And the one it does require is no longer taken on faith:
+// `nen scaffold init` resolves, at generation time, whether the repository's
+// OWN policy actually admits the key it is about to require
+// (../schema/workflow.ts's `trailerAdmitted`) -- a policy that does not is a
+// requirement no commit could ever honestly satisfy, so the generated hook's
+// automated half refuses every automated commit outright, naming the missing
+// policy, rather than checking for a trailer nobody could ever add without
+// also having it refused by the check above.
 
 import { chmodSync, writeFileSync } from "node:fs";
 
@@ -59,8 +73,14 @@ export function writeHookFile(path: string, body: string): void {
 export interface HookSpec {
   /** The trailer key naming which agent/persona made an automated commit. */
   readonly agentTrailer: string;
-  /** The trailer key naming which CI run produced an automated commit. */
-  readonly runTrailer: string;
+  /**
+   * The trailer key naming which CI run produced an automated commit, or
+   * `null` when this repository states none (../schema/workflow.ts's
+   * `commits.runTrailer`, absent by default). ABSENT MEANS OPTIONAL: unlike
+   * `agentTrailer`, a run identifier is never required unless the policy
+   * says so.
+   */
+  readonly runTrailer: string | null;
   /** The environment variable whose presence marks a commit as automated. */
   readonly markerEnvVar: string;
 }
@@ -72,8 +92,10 @@ export interface HookSpec {
 // TWO GUARDS, WITH DELIBERATELY DIFFERENT SCOPES, and the difference is the
 // whole design of this script:
 //
-//   * THE TRAILER PAIR IS REQUIRED ON AN AUTOMATED COMMIT ONLY (above). It is a
-//     positive obligation an automated run takes on about itself.
+//   * THE REQUIRED TRAILER(S) ARE REQUIRED ON AN AUTOMATED COMMIT ONLY
+//     (above). It is a positive obligation an automated run takes on about
+//     itself: `agentTrailer` always, `runTrailer` only when the policy states
+//     one.
 //   * A REFUSED ATTRIBUTION TRAILER IS REFUSED ON EVERY COMMIT. It is a fact
 //     about the MESSAGE, not about who typed it: a `Co-Authored-By:` naming a
 //     tool is equally wrong in the history whether a script or a person put it
@@ -81,19 +103,35 @@ export interface HookSpec {
 //     agent evades by not setting the marker. That is the whole reason a hook
 //     exists rather than a lint.
 //
-// THE REFUSED LIST IS DATA, BAKED IN AT GENERATION TIME. `nen scaffold init`
-// resolves it once from the repository's own `nen/workflow.json` (../schema/
-// workflow.ts's `refusedTrailerKeys`) and hands it here, so the hook needs no
-// nen on PATH to run and cannot drift from the policy at the moment of commit.
-// Re-run the scaffold after changing the policy; the report says `unchanged`
-// when nothing moved and rewrites the hook (under --force) when it did.
+// THE REFUSED LIST, AND WHETHER THE REQUIRED KEY IS ADMITTED, ARE BOTH DATA,
+// BAKED IN AT GENERATION TIME. `nen scaffold init` resolves both once from the
+// repository's own `nen/workflow.json` (../schema/workflow.ts's
+// `refusedTrailerKeys` and `trailerAdmitted`) and hands them here, so the hook
+// needs no nen on PATH to run and cannot drift from the policy at the moment
+// of commit. Re-run the scaffold after changing the policy; the report says
+// `unchanged` when nothing moved and rewrites the hook (under --force) when
+// it did -- and regenerating from an UNCHANGED policy is byte-stable, because
+// every one of these decisions is made once, here, from the same inputs.
 //
-// MATCHING IGNORES CASE (`grep -i`), for ../schema/workflow.ts's own reason:
-// every tool that reads the finished commit reads a trailer key without regard
-// to case, so a guard one capital defeats is not a guard.
+// `agentTrailerAdmitted: false` IS A CONFIGURATION nen REFUSES TO PAPER OVER.
+// A repository whose OWN `commits.allowedAttributionTrailers` does not list
+// the key this run is about to require has stated two things that contradict
+// each other -- "automated commits must carry this trailer" and "this trailer
+// is not one this repository admits" -- and there is no commit message that
+// satisfies both. Rather than generate a check for a trailer that could never
+// be added without also being refused, the automated half refuses every
+// automated commit outright and names the fix: admit the key, or regenerate
+// with a different `--agent-trailer`.
+//
+// MATCHING IGNORES CASE (`grep -i`/`grep` without `-i` where the key is
+// compared literally against what `nen scaffold init` resolved, not against
+// caller input), for ../schema/workflow.ts's own reason: every tool that
+// reads the finished commit reads a trailer key without regard to case, so a
+// guard one capital defeats is not a guard.
 export function renderCommitMsgHook(
   spec: HookSpec,
   refusedTrailers: readonly string[] = [],
+  agentTrailerAdmitted = true,
 ): string {
   const refusals = refusedTrailers
     .map(
@@ -105,19 +143,38 @@ fi
 `,
     )
     .join("");
+  const required = spec.runTrailer === null ? spec.agentTrailer : `${spec.agentTrailer}:/${spec.runTrailer}`;
+  const automatedHalf = !agentTrailerAdmitted
+    ? `  echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit), but this repository's nen/workflow.json does not admit '${spec.agentTrailer}' under commits.allowedAttributionTrailers -- no automated commit can carry a trailer this policy does not list. Add '${spec.agentTrailer}' to that list (or regenerate this hook with a different --agent-trailer), then re-run 'nen scaffold init'." >&2
+  exit 1`
+    : `  if ! grep -qE '^${spec.agentTrailer}: .+' "\$msg_file"; then
+    echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit) but the message carries no '${spec.agentTrailer}: <value>' trailer." >&2
+    exit 1
+  fi
+${
+  spec.runTrailer === null
+    ? ""
+    : `
+  if ! grep -qE '^${spec.runTrailer}: .+' "\$msg_file"; then
+    echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit) but the message carries no '${spec.runTrailer}: <value>' trailer." >&2
+    exit 1
+  fi
+`
+}`;
   return `#!/bin/sh
-# commit-msg -- enforces the ${spec.agentTrailer}:/${spec.runTrailer}: trailer
-# pair on an AUTOMATED commit only, and refuses every attribution trailer this
+# commit-msg -- enforces the ${required}: trailer${spec.runTrailer === null ? "" : "s"}
+# on an AUTOMATED commit only, and refuses every attribution trailer this
 # repository does not admit, on EVERY commit. Generated by 'nen scaffold init'.
 #
 # A commit is "automated" iff ${spec.markerEnvVar} is set in the environment
 # the commit runs in. An ordinary human commit at a keyboard carries no such
-# variable and is never asked for the trailer PAIR -- but the refused-trailer
+# variable and is never asked for either trailer -- but the refused-trailer
 # list below applies to it too, because a trailer nobody wants in the history is
 # unwanted whoever typed it.
 #
-# The refused list was read from nen/workflow.json when this file was generated
-# and is baked in as data: this hook needs no nen on PATH. Re-run
+# The refused list, and whether '${spec.agentTrailer}' is one this repository's
+# own policy admits, were both read from nen/workflow.json when this file was
+# generated and are baked in as data: this hook needs no nen on PATH. Re-run
 # 'nen scaffold init' after changing that policy.
 
 set -eu
@@ -129,15 +186,7 @@ if [ -z "\${${spec.markerEnvVar}:-}" ]; then
   exit 0
 fi
 
-if ! grep -qE '^${spec.agentTrailer}: .+' "\$msg_file"; then
-  echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit) but the message carries no '${spec.agentTrailer}: <value>' trailer." >&2
-  exit 1
-fi
-
-if ! grep -qE '^${spec.runTrailer}: .+' "\$msg_file"; then
-  echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit) but the message carries no '${spec.runTrailer}: <value>' trailer." >&2
-  exit 1
-fi
+${automatedHalf}
 
 exit 0
 `;

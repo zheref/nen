@@ -70,14 +70,24 @@ function git(cwd: string, args: readonly string[]): Run {
  * about to refuse every commit on this branch, and a fixture that cannot get
  * its first commit in cannot test anything. That is the one place this file
  * bypasses a hook, and it is the setup rather than a case.
+ *
+ * `admitted` AND `spec` LET A CASE DRIVE THE TWO zheref/nen#167 BRANCHES
+ * THROUGH A REAL COMMIT: `admitted: false` is the "policy does not admit the
+ * required key" hook (always refuses an automated commit), and a `spec`
+ * carrying `runTrailer: null` is the "no run identifier required" hook.
  */
-function repoWith(refusedTrailers: readonly string[], base = "main"): string {
+function repoWith(
+  refusedTrailers: readonly string[],
+  base = "main",
+  admitted = true,
+  spec: HookSpec = SPEC,
+): string {
   const root = mkdtempSync(join(tmpdir(), "nen-hook-int-"));
   expect(git(root, ["init", "-q", "-b", base]).status).toBe(0);
   const hooks = join(root, ".git", "hooks");
   mkdirSync(hooks, { recursive: true });
   for (const [name, body] of [
-    ["commit-msg", renderCommitMsgHook(SPEC, refusedTrailers)],
+    ["commit-msg", renderCommitMsgHook(spec, refusedTrailers, admitted)],
     ["pre-commit", renderPreCommitHook(base)],
   ] as const) {
     const path = join(hooks, name);
@@ -146,6 +156,44 @@ describe.skipIf(!HAVE_GIT)("the generated commit-msg hook, run by a real git com
   it("refuses nothing at all when the policy admits everything", () => {
     const root = repoWith([]);
     expect(commitOffTrunk(root, "work", "feat: a thing\n\nCo-Authored-By: A <a@b>").status).toBe(0);
+  });
+
+  // zheref/nen#167: the run identifier is optional -- a spec that states none
+  // requires only the agent trailer on an automated commit.
+  it("requires only the agent trailer when the spec carries no run trailer", () => {
+    const root = repoWith([], "main", true, { agentTrailer: "X-Agent", runTrailer: null, markerEnvVar: "X_AUTOMATED" });
+    expect(git(root, ["switch", "-q", "-c", "work"]).status).toBe(0);
+    const missingAgent = spawnSync("git", [...WHO, "commit", "--allow-empty", "-m", "feat: automated, no trailer"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, X_AUTOMATED: "1" },
+    });
+    expect(missingAgent.status).not.toBe(0);
+    expect(`${missingAgent.stderr ?? ""}`).toContain("X-Agent");
+
+    const withAgentOnly = spawnSync(
+      "git",
+      [...WHO, "commit", "--allow-empty", "-m", "feat: automated\n\nX-Agent: kurapika"],
+      { cwd: root, encoding: "utf8", env: { ...process.env, X_AUTOMATED: "1" } },
+    );
+    expect(withAgentOnly.status).toBe(0);
+  });
+
+  // zheref/nen#167: a policy that does not admit the required key refuses
+  // EVERY automated commit -- there is no message that could satisfy it.
+  it("refuses every automated commit outright when the policy does not admit the required key", () => {
+    const root = repoWith([], "main", false);
+    const human = commitOffTrunk(root, "work", "feat: a human commit, untouched");
+    expect(human.status).toBe(0);
+
+    const automated = spawnSync("git", [...WHO, "commit", "--allow-empty", "-m", "feat: automated\n\nX-Agent: kurapika"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, X_AUTOMATED: "1" },
+    });
+    expect(automated.status).not.toBe(0);
+    expect(`${automated.stderr ?? ""}`).toContain("does not admit 'X-Agent'");
+    expect(`${automated.stderr ?? ""}`).toContain("commits.allowedAttributionTrailers");
   });
 });
 

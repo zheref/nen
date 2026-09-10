@@ -209,6 +209,20 @@ export interface CommitsPolicy {
   readonly allowedAttributionTrailers: readonly string[];
   /** Extra keys this repository refuses, on top of `ATTRIBUTION_TRAILERS`. */
   readonly forbiddenTrailers: readonly string[];
+  /**
+   * The trailer key naming which CI run produced an automated commit, or
+   * `null` when this repository states none.
+   *
+   * ABSENT BY DEFAULT, AND NEVER ITSELF AN ATTRIBUTION TRAILER. A run
+   * identifier says WHICH RUN produced a commit, not who or what did --
+   * `ATTRIBUTION_TRAILERS` is closed to keys that answer the second question,
+   * so this one is never folded into `allowedAttributionTrailers` and is
+   * never auto-refused by that enumeration either. When a repository states
+   * one, ./scaffold/hook.ts's generated commit-msg hook requires it too,
+   * alongside the one attribution trailer `allowedAttributionTrailers`
+   * admits, on every automated commit.
+   */
+  readonly runTrailer: string | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -316,7 +330,7 @@ export function defaultWorkflow(): Workflow {
       raw: empty,
     },
     notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
-    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], raw: empty },
+    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
     models: { rule: null, surfaces: {}, roles: {}, raw: empty },
     raw: empty,
@@ -346,7 +360,11 @@ const COVERAGE_KEYS: readonly string[] = ["minimum", "recommended", "ideal", "sc
 const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
 const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures"];
 const NOTIFICATIONS_KEYS: readonly string[] = ["rungs", "sound", "turn"];
-const COMMITS_KEYS: readonly string[] = ["allowedAttributionTrailers", "forbiddenTrailers"];
+const COMMITS_KEYS: readonly string[] = [
+  "allowedAttributionTrailers",
+  "forbiddenTrailers",
+  "runTrailer",
+];
 const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds"];
 
 /**
@@ -616,7 +634,7 @@ function requireTrailerKey(path: string, pointer: string, key: string): string {
 }
 
 function parseCommits(path: string, value: unknown): CommitsPolicy {
-  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's two keys are");
+  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's three keys are");
   const read = (key: string): readonly string[] =>
     stringsOr(path, `commits.${key}`, raw[key], []).map((entry, index): string =>
       requireTrailerKey(path, `commits.${key}[${index}]`, entry),
@@ -638,7 +656,30 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
       `lists ${both.map((key): string => `'${key}'`).join(", ")} as both allowed and forbidden. A trailer key is one or the other; nen will not pick, because the two lists are read by different callers and a guess would admit the key in one place and refuse it in the other`,
     );
   }
-  return { allowedAttributionTrailers, forbiddenTrailers, raw };
+  const runTrailerRaw = raw["runTrailer"];
+  const runTrailer =
+    runTrailerRaw === undefined || runTrailerRaw === null
+      ? null
+      : requireTrailerKey(path, "commits.runTrailer", requireString(path, "commits.runTrailer", runTrailerRaw));
+  // A `runTrailer` THIS POLICY ALSO REFUSES IS A REQUIREMENT NO COMMIT CAN
+  // EVER SATISFY. The generated hook's automated half would demand the key on
+  // every automated commit and then refuse the very same message for carrying
+  // it -- the refusal check sits ABOVE the marker-env gate and applies to
+  // every commit unconditionally. Caught here, at load, by pointer, rather
+  // than as a hook nobody can ever get past.
+  if (runTrailer !== null) {
+    const refused = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, raw: {} }).find(
+      (key): boolean => key.toLowerCase() === runTrailer.toLowerCase(),
+    );
+    if (refused !== undefined) {
+      throw new SchemaError(
+        path,
+        "commits.runTrailer",
+        `'${runTrailer}' is also a trailer this policy REFUSES ('${refused}', by the rules above). The generated hook would then require it on every automated commit and refuse the same message for carrying it -- a requirement no commit could ever satisfy. Add '${runTrailer}' to commits.allowedAttributionTrailers, add it to neither list, or choose a different commits.runTrailer`,
+      );
+    }
+  }
+  return { allowedAttributionTrailers, forbiddenTrailers, runTrailer, raw };
 }
 
 function parseMonitor(path: string, value: unknown): MonitorPolicy {
@@ -823,6 +864,29 @@ export function trailerRefusal(commits: CommitsPolicy, key: string): string | nu
     (candidate): boolean => candidate.toLowerCase() === lower,
   );
   return refused ?? null;
+}
+
+/**
+ * Whether this policy's OWN allow-list admits one caller-typed trailer key.
+ *
+ * NOT THE SAME QUESTION AS `trailerRefusal`. A key nen has never heard of
+ * (`Akatsuki-Agent`, a caller's own vocabulary rather than one of
+ * `ATTRIBUTION_TRAILERS`) is never auto-refused, so it can be "not refused"
+ * and "not admitted" at the same time -- and that is exactly the state
+ * ./scaffold/hook.ts's generated commit-msg hook needs to tell apart from
+ * "admitted": a hook required to demand a trailer on every automated commit
+ * that this repository's own policy does not list under
+ * `commits.allowedAttributionTrailers` is a requirement no commit can ever
+ * satisfy honestly, and `nen scaffold init` generates a hook that refuses
+ * every automated commit outright rather than one that checks for a trailer
+ * it would then be impossible to add. Matched case-insensitively, for the
+ * same reason every other trailer comparison here is.
+ */
+export function trailerAdmitted(commits: CommitsPolicy, key: string): boolean {
+  const lower = key.trim().toLowerCase();
+  return commits.allowedAttributionTrailers.some(
+    (candidate): boolean => candidate.toLowerCase() === lower,
+  );
 }
 
 /**

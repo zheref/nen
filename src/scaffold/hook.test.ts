@@ -13,7 +13,7 @@ describe("renderCommitMsgHook -- conditional on the marker env var only", () => 
     expect(script).toContain('if [ -z "${X_AUTOMATED:-}" ]; then');
   });
 
-  it("checks for both trailer keys, by the caller-supplied names", () => {
+  it("checks for both trailer keys, by the caller-supplied names, when a run trailer is stated", () => {
     const script = renderCommitMsgHook(SPEC);
     expect(script).toContain("^X-Agent: .+");
     expect(script).toContain("^X-Run: .+");
@@ -24,6 +24,51 @@ describe("renderCommitMsgHook -- conditional on the marker env var only", () => 
     expect(script).toContain("^Akatsuki-Agent: .+");
     expect(script).toContain("^Akatsuki-Run: .+");
     expect(script).toContain('${CI:-}');
+  });
+});
+
+describe("renderCommitMsgHook -- the run identifier is OPTIONAL (zheref/nen#167)", () => {
+  it("checks only the agent trailer when runTrailer is null -- no second requirement", () => {
+    const script = renderCommitMsgHook({ agentTrailer: "X-Agent", runTrailer: null, markerEnvVar: "X_AUTOMATED" });
+    expect(script).toContain("^X-Agent: .+");
+    expect(script).not.toContain("-Run");
+    expect(script).not.toMatch(/carries no 'X-Run/);
+  });
+
+  it("requires the run trailer too when one is stated", () => {
+    const script = renderCommitMsgHook(SPEC);
+    expect(script).toContain("carries no 'X-Agent: <value>' trailer");
+    expect(script).toContain("carries no 'X-Run: <value>' trailer");
+  });
+
+  it("regenerating from the SAME spec and policy is byte-stable", () => {
+    expect(renderCommitMsgHook(SPEC, ["Co-Authored-By"], true)).toBe(
+      renderCommitMsgHook(SPEC, ["Co-Authored-By"], true),
+    );
+    expect(renderCommitMsgHook({ ...SPEC, runTrailer: null })).toBe(
+      renderCommitMsgHook({ ...SPEC, runTrailer: null }),
+    );
+  });
+});
+
+describe("renderCommitMsgHook -- a policy that does not admit the required key (zheref/nen#167)", () => {
+  it("refuses EVERY automated commit outright, rather than checking for a trailer that could never be added", () => {
+    const script = renderCommitMsgHook(SPEC, [], false);
+    expect(script).not.toContain("grep -qE '^X-Agent: .+'");
+    expect(script).toContain("does not admit 'X-Agent'");
+    expect(script).toContain("commits.allowedAttributionTrailers");
+    expect(script).toContain("exit 1");
+  });
+
+  it("still exits 0 for a human (non-automated) commit -- the marker-env gate still applies", () => {
+    const script = renderCommitMsgHook(SPEC, [], false);
+    expect(script.indexOf('if [ -z "${X_AUTOMATED:-}" ]; then')).toBeLessThan(
+      script.indexOf("does not admit 'X-Agent'"),
+    );
+  });
+
+  it("defaults agentTrailerAdmitted to true, so existing callers that pass only two arguments are unaffected", () => {
+    expect(renderCommitMsgHook(SPEC)).toContain("^X-Agent: .+");
   });
 });
 
