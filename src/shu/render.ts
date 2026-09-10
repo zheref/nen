@@ -29,11 +29,18 @@ import { VerbUsageError } from "../cli/command.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import {
   LAUNCH_VERBS,
+  type DeviceReadiness,
   type Invocation,
   type ProjectBlock,
   type StallGuard,
 } from "../schema/contract.js";
-import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, tokensUsed, usesToken } from "./launch.js";
+import {
+  ARTIFACT_TOKEN,
+  DEVICE_ID_TOKEN,
+  artifactAsSeenFrom,
+  tokensUsed,
+  usesToken,
+} from "./launch.js";
 
 /**
  * The precondition kinds this release can assert. Everything else refuses.
@@ -230,6 +237,16 @@ export interface ResolvedDevice {
   readonly kind: string | null;
   /** The id the probe reported, or null when nothing was probed. */
   readonly id: string | null;
+  /**
+   * Which of the probe's own states count as ready, or null for "any".
+   *
+   * IT IS THE DECLARATION'S RULE AND NOT A READING, so it is the same on a dry
+   * run as on a real one -- unlike `id`, which is null until something has been
+   * probed. That is what lets `--dry-run` print the rule beside the probe: a
+   * caller checking a launch before they let it run can see which state the
+   * device will have to be in, without a device being connected at all.
+   */
+  readonly readyWhen: DeviceReadiness | null;
 }
 
 /**
@@ -260,9 +277,26 @@ export interface ResolvedLaunch {
   readonly args: readonly string[];
   /**
    * The path `{artifact}` is substituted with, when the target overrides the
-   * verb's own first artifact; null when it does not.
+   * verb's own first artifact; null when it does not. AS DECLARED -- repository
+   * -root-relative, exactly as the file writes it.
    */
   readonly artifact: string | null;
+  /**
+   * What `{artifact}` is ACTUALLY substituted with: the chosen path as the
+   * after-steps' own working directory sees it, or null when there is nothing
+   * to fill the token with.
+   *
+   * TWO FIELDS FOR ONE PATH, BECAUSE THERE ARE TWO ROOTS AND A READER NEEDS
+   * BOTH. A declaration states paths against the REPOSITORY ROOT; an after-step
+   * is spawned in the LANE'S directory. On a lane at the root the two strings
+   * are identical and always have been -- which is most lanes, and is why the
+   * mismatch went unseen -- and on a lane one directory down the declared
+   * `build/App.app` is `../build/App.app` from where the installer stands.
+   * `artifact` answers "what does the file say"; this answers "what does the
+   * child receive", and collapsing them would leave the dry run unable to say
+   * that the two are the same fact seen from two places.
+   */
+  readonly artifactAs: string | null;
   readonly device: ResolvedDevice | null;
   /** The declared device probe, or null when the device needs none. */
   readonly probe: RenderedStep | null;
@@ -983,6 +1017,55 @@ const SIMULATED = "simulator";
  * 'run'") than the one the caller got wrong. A target with no `lane` key is the
  * fourth, and is simply the behaviour every launch had before the key existed.
  */
+/**
+ * The one sentence a target declared for the OTHER long-running verb gets.
+ *
+ * ONE COPY, TWO CALLERS, and the second caller is the reason it moved out of
+ * `resolveLaunch`: this refusal now fires BEFORE anything is rendered
+ * (`refuseCrossVerbTarget` below), while `resolveLaunch` keeps making it too
+ * because that function is callable on its own and its contract is that a plan
+ * it returns belongs to the target. Two copies of a sentence this specific are
+ * two sentences the day either one is improved.
+ */
+function crossVerbMessage(requested: string, declaredFor: string, asked: string): string {
+  return `launch target '${requested}' is declared for '${declaredFor}', and this is '${asked}'. project.launch.${requested}.verb says which of the two long-running verbs the target's arguments and after-steps were written against, and nen does not carry them across: run '${declaredFor} --target ${requested}', or declare a separate target for '${asked}'.`;
+}
+
+/**
+ * A `--target` declared for the OTHER long-running verb, refused BEFORE the
+ * lane's own row is read. Silent about every other case.
+ *
+ * WHY IT COMES FIRST, AHEAD OF THE SEAT. `dev` and `run` are different builds,
+ * and a target belongs to exactly one of them -- a fact about the DECLARATION,
+ * true on every lane and every host. The lane's seat is a fact about one row.
+ * Rendered first, the seat won on any lane where the other verb is `unsupported`
+ * or simply absent, so `run --target <a dev target>` answered `'run' is
+ * unsupported on lane '<lane>'` at exit 4: true, and a dead end -- it sends a
+ * reader to write a `run` row for a lane whose `run` they never wanted, while
+ * nen already held the sentence that ends the problem ("run `dev --target
+ * <name>`") one check further down and never reached it.
+ *
+ * IT STAYS SILENT ON EVERYTHING ELSE, and each silence is the same rule
+ * `launchLane` follows for the same reason: an UNDECLARED target, and a target
+ * seated `unsupported`, are refused by `resolveLaunch` in its own words on the
+ * lane the caller named -- and a seat that IS the target's own verb keeps its
+ * exit 4, because there the seat is the whole answer and there is no better one
+ * behind it.
+ */
+export function refuseCrossVerbTarget(
+  project: ProjectBlock,
+  verb: string,
+  requested: string | null,
+): void {
+  if (requested === null) return;
+  if (!Object.prototype.hasOwnProperty.call(project.launch, requested)) return;
+  const target = project.launch[requested];
+  /* c8 ignore next -- hasOwnProperty just answered for this key */
+  if (target === undefined) return;
+  if (target.unsupported !== null || target.verb === null || target.verb === verb) return;
+  throw new VerbUsageError(crossVerbMessage(requested, target.verb, verb));
+}
+
 export function launchLane(
   project: ProjectBlock,
   verb: string,
@@ -1029,9 +1112,12 @@ export function resolveLaunch(
     // after-steps are written against exactly one of them, and honouring them
     // on the other would install the wrong binary on somebody's phone while
     // reporting success.
-    throw new VerbUsageError(
-      `launch target '${requested}' is declared for '${target.verb}', and this is '${plan.verb}'. project.launch.${requested}.verb says which of the two long-running verbs the target's arguments and after-steps were written against, and nen does not carry them across: run '${target.verb} --target ${requested}', or declare a separate target for '${plan.verb}'.`,
-    );
+    //
+    // ./run.ts HAS USUALLY SAID THIS ALREADY, through `refuseCrossVerbTarget`
+    // above and before anything was rendered -- which is what keeps the lane's
+    // own seat from answering first. This is the standalone path: the sentence
+    // is shared, so the two cannot drift.
+    throw new VerbUsageError(crossVerbMessage(requested, String(target.verb), plan.verb));
   }
   // THE LANE, BEFORE ANY OF THE CHECKS BELOW READ THE PLAN. `args` are appended
   // to a lane's argv, `{artifact}` falls back to a lane's artifacts, and the
@@ -1128,10 +1214,24 @@ export function resolveLaunch(
       lane: target.lane,
       args: target.args,
       artifact: target.artifact,
+      // THE OVERRIDE FIRST, THEN THE VERB'S OWN FIRST ENTRY -- the same
+      // fallback `./run.ts` applied at the moment of substitution, moved here
+      // so ONE place decides what `{artifact}` means and the dry run's
+      // `substitutes:` line reads the same value a real run passes. It is
+      // rebased onto the lane's own directory because that is where every
+      // after-step is spawned; on a lane whose `cwd` is the root the two
+      // strings are identical, which is what keeps every existing declaration
+      // byte-for-byte unchanged.
+      artifactAs: artifactFor(onLane, target.artifact),
       device:
         target.device === null
           ? null
-          : { name: target.device.name, kind: target.device.kind, id: null },
+          : {
+              name: target.device.name,
+              kind: target.device.kind,
+              id: null,
+              readyWhen: target.device.readyWhen,
+            },
       // NEITHER CARRIES A `stdoutTo`, AND THE LOADER DOES NOT LET THEM: a
       // probe's stdout is the document nen searches for a device id, and an
       // after-step follows a verb that already owned this terminal. The field
@@ -1143,6 +1243,22 @@ export function resolveLaunch(
     },
     steps,
   };
+}
+
+/**
+ * What `{artifact}` becomes for THIS plan's after-steps, or null.
+ *
+ * TWO DECISIONS IN ONE PLACE, and they were in two before: WHICH path (the
+ * target's own override, else the verb's first declared artifact) and FROM
+ * WHERE (the lane's directory, which is the cwd every after-step is spawned
+ * with). Both are pure string work over what the declaration already states --
+ * `./launch.ts`'s `artifactAsSeenFrom` carries the argument for the rebasing --
+ * so a dry run can print exactly what a real run will pass, which is the whole
+ * promise `--dry-run` makes.
+ */
+function artifactFor(plan: RenderedInvocation, override: string | null): string | null {
+  const chosen = override ?? plan.artifacts[0] ?? null;
+  return chosen === null ? null : artifactAsSeenFrom(plan.cwdRelative, chosen);
 }
 
 /** A declared `{exe, argv}` as a RenderedStep that writes no file. */

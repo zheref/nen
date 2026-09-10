@@ -11,9 +11,11 @@
 // use everywhere else.
 
 import { describe, expect, it } from "vitest";
+import type { DeviceReadiness } from "../schema/contract.js";
 import {
   ARTIFACT_TOKEN,
   DEVICE_ID_TOKEN,
+  artifactAsSeenFrom,
   findDevice,
   LAUNCH_PLACEHOLDERS,
   substituteSteps,
@@ -34,6 +36,7 @@ describe("findDevice, over JSON output", () => {
       found: true,
       id: "BBBB-2222",
       ambiguous: [],
+      readiness: null,
       saw: ["Placeholder A", "Placeholder B"],
       sawKind: "names",
     });
@@ -94,6 +97,7 @@ describe("findDevice, over JSON output", () => {
       found: false,
       id: null,
       ambiguous: [],
+      readiness: null,
       saw: ["Placeholder A", "Placeholder B"],
       sawKind: "names",
     });
@@ -160,6 +164,7 @@ describe("findDevice, over plain output", () => {
       found: false,
       id: null,
       ambiguous: [],
+      readiness: null,
       saw: [
         "List of attached devices",
         "PH1234567890   device  usb:1-2 model:Placeholder_A",
@@ -184,6 +189,7 @@ describe("findDevice, over plain output", () => {
       found: false,
       id: null,
       ambiguous: [],
+      readiness: null,
       saw: [],
       sawKind: "lines",
     });
@@ -271,5 +277,196 @@ describe("two candidates for one name: nen picks neither", () => {
       { name: "Placeholder A", udid: "AAAA-1" },
     ]);
     expect(findDevice("Placeholder A", out).id).toBe("AAAA-1");
+  });
+});
+
+// ── readiness: the state beside the name, which the name cannot carry ───────
+//
+// A DEVICE LIST IS NOT A LIST OF USABLE DEVICES. The same row that says a
+// handset is attached also says whether its pairing prompt was answered, and
+// matching the name answers only the first of those. These fixtures reproduce
+// the two SHAPES a state arrives in -- a column on a line, a key on an object --
+// with the same invented vocabulary the rest of this file uses. This module
+// COMPARES nothing: what it reports is the word the probe printed, and
+// ../shu/run.ts is where that word is held against the accepted set.
+
+/** A plain-line readiness rule, as ../schema/contract.ts parses one. */
+function byField(field: number, accepted: readonly string[] = ["ready"]): DeviceReadiness {
+  return { field, path: null, in: accepted, raw: {} };
+}
+
+/** A JSON readiness rule, as ../schema/contract.ts parses one. */
+function byPath(path: string, accepted: readonly string[] = ["ready"]): DeviceReadiness {
+  return { field: null, path, in: accepted, raw: {} };
+}
+
+describe("findDevice reads a device's STATE where the declaration says it is", () => {
+  const ROWS = [
+    "PH0000000001   unpaired",
+    "PH0000000002   ready      usb:1-2",
+  ].join("\n");
+
+  it("counts fields FROM ONE, the way a reader counts columns on their screen", () => {
+    // Field 1 is the serial the declaration matched on; field 2 is the state.
+    expect(findDevice("PH0000000002", ROWS, byField(1)).readiness).toBe("PH0000000002");
+    expect(findDevice("PH0000000002", ROWS, byField(2)).readiness).toBe("ready");
+    expect(findDevice("PH0000000002", ROWS, byField(3)).readiness).toBe("usb:1-2");
+  });
+
+  it("reads the state off a row that offers NO id at all", () => {
+    // THE CASE THE WHOLE KEY EXISTS FOR. A device whose state is the reason it
+    // is unusable routinely prints a row with nothing id-shaped on it, and
+    // "the probe gave nen no id" is the true sentence that helps least.
+    const lookup = findDevice("PH0000000001", ROWS, byField(2));
+    expect(lookup.found).toBe(true);
+    expect(lookup.id).toBeNull();
+    expect(lookup.readiness).toBe("unpaired");
+  });
+
+  it("answers null for a field the row does not reach", () => {
+    expect(findDevice("PH0000000001", ROWS, byField(9)).readiness).toBeNull();
+  });
+
+  it("answers null for a rule written for the OTHER shape", () => {
+    // A `path` against plain lines reads nothing rather than guessing at one;
+    // ../shu/run.ts refuses with the rule quoted, which is the whole diagnosis.
+    expect(findDevice("PH0000000002", ROWS, byPath("state")).readiness).toBeNull();
+  });
+
+  it("changes nothing at all when no rule is declared", () => {
+    expect(findDevice("PH0000000002", ROWS).readiness).toBeNull();
+    // The id is unchanged too -- the first token on the row that is not one of
+    // the name's own words and carries a digit, exactly as it always was.
+    expect(findDevice("PH0000000002", ROWS).id).toBe("usb:1-2");
+  });
+
+  it("reads a key off the matched JSON object, dotted for a nested one", () => {
+    const out = JSON.stringify([
+      { name: "Placeholder A", udid: "U-1", connection: { state: "ready" } },
+    ]);
+    expect(findDevice("Placeholder A", out, byPath("connection.state")).readiness).toBe("ready");
+    expect(findDevice("Placeholder A", out, byPath("state")).readiness).toBeNull();
+  });
+
+  it("reads it off an ENCLOSING object when the matched one is only the name", () => {
+    // The cousin shape: the name in one sub-object, everything else in its
+    // sibling. The state walks exactly as far as the id already does.
+    const out = JSON.stringify({
+      result: {
+        devices: [
+          {
+            deviceProperties: { name: "Placeholder Handset Pro" },
+            hardwareProperties: { udid: "0000-8030-1234" },
+            connectionProperties: { tunnelState: "connected" },
+          },
+        ],
+      },
+    });
+    const rule = byPath("connectionProperties.tunnelState", ["connected"]);
+    expect(findDevice("Placeholder Handset Pro", out, rule).readiness).toBe("connected");
+  });
+
+  it("renders a boolean or a number rather than reading nothing", () => {
+    const flags = JSON.stringify([{ name: "Placeholder A", udid: "U-1", usable: true, tier: 3 }]);
+    expect(findDevice("Placeholder A", flags, byPath("usable", ["true"])).readiness).toBe("true");
+    expect(findDevice("Placeholder A", flags, byPath("tier", ["3"])).readiness).toBe("3");
+  });
+
+  it("reads nothing from an OBJECT at the end of the path", () => {
+    // Comparing `[object Object]` against a word would refuse every device
+    // forever while looking exactly like a rule that was working.
+    const out = JSON.stringify([{ name: "Placeholder A", udid: "U-1", state: { code: 2 } }]);
+    expect(findDevice("Placeholder A", out, byPath("state")).readiness).toBeNull();
+  });
+
+  it("reports a state two AGREEING rows both carry, in either shape", () => {
+    // ONE DEVICE DESCRIBED TWICE is a real shape -- the same handset seen over
+    // two transports, the same id printed twice -- and it is not an ambiguity
+    // about the state when both rows say the same word.
+    const json = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+    ]);
+    expect(findDevice("Placeholder A", json, byPath("state")).readiness).toBe("ready");
+    // A row that carried NOTHING at the position is not disagreement: it says
+    // nothing, and the row that did say something is the answer.
+    const partial = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1" },
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+    ]);
+    expect(findDevice("Placeholder A", partial, byPath("state")).readiness).toBe("ready");
+  });
+
+  it("reports NO state when two rows for one name DISAGREE about it", () => {
+    // THE COMPLEMENT OF THE RULE ABOVE, and it is `findDevice`'s own "nen picks
+    // neither" applied to the second fact a row carries: two rows that are not
+    // an id ambiguity (one id reached twice, or no ids at all) can still name
+    // two states, and answering with the first would refuse -- or permit -- a
+    // launch on a row nen chose.
+    const json = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+      { name: "Placeholder A", udid: "AAAA-1", state: "unpaired" },
+    ]);
+    expect(findDevice("Placeholder A", json, byPath("state")).readiness).toBeNull();
+    // Two id-less rows on the plain side, which is the same fact seen the other
+    // way: neither is the device's row more than the other is.
+    const lines = ["PH0000000001   ready", "PH0000000001   unpaired"].join("\n");
+    const lookup = findDevice("PH0000000001", lines, byField(2));
+    expect(lookup.id).toBeNull();
+    expect(lookup.readiness).toBeNull();
+  });
+
+  it("reads the id-bearing row alone when only one line offers an id", () => {
+    // The summary-line shape: a heading naming the device above its table. Only
+    // the row offers an id, so the heading is not a second opinion about the
+    // state -- it is not the device's row at all.
+    const withHeading = ["Found 1: PH0000000001", "PH0000000001   ready   usb:1-2"].join("\n");
+    expect(findDevice("PH0000000001", withHeading, byField(2)).readiness).toBe("ready");
+  });
+
+  it("reports NO state when the name matched two rows, in either shape", () => {
+    // Two candidates are two rows, so "this device's state" names two values
+    // and nen reports neither -- the ambiguity is the refusal in any case.
+    const two = ["Placeholder Handset      PH-0001  ready", "Placeholder Handset Pro  PH-0002  ready"].join("\n");
+    expect(findDevice("Placeholder Handset", two, byField(3)).readiness).toBeNull();
+    const json = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1", state: "ready" },
+      { name: "Placeholder A", udid: "AAAA-2", state: "ready" },
+    ]);
+    expect(findDevice("Placeholder A", json, byPath("state")).readiness).toBeNull();
+  });
+});
+
+// ── {artifact}, seen from where the after-steps actually stand ──────────────
+
+describe("artifactAsSeenFrom: two roots, one file", () => {
+  it("returns the declared string UNCHANGED for a lane at the repository root", () => {
+    // THE COMPATIBILITY PROMISE, and the reason the rebasing is relative rather
+    // than absolute: nearly every lane sits here, and every one of them passes
+    // exactly the bytes it always did.
+    expect(artifactAsSeenFrom(".", "build/App.app")).toBe("build/App.app");
+    expect(artifactAsSeenFrom("", "build/App.app")).toBe("build/App.app");
+  });
+
+  it("climbs out of a lane one directory down", () => {
+    expect(artifactAsSeenFrom("native", "build/App.app")).toBe("../build/App.app");
+    expect(artifactAsSeenFrom("apps/web", "build/App.app")).toBe("../../build/App.app");
+  });
+
+  it("stays inside the lane when the artifact is under it", () => {
+    expect(artifactAsSeenFrom("native", "native/build/App.app")).toBe("build/App.app");
+  });
+
+  it("answers '.' rather than an empty argument for an artifact AT the cwd", () => {
+    // An empty string would turn `install <path>` into `install`, which is the
+    // failure `project.launch.<name>.artifact`'s own empty-string refusal names.
+    expect(artifactAsSeenFrom("native", "native")).toBe(".");
+  });
+
+  it("answers with forward slashes whatever the declaration or the host use", () => {
+    // The same lane must render identically on all three platforms this
+    // project's CI runs, and a backslash is not a separator a declaration writes.
+    expect(artifactAsSeenFrom("native\\deep", "build/App.app")).toBe("../../build/App.app");
+    expect(artifactAsSeenFrom("./native/", "./build/App.app")).toBe("../build/App.app");
   });
 });

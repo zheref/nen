@@ -19,6 +19,18 @@
 // carry is a refusal that LISTS what the probe did offer -- which is the one
 // answer that turns "it did not work" into "the phone is asleep" or "you
 // renamed it".
+//
+// AND WHY A NAME IS NOT ENOUGH BY ITSELF. The row that carries the name also
+// carries a STATE, and the two are different facts: attached is not paired,
+// paired is not unlocked, present is not ready. A declaration may state which of
+// the probe's own state words count (`device.readyWhen`,
+// ../schema/contract.ts's `DeviceReadiness`) and this file reads that value out
+// of the same two shapes it reads an id out of. It compares nothing and refuses
+// nothing -- it reports what stood at the declared position, and ./run.ts is
+// where the state seen is held against the states accepted.
+
+import { posix } from "node:path";
+import type { DeviceReadiness } from "../schema/contract.js";
 
 /** The token an `after` step writes where the resolved device id belongs. */
 export const DEVICE_ID_TOKEN = "{device.id}";
@@ -91,6 +103,47 @@ export function substituteSteps<T extends Step>(
 }
 
 /**
+ * A repo-relative artifact path, AS THE AFTER-STEPS' OWN DIRECTORY SEES IT.
+ *
+ * TWO ROOTS, ONE STRING -- and this function is where they stop disagreeing. A
+ * declaration states every path relative to the REPOSITORY ROOT (`artifacts`,
+ * `project.launch.<name>.artifact`, and every containment check nen makes), but
+ * an after-step is spawned with its cwd set to the LANE'S directory. On a lane
+ * whose `cwd` is the root the two are the same string and always were; on a lane
+ * one directory down, substituting the declared string handed the installer a
+ * path that resolved against the wrong root -- `<repo>/native/build/App.app` for
+ * a declaration that plainly means `<repo>/build/App.app` -- and the child
+ * answered "no such file" about a file that was sitting there.
+ *
+ * RELATIVE, NOT ABSOLUTE, and that is the choice worth stating. An absolute path
+ * would also resolve correctly, and it would change what EVERY existing launch
+ * target spawns: a declaration written against v0.4.0 would suddenly print and
+ * pass `/Users/somebody/code/repo/build/App.app` where it had always printed
+ * `build/App.app`. Relative to the step's own cwd, a lane at the root -- which
+ * is nearly all of them -- gets back the identical string, byte for byte, and
+ * only the lanes that were broken change.
+ *
+ * POSIX ARITHMETIC ON TWO REPO-RELATIVE STRINGS, so it is pure: no filesystem,
+ * no repository root, and the same answer on all three platforms this project's
+ * CI runs. The result is forward-slashed for the reason the declaration is --
+ * that is the separator both a declaration and every one of these toolchains
+ * accept, and a backslash would make the same lane render differently on one OS.
+ */
+export function artifactAsSeenFrom(cwdRelative: string, artifact: string): string {
+  // `normalize` IS WHAT MAKES AN EMPTY `cwd` THE ROOT rather than a special
+  // case: it answers "." for "", for "." and for "./", so the three spellings a
+  // lane may use for the repository root all take the same path through here.
+  const from = posix.normalize(cwdRelative.split("\\").join("/"));
+  const to = posix.normalize(artifact.split("\\").join("/"));
+  const relative = posix.relative(from, to);
+  // AN ARTIFACT AT THE CWD ITSELF is the one case `relative` answers with the
+  // empty string, and handing an installer an empty argument is the failure
+  // `project.launch.<name>.artifact`'s own empty-string refusal exists to
+  // prevent. `.` is what that path means from where the step stands.
+  return relative === "" ? "." : relative;
+}
+
+/**
  * What a probe's output said about one device.
  *
  * THREE OUTCOMES, NOT TWO, and the third is the one a two-state answer gets
@@ -118,6 +171,18 @@ export interface DeviceLookup {
    * the same rule covers the JSON shape where two objects share one name.
    */
   readonly ambiguous: readonly string[];
+  /**
+   * What stood at the declared readiness position on this device's own row, or
+   * null -- when the declaration states no rule, when nothing stood there, and
+   * when the match was ambiguous enough that "this device's row" names two.
+   *
+   * IT IS A READING, NOT A VERDICT. This file compares it against nothing: the
+   * accepted set is the declaration's and the refusal is ./run.ts's, because a
+   * refusal has to name a pointer and this module knows no pointers. What it
+   * contributes is the one thing only a reader of the probe's output can say --
+   * the word the probe actually printed there.
+   */
+  readonly readiness: string | null;
   /** What the probe offered instead: every device NAME, or its own LINES. */
   readonly saw: readonly string[];
   readonly sawKind: "names" | "lines";
@@ -201,46 +266,109 @@ function namesIn(node: unknown, found: string[] = []): string[] {
 }
 
 /**
+ * A dotted key path read off one object, as a string, or null.
+ *
+ * THE SAME CLOSED IDEA AS `idOn`: it walks the segments the declaration wrote
+ * and nothing else -- no wildcards, no searching, no "the first key that looks
+ * like a state". A scalar at the end of the path is rendered (a boolean and a
+ * number are both real shapes for "is this usable"); an object or a list there
+ * is NOT, because a rule comparing `[object Object]` against a word would refuse
+ * every device forever while looking like it was working.
+ */
+function atPath(node: Record<string, unknown>, path: string): string | null {
+  let here: unknown = node;
+  for (const segment of path.split(".")) {
+    if (!isRecord(here)) return null;
+    here = here[segment];
+  }
+  if (typeof here === "string") return here;
+  if (typeof here === "number" && Number.isFinite(here)) return String(here);
+  if (typeof here === "boolean") return String(here);
+  return null;
+}
+
+/**
+ * The readiness value for a matched object, ON IT or on one of its ancestors.
+ *
+ * IT WALKS EXACTLY AS FAR AS THE ID DOES, and deliberately shares
+ * `ANCESTOR_LIMIT` rather than keeping a bound of its own. The shape that makes
+ * the walk necessary is one shape: the name in a sub-object, everything else in
+ * its siblings. A readiness rule that stopped at the matched object would be
+ * unreadable on exactly the documents whose ids are already read from above it,
+ * and a rule that walked FURTHER would read the state of the enclosing list.
+ */
+function readinessNear(
+  node: Record<string, unknown>,
+  ancestors: readonly Record<string, unknown>[],
+  path: string,
+): string | null {
+  const own = atPath(node, path);
+  if (own !== null) return own;
+  for (const ancestor of ancestors.slice(-ANCESTOR_LIMIT).reverse()) {
+    const above = atPath(ancestor, path);
+    if (above !== null) return above;
+  }
+  return null;
+}
+
+/** One object whose own `name` matched: what it resolves to, and its state. */
+interface JsonMatch {
+  readonly id: string | null;
+  readonly readiness: string | null;
+}
+
+/**
  * EVERY object whose own `name` is `name`, as the id each one resolves to
- * (`null` where that object offers none), in encounter order.
+ * (`null` where that object offers none) and the state each one reports, in
+ * encounter order.
  *
  * IT COLLECTS RATHER THAN STOPPING AT THE FIRST, and the difference is a wrong
  * device rather than a slow one: two objects sharing one name is a real shape
  * (the same simulator name under two runtimes, the same handset seen over two
  * transports) and the FIRST of them is not more correct than the second. What
  * comes back is every candidate, so the caller can refuse rather than pick.
+ *
+ * THE STATE IS READ WHERE THE MATCH IS MADE, because that is the one place both
+ * the matched object and its ancestors are in hand. Reading it afterwards would
+ * mean walking the document a second time to find the same object again, and
+ * the second walk is exactly where the two readings could disagree.
  */
-function idsForName(
+function matchesForName(
   node: unknown,
   name: string,
   ancestors: readonly Record<string, unknown>[],
-  found: (string | null)[],
-): (string | null)[] {
+  found: JsonMatch[],
+  ready: DeviceReadiness | null,
+): JsonMatch[] {
   if (Array.isArray(node)) {
-    for (const item of node) idsForName(item, name, ancestors, found);
+    for (const item of node) matchesForName(item, name, ancestors, found, ready);
     return found;
   }
   if (!isRecord(node)) return found;
   if (node["name"] === name) {
+    const readiness =
+      ready === null || ready.path === null ? null : readinessNear(node, ancestors, ready.path);
     const here = idNear(node);
     if (here !== null) {
-      found.push(here);
+      found.push({ id: here, readiness });
       return found;
     }
     for (const ancestor of ancestors.slice(-ANCESTOR_LIMIT).reverse()) {
       const above = idNear(ancestor);
       if (above !== null) {
-        found.push(above);
+        found.push({ id: above, readiness });
         return found;
       }
     }
     // FOUND, WITH NO ID: `null` rather than nothing at all, and the difference
     // is the third outcome `DeviceLookup` exists for. Dropping it would end as
     // "no such device", a sentence contradicting what the reader can see.
-    found.push(null);
+    found.push({ id: null, readiness });
     return found;
   }
-  for (const value of Object.values(node)) idsForName(value, name, [...ancestors, node], found);
+  for (const value of Object.values(node)) {
+    matchesForName(value, name, [...ancestors, node], found, ready);
+  }
   return found;
 }
 
@@ -282,12 +410,49 @@ function idOnLine(line: string, name: string): string | null {
   return null;
 }
 
+/**
+ * The whitespace-separated token at a 1-BASED field position on one line.
+ *
+ * COUNTED FROM ONE, which is the one arithmetic decision in this file that a
+ * reader could reasonably expect to go the other way. It counts the way every
+ * column-oriented tool on a terminal counts -- the row's first token is field 1
+ * -- because the person writing `readyWhen` is reading the probe's own output
+ * off their screen and counting across it, not indexing an array they cannot
+ * see. ../schema/contract.ts refuses a `field` below 1 at load, so a
+ * zero-indexed declaration is a refusal naming the key rather than a silent
+ * off-by-one that reads the serial as a state.
+ */
+function fieldOnLine(line: string, field: number): string | null {
+  const tokens = line.split(/\s+/).filter((token): boolean => token !== "");
+  return tokens[field - 1] ?? null;
+}
+
 /** Every non-empty trimmed line, for the refusal that has no names to list. */
 function linesOf(text: string): readonly string[] {
   return text
     .split("\n")
     .map((line): string => line.trim())
     .filter((line): boolean => line !== "");
+}
+
+/**
+ * ONE state, out of every reading the matching rows offered, or null.
+ *
+ * AGREEMENT OR NOTHING, and the rule is `findDevice`'s own "nen picks neither"
+ * applied to the second fact a row carries. A name can be matched by more than
+ * one row without that being an id AMBIGUITY -- the same device described twice
+ * is one device, and rows carrying no id at all are not competing candidates --
+ * but "this device's state" still names two values whenever those rows disagree,
+ * and answering with the first would refuse (or permit) a launch on a row nen
+ * chose. Readings that are absent are not disagreement: a row that carried
+ * nothing at the declared position says nothing, and one that did says it.
+ */
+function agreedReading(values: readonly (string | null)[]): string | null {
+  // DESTRUCTURED RATHER THAN COUNTED, so every arm below is one a test can
+  // reach: nothing read (`only` undefined -- an empty position, or no rule's
+  // shape matched), one thing read, and two that disagree.
+  const [only, second] = [...new Set(values.filter((value): value is string => value !== null))];
+  return second === undefined ? (only ?? null) : null;
 }
 
 /**
@@ -298,8 +463,19 @@ function linesOf(text: string): readonly string[] {
  * is read as lines. There is no `format` key for a repository to get wrong, and
  * a probe that changes its own output shape between releases changes nothing
  * here.
+ *
+ * `ready` IS OPTIONAL AND CHANGES NOTHING WHEN ABSENT. It decides only what
+ * `DeviceLookup.readiness` carries; the id, the ambiguity and the "what the
+ * probe saw" listing are the same answers they were before the key existed. A
+ * rule stating the position for the OTHER shape -- a `field` against a JSON
+ * probe, a `path` against a plain one -- reads nothing rather than guessing, and
+ * ./run.ts refuses with the rule quoted, which is a refusal a reader can act on.
  */
-export function findDevice(name: string, stdout: string): DeviceLookup {
+export function findDevice(
+  name: string,
+  stdout: string,
+  ready: DeviceReadiness | null = null,
+): DeviceLookup {
   const text = stdout.replace(/\r\n/g, "\n");
   let document: unknown;
   try {
@@ -309,18 +485,35 @@ export function findDevice(name: string, stdout: string): DeviceLookup {
   }
   if (document !== undefined && (isRecord(document) || Array.isArray(document))) {
     const saw = [...new Set(namesIn(document))].sort();
-    const candidates = idsForName(document, name, [], []);
-    if (candidates.length === 0) return { found: false, id: null, ambiguous: [], saw, sawKind: "names" };
-    const ids = [...new Set(candidates.filter((id): id is string => id !== null))];
+    const candidates = matchesForName(document, name, [], [], ready);
+    if (candidates.length === 0) {
+      return { found: false, id: null, ambiguous: [], readiness: null, saw, sawKind: "names" };
+    }
+    const ids = [...new Set(candidates.flatMap((match): readonly string[] => (match.id === null ? [] : [match.id])))];
     // TWO OBJECTS, ONE NAME, TWO IDS: nen picks neither. One id reached twice
     // is not an ambiguity -- it is the same device described twice, which some
     // probes do -- so the set is what decides, not the count of matches.
-    if (ids.length > 1) return { found: true, id: null, ambiguous: ids, saw, sawKind: "names" };
-    return { found: true, id: ids[0] ?? null, ambiguous: [], saw, sawKind: "names" };
+    //
+    // AND THE READINESS GOES WITH IT: two candidates are two rows, so "this
+    // device's state" names two values, and reporting either would be nen
+    // choosing. The caller refuses the ambiguity first in any case.
+    if (ids.length > 1) {
+      return { found: true, id: null, ambiguous: ids, readiness: null, saw, sawKind: "names" };
+    }
+    return {
+      found: true,
+      id: ids[0] ?? null,
+      ambiguous: [],
+      readiness: agreedReading(candidates.map((match): string | null => match.readiness)),
+      saw,
+      sawKind: "names",
+    };
   }
   const lines = linesOf(text);
   const matching = lines.filter((line): boolean => line.includes(name));
-  if (matching.length === 0) return { found: false, id: null, ambiguous: [], saw: lines, sawKind: "lines" };
+  if (matching.length === 0) {
+    return { found: false, id: null, ambiguous: [], readiness: null, saw: lines, sawKind: "lines" };
+  }
   // THE LINES THAT ACTUALLY OFFER AN ID ARE THE CANDIDATES, and the narrowing
   // is what keeps this usable. A probe that prints a summary line naming the
   // device above its table carries the name TWICE and means one device; only
@@ -333,13 +526,27 @@ export function findDevice(name: string, stdout: string): DeviceLookup {
     return id === null ? [] : [line];
   });
   if (withIds.length > 1) {
-    return { found: true, id: null, ambiguous: withIds, saw: lines, sawKind: "lines" };
+    return { found: true, id: null, ambiguous: withIds, readiness: null, saw: lines, sawKind: "lines" };
   }
   const only = withIds[0];
+  // WHICH ROWS THE STATE IS READ FROM. The row the id came off, when one line
+  // offered one -- that line IS the device's row and the narrowing above has
+  // already said so. When NO line offered an id, every line carrying the name
+  // is a candidate and they have to AGREE: a device whose state is the reason
+  // it is unusable routinely prints a row with no id on it (answering "the
+  // probe gave nen no id" about a phone showing an unanswered pairing prompt is
+  // the true sentence that helps least), but two such rows disagreeing about
+  // the state is two answers, and nen reports neither.
+  const rows = only === undefined ? matching : [only];
+  const field = ready === null ? null : ready.field;
   return {
     found: true,
     id: only === undefined ? null : idOnLine(only, name),
     ambiguous: [],
+    readiness:
+      field === null
+        ? null
+        : agreedReading(rows.map((line): string | null => fieldOnLine(line, field))),
     saw: lines,
     sawKind: "lines",
   };

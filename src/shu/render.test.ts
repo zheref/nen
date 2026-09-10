@@ -9,6 +9,8 @@ import {
   ASSERTABLE_KINDS,
   isLaunchTarget,
   LAUNCHING_VERBS,
+  launchLane,
+  refuseCrossVerbTarget,
   REFUSED_PLACEHOLDERS,
   renderArgv,
   renderInvocation,
@@ -708,5 +710,67 @@ describe("the precondition kinds this release asserts", () => {
         pointer: "project.preconditions.one[0].value",
       },
     ]);
+  });
+});
+
+// ── launchLane and refuseCrossVerbTarget: the two questions asked BEFORE a
+//    plan is rendered ─────────────────────────────────────────────────────
+//
+// BOTH ARE READ OFF THE DECLARATION AND NOTHING ELSE. `../shu/run.ts` asks them
+// before `renderInvocation`, because the alternative -- render the caller's
+// lane, then let the target speak -- lets a lane the declaration explicitly
+// overrode, or a lane that never declared this verb at all, answer first with a
+// sentence about a row nobody asked for. Tested here directly, rather than only
+// through the executor, because each is exported with a contract of its own.
+
+describe("launchLane: which lane a target declares, read before anything renders", () => {
+  const launching = project({
+    lanes: { one: { stack: "stack-a", cwd: "." }, two: { stack: "stack-b", cwd: "sub" } },
+    verbs: {
+      one: { dev: { exe: "tool", argv: ["serve"] } },
+      two: { dev: { exe: "other", argv: ["serve"] } },
+    },
+    launch: {
+      here: { verb: "dev", after: [{ exe: "installer", argv: ["put"] }] },
+      there: { verb: "dev", lane: "two", after: [{ exe: "installer", argv: ["put"] }] },
+      shipped: { verb: "run", lane: "two", after: [{ exe: "installer", argv: ["put"] }] },
+      seated: { unsupported: "no device is wired up yet." },
+    },
+  });
+
+  it("answers the lane a target names, and null when it names none", () => {
+    expect(launchLane(launching, "dev", "there")).toBe("two");
+    expect(launchLane(launching, "dev", "here")).toBeNull();
+  });
+
+  it("answers null for every case whose own refusal must come first", () => {
+    // NO --TARGET AT ALL, an undeclared name, a seated target, and one declared
+    // for the other verb. Each of the last three is refused elsewhere in words
+    // about the lane the CALLER named; rendering somewhere else first would
+    // answer a different question than the one they got wrong.
+    expect(launchLane(launching, "dev", null)).toBeNull();
+    expect(launchLane(launching, "dev", "nope")).toBeNull();
+    expect(launchLane(launching, "dev", "seated")).toBeNull();
+    expect(launchLane(launching, "dev", "shipped")).toBeNull();
+    // AND AN INHERITED OBJECT MEMBER IS NOT A DECLARED TARGET, which is why the
+    // lookup is `hasOwnProperty` rather than `in`.
+    expect(launchLane(launching, "dev", "toString")).toBeNull();
+  });
+
+  it("refuses a target declared for the OTHER verb, and is silent on the rest", () => {
+    // THE ORDER THIS FUNCTION EXISTS TO FIX: a target belongs to one verb,
+    // which is true on every lane, while a seat is a fact about one row.
+    expect(() => refuseCrossVerbTarget(launching, "run", "there")).toThrow(VerbUsageError);
+    expect(() => refuseCrossVerbTarget(launching, "run", "there")).toThrow(
+      /is declared for 'dev', and this is 'run'/,
+    );
+    // SILENT ON EVERYTHING ELSE, each for its own reason: a matching verb has
+    // nothing to refuse, and a seated or undeclared target keeps the refusal
+    // that names the lane the caller typed.
+    expect(() => refuseCrossVerbTarget(launching, "dev", "there")).not.toThrow();
+    expect(() => refuseCrossVerbTarget(launching, "dev", "seated")).not.toThrow();
+    expect(() => refuseCrossVerbTarget(launching, "dev", "nope")).not.toThrow();
+    expect(() => refuseCrossVerbTarget(launching, "dev", null)).not.toThrow();
+    expect(() => refuseCrossVerbTarget(launching, "dev", "toString")).not.toThrow();
   });
 });

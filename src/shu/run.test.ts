@@ -937,7 +937,7 @@ describe("refusals", () => {
   it("exit 2 naming every declared lane when --lane is unknown", async () => {
     const result = await capture(["build", "--lane", "nope"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/Declared: web, native, pages, device\./);
+    expect(result.err.join("\n")).toMatch(/Declared: web, native, pages, device, embedded\./);
   });
 
   it("exit 4 listing the lane's declared verbs when it declares no such verb", async () => {
@@ -1880,7 +1880,9 @@ describe("dev/run --target: the flag is OPTIONAL and names a device", () => {
     const result = await capture(["dev", "--target", "nope"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("is not declared under project.launch");
-    expect(result.err.join("\n")).toContain("Declared: bench, farm, handset, install, sim.");
+    expect(result.err.join("\n")).toContain(
+      "Declared: bench, farm, handset, install, nested, paired, sim.",
+    );
     expect(result.seams.calls).toEqual([]);
   });
 
@@ -1948,7 +1950,15 @@ describe("a launch dry run prints all three thirds and spawns nothing", () => {
     };
     expect(report.target.name).toBe("handset");
     expect(report.target.verb).toBe("dev");
-    expect(report.target.device).toEqual({ name: "Placeholder Handset Pro", kind: null, id: null });
+    expect(report.target.device).toEqual({
+      name: "Placeholder Handset Pro",
+      kind: null,
+      id: null,
+      // NULL RATHER THAN ABSENT, exactly as `lane` and `artifact` are: a reader
+      // that had to tell "this device declares no readiness rule" from "this
+      // release does not publish the key" would be reading two contracts.
+      readyWhen: null,
+    });
     expect(report.target.after).toEqual([
       {
         exe: "placeholder-installer",
@@ -2667,6 +2677,391 @@ describe("a launch target may name the artifact {artifact} stands for", () => {
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("declares an artifact and no after-step names {artifact}");
+  });
+});
+
+// ── (i.3) readiness: the state beside the name, and what it refuses ────────
+//
+// A NAME MATCH ANSWERS "IS IT PLUGGED IN". The row that carries the name also
+// carries a STATE, and until `readyWhen` existed nen read the first and reported
+// it as the second -- so a launch resolved an id off an unusable row, printed
+// exit 0 at the probe, and every command after it failed one at a time against a
+// device that was never going to answer. The fixture's `paired` target is the
+// one row here that declares the rule; every other row declares none and is
+// unchanged by it, which is the half these tests have to prove as well.
+
+describe("a device is READY, not merely present", () => {
+  /** The fixture's probe, printing one row per device with the state second. */
+  function rows(...lines: readonly string[]): ScriptedCall {
+    return {
+      match: "placeholder-device-tool list --long",
+      result: { code: 0, stdout: lines.join("\n") },
+    };
+  }
+
+  it("prints the rule beside the device on a dry run, and spawns nothing", async () => {
+    const result = await capture(["dev", "--target", "paired", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(
+      "readiness:     field 2 of the device's own row (counting from 1) must be one of: ready  (project.launch.paired.device.readyWhen)",
+    );
+    // THE RULE IS THE DECLARATION'S, not a reading, so it is knowable with no
+    // device connected at all -- which is what makes it worth printing beside a
+    // probe that has not run.
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("says nothing at all on a target that declares no rule", async () => {
+    const result = await capture(["dev", "--target", "handset", "--dry-run"]);
+    expect(result.out.join("\n")).not.toContain("readiness:");
+  });
+
+  it("launches when the row's state is one the declaration accepts", async () => {
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [
+        rows("PH0000000009   ready   usb:1-1", "PH0000000001   ready   usb:1-2"),
+        ok("pnpm exec next dev"),
+        ok("placeholder-installer install --device usb:1-2"),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams).at(-1)).toBe("placeholder-installer install --device usb:1-2");
+  });
+
+  it("refuses at 5 naming the device, the state seen, the states accepted, and what the probe offered", async () => {
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001   unpaired", "PH0000000009   ready   usb:1-1")],
+    });
+    expect(result.code).toBe(5);
+    const err = result.err.join("\n");
+    expect(err).toContain("the device 'PH0000000001' is on the probe's list and its state is 'unpaired'");
+    expect(err).toContain("project.launch.paired.device.readyWhen accepts");
+    expect(err).toContain("Accepted: 'ready'");
+    expect(err).toContain("field 2 of the device's own row");
+    // THE SAME DISCIPLINE THE ABSENCE REFUSAL FOLLOWS: it lists what the probe
+    // DID offer, which is what turns "it did not work" into "answer the prompt".
+    expect(err).toContain("PH0000000001   unpaired | PH0000000009   ready   usb:1-1");
+    // AND NOTHING AFTER THE PROBE RAN. An unscripted call throws here, so the
+    // recorded list being the probe alone is the assertion.
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --long"]);
+  });
+
+  it("answers the readiness refusal BEFORE the missing-id one", async () => {
+    // THE ROW THIS KEY EXISTS FOR carries no id at all -- an unanswered pairing
+    // prompt is exactly the state a listing abbreviates -- and "the probe gave
+    // nen no id" is then the true sentence that helps least.
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001   unpaired")],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("its state is 'unpaired'");
+    expect(result.err.join("\n")).not.toContain("gave nen no id for it");
+  });
+
+  it("refuses when nothing at all stood at the declared position, quoting where it looked", async () => {
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001")],
+    });
+    expect(result.code).toBe(5);
+    const err = result.err.join("\n");
+    expect(err).toContain("nen read no single state for it");
+    expect(err).toContain("field 2 of the device's own row (counting from 1)");
+  });
+
+  it("refuses when two rows carrying the name disagree about the state", async () => {
+    // NOT AN ID AMBIGUITY -- neither row offers one -- but two answers to "what
+    // state is this device in", and nen reports neither rather than acting on
+    // the row that happened to print first.
+    const result = await capture(["dev", "--target", "paired"], {
+      script: [rows("PH0000000001   ready", "PH0000000001   unpaired")],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("nen read no single state for it");
+    expect(result.err.join("\n")).toContain("two rows carrying this name disagree about it");
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --long"]);
+  });
+
+  it("reads a JSON probe's state off the device's own object", async () => {
+    const project = launchable({
+      box: {
+        verb: "dev",
+        device: {
+          name: "Placeholder Handset Pro",
+          resolve: { exe: "placeholder-device-tool", argv: ["list", "--json"] },
+          readyWhen: { path: "connection.state", in: ["connected"] },
+        },
+        after: [{ exe: "placeholder-installer", argv: ["install", "{device.id}"] }],
+      },
+    });
+    const probe = (state: string): ScriptedCall => ({
+      match: "placeholder-device-tool list --json",
+      result: {
+        code: 0,
+        stdout: JSON.stringify([
+          { name: "Placeholder Handset Pro", udid: "U-1", connection: { state } },
+        ]),
+      },
+    });
+    const green = await withDeclaration(project, ["dev", "--target", "box"], {
+      script: [
+        probe("connected"),
+        ok("placeholder-tool serve"),
+        ok("placeholder-installer install U-1"),
+      ],
+    });
+    expect(green.code).toBe(0);
+    const red = await withDeclaration(project, ["dev", "--target", "box"], {
+      script: [probe("unavailable")],
+    });
+    expect(red.code).toBe(5);
+    expect(red.err.join("\n")).toContain("its state is 'unavailable'");
+    expect(red.err.join("\n")).toContain(
+      "read from 'connection.state' on the device's own object, which is how nen reads a probe that prints JSON",
+    );
+    // The names listing, not the lines one, because this probe printed JSON.
+    expect(red.err.join("\n")).toContain("The probe reported: 'Placeholder Handset Pro'");
+  });
+
+  it("carries the rule in the --dry-run --json document, null where none is declared", async () => {
+    const declared = await capture(["dev", "--target", "paired", "--dry-run", "--json"]);
+    const report = JSON.parse(declared.out.join("\n")) as {
+      target: { device: { readyWhen: { field: number | null; path: string | null; in: readonly string[] } | null } };
+    };
+    expect(report.target.device.readyWhen).toMatchObject({
+      field: 2,
+      path: null,
+      in: ["ready"],
+    });
+    const bare = await capture(["dev", "--target", "handset", "--dry-run", "--json"]);
+    const other = JSON.parse(bare.out.join("\n")) as {
+      target: { device: { readyWhen: unknown } };
+    };
+    expect(other.target.device.readyWhen).toBeNull();
+  });
+});
+
+// ── (i.4) which refusal answers first when --target is given ───────────────
+//
+// A TARGET BELONGS TO ONE VERB, which is a fact about the DECLARATION and true
+// on every lane; a seat is a fact about ONE ROW. Rendered first, the seat won on
+// any lane where the other verb is `unsupported` or simply undeclared, and the
+// caller got a dead end -- "'run' is unsupported on lane 'device'", exit 4,
+// sending them to write a `run` row they never wanted -- while nen already held
+// the sentence that ends the problem.
+
+describe("the target's own verb answers before the lane's seat", () => {
+  it("refuses at 2 naming the fix, where the caller's lane declares no such verb", async () => {
+    // The fixture's `install` is declared for `dev` on the `device` lane, and
+    // that lane declares no `run` at all. Before the reorder this answered
+    // `lane 'device' (xcode-ios) declares no 'run'` at exit 4.
+    const result = await capture(["run", "--lane", "device", "--target", "install"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(
+      "launch target 'install' is declared for 'dev', and this is 'run'",
+    );
+    expect(result.err.join("\n")).toContain("run 'dev --target install'");
+    expect(result.err.join("\n")).not.toContain("declares no 'run'");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses at 2 where the caller's lane SEATS the other verb, in the repo's words", async () => {
+    // THE SHAPE THE FINDING CAME IN. A lane that declares `dev` and seats `run`
+    // is an ordinary declaration, and the seat's exit 4 is a true sentence that
+    // leads nowhere: the caller does not want this lane's `run`, they want the
+    // target's `dev`.
+    const project = {
+      lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          dev: { exe: "placeholder-tool", argv: ["serve"] },
+          run: { unsupported: "this lane ships through a store, not a local server." },
+        },
+      },
+      launch: {
+        handset: {
+          verb: "dev",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{device.id}"] }],
+        },
+      },
+    };
+    const result = await withDeclaration(project, ["run", "--target", "handset"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(
+      "launch target 'handset' is declared for 'dev', and this is 'run'",
+    );
+    expect(result.err.join("\n")).not.toContain("ships through a store");
+  });
+
+  it("keeps the seat's exit 4 when the target's verb DOES match", async () => {
+    // THE HALF THE REORDER MUST NOT TOUCH. Here the seat is the whole answer --
+    // there is no better sentence behind it -- so it stays where it was, at 4,
+    // in the declaration's own words.
+    const project = {
+      lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          build: { exe: "placeholder-tool", argv: ["build"] },
+          dev: { unsupported: "there is no local server for this lane." },
+        },
+      },
+      launch: {
+        handset: {
+          verb: "dev",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{device.id}"] }],
+        },
+      },
+    };
+    const result = await withDeclaration(project, ["dev", "--target", "handset"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain("there is no local server for this lane.");
+  });
+
+  it("leaves the seated TARGET's own exit 4 exactly where it was", async () => {
+    // `farm` has no command line at all, and that refusal is the target's own
+    // rather than a lane's -- the early check is silent on it by construction.
+    const result = await capture(["run", "--target", "farm"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain("device farm's own web console");
+  });
+
+  it("leaves an UNDECLARED target's exit 2 speaking about the caller's lane", async () => {
+    const result = await capture(["run", "--lane", "device", "--target", "nope"]);
+    expect(result.code).toBe(4);
+    // The lane the caller named declares no `run`, and there is no target to
+    // read a better sentence off -- so the lane still answers, as it must.
+    expect(result.err.join("\n")).toContain("declares no 'run'");
+  });
+});
+
+// ── (i.5) {artifact} as the after-step's own directory sees it ─────────────
+//
+// TWO ROOTS, ONE STRING. A declaration states every path against the REPOSITORY
+// ROOT; an after-step is spawned with its cwd set to the LANE'S directory. On a
+// lane at the root the two are the same string, which is how the mismatch stayed
+// invisible -- and on a lane one directory down the installer was handed a path
+// that resolved against the wrong root and answered "no such file" about a file
+// that was sitting there.
+
+describe("{artifact} reaches the after-step relative to where it runs", () => {
+  it("climbs out of a lane whose cwd is not the repository root", async () => {
+    // The fixture's `embedded` lane runs in `native/`; its declared artifact is
+    // `build/embedded/Placeholder.app`, one directory up from there.
+    const result = await capture(["dev", "--target", "nested"], {
+      script: [
+        ok("placeholder-build-tool -destination generic/platform=placeholder-embedded build"),
+        ok("placeholder-installer install ../build/embedded/Placeholder.app --on Placeholder Bench 2"),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams).at(-1)).toBe(
+      "placeholder-installer install ../build/embedded/Placeholder.app --on Placeholder Bench 2",
+    );
+    // AND THE STEP RAN THERE, which is the other half of the same fact.
+    expect(result.out.join("\n")).toContain("native");
+  });
+
+  it("prints both strings on the substitutes line, and the declared one under artifacts:", async () => {
+    const result = await capture(["dev", "--target", "nested", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(
+      "{artifact} <- ../build/embedded/Placeholder.app  (declared build/embedded/Placeholder.app, as the after-steps' own directory sees it -- lane 'embedded' does not sit at the repository root)",
+    );
+    // `artifacts:` ANSWERS A DIFFERENT QUESTION -- what does this build produce
+    // -- and keeps the repository-relative string every other declared path is
+    // reported in. `substitutes:` answers what the child receives.
+    expect(result.out.join("\n")).toContain(
+      "artifacts:     build/embedded/Placeholder.app (absent)",
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("leaves a lane at the ROOT byte-identical to what it always was", async () => {
+    // THE COMPATIBILITY PROMISE, and the reason the rebasing is relative rather
+    // than absolute: the fixture's `install` target is a root-cwd lane, and both
+    // the argv it spawns and the line it prints are unchanged to the byte.
+    const dry = await capture(["dev", "--target", "install", "--dry-run"]);
+    expect(dry.out.join("\n")).toContain(
+      "{artifact} <- build/device/Placeholder.signed  (project.launch.install.artifact, not the verb's own)",
+    );
+    expect(dry.out.join("\n")).not.toContain("as the after-steps' own directory sees it");
+    const wet = await capture(["dev", "--target", "install"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: {
+            code: 0,
+            stdout: JSON.stringify([{ name: "Placeholder Handset Pro", udid: "U-9" }]),
+          },
+        },
+        ok("placeholder-build-tool -destination generic/platform=placeholder-device build"),
+        ok("placeholder-installer install --device U-9 build/device/Placeholder.signed"),
+      ],
+    });
+    expect(wet.code).toBe(0);
+    expect(spawned(wet.seams).at(-1)).toBe(
+      "placeholder-installer install --device U-9 build/device/Placeholder.signed",
+    );
+  });
+
+  it("rebases a target's OWN artifact override too, since it is a path like any other", async () => {
+    // The override inherits the property rather than introducing it: it is the
+    // same repo-relative string read from a different key.
+    const result = await withDeclaration(
+      {
+        lanes: { only: { stack: "placeholder-stack", cwd: "sub/dir" } },
+        defaultLane: "only",
+        verbs: { only: { dev: { exe: "placeholder-tool", argv: ["serve"], artifacts: ["out/app"] } } },
+        launch: {
+          box: {
+            verb: "dev",
+            artifact: "out/app.signed",
+            device: { name: "Bench", kind: "simulator" },
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+          },
+        },
+      },
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain("{artifact} <- ../../out/app.signed");
+    expect(result.out.join("\n")).toContain("project.launch.box.artifact, not the verb's own");
+    expect(result.out.join("\n")).toContain("as the after-steps' own directory sees it");
+  });
+
+  it("publishes both paths in --dry-run --json, and neither hides the other", async () => {
+    const nested = await capture(["dev", "--target", "nested", "--dry-run", "--json"]);
+    const report = JSON.parse(nested.out.join("\n")) as {
+      target: { artifact: string | null; artifactAs: string | null };
+      artifacts: readonly { value: string }[];
+    };
+    // `artifact` is the DECLARED override -- null here, because this target
+    // declares none -- and `artifactAs` is what the child will actually get.
+    expect(report.target.artifact).toBeNull();
+    expect(report.target.artifactAs).toBe("../build/embedded/Placeholder.app");
+    expect(report.artifacts.map((entry): string => entry.value)).toEqual([
+      "build/embedded/Placeholder.app",
+    ]);
+    // AND ON A ROOT LANE THE TWO ARE THE SAME STRING, which is the whole reason
+    // this was ever able to go unnoticed.
+    const root = await capture(["dev", "--target", "install", "--dry-run", "--json"]);
+    const at = JSON.parse(root.out.join("\n")) as {
+      target: { artifact: string | null; artifactAs: string | null };
+    };
+    expect(at.target.artifactAs).toBe(at.target.artifact);
+  });
+
+  it("is null on a target whose after-steps name no artifact at all", async () => {
+    const result = await capture(["dev", "--target", "sim", "--dry-run", "--json"]);
+    const report = JSON.parse(result.out.join("\n")) as {
+      target: { artifactAs: string | null };
+    };
+    // `web`'s `dev` declares no artifacts, so there is nothing to fill the token
+    // with -- and the token is not named, which is why this is not a refusal.
+    expect(report.target.artifactAs).toBeNull();
   });
 });
 

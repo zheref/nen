@@ -54,7 +54,7 @@ import {
   type StreamedChunk,
   type WatchVerdict,
 } from "../seam/exec.js";
-import type { StallGuard } from "../schema/contract.js";
+import type { DeviceReadiness, StallGuard } from "../schema/contract.js";
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
@@ -63,6 +63,7 @@ import {
   isLaunchTarget,
   LAUNCHING_VERBS,
   launchLane,
+  refuseCrossVerbTarget,
   renderArgv,
   renderInvocation,
   resolveLaunch,
@@ -441,6 +442,61 @@ function describePrecondition(entry: AssertedPrecondition, width: number): strin
 }
 
 /**
+ * WHERE a readiness rule reads its value from, as one phrase.
+ *
+ * IT IS IN THE REFUSAL AND IN THE DRY RUN, which is the same sentence asked at
+ * two moments: before the launch ("this is the state your device will have to
+ * be in, and this is where nen will look for it") and at the refusal ("here is
+ * what stood there instead"). A rule whose position the probe's output has no
+ * shape for -- a `field` against a JSON document, a `path` against plain lines
+ * -- reads nothing, and the phrase is what makes that legible rather than
+ * mysterious: a reader who is told nen looked at "field 2 of the device's own
+ * row" against output they can see is JSON has the whole diagnosis.
+ */
+function readWhere(rule: DeviceReadiness): string {
+  // ASKED OF `path` RATHER THAN OF `field`, so the arm that reads a value is
+  // the arm that proved it non-null. The loader admits exactly one of the two
+  // (../schema/contract.ts's `parseReadyWhen`), so this is a fact rather than a
+  // preference -- but a `?? ""` on the other side would be a fallback nothing
+  // can reach, which is a branch no test can ever be written for.
+  return rule.path !== null
+    ? `'${rule.path}' on the device's own object`
+    : `field ${rule.field} of the device's own row (counting from 1)`;
+}
+
+/**
+ * WHICH OF THE PROBE'S TWO OUTPUT SHAPES the rule was written for.
+ *
+ * IN THE REFUSAL AND NOT IN THE DRY-RUN LINE, because it is the half a reader
+ * only needs once something has gone wrong: a `path` rule against output they
+ * can see is a list of lines reads nothing, and nen saying which shape it was
+ * looking for is the whole diagnosis of a rule that never fires.
+ */
+function readShape(rule: DeviceReadiness): string {
+  return rule.path === null ? "LINES" : "JSON";
+}
+
+/**
+ * The `readiness:` line of a launch report, or nothing.
+ *
+ * PRINTED WHEREVER THE RULE EXISTS -- a dry run and a real one alike -- and
+ * nowhere else, exactly as `proof` is. It is the DECLARATION's rule rather than
+ * a reading, so it is knowable with no device connected at all, which is what
+ * makes it worth printing beside a probe that has not run yet: the caller
+ * approving a `--dry-run` can see which state the launch is going to insist on.
+ */
+function readinessNote(target: ResolvedLaunch): readonly string[] {
+  const rule = target.device?.readyWhen ?? null;
+  if (rule === null) return [];
+  return [
+    labelled(
+      "readiness",
+      `${readWhere(rule)} must be one of: ${rule.in.join(", ")}  (project.launch.${target.name}.device.readyWhen)`,
+    ),
+  ];
+}
+
+/**
  * The `substitutes:` line of a launch dry run, or nothing.
  *
  * IT IS DERIVED FROM THE REPORT, like every other line here, so `--json` and
@@ -465,15 +521,31 @@ function substitutionNotes(report: ShuReport): readonly string[] {
         ? `${DEVICE_ID_TOKEN} <- '${name}' itself -- a simulated device is addressed by its name, so nothing is probed`
         : `${DEVICE_ID_TOKEN} <- the id of device '${name}', read from the probe above`;
     }
+    // THE VALUE IS THE ONE A REAL RUN PASSES, not the one the file writes, and
+    // on a lane whose `cwd` is not the repository root those are two different
+    // strings. Both are printed when they differ: `<- ../build/App.app` answers
+    // "what does the child receive", `(declared build/App.app ...)` answers
+    // "which line of my file is this", and a reader needs to be able to get
+    // from either to the other. They are the SAME string on a lane at the root,
+    // and this line is then exactly what it has always been.
+    /* c8 ignore next 2 -- `resolveLaunch` refuses {artifact} when the verb declares none AND the target overrides none, so each of these has a value here */
+    const declared = target.artifact ?? artifact?.value ?? "(the verb declares none)";
+    const passed = target.artifactAs ?? declared;
     // THE OVERRIDE IS NAMED AS AN OVERRIDE, not just printed. A reader checking
     // this line already knows the rule is "the verb's first artifact"; a path
     // that is not that one, printed with no explanation, reads as nen having
     // taken the wrong entry rather than as the declaration having said so.
-    if (target.artifact !== null) {
-      return `${ARTIFACT_TOKEN} <- ${target.artifact}  (project.launch.${target.name}.artifact, not the verb's own)`;
-    }
-    /* c8 ignore next -- `resolveLaunch` refuses {artifact} when the verb declares none AND the target overrides none, so artifacts[0] is here */
-    return `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
+    const notes = [
+      ...(target.artifact === null
+        ? []
+        : [`project.launch.${target.name}.artifact, not the verb's own`]),
+      ...(passed === declared
+        ? []
+        : [
+            `declared ${declared}, as the after-steps' own directory sees it -- lane '${report.lane}' does not sit at the repository root`,
+          ]),
+    ];
+    return `${ARTIFACT_TOKEN} <- ${passed}${notes.length === 0 ? "" : `  (${notes.join("; ")})`}`;
   });
   return [labelled("substitutes", notes.join("; "))];
 }
@@ -526,6 +598,12 @@ export function renderReport(report: ShuReport): readonly string[] {
           }`,
         ),
       );
+      // DIRECTLY UNDER THE DEVICE IT QUALIFIES, because the two lines are one
+      // fact split in two: the name is what nen looks for, the rule is what nen
+      // requires of the row it finds. A reader who sees only the first would
+      // read a green dry run as "this device will do", which is precisely the
+      // reading the key exists to stop being available.
+      for (const line of readinessNote(launch)) lines.push(line);
     }
   } else if (report.target !== null) {
     const target = report.target;
@@ -894,6 +972,19 @@ export async function runVerb(
 ): Promise<number> {
   refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
+  // A TARGET DECLARED FOR THE OTHER LONG-RUNNING VERB IS REFUSED BEFORE THE
+  // LANE'S OWN ROW IS EVEN READ, and the order is the fix rather than a
+  // preference. `dev` and `run` are different builds and a target belongs to
+  // one of them -- a fact about the declaration, true on every lane -- while a
+  // seat is a fact about one row. Rendered first, the seat answered on any lane
+  // where the other verb is `unsupported` or simply undeclared, so a caller who
+  // named a `dev` target on `run` was told `'run' is unsupported on lane '<x>'`
+  // (exit 4, and a dead end) while nen already held the sentence that ends it.
+  // Everything else this function's contract says stays where it was: the seat
+  // keeps exit 4 whenever the target's verb DOES match.
+  if (LAUNCHING_VERBS.includes(options.verb)) {
+    refuseCrossVerbTarget(project, options.verb, options.target);
+  }
   // THE TARGET'S LANE IS READ BEFORE ANYTHING IS RENDERED, and that ordering is
   // the whole point of the key. Rendered on the invocation's lane first, a
   // target whose OWN lane is the only one declaring the verb was refused by the
@@ -1686,13 +1777,15 @@ function runLaunch(
     deviceId = launch.device.name;
   }
 
-  // THE TARGET'S OWN ARTIFACT WINS OVER THE VERB'S FIRST ONE, and the fallback
-  // is unchanged for every target that declares none: "the first entry of the
-  // verb's artifacts" is the right answer for the thing a lane BUILDS and the
-  // wrong one for the thing a device INSTALLS, and a build routinely produces
-  // both. ../schema/contract.ts's `LaunchTarget.artifact` carries the argument.
-  const artifact = launch.artifact ?? plan.artifacts[0] ?? null;
-  const after = substituteSteps(launch.after, { deviceId, artifact });
+  // WHICH PATH, AND FROM WHERE, WERE BOTH DECIDED IN `resolveLaunch`. The
+  // target's own artifact wins over the verb's first one -- "the first entry"
+  // is the right answer for the thing a lane BUILDS and the wrong one for the
+  // thing a device INSTALLS -- and whichever won is already expressed relative
+  // to the directory these steps are about to be spawned in, which is the lane's
+  // and not the repository root the declaration writes its paths against.
+  // Substituting the declared string here handed the installer a path that
+  // resolved against the wrong root on every lane whose `cwd` is not `.`.
+  const after = substituteSteps(launch.after, { deviceId, artifact: launch.artifactAs });
   const resolved: RenderedInvocation = {
     ...plan,
     target: {
@@ -1748,7 +1841,7 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
   const device = launch.device;
   /* c8 ignore next */
   if (device === null) throw new ShuRefusal(EXIT_TOOL_NOT_INSTALLED, "no device declared.");
-  const lookup = findDevice(device.name, stdout);
+  const lookup = findDevice(device.name, stdout, device.readyWhen);
   if (!lookup.found) {
     throw new ShuRefusal(
       EXIT_TOOL_NOT_INSTALLED,
@@ -1771,6 +1864,30 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
       `the name '${device.name}' matches ${lookup.ambiguous.length} ${
         lookup.sawKind === "names" ? "devices the probe reported" : "of the probe's own lines"
       }, and nen will not pick one of them: ${lookup.ambiguous.map((entry): string => `'${entry}'`).join(", ")}. project.launch.${launch.name}.device.name is the whole match, so a name that is the beginning of a longer one matches both. Write the fuller name, or declare a probe that prints one device per line.`,
+    );
+  }
+  // PRESENT IS NOT READY, AND THIS IS WHERE THE TWO STOP BEING THE SAME ANSWER.
+  // It comes BEFORE the missing-id refusal deliberately: a device whose state is
+  // the reason it is unusable routinely prints a row carrying no id at all, and
+  // "the probe gave nen no id" is then a true sentence that sends the reader to
+  // look at the probe's output format when what they need is to answer the
+  // prompt on the device's own screen.
+  const rule = device.readyWhen;
+  if (rule !== null && (lookup.readiness === null || !rule.in.includes(lookup.readiness))) {
+    throw new ShuRefusal(
+      EXIT_TOOL_NOT_INSTALLED,
+      `the device '${device.name}' is ${
+        lookup.readiness === null
+          ? `on the probe's list and nen read no single state for it: project.launch.${launch.name}.device.readyWhen looks at ${readWhere(rule)}, and nothing there carried a value nen could read as one -- either the position is empty, or two rows carrying this name disagree about it and nen reports neither`
+          : `on the probe's list and its state is '${lookup.readiness}', which is not one project.launch.${launch.name}.device.readyWhen accepts`
+      }. Accepted: ${rule.in.map((state): string => `'${state}'`).join(", ")} -- read from ${readWhere(rule)}, which is how nen reads a probe that prints ${readShape(rule)}. A device that is PRESENT is not a device that is READY: every step this launch would run next addresses it by id, and nen will not report the probe green and let each of them fail one at a time. ${
+        // NO "IT SAW NOTHING" ARM HERE, unlike the absence refusal above: this
+        // one is reached only when the probe DID name the device, so there is
+        // always at least this device's own row to list.
+        lookup.sawKind === "names"
+          ? `The probe reported: ${lookup.saw.map((name): string => `'${name}'`).join(", ")}`
+          : `The probe printed: ${lookup.saw.join(" | ")}`
+      }. Get the device into one of the accepted states -- unlock it, answer its pairing prompt, wait for it to finish starting -- or, if this state IS usable here, add it to readyWhen.in.`,
     );
   }
   if (lookup.id === null) {
