@@ -428,6 +428,66 @@ describe.skipIf(!HAVE_GIT)("nen shu warmup, against the real git", () => {
     }).toEqual(before);
   });
 
+  // ── the trunk, checked out in another worktree (zheref/nen#168) ───────────
+  //
+  // THE CLAIM ONLY GIT CAN ANSWER: `git branch --force main origin/main` really
+  // is refused when another worktree has `main` checked out, and `git switch -c
+  // <name> origin/main` really does not need that ref moved first. The first
+  // half is asserted against git directly, right here, so this test fails
+  // loudly the day git stops refusing rather than silently proving nothing.
+  it("cuts from origin/main without touching a trunk ANOTHER worktree holds", async () => {
+    const primary = join(root, "primary");
+    mustGit(root, [...PINNED, "clone", "--quiet", upstream, primary]);
+    pinLineEndings(primary);
+    // The standard shape: the primary checkout stands on the trunk, and the
+    // effort gets a linked worktree of the SAME repository beside it.
+    const linked = join(root, "linked");
+    mustGit(primary, ["worktree", "add", "--quiet", linked, "-b", "holding"]);
+    expect(mustGit(primary, ["branch", "--show-current"])).toBe("main");
+
+    // Git really does refuse -- the failure this issue is about.
+    const refused = git(linked, ["branch", "--force", "main", "origin/main"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toMatch(/used by worktree/);
+
+    const trunkBefore = mustGit(primary, ["rev-parse", "main"]);
+    const result = await warmup(["warmup", "--repo", linked, "--branch", "worktree-idea"]);
+    expect(result.code).toBe(0);
+    const printed = result.out.join("\n");
+    expect(printed).toMatch(/trunk held by worktree .*; cutting from origin\/main directly/);
+    expect(printed).not.toContain("git branch --force main origin/main");
+    expect(printed).not.toContain("git merge --ff-only");
+
+    // The branch was cut, from the tip the fetch brought down.
+    expect(mustGit(linked, ["branch", "--show-current"])).toBe("worktree-idea");
+    expect(mustGit(linked, ["rev-parse", "HEAD"])).toBe(mustGit(linked, ["rev-parse", "origin/main"]));
+    // And the other worktree is exactly as it was: still on the trunk, still
+    // pointing where it did. Nothing here was that worktree's to move.
+    expect(mustGit(primary, ["branch", "--show-current"])).toBe("main");
+    expect(mustGit(primary, ["rev-parse", "main"])).toBe(trunkBefore);
+  });
+
+  it("--dry-run predicts that skip too, rather than printing a command git would refuse", async () => {
+    // The second half of zheref/nen#168: the plan used to print `git branch
+    // --force main origin/main` and exit 0 while the real run failed on that
+    // exact line. A plan that does not predict the failure is worse than none.
+    const primary = join(root, "dry-primary");
+    mustGit(root, [...PINNED, "clone", "--quiet", upstream, primary]);
+    pinLineEndings(primary);
+    const linked = join(root, "dry-linked");
+    mustGit(primary, ["worktree", "add", "--quiet", linked, "-b", "dry-holding"]);
+
+    const before = mustGit(linked, ["for-each-ref", "--format=%(refname) %(objectname)"]);
+    const result = await warmup(["warmup", "--repo", linked, "--branch", "never-cut", "--dry-run"]);
+    expect(result.code).toBe(0);
+    const printed = result.out.join("\n");
+    expect(printed).toMatch(/trunk held by worktree .*; cutting from origin\/main directly/);
+    expect(printed).not.toContain("git branch --force main origin/main");
+    expect(printed).toMatch(/^would run: {5}git switch -c never-cut origin\/main$/m);
+    // Still a dry run: the one command it performed moved nothing.
+    expect(mustGit(linked, ["for-each-ref", "--format=%(refname) %(objectname)"])).toBe(before);
+  });
+
   // ── the win32 line-ending trap, simulated ─────────────────────────────────
   //
   // Blocker B3, pinned where every lane runs it. The failure it guards is a

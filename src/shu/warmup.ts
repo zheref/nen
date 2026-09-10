@@ -70,6 +70,8 @@
 // block gets the branch it asked for, a line saying verification was skipped,
 // and exit 0.
 
+import { realpathSync } from "node:fs";
+
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import type { Io } from "../index.js";
 import { GIT, outputLines, ToolError, type CommandResult } from "../seam/exec.js";
@@ -102,6 +104,57 @@ export const WARMUP_REMOTE = "origin";
  * repaired is a guess.
  */
 export const DEFAULT_TRUNK = "main";
+
+/**
+ * The one read that says whether the trunk's local ref can be moved AT ALL.
+ *
+ * A BRANCH GIT HAS CHECKED OUT IN ANOTHER WORKTREE CANNOT BE FORCE-MOVED, and
+ * git says so by failing: `fatal: cannot force update the branch 'main' used by
+ * worktree at '<path>'`. That is the ordinary shape of a linked-worktree
+ * checkout -- a primary working copy standing on the trunk, every effort in its
+ * own worktree beside it -- so the failure was never an edge case, and it
+ * landed AFTER the fetch with the branch not yet cut (zheref/nen#168).
+ *
+ * THE LOCAL FAST-FORWARD IS NOT NEEDED FOR THE CUT. `git switch -c <branch>
+ * <remote>/<trunk>` reads the remote-tracking ref this run has just fetched and
+ * never looks at the local branch at all -- so when the trunk is held
+ * elsewhere, the move is to SKIP the local update, say which worktree holds it,
+ * and cut from the fetched tip exactly as every other path already does.
+ */
+export const WORKTREE_LIST: readonly string[] = ["worktree", "list", "--porcelain"];
+
+/** One worktree of this repository, as `git worktree list --porcelain` names it. */
+export interface TrunkWorktree {
+  /** The worktree's own directory, absolute, exactly as git printed it. */
+  readonly path: string;
+}
+
+/**
+ * The worktree holding `refs/heads/<trunk>`, or null when no worktree does.
+ *
+ * THE PORCELAIN FORM IS PARSED, NEVER THE HUMAN ONE. `git worktree list`
+ * without `--porcelain` prints `<path> <sha> [<branch>]` in aligned columns,
+ * which stops being parseable the moment a path carries a space. The porcelain
+ * form is one `<key> <value>` per line, `worktree <path>` opening each record
+ * and `branch <full ref>` naming what that record has checked out -- and the
+ * FULL ref is compared, so a trunk called `main` is never confused with a
+ * branch called `feat/main`.
+ *
+ * A DETACHED WORKTREE HOLDS NO BRANCH and can never be the answer: its record
+ * carries `detached` where this one carries `branch`.
+ */
+export function trunkWorktree(porcelain: string, trunk: string): TrunkWorktree | null {
+  const wanted = `branch refs/heads/${trunk}`;
+  let path: string | null = null;
+  for (const line of outputLines(porcelain)) {
+    if (line.startsWith("worktree ")) {
+      path = line.slice("worktree ".length);
+      continue;
+    }
+    if (line === wanted && path !== null) return { path };
+  }
+  return null;
+}
 
 /**
  * The three pseudo-refs that mean "git is half-way through something".
@@ -148,9 +201,16 @@ export interface WarmupStep {
  * and ./warmup.test.ts pins it, so a field inserted in the middle is a visible
  * decision rather than a silent reshuffle of somebody's golden file.
  *
- * There is deliberately no `dryRun` boolean, for ./run.ts's reason: the fact a
- * machine reader needs is "was anything executed", and `steps[].exitCode` is
- * already it. Two fields that could disagree about that is one field too many.
+ * `dryRun` IS A FIELD BECAUSE A DRY RUN IS NO LONGER "NOTHING WAS EXECUTED".
+ * It used to be, and this report deliberately carried no such boolean: the fact
+ * a machine reader wanted was "was anything run", and `steps[].exitCode` was
+ * already it. zheref/nen#168 ended that. Predicting the fast-forward means
+ * knowing which worktree holds the trunk, that is one read-only `git worktree
+ * list --porcelain`, and a plan that guessed at it instead would be a plan that
+ * does not predict the failure it exists to predict. So a dry run now performs
+ * exactly ONE command, records it with its real exit code like any other, and
+ * says which form it is here rather than leaving a reader to infer it from a
+ * row that no longer means what it meant.
  */
 export interface WarmupReport {
   readonly contract: string;
@@ -159,6 +219,8 @@ export interface WarmupReport {
   readonly remote: string;
   readonly branch: string;
   readonly discard: boolean;
+  /** True for `--dry-run`: every row but the worktree read is a plan. */
+  readonly dryRun: boolean;
   readonly steps: readonly WarmupStep[];
   /** The lane the build/test verification ran on, or null when there is no declaration. */
   readonly lane: string | null;
@@ -188,14 +250,14 @@ function labelled(label: string, value: string): string {
  * The human rendering, derived from the same report `--json` prints, using
  * ./run.ts's own `would run:` / `ran:` convention and its `renderArgv` quoting.
  *
- * WHICH PREFIX APPLIES IS READ OFF THE DOCUMENT, not passed in beside it. A
- * real run always records the working-copy read with a real exit code before it
- * reaches anything else, and a dry run records nothing with one -- so "did any
- * step actually run" is a property of the steps, and the table cannot come
- * apart from the object it was rendered from.
+ * WHICH PREFIX APPLIES IS READ OFF THE DOCUMENT, not passed in beside it -- and
+ * PER ROW, not once for the table. A dry run performs exactly one command (the
+ * worktree read, see WORKTREE_LIST), so a single prefix chosen for the whole
+ * report would have to call that row a plan or call the other twelve a run, and
+ * both are false. A row that carries an exit code RAN; in a dry run the rest
+ * would run; in a real run the rest was not reached.
  */
 export function renderWarmup(report: WarmupReport): readonly string[] {
-  const ran = report.steps.some((step): boolean => step.exitCode !== null);
   const lines: string[] = [
     labelled("repo", report.repo),
     labelled("remote", report.remote),
@@ -222,10 +284,10 @@ export function renderWarmup(report: WarmupReport): readonly string[] {
     const detail =
       step.exitCode !== null
         ? `${argv}  -- exit ${step.exitCode} in ${step.durationMs}ms`
-        : ran && step.argv.length > 0
+        : !report.dryRun && step.argv.length > 0
           ? `${argv}  -- not reached`
           : argv;
-    lines.push(labelled(ran ? "ran" : "would run", detail));
+    lines.push(labelled(report.dryRun && step.exitCode === null ? "would run" : "ran", detail));
     if (step.note !== null) {
       for (const noteLine of step.note.split("\n")) lines.push(`${" ".repeat(LABEL_WIDTH)}${noteLine}`);
     }
@@ -328,6 +390,62 @@ function why(result: CommandResult): string {
 /** Everything a git call said, on either stream, as lines. */
 function said(result: CommandResult): readonly string[] {
   return [...outputLines(result.stdout), ...outputLines(result.stderr)];
+}
+
+// ── the worktree question, worded once for both forms of the verb ───────────
+//
+// BOTH PATHS PRINT THE SAME SENTENCES, because the whole of zheref/nen#168's
+// second half is that `--dry-run` and the real run disagreed about what would
+// happen. Two copies of a sentence are two chances for them to disagree again.
+
+/** Why this read is here, before either form knows the answer. */
+function WORKTREE_NOTE(trunk: string): string {
+  return `which worktree of this repository has '${trunk}' checked out. Git refuses to force-move a branch that is checked out ANYWHERE ('fatal: cannot force update the branch ... used by worktree at ...'), and the local ref is not needed for the cut: the new branch comes off ${WARMUP_REMOTE}/${trunk} either way`;
+}
+
+/** The decision, when another worktree holds the trunk. */
+function heldByWorktree(path: string, trunk: string): string {
+  return `trunk held by worktree ${path}; cutting from ${WARMUP_REMOTE}/${trunk} directly. The local '${trunk}' is left exactly where it is -- moving it is git's to refuse, and nothing here needs it moved`;
+}
+
+/** The decision, when this working tree is the one standing on the trunk. */
+function heldHere(trunk: string): string {
+  return `'${trunk}' is checked out HERE, so the fast-forward happens in this working tree`;
+}
+
+/** The decision, when no worktree at all has the trunk checked out. */
+function nobodyHoldsTrunk(trunk: string): string {
+  return `no worktree of this repository has '${trunk}' checked out, so its ref is moved without touching any working tree`;
+}
+
+/**
+ * Do these two paths name the same directory?
+ *
+ * A STRING COMPARISON IS NOT ENOUGH, and macOS is where it shows: `--repo` is
+ * resolved by ../repo/root.ts with `path.resolve`, which normalises and never
+ * follows a symlink, while git prints each worktree's REAL path -- so a
+ * checkout under `/var/folders/...` (a symlink to `/private/var/folders/...` on
+ * every Mac) would compare unequal to itself and the plan would announce a
+ * trunk "held elsewhere" that is held right here. Both sides are resolved, and
+ * a path that cannot be resolved (it no longer exists, or is not readable)
+ * falls back to the comparison already made rather than throwing: the plan is
+ * a plan, and a stale worktree entry must not take the verb down with it.
+ */
+function samePath(left: string, right: string): boolean {
+  if (left === right) return true;
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
+
+/** The fail-closed refusal for a worktree list that did not answer. */
+function worktreeUnreadable(result: CommandResult, trunk: string): readonly string[] {
+  return [
+    `could not list this repository's worktrees ('git ${WORKTREE_LIST.join(" ")}' answered ${why(result)}).`,
+    `Refusing to read an unanswered question as "nothing else has '${trunk}' checked out" -- that reading is exactly what makes the fast-forward fail half-way through a run that has already fetched.`,
+  ];
 }
 
 // ── delegation into the executor ────────────────────────────────────────────
@@ -533,6 +651,7 @@ function assemble(
     remote: WARMUP_REMOTE,
     branch: options.branch,
     discard: options.discard,
+    dryRun: options.dryRun,
     steps,
     lane,
     exitCode,
@@ -592,15 +711,25 @@ export async function runWarmup(
 }
 
 /**
- * `--dry-run`: print every command, in order, and run NOTHING -- not even the
- * fetch, and not a single probe.
+ * `--dry-run`: print every command, in order, mutate NOTHING -- not the fetch,
+ * not a ref, not a file.
  *
- * A DRY RUN READS NO GIT STATE AT ALL, which is why three of the lines below
- * carry a note saying what a real run would do differently. The alternative --
- * reading HEAD, or the remotes, to print a more precise plan -- would make the
- * flag's guarantee "runs nothing except the harmless things", and there is no
- * such thing as a list of harmless things somebody else will not eventually add
- * to. ./warmup.test.ts asserts the seam records zero calls for this path.
+ * IT PERFORMS EXACTLY ONE COMMAND, AND THE LIST IS CLOSED: `git worktree list
+ * --porcelain`, which reads no working copy, moves no ref and writes nothing.
+ * Everything else below is a plan, and two of the lines still carry a note
+ * saying what a real run would decide differently.
+ *
+ * WHY THE EXCEPTION EXISTS, given the rule it breaks. This flag used to
+ * guarantee "runs nothing", and the argument for that was a good one: "runs
+ * nothing except the harmless things" is a guarantee somebody eventually adds
+ * to. But zheref/nen#168 is a failure a plan MUST predict -- a trunk checked
+ * out in another worktree cannot be force-moved, `git worktree list` answers
+ * that in one read, and a dry run that printed `git branch --force main
+ * origin/main` and exited 0 while the real run failed on that exact line is a
+ * dry run that told the caller the opposite of the truth. So the exception is
+ * this one argv, written down as WORKTREE_LIST, spent on the one question the
+ * plan cannot honestly guess at; the row carries its real exit code, and
+ * `dryRun` on the report is what says which form this is.
  */
 async function planWarmup(
   context: CommandContext,
@@ -638,6 +767,33 @@ async function planWarmup(
       ? `--from was not given, so the trunk is assumed to be '${DEFAULT_TRUNK}'; a real run refuses at exit 2 naming --from when there is no such local branch`
       : "--from names the LOCAL branch this warm-up fast-forwards, and it must already exist",
   );
+
+  // THE ONE COMMAND A DRY RUN ACTUALLY RUNS. It answers which worktree holds
+  // the trunk, and nothing else in this plan can be written honestly without
+  // it -- see this function's header. A spawn failure raises ../seam/exec.ts's
+  // ToolError exactly as it does on the real path, so the runner is the same
+  // one, borrowed for a single call.
+  const probe = gitRunner(context, repoRoot);
+  const listed = probe.run(WORKTREE_LIST, WORKTREE_NOTE(trunk));
+  if (listed.code !== 0) {
+    return refuse(context, worktreeUnreadable(listed, trunk));
+  }
+  const holder = trunkWorktree(listed.stdout, trunk);
+  // A DRY RUN TELLS ITS OWN WORKTREE APART BY PATH, because it has not read
+  // HEAD and will not: `--repo` is where this run is pointed, and git prints
+  // each worktree's directory absolutely. A real run has the branch it is
+  // standing on and compares that instead, which needs no path arithmetic --
+  // the two agree, and ./warmup.test.ts pins that they do.
+  const heldElsewhere = holder !== null && !samePath(holder.path, repoRoot);
+  probe.annotate(
+    holder === null
+      ? nobodyHoldsTrunk(trunk)
+      : heldElsewhere
+        ? heldByWorktree(holder.path, trunk)
+        : heldHere(trunk),
+  );
+  steps.push(...probe.steps);
+
   plan(
     ["check-ref-format", "--branch", options.branch],
     "git's own name validation. The branch name is the caller's: nen never repairs one into something git will accept. It runs HERE, before anything is discarded or fetched, because a mistyped branch name must not cost a caller their uncommitted work",
@@ -665,10 +821,20 @@ async function planWarmup(
     ["merge-base", "--is-ancestor", trunk, `${WARMUP_REMOTE}/${trunk}`],
     "the divergence test. A local trunk carrying commits the remote one does not refuses at exit 2 rather than being fast-forwarded over",
   );
-  plan(
-    ["branch", "--force", trunk, `${WARMUP_REMOTE}/${trunk}`],
-    `the fast-forward, in the form for a checkout that is NOT on '${trunk}'. On one that is, a real run does 'git merge --ff-only ${WARMUP_REMOTE}/${trunk}' instead -- a dry run reads no git state, so it cannot know which`,
-  );
+  // THE FAST-FORWARD, IN THE ONE FORM THIS REPOSITORY WILL ACTUALLY USE -- or
+  // not at all. The worktree read above settled which of the three it is, so
+  // this plan states one command rather than describing two and guessing.
+  if (holder === null) {
+    plan(
+      ["branch", "--force", trunk, `${WARMUP_REMOTE}/${trunk}`],
+      `the fast-forward. No worktree of this repository has '${trunk}' checked out, so its ref is moved without touching any working tree. A real run reads the branch it is standing on rather than these paths, and reaches the same line`,
+    );
+  } else if (!heldElsewhere) {
+    plan(
+      ["merge", "--ff-only", `${WARMUP_REMOTE}/${trunk}`],
+      `the fast-forward. '${trunk}' is checked out in ${repoRoot} -- this very working tree -- so it is advanced by a merge rather than force-moved: git refuses 'branch --force' on a branch that is checked out anywhere, including here`,
+    );
+  }
   plan(
     ["ls-remote", "--heads", WARMUP_REMOTE, `refs/heads/${options.branch}`],
     `refuses at exit 2 when that name is already a branch on ${WARMUP_REMOTE}. The ref is spelled in full because ls-remote matches a bare name against the TAIL of every ref on slash boundaries, so '${options.branch}' alone would also match a 'feat/${options.branch}' that is already there`,
@@ -889,6 +1055,28 @@ async function performWarmup(
       : `the trunk to fast-forward, as --from named it`,
   );
 
+  // ── 2a. IS THE TRUNK CHECKED OUT SOMEWHERE ELSE? ─────────────────────────
+  //
+  // zheref/nen#168. See WORKTREE_LIST. The answer decides one thing -- whether
+  // the local trunk is moved at all -- and it is asked HERE, with the other
+  // free questions, so a repository that cannot answer it refuses before the
+  // fetch rather than after it.
+  const worktrees = git.run(WORKTREE_LIST, null);
+  if (worktrees.code !== 0) {
+    return refuseHere(worktreeUnreadable(worktrees, trunk));
+  }
+  const holder = trunkWorktree(worktrees.stdout, trunk);
+  // A REAL RUN TELLS ITS OWN WORKTREE APART BY THE BRANCH IT IS STANDING ON,
+  // not by comparing paths: git lets one branch be checked out in exactly one
+  // worktree, so a trunk that is checked out somewhere while THIS checkout is
+  // on something else is, necessarily, checked out somewhere else. `--dry-run`
+  // has not read HEAD and compares `--repo` against git's own paths instead;
+  // the two agree, and ./warmup.test.ts pins that they do.
+  const heldElsewhere = holder !== null && current !== trunk;
+  git.annotate(
+    holder === null ? nobodyHoldsTrunk(trunk) : heldElsewhere ? heldByWorktree(holder.path, trunk) : heldHere(trunk),
+  );
+
   const nameOk = git.run(["check-ref-format", "--branch", options.branch], null);
   if (nameOk.code !== 0) {
     return refuseHere([
@@ -1010,6 +1198,18 @@ async function performWarmup(
   if (ancestor.code === 1) {
     return refuseHere([
       `the local '${trunk}' has DIVERGED from ${WARMUP_REMOTE}/${trunk}: it carries commits the remote branch does not, so moving it would silently drop them.`,
+      // THE DIVERGENCE STILL REFUSES WHEN THE TRUNK IS HELD ELSEWHERE, and the
+      // wording says why rather than repeating a reason that no longer applies:
+      // this run would not have moved that ref, but a trunk carrying unmerged
+      // commits means `${WARMUP_REMOTE}/${trunk}` -- the tip the branch is
+      // about to be cut from -- is not the whole of what this developer has,
+      // and cutting from it anyway is the "which of the two is right" question
+      // below, answered silently.
+      ...(heldElsewhere && holder !== null
+        ? [
+            `This run would not have moved it -- '${trunk}' is checked out in ${holder.path}, so the local fast-forward is skipped and the branch is cut from ${WARMUP_REMOTE}/${trunk} directly -- but the cut still comes off the remote tip, and your local '${trunk}' carries work that tip does not.`,
+          ]
+        : []),
       `Reconcile it yourself -- rebase it, merge it, or reset it once you have decided which of the two is right -- and run this again. Warmup fast-forwards and never resolves a divergence, because which side wins is not a question a warm-up gets to answer.`,
     ]);
   }
@@ -1017,24 +1217,37 @@ async function performWarmup(
     `'${trunk}' is an ancestor of ${WARMUP_REMOTE}/${trunk} -- a fast-forward loses nothing. This step's exit code IS the verdict: 0 ancestor, 1 diverged, and anything above that is git failing to answer`,
   );
 
-  // TWO SHAPES, BECAUSE GIT HAS TWO. A branch that is checked out cannot be
-  // moved by `git branch --force`, and a branch that is not checked out cannot
-  // be advanced by `git merge`. Which applies is read off the branch this run
-  // already looked up, not guessed.
+  // THREE SHAPES, BECAUSE GIT HAS THREE. A branch checked out HERE is advanced
+  // by a merge in this working tree; one checked out NOWHERE has its ref moved
+  // without touching a working tree; and one checked out in ANOTHER worktree
+  // cannot be moved from here at all -- git refuses, by design, and the local
+  // ref is not what the cut reads (zheref/nen#168). Which applies was settled
+  // above, off the branch this run is standing on and the worktree list, not
+  // guessed.
   const onTrunk = current === trunk;
-  const ff = git.run(
-    onTrunk ? ["merge", "--ff-only", `${WARMUP_REMOTE}/${trunk}`] : ["branch", "--force", trunk, `${WARMUP_REMOTE}/${trunk}`],
-    onTrunk
-      ? `the checkout is on '${trunk}', so the fast-forward happens in the working tree`
-      : `the checkout is not on '${trunk}', so the ref is moved without touching the working tree`,
-  );
-  mutated = true;
-  if (ff.code !== 0) {
-    return failedStep(
-      onTrunk ? `git merge --ff-only ${WARMUP_REMOTE}/${trunk}` : `git branch --force ${trunk} ${WARMUP_REMOTE}/${trunk}`,
-      ff,
-      `${WARMUP_REMOTE}/${trunk} was fetched and is current; the local '${trunk}' is not.`,
+  if (heldElsewhere) {
+    // NOTHING RUNS, and nothing needs to. The skip is already on the worktree
+    // row's note, which is where a reader looking for "why is there no
+    // fast-forward here" will be looking; a synthesised step with no argv would
+    // say the same thing in a row that claims to be a command.
+    context.io.err(
+      `${PROGRAM} shu warmup: ${heldByWorktree(holder?.path ?? "(unknown)", trunk)}. ${WARMUP_REMOTE}/${trunk} is current, which is the tip '${options.branch}' is cut from -- the local '${trunk}' is that other worktree's to fast-forward.`,
     );
+  } else {
+    const ff = git.run(
+      onTrunk ? ["merge", "--ff-only", `${WARMUP_REMOTE}/${trunk}`] : ["branch", "--force", trunk, `${WARMUP_REMOTE}/${trunk}`],
+      onTrunk
+        ? `the checkout is on '${trunk}', so the fast-forward happens in the working tree`
+        : `the checkout is not on '${trunk}', so the ref is moved without touching the working tree`,
+    );
+    mutated = true;
+    if (ff.code !== 0) {
+      return failedStep(
+        onTrunk ? `git merge --ff-only ${WARMUP_REMOTE}/${trunk}` : `git branch --force ${trunk} ${WARMUP_REMOTE}/${trunk}`,
+        ff,
+        `${WARMUP_REMOTE}/${trunk} was fetched and is current; the local '${trunk}' is not.`,
+      );
+    }
   }
 
   // ── 5. the name, on the remote this run has just fetched ─────────────────
