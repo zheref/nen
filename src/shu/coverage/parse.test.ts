@@ -21,7 +21,7 @@ import { COBERTURA } from "./formats/cobertura.js";
 import { ISTANBUL } from "./formats/istanbul.js";
 import { JACOCO } from "./formats/jacoco.js";
 import { LCOV } from "./formats/lcov.js";
-import { XCCOV } from "./formats/xccov.js";
+import { parseXccovFiles, XCCOV } from "./formats/xccov.js";
 import { decodeEntities, parentOf, scanXml } from "./formats/xml.js";
 import {
   detectFormat,
@@ -354,6 +354,94 @@ describe("the traps each format sets", () => {
       targets: [],
     });
     expect(XCCOV.parse(text, "x").total.lines.percent).toBe(82.35);
+  });
+});
+
+// ── the --touched-only descent: targets[].files[] ───────────────────────────
+
+describe("xccov: parseXccovFiles descends into targets[].files[]", () => {
+  it("returns one row per FILE, not per target -- sorted, same total as parse()", () => {
+    const parsed = parseXccovFiles(fixture("xccov-report.json"), "x");
+    // Same fixture, same total as XCCOV.parse(): the grain of the ROWS changes
+    // and the record's own top-level counts do not.
+    expect(parsed.total.lines).toEqual(TOTAL_LINES);
+    expect(parsed.targets.map((row): string => row.name)).toEqual([
+      "/repo/App/AppModel.swift",
+      "/repo/Core/Store.swift",
+    ]);
+    expect(parsed.targets.map((row): unknown => row.lines)).toEqual([
+      { covered: 11, total: 13, percent: 84.62 },
+      { covered: 3, total: 4, percent: 75 },
+    ]);
+    // No branch figure here either -- xccov measures none, for either grain.
+    expect(parsed.targets.every((row): boolean => row.branches === undefined)).toBe(true);
+  });
+
+  it("names a row by 'path', never by the bare 'name' two files could share", () => {
+    const text = JSON.stringify({
+      coveredLines: 1,
+      executableLines: 1,
+      targets: [
+        {
+          name: "App.app",
+          coveredLines: 1,
+          executableLines: 1,
+          files: [{ name: "Model.swift", path: "Sources/App/Model.swift", coveredLines: 1, executableLines: 1 }],
+        },
+      ],
+    });
+    expect(parseXccovFiles(text, "x").targets.map((row): string => row.name)).toEqual([
+      "Sources/App/Model.swift",
+    ]);
+  });
+
+  it("falls back to 'name' when a file entry carries no 'path'", () => {
+    const text = JSON.stringify({
+      coveredLines: 1,
+      executableLines: 1,
+      targets: [
+        {
+          name: "App.app",
+          coveredLines: 1,
+          executableLines: 1,
+          files: [{ name: "Model.swift", coveredLines: 1, executableLines: 1 }],
+        },
+      ],
+    });
+    expect(parseXccovFiles(text, "x").targets.map((row): string => row.name)).toEqual(["Model.swift"]);
+  });
+
+  it("skips a target with no 'files' array rather than refusing the whole report", () => {
+    // xccov omits 'files' for a target with nothing built into it (a resource
+    // bundle, an aggregate target) -- exactly the rows this descent should
+    // drop, not the malformed report the target-level parse() would refuse.
+    const text = JSON.stringify({
+      coveredLines: 3,
+      executableLines: 4,
+      targets: [
+        { name: "Resources", coveredLines: 0, executableLines: 0 },
+        {
+          name: "App.app",
+          coveredLines: 3,
+          executableLines: 4,
+          files: [{ name: "Model.swift", path: "App/Model.swift", coveredLines: 3, executableLines: 4 }],
+        },
+      ],
+    });
+    expect(parseXccovFiles(text, "x").targets.map((row): string => row.name)).toEqual(["App/Model.swift"]);
+  });
+
+  it("refuses a report with no 'targets' array at all, same as parse()", () => {
+    expect(() => parseXccovFiles("{}", "x")).toThrow(/has no "targets" array/);
+  });
+
+  it("refuses a file entry with neither 'path' nor 'name'", () => {
+    const text = JSON.stringify({
+      coveredLines: 1,
+      executableLines: 1,
+      targets: [{ name: "App.app", files: [{ coveredLines: 1, executableLines: 1 }] }],
+    });
+    expect(() => parseXccovFiles(text, "x")).toThrow(/has neither "path" nor "name"/);
   });
 });
 

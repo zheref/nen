@@ -39,17 +39,23 @@
 // then does the refusal go on propagating -- so `nen shu coverage` prints on
 // that path exactly what `nen shu build` prints on it.
 
+import { readFileSync } from "node:fs";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
+import { GIT, must, outputLines } from "../seam/exec.js";
 import { advisoryFor, type CoverageAdvisory } from "./coverage/advisory.js";
 import { openDeclaration } from "./declaration.js";
 import { ShuRefusal } from "./exit.js";
+import { XCCOV, parseXccovFiles } from "./coverage/formats/xccov.js";
 import { formatNamedBy, readReport, recognisedByName, supportedFormats } from "./coverage/parse.js";
 import {
   assembleCoverage,
   renderCoverage,
+  type CoverageLadderReport,
   type CoverageReport,
   type CoverageSource,
 } from "./coverage/report.js";
+import { bandRows, readLadder } from "./coverage/ladder.js";
+import { filterTouched, grainOf, type CoverageGrain, type TouchedFilter } from "./coverage/touched.js";
 import { CoverageReportError, type CoverageMeasure, type CoverageTarget } from "./coverage/shape.js";
 import { insideRepo, renderReport, runVerb, type ShuArtifactReport, type ShuReport } from "./run.js";
 
@@ -58,6 +64,18 @@ export interface CoverageOptions {
   readonly dryRun: boolean;
   /** `--threshold`, exactly as it was typed. Parsed here, refused here. */
   readonly threshold: string | null;
+  /**
+   * `--touched`: scope `targets` to the files `--base` diffs against HEAD.
+   *
+   * REQUIRES `base` NON-NULL, AND REFUSES THE REVERSE TOO -- validateTouched()
+   * below, called before anything is spawned. A `--base` nobody asked
+   * `--touched` for has nothing to do, and a flag accepted and ignored is worse
+   * than one refused (../command.ts's own rule for a foreign flag, applied here
+   * to a pair of this verb's own).
+   */
+  readonly touched: boolean;
+  /** `--base <ref>`. `git diff --name-only <base>...HEAD` names the touched set. */
+  readonly base: string | null;
   /**
    * The reference pack's advisory report locations, by stack.
    *
@@ -73,6 +91,26 @@ export interface CoverageOptions {
    * -- exactly as it already is for `shu tools`.
    */
   readonly advisories: Readonly<Record<string, CoverageAdvisory>>;
+}
+
+/**
+ * `--touched` and `--base` are required together, in both directions.
+ *
+ * CHECKED BEFORE ANYTHING IS SPAWNED, the same rule --threshold's own parse
+ * follows two functions up: a caller who mistyped a flag pairing should not
+ * also need a valid declaration to be told so.
+ */
+export function validateTouched(options: Pick<CoverageOptions, "touched" | "base">): void {
+  if (options.touched && (options.base === null || options.base.trim() === "")) {
+    throw new VerbUsageError(
+      `--touched requires --base <ref>: nen filters the per-target rows to the files 'git diff --name-only <base>...HEAD' reports, and there is no base to diff against without one.`,
+    );
+  }
+  if (!options.touched && options.base !== null) {
+    throw new VerbUsageError(
+      `--base is read only with --touched -- it names the ref '--touched' diffs against, and does nothing on its own. Add --touched, or drop --base.`,
+    );
+  }
 }
 
 /**
@@ -251,6 +289,19 @@ interface Parsed {
 }
 
 /**
+ * The FILE-level rows an xccov report carries under `targets[].files[]`, or
+ * null on any failure -- see the call site's comment for why null is a fallback
+ * rather than a refusal.
+ */
+function xccovFileRows(absolute: string, display: string): readonly CoverageTarget[] | null {
+  try {
+    return parseXccovFiles(readFileSync(absolute, "utf8"), display).targets;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Everything that happens after the executor returns.
  *
  * A RUN THAT DID NOT SUCCEED IS NOT PARSED, and that is the sharpest rule in
@@ -317,9 +368,21 @@ function parseAfterRun(
   );
   try {
     const parsed = readReport(absolute, artifact.value);
+    // UNDER --touched, AN xccov-report'S ROWS BECOME FILES, NOT TARGETS. A
+    // target is a whole app or framework; matching THAT against a touched-file
+    // list would keep nearly every row on nearly every diff, defeating the
+    // flag. ./coverage/formats/xccov.ts's `parseXccovFiles` descends into
+    // `targets[].files[]` for exactly this caller; a second, best-effort read
+    // (the first one just proved the file exists and parses) that fails for
+    // some other reason falls back to the target-level rows already in hand
+    // rather than failing a run over a read this verb does not strictly need.
+    const targets =
+      options.touched && parsed.format.id === XCCOV.id
+        ? (xccovFileRows(absolute, artifact.value) ?? parsed.coverage.targets)
+        : parsed.coverage.targets;
     return {
       total: parsed.coverage.total,
-      targets: relativiseTargets(repoRoot, parsed.coverage.targets),
+      targets: relativiseTargets(repoRoot, targets),
       // The format is re-stated from what actually PARSED the file, which is
       // not always the one the name suggested: the content decides.
       source: { format: parsed.format.id, path: artifact.value },
@@ -356,6 +419,7 @@ export function runCoverage(
   options: CoverageOptions,
 ): number {
   const threshold = parseThreshold(options.threshold);
+  validateTouched(options);
   // A HOLDER RATHER THAN A `let`: the assignment happens inside a callback, and
   // a `let` narrowed to `null` at its declaration is a type error at every read
   // below -- the compiler does not follow a closure it did not call.
@@ -421,16 +485,70 @@ function report(
   for (const line of renderReport(run)) write(line);
 
   const parsed = parseAfterRun(run, repoRoot, options, exitCode);
+  const touched = options.touched
+    ? computeTouched(context, repoRoot, options.base as string, parsed, threshold)
+    : null;
+  // THE LADDER IS READ ONLY WHEN THERE IS NO EXPLICIT --threshold TO OVERRIDE
+  // IT, and only under --touched -- ../coverage/ladder.ts's own header says
+  // why the scope is --touched and not a plain run. A repository with no
+  // 'nen/workflow.json' (or one with no usable coverage block) gets exactly
+  // what --touched already did before this field existed: readLadder()
+  // answers null rather than a refusal, on purpose.
+  const ladder = touched !== null && threshold === null ? readLadder(repoRoot) : null;
+  const ladderReport: CoverageLadderReport | null =
+    ladder === null ? null : { ...ladder, source: "nen/workflow.json" };
+  const targets =
+    touched === null ? parsed.targets : ladder === null ? touched.filter.rows : bandRows(touched.filter.rows, ladder);
   const document: CoverageReport = assembleCoverage({
     lane: run.lane,
     stack: run.stack,
     total: parsed.total,
-    targets: parsed.targets,
+    targets,
     threshold,
     report: parsed.source,
     exitCode: parsed.exitCode,
+    touched:
+      touched === null
+        ? null
+        : {
+            base: options.base as string,
+            files: touched.files,
+            matched: touched.filter.matched,
+            unmatched: touched.filter.unmatched,
+          },
+    ladder: ladderReport,
   });
-  emit(context.io, context.json, document, renderCoverage(document, parsed.why));
+  emit(
+    context.io,
+    context.json,
+    document,
+    renderCoverage(document, parsed.why, touched === null ? null : touched.grain),
+  );
   if (parsed.note !== null) context.io.err(parsed.note);
   return parsed.exitCode;
+}
+
+/**
+ * `--touched`'s own read: which files a change touched, and which of the
+ * report's own rows they matched.
+ *
+ * THE GIT CALL RUNS AFTER THE COVERAGE TOOL'S OWN RUN AND PARSE, never before:
+ * `parsed` (the rows to filter) does not exist until then, and the touched-file
+ * list itself never depends on what the tool did -- computing it earlier would
+ * buy nothing and cost the property below. That ordering also means a
+ * `--dry-run --touched` preview still names the touched set (`git diff` is a
+ * read of THIS process's own input, not the declared tool `--dry-run` silences)
+ * even though there is nothing yet to match it against.
+ */
+function computeTouched(
+  context: CommandContext,
+  repoRoot: string,
+  base: string,
+  parsed: Parsed,
+  threshold: number | null,
+): { readonly files: readonly string[]; readonly filter: TouchedFilter; readonly grain: CoverageGrain } {
+  const result = must(context.seams, GIT, ["diff", "--name-only", `${base}...HEAD`], { cwd: repoRoot });
+  const files = outputLines(result.stdout);
+  const grain: CoverageGrain = parsed.source === null ? "file" : grainOf(parsed.source.format);
+  return { files, filter: filterTouched(parsed.targets, files, grain, threshold), grain };
 }

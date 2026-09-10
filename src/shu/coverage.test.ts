@@ -90,15 +90,36 @@ interface Counts {
   readonly percent: number | null;
 }
 
+interface TouchedDoc {
+  readonly base: string;
+  readonly files: readonly string[];
+  readonly matched: readonly string[];
+  readonly unmatched: readonly string[];
+}
+
+interface LadderDoc {
+  readonly minimum: number;
+  readonly recommended: number;
+  readonly ideal: number;
+  readonly source: string;
+}
+
 interface Document {
   readonly contract: string;
   readonly lane: string;
   readonly stack: string;
   readonly total: { readonly lines: Counts; readonly branches?: Counts } | null;
-  readonly targets: readonly { readonly name: string; readonly lines: Counts }[];
+  readonly targets: readonly {
+    readonly name: string;
+    readonly lines: Counts;
+    readonly met?: boolean | null;
+    readonly band?: string | null;
+  }[];
   readonly threshold: { readonly value: number; readonly met: boolean | null } | null;
   readonly report: { readonly format: string; readonly path: string } | null;
   readonly exitCode: number;
+  readonly touched: TouchedDoc | null;
+  readonly ladder: LadderDoc | null;
 }
 
 /** The one JSON document on stdout, refusing anything that is not exactly one. */
@@ -183,7 +204,7 @@ describe("a coverage run, parsed", () => {
 // ── the document ────────────────────────────────────────────────────────────
 
 describe("the --json document", () => {
-  it("carries its eight keys, in order", async () => {
+  it("carries its ten keys, in order", async () => {
     const result = await capture(["coverage", "--threshold", "80", "--json"], { script: [ok(WEB)] });
     expect(Object.keys(JSON.parse(result.out.join("\n")) as object)).toEqual([
       "contract",
@@ -194,7 +215,15 @@ describe("the --json document", () => {
       "threshold",
       "report",
       "exitCode",
+      "touched",
+      "ladder",
     ]);
+  });
+
+  it("'touched' and 'ladder' are null without --touched", async () => {
+    const parsed = document(await capture(["coverage", "--json"], { script: [ok(WEB)] }));
+    expect(parsed.touched).toBeNull();
+    expect(parsed.ladder).toBeNull();
   });
 
   it("orders the keys inside a measure and a row too", async () => {
@@ -650,8 +679,373 @@ describe("the automation-policy row is unchanged", () => {
     );
   });
 
+  it("--touched --base does not change the class either way -- THE MUTANT", () => {
+    // izanami's coverage row is DRY-run-gated on the exact '--dry-run' token
+    // alone; a flag pair this verb ADDED must not become a second way to
+    // certify the bare (writing) form read-only, and must not make the
+    // explicit --dry-run form stop being certified either.
+    expect(classifyCommand("nen shu coverage --repo /x --touched --base main").classification).toBe(
+      "mutating",
+    );
+    expect(
+      classifyCommand("nen shu coverage --repo /x --touched --base main --dry-run").classification,
+    ).toBe("read-only");
+  });
+
   it("says why the bare form is never certified", () => {
     expect(classifyCommand("nen shu coverage").reason).toMatch(/writes its report tree by definition/);
+  });
+});
+
+// ── --touched --base <ref> ──────────────────────────────────────────────────
+
+describe("--touched --base <ref>", () => {
+  const diff = (base: string): string => `git diff --name-only ${base}...HEAD`;
+
+  it("--touched requires --base, refused at 2 before anything runs", async () => {
+    const result = await capture(["coverage", "--touched"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--touched requires --base/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("--base is refused without --touched, before anything runs", async () => {
+    const result = await capture(["coverage", "--base", "main"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--base is read only with --touched/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("both are refused on every other verb rather than accepted and ignored", async () => {
+    const touched = await capture(["build", "--touched"]);
+    expect(touched.code).toBe(2);
+    expect(touched.err.join("\n")).toMatch(/--touched is not read by 'shu build'/);
+    const base = await capture(["build", "--base", "main"]);
+    expect(base.code).toBe(2);
+    expect(base.err.join("\n")).toMatch(/--base is not read by 'shu build'/);
+  });
+
+  it("runs git diff AFTER the coverage tool, against the repository root", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main"], {
+      script: [ok(WEB), { match: diff("main"), result: { code: 0, stdout: "" } }],
+    });
+    expect(result.code).toBe(0);
+    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      WEB,
+      diff("main"),
+    ]);
+    expect(result.seams.calls[1]?.cwd).toBe(SHU_COVERAGE_REPO);
+  });
+
+  it("filters targets to the touched set, file grain, exact-path match", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      script: [
+        ok(WEB),
+        { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\nREADME.md\n" } },
+      ],
+    });
+    expect(result.code).toBe(0);
+    const parsed = document(result);
+    expect(parsed.targets.map((row): string => row.name)).toEqual(["packages/core/src/index.ts"]);
+    expect(parsed.touched).toEqual({
+      base: "main",
+      files: ["packages/core/src/index.ts", "README.md"],
+      matched: ["packages/core/src/index.ts"],
+      unmatched: ["README.md"],
+    });
+  });
+
+  it("adds 'met' per row when --threshold is given, against that row's own counts", async () => {
+    const result = await capture(
+      ["coverage", "--touched", "--base", "main", "--threshold", "80", "--json"],
+      {
+        script: [
+          ok(WEB),
+          {
+            match: diff("main"),
+            result: { code: 0, stdout: "packages/core/src/index.ts\npackages/app/src/main.ts\n" },
+          },
+        ],
+      },
+    );
+    expect(result.code).toBe(0);
+    const parsed = document(result);
+    const byName = new Map(parsed.targets.map((row): [string, boolean | null | undefined] => [row.name, row.met]));
+    expect(byName.get("packages/core/src/index.ts")).toBe(true); // 84.62%
+    expect(byName.get("packages/app/src/main.ts")).toBe(false); // 75%
+    // The AGGREGATE 'threshold.met' is unaffected -- it still compares the
+    // WHOLE report's total, never the touched subset.
+    expect(parsed.threshold).toEqual({ value: 80, met: true });
+  });
+
+  it("no threshold: a row carries no 'met' key at all", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      script: [ok(WEB), { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\n" } }],
+    });
+    const raw = JSON.parse(result.out.join("\n")) as { targets: readonly Record<string, unknown>[] };
+    expect(Object.keys(raw.targets[0] ?? {})).toEqual(["name", "lines", "branches"]);
+  });
+
+  it("still never gates: exit 0 even when a touched row misses the bar", async () => {
+    const result = await capture(
+      ["coverage", "--touched", "--base", "main", "--threshold", "100", "--json"],
+      {
+        script: [
+          ok(WEB),
+          { match: diff("main"), result: { code: 0, stdout: "packages/app/src/main.ts\n" } },
+        ],
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(document(result).targets[0]?.met).toBe(false);
+  });
+
+  it("--dry-run still computes the touched set -- nothing to match against yet", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--dry-run", "--json"], {
+      script: [{ match: diff("main"), result: { code: 0, stdout: "a.ts\n" } }],
+    });
+    expect(result.code).toBe(0);
+    const parsed = document(result);
+    expect(parsed.total).toBeNull();
+    expect(parsed.targets).toEqual([]);
+    expect(parsed.touched).toEqual({ base: "main", files: ["a.ts"], matched: [], unmatched: ["a.ts"] });
+  });
+
+  it("a run that failed still reports the touched set as entirely unmatched, and stays exit 1", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      script: [
+        { match: WEB, result: { code: 3 } },
+        { match: diff("main"), result: { code: 0, stdout: "a.ts\n" } },
+      ],
+    });
+    expect(result.code).toBe(1);
+    expect(document(result).touched?.unmatched).toEqual(["a.ts"]);
+  });
+
+  it("a base git cannot diff against surfaces as the tool's own failure, exit 1", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "nope", "--json"], {
+      script: [
+        ok(WEB),
+        { match: diff("nope"), result: { code: 128, stderr: "fatal: bad revision 'nope...HEAD'" } },
+      ],
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/git diff --name-only nope\.\.\.HEAD.*exited 128/);
+  });
+
+  it("package grain (cobertura): a touched file under the package is kept, text says 'BY PACKAGE'", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["coverage.cobertura.xml"] } } },
+    });
+    try {
+      writeFileSync(
+        join(repo, "coverage.cobertura.xml"),
+        '<coverage line-rate="1" lines-covered="4" lines-valid="4"><packages><package name="Placeholder.Core"><classes><class name="C" filename="Core/Store.cs"><lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="1"/><line number="4" hits="1"/></lines></class></classes></package></packages></coverage>',
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [
+          ok("x y"),
+          { match: diff("main"), result: { code: 0, stdout: "src/Placeholder/Core/Store.cs\n" } },
+        ],
+      });
+      expect(result.code).toBe(0);
+      expect(result.out.join("\n")).toContain("Placeholder.Core");
+      expect(result.out.join("\n")).toMatch(/matched BY PACKAGE/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("xccov: descends targets[].files[] under --touched, rows are FILES not targets", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "xcode-ios", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["xccov-report.json"] } } },
+    });
+    try {
+      writeFileSync(
+        join(repo, "xccov-report.json"),
+        JSON.stringify({
+          coveredLines: 3,
+          executableLines: 4,
+          targets: [
+            {
+              name: "Core.framework",
+              coveredLines: 3,
+              executableLines: 4,
+              files: [
+                {
+                  name: "Store.swift",
+                  path: join(repo, "Core", "Store.swift"),
+                  coveredLines: 3,
+                  executableLines: 4,
+                },
+              ],
+            },
+          ],
+        }),
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Store.swift\n" } }],
+      });
+      expect(result.code).toBe(0);
+      const parsed = document(result);
+      expect(parsed.targets.map((row): string => row.name)).toEqual(["Core/Store.swift"]);
+      expect(parsed.touched?.matched).toEqual(["Core/Store.swift"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── the coverage ladder (nen/workflow.json), --threshold absent only ───────
+
+describe("the coverage ladder, when --threshold is absent", () => {
+  const LADDER_REPORT = JSON.stringify({
+    total: { lines: { total: 17, covered: 14 }, branches: { total: 4, covered: 3 } },
+    "packages/core/src/index.ts": {
+      lines: { total: 13, covered: 11 },
+      branches: { total: 4, covered: 3 },
+    },
+    "packages/app/src/main.ts": { lines: { total: 4, covered: 3 } },
+  });
+
+  function withLadderProject(coverage: unknown): string {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["coverage-summary.json"] } } },
+    });
+    writeFileSync(join(repo, "coverage-summary.json"), LADDER_REPORT);
+    if (coverage !== undefined) {
+      writeFileSync(join(repo, "nen", "workflow.json"), JSON.stringify({ coverage }));
+    }
+    return repo;
+  }
+
+  const DIFF_MAIN = "git diff --name-only main...HEAD";
+  const BOTH_TOUCHED = "packages/core/src/index.ts\npackages/app/src/main.ts\n";
+
+  it("bands each touched row against minimum/recommended/ideal -- no key besides 'met' moved", async () => {
+    const repo = withLadderProject({ minimum: 80, recommended: 85, ideal: 90, scope: "touched" });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
+      });
+      expect(result.code).toBe(0);
+      const parsed = document(result);
+      const byName = new Map(parsed.targets.map((row): [string, string | null | undefined] => [row.name, row.band]));
+      // 11/13 = 84.62% -- at or above minimum(80), below recommended(85).
+      expect(byName.get("packages/core/src/index.ts")).toBe("minimum");
+      // 3/4 = 75% -- below minimum(80).
+      expect(byName.get("packages/app/src/main.ts")).toBe("under-minimum");
+      expect(parsed.ladder).toEqual({
+        minimum: 80,
+        recommended: 85,
+        ideal: 90,
+        source: "nen/workflow.json",
+      });
+      // No row carries 'met': there was no --threshold to answer for.
+      expect(parsed.targets.every((row): boolean => row.met === undefined)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("bands 'ideal' and 'recommended' too, at the right rungs", async () => {
+    // Same report, a lower bar: 84.62% now clears recommended(70) but not
+    // ideal(90); 75% clears minimum(50) and recommended(70) but not ideal.
+    const repo = withLadderProject({ minimum: 50, recommended: 70, ideal: 90 });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
+      });
+      const byName = new Map(document(result).targets.map((row): [string, string | null | undefined] => [row.name, row.band]));
+      expect(byName.get("packages/core/src/index.ts")).toBe("recommended");
+      expect(byName.get("packages/app/src/main.ts")).toBe("recommended");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("an explicit --threshold overrides the ladder entirely: rows carry 'met', 'ladder' stays null", async () => {
+    const repo = withLadderProject({ minimum: 80, recommended: 85, ideal: 90 });
+    try {
+      const result = await capture(
+        ["coverage", "--touched", "--base", "main", "--threshold", "80", "--json"],
+        { repo, script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }] },
+      );
+      const parsed = document(result);
+      expect(parsed.ladder).toBeNull();
+      expect(parsed.targets.every((row): boolean => row.band === undefined)).toBe(true);
+      expect(parsed.targets.some((row): boolean => row.met !== undefined)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("no nen/workflow.json: 'ladder' is null and no row carries 'band' -- unchanged from before this existed", async () => {
+    const repo = withLadderProject(undefined);
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
+      });
+      const parsed = document(result);
+      expect(parsed.ladder).toBeNull();
+      expect(parsed.targets.every((row): boolean => row.band === undefined)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("an incomplete coverage block (missing 'ideal') is treated as no ladder, silently", async () => {
+    const repo = withLadderProject({ minimum: 80, recommended: 85 });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
+      });
+      expect(document(result).ladder).toBeNull();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("is scoped to --touched: a plain run with no --threshold and a workflow.json present bands nothing", async () => {
+    const repo = withLadderProject({ minimum: 80, recommended: 85, ideal: 90 });
+    try {
+      const result = await capture(["coverage", "--json"], { repo, script: [ok("x y")] });
+      const parsed = document(result);
+      expect(parsed.ladder).toBeNull();
+      expect(parsed.targets.every((row): boolean => row.band === undefined)).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("prints a 'ladder:' line and a 'band' column, never alongside 'threshold:'", async () => {
+    const repo = withLadderProject({ minimum: 80, recommended: 85, ideal: 90 });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
+      });
+      const text = result.out.join("\n");
+      expect(text).toMatch(/^ladder:\s+nen\/workflow\.json -- minimum 80% \/ recommended 85% \/ ideal 90%/m);
+      expect(text).not.toMatch(/^threshold:/m);
+      expect(text).toMatch(/^ {2}lines\s+branches\s+band\s+target$/m);
+      expect(text).toContain("minimum");
+      expect(text).toContain("under-minimum");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 
