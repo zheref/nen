@@ -55,7 +55,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Fixed
 
-- **changelog**, **split**, **canon** — an unreadable input file is an **actionable exit-2 refusal**, not a raw errno at exit 1. Three verbs read a caller-named path with a bare `readFileSync`, so a mistyped one escaped as `nen changelog: ENOENT: no such file or directory, open '<path>'` — a raw errno under the code that means "the thing you asked for did not work", for what is "you typed it wrong" (closes #101).
+- **changelog**, **split**, **canon** — an unreadable input file is an **actionable exit-2 refusal**, not a raw errno at exit 1. Three verbs read a caller-named path with a bare `readFileSync`, so a mistyped one escaped as `nen changelog: ENOENT: no such file or directory, open '<path>'` — a raw errno under the code that means "the thing you asked for did not work", for what is "you typed it wrong" (closes [#101](https://github.com/zheref/nen/issues/101), [#198](https://github.com/zheref/nen/pull/198)).
 
   All three route through the shared reader now, so the refusal names the RESOLVED path, the errno, and what the file was for — the same shape every other path flag already gave, and the shape `changelog collate`'s own `--fragment-dir` got in #83 and `completeness` one function below it already used:
 
