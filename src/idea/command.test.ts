@@ -192,3 +192,42 @@ describe("nen idea file -- CLI wiring", () => {
     expect((await capture(["idea", "bogus"])).code).toBe(2);
   });
 });
+
+// zheref/nen#94. `--forbid-family` was declared in the flag spec and forwarded
+// into `fileIdea`'s FileRequest exactly as `issue file`'s is -- so it worked,
+// and nothing outside the source tree said it existed.
+describe("nen idea --help -- every flag the spec accepts is documented", () => {
+  it("documents --forbid-family, with what it does", () => {
+    expect(ideaCommand.usage).toContain("--forbid-family ns:family");
+    expect(ideaCommand.usage).toContain("declares off-limits");
+  });
+
+  it("documents every value flag the spec accepts", () => {
+    // The rule rather than the one instance: a flag the parser takes and the
+    // help never names is a flag only the source tells a caller about, which is
+    // how this one went unmentioned in the first place.
+    for (const flag of ideaCommand.flags.values ?? []) {
+      expect(ideaCommand.usage, `--${flag}`).toContain(`--${flag}`);
+    }
+  });
+});
+
+// zheref/nen#93's rule, applied to this family's fifth copy of the same check.
+describe("nen idea file -- --target refuses the way every other family does", () => {
+  it("refuses a MALFORMED --target at exit 2, not 1", async () => {
+    const result = await capture([
+      "idea", "file", "--target", "not-a-slug", "--title", "t",
+      "--body-file", "x", "--label", "a", "--assignee", "u",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/owner\/name/);
+  });
+
+  it("refuses a MISSING --target at exit 2, naming the flag", async () => {
+    const result = await capture([
+      "idea", "file", "--title", "t", "--body-file", "x", "--label", "a", "--assignee", "u",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--target owner\/name is required/);
+  });
+});

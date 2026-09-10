@@ -4,8 +4,16 @@ import { readFileSync } from "node:fs";
 import { assertRepoRoot } from "../repo/root.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
-import { parseTarget, type Target } from "../github/target.js";
-import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { parseTarget, TargetError, type Target } from "../github/target.js";
+import {
+  parseCallerToken,
+  requireRepoFlag,
+  requireSubcommand,
+  requireTargetFlag,
+  VerbUsageError,
+  type Command,
+  type CommandContext,
+} from "../cli/command.js";
 import type { FileRequest } from "../issue/file.js";
 import { fileIdea } from "./file.js";
 
@@ -14,6 +22,15 @@ const USAGE = `nen idea file -- file an idea issue, then READ IT BACK to verify 
 usage:
   nen idea file --target <owner/name> --repo <path> --title <t>
                --body-file <path> --label a,b --assignee <user>
+               [--forbid-family ns:family]
+
+  --forbid-family ns:family
+      Label families this invocation declares off-limits, comma-separated.
+      Works exactly as 'nen issue file's does -- it is forwarded into the same
+      FileRequest -- and refuses (never creates) a label whose family the
+      caller declared out of bounds, alongside the taxonomy check every label
+      already gets. Caller data: nen carries no repository's own convention
+      about which family means what.
 
 Reuses 'nen issue file's own choreography (labels and assignee IN the create
 call), then reads the created issue back over the API and compares title,
@@ -40,15 +57,24 @@ export const ideaCommand: Command = {
   run(context: CommandContext): number {
     requireSubcommand("idea", context.args, ["file"]);
 
-    const targetRaw = context.args.values["target"];
-    if (targetRaw === undefined) throw new VerbUsageError("--target owner/name is required.");
-    let target: Target;
-    try {
-      target = parseTarget(targetRaw);
-    } catch (error) {
-      context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
-      return 1;
-    }
+    // THE SAME REFUSAL THE OTHER FOUR FAMILIES GIVE (zheref/nen#93). This
+    // family kept a fifth, differently-shaped copy: a missing --target threw a
+    // VerbUsageError already, but a MALFORMED one printed and returned 1 --
+    // "the thing you asked for did not work" for what is a typo in a flag. #93
+    // settled that for `repo`, `labels`, `pr` and `issue` through
+    // `requireTargetFlag` + `parseCallerToken`; leaving this one behind would
+    // have made `nen idea file --target not-a-slug` the single verb answering
+    // differently from every other verb that takes the flag.
+    const target: Target = parseCallerToken(
+      (): Target =>
+        parseTarget(
+          requireTargetFlag(
+            context,
+            "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.",
+          ),
+        ),
+      (error: unknown): boolean => error instanceof TargetError,
+    );
 
     // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
     // never silently read as "validate against whatever taxonomy the cwd
