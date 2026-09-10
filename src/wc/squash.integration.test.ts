@@ -73,6 +73,26 @@ function pinLineEndings(repo: string): void {
   mustGit(repo, ["config", "core.autocrlf", "false"]);
 }
 
+/**
+ * A REPO-LOCAL git identity, distinct from `WHO`'s per-invocation `-c` flags.
+ *
+ * `nen wc squash`'s real mechanism runs `git commit -F <file>` through
+ * `defaultSeams()` -- production code, correctly carrying no identity flags
+ * of its own, because relying on the caller's ambient git config is exactly
+ * right for a real user's machine. A CI runner is not that machine: it may
+ * have NO global `user.name`/`user.email` at all, and `WHO`'s `-c` flags
+ * only cover the SETUP commits this file makes directly -- they are invisible
+ * to the commit the VERB UNDER TEST makes. A repo-LOCAL config, by contrast,
+ * applies to every git invocation in this directory regardless of who
+ * started it, which is what lets the real mechanism succeed on a runner with
+ * no ambient identity.
+ */
+function pinIdentity(repo: string): void {
+  mustGit(repo, ["config", "user.name", "nen test"]);
+  mustGit(repo, ["config", "user.email", "nen@example.invalid"]);
+  mustGit(repo, ["config", "commit.gpgsign", "false"]);
+}
+
 async function squash(argv: readonly string[]): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -90,6 +110,7 @@ beforeAll(() => {
   mkdirSync(upstream);
   mustGit(upstream, [...PINNED, "init", "--quiet", "--initial-branch=main"]);
   pinLineEndings(upstream);
+  pinIdentity(upstream);
   writeFileSync(join(upstream, "README.md"), "root\n");
   mustGit(upstream, ["add", "README.md"]);
   mustGit(upstream, [...WHO, "commit", "--quiet", "-m", "root"]);
@@ -112,6 +133,7 @@ function freshBranch(name: string, messages: readonly string[]): string {
   const work = join(root, name);
   mustGit(root, [...PINNED, "clone", "--quiet", upstream, work]);
   pinLineEndings(work);
+  pinIdentity(work);
   mustGit(work, ["switch", "-c", name]);
   messages.forEach((message, index): void => {
     writeFileSync(join(work, `${name}-${index}.txt`), `${message}\n`);
