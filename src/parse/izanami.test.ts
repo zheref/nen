@@ -1781,15 +1781,27 @@ describe("NEN_VERB_TABLE -- the shu family, every verb classified", () => {
     expect(classifyCommand("nen shu warmup --dry-run").classification).toBe("mutating");
   });
 
+  it("classifies `shu evidence` plain read-only -- it reads git and nothing else", () => {
+    // UNLIKE EVERY EXECUTING VERB ABOVE, this one's bare form is NOT `DRY`:
+    // it spawns no declared invocation from the target repository at all,
+    // only `git diff --name-status`, a command nen itself chose -- the same
+    // shape `wc classify`'s `RO` row already carries for `git status`.
+    expect(classifyCommand("nen shu evidence --base main").classification).toBe("read-only");
+    expect(classifyCommand("nen shu evidence --repo /tmp/x --base main --json").classification).toBe(
+      "read-only",
+    );
+  });
+
   it("still refuses a subcommand this family does not have", () => {
-    // The fail-closed floor is unchanged: only the thirteen are classified, and
-    // a fourteenth arriving without a row here classifies `unknown`.
+    // The fail-closed floor is unchanged: only the fourteen registered
+    // subcommands are classified, and one arriving without a row here
+    // classifies `unknown`.
     expect(classifyCommand("nen shu invented").classification).toBe("unknown");
   });
 
   // NenFamilyEntry's own doc comment reserves "*" for a family whose flags
-  // select the behaviour or whose every subcommand shares one policy. Three of
-  // these thirteen are not `dry-run-gated`, so a "*" row would certify them.
+  // select the behaviour or whose every subcommand shares one policy. Four of
+  // these fourteen are not `dry-run-gated`, so a "*" row would certify them.
   it("carries no wildcard row", () => {
     expect(Object.keys(shu?.subcommands ?? {})).not.toContain("*");
   });

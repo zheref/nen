@@ -534,6 +534,127 @@ describe("project", () => {
   });
 });
 
+describe("project.evidence", () => {
+  it("is null when the repository declares none", () => {
+    expect(parse({ project: PROJECT }).project?.evidence).toBeNull();
+  });
+
+  it("reads globs, mechanism, and the two defaults", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        evidence: { globs: ["**/__Snapshots__/**/*.png"], mechanism: "public-mirror" },
+      },
+    });
+    const evidence = contract.project?.evidence;
+    expect(evidence?.globs).toEqual(["**/__Snapshots__/**/*.png"]);
+    expect(evidence?.mechanism).toBe("public-mirror");
+    expect(evidence?.scene).toBe("{suite}-{scene}");
+    expect(evidence?.suiteSuffix).toBe("SnapshotTests");
+  });
+
+  it("reads an explicit scene template and suiteSuffix over the defaults", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        evidence: {
+          globs: ["**/*.png"],
+          mechanism: "files-changed",
+          scene: "{scene} ({suite})",
+          suiteSuffix: "Snapshots",
+        },
+      },
+    });
+    expect(contract.project?.evidence?.scene).toBe("{scene} ({suite})");
+    expect(contract.project?.evidence?.suiteSuffix).toBe("Snapshots");
+  });
+
+  it("accepts every declared mechanism", () => {
+    for (const mechanism of ["public-mirror", "files-changed", "embedded"] as const) {
+      const contract = parse({
+        project: { ...PROJECT, evidence: { globs: ["**/*.png"], mechanism } },
+      });
+      expect(contract.project?.evidence?.mechanism, mechanism).toBe(mechanism);
+    }
+  });
+
+  it("refuses an unknown mechanism, naming the closed set", () => {
+    const error = refusal({
+      project: { ...PROJECT, evidence: { globs: ["**/*.png"], mechanism: "s3" } },
+    });
+    expect(error.pointer).toBe("project.evidence.mechanism");
+    expect(error.message).toContain("CLOSED set");
+  });
+
+  it("refuses an absent globs list, naming the field", () => {
+    const error = refusal({ project: { ...PROJECT, evidence: { mechanism: "embedded" } } });
+    expect(error.pointer).toBe("project.evidence.globs");
+    expect(error.message).toContain("nothing (the field is absent)");
+  });
+
+  it("refuses an empty globs list -- required means at least one", () => {
+    const error = refusal({
+      project: { ...PROJECT, evidence: { globs: [], mechanism: "embedded" } },
+    });
+    expect(error.pointer).toBe("project.evidence.globs");
+    expect(error.message).toContain("empty array");
+  });
+
+  it("refuses an absent mechanism, naming the field", () => {
+    const error = refusal({ project: { ...PROJECT, evidence: { globs: ["**/*.png"] } } });
+    expect(error.pointer).toBe("project.evidence.mechanism");
+  });
+
+  it("refuses a non-array globs and a non-string element, by pointer", () => {
+    expect(
+      refusal({ project: { ...PROJECT, evidence: { globs: "**/*.png", mechanism: "embedded" } } })
+        .pointer,
+    ).toBe("project.evidence.globs");
+    expect(
+      refusal({ project: { ...PROJECT, evidence: { globs: [7], mechanism: "embedded" } } }).pointer,
+    ).toBe("project.evidence.globs[0]");
+  });
+
+  it("preserves an unknown key nobody misspelled", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        evidence: { globs: ["**/*.png"], mechanism: "embedded", $note: "metadata", host: "ios" },
+      },
+    });
+    expect(contract.project?.evidence?.raw["$note"]).toBe("metadata");
+    expect(contract.project?.evidence?.raw["host"]).toBe("ios");
+  });
+
+  it("refuses a near-miss key by pointer, SAYING WHICH misspelling it is -- like 'targets'", () => {
+    // ONE HELPER, FOUR BLOCKS: this block goes through the same
+    // `refuseNearMissKey` `project.targets`, `project.launch` and a launch
+    // device do, so it reports the same three shapes in the same words. The
+    // phrase is the one that is TRUE of the key -- `Mechanism` is three
+    // substitutions from `mechanism` and is the same word, and a maintainer
+    // told it is "one letter away" is being handed a false clue about their
+    // own file at the moment they are trying to fix it.
+    for (const [key, phrase] of [
+      ["glob", "is one letter away from 'globs'"],
+      ["globss", "is one letter away from 'globs'"],
+      ["mechanisms", "is one letter away from 'mechanism'"],
+      ["seene", "is one letter away from 'scene'"],
+      ["suiteSufix", "is one letter away from 'suiteSuffix'"],
+      ["Mechanism", "differs from 'mechanism' only in case"],
+      ["SuiteSuffix", "differs from 'suiteSuffix' only in case"],
+      ["scenes", "is one letter away from 'scene'"],
+    ] as const) {
+      const error = refusal({
+        project: { ...PROJECT, evidence: { globs: ["**/*.png"], mechanism: "embedded", [key]: "x" } },
+      });
+      expect(error.pointer, key).toBe(`project.evidence.${key}`);
+      expect(error.message, key).toContain(phrase);
+      // Whichever phrase it is, the way out names the key that was meant.
+      expect(error.message, key).toContain("Fix the spelling");
+    }
+  });
+});
+
 describe("project.toolchain", () => {
   const NODE = {
     version: ">=20.19.0",

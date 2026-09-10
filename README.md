@@ -362,7 +362,7 @@ exercises all three platforms on every change for exactly this reason.
 `nen --help` lists every command family (36); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-87 verbs outside the binary — each one's purpose, arguments, exit codes and
+88 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -379,8 +379,11 @@ they compose into. The families group roughly as:
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`
 - **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,
   `ui-test`, `lint`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
-  `test-report`, `tools`, `warmup`), which run what a *target project* declares
-  in its own `nen/contract.json` — never anything Nen decided
+  `test-report`, `evidence`, `tools`, `warmup`). Most of them run what a
+  *target project* declares in its own `nen/contract.json` — never a command Nen
+  decided; the exceptions are `evidence`, which reads only `git diff`, and
+  `warmup`'s own git half, both of which run a command Nen itself chose rather
+  than the target's declared argv
 - **This repository's own dev loop** — `dev` (`test`, `lint`, `replay`)
 - **Skill-grammar parsing** — `parse`
 - **Supply** — `bootstrap`, `wake`, `stop`
@@ -392,7 +395,8 @@ root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
 `nen shu` runs those verbs today, against any repository that declares them.
-All fourteen execute — `nen shu build --dry-run` prints the exact argv, cwd and
+Fourteen of the fifteen execute a *declared* invocation in some form —
+`nen shu build --dry-run` prints the exact argv, cwd and
 environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
 a `nen/contract.json` project block from the markers on disk and never writes
 one without `--write`; `nen shu tools` checks the **host** toolchain the
@@ -401,15 +405,19 @@ through `corepack` with `--install` — every other declared installer is
 verify-only in this release. `nen shu coverage` and `nen shu test-report` each
 run a lane's declared command and then **parse what it wrote** — a coverage
 report, a results file or a whole directory of JUnit XML — into one shape, and
-refuse a damaged report by name rather than printing a plausible number for it. `nen shu warmup` is the one verb in the family that
-mutates git state: it warms a **working copy** (clean → fetch → fast-forward the
-trunk → cut your branch → verify the declared build), refusing at exit 2 rather
-than guessing at every step. Every check that needs no mutation is made *before*
-`--discard` destroys anything, so a mistyped `--branch` costs nothing; and what
-`--discard` ran is not what it achieved, so the tree is read again afterwards and
-whatever survived — a nested repository, a dirty submodule — is named rather than
-reported as clean. It is *not* the top-level `nen warmup`, which sweeps a
-**registry** for stale pins and reads only.
+refuse a damaged report by name rather than printing a plausible number for it.
+The fifteenth, `nen shu evidence`, is the one verb that runs no declared
+invocation at all: it matches `git diff --name-status <base>...HEAD` — a command
+Nen itself chose — against `project.evidence.globs`. `nen shu warmup` is the one
+verb in the family that mutates git state: it warms a **working copy** (clean →
+fetch → fast-forward the trunk → cut your branch → verify the declared build),
+refusing at exit 2 rather than guessing at every step. Every check that needs no
+mutation is made *before* `--discard` destroys anything, so a mistyped
+`--branch` costs nothing; and what `--discard` ran is not what it achieved, so
+the tree is read again afterwards and whatever survived — a nested repository, a
+dirty submodule — is named rather than reported as clean. It is *not* the
+top-level `nen warmup`, which sweeps a **registry** for stale pins and reads
+only.
 
 What each verb can run **per stack** is written down in
 [`docs/STACK-MATRIX.md`](docs/STACK-MATRIX.md) — seven stacks × thirteen

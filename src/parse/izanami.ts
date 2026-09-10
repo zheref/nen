@@ -1154,10 +1154,16 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // `write-flag-gated` on `--run` because it no longer HAS a form that spawns
   // without one. Its row carries the argument.
   //
+  // `evidence` IS THE FIFTH NON-`DRY` ROW, and it is the only PLAIN
+  // `read-only` one: it spawns no declared invocation from the target
+  // repository at all, only `git diff --name-status`, a command nen itself
+  // chose (../shu/evidence/diff.ts) -- the same shape `wc classify`'s own
+  // `RO` row already carries for `git status`.
+  //
   // AND THERE IS NO `"*"` KEY. NenFamilyEntry's own doc comment says the
   // wildcard covers a family whose flags select the behaviour or whose every
-  // subcommand shares one policy; this family's emphatically do not -- four
-  // of the thirteen are not `DRY` -- and a `"*"` row would swallow them.
+  // subcommand shares one policy; this family's emphatically do not -- six
+  // of the fifteen are not `DRY` -- and a `"*"` row would swallow them.
   // ../parse/izanami.test.ts asserts exactly which keys are here, and which
   // policy each carries, so a row's kind cannot change by accident.
   shu: {
@@ -1242,6 +1248,15 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
         ["--from-artifacts"],
         "spawns the lane's declared TEST command and then parses what it wrote, unless --dry-run is given -- and a declared test task may write (a golden-image recorder, a coverage tree), so the bare form is never certified",
       ),
+      // THE ONE PLAIN `read-only` ROW IN THIS FAMILY. Every executing verb
+      // above is `DRY` because its bare form spawns the TARGET repository's
+      // own declared argv, which this table cannot vouch for; `evidence`
+      // spawns no declared invocation at all -- only `git diff
+      // --name-status <base>...HEAD`, a command NEN chose, exactly as
+      // `nen wc classify` runs `git status` -- and matches the result against
+      // `project.evidence.globs`, a pure computation. No flag on it writes
+      // anything: there is no `--dry-run` because there is nothing to skip.
+      evidence: RO("runs 'git diff --name-status' and matches the result against project.evidence.globs -- a read nen chose, never the target's own declared argv"),
       warmup: MUT("brings a working copy to a known state: it discards, fetches, force-moves a trunk ref and checks out a branch. No form of it is a pure read -- the dry run spawns nothing, but a warm-up is not a thing anyone WATCHES, so certifying one form read-only buys a caller nothing and costs the fail-closed answer"),
     },
   },

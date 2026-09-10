@@ -11,7 +11,7 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
 `scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
-families, 87 verbs, every flag checked against the binary this repository
+families, 88 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -436,7 +436,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 87 verbs, grouped as the README groups them. **Reads** is what a
+All 88 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -518,6 +518,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- TWO flags and no single-flag path to acting: --target is required and has no default, --run is required before anything is sent, and a lane whose deploy is a seat refuses with its own reason whatever --target says | nen/contract.json (project block + project.targets: the destination's args, the env NAMES it requires, or the sentence saying it has no command line); spawns the declared argv only with --run | yes |
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
+| [`shu`](#family-shu) | [`nen shu evidence`](#nen-shu-evidence) | match `git diff --name-status <base>...HEAD` against project.evidence.globs, deriving each survivor's suite/scene and grouping suite -> scenes; empty is exit 0, never an error | git diff (through the seam only -- no declared invocation, no lane); nen/contract.json (project.evidence) | yes |
 | [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
@@ -3603,6 +3604,7 @@ proposes one.
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
 | `project.targets` | `{ "<name>": { args, requiresEnv, unsupported, why } }` — the deploy destinations, and a **project-level** map rather than a per-lane one. `--target` must name a key of it, and there is no default — not even when there is exactly one. The **command** stays in `project.verbs.<lane>.deploy`, where every other verb's command is; a target says where that command sends it. `args` are appended to that argv, in order — refused on a multi-step row (which step reaches the destination is a guess), and refused, like any other argv, when they carry one of the reference pack's own placeholder tokens. `requiresEnv` names variables that must be **set**, asserted exactly as a precondition of kind `env` is — the value is never read, compared, logged or printed, so a credential belongs in the environment and never in this file; each entry is held to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) at load, because a name no environment could carry is a row that could only ever report `FAIL`. Repeats are collapsed, and a variable the lane's own preconditions already declare is asserted **once**. `unsupported` is the destination that has **no command line at all** (a hosting provider's own push integration, a CI action): exit 4 in the repository's own words, and the sentence is required rather than just the key. All four keys are optional; `{}` is a legal name-only target, and naming it is still mandatory. **Unknown keys are preserved** here as everywhere in this schema — with one exception: a key that misspells one of the four is **refused by pointer, naming the key it meant and which misspelling it is** — one letter out (`arg`, `requireEnv`), the same word in a different case (`Args`, `WHY`), or that key with an English plural on it — because preserving it means the flag was accepted, nothing was appended, and a different command deployed at exit 0. **Target names are the repository's own** and nen constrains them no more than it constrains a lane name: a name carrying a space or a leading `-` is legal, is listed verbatim in every refusal, and a leading `-` reaches `--target` only through the `--target=<name>` spelling. See [`nen shu deploy`](#nen-shu-deploy). |
 | `project.launch` | `{ "<name>": { verb, args, device, after, unsupported, why } }` — the **launch** targets `nen shu dev` and `nen shu run` take, and a project-level map like `targets`. A different block and a different vocabulary: `targets` says where a build is **sent**, `launch` says which **device** a local run lands on. `--target` is **optional** here — a bare `dev` runs the lane's declared `dev`, as it always has — and a name this block does not carry is exit 2 listing the ones it does. `verb` is `dev` or `run`, required, out of a closed set: the two are different builds, so naming a `dev` target on `run` is exit 2 rather than a silent cross-over. `args` are appended to that verb's argv, refused on a multi-step row exactly as a deploy target's are. `device` is `{ name, kind, resolve }`: `name` is matched **exactly** against what the probe printed (never a prefix, never a case fold, never "the only one connected" — nen does not pick a device); `resolve` is a declared `{ exe, argv }` probe whose output nen searches, as JSON (a `name` property, with `identifier`/`id`/`udid`/`serial` from the same object, one of its direct children, or up to two enclosing objects) or as plain lines (the line carrying the name, and its first token of six-plus characters that carries a digit); `kind: "simulator"` with no probe resolves the id to the **name itself** and spawns nothing, while any other device with no probe is exit 2. A device the probe did not name is **exit 5 listing what it did offer**, and a name two id-bearing candidates carry is exit 5 naming both rather than a guess. `after` is `[{ exe, argv }]` run once the verb exits 0, with `{device.id}` and `{artifact}` substituted — `{artifact}` is the **first** entry of the verb's own `artifacts`, and naming either token with nothing to fill it is exit 2 before anything spawns. `unsupported` is the target with **no command line at all** (a device farm's web console): exit 4 in the repository's own words, and it may not be declared beside anything that would be run. **Unknown keys are preserved** here as everywhere — except a key one spelling away from one nen reads (`arg`, `devices`, `resolver`, `verbs`, and the block key itself as `launches` or `Launch`), which is **refused by pointer naming the key it meant and which misspelling it is** — one letter out, a case slip, or an English plural. See [`nen shu dev`](#nen-shu-dev). |
+| `project.evidence` | `{ globs, mechanism, scene, suiteSuffix }` — what [`shu evidence`](#nen-shu-evidence) matches a changed file against, **project-level** like `targets` rather than per-lane. `globs` (required, at least one) is a list of `*`/`**`/`?` patterns; `mechanism` (required) is one of `public-mirror` \| `files-changed` \| `embedded`, the repository's own answer to "how does a survivor reach a human" — `evidence` never mirrors, embeds or lists files itself, it only reports which mechanism a later step should use. `scene` (default `"{suite}-{scene}"`) and `suiteSuffix` (default `"SnapshotTests"`) are read by a later mirroring step, not by this release of `evidence` itself, which reports `suite` and `scene` as separate row fields. Refused by pointer, exactly as `targets` is and saying which misspelling it is, for a key that misspells one of the four. Absent block: exit 2 naming it. |
 
 **Preconditions are asserted, never performed.** A declaration saying
 `{ "kind": "path", "value": "node_modules" }` is telling nen that a dependency
@@ -3634,7 +3636,7 @@ more. See also the [Exit codes](#exit-codes) convention.
 |---|---|
 | `0` | the tool ran and succeeded, or a dry run rendered |
 | `1` | the tool ran and failed. Nen exits 1 whatever the tool's own code was; the tool's code is in `steps[].exitCode`. A `nen/contract.json` that is **present and malformed** is also 1 — the file is there and says something nen cannot read, which is a repository defect rather than a mistyped invocation, and it is the code every family in this CLI answers an unreadable schema file with. The refusal names the file, the pointer and the expectation |
-| `2` | usage: **no** declaration, no `project` block, an unknown `--lane`, a placeholder nen cannot substitute, a **missing** `--target` or one that names no declared target, `--json` on a long-running verb without `--dry-run`, a path that resolves outside the repository, or a precondition that is not satisfied |
+| `2` | usage: **no** declaration, no `project` block, an unknown `--lane`, a placeholder nen cannot substitute, a **missing** `--target` or one that names no declared target, `--json` on a long-running verb without `--dry-run`, a path that resolves outside the repository, or a precondition that is not satisfied. On [`shu evidence`](#nen-shu-evidence): a missing `project.evidence` block, naming it — the **one** usage refusal that verb has, since it takes no lane and spawns no declared invocation for a placeholder or a precondition to apply to. No changed file matching a glob is **not** this — it is exit 0 with an empty `rows`/`suites` set, never an error |
 | `3` | **unsupported host** — the verb is real, this machine cannot run it. Never 1 (a retry wrapper would retry forever) and never 2 (the invocation was correct) |
 | `4` | **unsupported verb for this lane** — the declaration says so, in its own words. The invocation was correct; the answer is a fact about the repository. Across the seven stacks this family is designed for, it is the majority case. [`shu warmup`](#nen-shu-warmup) passes it through from the build (or test) it delegates, unchanged. On [`shu deploy`](#nen-shu-deploy) it is also the answer for a **destination** the declaration marks `unsupported` — one that has no command line at all — for the same reason and in the same words |
 | `5` | the declared program could not be started at all — not installed, or not on `PATH`. On [`shu tools`](#nen-shu-tools) it is also the CHECK verdict for a host where anything is missing or is not the pinned version |
@@ -3661,6 +3663,18 @@ report, tests, passed, failed, skipped, total, exitCode }` — and the executor'
 own report is rendered to **stderr** instead, where every argv, duration and
 precondition row still is. Nothing is lost and stdout is still exactly one
 object.
+
+[`shu evidence`](#nen-shu-evidence) is a FIFTH contract entirely
+(`nen.shu.evidence/v0.1`), keys in order: `{ contract, base, mechanism, rows,
+suites }`. There is no `lane`, `stack`, `steps`, `cwd`, `env` or `host` — this
+verb runs no declared invocation, so none of those questions apply. Each
+`rows[]` entry is `{ suite, scene, path, status }`, `status` being one of
+`added` \| `modified` \| `deleted` \| `renamed` (git's own finer `R###`/`C###`/`T`
+codes fold into this set: a copy reports as added, a rename at its **new**
+path). Each `suites[]` entry is `{ suite, scenes }`, `scenes` being the unique
+scene names under that suite in first-seen order. An empty `rows`/`suites` pair
+is a **successful, exit-0** document — a branch that changed no evidence, not
+an error.
 
 `--json` is **refused at exit 2** on [`shu dev`](#nen-shu-dev) and
 [`shu run`](#nen-shu-run) unless `--dry-run` is also given. Those two hand this
@@ -4678,6 +4692,95 @@ tests:
 lane declares a **directory** of one XML file per suite; the same lane without
 `--from-artifacts` runs the declared command first and prints the executor's
 report above these lines)
+
+### `nen shu evidence`
+
+Match `git diff --name-status <base>...HEAD` — through the seam, never a
+lane's declared argv — against this repository's `project.evidence.globs`,
+derive each survivor's **suite** and **scene**, and report them grouped
+suite → scene. The one verb in this family that spawns no invocation the
+target repository declared: only `git diff`, a command nen itself chose.
+
+**Usage**
+
+```text
+nen shu evidence [--repo <path>] --base <ref> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--base <ref>` | **yes** | The other end of `git diff --name-status <base>...HEAD`. | `HEAD` is always the checkout's own current commit, never a flag. Nen never invents a base to diff against. |
+
+No `--lane` (`project.evidence` is project-level, like `targets`, not
+per-lane) and no `--dry-run` (nothing here would need to be skipped — the
+`git diff` runs unconditionally, exactly as [`nen wc classify`](#nen-wc-classify)'s
+own `git status` read does). Both are refused as flags this subcommand does
+not read, exactly as `--write` is refused on `build`.
+
+**The glob matcher.** `*`, `**` and `?`, no dependency and no fourth wildcard:
+`*` matches any run of characters within one path segment, `**` also crosses
+`/` — including matching **zero** directories, so `**/*.png` matches a
+root-level file and `a/**/b` matches `a/b` as well as `a/x/y/b` — and `?` is
+exactly one character, never a `/`. `[...]` classes and brace expansion are
+not implemented; a pattern using either is matched literally, character by
+character.
+
+**Suite and scene**, generalised from KroApple's own `ci_scripts/
+pr_screenshots.sh` (`scene_of()`): walk a changed path's ancestor
+directories, nearest first, and the first one whose name ends with
+`suiteSuffix` (default `"SnapshotTests"`) names the **suite**, with the
+suffix stripped. No such ancestor at all — Paparazzi's own flat
+`.../snapshots/images/<name>.png` layout, which names no per-suite directory
+— falls back to the immediate parent directory's own name, unstripped. The
+**scene** is the file's basename with its extension removed, then a trailing
+`.<n>` a test runner adds when two cases share a name (`disabled.1.png`,
+`disabled.2.png`), then the `test_snapshot_` and `test_` prefixes XCTest and
+swift-testing generate — applied in that order, unconditionally, exactly as
+the bash `${b#test_snapshot_}` / `${b#test_}` pair is. A basename neither
+prefix recognises is returned with only its extension and index removed.
+
+**`status`** folds git's finer `--name-status` codes into the four this
+family publishes: `A` → `added`, `M`/`T` → `modified`, `D` → `deleted`,
+`R###` → `renamed` (reported at the **new** path — the survivor), `C###` →
+`added` (a copy is a brand-new path whose content happens to match another;
+`copied` is not one of the four).
+
+**Output and exit codes** — `0` (matched some evidence, or matched none — an
+empty `rows`/`suites` set is a **successful** answer, never an error) and `2`
+(no `project.evidence` block, naming it — the one usage refusal this verb
+has). Codes `1`, `3`, `4` and `5` do not apply: there is no declared
+invocation to fail, no lane-scoped host restriction, no unsupported-verb
+seat, and no program nen spawns that could fail to start other than `git`
+itself, whose own failure (an unresolvable `--base`, a detached `HEAD`)
+propagates as an ordinary tool failure rather than a silent "nothing
+changed".
+
+**`--json`** is a contract of its own (`nen.shu.evidence/v0.1`), keys in
+order: `{ contract, base, mechanism, rows, suites }`. No `lane`, `stack`,
+`steps`, `cwd`, `env` or `host` — none of those questions apply to a verb
+that runs no declared invocation. Each `rows[]` entry is
+`{ suite, scene, path, status }`; each `suites[]` entry is
+`{ suite, scenes }`, `scenes` being the unique scene names under that suite
+in first-seen order.
+
+**Example**
+
+```bash
+nen shu evidence --base main
+```
+```text
+evidence: 1 changed file across 1 suite (public-mirror), against main...HEAD
+
+suite: DateTimeField
+  added    disabled                 Kro/Tests/DateTimeFieldSnapshotTests/__Snapshots__/DateTimeFieldSnapshotTests/test_snapshot_disabled.1.png
+```
+(run against a KroApple-shaped fixture declaring
+`{"globs": ["**/__Snapshots__/**/*.png"], "mechanism": "public-mirror"}`; a
+branch that changed no `__Snapshots__/**/*.png` file prints `evidence: no
+changed file under project.evidence.globs against main...HEAD` and still
+exits `0`)
 
 ### `nen shu tools`
 
