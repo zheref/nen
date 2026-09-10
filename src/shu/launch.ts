@@ -20,6 +20,8 @@
 // answer that turns "it did not work" into "the phone is asleep" or "you
 // renamed it".
 
+import { posix } from "node:path";
+
 /** The token an `after` step writes where the resolved device id belongs. */
 export const DEVICE_ID_TOKEN = "{device.id}";
 
@@ -88,6 +90,47 @@ export function substituteSteps<T extends Step>(
   // stdout goes, and a substitution that rebuilt the object from two fields
   // would silently turn a declared file write back into terminal output.
   return steps.map((step): T => ({ ...step, exe: fill(step.exe), argv: step.argv.map(fill) }));
+}
+
+/**
+ * A repo-relative artifact path, AS THE AFTER-STEPS' OWN DIRECTORY SEES IT.
+ *
+ * TWO ROOTS, ONE STRING -- and this function is where they stop disagreeing. A
+ * declaration states every path relative to the REPOSITORY ROOT (`artifacts`,
+ * `project.launch.<name>.artifact`, and every containment check nen makes), but
+ * an after-step is spawned with its cwd set to the LANE'S directory. On a lane
+ * whose `cwd` is the root the two are the same string and always were; on a lane
+ * one directory down, substituting the declared string handed the installer a
+ * path that resolved against the wrong root -- `<repo>/native/build/App.app` for
+ * a declaration that plainly means `<repo>/build/App.app` -- and the child
+ * answered "no such file" about a file that was sitting there.
+ *
+ * RELATIVE, NOT ABSOLUTE, and that is the choice worth stating. An absolute path
+ * would also resolve correctly, and it would change what EVERY existing launch
+ * target spawns: a declaration written against v0.4.0 would suddenly print and
+ * pass `/Users/somebody/code/repo/build/App.app` where it had always printed
+ * `build/App.app`. Relative to the step's own cwd, a lane at the root -- which
+ * is nearly all of them -- gets back the identical string, byte for byte, and
+ * only the lanes that were broken change.
+ *
+ * POSIX ARITHMETIC ON TWO REPO-RELATIVE STRINGS, so it is pure: no filesystem,
+ * no repository root, and the same answer on all three platforms this project's
+ * CI runs. The result is forward-slashed for the reason the declaration is --
+ * that is the separator both a declaration and every one of these toolchains
+ * accept, and a backslash would make the same lane render differently on one OS.
+ */
+export function artifactAsSeenFrom(cwdRelative: string, artifact: string): string {
+  // `normalize` IS WHAT MAKES AN EMPTY `cwd` THE ROOT rather than a special
+  // case: it answers "." for "", for "." and for "./", so the three spellings a
+  // lane may use for the repository root all take the same path through here.
+  const from = posix.normalize(cwdRelative.split("\\").join("/"));
+  const to = posix.normalize(artifact.split("\\").join("/"));
+  const relative = posix.relative(from, to);
+  // AN ARTIFACT AT THE CWD ITSELF is the one case `relative` answers with the
+  // empty string, and handing an installer an empty argument is the failure
+  // `project.launch.<name>.artifact`'s own empty-string refusal exists to
+  // prevent. `.` is what that path means from where the step stands.
+  return relative === "" ? "." : relative;
 }
 
 /**

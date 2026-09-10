@@ -33,7 +33,13 @@ import {
   type ProjectBlock,
   type StallGuard,
 } from "../schema/contract.js";
-import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, tokensUsed, usesToken } from "./launch.js";
+import {
+  ARTIFACT_TOKEN,
+  DEVICE_ID_TOKEN,
+  artifactAsSeenFrom,
+  tokensUsed,
+  usesToken,
+} from "./launch.js";
 
 /**
  * The precondition kinds this release can assert. Everything else refuses.
@@ -260,9 +266,26 @@ export interface ResolvedLaunch {
   readonly args: readonly string[];
   /**
    * The path `{artifact}` is substituted with, when the target overrides the
-   * verb's own first artifact; null when it does not.
+   * verb's own first artifact; null when it does not. AS DECLARED -- repository
+   * -root-relative, exactly as the file writes it.
    */
   readonly artifact: string | null;
+  /**
+   * What `{artifact}` is ACTUALLY substituted with: the chosen path as the
+   * after-steps' own working directory sees it, or null when there is nothing
+   * to fill the token with.
+   *
+   * TWO FIELDS FOR ONE PATH, BECAUSE THERE ARE TWO ROOTS AND A READER NEEDS
+   * BOTH. A declaration states paths against the REPOSITORY ROOT; an after-step
+   * is spawned in the LANE'S directory. On a lane at the root the two strings
+   * are identical and always have been -- which is most lanes, and is why the
+   * mismatch went unseen -- and on a lane one directory down the declared
+   * `build/App.app` is `../build/App.app` from where the installer stands.
+   * `artifact` answers "what does the file say"; this answers "what does the
+   * child receive", and collapsing them would leave the dry run unable to say
+   * that the two are the same fact seen from two places.
+   */
+  readonly artifactAs: string | null;
   readonly device: ResolvedDevice | null;
   /** The declared device probe, or null when the device needs none. */
   readonly probe: RenderedStep | null;
@@ -1180,6 +1203,15 @@ export function resolveLaunch(
       lane: target.lane,
       args: target.args,
       artifact: target.artifact,
+      // THE OVERRIDE FIRST, THEN THE VERB'S OWN FIRST ENTRY -- the same
+      // fallback `./run.ts` applied at the moment of substitution, moved here
+      // so ONE place decides what `{artifact}` means and the dry run's
+      // `substitutes:` line reads the same value a real run passes. It is
+      // rebased onto the lane's own directory because that is where every
+      // after-step is spawned; on a lane whose `cwd` is the root the two
+      // strings are identical, which is what keeps every existing declaration
+      // byte-for-byte unchanged.
+      artifactAs: artifactFor(onLane, target.artifact),
       device:
         target.device === null
           ? null
@@ -1195,6 +1227,22 @@ export function resolveLaunch(
     },
     steps,
   };
+}
+
+/**
+ * What `{artifact}` becomes for THIS plan's after-steps, or null.
+ *
+ * TWO DECISIONS IN ONE PLACE, and they were in two before: WHICH path (the
+ * target's own override, else the verb's first declared artifact) and FROM
+ * WHERE (the lane's directory, which is the cwd every after-step is spawned
+ * with). Both are pure string work over what the declaration already states --
+ * `./launch.ts`'s `artifactAsSeenFrom` carries the argument for the rebasing --
+ * so a dry run can print exactly what a real run will pass, which is the whole
+ * promise `--dry-run` makes.
+ */
+function artifactFor(plan: RenderedInvocation, override: string | null): string | null {
+  const chosen = override ?? plan.artifacts[0] ?? null;
+  return chosen === null ? null : artifactAsSeenFrom(plan.cwdRelative, chosen);
 }
 
 /** A declared `{exe, argv}` as a RenderedStep that writes no file. */

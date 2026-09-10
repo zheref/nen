@@ -435,15 +435,31 @@ function substitutionNotes(report: ShuReport): readonly string[] {
         ? `${DEVICE_ID_TOKEN} <- '${name}' itself -- a simulated device is addressed by its name, so nothing is probed`
         : `${DEVICE_ID_TOKEN} <- the id of device '${name}', read from the probe above`;
     }
+    // THE VALUE IS THE ONE A REAL RUN PASSES, not the one the file writes, and
+    // on a lane whose `cwd` is not the repository root those are two different
+    // strings. Both are printed when they differ: `<- ../build/App.app` answers
+    // "what does the child receive", `(declared build/App.app ...)` answers
+    // "which line of my file is this", and a reader needs to be able to get
+    // from either to the other. They are the SAME string on a lane at the root,
+    // and this line is then exactly what it has always been.
+    /* c8 ignore next 2 -- `resolveLaunch` refuses {artifact} when the verb declares none AND the target overrides none, so each of these has a value here */
+    const declared = target.artifact ?? artifact?.value ?? "(the verb declares none)";
+    const passed = target.artifactAs ?? declared;
     // THE OVERRIDE IS NAMED AS AN OVERRIDE, not just printed. A reader checking
     // this line already knows the rule is "the verb's first artifact"; a path
     // that is not that one, printed with no explanation, reads as nen having
     // taken the wrong entry rather than as the declaration having said so.
-    if (target.artifact !== null) {
-      return `${ARTIFACT_TOKEN} <- ${target.artifact}  (project.launch.${target.name}.artifact, not the verb's own)`;
-    }
-    /* c8 ignore next -- `resolveLaunch` refuses {artifact} when the verb declares none AND the target overrides none, so artifacts[0] is here */
-    return `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
+    const notes = [
+      ...(target.artifact === null
+        ? []
+        : [`project.launch.${target.name}.artifact, not the verb's own`]),
+      ...(passed === declared
+        ? []
+        : [
+            `declared ${declared}, as the after-steps' own directory sees it -- lane '${report.lane}' does not sit at the repository root`,
+          ]),
+    ];
+    return `${ARTIFACT_TOKEN} <- ${passed}${notes.length === 0 ? "" : `  (${notes.join("; ")})`}`;
   });
   return [labelled("substitutes", notes.join("; "))];
 }
@@ -1674,13 +1690,15 @@ function runLaunch(
     deviceId = launch.device.name;
   }
 
-  // THE TARGET'S OWN ARTIFACT WINS OVER THE VERB'S FIRST ONE, and the fallback
-  // is unchanged for every target that declares none: "the first entry of the
-  // verb's artifacts" is the right answer for the thing a lane BUILDS and the
-  // wrong one for the thing a device INSTALLS, and a build routinely produces
-  // both. ../schema/contract.ts's `LaunchTarget.artifact` carries the argument.
-  const artifact = launch.artifact ?? plan.artifacts[0] ?? null;
-  const after = substituteSteps(launch.after, { deviceId, artifact });
+  // WHICH PATH, AND FROM WHERE, WERE BOTH DECIDED IN `resolveLaunch`. The
+  // target's own artifact wins over the verb's first one -- "the first entry"
+  // is the right answer for the thing a lane BUILDS and the wrong one for the
+  // thing a device INSTALLS -- and whichever won is already expressed relative
+  // to the directory these steps are about to be spawned in, which is the lane's
+  // and not the repository root the declaration writes its paths against.
+  // Substituting the declared string here handed the installer a path that
+  // resolved against the wrong root on every lane whose `cwd` is not `.`.
+  const after = substituteSteps(launch.after, { deviceId, artifact: launch.artifactAs });
   const resolved: RenderedInvocation = {
     ...plan,
     target: {

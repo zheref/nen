@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   ARTIFACT_TOKEN,
   DEVICE_ID_TOKEN,
+  artifactAsSeenFrom,
   findDevice,
   LAUNCH_PLACEHOLDERS,
   substituteSteps,
@@ -271,5 +272,39 @@ describe("two candidates for one name: nen picks neither", () => {
       { name: "Placeholder A", udid: "AAAA-1" },
     ]);
     expect(findDevice("Placeholder A", out).id).toBe("AAAA-1");
+  });
+});
+
+// ── {artifact}, seen from where the after-steps actually stand ──────────────
+
+describe("artifactAsSeenFrom: two roots, one file", () => {
+  it("returns the declared string UNCHANGED for a lane at the repository root", () => {
+    // THE COMPATIBILITY PROMISE, and the reason the rebasing is relative rather
+    // than absolute: nearly every lane sits here, and every one of them passes
+    // exactly the bytes it always did.
+    expect(artifactAsSeenFrom(".", "build/App.app")).toBe("build/App.app");
+    expect(artifactAsSeenFrom("", "build/App.app")).toBe("build/App.app");
+  });
+
+  it("climbs out of a lane one directory down", () => {
+    expect(artifactAsSeenFrom("native", "build/App.app")).toBe("../build/App.app");
+    expect(artifactAsSeenFrom("apps/web", "build/App.app")).toBe("../../build/App.app");
+  });
+
+  it("stays inside the lane when the artifact is under it", () => {
+    expect(artifactAsSeenFrom("native", "native/build/App.app")).toBe("build/App.app");
+  });
+
+  it("answers '.' rather than an empty argument for an artifact AT the cwd", () => {
+    // An empty string would turn `install <path>` into `install`, which is the
+    // failure `project.launch.<name>.artifact`'s own empty-string refusal names.
+    expect(artifactAsSeenFrom("native", "native")).toBe(".");
+  });
+
+  it("answers with forward slashes whatever the declaration or the host use", () => {
+    // The same lane must render identically on all three platforms this
+    // project's CI runs, and a backslash is not a separator a declaration writes.
+    expect(artifactAsSeenFrom("native\\deep", "build/App.app")).toBe("../../build/App.app");
+    expect(artifactAsSeenFrom("./native/", "./build/App.app")).toBe("../build/App.app");
   });
 });

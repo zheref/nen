@@ -4503,6 +4503,7 @@ would run:     pnpm turbo run build
 cwd:           /Users/…/shu-repo
 env:           (none added)
 artifacts:     packages/app/.output (absent)
+stdout to:     (none declared)
 log:           dry run -- nothing was executed, so there is no output to capture and no tool exit code to report.
 ```
 (run for real, against the executor's own fixture declaration)
@@ -4589,12 +4590,13 @@ Given, the verb becomes three things, in this order:
    **`device.name` is matched EXACTLY, as a string, and nen performs no Unicode normalisation.** macOS names a paired phone with its own typographic apostrophe — `’` (U+2019 RIGHT SINGLE QUOTATION MARK, the character autocorrect writes for a possessive), never the straight `'` (U+0027 APOSTROPHE) a keyboard's apostrophe key types — and a device probe reproduces the name the OS gave it, curly quote included. A `project.launch` declaration written with the straight quote (`"name": "Sergio's iPhone"`) will not match a probe row that says `Sergio’s iPhone`, exactly as a case fold or a prefix does not match either: the two are different strings at the code-point level, and this family compares strings, never sightlines. Declare the name with the SAME character the probe prints — copy it out of the probe's own `--dry-run` output (or `saw` in `--json`) rather than retyping it, since retyping is precisely how the two apostrophes get swapped.
 2. **the lane's own verb**, interactively as ever, with the target's `args` appended (refused on a multi-step row — which step reaches the device is a guess). **Which lane** is `project.launch.<name>.lane` when the target names one — read before the invocation is rendered at all, so the override reaches the verb rather than being second-guessed by the lane it replaced — and otherwise the lane the invocation already resolved: a device build and the build a developer iterates in are two declared rows, and the target is where the file says which of them this launch is. An explicit `--lane` that contradicts it is exit 2 naming both, never a silent winner;
 3. **the target's `after` steps**, captured, in order, with `{device.id}` and `{artifact}` substituted — `{artifact}` being the **first** entry of the verb's own `artifacts`, or `project.launch.<name>.artifact` where the target names one. That override exists because the first artifact is the thing the lane *built* and the installer wants the thing it *signed*, which is a later entry; it is refused outside the tree, refused empty, and refused when no after-step names `{artifact}` at all. Naming `{artifact}` on a verb that declares none *and* a target that overrides nothing, or `{device.id}` on a target with no device, is exit 2 *before anything spawns*: a token nothing can fill must never reach a command line as itself. Either token written into `args` is exit 2 for the other half of the same sentence — `args` is appended to the verb's own argv, which substitution never touches. They run only if the verb exited 0, and **a verb that never exits never reaches them** — that is what the declaration asked for, and nen backgrounds nothing.
+   **`{artifact}` is substituted relative to the directory the after-step runs in**, which is the *lane's* — while `artifacts` and `project.launch.<name>.artifact` are stated, like every declared path, against the *repository root*. On a lane whose `cwd` is the root the two are the same string and always were, so nothing an existing declaration passes changes by a byte; on a lane one directory down, a declared `build/App.app` reaches the installer as `../build/App.app` rather than as a path that resolved against the wrong root. The `substitutes:` line says both when they differ — `{artifact} <- ../build/App.app  (declared build/App.app, as the after-steps' own directory sees it — lane '<name>' does not sit at the repository root)` — while `artifacts:` keeps reporting the repository-relative string: the two answer different questions (*what does this build produce* against *what will the child receive*), and collapsing them would hide the rebasing rather than show it. `--json` carries both, as `target.artifact` (the declared override, or `null`) and `target.artifactAs` (what is actually substituted).
 
 All three run in the lane's `cwd` and are given the verb's own declared `env`: a launch is one lane operation, and an installer that could not see the variables the build was given would be a second environment nobody declared. Only the **names** are ever reported, here as everywhere.
 
 **Which refusal answers first, when `--target` is given.** A target belongs to **one** of the two long-running verbs, and that is a fact about the declaration — true on every lane and every host — while a lane's `unsupported` seat is a fact about one row. So the target's own verb is checked **before the lane is even read**: `nen shu run --target <a target declared for dev>` is exit **2** naming the fix (`run 'dev --target <name>'`), never the lane's exit 4. It used to be the other way round, and on any lane where the other verb is seated or simply undeclared the caller got a dead end — *"'run' is unsupported on lane 'device'"*, true, and pointing at a row they never wanted — while nen already held the sentence that ends the problem one check further down. Everything else keeps the order it had: a lane's seat still answers **4** when the target's verb *does* match (there the seat is the whole answer), a target with **no command line at all** still answers 4 in the repository's own words, and a `--target` this block does not declare is still exit 2 listing the ones it does.
 
-`--dry-run` prints all three as `would run:` lines with the tokens **unfilled**, plus one `substitutes:` line saying what each stands for, and spawns nothing at all — the probe included, which is what keeps this form read-only in [izanami's table](#nen-parse-izanami). `--json` still needs `--dry-run`, and the document's `target` is then `{ name, verb, lane, args, artifact, device: { name, kind, id }, probe, after }`, with `id` null exactly because nothing was probed.
+`--dry-run` prints all three as `would run:` lines with the tokens **unfilled**, plus one `substitutes:` line saying what each stands for, and spawns nothing at all — the probe included, which is what keeps this form read-only in [izanami's table](#nen-parse-izanami). `--json` still needs `--dry-run`, and the document's `target` is then `{ name, verb, lane, args, artifact, artifactAs, device: { name, kind, id }, probe, after }`, with `id` null exactly because nothing was probed.
 
 ```text
 $ nen shu dev --repo <repo> --target handset --dry-run
@@ -4613,6 +4615,7 @@ substitutes:   {device.id} <- the id of device 'Placeholder Handset Pro', read f
 cwd:           <repo>
 env:           (none added)
 artifacts:     (none declared)
+stdout to:     (none declared)
 log:           dry run -- nothing was executed, so there is no output to capture and no tool exit code to report.
 ```
 
@@ -4635,6 +4638,7 @@ substitutes:   {device.id} <- the id of device 'Placeholder Handset Pro', read f
 cwd:           <repo>
 env:           (none added)
 artifacts:     build/device/Placeholder.app (absent), build/device/Placeholder.signed (absent)
+stdout to:     (none declared)
 log:           dry run -- nothing was executed, so there is no output to capture and no tool exit code to report.
 ```
 
@@ -4646,6 +4650,28 @@ Four things on that page are the point, and each is a rule rather than a renderi
 - `artifacts:` still lists what the **verb** declares, both entries, in declaration order. It answers what this build produces; `substitutes:` answers what this target installs. Collapsing the two would hide the override rather than show it.
 
 `--dry-run --json` carries the same facts as fields: `target.lane` and `target.artifact` (both `null` on a target that declares neither), `target.after` verbatim with its tokens intact, and `artifacts[]` unchanged.
+
+**A lane that is not at the repository root, and what `{artifact}` then becomes.** The fixture's `nested` row runs on the `embedded` lane, whose `cwd` is `native`:
+
+```text
+$ nen shu dev --repo <repo> --target nested --dry-run
+lane:          embedded  (xcode-ios)
+verb:          dev
+target:        nested  (appends no argument)  -- on lane 'embedded', which this target declares
+device:        Placeholder Bench 2 (simulator)  -- id not resolved (nothing was probed)
+host:          darwin -- supported (declared: darwin, linux, win32)
+preconditions: (none declared)
+would run:     placeholder-build-tool -destination generic/platform=placeholder-embedded build
+would run:     placeholder-installer install {artifact} --on {device.id}
+substitutes:   {device.id} <- 'Placeholder Bench 2' itself -- a simulated device is addressed by its name, so nothing is probed; {artifact} <- ../build/embedded/Placeholder.app  (declared build/embedded/Placeholder.app, as the after-steps' own directory sees it -- lane 'embedded' does not sit at the repository root)
+cwd:           <repo>/native
+env:           (none added)
+artifacts:     build/embedded/Placeholder.app (absent)
+stdout to:     (none declared)
+log:           dry run -- nothing was executed, so there is no output to capture and no tool exit code to report.
+```
+
+`artifacts:` and `substitutes:` name the same file from the two roots that exist here — the repository's, which is where the declaration writes every path, and the after-step's own `cwd`, which is where the installer will actually look. Every launch target on a lane whose `cwd` is `.` prints and passes exactly what it always did.
 
 ### `nen shu run`
 

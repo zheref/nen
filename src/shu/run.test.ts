@@ -800,7 +800,7 @@ describe("refusals", () => {
   it("exit 2 naming every declared lane when --lane is unknown", async () => {
     const result = await capture(["build", "--lane", "nope"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/Declared: web, native, pages, device\./);
+    expect(result.err.join("\n")).toMatch(/Declared: web, native, pages, device, embedded\./);
   });
 
   it("exit 4 listing the lane's declared verbs when it declares no such verb", async () => {
@@ -1743,7 +1743,7 @@ describe("dev/run --target: the flag is OPTIONAL and names a device", () => {
     const result = await capture(["dev", "--target", "nope"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("is not declared under project.launch");
-    expect(result.err.join("\n")).toContain("Declared: bench, farm, handset, install, sim.");
+    expect(result.err.join("\n")).toContain("Declared: bench, farm, handset, install, nested, sim.");
     expect(result.seams.calls).toEqual([]);
   });
 
@@ -2598,6 +2598,134 @@ describe("the target's own verb answers before the lane's seat", () => {
     // The lane the caller named declares no `run`, and there is no target to
     // read a better sentence off -- so the lane still answers, as it must.
     expect(result.err.join("\n")).toContain("declares no 'run'");
+  });
+});
+
+// ── (i.5) {artifact} as the after-step's own directory sees it ─────────────
+//
+// TWO ROOTS, ONE STRING. A declaration states every path against the REPOSITORY
+// ROOT; an after-step is spawned with its cwd set to the LANE'S directory. On a
+// lane at the root the two are the same string, which is how the mismatch stayed
+// invisible -- and on a lane one directory down the installer was handed a path
+// that resolved against the wrong root and answered "no such file" about a file
+// that was sitting there.
+
+describe("{artifact} reaches the after-step relative to where it runs", () => {
+  it("climbs out of a lane whose cwd is not the repository root", async () => {
+    // The fixture's `embedded` lane runs in `native/`; its declared artifact is
+    // `build/embedded/Placeholder.app`, one directory up from there.
+    const result = await capture(["dev", "--target", "nested"], {
+      script: [
+        ok("placeholder-build-tool -destination generic/platform=placeholder-embedded build"),
+        ok("placeholder-installer install ../build/embedded/Placeholder.app --on Placeholder Bench 2"),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams).at(-1)).toBe(
+      "placeholder-installer install ../build/embedded/Placeholder.app --on Placeholder Bench 2",
+    );
+    // AND THE STEP RAN THERE, which is the other half of the same fact.
+    expect(result.out.join("\n")).toContain("native");
+  });
+
+  it("prints both strings on the substitutes line, and the declared one under artifacts:", async () => {
+    const result = await capture(["dev", "--target", "nested", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(
+      "{artifact} <- ../build/embedded/Placeholder.app  (declared build/embedded/Placeholder.app, as the after-steps' own directory sees it -- lane 'embedded' does not sit at the repository root)",
+    );
+    // `artifacts:` ANSWERS A DIFFERENT QUESTION -- what does this build produce
+    // -- and keeps the repository-relative string every other declared path is
+    // reported in. `substitutes:` answers what the child receives.
+    expect(result.out.join("\n")).toContain(
+      "artifacts:     build/embedded/Placeholder.app (absent)",
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("leaves a lane at the ROOT byte-identical to what it always was", async () => {
+    // THE COMPATIBILITY PROMISE, and the reason the rebasing is relative rather
+    // than absolute: the fixture's `install` target is a root-cwd lane, and both
+    // the argv it spawns and the line it prints are unchanged to the byte.
+    const dry = await capture(["dev", "--target", "install", "--dry-run"]);
+    expect(dry.out.join("\n")).toContain(
+      "{artifact} <- build/device/Placeholder.signed  (project.launch.install.artifact, not the verb's own)",
+    );
+    expect(dry.out.join("\n")).not.toContain("as the after-steps' own directory sees it");
+    const wet = await capture(["dev", "--target", "install"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: {
+            code: 0,
+            stdout: JSON.stringify([{ name: "Placeholder Handset Pro", udid: "U-9" }]),
+          },
+        },
+        ok("placeholder-build-tool -destination generic/platform=placeholder-device build"),
+        ok("placeholder-installer install --device U-9 build/device/Placeholder.signed"),
+      ],
+    });
+    expect(wet.code).toBe(0);
+    expect(spawned(wet.seams).at(-1)).toBe(
+      "placeholder-installer install --device U-9 build/device/Placeholder.signed",
+    );
+  });
+
+  it("rebases a target's OWN artifact override too, since it is a path like any other", async () => {
+    // The override inherits the property rather than introducing it: it is the
+    // same repo-relative string read from a different key.
+    const result = await withDeclaration(
+      {
+        lanes: { only: { stack: "placeholder-stack", cwd: "sub/dir" } },
+        defaultLane: "only",
+        verbs: { only: { dev: { exe: "placeholder-tool", argv: ["serve"], artifacts: ["out/app"] } } },
+        launch: {
+          box: {
+            verb: "dev",
+            artifact: "out/app.signed",
+            device: { name: "Bench", kind: "simulator" },
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+          },
+        },
+      },
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain("{artifact} <- ../../out/app.signed");
+    expect(result.out.join("\n")).toContain("project.launch.box.artifact, not the verb's own");
+    expect(result.out.join("\n")).toContain("as the after-steps' own directory sees it");
+  });
+
+  it("publishes both paths in --dry-run --json, and neither hides the other", async () => {
+    const nested = await capture(["dev", "--target", "nested", "--dry-run", "--json"]);
+    const report = JSON.parse(nested.out.join("\n")) as {
+      target: { artifact: string | null; artifactAs: string | null };
+      artifacts: readonly { value: string }[];
+    };
+    // `artifact` is the DECLARED override -- null here, because this target
+    // declares none -- and `artifactAs` is what the child will actually get.
+    expect(report.target.artifact).toBeNull();
+    expect(report.target.artifactAs).toBe("../build/embedded/Placeholder.app");
+    expect(report.artifacts.map((entry): string => entry.value)).toEqual([
+      "build/embedded/Placeholder.app",
+    ]);
+    // AND ON A ROOT LANE THE TWO ARE THE SAME STRING, which is the whole reason
+    // this was ever able to go unnoticed.
+    const root = await capture(["dev", "--target", "install", "--dry-run", "--json"]);
+    const at = JSON.parse(root.out.join("\n")) as {
+      target: { artifact: string | null; artifactAs: string | null };
+    };
+    expect(at.target.artifactAs).toBe(at.target.artifact);
+  });
+
+  it("is null on a target whose after-steps name no artifact at all", async () => {
+    const result = await capture(["dev", "--target", "sim", "--dry-run", "--json"]);
+    const report = JSON.parse(result.out.join("\n")) as {
+      target: { artifactAs: string | null };
+    };
+    // `web`'s `dev` declares no artifacts, so there is nothing to fill the token
+    // with -- and the token is not named, which is why this is not a refusal.
+    expect(report.target.artifactAs).toBeNull();
   });
 });
 
