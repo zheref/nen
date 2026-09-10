@@ -18,9 +18,10 @@ function requireTarget(context: CommandContext): Target {
 }
 
 /**
- * The registry, or a PRECONDITION refusal at exit 2 when it does not exist on
- * disk at all -- ENOENT under both `nen/repos.json` and the legacy
- * `schemas/repos.json` (../schema/taxonomy.ts's `ABSENT_FILE_MARKER`).
+ * The registry, or a PRECONDITION refusal at exit 2 when `nen/repos.json` does
+ * not exist on disk (../schema/taxonomy.ts's `ABSENT_FILE_MARKER`). `nen/` is
+ * the only location read. A legacy-only `schemas/repos.json` is refused, with
+ * ../schema/source.ts's migration sentence appended to the absence message.
  *
  * EVERY VERB IN THIS FAMILY THAT OPENS THE REGISTRY REFUSES THE SAME WAY. An
  * absent registry is not a token that failed to resolve or a scenario that
