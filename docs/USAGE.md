@@ -10,8 +10,8 @@ the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
-`scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
-families, 88 verbs, every flag checked against the binary this repository
+`scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 37 command
+families, 90 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -436,7 +436,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 88 verbs, grouped as the README groups them. **Reads** is what a
+All 90 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -487,6 +487,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop | git (rev-parse/symbolic-ref/log/diff), nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name | caller-named --template + --data files; writes --out, inside --repo, unless --dry-run | yes |
+| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout: the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them | caller-named --source + --agents directories; writes --out; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface) / hand-edited | caller-named --source + --agents + --out; writes nothing at all; no git/gh | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
@@ -5774,6 +5776,194 @@ wrote Reports/effort.html
 <p>93.74% of lines on 'nen'</p>
 ```
 (both run for real, `effort.html` being the six-line template above. Note the escaping: the merge commit's `'origin/main'` came out as `&#39;origin/main&#39;` from a `{{subject}}` cell, which is the default and the point. With a `coverage` of `null` the last paragraph is simply absent — the `{{#if}}` block is skipped, not blanked. The same render with `--out ../escape.html` prints `--out '../escape.html' resolves outside the repository at … 'report render' writes the report INTO the repository it is reporting on and nowhere else` at exit 2)
+## Surfaces
+
+One skills directory, rendered into the layout and frontmatter another agent
+surface documents for itself. Both verbs are local — no `gh`, no network — and
+neither installs anything: they write a mirror into a directory you name, and
+say how the committed one differs from a fresh generation. Where a skill lives
+once and has to be readable by more than one agent product, this is the copy
+that is generated rather than maintained.
+
+<a id="family-surface"></a>
+
+**`nen surface`**
+
+`mirror generate` writes `<out>/<name>/SKILL.md` for every `<name>/SKILL.md`
+under `--source`; `mirror check` regenerates the same thing in memory and diffs
+it against what is committed, exactly as [`canon mirror
+check`](#nen-canon-mirror-check) does, with the same four drift classes. Every
+per-surface difference — which frontmatter keys survive, how an invocation is
+spelled, where a persona goes — is **a row in `src/surface/rules.ts`**, not a
+branch in the generator, and each row carries the URL every fact in it was read
+from. Adding a surface is adding a row.
+
+The two rows this release ships, read on 2026-09-10:
+
+| | `codex` | `cursor` |
+|---|---|---|
+| skills read from | `.agents/skills/<name>/SKILL.md` ([docs](https://learn.chatgpt.com/docs/build-skills)) | `.cursor/skills/<name>/SKILL.md` ([docs](https://cursor.com/docs/skills)) |
+| frontmatter kept | `name`, `description` — the page documents no other key | `name`, `description`, `paths`, `globs`, `disable-model-invocation`, `icon`, `color`, `metadata` — the documented table, whole |
+| required | `name`, `description` | `name`, `description` |
+| invocation spelled | `$<name>` (*"run /skills or type $ to mention a skill"*) | `/<name>` (*"you explicitly type /skill-name in chat"*) |
+| personas | **no markdown persona file** — every one becomes a `## <name>` section of a generated `AGENTS.md` ([docs](https://learn.chatgpt.com/docs/agent-configuration/agents-md)) | one file per persona under `<out>/agents/<stem>.md`, frontmatter reduced to `name`, `description`, `model`, `readonly`, `is_background` ([docs](https://cursor.com/docs/agent/subagents)) |
+
+Two caveats the table carries and prints on stderr, rather than acting on:
+Codex **also** documents standalone per-agent **TOML** files under
+`.codex/agents/` (`name`, `description`, `developer_instructions`), which this
+verb does not write — it mirrors markdown to markdown, so a persona lands in
+`AGENTS.md` as prose; and Cursor documents that a skill's `name` must be
+lowercase letters, numbers and hyphens and must match its folder name, which nen
+carries through and does not enforce.
+
+**The generated marker is the first *markdown* line, not the first line of the
+file.** Every surface here identifies a skill by YAML frontmatter delimited by
+`---` **at the start of the file**, so an HTML comment above that fence would
+produce a file the surface silently declines to load — a "do not edit" banner
+bought at the price of the document. So the marker sits immediately after the
+closing fence (and on line 1 of `AGENTS.md`, which has no frontmatter):
+
+```text
+<!-- GENERATED by nen surface mirror (surface: cursor) -- do not edit; edit the source and regenerate -->
+```
+
+It is ASCII, it names the surface, and `check` reads it back out of that one
+position only — a marker-shaped line further down the file (a quoted example, a
+nested fence) is never mistaken for the real one, the same anchoring
+[`canon mirror check`](#nen-canon-mirror-check) applies to its own header.
+
+**What is mirrored, and what is not.** Only `<name>/SKILL.md` — a skill
+directory's `scripts/`, `references/` and assets are left where they are, and a
+mirror directory may hold them beside the generated file without either verb
+touching them. The **filename universe** these two verbs consider their own is
+exactly `<name>/SKILL.md` plus the row's own persona location; anything else
+under `--out` is never deleted and never reported as `extra`.
+
+### `nen surface mirror generate`
+
+Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
+with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
+documents, and — with `--invocation-prefix` — every `<prefix><name>` mention
+rewritten into that surface's own spelling. Writes only files whose content
+actually changed, and deletes an orphan whose source is gone (plus the directory
+that emptied, if nothing else was in it).
+
+It **never overwrites a file it did not write**. Every destination is checked
+for the marker *before the first byte is written*, and a file that carries none
+is refused by name at exit 2 — the case this exists for is `AGENTS.md`, which
+people write by hand at the root of a project and which an `--out` pointed one
+directory too high would otherwise destroy with no diff to recover it from. A
+file that *does* carry the marker is overwritten freely, hand edits included:
+that is the self-healing the mirror is for.
+
+**Usage**
+
+```text
+nen surface mirror generate --source <dir> --surface codex|cursor --out <dir>
+                            [--agents <dir>] [--invocation-prefix <prefix>]
+                            [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--source <dir>` | **yes** | the directory whose **subdirectories** are the skills | one holding no `<name>/SKILL.md` is refused at exit 2, never mirrored as empty: an empty generation would delete the whole mirror as orphaned, so the one plausible typo (`--source` pointed one level too high) would quietly empty it instead of saying so |
+| `--surface <name>` | **yes** | which row of the table above | anything else is refused at exit 2, listing the ones that exist |
+| `--out <dir>` | **yes** | where the mirror is written | a path resolving **inside** `--source` (its own directory included) is refused at exit 2 — the mirror would become part of the source, and the next run would mirror its own output. Created if absent |
+| `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused |
+| `--invocation-prefix <p>` | no | the **source's own** invocation namespace, e.g. `myplugin:` | caller data, never a literal in this binary (§3), for the same reason [`canon mirror generate`](#nen-canon-mirror-generate)'s `--header-template` is a flag. Without it nothing is rewritten; with it, mentions of skills *outside* the mirrored set are rewritten too, because a half-rewritten document is worse than an unrewritten one |
+| `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
+| `--repo <path>` | no | Not used — this verb operates purely on the paths given. | |
+
+**Output and exit codes** — prints `surface:`, `out:`, then `written:`,
+`unchanged:` and `deleted (orphaned):` (each `(none)` when empty); the row's
+caveat goes to **stderr**, so `--json` stays one document. `--json`:
+`{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
+dryRun, written, unchanged, deleted }`. Exit 0 on any completed run; exit 2 on a
+missing or unknown flag, an `--out` inside `--source`, a `--source` with no
+`SKILL.md`, a `SKILL.md` with no frontmatter block or missing a key the surface
+documents as required, or a destination that exists and carries no marker.
+
+**Example**
+
+```bash
+nen surface mirror generate --source src/surface/fixtures/skills \
+  --agents src/surface/fixtures/agents --surface cursor \
+  --out /tmp/nen-doc/cursor --invocation-prefix "demo:"
+```
+```text
+nen: note: cursor: this surface documents that a skill's `name` must be lowercase letters, numbers and hyphens and must match its folder name; nen mirrors the folder name and the `name` line it was given, and refuses neither.
+surface: cursor (.cursor/skills/<name>/SKILL.md)
+out: /tmp/nen-doc/cursor
+written: agents/scout.md, alpha/SKILL.md, beta/SKILL.md
+unchanged: (none)
+deleted (orphaned): (none)
+```
+The `alpha` skill's source frontmatter carries `name`, `description`,
+`allowed-tools`, `model`, `license` and `metadata`; what lands in the mirror is
+`name`, `description` and `metadata`, and every `demo:alpha` in the body — and
+in the description — has become `/alpha`. Under `--surface codex` the same
+source produces `name` and `description` only, `$alpha`, and one `AGENTS.md`
+holding a `## scout` section instead of `agents/scout.md`.
+
+### `nen surface mirror check`
+
+Regenerates from the SAME inputs `generate` uses and diffs the result against
+`--out` **without writing anything** — the CI-safe half of the pair. A file is:
+
+| Class | Meaning |
+|---|---|
+| `ok` | byte-identical to a fresh generation |
+| `missing` | the source has it; `--out` has not |
+| `extra` | `--out` has it, in the mirror's filename universe, and no source produces it |
+| `stale` | it carries a marker, but for a **different surface** — really generated, really out of date |
+| `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright |
+
+`stale` is where [`canon mirror check`](#nen-canon-mirror-check)'s `--ref` sits
+in this verb: there is no pinned upstream version to compare, so the fact the
+marker carries is the **surface**, and a mirror generated for one surface and
+checked against another is exactly that verb's stale case. Calling it
+hand-edited would send its maintainer looking for an edit nobody made.
+
+**Usage**
+
+```text
+nen surface mirror check --source <dir> --surface codex|cursor --out <dir>
+                         [--agents <dir>] [--invocation-prefix <prefix>]
+                         [--json]
+```
+
+**Arguments** — the same as `generate`, minus `--dry-run`, which is **refused**
+here (exit 2) rather than ignored: this verb never writes, so a flag saying "do
+not write" would be an instruction accepted and dropped.
+
+**Output and exit codes** — prints `surface:`, `ok: <n>`, then `missing:`,
+`extra:`, `stale:` and `hand-edited:` (each `(none)` when empty). `--json`:
+`{ contract: "nen.surface.mirror.check/v0.1", surface, ok, missing, extra,
+stale, handEdited }`. Exit **0** when all four drift lists are empty; exit **1**
+on any drift; exit 2 on the same refusals `generate` has, plus `--dry-run`.
+
+**Example**
+
+```bash
+nen surface mirror check --source src/surface/fixtures/skills \
+  --agents src/surface/fixtures/agents --surface cursor \
+  --out /tmp/nen-doc/cursor --invocation-prefix "demo:"
+```
+```text
+surface: cursor
+ok: 1
+missing: beta/SKILL.md
+extra: gamma/SKILL.md
+stale: (none)
+hand-edited: alpha/SKILL.md
+```
+(exit 1, after `beta/SKILL.md` was deleted from the mirror, a paragraph was
+appended to `alpha/SKILL.md`, and a `gamma/SKILL.md` with no source was left
+behind. Re-running `generate` heals all three at once — `written: alpha/SKILL.md,
+beta/SKILL.md`, `deleted (orphaned): gamma/SKILL.md` — and the check then exits 0)
+
 ## Developer workflows
 
 Six end-to-end scenarios, composed only from verbs that exist in v0.2.0. Every
