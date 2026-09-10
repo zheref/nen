@@ -4,13 +4,15 @@ dist/
 .DS_Store
 
 # ANCHORED, and the leading slash is the whole point. Unanchored, `coverage/`
-# matches a directory of that name at ANY depth -- which in this repository
-# means `src/shu/coverage/`, the source of the verb that reads coverage
-# reports. Every file under it had to be forced past the ignore rule to be
-# committed at all, and the next one added there would have been silently
-# skipped by `git add .`. What this line exists to ignore is the coverage
-# output THIS repository's own test run writes, and that lands in exactly one
-# place: the repository root.
+# matches a directory of that name at ANY depth -- which in this repository is
+# three of them: `src/shu/coverage/` (the source of the verb that READS
+# coverage reports), `src/shu/fixtures/coverage/` and
+# `src/schema/fixtures/shu-coverage-repo/coverage/` (38 fixture and source
+# files between them). Every one had to be forced past the rule to be
+# committed at all, and the next file added beside them would have been
+# skipped by `git add .` without a word. What this line exists to ignore is
+# the report THIS repository's own test run writes, and that lands in exactly
+# one place: the repository root.
 /coverage/
 
 # Nen's own generated output. NOT `nen/`, which is committed configuration --
