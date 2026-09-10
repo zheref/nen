@@ -1926,13 +1926,18 @@ line(s) indented two spaces. `--json` prints an array of each input object merge
 `effortClass`/`evidence`. Exit 0 whatever the classification (even `state-machine-violation`); exit 1
 only when `--input` cannot be read or parsed as a JSON array; exit 2 when `--input` is omitted.
 
-> **Note:** `--help` under-reports the class list. It names six classes
-> (`delivering`, `building`, `stalled`, `queued`, `idle`,
-> `state-machine-violation`), but `src/effort/classify.ts` has a seventh
-> that this verb really can return: `undecidable`, reached when an entry
-> carries no stage label, no mode label, no PR and no live integration
-> branch. Handle it in any caller that switches on the class. Tracked as
-> [zheref/nen#53](https://github.com/zheref/nen/issues/53).
+**The seven printable values, and why the taxonomy is still five.** senkei §3's
+taxonomy has five classes — `delivering`, `building`, `stalled`, `queued`,
+`idle` — and this verb's own name for itself says so. Two more values are real,
+reachable output, and they are answers *about* the taxonomy rather than members
+of it: `state-machine-violation` (two stage labels at once, flagged rather than
+resolved by guessing which is authoritative) and `undecidable` (no stage label,
+no mode label, no PR and no live integration branch — nothing here places the
+object anywhere). **Handle both in any caller that switches on the class.**
+`--help` used to name the count and five of the six it listed, mentioning
+`undecidable` nowhere at all (zheref/nen#53); it now names all seven, and
+`src/effort/command.test.ts` fails the build if a class the union carries is
+missing from it.
 
 **Example**
 

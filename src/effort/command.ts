@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
-import { classifyEffort, type EffortInput } from "./classify.js";
+import { classifyEffort, TAXONOMY_CLASSES, type EffortInput } from "./classify.js";
 
 const USAGE = `nen effort classify -- senkei §3's five-class taxonomy, mechanical half.
 
@@ -14,12 +14,25 @@ The input file is a JSON array of:
    "modeLabelPresent":bool,"hasPr":bool,"prOpen":bool,"prIsDelivery":bool,
    "integrationBranchAlive":bool,"reviewerVerdictMissing":bool}
 
-Classifies each entry as delivering, building, stalled, queued, idle, or
-state-machine-violation (two stage labels at once -- flagged, never resolved
-by guessing). 'stalled''s live-signal half (a reviewer job that died mid-run,
-a builder that burned its cap) is read from --input's optional
-reviewerVerdictMissing rather than fetched here; the mechanical rule
-(released, no branch, no PR) still reaches 'stalled' without it.`;
+SEVEN VALUES ARE PRINTABLE, and the taxonomy has five of them:
+  ${TAXONOMY_CLASSES.join(", ")}.
+The other two are answers ABOUT the taxonomy rather than members of it, and a
+caller switching on the class must handle both:
+
+  state-machine-violation  two stage labels at once -- flagged, never resolved
+                           by guessing which is authoritative.
+  undecidable              no stage label, no mode label, no PR and no live
+                           integration branch: nothing here places the object
+                           anywhere in the taxonomy. Reported, never guessed.
+
+'stalled''s live-signal half (a reviewer job that died mid-run, a builder that
+burned its cap) is read from --input's optional reviewerVerdictMissing rather
+than fetched here; the mechanical rule (released, no branch, no PR) still
+reaches 'stalled' without it.
+
+Exit 0 whatever the classification, including both of the two above: a
+classification is this verb's ANSWER, and an answer of "these labels contradict
+each other" or "nothing places this" is as much an answer as any other.`;
 
 export const effortCommand: Command = {
   name: "effort",

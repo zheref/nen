@@ -29,6 +29,37 @@
 
 export type EffortClass = "delivering" | "building" | "stalled" | "queued" | "idle" | "state-machine-violation" | "undecidable";
 
+/**
+ * Every value `classifyEffort` can return, as data.
+ *
+ * THE FIVE, AND THE TWO THAT ARE NOT CLASSES OF THE FIVE (zheref/nen#53).
+ * senkei §3's taxonomy has FIVE classes and this verb's own name for itself says
+ * so; `state-machine-violation` and `undecidable` are answers ABOUT the taxonomy
+ * rather than members of it -- the first says two stage labels contradict each
+ * other and the second says nothing here places the object anywhere. Both are
+ * real, reachable output, and `--help` named neither the count nor the second of
+ * them, so a caller reading only `--help` had no signal that `undecidable`
+ * existed at all.
+ *
+ * It is a LIST rather than a sentence because a sentence goes stale: the
+ * `satisfies` below fails the build if a class is added to the union and not
+ * here, and ../effort/command.test.ts fails it if one is here and not in the
+ * help text. That pair is what makes the vocabulary the verb prints the
+ * vocabulary the verb has.
+ */
+export const EFFORT_CLASSES = [
+  "delivering",
+  "building",
+  "stalled",
+  "queued",
+  "idle",
+  "state-machine-violation",
+  "undecidable",
+] as const satisfies readonly EffortClass[];
+
+/** The five that are senkei's taxonomy proper. */
+export const TAXONOMY_CLASSES = ["delivering", "building", "stalled", "queued", "idle"] as const satisfies readonly EffortClass[];
+
 export interface EffortInput {
   readonly kind: "epic" | "child";
   readonly issueState: "open" | "closed";
