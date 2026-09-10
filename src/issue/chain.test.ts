@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedSeams } from "../seam/scripted.js";
+import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { NotAnIssueError, type IssueSummary } from "./subissue.js";
 import {
@@ -361,5 +361,79 @@ describe("classifyChainPosition -- FOUR roles can refuse a verdict, and four can
     // every branch above the routable fall-through returns first.
     const closed = { ...(open as object), state: "closed" } as typeof open;
     expect(classifyChainPosition(closed, mapOf("idea=kind:idea")).position).toBe("closed");
+  });
+});
+
+// zheref/nen#85. GitHub redirects a transferred object, so `--issue 925` can be
+// answered by a payload numbered 926. The refusal paths were made consistent by
+// #82 and its follow-up -- every one of them reports the number AS THE CALLER
+// SPELLED IT -- and the SUCCESS path was not touched: text printed `#925` (the
+// command renders the typed argument) while `--json`'s `issue` carried 926, off
+// `summary.number`. One run, two renderings, two answers.
+describe("chainPosition / terminus -- on a REDIRECT, the result carries the caller's number", () => {
+  const TARGET: Target = { owner: "o", repo: "n", slug: "o/n" };
+  const { map } = parseRoleMap([
+    "building=mode:build",
+    "in-review=mode:review",
+    "idea=mode:idea",
+    "epic=type:epic",
+  ]);
+
+  /** `--issue 925` answered by a genuine issue numbered 926. */
+  function redirected(labels: readonly string[] = [], state = "open"): ScriptedCall {
+    return {
+      match: "gh api repos/o/n/issues/925",
+      result: {
+        stdout: JSON.stringify({ number: 926, id: 90926, title: "moved", state, labels }),
+      },
+    };
+  }
+
+  it("chain-position labels the verdict with the number that was asked for", () => {
+    const seams = new ScriptedSeams([redirected(["mode:idea"])]);
+    const result = chainPosition(seams, TARGET, 925, map);
+    expect(result.position).toBe("idea");
+    expect(result.issue).toBe(925);
+  });
+
+  it("terminus does the same, on its own result shape", () => {
+    const seams = new ScriptedSeams([redirected([], "closed")]);
+    const result = terminus(seams, TARGET, 925, map);
+    expect(result.kind).toBe("run-already-ended");
+    expect(result.issue).toBe(925);
+    // ...and in the evidence a caller reads, not only in the field.
+    expect(result.evidence.join(" ")).toContain("#925");
+    expect(result.evidence.join(" ")).not.toContain("#926");
+  });
+
+  it("agrees with the REFUSAL path, which has carried the caller's number since #82", () => {
+    // The consistency this closes: one verb, one number, whichever way the run
+    // ends. A payload that turns out to be a pull request refuses with 925.
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api repos/o/n/issues/925",
+        result: {
+          stdout: JSON.stringify({
+            number: 926,
+            id: 90926,
+            title: "moved, and a PR",
+            state: "open",
+            labels: [],
+            pull_request: { url: "https://api.github.com/repos/o/n/pulls/926" },
+          }),
+        },
+      },
+    ]);
+    expect((): unknown => chainPosition(seams, TARGET, 925, map)).toThrow(/#925 names a pull request/);
+  });
+
+  it("still answers the payload's number when no caller number is given", () => {
+    // The default, and the reason it is one: a caller constructing a summary
+    // directly is asking about THAT object, and the two numbers are the same by
+    // construction. Only a redirect makes them differ, and only a caller that
+    // typed a number can know it redirected.
+    const summary = issue({ number: 926, labels: ["mode:idea"] });
+    expect(classifyChainPosition(summary, map).issue).toBe(926);
+    expect(classifyChainPosition(summary, map, 925).issue).toBe(925);
   });
 });

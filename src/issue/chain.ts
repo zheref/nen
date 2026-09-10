@@ -190,25 +190,56 @@ export interface ChainPositionResult {
   readonly unmappedRoles: readonly ChainRole[];
 }
 
-export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainPositionResult {
+/**
+ * The number every RESULT of this module carries, decided once (zheref/nen#85).
+ *
+ * IT IS THE CALLER'S, not the payload's. GitHub redirects a transferred object,
+ * so `--issue 925` can be answered by a payload numbered 926 -- and until this
+ * was settled the two renderings of one run disagreed about which it was: text
+ * printed `#925` (`../issue/command.ts` renders the typed argument) while
+ * `--json`'s `issue` field carried 926, off `summary.number`.
+ *
+ * The caller's is the consistent choice and it was already the rule everywhere
+ * else: `requireIssue`'s refusal, `NotAnIssueError.numbers`, and `--json`'s
+ * `{ issue, refused: true }` all promise "the number AS THE CALLER SPELLED IT"
+ * (zheref/nen#82 and its follow-up made the refusal paths agree; the success
+ * path was not touched). A verdict labelled with a number the caller never
+ * typed is a verdict they cannot look up.
+ *
+ * The parameter is OPTIONAL and defaults to the payload's number, because a
+ * caller with no separately-typed number -- a test constructing a summary, a
+ * future caller classifying an object it already holds -- is asking about that
+ * object and the two are the same by construction. Only a redirect makes them
+ * differ, and only a caller that typed a number can know it redirected.
+ */
+function resultNumber(summary: IssueSummary, requested?: number): number {
+  return requested ?? summary.number;
+}
+
+export function classifyChainPosition(
+  issue: IssueSummary,
+  map: RoleMap,
+  requested?: number,
+): ChainPositionResult {
+  const number = resultNumber(issue, requested);
   const evidence: string[] = [];
   const unmapped = CHAIN_ROLES.filter((role): boolean => (map.get(role) ?? []).length === 0);
 
   if (issue.state.toLowerCase() !== "open") {
     evidence.push(`state is '${issue.state}' -- a closed issue ends the run; re-opening is a human's call`);
-    return { issue: issue.number, position: "closed", evidence, unmappedRoles: unmapped };
+    return { issue: number, position: "closed", evidence, unmappedRoles: unmapped };
   }
 
   const building = carries(issue, map, "building") ?? carries(issue, map, "in-review");
   if (building !== null) {
     evidence.push(`carries '${building}' -- the release already happened, so the next move is the PR-shaped one`);
-    return { issue: issue.number, position: "building", evidence, unmappedRoles: unmapped };
+    return { issue: number, position: "building", evidence, unmappedRoles: unmapped };
   }
 
   const idea = carries(issue, map, "idea");
   if (idea !== null) {
     evidence.push(`carries '${idea}' -- a raw brief, which is decomposed before anything is routed`);
-    return { issue: issue.number, position: "idea", evidence, unmappedRoles: unmapped };
+    return { issue: number, position: "idea", evidence, unmappedRoles: unmapped };
   }
 
   const epic = carries(issue, map, "epic");
@@ -216,13 +247,13 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
     const approved = carries(issue, map, "approved-team") ?? carries(issue, map, "approved-direct");
     if (approved !== null) {
       evidence.push(`carries '${epic}' and the mode label '${approved}' -- children advance wave by wave`);
-      return { issue: issue.number, position: "epic-approved", evidence, unmappedRoles: unmapped };
+      return { issue: number, position: "epic-approved", evidence, unmappedRoles: unmapped };
     }
     const researched = carries(issue, map, "researched");
     evidence.push(
       `carries '${epic}'${researched === null ? "" : ` and '${researched}'`} but no mode label -- the mode label is a human gate and is never applied by a run`,
     );
-    return { issue: issue.number, position: "epic-awaiting-approval", evidence, unmappedRoles: unmapped };
+    return { issue: number, position: "epic-awaiting-approval", evidence, unmappedRoles: unmapped };
   }
 
   // Every OTHER position above returns as soon as a role it depends on is
@@ -252,18 +283,18 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
     evidence.push(
       `only ${CRITICAL_ROLES.join(", ")} can produce this refusal; ${optional.join(", ")} are optional and never block a verdict (they are reported under unmappedRoles when absent), so a taxonomy that genuinely lacks one needs no placeholder for it.`,
     );
-    return { issue: issue.number, position: "undecidable", evidence, unmappedRoles: unmapped };
+    return { issue: number, position: "undecidable", evidence, unmappedRoles: unmapped };
   }
 
   evidence.push("carries no idea, epic or release label -- a routable child or standalone task");
-  return { issue: issue.number, position: "routable", evidence, unmappedRoles: unmapped };
+  return { issue: number, position: "routable", evidence, unmappedRoles: unmapped };
 }
 
 // Takes an already-parsed RoleMap, not raw --chain-labels entries -- parsing
 // is a CLI-boundary concern (parseRoleMap's `errors` need a place to be
 // reported and exited on, which is ../issue/verb.ts, not this wrapper).
 export function chainPosition(seams: Seams, target: Target, issue: number, map: RoleMap): ChainPositionResult {
-  return classifyChainPosition(requireIssue(issue, readIssue(seams, target, issue)), map);
+  return classifyChainPosition(requireIssue(issue, readIssue(seams, target, issue)), map, issue);
 }
 
 // --- terminus ----------------------------------------------------------------
@@ -300,12 +331,14 @@ export function classifyTerminus(
   map: RoleMap,
   integrationPrefix: string | null,
   trunk: string,
+  requested?: number,
 ): TerminusResult {
+  const number = resultNumber(issue, requested);
   const evidence: string[] = [];
   if (issue.state.toLowerCase() !== "open") {
-    evidence.push(`#${issue.number} is '${issue.state}' -- whatever closed it is the answer, not a PR still to come`);
+    evidence.push(`#${number} is '${issue.state}' -- whatever closed it is the answer, not a PR still to come`);
     return {
-      issue: issue.number,
+      issue: number,
       kind: "run-already-ended",
       evidence,
       expectedHeadPrefix: null,
@@ -321,10 +354,10 @@ export function classifyTerminus(
   if (chore !== null || (epic !== null && team !== null)) {
     if (integrationPrefix === null) {
       evidence.push(
-        `#${issue.number} delivers on an integration branch, but --integration-prefix was not given, so the branch shape cannot be named. It is not guessed: a wrong prefix would call an ordinary PR the terminus.`,
+        `#${number} delivers on an integration branch, but --integration-prefix was not given, so the branch shape cannot be named. It is not guessed: a wrong prefix would call an ordinary PR the terminus.`,
       );
       return {
-        issue: issue.number,
+        issue: number,
         kind: "undecidable",
         evidence,
         expectedHeadPrefix: null,
@@ -335,7 +368,7 @@ export function classifyTerminus(
       `carries '${chore ?? epic ?? ""}'${team === null ? "" : ` with the mode label '${team}'`} -- the terminus is the single '${integrationPrefix}* -> ${trunk}' delivery PR. A sub-PR merged onto that branch is not the gate.`,
     );
     return {
-      issue: issue.number,
+      issue: number,
       kind: "integration-delivery-pr",
       evidence,
       expectedHeadPrefix: integrationPrefix,
@@ -348,7 +381,7 @@ export function classifyTerminus(
       `carries '${epic}' with the mode label '${direct}' -- there is no integration branch, so each child's own PR is a terminus and the epic ends when the last one does`,
     );
     return {
-      issue: issue.number,
+      issue: number,
       kind: "each-child-pr",
       evidence,
       expectedHeadPrefix: null,
@@ -361,7 +394,7 @@ export function classifyTerminus(
       `carries '${epic}' but no mode label, so which shape its delivery takes is not decided yet -- that decision is a human gate`,
     );
     return {
-      issue: issue.number,
+      issue: number,
       kind: "undecidable",
       evidence,
       expectedHeadPrefix: null,
@@ -371,7 +404,7 @@ export function classifyTerminus(
 
   evidence.push(`no epic or chore label -- the terminus is this issue's own PR into '${trunk}'`);
   return {
-    issue: issue.number,
+    issue: number,
     kind: "own-pr",
     evidence,
     expectedHeadPrefix: null,
@@ -388,5 +421,11 @@ export function terminus(
   integrationPrefix: string | null = null,
   trunk = "main",
 ): TerminusResult {
-  return classifyTerminus(requireIssue(issue, readIssue(seams, target, issue)), map, integrationPrefix, trunk);
+  return classifyTerminus(
+    requireIssue(issue, readIssue(seams, target, issue)),
+    map,
+    integrationPrefix,
+    trunk,
+    issue,
+  );
 }
