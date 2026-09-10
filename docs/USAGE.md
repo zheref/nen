@@ -456,7 +456,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
-| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since 'git merge-base --onto HEAD' into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
+| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, ignored, binary, out-of-scope and unmentioned-deletion files before staging | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -1133,7 +1133,7 @@ case: on-branch-clean
 
 ### `nen wc squash`
 
-Folds every commit since `git merge-base --onto HEAD` into ONE, whose message
+Folds every commit since `git merge-base <onto> HEAD` into ONE, whose message
 is `--message-file`'s contents. The one write this family makes, and every
 refusal below runs BEFORE it: a dirty working tree; `--onto` not an ancestor
 of HEAD; any commit in the range already reachable from this branch's own

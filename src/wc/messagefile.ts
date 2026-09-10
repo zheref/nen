@@ -22,11 +22,26 @@
 import { COMMIT_TYPES, validateCommitMessage, type CommitMessageInput, type CommitType, type Trailer } from "../commit/format.js";
 import { attributionRefusalMessages, loadWorkflow } from "../schema/workflow.js";
 
-/** `type(scope)!: subject` -- Conventional Commits' own header grammar. */
-const HEADER = /^([A-Za-z]+)(\(([^)]*)\))?(!)?:\s?(.*)$/;
+/**
+ * `type(scope)!: subject` -- Conventional Commits' own header grammar.
+ *
+ * THE SPACE AFTER THE COLON IS LITERAL AND REQUIRED, not `\s?`. ../commit/
+ * format.ts's own `headerLine` always renders exactly one -- `${type}${scope}
+ * ${bang}: ${subject.trim()}` -- so a file this module accepts is a file that
+ * shape could actually have produced; `feat:subject` with no space at all is
+ * not that shape, and letting it through would validate a header nobody who
+ * followed the documented grammar would ever write (review finding).
+ */
+const HEADER = /^([A-Za-z]+)(\(([^)]*)\))?(!)?: (.*)$/;
 
-/** One trailer line: a key `[A-Za-z0-9][A-Za-z0-9-]*`, a colon, a space, a value. */
-const TRAILER_LINE = /^[A-Za-z0-9][A-Za-z0-9-]*:\s.+$/;
+/**
+ * One trailer line: a key `[A-Za-z0-9][A-Za-z0-9-]*`, a colon, ONE LITERAL
+ * SPACE, a value -- not `\s`, which also matches a tab. ../commit/format.ts's
+ * own trailer rendering is `${key}: ${value}`, always a single space, so the
+ * same argument as HEADER's applies: a tab-separated line is not a shape
+ * `nen commit format` ever produces (review finding).
+ */
+const TRAILER_LINE = /^[A-Za-z0-9][A-Za-z0-9-]*: .+$/;
 
 export interface ParsedCommitMessage {
   readonly input: CommitMessageInput;

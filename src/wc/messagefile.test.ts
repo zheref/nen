@@ -94,6 +94,27 @@ describe("parseCommitMessageFile -- turning a raw file back into CommitMessageIn
     expect(result.reasons.join(" ")).toMatch(/does not look like a Conventional Commits header/);
   });
 
+  // ../commit/format.ts's own headerLine always renders exactly ONE space
+  // after the colon, so a header missing it is not a shape that formatter
+  // could ever have produced (review finding).
+  it("refuses a header with NO space after the colon", () => {
+    const result = parseCommitMessageFile("feat:no space at all\n");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reasons.join(" ")).toMatch(/does not look like a Conventional Commits header/);
+  });
+
+  // Same rule, one comma over: ../commit/format.ts's trailer rendering is
+  // always `${key}: ${value}`, so a TAB-separated line -- which \s also
+  // matched before this fix -- is not that shape either (review finding).
+  it("does NOT read a TAB-separated line as a trailer -- only a single literal space", () => {
+    const result = parseCommitMessageFile("feat: add a thing\n\nCloses:\t#12\n");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.input.trailers).toEqual([]);
+    expect(result.value.input.body).toEqual(["Closes:\t#12"]);
+  });
+
   it("still extracts a TYPE even when it is not a known one -- the shape checker refuses THAT, not the parser", () => {
     const result = parseCommitMessageFile("bogus: a thing\n");
     expect(result.ok).toBe(true);
