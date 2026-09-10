@@ -883,6 +883,12 @@ function runLaunch(
   preconditions: readonly AssertedPrecondition[],
   sink: ReportSink | undefined,
 ): number {
+  // THE VERB'S DECLARED `env` REACHES ALL THREE THIRDS, and that is a decision
+  // rather than a fall-through. A launch is ONE lane operation -- probe the
+  // device this build is for, build it, put it there -- and an installer that
+  // could not see the variables the build was given would be a second
+  // environment nobody declared. Only the NAMES are ever reported, here as
+  // everywhere: `ShuReport.env` is `Object.keys`.
   const env = Object.keys(plan.env).length === 0 ? {} : { env: plan.env };
   const steps: ShuStepReport[] = [];
   let deviceId: string | null = null;
