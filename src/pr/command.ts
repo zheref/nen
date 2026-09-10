@@ -609,7 +609,7 @@ function resolveReviewerLogins(
         unresolved.length === 1 ? "does" : "do"
       } not resolve to a Bot already known to ${target.slug}#${prNumber} (its own reviewRequests or timelineItems) or a collaborator of ${
         target.slug
-      }. A login 'gh pr edit --add-reviewer' has never seen this pull request request or accept a review from cannot be told apart from a genuine typo -- if ${
+      }. A login this pull request has never requested a review from, or received one from, cannot be told apart from a genuine typo -- if ${
         unresolved.length === 1 ? "it is a bot's" : "any of these is a bot's"
       } login, name it by its node id with --add-bots instead.`,
     );
@@ -672,7 +672,12 @@ function doRequestReviews(context: CommandContext): number {
 
   const ok = results.every((result): boolean => result.ok);
   const lines = results.map((result): string => result.message);
-  emit(context.io, context.json, { ok, routing: routes, message: lines.join(" ") }, lines);
+  // JOINED WITH A NEWLINE, matching the human rendering line for line
+  // (Copilot review, PR #174) -- both routes running in the same call
+  // prints two lines to the terminal, and `--json`'s `message` field
+  // silently collapsing them with a space would be a fact the human
+  // rendering states plainly and the JSON rendering blurs.
+  emit(context.io, context.json, { ok, routing: routes, message: lines.join("\n") }, lines);
   return ok ? 0 : 1;
 }
 
