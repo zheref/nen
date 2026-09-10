@@ -255,6 +255,9 @@ interface Forbidden {
   readonly pattern: RegExp;
   /** Where the rule applies. `code` is every shipped source; `ts` is TypeScript only. */
   readonly scope?: "code" | "ts";
+  /** Lines this rule MUST catch, and lines it must not. Exercised below. */
+  readonly catches: readonly string[];
+  readonly allows: readonly string[];
 }
 
 // Each entry names a CLASS of value §3 forbids, with the reason a violation
@@ -270,10 +273,14 @@ const FORBIDDEN: readonly Forbidden[] = [
     // `bugbot`.
     pattern:
       /(?<![A-Za-z0-9_])(sasuke|tenma|bisky|bugbot|copilot|kisuke|naruto|yamamoto|ichigo|okkotsu|rukia|natsu|kurapika|tanjiro|neferpitou|itachi|kisame|roy-bankai|train-bot)(?![A-Za-z0-9_])/i,
+    catches: ['const a = "sasuke";', 'const b = "roy-bankai";', "const c = SASUKE;"],
+    allows: ["const cursor = page.cursor;", "const d = narutoish;"],
   },
   {
     what: "a label namespace",
     pattern: /(?<![A-Za-z0-9_])(bankai|akatsuki|shikai)\s*:/i,
+    catches: ['const a = "bankai:mode/build";'],
+    allows: ['const a = "mode/build";'],
   },
   {
     what: "the name of a system nen serves",
@@ -283,12 +290,16 @@ const FORBIDDEN: readonly Forbidden[] = [
     // with, but a system's name shipped in a string all the same -- and error
     // messages are exactly where such a name survives a value-level sweep.
     pattern: /(?<![A-Za-z0-9_])(bankai|akatsuki|shikai|hatsu|ninjutsu)(?![A-Za-z0-9_])/i,
+    catches: ['throw new Error("e.g. --repo ../bankai-core");'],
+    allows: ['throw new Error("e.g. --repo ../some-repo");'],
   },
   {
     what: "a check-name fragment",
     // `<caller job> / <called job>` is the rollup's shape; a literal naming a
     // specific reviewer job is a check name written into the binary.
     pattern: /["'`][^"'`]*\/\s(audit|review|probe|sweep|inspect)\b/i,
+    catches: ['const a = "sasuke / audit";'],
+    allows: ['const a = context.check;'],
   },
   {
     what: "a concrete colour",
@@ -318,6 +329,18 @@ const FORBIDDEN: readonly Forbidden[] = [
     // -- a concrete colour is the forbidden thing, not the function.
     pattern:
       /#[0-9a-fA-F]{6}(?![0-9a-fA-F])|["'`]#(?![0-9]{3}["'`])[0-9a-fA-F]{3}["'`]|(?:rgb|hsl)a?\(\s*\d/i,
+    catches: [
+      'const a = "#d93f0b";',
+      'const b = "#f00";',
+      'const c = "rgb(217, 63, 11)";',
+      'const d = "hsla(12, 90%, 45%, 0.5)";',
+    ],
+    allows: [
+      "const shape = /^#[0-9a-fA-F]{6}$/;",
+      "throw new Error(\"a child names its issue as '#123'\");",
+      'const e = "#888";',
+      "const f = hsl(hue);",
+    ],
   },
   {
     what: "a status colour glyph",
@@ -335,22 +358,56 @@ const FORBIDDEN: readonly Forbidden[] = [
     // every pictographic character would forbid them along with the tick in
     // `src/dev/matrix.ts`, which nothing asked for.
     pattern: /[\u{1F534}-\u{1F53A}\u{1F7E0}-\u{1F7EB}\u{26AA}\u{26AB}\u{2B1B}\u{2B1C}]/u,
+    catches: ['const a = "\u{1F534} blocked";', 'const b = "\u{1F7E1}";', 'const c = "\u{26AB}";'],
+    // The KIND vocabulary this rule must NOT reach.
+    allows: ['const merged = "\u2713";', 'const closed = "\u2717";', 'const draft = "\u270E";'],
   },
   {
     what: "a delivery branch-naming convention",
     pattern: /["'`](integration|train|epic)\//i,
+    catches: ['const a = "integration/v1";'],
+    allows: ["const a = branchFor(kind);"],
   },
   {
     what: "a runtime string assembly",
-    // The one defeat that is NOT decidable by reading (zheref/nen#6 item 1,
-    // "blind to assembly"): `String.fromCharCode(115, 97, ...)` and
-    // `atob("c2FzdWtl")` both produce a name no sweep over source can see.
-    // Adjacent literal concatenation is folded before this runs, because it HAS
-    // one possible value; these two do not, so they are refused outright rather
-    // than analysed. Neither has a single use in this codebase, so the rule
-    // costs nothing today and is a wall the day it would have cost something.
-    pattern: /(?<![A-Za-z0-9_.])(?:String\.fromCharCode|fromCodePoint|atob)\s*\(/,
+    // The other way a name is assembled past a sweep over source (zheref/nen#6
+    // item 1, "blind to assembly"): `String.fromCharCode(115, 97, ...)` and
+    // `atob("c2FzdWtl")` each spell a name the vocabulary rules cannot read.
+    // Adjacent string concatenation is FOLDED before the rules run, because it
+    // has exactly one decidable value; these do not, so they are refused.
+    //
+    // REFUSED ONLY OVER LITERALS, which is the whole precision of the rule. A
+    // name can only be hidden here if the characters are IN THE FILE -- numeric
+    // literals for the two `from…` methods, a string literal for `atob`. A call
+    // over a variable (`String.fromCodePoint(code)`) encodes nothing at all: the
+    // source carries no name to find, and the value comes from whatever the tool
+    // was pointed at. That distinction is not academic -- `src/shu/coverage/
+    // formats/xml.ts` decodes XML numeric character references exactly that way,
+    // and a rule that forbade the method outright would forbid an entity decoder
+    // for being able to produce letters.
+    //
+    // MATCHED ON THE METHOD NAME, never on the receiver, so the lookbehind
+    // excludes identifier characters and NOT `.`: `String.x(`, `globalThis.x(`
+    // and a destructured bare `x(` all read the same, and no spelling of the
+    // same call walks past. (A first draft did put `.` in that class and
+    // anchored the `String` forms on the receiver, so `String.fromCodePoint(`
+    // matched neither limb -- caught in review of the PR that added this.)
+    pattern:
+      /(?<![A-Za-z0-9_])(?:fromCharCode|fromCodePoint)\s*\(\s*[0-9]|(?<![A-Za-z0-9_])atob\s*\(\s*["'`]/,
     scope: "ts",
+    catches: [
+      "const a = String.fromCharCode(115, 97);",
+      "const b = String.fromCodePoint(0x73);",
+      'const c = atob("c2FzdWtl");',
+      "const d = fromCharCode(115);",
+    ],
+    // The legitimate half: a decode over a value the source does not carry.
+    allows: [
+      "const a = String.fromCodePoint(code);",
+      "const b = atob(seed);",
+      "const c = String(value);",
+      "const d = codePointAt(0);",
+    ],
   },
 ];
 
@@ -438,6 +495,26 @@ describe("§3: names are data", () => {
         });
       }
       expect(offences).toEqual([]);
+    });
+  }
+
+  // A rule that has never been seen to FIRE is a rule nobody has tested, and a
+  // sweep whose rules all quietly match nothing passes forever. The self-check
+  // at the top proves the walker finds the tree; this proves each RULE finds the
+  // thing it was written for, and leaves alone the thing that made it delicate
+  // -- the issue-reference notation, the KIND glyphs, the validator shapes.
+  //
+  // It is the guard the review of this file's own hardening needed: the assembly
+  // rule's first draft was anchored on the RECEIVER, so `String.fromCodePoint`
+  // matched no limb of it at all, and nothing here would have said so.
+  for (const { what, pattern, catches, allows } of FORBIDDEN) {
+    it(`the ${what} rule catches what it claims to`, () => {
+      for (const line of catches) {
+        expect(pattern.exec(foldConcatenations(line)), line).not.toBeNull();
+      }
+      for (const line of allows) {
+        expect(pattern.exec(foldConcatenations(line)), line).toBeNull();
+      }
     });
   }
 
