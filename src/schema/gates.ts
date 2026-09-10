@@ -172,6 +172,31 @@ export interface DeliveryIdentity {
  */
 export const GATES_SCHEMA_VERSION = 1;
 
+/**
+ * CON-30's review carve-out for an automated dependency author, as data.
+ *
+ * A dependency bot opens pull requests nothing re-requests a review on and
+ * nobody is going to review one at a time; the repository shims its review
+ * contexts to `success` instead (`examples/dependabot-review-shim.yml`). The
+ * carve-out is what lets the decider READ that shim rather than each caller
+ * re-deriving the exemption from its own configuration -- CON-30's own words
+ * for it: "CON-32's decider therefore carries the carve-out itself rather than
+ * leaving it to configuration."
+ *
+ * IT IS SATISFIED BY PRESENCE, NEVER BY ABSENCE. `satisfiedByContext` names the
+ * check contexts that must be present AND green for the carve-out to fire. A
+ * pull request with none of them does not qualify, which is the difference
+ * between "the shim ran and said the review rounds are covered" and "nothing
+ * reviewed this and nothing said so" -- and the reason the field is a list of
+ * contexts rather than a boolean.
+ */
+export interface DependabotCarveOut {
+  /** The author login the carve-out belongs to. */
+  readonly authorPattern: RegExp;
+  /** The check contexts whose green presence satisfies the review rounds. */
+  readonly satisfiedByContext: readonly string[];
+}
+
 export interface GateIdentities {
   readonly path: string;
   /** Always `GATES_SCHEMA_VERSION`; an unknown version is refused at load. */
@@ -182,6 +207,8 @@ export interface GateIdentities {
   /** The reviewers configured on EVERY pull request, before enrolment. */
   readonly baseReviewers: readonly string[];
   readonly delivery: DeliveryIdentity;
+  /** CON-30's carve-out, or `null` when the file declares none. */
+  readonly dependabotCarveOut: DependabotCarveOut | null;
   reviewer(name: string): ReviewerIdentity | undefined;
 }
 
@@ -428,6 +455,48 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     labels,
   };
 
+  // CON-30's carve-out. OPTIONAL: a repository that has no dependency bot
+  // declares none and the gate behaves exactly as it always has. Declared, it is
+  // validated to the same standard as every other block here -- a carve-out that
+  // is malformed must be a loud refusal at load, never a rule that silently
+  // applies to nobody, because the thing it governs is whether a pull request
+  // nobody reviewed can read as ready.
+  const rawCarveOut = root["dependabot_carve_out"];
+  let dependabotCarveOut: DependabotCarveOut | null = null;
+  if (rawCarveOut !== undefined && rawCarveOut !== null) {
+    const record = requireRecord(path, "dependabot_carve_out", rawCarveOut);
+    const contexts = requireArray(
+      path,
+      "dependabot_carve_out.satisfied_by_context",
+      record["satisfied_by_context"],
+    ).map((item, index): string =>
+      requireString(path, `dependabot_carve_out.satisfied_by_context[${index}]`, item),
+    );
+    // AN EMPTY LIST IS REFUSED, and this is the same refusal shape as the
+    // empty-approver-set one above, for the same reason. A carve-out satisfied
+    // by NO context is satisfied by nothing at all -- so it would fire on every
+    // pull request that bot opens, on no evidence, and open CON-32(b) outright
+    // for an author whose whole point is that nobody reviews its work. "This
+    // author needs no review" and "the author forgot to list the shim's
+    // contexts" are indistinguishable from here, and only one of them is safe.
+    if (contexts.length === 0) {
+      throw new SchemaError(
+        path,
+        "dependabot_carve_out.satisfied_by_context",
+        "is empty. A carve-out satisfied by no context is satisfied by nothing, so it would clear the review rounds for every pull request that author opens on no evidence at all. Name the check contexts the review shim reports, or delete the block.",
+      );
+    }
+    dependabotCarveOut = {
+      authorPattern: readPattern(
+        path,
+        "dependabot_carve_out.author_pattern",
+        record["author_pattern"],
+        true,
+      ),
+      satisfiedByContext: contexts,
+    };
+  }
+
   const byName = new Map(
     reviewers.map((reviewer): [string, ReviewerIdentity] => [reviewer.name, reviewer]),
   );
@@ -439,6 +508,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     defaultApprovers,
     baseReviewers,
     delivery,
+    dependabotCarveOut,
     reviewer: (name): ReviewerIdentity | undefined => byName.get(name),
   };
 }

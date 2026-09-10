@@ -684,6 +684,38 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
 
+**CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
+optional `dependabot_carve_out`:
+
+```json
+"dependabot_carve_out": {
+  "author_pattern": { "pattern": "^dependabot(\\[bot\\])?$", "ignoreCase": true },
+  "satisfied_by_context": ["sasuke / audit", "kakuzu / review"]
+}
+```
+
+When the pull request's author matches `author_pattern` **and every context in
+`satisfied_by_context` is present in the rollup and green on its latest run**,
+the three CON-32(b) rows — the stall bound, the owed round and the approve limb
+— are satisfied by the review shim that reported those contexts rather than by a
+review round. It is **satisfied by presence, never by absence**: a pull request
+missing one of the named contexts has not been shimmed, it has merely not been
+reviewed, and the gate runs exactly as it always does. CON-32(a) runs **first**,
+so a dependency PR is never exempted from having checks or from their being
+green, and CON-32(d) still runs after, so an unresolved thread still fails —
+a human who opened one is owed an answer whether or not a shim covered the
+rounds.
+
+It is never a silent exemption: `--explain` prints the reason under each row it
+satisfied, `--json`'s `conjuncts[].note` carries the same string, and
+`meta.dependabotCarveOut` says whether it fired (`null` on an unevaluated
+report, where the gate never ran far enough to ask). The block is optional — a
+file that omits it behaves exactly as before — and the carve-out never applies
+on the `--reviewers` identity path, which names no file and so declares none.
+An empty `satisfied_by_context` is refused at load: a carve-out satisfied by no
+context is satisfied by nothing, and would clear the review rounds for that
+author on no evidence at all.
+
 **Provenance — which binary decided it.** Every report says which `nen`
 produced it: `meta.generator` carries `program`, `version` and `executable`
 (the resolved path of the running process), and `--explain` renders them as a
@@ -702,7 +734,8 @@ them; the report carries it, and a caller that wants it reads the report.
 **Output and exit codes** — human line is `<repo>#<pr>: <gateLine>` (or the
 full conjunct table with `--explain`); `--json` top-level keys: `contract`,
 `verdict` (`ready`\|`not-ready`\|`unevaluated`), `gateLine`, `firstFailing`,
-`conjuncts[]`, `caveats[]`, `remedy`, `meta`. Exit 0 only on `verdict: ready`;
+`conjuncts[]` (each row `id`, `order`, `clause`, `title`, `status`, `reason`,
+`note`), `caveats[]`, `remedy`, `meta`. Exit 0 only on `verdict: ready`;
 exit 1 on `not-ready` **or** `unevaluated` (a non-zero exit never means
 "cleared" — SKILL.md §4's "absence is never a pass"); exit 2 on a malformed
 ref, an unresolvable code, or no reviewer-identity source at all (a usage

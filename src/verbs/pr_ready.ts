@@ -291,6 +291,13 @@ export interface ReadyMeta {
   readonly roundPolicy: RoundPolicy;
   readonly excludeRun: string | null;
   readonly deliveryPr: boolean | null;
+  /**
+   * Whether CON-30's `dependabot_carve_out` fired for this pull request
+   * (zheref/nen#18). `null` when the gate never ran far enough to ask -- an
+   * unevaluated report -- and never `true` on the `--reviewers` identity path,
+   * which names no file and therefore declares no carve-out.
+   */
+  readonly dependabotCarveOut: boolean | null;
   readonly identities: { readonly source: "schema" | "flags"; readonly path: string | null };
   readonly warnings: readonly string[];
   readonly evaluatedAt: string;
@@ -517,6 +524,13 @@ export function identitiesFromFlags(
     defaultApprovers: approvers,
     baseReviewers: reviewers,
     delivery: { authorPattern: /(?!)/, headRefPrefixes: [], labels: [] },
+    // NO CARVE-OUT ON THE FLAGS PATH, and that is the conservative reading
+    // rather than an omission (zheref/nen#18). CON-30's carve-out clears review
+    // rounds for an author nobody reviews, on the strength of check contexts a
+    // FILE names; `--reviewers a,b` names no file, so there is nothing that
+    // could say which contexts stand in for a round. Inventing a default here
+    // would be inventing the one rule whose whole purpose is to be declared.
+    dependabotCarveOut: null,
     reviewer: (name): ReviewerIdentity | undefined => byName.get(name),
   };
 }
@@ -760,6 +774,12 @@ export function renderExplain(report: ReadyReport): string[] {
       )}${conjunct.title}`,
     );
     if (conjunct.reason !== null) lines.push(`        └ ${conjunct.reason}`);
+    // CON-30's "never a silent exemption" (zheref/nen#18). A CON-32(b) row that
+    // passed because a review shim covered it, on a pull request nobody
+    // reviewed, must say so on the row itself -- a reader who sees `ready`
+    // against "No configured reviewer's round owed" and is not told why has
+    // been told the wrong thing.
+    if (conjunct.note !== null) lines.push(`        └ ${conjunct.note}`);
   }
   lines.push("");
   lines.push("  What the gate does NOT decide:");
@@ -956,6 +976,7 @@ export async function prReady(
       excludeRun: excludeRun === "" ? null : excludeRun,
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
+      dependabotCarveOut: evaluation.context.dependabotCarveOut,
       warnings: [...flagWarnings, ...fetched.warnings],
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
@@ -1016,6 +1037,9 @@ function unevaluatedReport(
       excludeRun: excludeRun === "" ? null : excludeRun,
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
+      // The gate never ran, so it never asked -- `false` here would read as
+      // "asked and no", which is a claim about evidence nobody looked at.
+      dependabotCarveOut: null,
       warnings,
       evaluatedAt: now,
       generator: { program: PROGRAM, version: VERSION, executable },

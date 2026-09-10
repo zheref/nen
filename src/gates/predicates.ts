@@ -250,6 +250,48 @@ export function checksAllGreen(entries: readonly RollupEntry[]): boolean {
   });
 }
 
+// --- dependabotCarveOutSatisfied ---------------------------------------------
+// PORT ADDITION (CON-30, zheref/nen#18). True iff the file declares a carve-out,
+// the pull request's author matches it, and EVERY context it names is present in
+// the rollup and green on its latest run.
+//
+// SATISFIED BY PRESENCE, NEVER BY ABSENCE, and every clause of that sentence is
+// load-bearing:
+//
+//   * The AUTHOR is matched against the file's own pattern, not a literal --
+//     §3, the same rule every other identity in this module follows.
+//   * Every named context must be PRESENT. A pull request missing one has not
+//     been shimmed; it has merely not been reviewed, and those are the two
+//     things this predicate exists to tell apart. A dependency bot's PR is never
+//     exempted from having no checks at all -- CON-32(a) runs first and an empty
+//     rollup still fails there.
+//   * Every named context must be GREEN, on the LATEST run per name, through the
+//     same `latestChecks` reduction `checksAllGreen` uses. A superseded SUCCESS
+//     beside a current FAILURE must not clear a round, which is bankai-core#577
+//     read from the other direction.
+//   * A name match is EXACT, against the rollup entry's own label. These are
+//     context names a repository wrote down beside the workflow that reports
+//     them, not patterns -- and a substring or pattern match here would let a
+//     neighbouring job's name stand in for the shim's.
+export function dependabotCarveOutSatisfied(
+  identities: GateIdentities,
+  author: string,
+  entries: readonly RollupEntry[],
+): boolean {
+  const carveOut = identities.dependabotCarveOut;
+  if (carveOut === null) return false;
+  if (author === "" || !carveOut.authorPattern.test(author)) return false;
+
+  const green = new Set<string>();
+  for (const entry of latestChecks(entries)) {
+    const label = rollupEntryLabel(entry);
+    if (label === null) continue;
+    const status = rollupEntryStatus(entry);
+    if (status !== null && GREEN_STATUSES.has(status)) green.add(label);
+  }
+  return carveOut.satisfiedByContext.every((context): boolean => green.has(context));
+}
+
 // --- excludeCheckRun ---------------------------------------------------------
 // The CON-36 self-run carve-out (bankai-core#708): drop every rollup entry whose
 // `detailsUrl` names the given Actions run.

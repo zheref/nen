@@ -110,6 +110,52 @@ describe("parseGateIdentities -- validation", () => {
     );
   });
 
+  it("reads CON-30's dependabot_carve_out when the file declares one", () => {
+    const identities = parseGateIdentities(at, {
+      ...minimal,
+      dependabot_carve_out: {
+        author_pattern: { pattern: "^dependabot(\\[bot\\])?$", ignoreCase: true },
+        satisfied_by_context: ["x / audit", "y / review"],
+      },
+    });
+    expect(identities.dependabotCarveOut?.satisfiedByContext).toEqual(["x / audit", "y / review"]);
+    expect(identities.dependabotCarveOut?.authorPattern.test("dependabot[bot]")).toBe(true);
+    expect(identities.dependabotCarveOut?.authorPattern.test("alice")).toBe(false);
+  });
+
+  it("leaves the carve-out NULL when the file declares none -- it is optional", () => {
+    // A repository with no dependency bot says nothing and the gate behaves
+    // exactly as it always has. `nen schema check` reported `ok` on a file
+    // carrying this block long before any build parsed it (zheref/nen#18); this
+    // is the other direction of the same compatibility.
+    expect(parseGateIdentities(at, minimal).dependabotCarveOut).toBeNull();
+  });
+
+  it("REFUSES an EMPTY satisfied_by_context -- it would clear the rounds on no evidence", () => {
+    // Same shape and same reasoning as the empty-approver-set refusal above: a
+    // carve-out satisfied by NO context is satisfied by nothing at all, so it
+    // fires on every pull request that author opens and opens CON-32(b) outright
+    // for the one author whose whole premise is that nobody reviews its work.
+    expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        dependabot_carve_out: {
+          author_pattern: { pattern: "bot", ignoreCase: true },
+          satisfied_by_context: [],
+        },
+      }),
+    ).toThrow(/satisfied by no context/);
+  });
+
+  it("REFUSES a carve-out with no author_pattern", () => {
+    expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        dependabot_carve_out: { satisfied_by_context: ["x / audit"] },
+      }),
+    ).toThrow(/dependabot_carve_out\.author_pattern/);
+  });
+
   it("REFUSES an omitted or empty base_reviewers", () => {
     const withoutKey = { ...minimal, base_reviewers: undefined };
     expect(() => parseGateIdentities(at, withoutKey)).toThrow(/base_reviewers/);

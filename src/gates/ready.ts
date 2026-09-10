@@ -232,6 +232,7 @@
 import {
   cancelledLatestReport,
   checksAllGreen,
+  dependabotCarveOutSatisfied,
   excludeCheckRun,
   isDeliveryPr,
   latestChecks,
@@ -375,6 +376,19 @@ export interface Conjunct {
    * bankai-core#639/#698 were both about.
    */
   readonly reason: string | null;
+  /**
+   * Why a row PASSED, on the rare row whose passing needs explaining -- today,
+   * only the three CON-32(b) rows a CON-30 carve-out satisfied (zheref/nen#18).
+   * `null` on every other row and in every other run.
+   *
+   * It is a separate field from `reason` rather than a reuse of it, because
+   * `reason` means "the gate's own words for what FAILED" and a consumer that
+   * renders one as the other reports a satisfied row as a problem. CON-30 asks
+   * for the opposite of silence here -- a reader must see WHY a review-round row
+   * passed on a pull request nobody reviewed -- and a row that says nothing is
+   * exactly the silent exemption it forbids. Additive to `nen.pr.ready/v0.1`.
+   */
+  readonly note: string | null;
 }
 
 interface ConjunctSpec {
@@ -492,6 +506,15 @@ export interface EvaluationContext {
   readonly headSha: string;
   /** CON-40's carve-out, computed ONCE and threaded into both CON-32(b) limbs. */
   readonly deliveryPr: boolean;
+  /**
+   * CON-30's carve-out: this pull request's author matches the file's
+   * `dependabot_carve_out` and every context it names reported green, so the
+   * three CON-32(b) rows are satisfied by the review shim rather than by a
+   * review round. `false` on every repository that declares no carve-out, and on
+   * every author that does not match one -- NEVER a silent exemption (CON-30's
+   * own framing), which is why it is reported here and rendered by `--explain`.
+   */
+  readonly dependabotCarveOut: boolean;
 }
 
 export interface EvaluateOptions {
@@ -584,17 +607,31 @@ function unreadable(error: ParseError): string {
  * reporting an unknown as a pass is the one reading a readiness gate must never
  * offer.
  */
-function table(failedAt: ConjunctId | null, reason: string | null): readonly Conjunct[] {
+function table(
+  failedAt: ConjunctId | null,
+  reason: string | null,
+  notes: Readonly<Partial<Record<ConjunctId, string>>> = {},
+): readonly Conjunct[] {
   let seen = false;
   return CONJUNCTS.map((spec, index): Conjunct => {
+    const note = notes[spec.id] ?? null;
     if (failedAt === null) {
-      return { ...spec, order: index + 1, status: "ready", reason: null };
+      return { ...spec, order: index + 1, status: "ready", reason: null, note };
     }
     if (spec.id === failedAt) {
       seen = true;
-      return { ...spec, order: index + 1, status: "failed", reason };
+      // A row that FAILED does not carry a passing note: it did not pass.
+      return { ...spec, order: index + 1, status: "failed", reason, note: null };
     }
-    return { ...spec, order: index + 1, status: seen ? "unevaluated" : "ready", reason: null };
+    const status: ConjunctStatus = seen ? "unevaluated" : "ready";
+    return {
+      ...spec,
+      order: index + 1,
+      status,
+      reason: null,
+      // A row the gate never reached explains nothing either.
+      note: status === "ready" ? note : null,
+    };
   });
 }
 
@@ -698,6 +735,7 @@ export function evaluateReady(
     policy,
     headSha: head,
     deliveryPr: delivery,
+    dependabotCarveOut: false,
   };
   const fail = (at: ConjunctId, line: string): ReadyEvaluation => ({
     ready: false,
@@ -785,6 +823,69 @@ export function evaluateReady(
       "checks-green",
       "not-ready: required checks reported but are not all green (CON-32a)",
     );
+  }
+
+  // ── CON-30's dependency-author carve-out (zheref/nen#18) ─────────────────
+  //
+  // ADOPTION DIVERGENCE (7): a branch bankai-core's `evaluate_ready` does not
+  // have. It is recorded here rather than folded in silently, because this file
+  // carries the original's logic unchanged and every departure is named.
+  //
+  // WHY IT IS THE DECIDER'S AND NOT CONFIGURATION'S. CON-30: "CON-32's decider
+  // therefore carries the carve-out itself rather than leaving it to
+  // configuration." The alternative is every caller re-deriving the exemption
+  // from its own copy of a rule -- which is how two callers come to disagree
+  // about whether a dependency PR is ready, on the same evidence.
+  //
+  // WHERE IT SITS, and why exactly here: AFTER CON-32(a). A dependency bot's
+  // pull request is never exempted from having checks -- an empty rollup is
+  // still a failing CON-32(a) row above, and a red one still fails. What the
+  // carve-out clears is the three CON-32(b) rows: the stall bound, the owed
+  // round, and the approve limb. Those are the rows a review shim's `success`
+  // contexts are STANDING IN FOR, and they are the only ones. CON-32(d)'s
+  // unresolved-thread row below is untouched: a human who did open a thread on a
+  // dependency PR is owed an answer, carve-out or not.
+  //
+  // The rollup it reads is the UN-excluded one, for the same reason
+  // `pending_rounds` reads it: `--exclude-run` is a CON-32(a) carve-out for the
+  // asking job's own check and was never scoped to change which reviewers owe a
+  // round -- nor, therefore, what stands in for one.
+  const carveOut = dependabotCarveOutSatisfied(
+    identities,
+    deliveryEvidence(state).author,
+    parsedChecks.value,
+  );
+  if (carveOut) {
+    const contexts = identities.dependabotCarveOut?.satisfiedByContext.join(", ") ?? "";
+    const note =
+      `satisfied by dependabot_carve_out: the author matches the declared pattern and ` +
+      `every named context reported green (${contexts})`;
+    const notes: Partial<Record<ConjunctId, string>> = {
+      "round-stalled": note,
+      "rounds-owed": note,
+      "approvals-at-head": note,
+    };
+    const carved: EvaluationContext = { ...context, dependabotCarveOut: true };
+    // CON-32(d) STILL RUNS, on the same reading as below: an empty value is 1,
+    // i.e. not-ready. A human who did open a thread on a dependency PR is owed
+    // an answer whether or not a shim covered the review rounds.
+    if ((unresolved === "" ? "1" : unresolved) !== "0") {
+      const line = `not-ready: ${unresolved} unresolved review thread(s) (CON-32d)`;
+      return {
+        ready: false,
+        line,
+        conjuncts: table("unresolved-threads", line, notes),
+        firstFailing: "unresolved-threads",
+        context: carved,
+      };
+    }
+    return {
+      ready: true,
+      line: "ready",
+      conjuncts: table(null, null, notes),
+      firstFailing: null,
+      context: carved,
+    };
   }
 
   // pending_rounds is handed `{review_requests, checks, reviews}` from the RAW

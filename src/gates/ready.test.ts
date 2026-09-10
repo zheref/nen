@@ -73,7 +73,7 @@ describe("evaluateReady -- the ready path", () => {
     }
   });
 
-  it("reports the context: reviewers, approvers, policy, head, delivery-PR", () => {
+  it("reports the context: reviewers, approvers, policy, head, both carve-outs", () => {
     const evaluation = evaluateReady(IDENTITIES, readyState(), OPTIONS);
     expect(evaluation.context).toEqual({
       reviewers: ["sasuke", "tenma", "copilot"],
@@ -81,7 +81,120 @@ describe("evaluateReady -- the ready path", () => {
       policy: "bounded",
       headSha: HEAD,
       deliveryPr: false,
+      // CON-30's carve-out is reported on EVERY evaluation, false included:
+      // "this pull request was not carved out" is a fact a reader of a ready
+      // verdict needs as much as the opposite one (zheref/nen#18).
+      dependabotCarveOut: false,
     });
+  });
+});
+
+describe("evaluateReady -- CON-30's dependency-author carve-out (zheref/nen#18)", () => {
+  // The fixture declares `dependabot_carve_out`: author `^dependabot(\[bot\])?$`,
+  // satisfied by `sasuke / audit` and `tenma / review` -- the two contexts the
+  // review shim reports. A dependency bot's PR carries NO review round and NO
+  // approval, which is exactly the state every case below starts from.
+  const SHIMMED = [greenCheck(), greenCheck("sasuke / audit"), greenCheck("tenma / review")];
+
+  function botState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return readyState({
+      author: "dependabot[bot]",
+      checks: SHIMMED,
+      reviews: [],
+      review_requests: [],
+      ...overrides,
+    });
+  }
+
+  it("clears the three CON-32(b) rows for the declared author when every context is green", () => {
+    const evaluation = evaluateReady(IDENTITIES, botState(), OPTIONS);
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.line).toBe("ready");
+    expect(evaluation.context.dependabotCarveOut).toBe(true);
+    // NEVER A SILENT EXEMPTION (CON-30): the rows it satisfied say so, by field
+    // name, and no other row does.
+    const noted = evaluation.conjuncts.filter((c): boolean => c.note !== null);
+    expect(noted.map((c): ConjunctId => c.id)).toEqual([
+      "round-stalled",
+      "rounds-owed",
+      "approvals-at-head",
+    ]);
+    for (const conjunct of noted) {
+      expect(conjunct.status).toBe("ready");
+      expect(conjunct.note).toContain("dependabot_carve_out");
+      expect(conjunct.note).toContain("sasuke / audit, tenma / review");
+    }
+  });
+
+  it("does NOT fire for anyone else with the identical context set", () => {
+    // The control. Same shimmed checks, same absent reviews -- a different
+    // author. If this passed, the carve-out would be an exemption for whoever
+    // arranged the right check names, which is the opposite of what it is.
+    const evaluation = evaluateReady(IDENTITIES, botState({ author: "alice" }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.dependabotCarveOut).toBe(false);
+    expect(evaluation.firstFailing).toBe("rounds-owed");
+    expect(evaluation.conjuncts.every((c): boolean => c.note === null)).toBe(true);
+  });
+
+  it("is satisfied by PRESENCE, never by absence: one context missing and the gate runs as usual", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      botState({ checks: [greenCheck(), greenCheck("sasuke / audit")] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.dependabotCarveOut).toBe(false);
+    expect(evaluation.firstFailing).toBe("rounds-owed");
+  });
+
+  it("is not reached at all when a shimmed context is RED -- CON-32(a) still runs first", () => {
+    // A dependency PR is never exempted from having checks, and never from
+    // their being green. The carve-out sits AFTER row 2 for this reason.
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      botState({
+        checks: [
+          greenCheck(),
+          { name: "sasuke / audit", status: "COMPLETED", conclusion: "FAILURE" },
+          greenCheck("tenma / review"),
+        ],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("checks-green");
+    expect(evaluation.context.dependabotCarveOut).toBe(false);
+  });
+
+  it("does not clear CON-32(d): an unresolved thread still fails, carve-out or not", () => {
+    // A human who did open a thread on a dependency PR is owed an answer. The
+    // carve-out stands in for review ROUNDS, not for a conversation.
+    const evaluation = evaluateReady(IDENTITIES, botState({ unresolved_threads: 2 }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("unresolved-threads");
+    expect(evaluation.context.dependabotCarveOut).toBe(true);
+    // The rows it DID satisfy still explain themselves; the failing row does not
+    // carry a passing note.
+    expect(evaluation.conjuncts.find((c): boolean => c.id === "rounds-owed")?.note).toContain(
+      "dependabot_carve_out",
+    );
+    expect(
+      evaluation.conjuncts.find((c): boolean => c.id === "unresolved-threads")?.note,
+    ).toBeNull();
+  });
+
+  it("reaches the SAME verdict a normally-reviewed pull request would", () => {
+    // The shadow-window shape #18 asks for, as a fixture comparison: the only
+    // difference between these two states is that one was reviewed by people
+    // and the other was shimmed. Both are ready.
+    const reviewed = evaluateReady(IDENTITIES, readyState(), OPTIONS);
+    const shimmed = evaluateReady(IDENTITIES, botState(), OPTIONS);
+    expect(shimmed.ready).toBe(reviewed.ready);
+    expect(shimmed.line).toBe(reviewed.line);
+    expect(shimmed.conjuncts.map((c): string => c.status)).toEqual(
+      reviewed.conjuncts.map((c): string => c.status),
+    );
   });
 });
 
