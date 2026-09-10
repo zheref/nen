@@ -159,6 +159,17 @@ describe("--dry-run", () => {
     expect(captured.out.join("\n")).toMatch(/^ {2}coverage\.total\.lines\.percent$/m);
   });
 
+  it("lists the tokens ON THE REFUSAL too, so the advice to run it is not a loop", async () => {
+    const root = stagedRepo({ ...DATA, branch: undefined });
+    const captured = await capture(
+      ["report", "render", "--template", join(FIXTURES, "report.html"), "--data", "data.json", "--out", "out.html", "--dry-run"],
+      root,
+    );
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/'branch', which the data document has not got/);
+    expect(captured.err.join("\n")).toMatch(/This template names 12 token\(s\): repo, branch, base/);
+  });
+
   it("makes the SAME refusals the real run makes, so a dry run proves something", async () => {
     const root = stagedRepo();
     const captured = await capture(

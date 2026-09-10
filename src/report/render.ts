@@ -23,7 +23,7 @@
 // --body-file`.
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { readJsonFile, readTextFile } from "../cli/inputs.js";
 import { realContainment } from "../repo/contain.js";
@@ -79,10 +79,23 @@ export function assertOutPath(repoRoot: string, out: string): string {
   return containment.real;
 }
 
+/**
+ * `--out` against `--repo`, NORMALIZED.
+ *
+ * `resolve` rather than a join, and the normalization is the point rather than a
+ * tidiness: `realContainment` reports the deepest EXISTING ancestor whose real
+ * path differs from its lexical one as the symlink that redirected the write, and
+ * an un-normalized `<root>/../escape.html` makes `<root>/..` differ from its own
+ * realpath by spelling alone -- so a plain `..` escape was refused with a
+ * sentence claiming the parent directory was a symlink, which it is not. The
+ * refusal must name what actually redirected the write, or the next one nobody
+ * believes.
+ *
+ * An ABSOLUTE `--out` re-roots safely: `resolve` returns it unchanged, and the
+ * containment test then answers for it. Only a `..` escapes.
+ */
 function resolveAgainst(root: string, value: string): string {
-  // `resolve` handles both spellings; the branch is spelled out so the relative
-  // case is visibly anchored to --repo rather than to an ambient cwd.
-  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) ? value : `${root}/${value}`;
+  return resolve(root, value);
 }
 
 export interface RenderResult {
@@ -114,14 +127,30 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
     "The data document is what every token in the template is answered from; there is no empty default for it.",
   );
 
+  // A DRY RUN RENDERS TOO, AND THROWS AWAY WHAT IT RENDERED. Listing the tokens
+  // and stopping would be a preview that proves only that the template parses --
+  // the failure a caller actually wants to find before publishing is the one
+  // between the template and the DATA ("the document spells it `lastStop`"), and
+  // a dry run whose refusals differ from the real run's proves nothing.
+  //
+  // SO THE TOKEN LIST IS APPENDED TO THE REFUSAL, on the dry-run path only.
+  // Without it the advice in ./template.ts's unknown-token message -- run
+  // --dry-run to see what this template asks for -- would send the caller to an
+  // invocation that answers with the same refusal and no list.
   let filled: string;
-  let tokens: readonly string[];
+  let tokens: readonly string[] = [];
   try {
     const parsed = parseTemplate(templateText);
     tokens = parsed.tokens;
     filled = renderTemplate(parsed, data);
   } catch (error) {
-    if (error instanceof TemplateError) throw new VerbUsageError(`${options.template}: ${error.message}`);
+    if (error instanceof TemplateError) {
+      const listed =
+        options.dryRun && tokens.length > 0
+          ? ` This template names ${tokens.length} token(s): ${tokens.join(", ")}.`
+          : "";
+      throw new VerbUsageError(`${options.template}: ${error.message}${listed}`);
+    }
     /* c8 ignore next -- nothing else is thrown from the parse/render pair */
     throw error;
   }
