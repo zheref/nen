@@ -11,10 +11,10 @@
 // first. A dry run prints the exact call it would have made, so the thing the
 // caller approves is the thing that runs.
 
-import { assertRepoRoot } from "../repo/root.js";
+import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
-import { readJsonFile, readTextFile } from "../cli/inputs.js";
+import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
 import {
@@ -747,11 +747,20 @@ function comment(context: CommandContext): number {
   // that would be sent" would be a claim about a file this process rewrote in
   // memory, not the one on disk. Reading it as-is keeps both sides looking at
   // the same bytes without moving either one.
-  const body =
+  // RESOLVED AGAINST --repo's ROOT, and resolved ONCE (zheref/nen#100). The
+  // path travels to `gh` as well as to this read, so the two must agree about
+  // which file it is -- and before this they only agreed when the process
+  // happened to be standing in the repository `--repo` names. Absolute after
+  // resolution, so what `gh` receives is unambiguous wherever it is spawned.
+  const bodyPath =
     bodyFile === undefined
+      ? undefined
+      : resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), bodyFile);
+  const body =
+    bodyPath === undefined
       ? (inline ?? "")
       : readTextFile(
-          bodyFile,
+          bodyPath,
           process.cwd(),
           "--body-file names the bytes this verb posts, so an unreadable one is refused rather than sent as an empty comment.",
           true,
@@ -865,8 +874,14 @@ function editBody(context: CommandContext): number {
   // comment()'s own --body-file path makes above, for the same reasons: a
   // --dry-run byte count that is not the byte count that would be sent is
   // not a dry run, and `gh` is handed this SAME path untouched.
-  const body = readTextFile(
+  // Resolved against --repo's root, ONCE, for the reason comment() states just
+  // above: this same path is handed to `gh` below (zheref/nen#100).
+  const bodyPath = resolveAgainstRepo(
+    resolveRepoRoot({ repoFlag: context.repoFlag }),
     bodyFile,
+  );
+  const body = readTextFile(
+    bodyPath,
     process.cwd(),
     "--body-file names the bytes this verb writes as the issue's new body, so an unreadable one is refused rather than replacing it with nothing.",
     true,
@@ -887,7 +902,7 @@ function editBody(context: CommandContext): number {
   certifyIssue(context.seams, target, issue);
 
   const bytes = Buffer.byteLength(body, "utf8");
-  const argv = editBodyArgv(target, issue, bodyFile);
+  const argv = editBodyArgv(target, issue, bodyPath);
 
   if (context.args.booleans.has("dry-run")) {
     if (context.json) {

@@ -16,6 +16,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./slots.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
@@ -125,7 +126,9 @@ export const loopCommand: Command = {
 
     let parsed;
     try {
-      parsed = parseEfforts(readFileSync(path, "utf8").replace(/\r\n/g, "\n"));
+      // // Resolved against --repo's root, one base for every path flag (zheref/nen#100).
+      const full = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), path);
+      parsed = parseEfforts(readFileSync(full, "utf8").replace(/\r\n/g, "\n"));
     } catch (error) {
       context.io.err(`nen: could not read --efforts '${path}': ${String(error)}`);
       return 1;

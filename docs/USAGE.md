@@ -74,39 +74,38 @@ least one `--trailer` — a message that could not violate the trailer policy
 never touches the filesystem — and [`stop`](#nen-stop) writes under it only
 with `--mark`.
 
-#### Relative paths resolve against two different bases
+#### Relative paths resolve against one base: `--repo`'s root
 
-There is no single rule here, and the difference is worth knowing before it
-costs you a run. **Most** path flags resolve a relative value against
-`--repo`'s root (an absolute value is always used as-is): `--rows-from`,
-`--board-from`, `--gates`, `--changelog`, `--fragment-dir`, `--wakes-from`,
-`--body-from`, `--requirements-from`, `--ledger`, `--questions-from`,
-`--answers-from`, `--tiers`, `--template`, `--data`, `--out`, and every taxonomy
-file a verb opens for itself.
+An **absolute** value is always used as-is. A **relative** one resolves against
+the root `--repo` names — `--rows-from`, `--board-from`, `--gates`,
+`--changelog`, `--fragment-dir`, `--wakes-from`, `--body-from`,
+`--requirements-from`, `--ledger`, `--questions-from`, `--answers-from`,
+`--tiers`, `--template`, `--data`, `--out`, `--body-file`, `--input`,
+`--efforts`, `--original`, `--branches`, `--table`, `--rules-dir`,
+`--canon-values`, `--out-dir`, `--mirror-dir`, `--markdown-out`, and every
+taxonomy file a verb opens for itself. `--repo` itself defaults to the process's
+current directory, so a caller standing in the repository sees no difference
+between the two.
 
-**A closed set of own-path flags does not** — they are handed to
-`readFileSync`/`writeFileSync` unresolved, so a relative value resolves
-against the **process's current directory** and `--repo` is ignored:
+**There used to be two bases** ([#100](https://github.com/zheref/nen/issues/100)).
+A closed set of "own-path" flags was handed to `readFileSync`/`writeFileSync`
+unresolved, so they resolved against the **process's** directory and ignored
+`--repo` entirely. Nothing was inconsistent within a single invocation, which is
+exactly why it survived: run from the repository root, the two bases are the same
+path and the split is invisible. It appeared the moment a caller ran from
+somewhere else — a worktree, a wrapper script, a CI step with its own working
+directory — and then `--repo ../other --body-file notes.md` read *this* tree's
+`notes.md` while every other flag on the same line read the other tree's. An
+`ENOENT` is the lucky version of that; the unlucky one is a same-named file that
+exists in both.
 
-| Verb | Flags resolved against the process cwd |
-|---|---|
-| [`epic next-wave`](#nen-epic-next-wave) | `--body-file`, `--out` |
-| [`idea file`](#nen-idea-file) | `--body-file` |
-| [`issue comment`](#nen-issue-comment) | `--body-file` |
-| [`issue file`](#nen-issue-file) | `--body-file` — never read by nen at all; the path is handed to `gh` verbatim, so `gh`'s own cwd resolves it |
-| [`effort classify`](#nen-effort-classify) | `--input` |
-| [`loop slots`](#nen-loop-slots) | `--efforts` |
-| [`split verify`](#nen-split-verify) | `--original`, `--branches` |
-| [`quality tooling`](#nen-quality-tooling) | `--table` |
-| [`quality method-check`](#nen-quality-method-check) | `--input` |
-| [`canon mirror generate`](#nen-canon-mirror-generate) / [`canon mirror check`](#nen-canon-mirror-check) | `--rules-dir`, `--canon-values`, `--out-dir`, `--mirror-dir`, `--markdown-out` |
-
-Every one of these verbs is also in the accept-but-never-read list above, so
-there is nothing inconsistent about a single invocation — but there IS an
-inconsistency across the surface, and it is tracked as
-[zheref/nen#100](https://github.com/zheref/nen/issues/100). Until it closes,
-the portable habit is to pass an absolute path to any of the flags in this
-table, or to run the verb from the directory those paths are relative to.
+The root wins, which is the decision
+[#86](https://github.com/zheref/nen/issues/86) already made for `--gates`, and
+its reasoning generalises without change: every other path a verb reads is
+anchored there, and the failure the exception produced was silent and wrong.
+Where a path also travels onward — `issue comment`/`issue edit-body` hand
+`--body-file` to `gh` — it is resolved **once**, to an absolute path, so nen and
+`gh` cannot disagree about which file it is.
 
 ### Containment
 

@@ -755,13 +755,21 @@ describe("nen issue comment -- the general comment primitive", () => {
   // with two files of the same relative name in two different directories, so
   // a future refactor that resolved against --repo instead would read the
   // WRONG one and this test would see the decoy's text.
-  it("resolves a RELATIVE --body-file against process.cwd(), never against --repo", async () => {
+  // zheref/nen#100 REVERSED THIS, deliberately. `--body-file` used to resolve
+  // against the process's directory while `--gates`, `--changelog`, `--ledger`
+  // and every taxonomy file resolved against `--repo` -- two bases on one
+  // surface. Nothing was inconsistent within an invocation run from the
+  // repository root, which is why it survived; it appears the moment a caller
+  // runs from somewhere else, and then this verb reads THIS tree's file while
+  // every other flag on the line reads the named tree's. The decoy below is
+  // what that costs when both files exist.
+  it("resolves a RELATIVE --body-file against --repo, not the process's directory", async () => {
     const cwdDir = mkdtempSync(join(tmpdir(), "nen-issue-cwd-"));
     const repoDir = mkdtempSync(join(tmpdir(), "nen-issue-repo-"));
-    writeFileSync(join(cwdDir, "rel.md"), "the cwd file's own words\n", "utf8");
-    // A decoy at the SAME relative name under --repo: if resolution ever
-    // switched its base to --repo, this is the file that would be read.
-    writeFileSync(join(repoDir, "rel.md"), "the decoy under --repo\n", "utf8");
+    // The decoy is now the one in the PROCESS's directory: a file at the same
+    // relative name that must NOT be read.
+    writeFileSync(join(cwdDir, "rel.md"), "the decoy the process happens to stand beside\n", "utf8");
+    writeFileSync(join(repoDir, "rel.md"), "the file under --repo\n", "utf8");
     const previous = process.cwd();
     try {
       process.chdir(cwdDir);
@@ -772,7 +780,7 @@ describe("nen issue comment -- the general comment primitive", () => {
       );
       expect(result.code).toBe(0);
       const parsed = JSON.parse(result.out.join("\n")) as { body: string };
-      expect(parsed.body).toBe("the cwd file's own words\n");
+      expect(parsed.body).toBe("the file under --repo\n");
     } finally {
       process.chdir(previous);
     }

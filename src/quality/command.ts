@@ -1,6 +1,8 @@
 // src/quality/command.ts -- `nen quality tooling|perf-compare|method-check`.
 
 import { readFileSync } from "node:fs";
+import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { parseToolingTable, resolveTooling } from "./tooling.js";
 import { comparePerf, PerfCompareError } from "./perf.js";
@@ -23,7 +25,13 @@ usage:
   nen quality method-check --input <path.json>
       Validates a QA-15 method block: device/OS stated, Release config with no
       debugger, sample size >=5 with the first discarded, median and p90
-      reported, thermal and network conditions stated. Exits 1 on any gap.`;
+      reported, thermal and network conditions stated. Exits 1 on any gap.
+
+  --repo <path>    The checkout that --table and --input resolve against.
+                   Defaults to the current directory, so a call made from
+                   anywhere else needs it: since zheref/nen#100 every path
+                   flag on this verb resolves against this root, never
+                   against the process's own directory.`;
 
 export const qualityCommand: Command = {
   name: "quality",
@@ -49,7 +57,9 @@ function tooling(context: CommandContext): number {
   }
   let table;
   try {
-    table = parseToolingTable(readFileSync(tablePath, "utf8"));
+    // // Resolved against --repo's root, one base for every path flag (zheref/nen#100).
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+    table = parseToolingTable(readFileSync(resolveAgainstRepo(root, tablePath), "utf8"));
   } catch (error) {
     context.io.err(`nen: could not read --table '${tablePath}': ${String(error)}`);
     return 1;
@@ -107,7 +117,11 @@ function methodCheck(context: CommandContext): number {
   if (path === undefined) throw new VerbUsageError("quality method-check takes --input <path.json>.");
   let block: MethodBlock;
   try {
-    block = JSON.parse(readFileSync(path, "utf8").replace(/\r\n/g, "\n")) as MethodBlock;
+    // // Resolved against --repo's root, one base for every path flag (zheref/nen#100).
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+    block = JSON.parse(
+      readFileSync(resolveAgainstRepo(root, path), "utf8").replace(/\r\n/g, "\n"),
+    ) as MethodBlock;
   } catch (error) {
     context.io.err(`nen: could not read --input '${path}': ${String(error)}`);
     return 1;

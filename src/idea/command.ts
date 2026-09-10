@@ -2,6 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { assertRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { parseTarget, TargetError, type Target } from "../github/target.js";
@@ -89,9 +90,12 @@ export const ideaCommand: Command = {
     if (bodyFile === undefined) {
       throw new VerbUsageError("--body-file <path> is required; a body typed on the command line is a body nobody reviewed.");
     }
+    const root = assertRepoRoot({ repoFlag });
     let submittedBody: string;
     try {
-      submittedBody = readFileSync(bodyFile, "utf8");
+      // // Resolved against --repo's root, one base for every path flag (zheref/nen#100). Read RAW: the read-back compares bytes, so normalising here would
+      // make nen disagree with itself about what it sent.
+      submittedBody = readFileSync(resolveAgainstRepo(root, bodyFile), "utf8");
     } catch (error) {
       context.io.err(`nen: could not read --body-file '${bodyFile}': ${String(error)}`);
       return 1;
@@ -105,7 +109,6 @@ export const ideaCommand: Command = {
       forbiddenFamilies: commaList(context.args.values["forbid-family"]),
     };
 
-    const root = assertRepoRoot({ repoFlag });
     const taxonomy = loadLabelTaxonomy(root);
     const result = fileIdea(context.seams, target, request, submittedBody, taxonomy);
 

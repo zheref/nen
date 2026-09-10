@@ -12,6 +12,8 @@
 // would have callers writing to a temporary file they then delete.
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { coordinate, DuplicateChildIdError, UnparsableChecklistError } from "./waves.js";
 
@@ -46,7 +48,13 @@ known, checked child of this parent -- an unknown id never clears the gate.
 Exits 1 (never writing --out) when the same child id appears more than once in
 the checklist -- a duplicate is an authoring error this coordinator refuses to
 guess past -- or when the body has checkbox lines but NONE resolves to a
-child: an all-unreadable checklist must not report itself as an empty one.`;
+child: an all-unreadable checklist must not report itself as an empty one.
+
+  --repo <path>    The checkout that --body-file and --out resolve
+                   against. Defaults to the current directory, so a call
+                   made from anywhere else needs it: since zheref/nen#100
+                   every path flag on this verb resolves against this
+                   root, never against the process's own directory.`;
 
 export const epicCommand: Command = {
   name: "epic",
@@ -58,6 +66,12 @@ export const epicCommand: Command = {
   },
   run(context: CommandContext): number {
     requireSubcommand("epic", context.args, ["next-wave"]);
+    // ONE BASE FOR EVERY PATH FLAG (zheref/nen#100). `--repo` defaults to the
+    // process's directory, so a caller standing in the repository sees no
+    // change at all; a caller standing anywhere else now gets --body-file and
+    // --out from the tree they named rather than from the one they happen to
+    // be in.
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     const bodyFile = context.args.values["body-file"];
     if (bodyFile === undefined) throw new VerbUsageError("--body-file <path> is required.");
     const citation = context.args.values["citation"];
@@ -73,7 +87,7 @@ export const epicCommand: Command = {
       // anchored at end-of-line and a stray carriage return would put one
       // inside the `rest` group -- where it would then be written back out into
       // the middle of a rewritten line.
-      body = readFileSync(bodyFile, "utf8").replace(/\r\n/g, "\n");
+      body = readFileSync(resolveAgainstRepo(root, bodyFile), "utf8").replace(/\r\n/g, "\n");
     } catch (error) {
       context.io.err(`nen: could not read --body-file '${bodyFile}': ${String(error)}`);
       return 1;
@@ -109,7 +123,11 @@ export const epicCommand: Command = {
     }
     const out = context.args.values["out"];
     if (out !== undefined) {
-      writeFileSync(out, result.body, "utf8");
+      // Written where --repo says, not where the process happens to stand
+      // (zheref/nen#100): the input beside it resolves that way too, and a
+      // rewritten body landing in a different tree from the one it was read
+      // from is the failure that split produced.
+      writeFileSync(resolveAgainstRepo(root, out), result.body, "utf8");
     }
 
     // Unresolvable checkboxes are warned about on stderr in BOTH modes -- in

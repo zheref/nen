@@ -1,6 +1,8 @@
 // src/effort/command.ts -- `nen effort classify`.
 
 import { readFileSync } from "node:fs";
+import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { classifyEffort, EFFORT_CLASSES, TAXONOMY_CLASSES, type EffortInput } from "./classify.js";
 
@@ -32,7 +34,13 @@ still reaches 'stalled' without it.
 
 Exit 0 whatever the classification, including every one above: a
 classification is this verb's ANSWER, and an answer of "these labels contradict
-each other" or "nothing places this" is as much an answer as any other.`;
+each other" or "nothing places this" is as much an answer as any other.
+
+  --repo <path>    The checkout that --input resolves against. Defaults to
+                   the current directory, so a call made from anywhere
+                   else needs it: since zheref/nen#100 every path flag on
+                   this verb resolves against this root, never against the
+                   process's own directory.`;
 
 export const effortCommand: Command = {
   name: "effort",
@@ -46,7 +54,9 @@ export const effortCommand: Command = {
 
     let inputs: EffortInput[];
     try {
-      const parsed: unknown = JSON.parse(readFileSync(path, "utf8").replace(/\r\n/g, "\n"));
+      // // Resolved against --repo's root, one base for every path flag (zheref/nen#100).
+      const full = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), path);
+      const parsed: unknown = JSON.parse(readFileSync(full, "utf8").replace(/\r\n/g, "\n"));
       if (!Array.isArray(parsed)) throw new Error("expected a JSON array");
       inputs = parsed as EffortInput[];
     } catch (error) {
