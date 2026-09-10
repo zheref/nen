@@ -5137,10 +5137,16 @@ nen report data --repo . --base origin/main --tiers tiers.json
 ```
 ```text
 repo: report-family on 'opus/kurapika/report-family', base 'origin/main'
-generated: 2026-09-10T05:07:40.561Z
-commits: 1
+generated: 2026-09-10T05:15:27.751Z
+commits: 4
+  fe71eafb Merge remote-tracking branch 'origin/main' into opus/kurapika/report-family
+  9d647966 docs(changelog): link the report family bullet to its PR
+  e17af580 docs(report): document the report family, its two verbs and the counts
   5e70ff32 feat(report): add the report family -- data and render
-files: 10 (10 tiered)
+files: 13 (13 tiered)
+  M    CHANGELOG.md  [docs]
+  M    README.md  [docs]
+  M    docs/USAGE.md  [docs]
   M    src/cli/registry.ts  [source]
   M    src/parse/izanami.ts  [source]
   A    src/report/command.ts  [source]
@@ -5152,11 +5158,11 @@ files: 10 (10 tiered)
   A    src/report/template.test.ts  [tests]
   A    src/report/template.ts  [source]
 evidence: 0 row(s) -- 'nen shu evidence' fills this; this verb never globs a tree
-coverage: none read
+coverage: 93.74% lines on 'nen' (lcov, coverage/lcov.info)
 proof: none
 last stop: none
 ```
-(run for real, in this repository's own worktree while the family was being written; `tiers.json` was `{"tests": ["src/**/*.test.ts"], "source": ["src"], "docs": ["docs", "README.md", "CHANGELOG.md"]}`. `coverage: none read` because this repository declares no `nen/contract.json` and therefore no lane)
+(run for real, in this repository's own worktree while the family was being written; `tiers.json` was `{"tests": ["src/**/*.test.ts"], "source": ["src"], "docs": ["docs", "README.md", "CHANGELOG.md"]}`. The coverage line is this repository's OWN declaration answering: `nen/contract.json` names lane `nen`, whose `coverage` verb declares `coverage/lcov.info`, and that file was on disk from a previous [`shu coverage`](#nen-shu-coverage) run — this verb read it and spawned nothing. Before that run it printed `coverage: none read`, with `coverage: lane 'nen' declares 'coverage/lcov.info', which is not there. Run 'nen shu coverage --repo <path> --lane nen' to produce it; reported as null.` on stderr)
 
 ### `nen report render`
 
@@ -5207,7 +5213,18 @@ tokens: 11
   coverage.lane
 wrote Reports/effort.html
 ```
-(run for real; `effort.html` was a six-line template using every construct, and `Reports/effort.html` came out as `<h1>report-family -- opus/kurapika/report-family</h1>` followed by one `<tr>` per commit and no coverage paragraph, the `{{#if coverage}}` block having been skipped on a `coverage` of `null`. The same invocation with `--out ../escape.html` prints `--out '../escape.html' resolves outside the repository at … 'report render' writes the report INTO the repository it is reporting on and nowhere else` at exit 2)
+```text
+<h1>report-family -- opus/kurapika/report-family</h1>
+<p>against origin/main, generated 2026-09-10T05:15:35.200Z</p>
+<table>
+<tr><td>0</td><td>fe71eafb3e6c0478c1e4f6403eb4fb91a7060cf6</td><td>Merge remote-tracking branch &#39;origin/main&#39; into opus/kurapika/report-family</td></tr>
+<tr><td>1</td><td>9d647966a95dd126c660b18c3dd276320ea5bccb</td><td>docs(changelog): link the report family bullet to its PR</td></tr>
+<tr><td>2</td><td>e17af5808a8a3f5d887d379f553822d8ad306c69</td><td>docs(report): document the report family, its two verbs and the counts</td></tr>
+<tr><td>3</td><td>5e70ff32ed78b267edf7434b80e0a6d0ed7fd4c2</td><td>feat(report): add the report family -- data and render</td></tr>
+</table>
+<p>93.74% of lines on 'nen'</p>
+```
+(both run for real, `effort.html` being the six-line template above. Note the escaping: the merge commit's `'origin/main'` came out as `&#39;origin/main&#39;` from a `{{subject}}` cell, which is the default and the point. With a `coverage` of `null` the last paragraph is simply absent — the `{{#if}}` block is skipped, not blanked. The same render with `--out ../escape.html` prints `--out '../escape.html' resolves outside the repository at … 'report render' writes the report INTO the repository it is reporting on and nowhere else` at exit 2)
 
 ## Developer workflows
 
