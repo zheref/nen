@@ -2,8 +2,9 @@
 // scenario`.
 
 import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
-import { openTaxonomy } from "../schema/taxonomy.js";
-import { loadRepoRegistry } from "../schema/repos.js";
+import { ABSENT_FILE_MARKER, openTaxonomy } from "../schema/taxonomy.js";
+import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
+import { SchemaError } from "../schema/errors.js";
 import { parseTarget, type Target } from "../github/target.js";
 import { resolve, RepoResolutionError, type Resolution } from "./resolve.js";
 import { assertRepoRoot, resolveRepoRoot } from "./root.js";
@@ -14,6 +15,39 @@ function requireTarget(context: CommandContext): Target {
   const raw = context.args.values["target"];
   if (raw === undefined) throw new Error("--target owner/name is required.");
   return parseTarget(raw);
+}
+
+/**
+ * The registry, or a PRECONDITION refusal at exit 2 when it does not exist on
+ * disk at all -- ENOENT under both `nen/repos.json` and the legacy
+ * `schemas/repos.json` (../schema/taxonomy.ts's `ABSENT_FILE_MARKER`).
+ *
+ * EVERY VERB IN THIS FAMILY THAT OPENS THE REGISTRY REFUSES THE SAME WAY. An
+ * absent registry is not a token that failed to resolve or a scenario that
+ * was not recorded -- it is "this repository has not adopted nen/repos.json
+ * at all", the same class of thing as an omitted --repo or --from beside a
+ * token, both already exit 2 in this family. Left uncaught, it fell through
+ * to the generic verb-failure catch and reported the identical "no such
+ * file" text at exit 1 (or, through some wrappers, was swallowed as if the
+ * verb had done nothing at all) -- indistinguishable from "the token you
+ * typed is wrong", which every wrapper this family has retries for.
+ *
+ * A PRESENT BUT MALFORMED registry is a DIFFERENT failure and is NOT caught
+ * here: the invocation was fine, the target repository's own file is not --
+ * ../commit/command.ts draws the identical line for nen/workflow.json ("A
+ * POLICY THAT WILL NOT LOAD IS EXIT 1, NOT 2"). Only the file's ABSENCE is a
+ * precondition; its contents being wrong is the verb's own failure to read
+ * them, same as always.
+ */
+function requireRegistry(load: () => RepoRegistry): RepoRegistry {
+  try {
+    return load();
+  } catch (error) {
+    if (error instanceof SchemaError && error.message.includes(ABSENT_FILE_MARKER)) {
+      throw new VerbUsageError(error.message);
+    }
+    throw error;
+  }
 }
 
 const USAGE = `nen repo resolve [<token>] [--repo <path>]
@@ -41,7 +75,11 @@ resolve:
                    ignored; to read another checkout's registry, use --repo.
 
 An unknown token is an error that lists the registry's codes. It is never a
-guess and never a widening to every repository.
+guess and never a widening to every repository. A --repo (or the current
+directory) that carries NEITHER nen/repos.json NOR the legacy
+schemas/repos.json is a DIFFERENT refusal, at exit 2: there is no registry to
+resolve a token against at all, a precondition this verb cannot proceed
+without -- not a token that failed to match one.
 
 inventory:
   senkei's live enumeration: every open issue carrying --epic-label with
@@ -56,9 +94,13 @@ scenario:
   the value canon-resolve/quality-tooling lookups read. --repo is
   REQUIRED (exit 2), never defaulted to the current directory: a cwd
   default surfaced as whatever registry happened to be there, not as the
-  forgotten flag (zheref/nen#28). Exits 1 with a DISTINCT reason when
-  --repo carries no nen/repos.json, when --target is not recorded in
-  it at all, or when it is recorded but carries no scenario.`;
+  forgotten flag (zheref/nen#28). Exits 2 when --repo carries NEITHER
+  nen/repos.json NOR the legacy schemas/repos.json -- there is no
+  registry to read at all, the same precondition 'repo resolve' refuses
+  the same way. Exits 1 with a DISTINCT reason when the registry IS
+  present and --target is not recorded in it at all, or is recorded but
+  carries no scenario -- those are the target repository's own data, not
+  the invocation.`;
 
 function render(resolution: Resolution): string[] {
   const lines: string[] = [];
@@ -101,7 +143,7 @@ export const repoCommand: Command = {
     }
 
     const taxonomy = openTaxonomy({ repoFlag: context.repoFlag });
-    const registry = taxonomy.repos();
+    const registry = requireRegistry((): RepoRegistry => taxonomy.repos());
     // `--from` defaults to the CALL SITE's cwd, not to the target repository:
     // "which repository am I standing in" and "whose taxonomy am I reading" are
     // different questions, and a verb that answered the first with the second
@@ -159,7 +201,7 @@ function scenario(context: CommandContext): number {
   );
   const target = requireTarget(context);
   const root = assertRepoRoot({ repoFlag });
-  const registry = loadRepoRegistry(root);
+  const registry = requireRegistry((): RepoRegistry => loadRepoRegistry(root));
   const result = resolveScenario(registry, target.slug);
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));

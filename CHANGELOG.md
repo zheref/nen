@@ -4,6 +4,10 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Fixed
+
+- **repo** — `nen repo resolve` and `nen repo scenario` refuse a `--repo` (or, for `resolve`'s no-token form, a current directory) carrying NEITHER `nen/repos.json` NOR the legacy `schemas/repos.json` at exit **2**, naming the file, instead of falling through to a generic exit-1 failure indistinguishable from an unresolved token or an unrecorded scenario. A missing registry is a PRECONDITION neither verb can proceed past at all — the same class of thing as an omitted `--repo` or `--from` beside a token, both already exit 2 in this family — not a data problem inside a file that opened fine. A registry that is present but malformed is unaffected and stays exit 1, matching how `nen commit format` already treats a malformed (as opposed to absent) `nen/workflow.json` (`nen repo inventory` never reads the registry and is unaffected)
+
 ### Added
 
 - **pr** — `nen pr cascade-main` gains `--no-push`: fetch and merge exactly as it always has, then stop — never push, with the log saying `not pushed (--no-push)` and `--json` gaining `noPush: true` (`false` on every other call, never omitted). A conflicted merge's `--json` also gains `conflicts[]`, one entry per unmerged path from `git diff --name-only --diff-filter=U`: `kind` (`both-modified`, `add-add`, `modify-delete`, `delete-modify`) read off `git ls-files -u`'s stage table, and `ours[]`/`theirs[]` — the commits each side contributed to that path since the merge base (`git log --format=%H <mergeBase>..<ref> -- <path>`). Text output lists the same, one block per file. Neither flag changes the existing rule: this verb never runs `git merge --abort`, never picks a side, and never pushes over a conflict. `--no-push` still merges locally — a working-tree/index mutation — so izanami's automation-policy table keeps `cascade-main` `mutating` in every spelling, `--no-push` included ([#141](https://github.com/zheref/nen/pull/141))
