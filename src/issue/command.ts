@@ -379,9 +379,12 @@ usage:
       does NOT perform the write: it posts only to issues/{parent}/sub_issues,
       and replacing a body is a different write, on the one path in this verb
       that is reachable only where the endpoint is missing. Apply it yourself
-      with 'nen issue edit-body --issue <parent> --body-file <f>', whose file is
-      the parent's CURRENT body plus those lines (that verb REPLACES a body),
-      and say which form was used: a task list is not a sub-issue graph.
+      with 'nen issue edit-body --target <owner/name> --issue <parent>
+      --body-file <f>' -- written whole, --target included, because a block
+      whose whole job is to say what to run has to be copy/pastable and that
+      verb requires it too -- whose file is the parent's CURRENT body plus those
+      lines (it REPLACES a body). Then say which form was used: a task list is
+      not a sub-issue graph.
 
   nen issue consolidate-close --target <owner/name> --parent <n>
                               --children 1,2 --repo <path>

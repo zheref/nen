@@ -1994,7 +1994,16 @@ describe("nen issue consolidate-close -- the caller-supplied close comment", () 
   it("issue --help says the fallback is DETECTED here and performed by the caller", async () => {
     const out = (await capture(["issue", "--help"])).out.join("\n");
     expect(out).toMatch(/does NOT perform the write/);
-    expect(out).toMatch(/nen issue edit-body --issue <parent> --body-file <f>/);
+    // THE WHOLE INVOCATION, --target included. A help block whose entire job is
+    // to say what to run must be copy/pastable: `issue edit-body` requires
+    // --target the same way this verb does, and an invocation missing it fails
+    // for a reader who trusted the text (Copilot, PR #183). Matched across the
+    // line wrap the help block puts in, so the assertion pins the command
+    // rather than one line's happening to hold all of it.
+    const helpText = out.replace(/\s+/g, " ");
+    expect(helpText).toContain(
+      "nen issue edit-body --target <owner/name> --issue <parent> --body-file <f>",
+    );
   });
 
   it("issue --help documents both close-comment flags and the placeholder vocabulary", async () => {

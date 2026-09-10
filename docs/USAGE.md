@@ -3439,7 +3439,7 @@ nen does NOT write this. To apply it, put the CURRENT body of #12 plus these lin
   nen issue edit-body --target zheref/bankai-core --issue 12 --body-file <file>
 ```
 
-[`issue edit-body`](#nen-issue-edit-body) **replaces** a body, so the file is the parent's current body *plus* those lines -- handing it only the lines loses the body. And say which form was used: a task list is not a sub-issue graph, and a later sweep that reads one as the other is wrong about the whole chain.
+[`issue edit-body`](#nen-issue-edit-body) requires `--target` the same way this verb does, so the line above is copy/pastable as written; and it **replaces** a body, so the file is the parent's current body *plus* those lines -- handing it only the lines loses the body. And say which form was used: a task list is not a sub-issue graph, and a later sweep that reads one as the other is wrong about the whole chain.
 
 **Output and exit codes** -- human rendering is the run's own `log` lines: `would run: gh api --method POST repos/<slug>/issues/<parent>/sub_issues -F sub_issue_id=<id>   (#<child> -> id <id>)` under `--dry-run`, or `attached #<child> (id <id>) to #<parent>` for a real write; a 404/410 from the sub-issues endpoint is reported with the task-list fallback block above. `--json`: the `AttachReport` -- `{ attached, failed, fallbackTaskList, log }`, or `{ parent, children, pullRequests, refused: true, reason }` on the object-class refusal. Exit 0 when every child attached; exit 1 when one or more children failed to attach, OR when the object-class certification refused (nothing is attached in that case).
 
