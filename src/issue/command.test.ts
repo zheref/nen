@@ -1025,6 +1025,206 @@ describe("nen issue comment -- the general comment primitive", () => {
   });
 });
 
+describe("nen issue edit-body -- replaces an issue's body outright, byte for byte", () => {
+  const CERTIFY_12: ScriptedCall = {
+    match: "gh api repos/o/n/issues/12",
+    result: { stdout: JSON.stringify({ number: 12, id: 100, title: "an issue", state: "open", labels: [] }) },
+  };
+
+  it("certifies the number first, then writes through the Runner seam", async () => {
+    const path = tempFile("body.md", "## plan\n\nreplaced wholesale.\n");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
+      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file ${path}`, result: {} }],
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toBe("replaced o/n#12's body (29 byte(s))");
+    // The certifying read comes before the write, in argv order -- a write
+    // ahead of it would mean the object class was never actually checked.
+    expect(result.calls).toEqual([
+      "gh api repos/o/n/issues/12",
+      `gh issue edit 12 --repo o/n --body-file ${path}`,
+    ]);
+  });
+
+  it("--json carries the frozen six-field contract, written: true on a real run", async () => {
+    const path = tempFile("body.md", "hello");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
+      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file ${path}`, result: {} }],
+      { json: true },
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({
+      contract: "nen.issue.edit-body/v0.1",
+      target: "o/n",
+      number: 12,
+      bytes: 5,
+      written: true,
+      dryRun: false,
+    });
+  });
+
+  // --dry-run still reads GitHub to certify the number, exactly like
+  // attach-sub/consolidate-close -- but never runs the write.
+  it("--dry-run certifies (still reads GitHub), then prints target/number/bytes/first-last line and writes nothing", async () => {
+    const path = tempFile("body.md", "first line\nmiddle\nlast line\n");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path, "--dry-run"],
+      [CERTIFY_12],
+    );
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      `would run: gh issue edit 12 --repo o/n --body-file ${path}`,
+      "target: o/n",
+      "number: 12",
+      "bytes: 28",
+      "first line: first line",
+      "last line: last line",
+    ]);
+    expect(result.calls).toEqual(["gh api repos/o/n/issues/12"]);
+  });
+
+  it("--dry-run --json carries dryRun: true, written: false, and no other fields", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path, "--dry-run"],
+      [CERTIFY_12],
+      { json: true },
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({
+      contract: "nen.issue.edit-body/v0.1",
+      target: "o/n",
+      number: 12,
+      bytes: 2,
+      written: false,
+      dryRun: true,
+    });
+  });
+
+  // UNLIKE 'issue comment', a pull request's number is refused -- certified
+  // BEFORE any write, so an empty script would throw on an unscripted write
+  // if the guard ever let one through.
+  it("refuses (exit 2) a number that names a pull request, before any write", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "925", "--body-file", path],
+      [
+        {
+          match: "gh api repos/o/n/issues/925",
+          result: {
+            stdout: JSON.stringify({
+              number: 925,
+              id: 900,
+              title: "a pull request",
+              state: "open",
+              labels: [],
+              pull_request: { url: "https://api.github.com/repos/o/n/pulls/925" },
+            }),
+          },
+        },
+      ],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/#925 names a pull request .* not an issue/);
+    expect(result.err.join("\n")).toMatch(/nen pr edit-body/);
+  });
+
+  it("--dry-run also refuses a pull request's number -- the dry run never lies about what a real run would do", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "925", "--body-file", path, "--dry-run"],
+      [
+        {
+          match: "gh api repos/o/n/issues/925",
+          result: {
+            stdout: JSON.stringify({
+              number: 925,
+              id: 900,
+              title: "a pull request",
+              state: "open",
+              labels: [],
+              pull_request: { url: "https://api.github.com/repos/o/n/pulls/925" },
+            }),
+          },
+        },
+      ],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/#925 names a pull request/);
+  });
+
+  it("requires --issue", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(["issue", "edit-body", "--target", "o/n", "--body-file", path], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--issue <n>/);
+  });
+
+  it.each(["1e3", "0x0c", "12.0", " 12", "+12", "0"])(
+    "refuses (exit 2) --issue '%s' rather than letting a loose read retarget the write",
+    async (raw) => {
+      const path = tempFile("body.md", "hi");
+      const result = await capture(
+        ["issue", "edit-body", "--target", "o/n", "--issue", raw, "--body-file", path],
+        [],
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--issue <n>: a positive whole number, digits only/);
+    },
+  );
+
+  it("requires --body-file, and there is no inline --body spelling", async () => {
+    const result = await capture(["issue", "edit-body", "--target", "o/n", "--issue", "12"], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--body-file <path>/);
+    expect(result.err.join("\n")).toMatch(/no inline --body/);
+  });
+
+  it("refuses (exit 2) an inline --body -- it belongs to 'issue comment'", async () => {
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body", "hi"],
+      [],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/It belongs to 'issue comment'/);
+  });
+
+  it("refuses (exit 2) an empty --body-file", async () => {
+    const path = tempFile("body.md", "\n   \n");
+    const result = await capture(["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is empty/);
+  });
+
+  it("refuses (exit 2) a --body-file that does not exist", async () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "nope.md");
+    const result = await capture(["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", missing], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not read/);
+  });
+
+  it("propagates a gh write failure as its own error (exit 1), after certification succeeded", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
+      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file ${path}`, result: { code: 1, stderr: "HTTP 500" } }],
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not replace o\/n#12's body/);
+  });
+
+  it("issue --help documents edit-body, its --body-file-only shape and the pull-request refusal", async () => {
+    const result = await capture(["issue", "--help"]);
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/nen issue edit-body --target <owner\/name> --issue <n>/);
+    expect(out).toMatch(/no\s+inline --body/);
+    expect(out).toMatch(/a number\s+that names a PULL REQUEST is refused/);
+  });
+});
+
 // THE COVERAGE TEST FOR THE DERIVED GUARD (round-two review's MAJOR, and the
 // same shape as zheref/nen#74's parseArgs-coupling test one directory over).
 //
@@ -1049,6 +1249,7 @@ describe("nen issue -- foreign flags derived from each subcommand's own spec (ro
     "open-pr-check": ["--target", "o/n", "--issues", "1"],
     file: ["--target", "o/n", "--title", "t", "--body-file", "b.md", "--label", "l", "--assignee", "a"],
     comment: ["--target", "o/n", "--issue", "1", "--body", "hi"],
+    "edit-body": ["--target", "o/n", "--issue", "1", "--body-file", "b.md"],
     "attach-sub": ["--target", "o/n", "--parent", "1", "--children", "2"],
     "consolidate-close": ["--target", "o/n", "--parent", "1", "--children", "2"],
     "chain-position": ["--target", "o/n", "--issue", "1"],
@@ -1213,15 +1414,17 @@ describe("nen issue -- foreign flags derived from each subcommand's own spec (ro
   // could not hold at all -- and four render as a sentence rather than a chain
   // of "and"s, because a refusal a caller does not read is a refusal they route
   // around.
-  it("names BOTH owners of a two-owner flag, and conjoins a four-owner one", async () => {
-    const two = await capture(["issue", "search", "--target", "o/n", "--body-file", "b.md"], []);
-    expect(two.code).toBe(2);
-    expect(two.err.join("\n")).toContain("It belongs to 'issue file' and 'issue comment'.");
+  it("names all three owners of a three-owner flag, and conjoins a five-owner one", async () => {
+    const three = await capture(["issue", "search", "--target", "o/n", "--body-file", "b.md"], []);
+    expect(three.code).toBe(2);
+    expect(three.err.join("\n")).toContain(
+      "It belongs to 'issue file', 'issue comment' and 'issue edit-body'.",
+    );
 
-    const four = await capture(["issue", "search", "--target", "o/n", "--dry-run"], []);
-    expect(four.code).toBe(2);
-    expect(four.err.join("\n")).toContain(
-      "It belongs to 'issue file', 'issue comment', 'issue attach-sub' and 'issue consolidate-close'.",
+    const five = await capture(["issue", "search", "--target", "o/n", "--dry-run"], []);
+    expect(five.code).toBe(2);
+    expect(five.err.join("\n")).toContain(
+      "It belongs to 'issue file', 'issue comment', 'issue edit-body', 'issue attach-sub' and 'issue consolidate-close'.",
     );
   });
 
@@ -1250,7 +1453,7 @@ describe("nen issue -- foreign flags derived from each subcommand's own spec (ro
       // --dry-run DOES belong to remains useful, it is just not the whole
       // answer for a verb that never had a write to preview.
       expect(err).toContain(
-        "It belongs to 'issue file', 'issue comment', 'issue attach-sub' and 'issue consolidate-close'.",
+        "It belongs to 'issue file', 'issue comment', 'issue edit-body', 'issue attach-sub' and 'issue consolidate-close'.",
       );
     },
   );

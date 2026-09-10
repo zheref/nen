@@ -10,6 +10,13 @@ import type { Target } from "../github/target.js";
 import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
 import { prCommand } from "./command.js";
 
+/** A throwaway file, for edit-body's --body-file. */
+function tempFile(name: string, contents: string): string {
+  const path = join(mkdtempSync(join(tmpdir(), "nen-pr-")), name);
+  writeFileSync(path, contents, "utf8");
+  return path;
+}
+
 // NEVER `defaultSeams()` HERE (review finding) -- see board/command.test.ts's
 // own note on the same fix. A `run` that throws converts a future regression
 // (this verb growing a real `gh` call) into an immediate red test instead of
@@ -580,5 +587,200 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     );
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/requested copilot, sasuke/);
+  });
+});
+
+describe("nen pr edit-body -- replaces a pull request's body outright, byte for byte", () => {
+  const CERTIFY_12: ScriptedCall = {
+    match: "gh api repos/zheref/nen/pulls/12",
+    result: { stdout: JSON.stringify({ number: 12 }) },
+  };
+
+  it("certifies the number first, then writes through the Runner seam", async () => {
+    const path = tempFile("body.md", "## plan\n\nreplaced wholesale.\n");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path],
+      null,
+      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: {} }]),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toBe("replaced zheref/nen#12's body (29 byte(s))");
+  });
+
+  it("--json carries the frozen six-field contract, written: true on a real run", async () => {
+    const path = tempFile("body.md", "hello");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--json"],
+      null,
+      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: {} }]),
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({
+      contract: "nen.pr.edit-body/v0.1",
+      target: "zheref/nen",
+      number: 12,
+      bytes: 5,
+      written: true,
+      dryRun: false,
+    });
+  });
+
+  // --dry-run still reads GitHub to certify the number -- this verb is not
+  // network-free -- but runs no write.
+  it("--dry-run certifies (still reads GitHub), then prints target/number/bytes/first-last line and writes nothing", async () => {
+    const path = tempFile("body.md", "first line\nmiddle\nlast line\n");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--dry-run"],
+      null,
+      new ScriptedSeams([CERTIFY_12]),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      `would run: gh pr edit 12 --repo zheref/nen --body-file ${path}`,
+      "target: zheref/nen",
+      "number: 12",
+      "bytes: 28",
+      "first line: first line",
+      "last line: last line",
+    ]);
+  });
+
+  it("--dry-run --json carries dryRun: true, written: false, and no other fields", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--dry-run", "--json"],
+      null,
+      new ScriptedSeams([CERTIFY_12]),
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({
+      contract: "nen.pr.edit-body/v0.1",
+      target: "zheref/nen",
+      number: 12,
+      bytes: 2,
+      written: false,
+      dryRun: true,
+    });
+  });
+
+  // UNLIKE 'issue comment', a number that does not read as a pull request is
+  // refused before any write -- and the wording never claims it IS an issue,
+  // only that it is not a pull request (see ./editbody.ts's header).
+  it("refuses (exit 2) a number that does not read as a pull request, before any write", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "17", "--body-file", path],
+      null,
+      new ScriptedSeams([{ match: "gh api repos/zheref/nen/pulls/17", result: { code: 1, stderr: "HTTP 404: Not Found" } }]),
+    );
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/#17 does not read as a pull request/);
+    expect(err).toMatch(/nen issue edit-body/);
+    expect(err).not.toMatch(/#17 names an issue/);
+  });
+
+  it("--dry-run also refuses a non-pull-request number -- the dry run never lies about what a real run would do", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "17", "--body-file", path, "--dry-run"],
+      null,
+      new ScriptedSeams([{ match: "gh api repos/zheref/nen/pulls/17", result: { code: 1, stderr: "HTTP 404: Not Found" } }]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/#17 does not read as a pull request/);
+  });
+
+  it("requires --pr", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--body-file", path],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--pr <n>/);
+  });
+
+  it.each(["1e3", "0x0c", "12.0", " 12", "+12", "0"])(
+    "refuses (exit 2) --pr '%s' rather than letting a loose read retarget the write",
+    async (raw) => {
+      const path = tempFile("body.md", "hi");
+      const result = await capture(
+        ["pr", "edit-body", "--target", "zheref/nen", "--pr", raw, "--body-file", path],
+        null,
+        new ScriptedSeams([]),
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--pr <n>: a positive whole number, digits only/);
+    },
+  );
+
+  it("requires --body-file", async () => {
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12"],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--body-file <path>/);
+  });
+
+  it("refuses (exit 2) an empty --body-file", async () => {
+    const path = tempFile("body.md", "\n   \n");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is empty/);
+  });
+
+  it("refuses (exit 2) a --body-file that does not exist", async () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "nen-pr-")), "nope.md");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", missing],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not read/);
+  });
+
+  it("propagates a gh write failure as its own error (exit 1), after certification succeeded", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path],
+      null,
+      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: { code: 1, stderr: "HTTP 500" } }]),
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not replace zheref\/nen#12's body/);
+  });
+
+  it("refuses --dry-run on any subcommand other than edit-body", async () => {
+    const result = await capture(["pr", "ready", "--dry-run"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--dry-run is only read by 'pr edit-body'/);
+  });
+
+  it("refuses --body-file on any subcommand other than edit-body", async () => {
+    const path = tempFile("body.md", "hi");
+    const result = await capture(
+      ["pr", "ready", "--body-file", path],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--body-file is only read by 'pr edit-body'/);
+  });
+
+  it("'nen pr --help' documents edit-body, its --body-file-only shape and the non-pull-request refusal", async () => {
+    const result = await capture(["pr", "--help"], null);
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/nen pr edit-body --target <owner\/name> --pr <n> --body-file <path> \[--dry-run\]/);
+    expect(out).toMatch(/does not read as a pull request/);
   });
 });

@@ -52,6 +52,7 @@ import {
   type CloseComments,
 } from "./subissue.js";
 import { commentArgv, postComment, type CommentRequest } from "./comment.js";
+import { certifyIssue, editBodyArgv, writeIssueBody } from "./editbody.js";
 import { chainPosition, parseRoleMap, terminus, type ChainPositionResult, type TerminusResult } from "./chain.js";
 import { conjoin } from "../cli/prose.js";
 
@@ -109,6 +110,7 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
     booleans: ["dry-run"],
   },
   comment: { values: ["target", "issue", "body", "body-file"], booleans: ["dry-run"] },
+  "edit-body": { values: ["target", "issue", "body-file"], booleans: ["dry-run"] },
   "attach-sub": { values: ["target", "parent", "children"], booleans: ["dry-run"] },
   "consolidate-close": {
     values: ["target", "parent", "children", "severity-family", "close-comment", "close-comment-map"],
@@ -336,6 +338,27 @@ usage:
       accepted, deliberately -- ./comment.ts records why, and why that is not
       the same decision chain-position/terminus made.
 
+  nen issue edit-body --target <owner/name> --issue <n>
+                      --body-file <path> [--dry-run]
+      Replaces the issue's body OUTRIGHT with the file's bytes -- no
+      trimming, no template, the file becomes the body exactly, through
+      'gh issue edit --body-file'. --body-file is required; there is no
+      inline --body here, unlike 'issue comment' -- a body that replaces
+      EVERYTHING an issue says is a document, the same rule 'issue file'
+      already applies to the opening body. Refused (exit 2): a missing or
+      unreadable --body-file, an empty or whitespace-only one, a
+      non-numeric/non-positive --issue. UNLIKE 'issue comment', a number
+      that names a PULL REQUEST is refused (exit 2), never accepted: a
+      comment adds to a timeline either way, but replacing the whole body is
+      not additive and is invisible the moment the command exits -- the
+      same hazard 'attach-sub'/'consolidate-close' refuse a pull request
+      for. The number is certified before any write, so nothing changes on
+      a refusal. --dry-run still performs that certifying read (this verb
+      is not network-free, like 'attach-sub'), then prints the target, the
+      number, the byte count and the first and last line of the body
+      instead of writing. --json: '{ contract: "nen.issue.edit-body/v0.1",
+      target, number, bytes, written, dryRun }'.
+
   nen issue attach-sub --target <owner/name> --parent <n> --children 1,2
                        [--dry-run]
       Attaches children as sub-issues, resolving each child's ID (the API takes
@@ -444,6 +467,8 @@ export const issueCommand: Command = {
         return file(context);
       case "comment":
         return comment(context);
+      case "edit-body":
+        return editBody(context);
       case "attach-sub":
         return attach(context);
       case "consolidate-close":
@@ -765,6 +790,105 @@ function comment(context: CommandContext): number {
       ? `commented on ${target.slug}#${issue} (gh printed no comment URL, so there is none to report -- the comment was posted)`
       : `commented on ${target.slug}#${issue} ${result.url}`,
   );
+  return 0;
+}
+
+/** The first and last line of a body, for --dry-run's summary. */
+function bodyBookends(body: string): { readonly first: string; readonly last: string } {
+  const withoutTrailingNewline = body.endsWith("\n") ? body.slice(0, -1) : body;
+  const lines = withoutTrailingNewline.split("\n");
+  return { first: lines[0] ?? "", last: lines[lines.length - 1] ?? "" };
+}
+
+// NOTE ON `--repo`: this subcommand's usage line, like 'comment', lists NO
+// --repo -- it validates no taxonomy, so requiring a checkout would be asking
+// for a path this verb has nothing to do with; --target alone addresses the
+// API.
+function editBody(context: CommandContext): number {
+  const target = requireTarget(context);
+
+  // `--issue`, READ WITH THE HOUSE `/^\d+$/` GUARD -- see comment()'s own
+  // note above for why a MUTATING number read takes the strict form rather
+  // than this family's older, looser `Number(...)` idiom.
+  const rawIssue = context.args.values["issue"];
+  if (rawIssue === undefined) {
+    throw new VerbUsageError("edit-body takes --issue <n>.");
+  }
+  if (!/^\d+$/.test(rawIssue) || Number.parseInt(rawIssue, 10) <= 0) {
+    throw new VerbUsageError(
+      `edit-body takes --issue <n>: a positive whole number, digits only -- got '${rawIssue}'. A looser read would accept '1e3' as 1000 and '0x0c' as 12 and replace the wrong issue's body.`,
+    );
+  }
+  const issue = Number.parseInt(rawIssue, 10);
+
+  const bodyFile = context.args.values["body-file"];
+  if (bodyFile === undefined) {
+    throw new VerbUsageError(
+      "edit-body takes --body-file <path>: a body typed on the command line is a body nobody reviewed, and this verb REPLACES the issue's body outright -- there is no inline --body here, unlike 'issue comment'.",
+    );
+  }
+
+  // READ RAW AND CHECKED BEFORE ANYTHING IS SENT -- the same two decisions
+  // comment()'s own --body-file path makes above, for the same reasons: a
+  // --dry-run byte count that is not the byte count that would be sent is
+  // not a dry run, and `gh` is handed this SAME path untouched.
+  const body = readTextFile(
+    bodyFile,
+    process.cwd(),
+    "--body-file names the bytes this verb writes as the issue's new body, so an unreadable one is refused rather than replacing it with nothing.",
+    true,
+  );
+  if (body.trim() === "") {
+    throw new VerbUsageError(
+      `--body-file '${bodyFile}' is empty (or holds only whitespace). Replacing an issue's body with nothing is never what a caller meant, and it is never assumed.`,
+    );
+  }
+
+  // CERTIFIED BEFORE ANY WRITE -- unlike 'issue comment', which deliberately
+  // accepts a pull request's number (see ./comment.ts's header): replacing
+  // the WHOLE body is not additive, and is invisible the moment the command
+  // exits, the same hazard attach-sub/consolidate-close refuse a pull
+  // request for. See ./editbody.ts's own header for why this is a usage
+  // error (exit 2) rather than this family's other object-class refusal
+  // (NotAnIssueError, exit 1).
+  certifyIssue(context.seams, target, issue);
+
+  const bytes = Buffer.byteLength(body, "utf8");
+  const argv = editBodyArgv(target, issue, bodyFile);
+
+  if (context.args.booleans.has("dry-run")) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify(
+          { contract: "nen.issue.edit-body/v0.1", target: target.slug, number: issue, bytes, written: false, dryRun: true },
+          null,
+          2,
+        ),
+      );
+      return 0;
+    }
+    const { first, last } = bodyBookends(body);
+    context.io.out(`would run: gh ${argv.join(" ")}`);
+    context.io.out(`target: ${target.slug}`);
+    context.io.out(`number: ${issue}`);
+    context.io.out(`bytes: ${bytes}`);
+    context.io.out(`first line: ${first}`);
+    context.io.out(`last line: ${last}`);
+    return 0;
+  }
+
+  writeIssueBody(context.seams, target, issue, bodyFile);
+  if (context.json) {
+    context.io.out(
+      JSON.stringify(
+        { contract: "nen.issue.edit-body/v0.1", target: target.slug, number: issue, bytes, written: true, dryRun: false },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+  context.io.out(`replaced ${target.slug}#${issue}'s body (${bytes} byte(s))`);
   return 0;
 }
 
