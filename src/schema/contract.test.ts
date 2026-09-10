@@ -362,25 +362,35 @@ describe("project", () => {
     expect(refusal({ project: { ...PROJECT, targets: [] } }).pointer).toBe("project.targets");
   });
 
-  it("refuses a key one letter away from one nen reads, naming the key it meant", () => {
+  it("refuses a near-miss key by pointer, SAYING WHICH misspelling it is", () => {
     // THE FAILURE THIS BLOCK WAS PARSED TO PREVENT, and the half a wrong-TYPE
     // check does not reach: `{"arg": ["--prod"]}` is a perfectly-shaped list
     // under a key nothing reads, so the flag is accepted, nothing is appended,
     // and a DIFFERENT command deploys at exit 0.
-    for (const [key, meant] of [
-      ["arg", "args"],
-      ["Args", "args"],
-      ["argss", "args"],
-      ["requireEnv", "requiresEnv"],
-      ["requiresEnvs", "requiresEnv"],
-      ["unsuported", "unsupported"],
-      ["hy", "why"],
+    //
+    // AND THE PHRASE IS THE ONE THAT IS TRUE OF THAT KEY. The rule catches three
+    // shapes, and calling all three "one letter away" hands a maintainer a false
+    // clue about their own file at the exact moment they are trying to fix it:
+    // `WHY` is three substitutions from `why` and is the same word. (The
+    // English-plural shape needs a plural two letters out, which none of these
+    // four keys has; `launches` is where it fires, below.)
+    for (const [key, phrase] of [
+      ["arg", "is one letter away from 'args'"],
+      ["argss", "is one letter away from 'args'"],
+      ["requireEnv", "is one letter away from 'requiresEnv'"],
+      ["requiresEnvs", "is one letter away from 'requiresEnv'"],
+      ["unsuported", "is one letter away from 'unsupported'"],
+      ["hy", "is one letter away from 'why'"],
+      ["Args", "differs from 'args' only in case"],
+      ["WHY", "differs from 'why' only in case"],
     ] as const) {
       const error = refusal({
         project: { ...PROJECT, targets: { prod: { [key]: ["--prod"] } } },
       });
       expect(error.pointer, key).toBe(`project.targets.prod.${key}`);
-      expect(error.message, key).toContain(`is one letter away from '${meant}'`);
+      expect(error.message, key).toContain(phrase);
+      // Whichever phrase it is, the way out names the key that was meant.
+      expect(error.message, key).toContain("Fix the spelling");
     }
   });
 
@@ -521,6 +531,127 @@ describe("project", () => {
     expect(
       refusal({ project: { ...PROJECT, preconditions: { web: [{ value: "x" }] } } }).pointer,
     ).toBe("project.preconditions.web[0].kind");
+  });
+});
+
+describe("project.evidence", () => {
+  it("is null when the repository declares none", () => {
+    expect(parse({ project: PROJECT }).project?.evidence).toBeNull();
+  });
+
+  it("reads globs, mechanism, and the two defaults", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        evidence: { globs: ["**/__Snapshots__/**/*.png"], mechanism: "public-mirror" },
+      },
+    });
+    const evidence = contract.project?.evidence;
+    expect(evidence?.globs).toEqual(["**/__Snapshots__/**/*.png"]);
+    expect(evidence?.mechanism).toBe("public-mirror");
+    expect(evidence?.scene).toBe("{suite}-{scene}");
+    expect(evidence?.suiteSuffix).toBe("SnapshotTests");
+  });
+
+  it("reads an explicit scene template and suiteSuffix over the defaults", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        evidence: {
+          globs: ["**/*.png"],
+          mechanism: "files-changed",
+          scene: "{scene} ({suite})",
+          suiteSuffix: "Snapshots",
+        },
+      },
+    });
+    expect(contract.project?.evidence?.scene).toBe("{scene} ({suite})");
+    expect(contract.project?.evidence?.suiteSuffix).toBe("Snapshots");
+  });
+
+  it("accepts every declared mechanism", () => {
+    for (const mechanism of ["public-mirror", "files-changed", "embedded"] as const) {
+      const contract = parse({
+        project: { ...PROJECT, evidence: { globs: ["**/*.png"], mechanism } },
+      });
+      expect(contract.project?.evidence?.mechanism, mechanism).toBe(mechanism);
+    }
+  });
+
+  it("refuses an unknown mechanism, naming the closed set", () => {
+    const error = refusal({
+      project: { ...PROJECT, evidence: { globs: ["**/*.png"], mechanism: "s3" } },
+    });
+    expect(error.pointer).toBe("project.evidence.mechanism");
+    expect(error.message).toContain("CLOSED set");
+  });
+
+  it("refuses an absent globs list, naming the field", () => {
+    const error = refusal({ project: { ...PROJECT, evidence: { mechanism: "embedded" } } });
+    expect(error.pointer).toBe("project.evidence.globs");
+    expect(error.message).toContain("nothing (the field is absent)");
+  });
+
+  it("refuses an empty globs list -- required means at least one", () => {
+    const error = refusal({
+      project: { ...PROJECT, evidence: { globs: [], mechanism: "embedded" } },
+    });
+    expect(error.pointer).toBe("project.evidence.globs");
+    expect(error.message).toContain("empty array");
+  });
+
+  it("refuses an absent mechanism, naming the field", () => {
+    const error = refusal({ project: { ...PROJECT, evidence: { globs: ["**/*.png"] } } });
+    expect(error.pointer).toBe("project.evidence.mechanism");
+  });
+
+  it("refuses a non-array globs and a non-string element, by pointer", () => {
+    expect(
+      refusal({ project: { ...PROJECT, evidence: { globs: "**/*.png", mechanism: "embedded" } } })
+        .pointer,
+    ).toBe("project.evidence.globs");
+    expect(
+      refusal({ project: { ...PROJECT, evidence: { globs: [7], mechanism: "embedded" } } }).pointer,
+    ).toBe("project.evidence.globs[0]");
+  });
+
+  it("preserves an unknown key nobody misspelled", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        evidence: { globs: ["**/*.png"], mechanism: "embedded", $note: "metadata", host: "ios" },
+      },
+    });
+    expect(contract.project?.evidence?.raw["$note"]).toBe("metadata");
+    expect(contract.project?.evidence?.raw["host"]).toBe("ios");
+  });
+
+  it("refuses a near-miss key by pointer, SAYING WHICH misspelling it is -- like 'targets'", () => {
+    // ONE HELPER, FOUR BLOCKS: this block goes through the same
+    // `refuseNearMissKey` `project.targets`, `project.launch` and a launch
+    // device do, so it reports the same three shapes in the same words. The
+    // phrase is the one that is TRUE of the key -- `Mechanism` is three
+    // substitutions from `mechanism` and is the same word, and a maintainer
+    // told it is "one letter away" is being handed a false clue about their
+    // own file at the moment they are trying to fix it.
+    for (const [key, phrase] of [
+      ["glob", "is one letter away from 'globs'"],
+      ["globss", "is one letter away from 'globs'"],
+      ["mechanisms", "is one letter away from 'mechanism'"],
+      ["seene", "is one letter away from 'scene'"],
+      ["suiteSufix", "is one letter away from 'suiteSuffix'"],
+      ["Mechanism", "differs from 'mechanism' only in case"],
+      ["SuiteSuffix", "differs from 'suiteSuffix' only in case"],
+      ["scenes", "is one letter away from 'scene'"],
+    ] as const) {
+      const error = refusal({
+        project: { ...PROJECT, evidence: { globs: ["**/*.png"], mechanism: "embedded", [key]: "x" } },
+      });
+      expect(error.pointer, key).toBe(`project.evidence.${key}`);
+      expect(error.message, key).toContain(phrase);
+      // Whichever phrase it is, the way out names the key that was meant.
+      expect(error.message, key).toContain("Fix the spelling");
+    }
   });
 });
 
@@ -722,5 +853,146 @@ describe("loadContract, against the bundled fixtures", () => {
     } catch (error) {
       expect((error as SchemaError).message).toContain("no such file.");
     }
+  });
+});
+
+// ── project.launch ──────────────────────────────────────────────────────────
+//
+// The block `nen shu dev|run --target` reads. It is parsed rather than
+// preserved for `project.targets`' reason, one release later and with one more
+// hole to close: this block contributes not just ARGUMENTS to a spawned argv
+// but a whole second and third command (the device probe, the after-steps), so
+// a key nobody reads here is a launch that silently does two thirds of what the
+// file says.
+
+describe("project.launch", () => {
+  const DEVICE = { name: "Placeholder Handset", kind: "simulator" } as const;
+
+  it("is absent-means-empty, exactly as targets is", () => {
+    expect(parse({ project: PROJECT }).project?.launch).toEqual({});
+  });
+
+  it("reads a whole target: verb, args, device, after, why", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        launch: {
+          box: {
+            verb: "dev",
+            args: ["--flag"],
+            device: {
+              name: "Placeholder Handset",
+              resolve: { exe: "placeholder-probe", argv: ["list"] },
+            },
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+            why: "the bench",
+            note: "an unknown key, preserved",
+          },
+        },
+      },
+    });
+    const target = contract.project?.launch["box"];
+    expect(target?.verb).toBe("dev");
+    expect(target?.args).toEqual(["--flag"]);
+    expect(target?.device?.name).toBe("Placeholder Handset");
+    expect(target?.device?.resolve).toEqual({ exe: "placeholder-probe", argv: ["list"] });
+    expect(target?.after).toEqual([{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }]);
+    expect(target?.why).toBe("the bench");
+    // UNKNOWN KEYS ARE PRESERVED HERE TOO -- this schema's convention, and the
+    // reason the near-miss guard below has to exist at all.
+    expect(target?.raw["note"]).toBe("an unknown key, preserved");
+  });
+
+  it("requires a verb, out of a CLOSED two-member set", () => {
+    expect(refusal({ project: { ...PROJECT, launch: { box: { device: DEVICE } } } }).pointer).toBe(
+      "project.launch.box.verb",
+    );
+    const wrong = refusal({
+      project: { ...PROJECT, launch: { box: { verb: "build", device: DEVICE } } },
+    });
+    expect(wrong.pointer).toBe("project.launch.box.verb");
+    expect(wrong.message).toContain("dev, run");
+  });
+
+  it("reads a target with no command line at all as its own sentence", () => {
+    const contract = parse({
+      project: { ...PROJECT, launch: { farm: { unsupported: "a web console, not a command" } } },
+    });
+    expect(contract.project?.launch["farm"]?.unsupported).toBe("a web console, not a command");
+    expect(contract.project?.launch["farm"]?.verb).toBeNull();
+  });
+
+  it("refuses a target that is unsupported AND carries something to run", () => {
+    const error = refusal({
+      project: { ...PROJECT, launch: { farm: { unsupported: "no command", verb: "dev" } } },
+    });
+    expect(error.pointer).toBe("project.launch.farm");
+    expect(error.message).toContain("has no verb, arguments, device or after-steps either");
+  });
+
+  it("refuses the shapes a typo produces, by pointer", () => {
+    const bad = (launch: unknown): string | null =>
+      refusal({ project: { ...PROJECT, launch } }).pointer;
+    expect(bad({ box: "a string" })).toBe("project.launch.box");
+    expect(bad({ box: { verb: "dev", args: "--flag" } })).toBe("project.launch.box.args");
+    expect(bad({ box: { verb: "dev", after: {} } })).toBe("project.launch.box.after");
+    expect(bad({ box: { verb: "dev", after: [{ exe: "x" }] } })).toBe("project.launch.box.after[0].argv");
+    expect(bad({ box: { verb: "dev", device: { kind: "simulator" } } })).toBe(
+      "project.launch.box.device.name",
+    );
+    expect(bad({ box: { verb: "dev", device: { name: "n", resolve: { argv: ["x"] } } } })).toBe(
+      "project.launch.box.device.resolve.exe",
+    );
+    // A STRING argv is refused everywhere in this family, this block included.
+    expect(bad({ box: { verb: "dev", device: { name: "n", resolve: { exe: "p", argv: "list" } } } })).toBe(
+      "project.launch.box.device.resolve.argv",
+    );
+  });
+
+  it("refuses a key one spelling away from one nen reads, in the target and in the device", () => {
+    for (const [launch, pointer, meant] of [
+      [{ box: { verb: "dev", arg: ["--flag"] } }, "project.launch.box.arg", "args"],
+      [{ box: { verb: "dev", devices: {} } }, "project.launch.box.devices", "device"],
+      [{ box: { verb: "dev", afters: [] } }, "project.launch.box.afters", "after"],
+      [{ box: { verbs: "dev" } }, "project.launch.box.verbs", "verb"],
+      [
+        { box: { verb: "dev", device: { name: "n", resolver: { exe: "p", argv: ["l"] } } } },
+        "project.launch.box.device.resolver",
+        "resolve",
+      ],
+    ] as const) {
+      const error = refusal({ project: { ...PROJECT, launch } });
+      expect(error.pointer, pointer).toBe(pointer);
+      expect(error.message, pointer).toContain(`is one letter away from '${meant}'`);
+    }
+  });
+
+  it("refuses a misspelling of the BLOCK KEY, which no other guard would catch", () => {
+    // `"launches": {...}` parses cleanly, is preserved as an unknown key, and
+    // makes every --target this repository declares answer "not declared". The
+    // distance rule alone does not reach it: `launches` is two insertions away.
+    for (const key of ["launches", "Launch", "launchs"]) {
+      const error = refusal({ project: { ...PROJECT, [key]: { box: { verb: "dev" } } } });
+      expect(error.pointer, key).toBe(`project.${key}`);
+      expect(error.message, key).toContain("the block nen reads for 'nen shu dev|run --target'");
+    }
+    // AND EACH ONE IS NAMED FOR THE MISSPELLING IT ACTUALLY IS -- the plural
+    // shape exists for exactly this key, which the one-edit rule cannot reach.
+    for (const [key, phrase] of [
+      ["launches", "is 'launch' with an English plural on it"],
+      ["Launch", "differs from 'launch' only in case"],
+      ["launchs", "is one letter away from 'launch'"],
+    ] as const) {
+      const error = refusal({ project: { ...PROJECT, [key]: { box: { verb: "dev" } } } });
+      expect(error.message, key).toContain(phrase);
+    }
+  });
+
+  it("keeps a project-level key that is nobody's misspelling of it", () => {
+    const contract = parse({
+      project: { ...PROJECT, $launch: "a note", lunchbox: {}, launchpad: {} },
+    });
+    expect(contract.project?.raw["lunchbox"]).toEqual({});
+    expect(contract.project?.raw["launchpad"]).toEqual({});
   });
 });

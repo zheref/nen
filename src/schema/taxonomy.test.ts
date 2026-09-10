@@ -82,6 +82,7 @@ describe("checkTaxonomy", () => {
       "nen/colors.yml",
       "nen/gates.json",
       "nen/contract.json",
+      "nen/workflow.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
     expect(report.checks[0]?.detail).toMatch(/\d+ labels/);
@@ -91,16 +92,25 @@ describe("checkTaxonomy", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
     const report = checkTaxonomy({ repoFlag: root });
     expect(report.ok).toBe(false);
-    // Four, not five: the optional contract is the one row whose ABSENCE is a
-    // pass rather than a finding.
+    // Four, not six: the optional contract and the optional policy are the two
+    // rows whose ABSENCE is a pass rather than a finding -- and they say two
+    // different things about it, which is the point of having two sentences.
     expect(report.checks.filter((c): boolean => !c.ok).length).toBe(4);
-    for (const check of report.checks.filter((c): boolean => c.file !== "nen/contract.json")) {
+    const optional = ["nen/contract.json", "nen/workflow.json"];
+    for (const check of report.checks.filter((c): boolean => !optional.includes(c.file))) {
       expect(check.detail).toMatch(/no such file/);
       expect(check.path).toContain(root);
     }
     const contract = report.checks.find((c): boolean => c.file === "nen/contract.json");
     expect(contract?.ok).toBe(true);
     expect(contract?.detail).toBe("absent (optional)");
+    const workflow = report.checks.find((c): boolean => c.file === "nen/workflow.json");
+    expect(workflow?.ok).toBe(true);
+    expect(workflow?.required).toBe(false);
+    // "defaults apply", NOT "optional": an absent policy is a full policy made
+    // of defaults, and an absent contract is nothing to read at all.
+    expect(workflow?.detail).toBe("absent (defaults apply)");
+    expect(workflow?.path).toBe(join(root, "nen", "workflow.json"));
   });
 
   it("names BOTH locations in the not-found message, so a caller knows the fallback exists", () => {
@@ -313,20 +323,25 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     expect(check?.note).toContain("schemas/labels.json");
   });
 
+  /** One row by NAME. Position stopped being an identity when a sixth row landed. */
+  function rowFor(root: string, file: string): SchemaCheck | undefined {
+    return checkTaxonomy({ repoFlag: root }).checks.find((c): boolean => c.file === file);
+  }
+
   it("reports the contract row: absent is ok, present is validated, broken FAILS", () => {
-    const absent = checkTaxonomy({ repoFlag: migrated() }).checks.at(-1);
+    const absent = rowFor(migrated(), "nen/contract.json");
     expect(absent?.file).toBe("nen/contract.json");
     expect(absent?.ok).toBe(true);
     expect(absent?.required).toBe(false);
     expect(absent?.detail).toBe("absent (optional)");
 
-    const present = checkTaxonomy({ repoFlag: BANKAI_REPO }).checks.at(-1);
+    const present = rowFor(BANKAI_REPO, "nen/contract.json");
     expect(present?.ok).toBe(true);
     expect(present?.detail).toContain("dependency (nen >= 0.3, pinned v0.3.0)");
     expect(present?.detail).toContain("project (2 lanes: web, android");
 
     // ALT_REPO carries the dependency-only shape, and the row says only that.
-    const alt = checkTaxonomy({ repoFlag: ALT_REPO }).checks.at(-1);
+    const alt = rowFor(ALT_REPO, "nen/contract.json");
     expect(alt?.ok).toBe(true);
     expect(alt?.detail).toContain("dependency (nen >= 0.1, pinned v0.1.0)");
     expect(alt?.detail).not.toContain("project (");
@@ -337,9 +352,42 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     writeFileSync(join(broken, "nen", "contract.json"), '{"dependency":{"minimum":"0.3"}}');
     const report = checkTaxonomy({ repoFlag: broken });
     expect(report.ok).toBe(false);
-    const row = report.checks.at(-1);
+    const row = report.checks.find((c): boolean => c.file === "nen/contract.json");
     expect(row?.ok).toBe(false);
     expect(row?.required).toBe(true);
     expect(row?.detail).toMatch(/pinned_ref/);
+  });
+
+  it("reports the policy row: absent applies defaults, present names the ladder, broken FAILS", () => {
+    const root = migrated();
+    const absent = rowFor(root, "nen/workflow.json");
+    expect(absent?.ok).toBe(true);
+    expect(absent?.required).toBe(false);
+    expect(absent?.detail).toBe("absent (defaults apply)");
+
+    // A file that IS there is summarised by what it decides -- the ladder, the
+    // branch template and the trunk -- because those are the three a reader
+    // checks a repository's policy against.
+    writeFileSync(
+      join(root, "nen", "workflow.json"),
+      JSON.stringify({ coverage: { minimum: 70, recommended: 75, ideal: 95 } }),
+    );
+    const present = rowFor(root, "nen/workflow.json");
+    expect(present?.ok).toBe(true);
+    expect(present?.detail).toContain("coverage 70/75/95 (touched)");
+    expect(present?.detail).toContain("branch '{model}/{persona}/{descriptor}' off 'main'");
+
+    // Present and WRONG fails by POINTER, exactly like a present-and-wrong
+    // contract -- "optional" is about absence, never about being malformed.
+    writeFileSync(
+      join(root, "nen", "workflow.json"),
+      JSON.stringify({ coverage: { minimum: 95, ideal: 80 } }),
+    );
+    const report = checkTaxonomy({ repoFlag: root });
+    expect(report.ok).toBe(false);
+    const row = report.checks.find((c): boolean => c.file === "nen/workflow.json");
+    expect(row?.ok).toBe(false);
+    expect(row?.required).toBe(true);
+    expect(row?.detail).toMatch(/at coverage, states a ladder that does not ascend/);
   });
 });

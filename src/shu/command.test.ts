@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { findCommand } from "../cli/registry.js";
-import { ScriptedSeams } from "../seam/scripted.js";
-import { SHU_REPO } from "../schema/fixtures/paths.js";
+import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import { SHU_EVIDENCE_REPO, SHU_REPO } from "../schema/fixtures/paths.js";
 import { EXECUTING_VERBS, SHU_SUBCOMMAND_FLAGS, SHU_SUBCOMMANDS, shuCommand } from "./command.js";
 
 async function capture(argv: readonly string[]): Promise<{ code: number; out: string[]; err: string[] }> {
@@ -21,12 +21,29 @@ async function capture(argv: readonly string[]): Promise<{ code: number; out: st
   return { code, out, err };
 }
 
+/** Like `capture`, but against a caller-named repo and a caller-scripted seam. */
+async function captureAgainst(
+  repo: string,
+  script: readonly ScriptedCall[],
+  argv: readonly string[],
+): Promise<{ code: number; out: string[]; err: string[] }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: Io = {
+    out: (line): void => void out.push(line),
+    err: (line): void => void err.push(line),
+  };
+  const seams = new ScriptedSeams(script, { platform: "linux" });
+  const code = await runFamily(shuCommand, ["shu", ...argv], repo, false, io, seams);
+  return { code, out, err };
+}
+
 describe("the family's registration", () => {
   it("is in the registry under its own name", () => {
     expect(findCommand("shu")).toBe(shuCommand);
   });
 
-  it("carries all fourteen verbs, in the order the design lists them", () => {
+  it("carries all fifteen verbs, in the order the design lists them", () => {
     expect(SHU_SUBCOMMANDS).toEqual([
       "detect",
       "build",
@@ -40,6 +57,7 @@ describe("the family's registration", () => {
       "deploy",
       "coverage",
       "test-report",
+      "evidence",
       "tools",
       "warmup",
     ]);
@@ -49,12 +67,15 @@ describe("the family's registration", () => {
     expect(Object.keys(SHU_SUBCOMMAND_FLAGS).sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 
-  it("splits the fourteen into the eleven that execute a lane's invocation, and three that do not", () => {
-    // `detect` reads markers, `tools` probes the host, and `warmup` mutates git
-    // state and then DELEGATES to the rest. None of the three goes through
+  it("splits the fifteen into the eleven that execute a lane's invocation, and four that do not", () => {
+    // `detect` reads markers, `tools` probes the host, `warmup` mutates git
+    // state and then DELEGATES to the rest, and `evidence` reads git and this
+    // repository's own project.evidence block. None of the four goes through
     // ./run.ts's runVerb directly, which is what EXECUTING_VERBS names --
     // `test-report` does, running the lane's `test` row before it parses.
-    expect([...EXECUTING_VERBS, "detect", "tools", "warmup"].sort()).toEqual([...SHU_SUBCOMMANDS].sort());
+    expect([...EXECUTING_VERBS, "detect", "evidence", "tools", "warmup"].sort()).toEqual(
+      [...SHU_SUBCOMMANDS].sort(),
+    );
   });
 
   it("refuses an unknown verb at 2, listing the ones it has", async () => {
@@ -110,7 +131,7 @@ describe("each verb owns its flags", () => {
 });
 
 describe("the help text", () => {
-  it("documents all fourteen verbs", async () => {
+  it("documents all fifteen verbs", async () => {
     const result = await capture(["--help"]);
     expect(result.code).toBe(0);
     const help = result.out.join("\n");
@@ -151,5 +172,89 @@ describe("the help text", () => {
     const help = (await capture(["--help"])).out.join("\n");
     expect(help).toMatch(/run\s+nothing at all/);
     expect(help).toMatch(/the thing you approve is\s+the\s+thing that runs/);
+  });
+});
+
+describe("nen shu evidence", () => {
+  const DIFF = "git diff --name-status main...HEAD";
+
+  it("refuses --lane -- project.evidence is project-level, not per-lane", async () => {
+    const result = await captureAgainst(SHU_EVIDENCE_REPO, [], ["evidence", "--base", "main", "--lane", "web"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--lane is not read by 'shu evidence'/);
+  });
+
+  it("refuses --dry-run -- this verb spawns nothing a dry run would skip", async () => {
+    const result = await captureAgainst(SHU_EVIDENCE_REPO, [], ["evidence", "--base", "main", "--dry-run"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--dry-run is not read by 'shu evidence'/);
+  });
+
+  it("requires --base, with no default", async () => {
+    const result = await captureAgainst(SHU_EVIDENCE_REPO, [], ["evidence"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--base is required/);
+  });
+
+  it("refuses at 2, naming the missing block, on a repository with no project.evidence", async () => {
+    const result = await captureAgainst(
+      SHU_REPO,
+      [{ match: DIFF, result: { stdout: "" } }],
+      ["evidence", "--base", "main"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/has no "project\.evidence" block/);
+  });
+
+  it("reports an empty set at exit 0 for no changed evidence -- never an error", async () => {
+    const result = await captureAgainst(
+      SHU_EVIDENCE_REPO,
+      [{ match: DIFF, result: { stdout: "M\tsrc/main.ts\n" } }],
+      ["evidence", "--base", "main"],
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/no changed file under project\.evidence\.globs/);
+  });
+
+  it("matches a changed evidence file, deriving suite and scene, and exits 0", async () => {
+    const path =
+      "Kro/Tests/DateTimeFieldSnapshotTests/__Snapshots__/DateTimeFieldSnapshotTests/test_snapshot_disabled.1.png";
+    const result = await captureAgainst(
+      SHU_EVIDENCE_REPO,
+      [{ match: DIFF, result: { stdout: `A\t${path}\n` } }],
+      ["evidence", "--base", "main"],
+    );
+    expect(result.code).toBe(0);
+    const text = result.out.join("\n");
+    expect(text).toMatch(/1 changed file across 1 suite \(public-mirror\)/);
+    expect(text).toMatch(/suite: DateTimeField/);
+    expect(text).toMatch(/added\s+disabled\s+.*test_snapshot_disabled\.1\.png/);
+  });
+
+  it("emits the published contract as one document under --json", async () => {
+    const path = "__Snapshots__/DateTimeFieldSnapshotTests/test_snapshot_disabled.png";
+    const result = await captureAgainst(
+      SHU_EVIDENCE_REPO,
+      [{ match: DIFF, result: { stdout: `A\t${path}\n` } }],
+      ["evidence", "--base", "main", "--json"],
+    );
+    expect(result.code).toBe(0);
+    const document = JSON.parse(result.out.join("\n"));
+    expect(document).toEqual({
+      contract: "nen.shu.evidence/v0.1",
+      base: "main",
+      mechanism: "public-mirror",
+      rows: [{ suite: "DateTimeField", scene: "disabled", path, status: "added" }],
+      suites: [{ suite: "DateTimeField", scenes: ["disabled"] }],
+    });
+  });
+
+  it("runs the diff against the exact base the caller named", async () => {
+    const result = await captureAgainst(
+      SHU_EVIDENCE_REPO,
+      [{ match: "git diff --name-status v1.0.0...HEAD", result: { stdout: "" } }],
+      ["evidence", "--base", "v1.0.0"],
+    );
+    expect(result.code).toBe(0);
   });
 });

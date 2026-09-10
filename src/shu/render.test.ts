@@ -6,13 +6,33 @@ import { VerbUsageError } from "../cli/command.js";
 import { parseProjectBlock, type ProjectBlock } from "../schema/contract.js";
 import { ShuRefusal } from "./exit.js";
 import {
+  isLaunchTarget,
+  LAUNCHING_VERBS,
   REFUSED_PLACEHOLDERS,
   renderArgv,
   renderInvocation,
   resolveLane,
   resolveTarget,
+  TARGETED_VERBS,
   type RenderedInvocation,
+  type ResolvedTarget,
 } from "./render.js";
+
+/**
+ * The DEPLOY half of the report's one `target` key.
+ *
+ * The key carries a destination on `deploy` and a device on `dev`/`run`, and
+ * `isLaunchTarget` is what tells them apart. A test about a destination says so
+ * here rather than casting, so a resolver that started answering with the wrong
+ * shape would fail loudly instead of reading `undefined`.
+ */
+function deployed(rendered: RenderedInvocation): ResolvedTarget {
+  const target = rendered.target;
+  if (target === null || isLaunchTarget(target)) {
+    throw new Error(`expected a resolved deploy target, got ${JSON.stringify(target)}`);
+  }
+  return target;
+}
 
 function project(overrides: Record<string, unknown> = {}): ProjectBlock {
   return parseProjectBlock("/fixture/nen/contract.json", {
@@ -293,7 +313,7 @@ describe("resolveTarget", () => {
         pointer: "project.targets.prod.requiresEnv[0]",
       },
     ]);
-    expect(resolved.target?.requiresEnv).toEqual(["A_TOKEN", "B_TOKEN"]);
+    expect(deployed(resolved).requiresEnv).toEqual(["A_TOKEN", "B_TOKEN"]);
   });
 
   it("de-duplicates requiresEnv: one variable is one row, however often it is written", () => {
@@ -302,7 +322,7 @@ describe("resolveTarget", () => {
     // variable was reported as "3 preconditions are not satisfied".
     const block = deployable({ prod: { requiresEnv: ["DUP", "DUP", "DUP"] } });
     const resolved = resolveTarget(block, plan(block), "prod");
-    expect(resolved.target?.requiresEnv).toEqual(["DUP"]);
+    expect(deployed(resolved).requiresEnv).toEqual(["DUP"]);
     expect(resolved.preconditions).toEqual([
       {
         kind: "env",
@@ -327,7 +347,7 @@ describe("resolveTarget", () => {
       targets: { prod: { requiresEnv: ["SHARED_TOKEN", "ONLY_THE_TARGETS"] } },
     });
     const resolved = resolveTarget(block, plan(block), "prod");
-    expect(resolved.target?.requiresEnv).toEqual(["ONLY_THE_TARGETS", "SHARED_TOKEN"]);
+    expect(deployed(resolved).requiresEnv).toEqual(["ONLY_THE_TARGETS", "SHARED_TOKEN"]);
     expect(resolved.preconditions).toEqual([
       {
         kind: "env",
@@ -503,5 +523,16 @@ describe("renderArgv", () => {
 
   it("escapes a quote inside an element rather than ending the quoting early", () => {
     expect(renderArgv({ exe: "tool", argv: ["it's here"] })).toBe("tool 'it'\\''s here'");
+  });
+});
+
+describe("the two things --target can name", () => {
+  it("shares no verb between the two lists", () => {
+    // `deploy`'s --target is REQUIRED and names a destination; `dev`/`run`'s is
+    // OPTIONAL and names a device. A verb in both lists would carry one flag
+    // with two meanings and nothing to tell them apart by.
+    const both = TARGETED_VERBS.filter((verb): boolean => LAUNCHING_VERBS.includes(verb));
+    expect(both).toEqual([]);
+    expect(LAUNCHING_VERBS).toEqual(["dev", "run"]);
   });
 });

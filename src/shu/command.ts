@@ -1,6 +1,6 @@
 // src/shu/command.ts -- `nen shu ...`, the stack-aware developer verbs.
 //
-// FOURTEEN VERBS, AND ALL FOURTEEN DO SOMETHING NOW. The family was declared
+// FIFTEEN VERBS, AND ALL FIFTEEN DO SOMETHING NOW. The family was declared
 // whole from day one -- `detect` proposing a declaration, ten verbs executing
 // one, and `tools` and `warmup` refusing by name with the release they arrived
 // in -- for ../cli/registry.ts's reason: a verb that is absent today and
@@ -9,18 +9,28 @@
 // write against. Both of those two have since landed, and the mechanism they
 // needed is gone rather than left standing empty.
 //
-// ONE OF THE FOURTEEN MUTATES GIT STATE, and it is the only one: `warmup`
+// `evidence` IS THE ONE THAT FITS NEITHER SHAPE: it does not run a per-lane
+// invocation the way the eleven executing verbs do, and it does not read the
+// filesystem for markers the way `detect` does. It reads `project.evidence` --
+// a project-level declaration, like `targets` -- and `git diff` through the
+// seam, and reports which of the changed files match the declared globs,
+// grouped suite -> scene. Nothing it does writes anything, anywhere, ever: it
+// has no `--dry-run` because there is nothing a dry run would need to skip.
+//
+// ONE OF THE FIFTEEN MUTATES GIT STATE, and it is the only one: `warmup`
 // (./warmup.ts). Every other verb here either reads, or spawns what the target
 // repository declared inside a directory. That asymmetry is why `warmup` alone
 // requires `--repo` rather than defaulting to the caller's directory.
 //
-// WHAT THE FAMILY IS. Every verb below runs what the TARGET REPOSITORY declares
-// in its own `nen/contract.json`, under `project`. Nen carries no build system,
-// no package manager, no test runner and no knowledge of any: ./run.ts and
-// ./render.ts contain zero toolchain names and ./purity.test.ts fails the build
-// if that ever stops being true. `detect` is the one verb that reads the
-// filesystem for markers, and it PROPOSES -- it never writes without `--write`
-// and never overwrites a declaration at all.
+// WHAT THE FAMILY IS. Most of the verbs below run what the TARGET REPOSITORY
+// declares in its own `nen/contract.json`, under `project`. Nen carries no
+// build system, no package manager, no test runner and no knowledge of any:
+// ./run.ts and ./render.ts contain zero toolchain names and ./purity.test.ts
+// fails the build if that ever stops being true. `detect` is the one verb that
+// reads the filesystem for markers, and it PROPOSES -- it never writes without
+// `--write` and never overwrites a declaration at all. `evidence` is the one
+// verb that reads `project` but spawns no DECLARED invocation at all -- only
+// `git diff`, a command nen chose, never the repository's own argv.
 //
 // EACH SUBCOMMAND OWNS ITS FLAGS, derived from one table, on ../issue/command.ts's
 // pattern and for its reason: a family shares one flag spec, so `nen shu build
@@ -38,6 +48,8 @@ import { EXIT_UNSUPPORTED_HOST, ShuRefusal } from "./exit.js";
 import { coverageAdvisories } from "./coverage-defaults.js";
 import { runCoverage } from "./coverage.js";
 import { detect, renderDetect, writeProposal } from "./detect.js";
+import { readChangedFiles } from "./evidence/diff.js";
+import { buildEvidenceReport, renderEvidence } from "./evidence/report.js";
 import { ENABLED_INSTALLERS } from "./install.js";
 import { probeTool, runInstallSteps } from "./probe.js";
 import { declaredHostsFor } from "./render.js";
@@ -74,16 +86,25 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   lint: { values: ["lane"], booleans: ["dry-run"] },
   archive: { values: ["lane"], booleans: ["dry-run"] },
   release: { values: ["lane"], booleans: ["dry-run"] },
-  dev: { values: ["lane"], booleans: ["dry-run"] },
-  run: { values: ["lane"], booleans: ["dry-run"] },
+  // `--target` ON THESE TWO NAMES A DEVICE, NOT A DESTINATION: a key of
+  // `project.launch` rather than of `project.targets`, and OPTIONAL rather than
+  // required. `--run` stays `deploy`'s alone -- these two have always spawned
+  // without it, and a gate arriving with a flag would break every script.
+  dev: { values: ["lane", "target"], booleans: ["dry-run"] },
+  run: { values: ["lane", "target"], booleans: ["dry-run"] },
   deploy: { values: ["lane", "target"], booleans: ["dry-run", "run"] },
   coverage: { values: ["lane", "threshold", "base"], booleans: ["dry-run", "touched"] },
   "test-report": { values: ["lane"], booleans: ["dry-run", "from-artifacts"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
+  // NO --lane, AND NO --dry-run. `project.evidence` is a project-level block,
+  // not a per-lane one (like `targets`), and this verb spawns nothing a dry
+  // run would need to skip -- `git diff` runs unconditionally, exactly as
+  // `nen wc classify`'s own git reads do.
+  evidence: { values: ["base"] },
 };
 
-/** The fourteen, in the order the design lists them (not alphabetical). */
+/** The fifteen, in the order the design lists them (not alphabetical). */
 export const SHU_SUBCOMMANDS: readonly string[] = [
   "detect",
   "build",
@@ -97,6 +118,7 @@ export const SHU_SUBCOMMANDS: readonly string[] = [
   "deploy",
   "coverage",
   "test-report",
+  "evidence",
   "tools",
   "warmup",
 ];
@@ -138,7 +160,7 @@ const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
 const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
 
---repo is bracketed there because thirteen of the fourteen verbs default it to the
+--repo is bracketed there because fourteen of the fifteen verbs default it to the
 directory you are standing in. It is REQUIRED on 'warmup', the one verb here
 that mutates git state: a verb that fetches into a repository, force-moves a
 branch ref and checks out a new branch must never do it to wherever this process
@@ -160,8 +182,11 @@ verbs:
   archive     Produce the lane's distributable artifact.
   release     Publish it, where the lane declares a publication step.
   dev         Start the lane's DEBUG build. Long-running: nen inherits this
-              terminal and hands it to the child.
-  run         Start the lane's PRODUCTION build, locally. Also long-running.
+              terminal and hands it to the child. With --target <name> it
+              launches a declared DEVICE instead: the probe, the verb, then
+              the target's after-steps. Bare, it is exactly what it always was.
+  run         Start the lane's PRODUCTION build, locally. Also long-running,
+              and it takes the same optional --target.
   deploy      Send a build to a declared, NAMED target: --target <name> [--run].
               --target is required and has no default, not even when exactly
               one target exists. Bare, this is a safe, exit-0 plan -- the
@@ -184,6 +209,13 @@ verbs:
               that file and runs nothing at all. A failing suite is still
               parsed, and its failures never move the exit code: that is the
               run's.
+  evidence    Match 'git diff --name-status <base>...HEAD' against this
+              repository's project.evidence.globs, deriving each survivor's
+              suite and scene, and report the survivors grouped suite ->
+              scene. Reads git through the seam ONLY -- no declared lane, no
+              invocation, nothing spawned that this repository chose. No
+              'project.evidence' block is exit 2 naming it; no changed file
+              matching a glob is exit 0 with an empty set, never an error.
   tools       Check the HOST toolchain this repository pins under
               project.toolchain (and, from a dependency block, nen itself).
               Read-only by default: it runs each declared version probe and
@@ -261,6 +293,68 @@ the declaration:
                           unsupported  this destination has no command line at
                                        all (a provider's git integration, a CI
                                        action). Exit 4, in the repo's words.
+  project.launch        { "<name>": { verb, args, device, after, unsupported,
+                        why } }, the LAUNCH targets 'dev' and 'run' take. A
+                        different block from project.targets and a different
+                        vocabulary: that one says where a build is SENT, this
+                        one says which DEVICE a local run lands on. --target is
+                        OPTIONAL here -- a bare 'dev' runs the lane's declared
+                        'dev', as it always has -- and a name this block does
+                        not carry is exit 2 listing the ones it does:
+                          verb         'dev' or 'run': which long-running verb
+                                       this target launches through. Required.
+                                       Naming it on the other one is exit 2 --
+                                       they are different builds.
+                          args         appended to that verb's argv, in order.
+                                       Refused on a multi-step row, as a deploy
+                                       target's are.
+                          device       { name, kind, resolve }. 'name' is
+                                       matched EXACTLY against what the probe
+                                       printed; nen never picks a device, not
+                                       even when there is one. 'resolve' is a
+                                       declared { exe, argv } probe whose output
+                                       nen searches -- JSON (a 'name' property,
+                                       with identifier/id/udid/serial from the
+                                       same object, one of its direct children,
+                                       or up to two enclosing objects) or plain
+                                       lines (the line carrying the name, and
+                                       its first token of six-plus characters
+                                       that carries a digit). A device the probe
+                                       did not name is exit 5 listing what it
+                                       DID offer, and a name TWO id-bearing
+                                       candidates carry is exit 5 naming both:
+                                       plain output has no field boundaries, so
+                                       a name that is the beginning of a longer
+                                       one matches both rows, and nen picks
+                                       neither. 'kind': "simulator" with no
+                                       probe resolves the id to the name itself
+                                       and spawns nothing; any other device with
+                                       no probe is exit 2.
+                          after        [{ exe, argv }] run once the verb exits 0,
+                                       in order, with {device.id} and {artifact}
+                                       substituted -- {artifact} being the FIRST
+                                       entry of the verb's own 'artifacts'.
+                                       Naming {artifact} on a verb that declares
+                                       none, or {device.id} with no device, is
+                                       exit 2: a token nothing can fill must not
+                                       reach a command line as itself.
+                          unsupported  this target has no command line at all.
+                                       Exit 4, in the repo's words.
+
+  project.evidence      { globs, mechanism, scene, suiteSuffix } -- what
+                        'evidence' matches a changed file against, project-
+                        level like 'targets' rather than per-lane. 'globs'
+                        (required, at least one) is a list of '*'/'**'/'?'
+                        patterns; 'mechanism' (required) is one of
+                        public-mirror | files-changed | embedded, the
+                        repository's own answer to "how does a survivor reach
+                        a human" -- 'evidence' never mirrors, embeds or lists
+                        files itself, it only reports which mechanism a later
+                        step should use. 'scene' (default "{suite}-{scene}")
+                        and 'suiteSuffix' (default "SnapshotTests") are read by
+                        a later mirroring step, not by this release of
+                        'evidence' itself, which reports 'suite' and 'scene'
+                        as separate fields. Absent block: exit 2 naming it.
 
   project.toolchain     { "<tool>": { version, probe, versionFrom, installer,
                         why } } -- the HOST tools 'tools' checks. 'version' is
@@ -286,6 +380,12 @@ flags:
                    OPTIONAL on 'tools', where a lane supplies only the probe's
                    directory and the stack whose tested minimums are shown:
                    project.toolchain hangs off the project, not off a lane.
+                   NOT READ AT ALL on 'evidence' -- project.evidence is a
+                   project-level block, and giving --lane there is refused as
+                   a flag this subcommand does not read.
+  --base <ref>     'evidence' only, and REQUIRED. The other end of
+                   'git diff --name-status <base>...HEAD' -- HEAD is always
+                   the checkout's own current commit, never a flag.
   --dry-run        Print every step's exact argv, cwd and env NAMES, and run
                    nothing at all. The argv printed is the argv that would be
                    spawned, from the same rendering -- the thing you approve is
@@ -379,7 +479,23 @@ flags:
   --tests          'warmup' only. Also run the lane's declared 'test' after the
                    build, through the same executor. Off by default, because a
                    test suite is the slow half and a warm-up is the fast one.
-  --target <name>  'deploy' only. Must name a key of project.targets. Required,
+  --target <name>  On 'dev' and 'run', a key of project.launch: WHICH DEVICE
+                   this local run lands on. OPTIONAL there, with no default
+                   ever -- a bare 'dev' runs the lane's declared 'dev' exactly
+                   as it always has, so a repository declaring its first launch
+                   target changes nothing about the line anyone ran yesterday.
+                   Given, the verb becomes three things in order: the declared
+                   device probe (captured, so nen can read it), the lane's own
+                   verb (interactive, as ever, with the target's 'args'
+                   appended), and the target's 'after' steps with {device.id}
+                   and {artifact} substituted. --dry-run prints all three as
+                   'would run:' with the tokens UNFILLED and one 'substitutes:'
+                   line saying what each stands for -- nothing is spawned, the
+                   probe included, so there is no id for nen to have printed.
+                   A verb that never exits never reaches its after-steps; that
+                   is what the declaration asked for, and nen backgrounds
+                   nothing.
+                   On 'deploy' it must name a key of project.targets. Required,
                    with no default ever -- not even when there is exactly one.
                    It is resolved AFTER the lane, the verb, the host and the
                    placeholders, and before the preconditions: a lane whose
@@ -439,10 +555,20 @@ flags:
                    keys in order:
                    { contract, lane, stack, verb, target, steps, cwd, env,
                      host, preconditions, exitCode, durationMs, artifacts,
-                     log }. 'target' is null on every verb but 'deploy', where
-                   it is { name, args, requiresEnv } -- the destination that
-                   was resolved, what it appended to the argv, and the
-                   variable NAMES it requires. Never a value of one.
+                     log }. 'target' is null unless a destination or a device
+                   was resolved. On 'deploy' it is { name, args, requiresEnv }
+                   -- the destination, what it appended to the argv, and the
+                   variable NAMES it requires. Never a value of one. On 'dev'
+                   and 'run' with --target it is
+                   { name, verb, args, device, probe, after }, where 'device'
+                   is { name, kind, id } and 'id' is null exactly when nothing
+                   was probed (every dry run), and 'after' carries the steps
+                   as they would spawn -- tokens unfilled on a dry run,
+                   substituted on a real one. The two shapes are told apart by
+                   their own fields ('requiresEnv' against 'device'), with
+                   'verb' two keys up saying which to expect. 'steps' on a
+                   launch is all three thirds in order: the probe, the verb,
+                   the after-steps.
                    On 'warmup' it is a different contract again
                    ('${WARMUP_CONTRACT}'), keys in order:
                    { contract, repo, trunk, remote, branch, discard, steps,
@@ -553,6 +679,20 @@ flags:
                    child's and one object followed by a server's log lines is
                    not a document. '--dry-run --json' is their machine-readable
                    pre-flight.
+                   On 'evidence' it is a FIFTH contract entirely
+                   ('nen.shu.evidence/v0.1'), keys in order:
+                   { contract, base, mechanism, rows, suites }. There is no
+                   'lane', 'stack', 'steps', 'cwd', 'env' or 'host' -- this verb
+                   runs no declared invocation, so none of those questions
+                   apply. Each rows[] entry is
+                   { suite, scene, path, status }, where 'status' is one of
+                   added | modified | deleted | renamed (git's own finer
+                   R###/C###/T codes are folded into this set: a copy reports
+                   as added, a rename at its NEW path). Each suites[] entry is
+                   { suite, scenes }, 'scenes' being the unique scene names
+                   under that suite in first-seen order. An empty rows/suites
+                   pair is a SUCCESSFUL, exit-0 document -- a branch that
+                   changed no evidence, not an error.
 
 exit codes:
   0  the tool ran and succeeded, or a dry run rendered
@@ -583,6 +723,12 @@ exit codes:
      this release will not act on (a range where the installer activates one
      exact version, or a pin the lane's own manifest contradicts). Every one of
      those is refused BEFORE anything is installed.
+     On 'evidence' also: a missing "project.evidence" block, naming it -- this
+     is the ONE usage refusal that verb has, since it takes no lane and spawns
+     no declared invocation for a placeholder or a precondition to apply to.
+     No changed file matching a glob is NOT this: it is exit 0 with an empty
+     rows/suites set, never an error -- a branch that changed no evidence is
+     an ordinary, successful answer to the question this verb asks.
      On 'warmup' also: a dirty working copy without --discard (listing every
      path that would be lost), a merge/rebase/cherry-pick still in progress, a
      DETACHED HEAD carrying commits no branch and no remote-tracking ref
@@ -614,6 +760,11 @@ exit codes:
      CHECK verdict for a host where anything is missing or is not the pinned
      version. Never 1: a missing tool is not a failed build, and a caller that
      retried a 1 would retry forever on a machine that is simply not set up.
+     ON A LAUNCH IT IS ALSO THE DEVICE: a --target whose declared device the
+     probe did not name (the refusal lists what it DID offer), or named with no
+     id nen recognises. Same code for the same reason -- the thing nen was told
+     to reach is not on this host, the command line was correct, and the fix is
+     to connect, wake or rename something rather than to retype the line.
      Under --install the code is 0 when everything nen COULD install now
      passes, even if verify-only tools are still absent -- otherwise the
      install form is permanently red on a machine nen can never fix, and the
@@ -693,6 +844,27 @@ function runDetect(context: CommandContext, repoRoot: string): number {
     );
   }
   return written.exitCode;
+}
+
+// ── `evidence`: reads git and this repository's own declaration, spawns nothing ──
+//
+// THE ONE USAGE REFUSAL THIS VERB HAS is a missing "project.evidence" block --
+// no lane, no target, no placeholder, so none of ../declaration.ts's other
+// refusals apply. A REPOSITORY WITH NO "project" BLOCK AT ALL still refuses at
+// ./declaration.ts's own exit 2, naming the file, which is what every other
+// verb in this family does too.
+function runEvidence(context: CommandContext, repoRoot: string, base: string): number {
+  const opened = openDeclaration(repoRoot);
+  const evidence = opened.project.evidence;
+  if (evidence === null) {
+    throw new VerbUsageError(
+      `${opened.path} has no "project.evidence" block. 'shu evidence' matches 'git diff --name-status ${base}...HEAD' against globs a repository declares under project.evidence -- globs (at least one), mechanism (public-mirror | files-changed | embedded), and optionally scene/suiteSuffix. Add one, or run this against a repository that declares one.`,
+    );
+  }
+  const changed = readChangedFiles(context.seams, repoRoot, base);
+  const document = buildEvidenceReport(evidence, base, changed);
+  emit(context.io, context.json, document, renderEvidence(document));
+  return 0;
 }
 
 // ── `tools`: the join between the catalogue side and the host side ──────────
@@ -895,6 +1067,18 @@ export const shuCommand: Command = {
           install: context.args.booleans.has("install"),
           dryRun: context.args.booleans.has("dry-run"),
         });
+      }
+
+      if (subcommand === "evidence") {
+        return runEvidence(
+          context,
+          repoRoot,
+          requireValue(
+            context.args,
+            "base",
+            "'shu evidence' matches 'git diff --name-status <base>...HEAD' against project.evidence.globs; nen never invents a base to diff against.",
+          ),
+        );
       }
 
       if (subcommand === "coverage") {

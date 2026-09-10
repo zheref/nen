@@ -27,11 +27,23 @@ import { dirname, isAbsolute, join } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { looksLikeOwnerSlug } from "../repo/root.js";
 import { CONTRACT_FILE } from "../schema/source.js";
+import {
+  WORKFLOW_FILE,
+  parseWorkflow,
+  refusedTrailerKeys,
+  type Workflow,
+} from "../schema/workflow.js";
 import { detect } from "../shu/detect.js";
 import { PROGRAM } from "../version.js";
-import { renderCommitMsgHook, writeHookFile, type HookSpec } from "./hook.js";
-import { bootstrapRef, type ScaffoldWrite, type WriteAction } from "./init.js";
-import { substitute, templateForStack } from "./templates.js";
+import { renderCommitMsgHook, renderPreCommitHook, writeHookFile, type HookSpec } from "./hook.js";
+import { PRE_COMMIT_HOOK, bootstrapRef, type ScaffoldWrite, type WriteAction } from "./init.js";
+import {
+  TEMPLATE_DIRECTORY,
+  WORKFLOW_TEMPLATE_FILE,
+  defaultWorkflowDocument,
+  substitute,
+  templateForStack,
+} from "./templates.js";
 
 /** `nen.scaffold.new/v0.1` -- this verb's own versioned contract string. */
 export const SCAFFOLD_NEW_CONTRACT = "nen.scaffold.new/v0.1";
@@ -213,15 +225,28 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
   );
   notes.push(...bootstrap.notes);
 
-  // The hook, ONLY when the caller stated the convention it enforces. Which
-  // two trailer keys mark an automated commit, and which environment variable
-  // marks the run, are the target system's own vocabulary -- nen ships none,
-  // and inventing a pair here would bake one system's convention into every
-  // project this verb ever writes.
+  // THE POLICY THIS TREE STARTS UNDER. A fresh tree has no `nen/workflow.json`
+  // to read, so it is the pack's default document with the caller's own trailer
+  // keys in it -- and both generated hooks are made out of it, exactly as
+  // `scaffold init`'s are. `iteration.lane` is filled in below, once `detect`
+  // has answered which lane the marker this verb just wrote declares; neither
+  // hook reads that field, which is why they can be written first.
+  const allowedAttributionTrailers =
+    options.hook === undefined ? [] : [options.hook.agentTrailer, options.hook.runTrailer];
+  const policy: Workflow = parseWorkflow(
+    `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`,
+    defaultWorkflowDocument({ lane: null, allowedAttributionTrailers }),
+  );
+
+  // The commit-msg hook, ONLY when the caller stated the convention it
+  // enforces. Which two trailer keys mark an automated commit, and which
+  // environment variable marks the run, are the target system's own vocabulary
+  // -- nen ships none, and inventing a pair here would bake one system's
+  // convention into every project this verb ever writes.
   const hookPath = ".git/hooks/commit-msg";
   const postSteps: string[] = [`cd ${dir} && git init && git add -A && git commit -m "chore: scaffold"`];
   if (options.hook !== undefined) {
-    const body = renderCommitMsgHook(options.hook);
+    const body = renderCommitMsgHook(options.hook, refusedTrailerKeys(policy.commits));
     // THROUGH ./hook.ts's WRITER, exactly as `scaffold init` does. A hook
     // written 0644 is one `git` skips in silence on every commit, and this verb
     // shipped one for as long as it had a writer of its own.
@@ -235,6 +260,17 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
       why: "no trailer convention was stated (--agent-trailer, --run-trailer, --marker-env), and nen ships none. The post-steps name the invocation that installs it.",
     });
   }
+
+  // THE TRUNK GUARD IS WRITTEN UNCONDITIONALLY, unlike the hook above, and the
+  // difference is what each one needs. The commit-msg hook enforces a trailer
+  // convention nen does not have; this one refuses a commit on the branch
+  // `branch.base` names, and every repository has a trunk. A fresh tree is also
+  // the one place the guard is free: nothing has been committed to it yet.
+  const preCommitPath = `.git/hooks/${PRE_COMMIT_HOOK}`;
+  const preCommitBody = renderPreCommitHook(policy.branch.base);
+  put(preCommitPath, preCommitBody, `the trunk guard for '${policy.branch.base}'`, (path): void => {
+    writeHookFile(path, preCommitBody);
+  });
 
   postSteps.push(...template.postSteps);
   if (options.hook === undefined) {
@@ -252,12 +288,30 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
   // there is no tree to read, so the row says what would be written and where
   // it would come from rather than inventing a block from the same catalogue by
   // a second route -- two routes to one document is how the two drift.
+  /**
+   * The policy file, written with the lane the declaration ends up declaring.
+   *
+   * IT IS WRITTEN AFTER THE DECLARATION AND FROM THE SAME ANSWER, so
+   * `iteration.lane` and `project.defaultLane` cannot name two different lanes
+   * -- the same coupling `scaffold init` gets by reading the lane back off its
+   * own proposal. A tree whose declaration nen could not derive gets a policy
+   * with no lane rather than no policy: every other key in it is still true.
+   */
+  const putWorkflow = (lane: string | null): void => {
+    putText(
+      WORKFLOW_FILE,
+      `${JSON.stringify(defaultWorkflowDocument({ lane, allowedAttributionTrailers }), null, 2)}\n`,
+      "the delivery policy the generated hooks were made from -- every key carries nen's own default",
+    );
+  };
+
   if (dry) {
     writes.push({
       path: CONTRACT_FILE,
       action: "would-create",
       why: `proposed by '${PROGRAM} shu detect' off the marker written above -- the same block '${PROGRAM} shu detect --write' writes, seats and all`,
     });
+    putWorkflow(null);
     notes.push(
       `a dry run writes nothing, so the declaration is described rather than shown: it is exactly what '${PROGRAM} shu detect --repo ${dir}' prints once the tree exists.`,
     );
@@ -269,6 +323,7 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
         action: "refused",
         why: `the tree was written, but '${PROGRAM} shu detect' found no lane in it -- so there is nothing to declare, and nen will not write a declaration it did not derive from a marker. This is a defect in the '${template.template}' template for '${options.stack}'.`,
       });
+      putWorkflow(null);
     } else {
       const body = `${JSON.stringify(report.proposal, null, 2)}\n`;
       putText(
@@ -276,6 +331,9 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
         body,
         `proposed by '${PROGRAM} shu detect' off the marker this verb wrote, seats and all`,
       );
+      const declared = (report.proposal as { project?: { defaultLane?: unknown } }).project
+        ?.defaultLane;
+      putWorkflow(typeof declared === "string" && declared !== "" ? declared : null);
       notes.push(...report.notes);
     }
   }

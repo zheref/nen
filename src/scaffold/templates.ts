@@ -40,6 +40,7 @@
 import fullTemplate from "../../templates/full/template.json";
 import minimalTemplate from "../../templates/minimal/template.json";
 import templateIndex from "../../templates/index.json";
+import workflowPack from "../../templates/workflow.json";
 
 import { VerbUsageError } from "../cli/command.js";
 import { loadProfilesPack, profileById } from "../profiles/pack.js";
@@ -52,6 +53,9 @@ export const TEMPLATE_INDEX_FILE = "index.json";
 
 /** The one document each template directory holds. */
 export const TEMPLATE_FILE = "template.json";
+
+/** The default policy document, beside the index rather than in a directory. */
+export const WORKFLOW_TEMPLATE_FILE = "workflow.json";
 
 /**
  * The token shape a `--stack` value must have.
@@ -159,6 +163,66 @@ export class TemplateError extends Error {
     super(`${path}: '${field}' ${message}.`);
     this.name = "TemplateError";
   }
+}
+
+/** The two values a caller states; everything else is copied verbatim. */
+export interface WorkflowDefaults {
+  /** The lane being scaffolded, or null when this run declared more than one. */
+  readonly lane: string | null;
+  /** Attribution trailer keys this repository ADMITS. The caller's own. */
+  readonly allowedAttributionTrailers: readonly string[];
+}
+
+/**
+ * The default `nen/workflow.json`, with the caller's two values overlaid.
+ *
+ * WHY THE DOCUMENT IS DATA AND THIS FUNCTION IS THE ONLY READER. Every byte
+ * this verb writes into somebody else's repository should be readable in one
+ * file by a reviewer who does not read TypeScript -- the same argument
+ * each template directory's own `template.json` already rests on -- and the
+ * policy document is the one nen writes with no stack in it at all, so it sits
+ * beside the index rather than inside a template directory.
+ *
+ * EXACTLY TWO VALUES ARE OVERLAID, AND BOTH ARE THE CALLER'S. The lane is the
+ * one this run declared; the allowed attribution trailers are the trailer keys
+ * the invocation named (`--agent-trailer`, `--run-trailer`). Everything else --
+ * the ladder, the branch template, the model matrix -- is the pack's, verbatim.
+ * A third overlay would be nen deciding a policy on a repository's behalf,
+ * which is what the file exists to stop.
+ *
+ * IT RETURNS A FRESH OBJECT EVERY CALL. The imported document is module state
+ * shared by every invocation in this process (`nen scaffold init` runs
+ * in-process inside its own tests, and inside ./command.ts's `shu tools`
+ * join); overlaying onto the import itself would leak one run's lane into the
+ * next one's document.
+ */
+export function defaultWorkflowDocument(defaults: WorkflowDefaults): Record<string, unknown> {
+  const pack = workflowPack as { document?: unknown };
+  const document = pack.document;
+  if (document === null || typeof document !== "object" || Array.isArray(document)) {
+    throw new TemplateError(
+      `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`,
+      "document",
+      "must be the default policy object",
+    );
+  }
+  // A STRUCTURED CLONE, not a shallow spread: the two overlays below reach into
+  // nested blocks, and a shallow copy would write them through to the import.
+  const copy = JSON.parse(JSON.stringify(document)) as Record<string, unknown>;
+  const overlay = (block: string, key: string, value: unknown): void => {
+    const target = copy[block];
+    if (target === null || typeof target !== "object" || Array.isArray(target)) {
+      throw new TemplateError(
+        `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`,
+        `document.${block}`,
+        "must be an object -- it is one of the two blocks a caller's own values are written into",
+      );
+    }
+    (target as Record<string, unknown>)[key] = value;
+  };
+  overlay("iteration", "lane", defaults.lane);
+  overlay("commits", "allowedAttributionTrailers", [...defaults.allowedAttributionTrailers]);
+  return copy;
 }
 
 /** One file a template would write: a repo-relative path and its whole body. */

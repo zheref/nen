@@ -1054,7 +1054,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // matter which module a refactor touches first.
       fetch: RO("one typed PR snapshot -- gh reads only (its REST reviews call pins --method GET)"),
       "next-blocker": RO("reports the first blocking condition -- reads only (same pinned-GET fetch)"),
-      "cascade-main": MUT("merges the trunk into the branch and pushes"),
+      "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
       "request-reviews": MUT("gh pr edit --add-reviewer"),
     },
@@ -1154,10 +1154,16 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // `write-flag-gated` on `--run` because it no longer HAS a form that spawns
   // without one. Its row carries the argument.
   //
+  // `evidence` IS THE FIFTH NON-`DRY` ROW, and it is the only PLAIN
+  // `read-only` one: it spawns no declared invocation from the target
+  // repository at all, only `git diff --name-status`, a command nen itself
+  // chose (../shu/evidence/diff.ts) -- the same shape `wc classify`'s own
+  // `RO` row already carries for `git status`.
+  //
   // AND THERE IS NO `"*"` KEY. NenFamilyEntry's own doc comment says the
   // wildcard covers a family whose flags select the behaviour or whose every
-  // subcommand shares one policy; this family's emphatically do not -- four
-  // of the thirteen are not `DRY` -- and a `"*"` row would swallow them.
+  // subcommand shares one policy; this family's emphatically do not -- six
+  // of the fifteen are not `DRY` -- and a `"*"` row would swallow them.
   // ../parse/izanami.test.ts asserts exactly which keys are here, and which
   // policy each carries, so a row's kind cannot change by accident.
   shu: {
@@ -1219,8 +1225,17 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
         ["--run"],
         "sends a build to a declared target once --run is given; without it the verb renders the resolved plan and spawns nothing at all, which is a property of nen rather than a claim about the declaration's argv",
       ),
-      dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given"),
-      run: DRY("starts a long-running production process on this terminal unless --dry-run is given"),
+      // `--target <name>` DOES NOT MOVE EITHER ROW, and that is the point of
+      // stating it here. A launch target adds two more spawns to the bare form
+      // -- the declared device probe before the verb, the declared after-steps
+      // once it exits -- so the targeted form is MORE mutating than the bare
+      // one, never less, and `dry-run-gated` already refuses it. The
+      // `--dry-run` side is unchanged for the reason it was admitted at all: a
+      // dry run of these two spawns nothing whatever, the probe included, which
+      // is a property of nen rather than a claim about the declaration's argv
+      // (../shu/run.test.ts pins zero recorded calls for a targeted dry run).
+      dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given -- and with --target <name> also spawns the declared device probe before it and the target's after-steps once it exits"),
+      run: DRY("starts a long-running production process on this terminal unless --dry-run is given -- and with --target <name> also spawns the declared device probe before it and the target's after-steps once it exits"),
       coverage: DRY("spawns the lane's declared coverage command unless --dry-run is given -- a coverage run writes its report tree by definition"),
       // THE ONE ROW IN THIS TABLE WITH A SECOND READ GATE, and it is a
       // property of nen rather than of anybody's declaration: `--from-artifacts`
@@ -1233,12 +1248,36 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
         ["--from-artifacts"],
         "spawns the lane's declared TEST command and then parses what it wrote, unless --dry-run is given -- and a declared test task may write (a golden-image recorder, a coverage tree), so the bare form is never certified",
       ),
+      // THE ONE PLAIN `read-only` ROW IN THIS FAMILY. Every executing verb
+      // above is `DRY` because its bare form spawns the TARGET repository's
+      // own declared argv, which this table cannot vouch for; `evidence`
+      // spawns no declared invocation at all -- only `git diff
+      // --name-status <base>...HEAD`, a command NEN chose, exactly as
+      // `nen wc classify` runs `git status` -- and matches the result against
+      // `project.evidence.globs`, a pure computation. No flag on it writes
+      // anything: there is no `--dry-run` because there is nothing to skip.
+      evidence: RO("runs 'git diff --name-status' and matches the result against project.evidence.globs -- a read nen chose, never the target's own declared argv"),
       warmup: MUT("brings a working copy to a known state: it discards, fetches, force-moves a trunk ref and checks out a branch. No form of it is a pure read -- the dry run spawns nothing, but a warm-up is not a thing anyone WATCHES, so certifying one form read-only buys a caller nothing and costs the fail-closed answer"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },
   stage: { subcommands: { triage: RO("reads 'git status --porcelain'; stages nothing") } },
-  stop: { subcommands: { "*": RO("renders the gate-stop banner; fires nothing itself") } },
+  // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
+  // table are still a pure render -- this verb fires no notification and never
+  // could (../stop/command.ts's header states why) -- but `--mark` writes
+  // `.nen/last-stop.json`, which is a file on disk and therefore not something
+  // a read-only loop may do on every iteration. The bare form stays read-only
+  // for the reason `nen wake fire` and `nen shu deploy` are: absent the flag,
+  // this verb provably writes nothing, which is a property of nen rather than a
+  // claim about somebody else's file.
+  stop: {
+    subcommands: {
+      "*": GATED(
+        ["--mark"],
+        "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads",
+      ),
+    },
+  },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
   wake: {
     subcommands: {
