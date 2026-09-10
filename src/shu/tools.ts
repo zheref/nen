@@ -36,7 +36,7 @@
 import { VerbUsageError } from "../cli/command.js";
 import { loadProfilesPack, profileById } from "../profiles/pack.js";
 import type { Installer, ProjectBlock, RepositoryContract, VersionFrom } from "../schema/contract.js";
-import { PROGRAM } from "../version.js";
+import { PROGRAM, VERSION } from "../version.js";
 import {
   isRunnable,
   readManifestPin,
@@ -47,12 +47,15 @@ import {
 } from "./install.js";
 import { renderArgv, type RenderedStep } from "./render.js";
 import {
+  minimumBelowFloor,
   parseMinimum,
   parsePin,
+  renderFloor,
   renderMinimum,
   renderPin,
   satisfiesMinimum,
   satisfiesPin,
+  thisBuild,
   truncate,
   type Assessment,
   type ToolState,
@@ -185,6 +188,18 @@ export interface ToolsReport {
   readonly lane: string | null;
   readonly stack: string | null;
   readonly mode: ToolsMode;
+  /**
+   * THE LOWEST `dependency.minimum` PIN THIS BUILD SATISFIES, as `MAJOR.MINOR`.
+   *
+   * A fact about the BINARY and not about this run, which is why it is here
+   * rather than on the `nen` row and why it is present even in a report with no
+   * `dependency` block at all: a consumer deciding whether it owes a repin is
+   * asking about the binary, and asking it should not require a declaration
+   * that happens to carry the block. The row's own `pinned` range is derived
+   * from this and from `../version.ts`'s `VERSION`, so the two can never
+   * disagree.
+   */
+  readonly compatibleMinorFloor: string;
   readonly summary: ToolsSummary;
   readonly tools: readonly ToolRow[];
   readonly exitCode: number;
@@ -277,6 +292,11 @@ export function buildPlans(
   const dependencyName = dependency?.name ?? PROGRAM;
   if (dependency !== null && !Object.prototype.hasOwnProperty.call(declared, dependencyName)) {
     const floor = parseMinimum(dependency.minimum, "dependency.minimum");
+    // READ ONCE, AND USED FOR BOTH THE RENDERED RANGE AND THE COMPARISON, so
+    // the column and the verdict cannot be computed against two readings of the
+    // same two literals.
+    const build = thisBuild();
+    const belowFloor = minimumBelowFloor(floor, build);
     plans.push({
       name: dependencyName,
       required: true,
@@ -291,11 +311,17 @@ export function buildPlans(
       // member that reads it, not a default nen fell back to.
       versionFrom: "first-semver-on-stdout",
       installer: "verify-only",
-      pinned: renderMinimum(floor),
-      satisfiedBy: (found): boolean => satisfiesMinimum(floor, found),
+      pinned: renderMinimum(floor, build),
+      satisfiedBy: (found): boolean => satisfiesMinimum(floor, found, build),
       install: {
         kind: "by-hand",
-        why: `the bootstrap this repository pins installs ${dependency.pinnedRef}. Re-pinning ${dependencyName} is the bootstrap's job and this repository's decision; this verb reports the version and never changes it.`,
+        // THE ONE ROW WHOSE WAY OUT CAN BE "THE PIN IS WRONG, NOT THE HOST".
+        // A `minimum` below this build's compatibility floor cannot be
+        // satisfied by any version of this binary, so a reader told only
+        // "WRONG" beside the version they have just installed would go and
+        // install it again. The sentence is a fact about the declaration and
+        // is appended before any probe runs.
+        why: `the bootstrap this repository pins installs ${dependency.pinnedRef}. Re-pinning ${dependencyName} is the bootstrap's job and this repository's decision; this verb reports the version and never changes it.${belowFloor === null ? "" : ` ${belowFloor}`}`,
       },
       why: dependency.raw["minimum_semantics"] === undefined ? null : String(dependency.raw["minimum_semantics"]),
     });
@@ -558,6 +584,7 @@ export function assembleToolsReport(
     lane,
     stack,
     mode,
+    compatibleMinorFloor: renderFloor(thisBuild().floor),
     summary: summarise(tools, assessed),
     tools,
     exitCode,
@@ -649,6 +676,16 @@ export function renderToolsReport(report: ToolsReport): readonly string[] {
     ),
   );
   lines.push(labelled("mode", mode));
+  // THE FLOOR PRINTS BESIDE THE BINARY'S OWN VERSION, on every run: it is what
+  // decides whether a `dependency.minimum` still holds, and a consumer reading
+  // this table to answer "do I owe a repin" should not have to find a row to
+  // learn the answer.
+  lines.push(
+    labelled(
+      "compat floor",
+      `${report.compatibleMinorFloor}  (the lowest dependency.minimum ${PROGRAM} ${VERSION} satisfies)`,
+    ),
+  );
   if (tools.length === 0) {
     lines.push(labelled("tools", "(none declared)"));
     return lines;
