@@ -1,6 +1,6 @@
 // src/shu/command.ts -- `nen shu ...`, the stack-aware developer verbs.
 //
-// THIRTEEN VERBS, AND ALL THIRTEEN DO SOMETHING NOW. The family was declared
+// FOURTEEN VERBS, AND ALL FOURTEEN DO SOMETHING NOW. The family was declared
 // whole from day one -- `detect` proposing a declaration, ten verbs executing
 // one, and `tools` and `warmup` refusing by name with the release they arrived
 // in -- for ../cli/registry.ts's reason: a verb that is absent today and
@@ -9,7 +9,7 @@
 // write against. Both of those two have since landed, and the mechanism they
 // needed is gone rather than left standing empty.
 //
-// ONE OF THE THIRTEEN MUTATES GIT STATE, and it is the only one: `warmup`
+// ONE OF THE FOURTEEN MUTATES GIT STATE, and it is the only one: `warmup`
 // (./warmup.ts). Every other verb here either reads, or spawns what the target
 // repository declared inside a directory. That asymmetry is why `warmup` alone
 // requires `--repo` rather than defaulting to the caller's directory.
@@ -41,6 +41,7 @@ import { detect, renderDetect, writeProposal } from "./detect.js";
 import { ENABLED_INSTALLERS } from "./install.js";
 import { probeTool, runInstallSteps } from "./probe.js";
 import { declaredHostsFor } from "./render.js";
+import { runTestReport } from "./test-report.js";
 import { insideRepo, runVerb } from "./run.js";
 import { DEFAULT_TRUNK, runWarmup, WARMUP_CONTRACT, WARMUP_REMOTE } from "./warmup.js";
 import { assess, type Observation } from "./toolchain.js";
@@ -81,11 +82,12 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   run: { values: ["lane", "target"], booleans: ["dry-run"] },
   deploy: { values: ["lane", "target"], booleans: ["dry-run", "run"] },
   coverage: { values: ["lane", "threshold"], booleans: ["dry-run"] },
+  "test-report": { values: ["lane"], booleans: ["dry-run", "from-artifacts"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
 };
 
-/** The thirteen, in the order the design lists them (not alphabetical). */
+/** The fourteen, in the order the design lists them (not alphabetical). */
 export const SHU_SUBCOMMANDS: readonly string[] = [
   "detect",
   "build",
@@ -98,11 +100,21 @@ export const SHU_SUBCOMMANDS: readonly string[] = [
   "run",
   "deploy",
   "coverage",
+  "test-report",
   "tools",
   "warmup",
 ];
 
-/** The ten that execute a lane's declared invocation in this release. */
+/**
+ * The eleven that execute a lane's declared invocation in this release.
+ *
+ * `test-report` IS ON THE LIST THOUGH IT DECLARES NOTHING OF ITS OWN. It runs
+ * `project.verbs.<lane>.test` through the same executor and then parses what
+ * that run wrote, exactly as `coverage` runs its own row and parses that -- so
+ * it spawns the target repository's argv, which is the property this list is
+ * read for (../parse/izanami.ts's automation-policy rows, ./command.test.ts's
+ * split). Its one read-only form, `--from-artifacts`, spawns nothing at all.
+ */
 export const EXECUTING_VERBS: readonly string[] = [
   "build",
   "test",
@@ -114,6 +126,7 @@ export const EXECUTING_VERBS: readonly string[] = [
   "run",
   "deploy",
   "coverage",
+  "test-report",
 ];
 
 /**
@@ -129,7 +142,7 @@ const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
 const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
 
---repo is bracketed there because twelve of the thirteen verbs default it to the
+--repo is bracketed there because thirteen of the fourteen verbs default it to the
 directory you are standing in. It is REQUIRED on 'warmup', the one verb here
 that mutates git state: a verb that fetches into a repository, force-moves a
 branch ref and checks out a new branch must never do it to wherever this process
@@ -166,6 +179,16 @@ verbs:
               --threshold -- whether the number cleared a bar. The report is
               the first path under this verb's 'artifacts' whose format nen
               reads; a lane that names none is exit 1 saying so.
+  test-report Run the lane's declared 'test', then PARSE the results file
+              that run produced: a row per test, and the four counts. The
+              report is the first path under the TEST verb's 'artifacts' nen
+              recognises -- there is no 'test-report' row to declare, because a
+              repository that has said how its tests run has said enough. A
+              path with no extension in its last segment is read as a
+              DIRECTORY of XML, one file per suite. --from-artifacts reads
+              that file and runs nothing at all. A failing suite is still
+              parsed, and its failures never move the exit code: that is the
+              run's.
   tools       Check the HOST toolchain this repository pins under
               project.toolchain (and, from a dependency block, nen itself).
               Read-only by default: it runs each declared version probe and
@@ -337,6 +360,15 @@ flags:
                    'met: true|false'. IT NEVER CHANGES THE EXIT CODE, in
                    either direction: nen does not decide whether a number is
                    good enough. Read 'met' and decide.
+  --from-artifacts 'test-report' only. Do not run anything: read the results
+                   file the lane's 'test' verb declares under 'artifacts' and
+                   parse whatever is on disk. The lane, the verb and the host
+                   are resolved exactly as a real run resolves them -- a lane
+                   with no declared 'test' is still exit 4 -- because the
+                   artifact list is a property of that invocation. nen cannot
+                   tell how old the file is, and says so. Giving this together
+                   with --dry-run is exit 2: both start nothing and they answer
+                   different questions.
   --branch <name>  'warmup' only. The branch to cut from the freshly-fetched
                    trunk. REQUIRED, with no default: nen never invents a branch
                    name. It is validated with git's own 'check-ref-format
@@ -521,6 +553,25 @@ flags:
                    'dryRun' boolean here either. The EXECUTOR's own report for
                    this verb is rendered to stderr under --json, so stdout stays
                    exactly one document and nothing it produced is lost.
+                   On 'test-report' it is a FIFTH contract
+                   ('nen.shu.test-report/v0.1'), keys in order:
+                   { contract, lane, stack, report, tests, passed, failed,
+                     skipped, total, exitCode }, where each tests[] row is
+                   { name, suite, status, durationMs } and 'status' is
+                   passed | failed | skipped -- three answers, whatever the
+                   eight words the formats spell between them. 'suite' is the
+                   class, file or target the test is written in, or null;
+                   'durationMs' is null where the report states no time.
+                   'tests' is in the REPORT's own order (the table prints
+                   failures first) and is not always the whole suite: one
+                   format states its totals and lists only its failures, so
+                   'tests.length' is not another spelling of 'total'. The four
+                   counts are null exactly when nothing was parsed. 'report' is
+                   { format, path }: the declared artifact nen actually parsed,
+                   or null. THE FAILURES NEVER MOVE 'exitCode': it is the run's,
+                   and under --from-artifacts, where nothing ran, it is about
+                   the READ -- 0 for a report that parsed, however red it was.
+                   Read 'failed' and decide.
                    'env' is variable NAMES only, never values. 'steps[].exitCode'
                    is the TOOL's code and is null when nothing was run, which is
                    how a --json reader tells a dry run from a real one;
@@ -889,6 +940,14 @@ export const shuCommand: Command = {
           dryRun: context.args.booleans.has("dry-run"),
           threshold: context.args.values["threshold"] ?? null,
           advisories: coverageAdvisories(),
+        });
+      }
+
+      if (subcommand === "test-report") {
+        return runTestReport(context, repoRoot, {
+          lane: context.args.values["lane"] ?? null,
+          dryRun: context.args.booleans.has("dry-run"),
+          fromArtifacts: context.args.booleans.has("from-artifacts"),
         });
       }
 

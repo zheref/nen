@@ -1,0 +1,23 @@
+{
+  "numTotalTests": 5,
+  "success": false,
+  "testResults": [
+    {
+      "name": "/home/placeholder/checkout/src/cart.test.ts",
+      "status": "failed",
+      "assertionResults": [
+        { "fullName": "cart > adds one item", "title": "adds one item", "status": "passed", "duration": 12 },
+        { "fullName": "cart > adds two items", "title": "adds two items", "status": "passed", "duration": 21 },
+        { "fullName": "cart > refuses a negative quantity", "title": "refuses a negative quantity", "status": "failed", "duration": 12.345 }
+      ]
+    },
+    {
+      "name": "/home/placeholder/checkout/src/totals.test.ts",
+      "status": "passed",
+      "assertionResults": [
+        { "fullName": "totals > sums an empty cart", "title": "sums an empty cart", "status": "passed", "duration": 30 },
+        { "title": "applies a discount", "status": "pending" }
+      ]
+    }
+  ]
+}

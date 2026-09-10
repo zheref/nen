@@ -1,8 +1,9 @@
 # Test fixtures
 
-Six fake repository roots. Two carry a migrated `nen/` directory; the third
-deliberately still carries `schemas/`; the last three carry only a contract — one
-for the executor, one for the toolchain check, one for the coverage parse.
+Seven fake repository roots. Two carry a migrated `nen/` directory; the third
+deliberately still carries `schemas/`; the last four carry only a contract — one
+for the executor, one for the toolchain check, one for the coverage parse, one
+for the test-report parse.
 
 These are **test data, not shipped code**. They deliberately contain concrete
 persona, label and check-name strings — that is the point of them: the loaders
@@ -90,10 +91,27 @@ different things.
   quotes differs per lane — one stack has a conventional report location and the
   others say why they have none.
 
+- `shu-test-report-repo/nen/contract.json` — the repository `nen shu
+  test-report` is proved against, and the one fixture here that declares **no
+  row for the verb it is about**: that verb runs `project.verbs.<lane>.test` and
+  reads *that* row's `artifacts`, because a repository which has said how its
+  tests run has said enough. Nine lanes, one per answer: `web` declares a report
+  nen parses (committed beside it, so the parse runs end to end), `core`
+  declares no artifact at all, `native` declares the **two-step** shape this
+  family means by *declared* — a build step and a vendor extraction step the
+  repository named, writing the JSON nen reads, because nen spawns no extraction
+  of its own — `droid` declares a **directory** of one XML file per suite,
+  `mixed` declares two decoys before the real report (an unrecognised extension
+  and an extension-less **binary**, which is what makes the artifact choice two
+  passes rather than one), `gone` declares a report that is not on disk, `stray`
+  a directory holding XML that is not a test report, `noxml` a directory holding
+  no XML at all, and `untested` declares a `build` and no `test` whatever.
+
 The marker trees `nen shu detect` scans are a different kind of input and live
 separately, at `src/shu/fixtures/` — see that directory's own README; the
 coverage REPORT fixtures the five parsers are proved against live at
-`src/shu/fixtures/coverage/`, which has one too.
+`src/shu/fixtures/coverage/`, and the test REPORT fixtures the three parsers are
+proved against at `src/shu/fixtures/test-report/`. Both have a README too.
 
 Nothing under this directory is linted (`eslint.config.js` ignores
 `**/fixtures/**`) or type-checked, and the taxonomy-purity sweep in
