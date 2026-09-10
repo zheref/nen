@@ -3494,7 +3494,7 @@ nen commit format --type feat --subject "a short imperative subject"
 nen commit format --type fix --subject "stop dropping the last row" --trailer "Co-Authored-By=A" --repo .
 ```
 ```text
-nen: trailer key 'Co-Authored-By' is an attribution trailer this repository refuses. '/tmp/site/nen/workflow.json' lists 'Akatsuki-Agent', 'Akatsuki-Run' under commits.allowedAttributionTrailers, and 'Co-Authored-By' is not among them. Drop the trailer, or add its key to that list
+nen: trailer key 'Co-Authored-By' is an attribution trailer this repository refuses. '/tmp/site/nen/workflow.json' admits 'Akatsuki-Agent', 'Akatsuki-Run' under commits.allowedAttributionTrailers, and 'Co-Authored-By' is not one of them. Drop the trailer, or add its key to that list
 ```
 exit 2. (from a real run against a scratch repository scaffolded by `nen scaffold init`; the absolute path is elided to `/tmp/site`)
 

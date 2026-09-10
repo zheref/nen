@@ -188,6 +188,17 @@ describe("nen stop --mark -- the marker a host hook rings off", () => {
     expect(existsSync(join(root, "nen"))).toBe(false);
   });
 
+  it("names in --help EXACTLY the keys the marker carries, and no others", async () => {
+    // The help text is what a hook author reads before writing a parser, so a
+    // key it omits is a field somebody discovers by debugging (review finding).
+    // Coupled to the file rather than restated, so neither can move alone.
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    await capture(["stop", "--mark"], root);
+    const documented = /\{ ([a-z, ]+) \}/.exec(stopCommand.usage)?.[1]?.split(", ") ?? [];
+    expect(documented).toEqual(Object.keys(marker(root)));
+    expect(stopCommand.usage).toContain(STOP_MARK_CONTRACT);
+  });
+
   it("carries --notified through, so a hook knows which rungs are left", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
     await capture(["stop", "--gate", "G2", "--notified", "--mark"], root);

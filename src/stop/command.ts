@@ -33,8 +33,9 @@
 //
 // ...AND `--mark` IS HOW THE HOST RINGS THEM WITHOUT NEN GROWING A NOTIFIER.
 // The two rungs need a tool nen may not spawn; what they do NOT need is for
-// nen to spawn it. `--mark` writes `.nen/last-stop.json` -- who, which gate,
-// whether rung 1 was already fired, and when -- and a hook on the caller's own
+// nen to spawn it. `--mark` writes `.nen/last-stop.json` -- the marker's own
+// contract string, who, which gate, whether rung 1 was already fired, and the
+// instant -- and a hook on the caller's own
 // host reads that file and rings whatever its platform has. The split is the
 // same one this file already draws about rung 1: nen states the fact, the host
 // acts on it. Nothing here plays a sound, raises a toast, or learns the name of
@@ -91,8 +92,10 @@ one renderer.
   --gate <g>          The human gate being asked for.
   --notified          The caller already fired the push-notification rung.
   --mark              Also write '${MARKER_FILE}' under --repo:
-                      { who, gate, notified, at }. The ONLY form of this verb
-                      that writes anything.
+                      { contract, who, gate, notified, at }, where 'contract'
+                      is '${STOP_MARK_CONTRACT}' -- the marker's own versioned
+                      shape, so a hook can tell a future change from a
+                      compatible one. The ONLY form of this verb that writes.
   efforts.md | -       A markdown pipe table (header + rows); '-' reads stdin.
   --template          Emit a blank 5-column table to fill in; nothing is
                       waited on, so no signal line is printed.
@@ -104,13 +107,13 @@ host if you need them; this command renders rung 4 (the banner and table) and
 states rung 1's status, which is the caller's to have fired.
 
 --mark is how a host wires those two rungs without nen learning a notifier: it
-records this stop as a fact -- who asked, which gate, whether rung 1 was
-already fired, and the instant -- and a Stop hook on your own machine reads
-'${MARKER_FILE}' and rings whatever that platform has. Nen still fires nothing.
-The file lives under the dot-prefixed, gitignored '.nen/' (generated output),
-never under the committed 'nen/'; the directory is created if it is absent, and
-an existing marker is replaced, because the latest stop is the one a hook
-should ring for.`;
+records this stop as a fact -- the contract string, who asked, which gate,
+whether rung 1 was already fired, and the instant -- and a Stop hook on your
+own machine reads '${MARKER_FILE}' and rings whatever that platform has. Nen
+still fires nothing. The file lives under the dot-prefixed, gitignored '.nen/'
+(generated output), never under the committed 'nen/'; the directory is created
+if it is absent, and an existing marker is replaced, because the latest stop is
+the one a hook should ring for.`;
 
 const GATE_NAMES: Readonly<Record<string, string>> = {
   G1: "epic approval",

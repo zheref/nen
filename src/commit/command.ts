@@ -93,12 +93,18 @@ function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): 
   for (const trailer of trailers) {
     const refused = trailerRefusal(loaded.workflow.commits, trailer.key);
     if (refused === null) continue;
+    // TWO WHOLE SENTENCES, NOT ONE WITH A HOLE IN IT. An empty allow-list and a
+    // populated one are different facts about the repository and read as
+    // different sentences; splicing a clause into a shared frame produced
+    // "lists no allowed attribution trailer at all, and 'X' is not among them"
+    // -- among WHAT -- which is the one line of this refusal a reader has to
+    // parse twice.
     refusals.push(
-      `trailer key '${trailer.key}' is an attribution trailer this repository refuses. '${loaded.path}' lists ${
-        allowed.length === 0
-          ? "no allowed attribution trailer at all"
-          : `${allowed.map((key): string => `'${key}'`).join(", ")} under commits.allowedAttributionTrailers`
-      }, and '${refused}' is not among them. Drop the trailer, or add its key to that list`,
+      allowed.length === 0
+        ? `trailer key '${trailer.key}' is an attribution trailer this repository refuses. '${loaded.path}' admits none at all: its commits.allowedAttributionTrailers is empty. Drop the trailer, or add '${refused}' to that list`
+        : `trailer key '${trailer.key}' is an attribution trailer this repository refuses. '${loaded.path}' admits ${allowed
+            .map((key): string => `'${key}'`)
+            .join(", ")} under commits.allowedAttributionTrailers, and '${refused}' is not one of them. Drop the trailer, or add its key to that list`,
     );
   }
   return refusals;
