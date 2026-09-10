@@ -9,9 +9,10 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
-`scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
-families, 89 verbs, every flag checked against the binary this repository
+with the `nen` spelling. This document covers the **v0.4.0 line** (`report`,
+`shu test-report`, `shu evidence` and the `nen/workflow.json` policy file are
+new in it, and none of them is in v0.3.0): 37 command
+families, 91 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -245,7 +246,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
-| `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the reports directory, the model matrix. See [`nen/workflow.json`](#nenworkflowjson) | [`commit format`](#nen-commit-format) (the trailer policy), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
+| `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the reports directory, the model matrix. See [`nen/workflow.json`](#nenworkflowjson) | [`commit format`](#nen-commit-format) (the trailer policy), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
 `nen/` holds committed configuration only. Generated output goes to a
 dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
@@ -253,8 +254,8 @@ one-character difference is what keeps a build log out of a review.
 
 **The legacy `schemas/` location.** Before v0.3 the four taxonomy files lived in
 a `schemas/` directory. Nen still reads them from there when `nen/` does not
-carry them, so an un-migrated repository keeps working for the whole v0.3 line;
-that fallback is **removed in v0.4.0**. It is read-only — nothing in nen writes
+carry them, so an un-migrated repository keeps working through the v0.4 line;
+that fallback is **removed in v0.5.0**. It is read-only — nothing in nen writes
 to `schemas/` — and [`schema check`](#nen-schema-check) is where the migration
 state is reported: a file read from the legacy location gets a `warn` row naming
 the canonical path, and a file present in BOTH with different bytes is a
@@ -394,8 +395,8 @@ has actually been published for that tag — not the moment
 [`tag cut`](#nen-tag-cut) runs. Fetch the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.3.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.4.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.4.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -403,7 +404,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)"
 "$nen" --version
 ```
 
@@ -436,7 +437,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 89 verbs, grouped as the README groups them. **Reads** is what a
+All 91 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -487,6 +488,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop | git (rev-parse/symbolic-ref/log/diff), nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name | caller-named --template + --data files; writes --out, inside --repo, unless --dry-run | yes |
+| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout: the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them | caller-named --source + --agents directories; writes --out; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface) / hand-edited | caller-named --source + --agents + --out; writes nothing at all; no git/gh | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
@@ -517,7 +520,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu dev`](#nen-shu-dev) | start a lane's DEBUG build; long-running, on this terminal. With `--target <name>` it launches a declared DEVICE instead: the declared probe, the verb, then the target's after-steps | nen/contract.json (project block, plus project.launch for `--target`); inherits stdio unless --dry-run; spawns the declared device probe and after-steps only with `--target` | yes |
 | [`shu`](#family-shu) | [`nen shu run`](#nen-shu-run) | start a lane's PRODUCTION build locally; long-running, on this terminal. Takes the same optional `--target` | nen/contract.json (project block, plus project.launch for `--target`); inherits stdio unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- TWO flags and no single-flag path to acting: --target is required and has no default, --run is required before anything is sent, and a lane whose deploy is a seat refuses with its own reason whatever --target says | nen/contract.json (project block + project.targets: the destination's args, the env NAMES it requires, or the sentence saying it has no command line); spawns the declared argv only with --run | yes |
-| [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name | yes |
+| [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code; `--touched --base <ref>` narrows the rows to the files a change touched (a git-diff read after the run) and, with `--threshold` absent, bands each row against `nen/workflow.json`'s coverage ladder -- or, where that file is absent, nen's published 80/85/90 defaults -- instead; never gating either way | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name (and, under `--touched` with no `--threshold`, `nen/workflow.json` through the shared loader) | yes |
 | [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu evidence`](#nen-shu-evidence) | match `git diff --name-status <base>...HEAD` against project.evidence.globs, deriving each survivor's suite/scene and grouping suite -> scenes; empty is exit 0, never an error | git diff (through the seam only -- no declared invocation, no lane); nen/contract.json (project.evidence) | yes |
 | [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
@@ -1902,7 +1905,7 @@ default over a policy the repository states and nen could not parse.
 
 It is also where the `schemas/` → `nen/` migration is reported. A file read from the legacy `schemas/`
 location gets a `warn` row printed at the path it was actually read from, followed by an indented
-`^ legacy location…` line naming the canonical path and the v0.4.0 removal. A file present in BOTH
+`^ legacy location…` line naming the canonical path and the v0.5.0 removal. A file present in BOTH
 places whose bytes DIFFER is a **shadowed leftover**: the row FAILS the report even though the file
 loaded, because `nen/` won the read and the copy somebody may still be editing is the one nen ignores.
 Identical bytes in both places is an `ok` row with a note saying the deletion is free. The comparison
@@ -1980,17 +1983,17 @@ nen schema check --repo src/schema/fixtures/legacy-repo
 ```text
 repository: /path/to/src/schema/fixtures/legacy-repo
   warn  schemas/labels.json  13 labels
-        ^ legacy location. Move it to 'nen/labels.json'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/labels.json'; the schemas/ fallback is removed in v0.5.0.
   warn  schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
-        ^ legacy location. Move it to 'nen/repos.json'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/repos.json'; the schemas/ fallback is removed in v0.5.0.
   warn  schemas/colors.yml  3 categories, 13 values
-        ^ legacy location. Move it to 'nen/colors.yml'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/colors.yml'; the schemas/ fallback is removed in v0.5.0.
   warn  schemas/gates.json  5 reviewer identities
-        ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.4.0.
+        ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.5.0.
   ok    nen/contract.json  absent (optional)
   ok    nen/workflow.json  absent (defaults apply)
 ```
-exit 0 — an un-migrated repository still passes for the whole v0.3 line.
+exit 0 — an un-migrated repository still passes through the v0.4 line.
 (from a real run against the bundled fixture repo)
 
 <a id="family-color"></a>
@@ -3733,7 +3736,7 @@ the reason `target` is — one family, one document shape.
 `--json` document is **not** that shape: each runs through the same executor and
 then parses what the run produced, so their stdout carries
 `nen.shu.coverage/v0.1` — `{ contract, lane, stack, total, targets, threshold,
-report, exitCode }` — and `nen.shu.test-report/v0.1` — `{ contract, lane, stack,
+report, exitCode, touched, ladder }` — and `nen.shu.test-report/v0.1` — `{ contract, lane, stack,
 report, tests, passed, failed, skipped, total, exitCode }` — and the executor's
 own report is rendered to **stderr** instead, where every argv, duration and
 precondition row still is. Nothing is lost and stdout is still exactly one
@@ -4495,7 +4498,7 @@ classification as `test`: a coverage run writes its report tree by definition.
 **Usage**
 
 ```text
-nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--dry-run] [--json]
+nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref>] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -4503,8 +4506,10 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--dry-ru
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--lane <name>` | no | Which lane to measure. | Defaults to `project.defaultLane`, as everywhere else in this family. |
-| `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. |
-| `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. |
+| `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. Under `--touched`, also reported **per row**, and giving it OVERRIDES the workflow-file ladder below for that run. |
+| `--touched` | no | Narrow `targets` to the rows a change touched. | Requires `--base`; given without it, **exit 2**. With `--threshold` absent, also loads `nen/workflow.json`'s coverage ladder (defaulting to 80/85/90 when that file is absent) and bands each row; a malformed policy is exit 1 before anything is spawned. See below. |
+| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. |
+| `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
 first path under `project.verbs.<lane>.coverage.artifacts` whose **format** it
@@ -4574,8 +4579,8 @@ clamped to 100%.
 when there was no number to compare. The exit code is the **run's**, in both
 directions: coverage under the bar still exits 0 when the tool exited 0. nen does
 not decide whether a number is good enough — the policy that prompted this flag
-scopes its bar to *the files a pull request touched*, a git-diff-aware judgement
-no coverage report can answer. Read `met` and decide.
+scopes its bar to *the files a pull request touched*, which is exactly what
+`--touched` below answers. Read `met` and decide.
 
 The comparison is on the **counts**, not on the rounded percentage the table
 prints: 19 999 of 25 000 lines displays as `80.00%` and is **not** met at
@@ -4596,14 +4601,90 @@ path.
 per *file*, so a large repository prints a long table; `--json` carries the same
 rows. Pipe it (`| head`), or read `total` alone, until a `--top <n>` exists.
 
+**`--touched --base <ref>` narrows `targets` to the rows a change touched.**
+After the run and the parse above, nen computes `git diff --name-only
+<base>...HEAD` **in the repository root** and filters the per-target table down
+to the rows that diff names — the same *files a pull request touched* scope
+`--threshold`'s own policy already talks about, made real. `--touched` requires
+`--base`; either flag given without the other is **exit 2**, before anything
+runs.
+
+The match depends on what a row **is**:
+
+- **File-grain formats** (`istanbul-summary`, `lcov`) match a touched path by
+  plain equality against the row's own (already repo-relative) name.
+- **Package-grain formats** (`cobertura`, `jacoco`) name a row after a
+  *package*, not a file, so a touched file matches when its own path contains
+  that package's segments, in order, with the file itself left over —
+  "this touched file sits **under** that package". The text rendering says so
+  (`-- rows matched BY PACKAGE, not by file`); `--json` does not carry the
+  grain, because it already follows from `report.format`.
+- **`xccov-report`** is read at **file** grain here only: nen descends
+  `targets[].files[]` instead of stopping at the target row, because "this
+  whole app/framework was touched" is true of nearly every diff and would
+  keep almost the entire table. The file path is relativised the same way
+  every other format's row name is.
+
+`--json` gains a ninth key, `touched: { base, files, matched, unmatched }`
+(`files` is everything git named; `matched` and `unmatched` partition it —
+their lengths always sum to `files.length`), and each **row** gains its own
+`met` when `--threshold` is also given — the aggregate `threshold.met` above
+still answers for the whole report; a row's `met` answers for that row alone,
+both compared on the **counts**, never the rounded percentage. **This still
+never gates**: the exit code is the run's, exactly as bare `--threshold` is.
+
+`--dry-run --touched` still computes and reports the touched set: that read is
+`git diff`, not the declared tool, so a preview costs nothing — `targets` is
+still empty, because nothing was parsed to filter.
+
+**The ladder — `nen/workflow.json`'s `coverage.{minimum,recommended,ideal}`,
+when `--threshold` is not given.** The design's own shape for that file states
+`"coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope":
+"touched" }` — a policy about the files a change touched, the same scope
+`--touched` already reads. So under `--touched`, with no explicit `--threshold`
+to override it, nen reads that block and reports each row's **band** instead of
+`met`: `under-minimum` / `minimum` / `recommended` / `ideal`, on the same
+inclusive-at-the-boundary, counts-not-percentage comparison `--threshold`'s own
+`met` uses. `--json` gains a tenth key, `ladder: { minimum, recommended, ideal,
+source, present }`, or `null`.
+
+**The file is read by the one loader, and an absent file is a ladder.** These
+are the same `src/schema/workflow.ts` numbers `nen schema check` validates and
+`nen commit format` reads its trailer policy from — there is no second reader of
+`nen/workflow.json` in this binary. Every key in that file is optional and every
+default is published, so a repository that has never written one is banded
+against **80 / 85 / 90** rather than not banded at all: `ladder.present` is
+`false` there, and the text line reads `nen/workflow.json is absent — these are
+nen's defaults`, so a rung a repository *chose* is never mistaken for one nen
+*assumed*. A partial `coverage` block takes the published default for each rung
+it omits. `source` is the repo-relative `nen/workflow.json`, never the absolute
+path the loader hands back — this document gets pasted into issues, and the row
+names are already relativised for exactly that reason.
+
+**A malformed policy is exit 1, before the coverage tool is spawned.** The
+ladder is loaded alongside `--threshold`'s number and `--touched`'s flag
+pairing, at the top of the run rather than in the middle of the report: a file
+that is present and unreadable, or that states a `coverage` block nen cannot
+read (a string where a number belongs, a ladder that does not ascend, a key one
+letter away from one nen reads), is a refusal naming the pointer — and a refusal
+a caller has to sit through a whole coverage build to hear is one delivered at
+the worst possible moment.
+
+`ladder: null` is a fact about the **invocation**, never about the repository.
+An explicit `--threshold` wins where both exist — it is the caller overriding
+the file's policy for this one run, not a second number to reconcile against it
+— and a plain (non-`--touched`) run never reads the file at all: **this too
+still never gates.**
+
 **`--json`** is a different contract from the other executing verbs
 (`nen.shu.coverage/v0.1`), keys in order: `{ contract, lane, stack, total,
-targets, threshold, report, exitCode }`. `percent` is computed from the counts
-(two decimals) rather than read out of the file — three of the five formats carry
-a percentage of their own, rounded three different ways, one of them as a
-fraction — and it is `null` for a report about no code, because 0 of 0 is neither
-100% nor 0%. **A dry run is told by `exitCode: 0` with `total: null`**; nothing
-else produces that pair. The executor's own report goes to stderr in this mode.
+targets, threshold, report, exitCode, touched, ladder }`. `percent` is computed
+from the counts (two decimals) rather than read out of the file — three of the five
+formats carry a percentage of their own, rounded three different ways, one of
+them as a fraction — and it is `null` for a report about no code, because 0 of 0
+is neither 100% nor 0%. **A dry run is told by `exitCode: 0` with `total:
+null`**; nothing else produces that pair. The executor's own report goes to
+stderr in this mode.
 
 **Example**
 
@@ -4630,6 +4711,88 @@ threshold:     80% -- met. This is REPORTED and never enforced: nen exits 0 here
 ```
 (run against this repository's own coverage fixture declaration; the same run
 with `--threshold 95` prints `95% -- NOT met` and still exits **0**)
+
+**Example — `--touched`**
+
+```bash
+nen shu coverage --touched --base <base> --threshold 80
+```
+```text
+lane:          web  (nextjs)
+verb:          coverage
+host:          darwin -- supported (declared: darwin, linux, win32)
+preconditions: (none declared)
+ran:           pnpm --filter @placeholder/core test:coverage  -- exit 0 in 208ms
+cwd:           /…/shu-coverage-repo
+env:           (none added)
+artifacts:     coverage/coverage-summary.json
+log:           not captured to a file -- each step's own stdout and stderr were relayed as it finished. A .nen/logs/ transcript is not in this release (zheref/nen#91).
+report:        coverage/coverage-summary.json  (istanbul-summary)
+total:         lines 82.35% (14/17)   branches 75.00% (3/4)
+targets:
+  lines           branches      met  target
+  84.62% (11/13)  75.00% (3/4)  met  packages/core/src/index.ts
+threshold:     80% -- met. This is REPORTED and never enforced: nen exits 0 here, and the threshold moved that by nothing.
+touched:       base <base>: 2 files (1 matched, 1 unmatched)
+  unmatched: README.md
+```
+(run against a copy of this repository's own coverage fixture, in a REAL git
+history: `<base>` is the commit before one that edited
+`packages/core/src/index.ts` and added `README.md`. `packages/app/src/main.ts`
+is untouched by that commit, so its row is gone from the table entirely — not
+merely marked unmet. `--json` for the same run:)
+
+```json
+{
+  "targets": [
+    { "name": "packages/core/src/index.ts", "lines": { "covered": 11, "total": 13, "percent": 84.62 },
+      "branches": { "covered": 3, "total": 4, "percent": 75 }, "met": true }
+  ],
+  "threshold": { "value": 80, "met": true },
+  "touched": {
+    "base": "<base>",
+    "files": ["README.md", "packages/core/src/index.ts"],
+    "matched": ["packages/core/src/index.ts"],
+    "unmatched": ["README.md"]
+  }
+}
+```
+(elided to the keys this example is about; the full document still carries all
+ten, `ladder: null` among them since `--threshold` was given)
+
+**Example — the ladder, no `--threshold`**
+
+```bash
+nen shu coverage --touched --base <base>
+```
+```text
+lane:          web  (nextjs)
+verb:          coverage
+host:          darwin -- supported (declared: darwin, linux, win32)
+preconditions: (none declared)
+ran:           pnpm --filter @placeholder/core test:coverage  -- exit 0 in 1181ms
+cwd:           /…/shu-coverage-repo
+env:           (none added)
+artifacts:     coverage/coverage-summary.json
+log:           not captured to a file -- each step's own stdout and stderr were relayed as it finished. A .nen/logs/ transcript is not in this release (zheref/nen#91).
+report:        coverage/coverage-summary.json  (istanbul-summary)
+total:         lines 82.35% (14/17)   branches 75.00% (3/4)
+targets:
+  lines           branches      band           target
+  75.00% (3/4)    --            under-minimum  packages/app/src/main.ts
+  84.62% (11/13)  75.00% (3/4)  minimum        packages/core/src/index.ts
+ladder:        nen/workflow.json -- minimum 80% / recommended 85% / ideal 90%. REPORTED per row as 'band', and never enforced: nen exits 0 here, whatever the bands say.
+touched:       base <base>: 2 files (2 matched, 0 unmatched)
+```
+(run against a copy of this repository's own coverage fixture, with a real
+`nen/workflow.json` declaring `{"coverage":{"minimum":80,"recommended":85,
+"ideal":90,"scope":"touched"}}`, and `<base>` the commit before one that
+touched both files. No `--threshold` was given, so `threshold` is absent from
+the text and `null` in `--json`, and `ladder` carries the three numbers
+instead — with `present: true`, because the file was really there. Delete that
+file and the same run prints `nen/workflow.json is absent — these are nen's
+defaults` and the identical three rungs, because 80/85/90 is what the loader
+answers with)
 
 ### `nen shu test-report`
 
@@ -5593,10 +5756,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.3.0 --source zheref/nen
+nen bootstrap --ref v0.4.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/v0.3.0/nen-linux-x64
+/home/me/.cache/nen/v0.4.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -5902,6 +6065,202 @@ wrote Reports/effort.html
 <p>93.74% of lines on 'nen'</p>
 ```
 (both run for real, `effort.html` being the six-line template above. Note the escaping: the merge commit's `'origin/main'` came out as `&#39;origin/main&#39;` from a `{{subject}}` cell, which is the default and the point. With a `coverage` of `null` the last paragraph is simply absent — the `{{#if}}` block is skipped, not blanked. The same render with `--out ../escape.html` prints `--out '../escape.html' resolves outside the repository at … 'report render' writes the report INTO the repository it is reporting on and nowhere else` at exit 2)
+## Surfaces
+
+One skills directory, rendered into the layout and frontmatter another agent
+surface documents for itself. Both verbs are local — no `gh`, no network — and
+neither installs anything: they write a mirror into a directory you name, and
+say how the committed one differs from a fresh generation. Where a skill lives
+once and has to be readable by more than one agent product, this is the copy
+that is generated rather than maintained.
+
+<a id="family-surface"></a>
+
+**`nen surface`**
+
+`mirror generate` writes `<out>/<name>/SKILL.md` for every `<name>/SKILL.md`
+under `--source`; `mirror check` regenerates the same thing in memory and diffs
+it against what is committed, exactly as [`canon mirror
+check`](#nen-canon-mirror-check) does, with the same four drift classes. Every
+per-surface difference — which frontmatter keys survive, how an invocation is
+spelled, where a persona goes — is **a row in `src/surface/rules.ts`**, not a
+branch in the generator, and each row carries the URL every fact in it was read
+from. Adding a surface is adding a row.
+
+The two rows this release ships, read on 2026-09-10:
+
+| | `codex` | `cursor` |
+|---|---|---|
+| skills read from | `.agents/skills/<name>/SKILL.md` ([docs](https://learn.chatgpt.com/docs/build-skills)) | `.cursor/skills/<name>/SKILL.md` ([docs](https://cursor.com/docs/skills)) |
+| frontmatter kept | `name`, `description` — the page documents no other key | `name`, `description`, `paths`, `globs`, `disable-model-invocation`, `icon`, `color`, `metadata` — the documented table, whole |
+| required | `name`, `description` | `name`, `description` |
+| invocation spelled | `$<name>` (*"run /skills or type $ to mention a skill"*) | `/<name>` (*"you explicitly type /skill-name in chat"*) |
+| personas | **no markdown persona file** — every one becomes a `## <name>` section of a generated `AGENTS.md` ([docs](https://learn.chatgpt.com/docs/agent-configuration/agents-md)) | one file per persona under `<out>/agents/<stem>.md`, frontmatter reduced to `name`, `description`, `model`, `readonly`, `is_background` ([docs](https://cursor.com/docs/agent/subagents)) |
+
+Two caveats the table carries and prints on stderr, rather than acting on:
+Codex **also** documents standalone per-agent **TOML** files under
+`.codex/agents/` (`name`, `description`, `developer_instructions`), which this
+verb does not write — it mirrors markdown to markdown, so a persona lands in
+`AGENTS.md` as prose; and Cursor documents that a skill's `name` must be
+lowercase letters, numbers and hyphens and must match its folder name, which nen
+carries through and does not enforce.
+
+**The generated marker is the first *markdown* line, not the first line of the
+file.** Every surface here identifies a skill by YAML frontmatter delimited by
+`---` **at the start of the file**, so an HTML comment above that fence would
+produce a file the surface silently declines to load — a "do not edit" banner
+bought at the price of the document. So the marker sits immediately after the
+closing fence (and on line 1 of `AGENTS.md`, which has no frontmatter):
+
+```text
+<!-- GENERATED by nen surface mirror (surface: cursor) -- do not edit; edit the source and regenerate -->
+```
+
+It is ASCII, it names the surface, and `check` reads it back out of that one
+position only — a marker-shaped line further down the file (a quoted example, a
+nested fence) is never mistaken for the real one, the same anchoring
+[`canon mirror check`](#nen-canon-mirror-check) applies to its own header.
+
+**What is mirrored, and what is not.** Only `<name>/SKILL.md` — a skill
+directory's `scripts/`, `references/` and assets are left where they are, and a
+mirror directory may hold them beside the generated file without either verb
+touching them. The **filename universe** these two verbs consider their own has
+**two** conditions: a file must sit at one of the row's own locations
+(`<name>/SKILL.md`, or the persona location) **and carry a generated marker**.
+An unmarked file is somebody's own work wherever it sits, so it is never
+overwritten, never deleted as an orphan, and never reported as `extra` — a
+`SKILL.md` written by hand in the mirror directory is as untouchable as a
+`README.md` beside it. The gate is "carries *a* marker", not "carries *this*
+surface's": a file generated for another surface whose source has since gone is
+still this generator's output, and is exactly what `check` calls `extra` and
+`generate` deletes. Both verbs read the same list, so what one reports the other
+clears.
+
+### `nen surface mirror generate`
+
+Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
+with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
+documents, and — with `--invocation-prefix` — every `<prefix><name>` mention
+rewritten into that surface's own spelling. Writes only files whose content
+actually changed, and deletes an orphan whose source is gone (plus the directory
+that emptied, if nothing else was in it).
+
+It **never overwrites a file it did not write**. Every destination is checked
+for the marker *before the first byte is written*, and a file that carries none
+is refused by name at exit 2 — the case this exists for is `AGENTS.md`, which
+people write by hand at the root of a project and which an `--out` pointed one
+directory too high would otherwise destroy with no diff to recover it from. A
+file that *does* carry the marker is overwritten freely, hand edits included:
+that is the self-healing the mirror is for.
+
+**Usage**
+
+```text
+nen surface mirror generate --source <dir> --surface codex|cursor --out <dir>
+                            [--agents <dir>] [--invocation-prefix <prefix>]
+                            [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--source <dir>` | **yes** | the directory whose **subdirectories** are the skills | one holding no `<name>/SKILL.md` is refused at exit 2, never mirrored as empty: an empty generation would delete the whole mirror as orphaned, so the one plausible typo (`--source` pointed one level too high) would quietly empty it instead of saying so |
+| `--surface <name>` | **yes** | which row of the table above | anything else is refused at exit 2, listing the ones that exist |
+| `--out <dir>` | **yes** | where the mirror is written | a path resolving **inside** `--source` (its own directory included) is refused at exit 2 — the mirror would become part of the source, and the next run would mirror its own output. Created if absent |
+| `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused. On a surface that keeps personas as **files**, a persona that would mirror to an **empty frontmatter block** — no fence in the source, or a fence holding only keys that surface does not read — is refused at exit 2: the file written would carry no frontmatter at all, and there would be nothing for the surface to route on. On a surface whose personas are **prose** (the appendix), the same file is fine, because frontmatter is not a concept there |
+| `--invocation-prefix <p>` | no | the **source's own** invocation namespace, e.g. `myplugin:` | caller data, never a literal in this binary (§3), for the same reason [`canon mirror generate`](#nen-canon-mirror-generate)'s `--header-template` is a flag. Without it nothing is rewritten; with it, mentions of skills *outside* the mirrored set are rewritten too, because a half-rewritten document is worse than an unrewritten one |
+| `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
+| `--repo <path>` | no | Not used — this verb operates purely on the paths given. | |
+
+**Output and exit codes** — prints `surface:`, `out:`, then `written:`,
+`unchanged:` and `deleted (orphaned):` (each `(none)` when empty); the row's
+caveat goes to **stderr**, so `--json` stays one document. `--json`:
+`{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
+dryRun, written, unchanged, deleted }`. Exit 0 on any completed run; exit 2 on a
+missing or unknown flag, an `--out` inside `--source`, a `--source` with no
+`SKILL.md`, a `SKILL.md` with no frontmatter block or missing a key the surface
+documents as required, or a destination that exists and carries no marker.
+
+**Example**
+
+```bash
+nen surface mirror generate --source src/surface/fixtures/skills \
+  --agents src/surface/fixtures/agents --surface cursor \
+  --out /tmp/nen-doc/cursor --invocation-prefix "demo:"
+```
+```text
+nen: note: cursor: this surface documents that a skill's `name` must be lowercase letters, numbers and hyphens and must match its folder name; nen mirrors the folder name and the `name` line it was given, and refuses neither.
+surface: cursor (.cursor/skills/<name>/SKILL.md)
+out: /tmp/nen-doc/cursor
+written: agents/scout.md, alpha/SKILL.md, beta/SKILL.md
+unchanged: (none)
+deleted (orphaned): (none)
+```
+The `alpha` skill's source frontmatter carries `name`, `description`,
+`allowed-tools`, `model`, `license` and `metadata`; what lands in the mirror is
+`name`, `description` and `metadata`, and every `demo:alpha` in the body — and
+in the description — has become `/alpha`. Under `--surface codex` the same
+source produces `name` and `description` only, `$alpha`, and one `AGENTS.md`
+holding a `## scout` section instead of `agents/scout.md`.
+
+### `nen surface mirror check`
+
+Regenerates from the SAME inputs `generate` uses and diffs the result against
+`--out` **without writing anything** — the CI-safe half of the pair. A file is:
+
+| Class | Meaning |
+|---|---|
+| `ok` | byte-identical to a fresh generation |
+| `missing` | the source has it; `--out` has not |
+| `extra` | `--out` has it, in the mirror's filename universe, and no source produces it |
+| `stale` | it carries a marker, but for a **different surface** — really generated, really out of date |
+| `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright |
+
+`stale` is where [`canon mirror check`](#nen-canon-mirror-check)'s `--ref` sits
+in this verb: there is no pinned upstream version to compare, so the fact the
+marker carries is the **surface**, and a mirror generated for one surface and
+checked against another is exactly that verb's stale case. Calling it
+hand-edited would send its maintainer looking for an edit nobody made.
+
+**Usage**
+
+```text
+nen surface mirror check --source <dir> --surface codex|cursor --out <dir>
+                         [--agents <dir>] [--invocation-prefix <prefix>]
+                         [--json]
+```
+
+**Arguments** — the same as `generate`, minus `--dry-run`, which is **refused**
+here (exit 2) rather than ignored: this verb never writes, so a flag saying "do
+not write" would be an instruction accepted and dropped.
+
+**Output and exit codes** — prints `surface:`, `ok: <n>`, then `missing:`,
+`extra:`, `stale:` and `hand-edited:` (each `(none)` when empty). `--json`:
+`{ contract: "nen.surface.mirror.check/v0.1", surface, ok, missing, extra,
+stale, handEdited }`. Exit **0** when all four drift lists are empty; exit **1**
+on any drift; exit 2 on the same refusals `generate` has, plus `--dry-run`.
+
+**Example**
+
+```bash
+nen surface mirror check --source src/surface/fixtures/skills \
+  --agents src/surface/fixtures/agents --surface cursor \
+  --out /tmp/nen-doc/cursor --invocation-prefix "demo:"
+```
+```text
+surface: cursor
+ok: 1
+missing: beta/SKILL.md
+extra: gamma/SKILL.md
+stale: (none)
+hand-edited: alpha/SKILL.md
+```
+(exit 1, after `beta/SKILL.md` was deleted from the mirror, a paragraph was
+appended to `alpha/SKILL.md`, and a `gamma/SKILL.md` with no source was left
+behind. Re-running `generate` heals all three at once — `written: alpha/SKILL.md,
+beta/SKILL.md`, `deleted (orphaned): gamma/SKILL.md` — and the check then exits 0)
+
 ## Developer workflows
 
 Six end-to-end scenarios, composed only from verbs that exist in v0.2.0. Every
@@ -6350,8 +6709,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.4.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)"
 "$nen" --version
 ```
 
@@ -6362,7 +6721,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.3.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.4.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash

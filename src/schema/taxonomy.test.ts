@@ -233,7 +233,7 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     const root = LEGACY_REPO;
     const report = checkTaxonomy({ repoFlag: root });
     // It still PASSES -- the whole point of the fallback is that an
-    // un-migrated repository keeps working through the v0.3 line.
+    // un-migrated repository keeps working through the v0.4 line.
     expect(report.ok).toBe(true);
     const check = report.checks[0];
     expect(check?.location).toBe("schemas");
@@ -241,7 +241,7 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     expect(check?.ok).toBe(true);
     expect(check?.detail).toMatch(/\d+ labels/);
     expect(check?.note).toContain("nen/labels.json");
-    expect(check?.note).toContain("v0.4.0");
+    expect(check?.note).toContain("v0.5.0");
     expect(check?.shadowed).toBe(false);
     // Every one of the four legacy reads is named in `deprecations`, so a
     // machine reader sees the migration state without parsing prose.

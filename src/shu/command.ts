@@ -93,7 +93,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   dev: { values: ["lane", "target"], booleans: ["dry-run"] },
   run: { values: ["lane", "target"], booleans: ["dry-run"] },
   deploy: { values: ["lane", "target"], booleans: ["dry-run", "run"] },
-  coverage: { values: ["lane", "threshold"], booleans: ["dry-run"] },
+  coverage: { values: ["lane", "threshold", "base"], booleans: ["dry-run", "touched"] },
   "test-report": { values: ["lane"], booleans: ["dry-run", "from-artifacts"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
@@ -197,6 +197,8 @@ verbs:
               --threshold -- whether the number cleared a bar. The report is
               the first path under this verb's 'artifacts' whose format nen
               reads; a lane that names none is exit 1 saying so.
+              --touched --base <ref> narrows the rows to the files a change
+              touched, per --threshold and --touched below.
   test-report Run the lane's declared 'test', then PARSE the results file
               that run produced: a row per test, and the four counts. The
               report is the first path under the TEST verb's 'artifacts' nen
@@ -410,7 +412,40 @@ flags:
                    against the report's own line coverage and REPORTS
                    'met: true|false'. IT NEVER CHANGES THE EXIT CODE, in
                    either direction: nen does not decide whether a number is
-                   good enough. Read 'met' and decide.
+                   good enough. Read 'met' and decide. Under --touched, 'met'
+                   is ALSO reported per row, against that row's own counts.
+  --touched        'coverage' only. Narrow 'targets' to the rows a change
+                   touched: 'git diff --name-only <base>...HEAD', run AFTER
+                   the coverage tool's own run and parse, against the
+                   REPOSITORY ROOT. A file-grain report (istanbul-summary,
+                   lcov) matches a touched path by equality; a package-grain
+                   one (cobertura, jacoco) matches when a touched path
+                   contains the package's own segments, in order, with the
+                   file itself left over -- 'the touched file sits under this
+                   package'. xccov-report is read at FILE grain here only:
+                   nen descends 'targets[].files[]' instead of stopping at
+                   the target row, because "this whole app was touched" is
+                   true of nearly every diff. REQUIRES --base; given without
+                   it, exit 2. --json's 'touched' key carries
+                   { base, files, matched, unmatched } -- 'files' is
+                   everything git named, 'matched' and 'unmatched' partition
+                   it by whether a row claimed it. WHEN --threshold IS NOT
+                   GIVEN, nen also loads <repo>/nen/workflow.json's
+                   'coverage.{minimum,recommended,ideal}' -- the same loader
+                   'nen schema check' validates -- and reports each row's own
+                   'band' against it instead of 'met'. An ABSENT file is the
+                   published default ladder (80/85/90), not the absence of
+                   one: every touched row is still banded, and --json's
+                   'ladder' carries 'present: false' so a reader can tell an
+                   assumed rung from a declared one. A file that is present
+                   and MALFORMED is exit 1 naming the pointer, refused BEFORE
+                   the declared tool is spawned. STILL NEVER GATES, either
+                   way: the exit code is the run's, exactly as bare
+                   --threshold is.
+  --base <ref>     'coverage' only, and only WITH --touched -- given without
+                   it, exit 2: it names the ref --touched diffs against and
+                   has nothing to do on its own. No default: nen never
+                   invents a base to compare against.
   --from-artifacts 'test-report' only. Do not run anything: read the results
                    file the lane's 'test' verb declares under 'artifacts' and
                    parse whatever is on disk. The lane, the verb and the host
@@ -590,7 +625,7 @@ flags:
                    On 'coverage' it is a FOURTH contract
                    ('nen.shu.coverage/v0.1'), keys in order:
                    { contract, lane, stack, total, targets, threshold, report,
-                     exitCode }, where 'total' is
+                     exitCode, touched, ladder }, where 'total' is
                    { lines: { covered, total, percent } } plus a 'branches'
                    block in the same shape when the tool measures them, and each
                    targets[] row is { name, lines, branches }. 'percent' is
@@ -604,6 +639,25 @@ flags:
                    'dryRun' boolean here either. The EXECUTOR's own report for
                    this verb is rendered to stderr under --json, so stdout stays
                    exactly one document and nothing it produced is lost.
+                   'touched' is { base, files, matched, unmatched } under
+                   --touched, or null without it; 'targets' is then narrowed to
+                   the matched rows, and each carries its own 'met' when
+                   --threshold was also given -- reported per file, on top of
+                   the aggregate 'threshold.met' above.
+                   'ladder' is { minimum, recommended, ideal, source, present }
+                   from <repo>/nen/workflow.json's own 'coverage' block, and
+                   ONLY under --touched with --threshold ABSENT -- an explicit
+                   --threshold overrides the file's policy for that run rather
+                   than being reconciled against it. Non-null, each row also
+                   carries its own 'band': under-minimum | minimum |
+                   recommended | ideal, never alongside 'met'. 'source' is the
+                   repo-relative 'nen/workflow.json', never an absolute path,
+                   and 'present' is false when that file does not exist -- in
+                   which case the three numbers are nen's own defaults
+                   (80/85/90) and the rows are banded against them all the
+                   same. null means this INVOCATION has no ladder (no
+                   --touched, or a --threshold that replaced it), never that
+                   the repository has none. STILL NEVER GATES.
                    On 'test-report' it is a FIFTH contract
                    ('nen.shu.test-report/v0.1'), keys in order:
                    { contract, lane, stack, report, tests, passed, failed,
@@ -670,6 +724,8 @@ exit codes:
      target, --run given together with --dry-run, --json on a long-running verb
      without --dry-run, a path that resolves outside the repository, or a
      PRECONDITION that is not satisfied.
+     On 'coverage' also: --touched given without --base, or --base given
+     without --touched -- each names the flag with nothing to do.
      On 'tools' also: an --only naming a tool the declaration does not carry, a
      'version' in a form nen cannot evaluate, and -- under --install -- a pin
      this release will not act on (a range where the installer activates one
@@ -1053,6 +1109,8 @@ export const shuCommand: Command = {
           lane: context.args.values["lane"] ?? null,
           dryRun: context.args.booleans.has("dry-run"),
           threshold: context.args.values["threshold"] ?? null,
+          touched: context.args.booleans.has("touched"),
+          base: context.args.values["base"] ?? null,
           advisories: coverageAdvisories(),
         }));
       }
