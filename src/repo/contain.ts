@@ -28,10 +28,10 @@
 // `containedPath` alone, so a symlinked `cwd`, precondition, artifact, launch
 // artifact or `stdoutTo` walked out of the tree while every line nen printed
 // said otherwise. It asks both now. The lexical half alone stays right for a
-// caller that only COMPUTES a path rather than reaching one -- `../report/data
-// .ts` working out where a proof would be, `../shu/proof.ts` where to write
-// one, `../surface/command.ts` asking whether one flag-stated directory sits
-// under another.
+// caller that only COMPUTES a path rather than reaching one: `../shu/proof.ts`
+// deciding where a proof would be written, `../report/data.ts` where one would
+// be read, `../surface/command.ts` asking whether one flag-stated directory
+// sits under another.
 //
 // NEITHER THROWS. The caller composes the refusal, because the callers name
 // different things in it -- a declaration pointer, or the flag the value came
