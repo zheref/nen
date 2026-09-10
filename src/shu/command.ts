@@ -1061,7 +1061,17 @@ export const shuCommand: Command = {
   summary: "Stack-aware developer verbs, from the target repo's own declaration.",
   usage: USAGE,
   flags: SHU_FLAGS,
-  run(context: CommandContext): number {
+  // NOT AN `async` FUNCTION, AND THAT IS DELIBERATE. Three of the fifteen verbs
+  // -- `detect`, `tools`, `evidence` -- spawn nothing that has to be WATCHED and
+  // stay synchronous under the hood, and one of them is called from another
+  // family: ../scaffold/command.ts runs `shu tools` through this very
+  // dispatcher and checks that what comes back is a number. Making the whole
+  // method async would have turned that check into a permanent failure for a
+  // verb whose behaviour did not change. So the synchronous verbs return
+  // numbers and the executing ones return the promise ../shu/run.ts now
+  // answers with (../cli/command.ts's `run` is typed for exactly this), with
+  // one refusal mapping shared by both paths.
+  run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("shu", context.args, SHU_SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);
     const repoRoot = resolveRepoRoot({ repoFlag: context.repoFlag });
@@ -1095,22 +1105,22 @@ export const shuCommand: Command = {
         // -- and handed across as strings that can only land in a message.
         // ../profiles/inertness.test.ts is what keeps that a property of the
         // program rather than a sentence in a header.
-        return runCoverage(context, repoRoot, {
+        return refusalCode(context, subcommand, runCoverage(context, repoRoot, {
           lane: context.args.values["lane"] ?? null,
           dryRun: context.args.booleans.has("dry-run"),
           threshold: context.args.values["threshold"] ?? null,
           touched: context.args.booleans.has("touched"),
           base: context.args.values["base"] ?? null,
           advisories: coverageAdvisories(),
-        });
+        }));
       }
 
       if (subcommand === "test-report") {
-        return runTestReport(context, repoRoot, {
+        return refusalCode(context, subcommand, runTestReport(context, repoRoot, {
           lane: context.args.values["lane"] ?? null,
           dryRun: context.args.booleans.has("dry-run"),
           fromArtifacts: context.args.booleans.has("from-artifacts"),
-        });
+        }));
       }
 
       if (subcommand === "warmup") {
@@ -1122,7 +1132,7 @@ export const shuCommand: Command = {
         // that to "wherever this process happens to be" is a verb that will
         // eventually do it to the wrong checkout (zheref/nen#28's rule, applied
         // where the blast radius is largest).
-        return runWarmup(
+        return refusalCode(context, subcommand, runWarmup(
           context,
           assertRepoRoot({
             repoFlag: requireRepoFlag(
@@ -1142,7 +1152,7 @@ export const shuCommand: Command = {
             lane: context.args.values["lane"] ?? null,
             dryRun: context.args.booleans.has("dry-run"),
           },
-        );
+        ));
       }
 
       // NEVER A DEFAULT TARGET, not even when there is exactly one -- a deploy
@@ -1152,7 +1162,7 @@ export const shuCommand: Command = {
       // made a written `deploy` seat unreachable, because a lane that will
       // never deploy answered "--target is required" instead of its own reason.
       // ./run.ts's `runVerb` header carries the order and the argument.
-      return runVerb(context, repoRoot, {
+      return refusalCode(context, subcommand, runVerb(context, repoRoot, {
         verb: subcommand,
         lane: context.args.values["lane"] ?? null,
         dryRun: context.args.booleans.has("dry-run"),
@@ -1161,16 +1171,38 @@ export const shuCommand: Command = {
         // refused this flag on every verb but 'deploy', so reading it
         // unconditionally here cannot turn another verb's line into an action.
         run: context.args.booleans.has("run"),
-      });
+      }));
     } catch (error) {
-      // This family's own codes (3/4/5) are returned, not thrown past
-      // ../index.ts's runFamily -- which maps every error it does not know to 1
-      // or 2, correctly, for every family that has only those.
-      if (error instanceof ShuRefusal) {
-        context.io.err(`${PROGRAM} shu ${subcommand}: ${error.message}`);
-        return error.code;
-      }
-      throw error;
+      return shuRefusalCode(context, subcommand, error);
     }
   },
 };
+
+/**
+ * This family's own codes (3/4/5) are RETURNED, not thrown past ../index.ts's
+ * `runFamily` -- which maps every error it does not know to 1 or 2, correctly,
+ * for every family that has only those.
+ *
+ * ONE MAPPING FOR BOTH PATHS. A verb that answers synchronously raises through
+ * the `try` above; one that answers with a promise REJECTS it, and a `catch`
+ * block cannot see that. `refusalCode` below attaches the same mapping to the
+ * promise, so a `ShuRefusal` means the same thing whichever half of this
+ * dispatcher produced it -- which it did not, for one release, on every
+ * executing verb.
+ */
+function shuRefusalCode(context: CommandContext, subcommand: string, error: unknown): number {
+  if (error instanceof ShuRefusal) {
+    context.io.err(`${PROGRAM} shu ${subcommand}: ${error.message}`);
+    return error.code;
+  }
+  throw error;
+}
+
+/** The same mapping, on the promise an executing verb answers with. */
+function refusalCode(
+  context: CommandContext,
+  subcommand: string,
+  pending: Promise<number>,
+): Promise<number> {
+  return pending.catch((error: unknown): number => shuRefusalCode(context, subcommand, error));
+}

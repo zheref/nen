@@ -28,6 +28,9 @@ const REFUSING_SEAMS: Seams = {
   runInteractive: (): never => {
     throw new Error("this verb has no interactive form");
   },
+  runStreamed: (): never => {
+    throw new Error("this verb has no watched form");
+  },
   now: (): Date => new Date("2026-09-09T12:34:56.000Z"),
   env: {},
   platform: "linux",

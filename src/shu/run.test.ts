@@ -115,9 +115,22 @@ function wouldRun(out: readonly string[]): readonly string[] {
     .map((line): string => line.slice("would run:".length).trim());
 }
 
-/** Every argv the seam actually took, in order. */
+/**
+ * Every DECLARED argv the seam actually took, in order.
+ *
+ * NEN'S OWN `git` CALLS ARE NOT PART OF THIS, and the filter is the point of
+ * the helper rather than a convenience: what these goldens pin is that a
+ * repository's declaration reaches the seam token for token. A green `build`
+ * also asks git for the working copy's tree so it can record a build proof
+ * (../shu/proof.ts) -- a command NEN chose, like `shu evidence`'s own `git
+ * diff` -- and folding that into the goldens would make every one of them a
+ * statement about two unrelated things. The proof's own calls are pinned in
+ * ./proof.test.ts, where they are the subject.
+ */
 function spawned(seams: ScriptedSeams): readonly string[] {
-  return seams.calls.map((call): string => [call.command, ...call.args].join(" "));
+  return seams.calls
+    .filter((call): boolean => call.command !== "git")
+    .map((call): string => [call.command, ...call.args].join(" "));
 }
 
 // ── (a) argv goldens, one per verb the nextjs lane declares ─────────────────
@@ -307,7 +320,9 @@ describe("one argv element, from the declaration to the seam", () => {
       script: [ok(["xcodebuild", ...ARGV].join(" "))],
     });
     expect(result.code).toBe(0);
-    expect(result.seams.calls).toHaveLength(1);
+    // The DECLARED calls: a green `build` also asks git for a tree hash, which
+    // `spawned` filters out for the reason its own comment gives.
+    expect(spawned(result.seams)).toHaveLength(1);
     expect(result.seams.calls[0]?.command).toBe("xcodebuild");
     expect(result.seams.calls[0]?.args).toEqual(ARGV);
     // The element the seam took is the declaration's own bytes -- no quoting
@@ -364,6 +379,7 @@ describe("--json -- the pinned key order", () => {
       "durationMs",
       "artifacts",
       "log",
+      "proof",
     ]);
   });
 
@@ -379,7 +395,14 @@ describe("--json -- the pinned key order", () => {
   it("pins a step's own key order too", async () => {
     const result = await capture(["build", "--json"], { script: [ok("pnpm turbo run build")] });
     const report = JSON.parse(result.out.join("\n")) as { steps: readonly object[] };
-    expect(Object.keys(report.steps[0] ?? {})).toEqual(["exe", "argv", "cwd", "exitCode", "durationMs"]);
+    expect(Object.keys(report.steps[0] ?? {})).toEqual([
+      "exe",
+      "argv",
+      "cwd",
+      "exitCode",
+      "durationMs",
+      "stall",
+    ]);
   });
 
   it("reports the TOOL's own exit code in the step, and nen's separately", async () => {
@@ -2048,5 +2071,309 @@ describe("a name two devices carry is a refusal, not a choice", () => {
     });
     expect(result.code).toBe(5);
     expect(result.err.join("\n")).toContain("matches 2 devices the probe reported");
+  });
+});
+
+// ── the stall guard ─────────────────────────────────────────────────────────
+//
+// NOTHING HERE SLEEPS. The budgets below are three minutes and one minute, and
+// every one of these tests runs in microseconds: the scripted streaming seam
+// (../seam/scripted.ts) replays a TIMELINE the fixture states, and the elapsed/
+// quiet arithmetic it feeds the guard is the seam's own `outputWindow` -- the
+// same function the real runner calls against a real clock. So what is proved
+// here is the guard's decisions, on the numbers a declaration writes, without a
+// single real millisecond.
+//
+// THE REMEDY IS THE REPOSITORY'S. `placeholder-killer` is a fixture name; nen
+// has no idea what it does and never will. ./purity.test.ts is what keeps that
+// true of the shipped modules.
+
+const KILLER = "placeholder-killer -9 -f placeholder-pattern";
+
+const STALL_GUARD = {
+  elapsedMs: 180_000,
+  quietMs: 60_000,
+  onStall: { exe: "placeholder-killer", argv: ["-9", "-f", "placeholder-pattern"] },
+};
+
+/** A one-lane declaration whose `build` carries a stall guard. */
+function guarded(overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> {
+  return oneLane({}, { exe: "placeholder-tool", argv: ["go"], stall: { ...STALL_GUARD, ...overrides } });
+}
+
+/** A scripted build whose timeline is a list of instants. */
+function timeline(
+  events: readonly { atMs: number; stream?: "stdout" | "stderr"; text?: string }[],
+  code = 0,
+  exitAtMs?: number,
+): ScriptedCall {
+  return {
+    match: "placeholder-tool go",
+    result: { code, stream: { events, ...(exitAtMs === undefined ? {} : { exitAtMs }) } },
+  };
+}
+
+interface StallJson {
+  readonly steps: readonly {
+    readonly exitCode: number | null;
+    readonly stall: {
+      readonly elapsedMs: number;
+      readonly quietMs: number;
+      readonly maxStrikes: number;
+      readonly onStall: { readonly exe: string; readonly argv: readonly string[] };
+      readonly strikes: number;
+      readonly at: readonly number[];
+      readonly stalled: boolean;
+    } | null;
+  }[];
+  readonly exitCode: number;
+}
+
+const stallOf = (result: Captured): StallJson["steps"][number]["stall"] =>
+  (JSON.parse(result.out.join("\n")) as StallJson).steps[0]?.stall ?? null;
+
+describe("a stall guard: BOTH budgets, the repository's own remedy, and no kill", () => {
+  it("prints the budgets and the remedy on a dry run, and spawns nothing", async () => {
+    const result = await withDeclaration(guarded(), ["build", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(
+      `on stall:      after 180000ms elapsed AND 60000ms with no output: ${KILLER}  (up to 2 times)`,
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("carries the declared guard in --json even when nothing ran", async () => {
+    const result = await withDeclaration(guarded(), ["build", "--dry-run", "--json"]);
+    expect(stallOf(result)).toEqual({
+      elapsedMs: 180_000,
+      quietMs: 60_000,
+      maxStrikes: 2,
+      onStall: { exe: "placeholder-killer", argv: ["-9", "-f", "placeholder-pattern"] },
+      strikes: 0,
+      at: [],
+      stalled: false,
+    });
+  });
+
+  it("fires NOTHING while the step keeps talking", async () => {
+    const result = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([
+          { atMs: 100_000, stream: "stdout", text: "still compiling\n" },
+          // Well past the elapsed budget, but it spoke 10 seconds ago.
+          { atMs: 190_000, stream: "stdout", text: "still going\n" },
+          { atMs: 200_000 },
+          { atMs: 250_000, stream: "stdout", text: "linking\n" },
+          { atMs: 300_000 },
+        ]),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(stallOf(result)).toMatchObject({ strikes: 0, at: [], stalled: false });
+    expect(spawned(result.seams)).toEqual(["placeholder-tool go"]);
+  });
+
+  it("fires NOTHING on a long quiet stretch that is still inside the elapsed budget", async () => {
+    // THE HALF OF THE RULE THAT MATTERS MOST. This step has said nothing for its
+    // whole life -- 170 seconds of silence, well past the 60-second quiet window
+    // -- and is not touched, because it is not yet past the elapsed budget. A
+    // guard that acted on silence alone would kill a healthy compile here.
+    const result = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [timeline([{ atMs: 100_000 }, { atMs: 170_000 }], 0, 175_000)],
+    });
+    expect(result.code).toBe(0);
+    expect(stallOf(result)).toMatchObject({ strikes: 0, stalled: false });
+    expect(spawned(result.seams)).toEqual(["placeholder-tool go"]);
+  });
+
+  it("runs the declared remedy once BOTH budgets are past, and resets the quiet window", async () => {
+    const result = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([
+          { atMs: 100_000, stream: "stdout", text: "compiling\n" },
+          // 185s in, 85s quiet: past both. One strike.
+          { atMs: 185_000 },
+          // 200s in, and only 15s since the remedy ran -- the reset is why this
+          // tick does not fire a second one.
+          { atMs: 200_000 },
+          { atMs: 210_000, stream: "stdout", text: "unwedged, linking\n" },
+        ], 0, 220_000),
+        { match: KILLER, result: { code: 0 } },
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(stallOf(result)).toMatchObject({ strikes: 1, at: [185_000], stalled: false });
+    // The remedy went through the CAPTURED seam, like every other declared step.
+    expect(spawned(result.seams)).toEqual(["placeholder-tool go", KILLER]);
+    expect(result.err.join("\n")).toContain("strike 1 of 2");
+  });
+
+  it("recovering after every strike is the guard WORKING: the run is green", async () => {
+    const result = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([
+          { atMs: 185_000 },
+          { atMs: 250_000 },
+          { atMs: 260_000, stream: "stdout", text: "done\n" },
+        ], 0, 270_000),
+        { match: KILLER, result: { code: 0 } },
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(stallOf(result)).toMatchObject({ strikes: 2, stalled: false });
+    expect((JSON.parse(result.out.join("\n")) as StallJson).steps[0]?.exitCode).toBe(0);
+  });
+
+  it("stalls at exit 1 once every strike is spent, WITHOUT killing the step", async () => {
+    const result = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([{ atMs: 185_000 }, { atMs: 250_000 }, { atMs: 320_000 }], 0, 999_999),
+        { match: KILLER, result: { code: 0 } },
+      ],
+    });
+    expect(result.code).toBe(1);
+    const stall = stallOf(result);
+    expect(stall).toMatchObject({ strikes: 2, at: [185_000, 250_000], stalled: true });
+    // NO CODE, because the step never gave one: nen stopped waiting and left it
+    // running. A number here would be a verdict nobody reached.
+    expect((JSON.parse(result.out.join("\n")) as StallJson).steps[0]?.exitCode).toBeNull();
+    // TWO REMEDIES AND NOT ONE MORE THING. Every call the seam took is either
+    // the declared step or the declared remedy -- nen signalled nothing.
+    expect(spawned(result.seams)).toEqual(["placeholder-tool go", KILLER, KILLER]);
+    const err = result.err.join("\n");
+    expect(err).toContain("is STALLED");
+    expect(err).toContain("STILL RUNNING and is yours to stop");
+  });
+
+  it("honours a declared maxStrikes instead of the default two", async () => {
+    const result = await withDeclaration(guarded({ maxStrikes: 1 }), ["build", "--json"], {
+      script: [
+        timeline([{ atMs: 185_000 }, { atMs: 250_000 }], 0, 999_999),
+        { match: KILLER, result: { code: 0 } },
+      ],
+    });
+    expect(result.code).toBe(1);
+    expect(stallOf(result)).toMatchObject({ maxStrikes: 1, strikes: 1, stalled: true });
+  });
+
+  it("says so, and carries on, when the declared remedy cannot be started", async () => {
+    // The step has NOT failed -- it may still recover on its own -- and what
+    // has failed is the repository's own remedy. That is a fact its maintainer
+    // needs and not a reason for nen to give up on a running process.
+    const result = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([{ atMs: 185_000 }, { atMs: 260_000, stream: "stdout", text: "recovered\n" }], 0, 270_000),
+        { match: KILLER, result: { spawnFailed: true, stderr: "not found" } },
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toContain("the declared remedy could not be started");
+    expect(stallOf(result)).toMatchObject({ strikes: 1, stalled: false });
+  });
+
+  it("reports a remedy's own non-zero exit and never acts on it", async () => {
+    // The canonical remedy is a targeted kill, and a kill that matched nothing
+    // exits non-zero -- the ordinary answer when the wedged process is already
+    // gone.
+    const result = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([{ atMs: 185_000 }, { atMs: 260_000, stream: "stdout", text: "on we go\n" }], 0, 270_000),
+        { match: KILLER, result: { code: 1, stderr: "no process matched" } },
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toContain("no process matched");
+  });
+
+  it("relays a watched step's output as LINES, however the chunks fell", async () => {
+    const result = await withDeclaration(guarded(), ["build"], {
+      script: [
+        timeline([
+          { atMs: 1, stream: "stdout", text: "half a li" },
+          { atMs: 2, stream: "stdout", text: "ne\nand another\n" },
+          { atMs: 3, stream: "stdout", text: "no trailing newline" },
+        ]),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("half a line");
+    expect(result.out).toContain("and another");
+    // FLUSHED AT THE END: a tool whose last line carries no newline still said it.
+    expect(result.out).toContain("no trailing newline");
+  });
+
+  it("applies an invocation-level guard to every step that declares none", async () => {
+    const project = oneLane({}, {
+      steps: [
+        { exe: "placeholder-tool", argv: ["one"] },
+        { exe: "placeholder-tool", argv: ["two"], stall: { ...STALL_GUARD, elapsedMs: 1_000, quietMs: 500 } },
+      ],
+      stall: STALL_GUARD,
+    });
+    const result = await withDeclaration(project, ["build", "--dry-run", "--json"]);
+    const report = JSON.parse(result.out.join("\n")) as StallJson;
+    expect(report.steps[0]?.stall).toMatchObject({ elapsedMs: 180_000, quietMs: 60_000 });
+    // THE STEP'S OWN WINS. A multi-step row is routinely one slow compile and
+    // three fast bookkeeping commands.
+    expect(report.steps[1]?.stall).toMatchObject({ elapsedMs: 1_000, quietMs: 500 });
+  });
+
+  it("leaves an unguarded step on the captured seam, untouched", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json"], {
+      script: [{ match: "placeholder-tool go", result: { code: 0 } }],
+    });
+    expect(result.code).toBe(0);
+    expect(stallOf(result)).toBeNull();
+    expect(result.seams.calls[0]?.streamed).toBeUndefined();
+  });
+
+  it("refuses a guard on a verb whose output nen never sees", async () => {
+    const project = oneLane(
+      { verbs: { only: { dev: { exe: "placeholder-tool", argv: ["serve"], stall: STALL_GUARD } } } },
+    );
+    const result = await withDeclaration(project, ["dev", "--dry-run"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("nen cannot honour one on this verb");
+    expect(result.err.join("\n")).toContain("build, test, ui-test, lint, archive, coverage, test-report");
+  });
+
+  it("refuses a budget that is not a positive whole number, by pointer, at load", async () => {
+    for (const [block, pointer] of [
+      [{ elapsedMs: 0 }, "stall.elapsedMs"],
+      [{ quietMs: -1 }, "stall.quietMs"],
+      [{ elapsedMs: 1.5 }, "stall.elapsedMs"],
+      [{ maxStrikes: 0 }, "stall.maxStrikes"],
+    ] as const) {
+      const result = await withDeclaration(guarded(block), ["build", "--dry-run"]);
+      expect(result.code, JSON.stringify(block)).toBe(1);
+      expect(result.err.join("\n")).toContain(`project.verbs.only.build.${pointer}`);
+    }
+  });
+
+  it("refuses a remedy written as a string -- there is no shell to hand it to", async () => {
+    const result = await withDeclaration(
+      guarded({ onStall: "placeholder-killer -9 placeholder-pattern" }),
+      ["build", "--dry-run"],
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("project.verbs.only.build.stall.onStall");
+  });
+
+  it("refuses a guard with no remedy at all", async () => {
+    const result = await withDeclaration(
+      { ...oneLane({}, { exe: "placeholder-tool", argv: ["go"], stall: { elapsedMs: 1, quietMs: 1 } }) },
+      ["build", "--dry-run"],
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("stall.onStall");
+  });
+
+  it("refuses a key one spelling away from one it reads, naming the key it meant", async () => {
+    const result = await withDeclaration(
+      guarded({ maxStrike: 3 } as unknown as Record<string, number>),
+      ["build", "--dry-run"],
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("maxStrikes");
   });
 });
