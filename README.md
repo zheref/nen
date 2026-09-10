@@ -88,6 +88,7 @@ repository: <absolute path to your checkout>/src/schema/fixtures/bankai-repo
   ok    nen/colors.yml  3 categories, 13 values
   ok    nen/gates.json  5 reviewer identities
   ok    nen/contract.json  dependency (nen >= 0.3, pinned v0.3.0), project (2 lanes: web, android; 10 verbs; 3 toolchain entries)
+  ok    nen/workflow.json  absent (defaults apply)
 ```
 
 (`repository:` prints the resolved absolute path, which is unique to wherever
@@ -125,9 +126,11 @@ is published, as [Install](#install) says. `--ref v0.1.0` resolves today.
 
 ### Set up a repository
 
-The directory skeleton, the commit-msg trailer hook, a canon-values template,
-`nen/contract.json`, the stack's CI workflow, and `.nen/` in `.gitignore` — one
-verb, on a repository that already exists. `--accept-detected` accepts the stack
+The directory skeleton, the commit-msg trailer hook, the trunk-guarding
+pre-commit hook, a canon-values template, `nen/contract.json`,
+`nen/workflow.json`, the stack's CI workflow, and `.nen/` plus the policy's
+reports directory in `.gitignore` — one verb, on a repository that already
+exists. `--accept-detected` accepts the stack
 proposal [`nen shu detect`](docs/USAGE.md#nen-shu-detect) prints, seats and open
 questions and all; **Nen never guesses a stack**, so pass `--stack <id>` instead
 to state one, and with neither flag the verb refuses and names both. Add
@@ -318,6 +321,7 @@ that repository's `nen/` directory at the path given by `--repo`
 | `nen/colors.yml` | The status-color precedence for board rendering |
 | `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check |
 | `nen/contract.json` | Optional. What this repository needs *from* Nen (`dependency`), and the stack declaration Nen reads *about* it (`project`). Parsed, validated and reported; nothing acts on it yet |
+| `nen/workflow.json` | Optional, and its absence is a full policy of defaults rather than none. The delivery loop's parameters: the branch template and trunk, the iteration checks, the coverage ladder, which attribution trailers a commit may carry, the reports directory, the model matrix. Read by `nen commit format` and baked into the hooks `nen scaffold init` generates |
 
 `nen/` is committed configuration only. Generated output goes to a
 dot-prefixed, gitignored `.nen/` — the one-character difference is deliberate,

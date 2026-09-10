@@ -46,8 +46,8 @@ a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`canon resolve`](#nen-canon-resolve),
 [`parse futon`](#nen-parse-futon) and
 [`report data`](#nen-report-data).
-Thirty verbs accept it and never read it at all — they work entirely from the
-paths and slugs they are handed. Every verb of [`commit`](#family-commit),
+Twenty-nine verbs accept it and never read it at all — they work entirely from
+the paths and slugs they are handed. Every verb of
 [`effort`](#family-effort), [`epic`](#family-epic), [`loop`](#family-loop),
 [`quality`](#family-quality), [`run`](#family-run), [`split`](#family-split),
 [`wake`](#family-wake) and [`watch`](#family-watch) is one; so are
@@ -63,6 +63,13 @@ paths and slugs they are handed. Every verb of [`commit`](#family-commit),
 [`issue file`](#nen-issue-file) and
 [`issue consolidate-close`](#nen-issue-consolidate-close). Their argument
 tables say so.
+
+Two verbs read it **conditionally**, which is a third thing again.
+[`commit format`](#nen-commit-format) opens
+[`nen/workflow.json`](#nenworkflowjson) only when the invocation carries at
+least one `--trailer` — a message that could not violate the trailer policy
+never touches the filesystem — and [`stop`](#nen-stop) writes under it only
+with `--mark`.
 
 #### Relative paths resolve against two different bases
 
@@ -219,6 +226,7 @@ verb does by default:
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` carries the table's one **second** read gate, `--from-artifacts`, which never reaches the executor at all |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
+| [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is its one writing form: `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself. So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
 | [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
 "Still reads GitHub" matters in CI: a dry run of those three needs a token even
@@ -237,6 +245,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
+| `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the reports directory, the model matrix. See [`nen/workflow.json`](#nenworkflowjson) | [`commit format`](#nen-commit-format) (the trailer policy), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
 `nen/` holds committed configuration only. Generated output goes to a
 dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
@@ -268,6 +277,92 @@ naming a path, and nen takes it literally: `--gates` deliberately does not fall
 back, since a flag that quietly read a different file than the one it was handed
 would be worse than a refusal. Move those pins along with the files, in the same
 change; `schema check` will not warn about them, because it never sees them.
+
+#### `nen/workflow.json`
+
+**Optional, and its absence is a full policy rather than none.** Every key in
+it has a default, so a repository that carries no policy file runs under the
+same parameters as one whose file states them all — and
+[`schema check`](#nen-schema-check) reports the absence as an `ok` row reading
+`absent (defaults apply)`, not as a finding. That is deliberately *unlike* the
+four taxonomy files, whose absence is a hard refusal: a taxonomy fallback would
+make nen report label names this repository does not have, while a policy
+default invents nobody's vocabulary. `80` is a number; `main` is a branch name
+one line overrides.
+
+It is a **second** file rather than a block inside `nen/contract.json` because
+the two have different audiences and different lifetimes. The contract says what
+nen *executes* — lanes, argv, toolchain pins, deploy destinations — and changes
+when the build changes. This says what the loop's *parameters* are, and changes
+when the team's rules do. Nothing in it is ever spawned, and nothing in it names
+a program.
+
+```json
+{
+  "$schema": "nen.workflow/v0.1",
+  "branch": { "template": "{model}/{persona}/{descriptor}", "base": "main" },
+  "iteration": { "checks": ["build"], "lane": null },
+  "tests": { "required": ["test"], "extra": [] },
+  "coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope": "touched" },
+  "launch": { "default": null, "fallback": null },
+  "reports": { "dir": "Reports", "retain": "final-only", "template": "rikugan", "captures": "Reports/captures" },
+  "notifications": { "rungs": ["push", "os", "sound"], "sound": "Glass" },
+  "commits": { "allowedAttributionTrailers": [], "forbiddenTrailers": [] },
+  "monitor": { "maxCycles": 20, "pollSeconds": 300 },
+  "models": { "rule": "…", "<surface>": { "<tier>": "<alias>" }, "roles": { "reviewer": "deep" } }
+}
+```
+
+That block is the default set, written out: it is exactly what an absent file
+means, and exactly what [`scaffold init`](#nen-scaffold-init) writes (with
+`iteration.lane` set to the lane it scaffolded, `commits.allowedAttributionTrailers`
+set to the two trailer keys the invocation named, and a starting `models`
+matrix). **Three fields have no default at all** — `models`, `launch.default`
+and `iteration.lane` — because each would be nen inventing a name rather than a
+number; they come back empty or `null`.
+
+| Key | What it decides | Read by |
+|---|---|---|
+| `branch.template` | how a branch is named. **Must contain `{descriptor}`** — every other token is optional, but a template without that one renders the same branch name for every effort this repository ever runs | callers |
+| `branch.base` | the trunk a branch is cut from | the generated `pre-commit` hook, which bakes it in and refuses a commit made on that branch |
+| `iteration.checks` / `iteration.lane` | which declared verbs an iteration proves, and in which lane | callers |
+| `tests.required` / `tests.extra` | which declared verbs a test pass runs | callers |
+| `coverage.minimum` / `recommended` / `ideal` / `scope` | the ladder. Whole percentages `0`–`100`, and they must **ascend** — three rungs whose order is the whole of their meaning | callers |
+| `launch.default` / `launch.fallback` | which `project.launch` target a bare launch uses. No default ever | callers |
+| `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
+| `notifications.rungs` / `sound` | which escalation rungs a host hook fires | host hooks |
+| `commits.allowedAttributionTrailers` / `forbiddenTrailers` | which attribution trailers a commit may carry | [`commit format`](#nen-commit-format), the generated `commit-msg` hook |
+| `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
+| `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
+
+**Unknown keys are preserved, and near-miss keys are refused *because* they
+are.** A key nen has never heard of survives a round trip untouched — the file
+is the repository's, and a later release (or its own tooling) may read it. That
+is exactly why a key one letter from one nen *does* read is refused by pointer:
+`{"coverage": {"minimun": 90}}` is a perfectly-shaped number under a key nothing
+reads, so it would be kept, ignored, and the ladder would silently hold the
+default the repository was trying to change. The rule is the one
+`project.targets` already applies, and it is **not** applied inside `models`,
+whose key space is open by design.
+
+**Attribution-shaped is an enumeration, not a pattern.** `Assisted-by`,
+`Claude-Session`, `Co-Authored-By`, `Generated-by`, `Generated-with`,
+`Reviewed-by` and `Signed-off-by` are the keys nen counts as saying *who or what
+produced this commit*, plus every key `commits.forbiddenTrailers` adds. A
+repository that wants one of them lists it in
+`commits.allowedAttributionTrailers`; everything else — `Closes`, `Refs`, a
+project's own agent trailer — is untouched. Matching **ignores case**, because
+every tool that reads the finished commit does, and a guard one capital defeats
+is not a guard.
+
+**Two values leave the file and become part of a script**, so both are held to a
+shape at load: `branch.base` (a git branch name a shell reads only once) and
+every trailer key (`[A-Za-z0-9][A-Za-z0-9-]*`, a git trailer key's own charset).
+`reports.dir` and `reports.captures` must be repo-relative with no `..`, since
+one of them is appended to a `.gitignore` verbatim.
+
+**There is no legacy `schemas/` location for it.** Like `nen/contract.json`, it
+is new in this line, and no released nen ever looked for one elsewhere.
 
 A repository carrying none of these can still use the repository-agnostic verbs
 ([`commit format`](#nen-commit-format), [`ref parse`](#nen-ref-parse),
@@ -374,7 +469,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
-| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and where it was read from | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional) | yes |
+| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and where it was read from | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
@@ -402,15 +497,15 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`issue`](#family-issue) | [`nen issue chain-position`](#nen-issue-chain-position) | classify where an OPEN issue sits on its delivery chain, from its labels alone | gh (api read) | yes |
 | [`issue`](#family-issue) | [`nen issue terminus`](#nen-issue-terminus) | classify which object ends an issue's delivery run (its own PR, each child's PR, or one integration-branch delivery PR) | gh (api read) | yes |
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
-| [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, a canon-values.yml template, nen/contract.json's project block, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
-| [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, the hook, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
+| [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
+| [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | substitute every {{TOKEN}} in each canonical rule file into a mirror directory, writing only changed files and deleting orphans | caller-named --rules-dir + --canon-values file; writes --out-dir; no git/gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | regenerate the mirror in memory and diff it against the committed --mirror-dir: missing / extra / stale / hand-edited | caller-named --rules-dir + --canon-values + --mirror-dir; no git/gh | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
-| [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) -- never its content | none | yes |
+| [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) -- never its content | nen/workflow.json under --repo, and only when the invocation carries a --trailer: the attribution-trailer policy | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -435,7 +530,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`bootstrap`](#family-bootstrap) | [`nen bootstrap`](#nen-bootstrap) | fetch, checksum-verify and cache a pinned nen binary by running bootstrap/nen.sh, relaying its verified path and exit code unchanged | bootstrap/nen.sh under --repo; network (GitHub release assets + SHA256SUMS) | no *(stdio)* |
 | [`wake`](#family-wake) | [`nen wake verify`](#nen-wake-verify) | scan open PRs whose author matches --author-pattern for a swallowed (action_required/startup_failure, never-executed) workflow run, auto-redriving what is safe and flagging the rest for a human | gh (pulls, actions/runs, issue comments; --run also writes reruns + comments) | yes |
 | [`wake`](#family-wake) | [`nen wake fire`](#nen-wake-fire) | edge-trigger one object by removing then re-applying a label, then post an optional settle comment | gh (issue edit x2, api comment; --run required to write) | yes |
-| [`stop`](#family-stop) | [`nen stop`](#nen-stop) | render the gate-stop banner plus a padded-markdown efforts table read from a file/stdin, or (--template) a blank table to fill in | a local efforts.md file or stdin; no git/gh | yes |
+| [`stop`](#family-stop) | [`nen stop`](#nen-stop) | render the gate-stop banner plus a padded-markdown efforts table read from a file/stdin, or (--template) a blank table to fill in; --mark also records the stop for a host hook | a local efforts.md file or stdin; no git/gh. --mark WRITES .nen/last-stop.json under --repo | yes |
 
 ## Readiness & pull requests
 
@@ -1748,6 +1843,16 @@ repository's own taxonomy, not a feature it simply hasn't adopted. `nen/contract
 same way, one step further: its absence is an `ok` row reading `absent (optional)`, and only a contract
 that is present and malformed fails.
 
+[`nen/workflow.json`](#nenworkflowjson) is optional in a **third** sense, and its row says which one:
+its absence is an `ok` row reading `absent (defaults apply)`, because every parameter in that file has a
+default and a repository that states no policy still runs under one. An absent contract is *nothing to
+read*; an absent policy is *a full policy made of defaults*, and telling the two apart is the whole
+reason they are two sentences. Present, the row names what the file decides — the coverage ladder, the
+branch template and the trunk. Present and malformed, the row FAILS naming the **pointer**, exactly like
+a malformed contract; and the closing refusal for that case does **not** say "nen has no built-in copy
+to fall back on", because for this one file it has: nen is deliberately declining to apply its own
+default over a policy the repository states and nen could not parse.
+
 It is also where the `schemas/` → `nen/` migration is reported. A file read from the legacy `schemas/`
 location gets a `warn` row printed at the path it was actually read from, followed by an indented
 `^ legacy location…` line naming the canonical path and the v0.4.0 removal. A file present in BOTH
@@ -1776,7 +1881,7 @@ nen schema check --repo <path> [--json]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
-| `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }`. |
+| `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }` — `checks[]` carries one row per file, `nen/workflow.json` last. |
 
 **Output and exit codes** — human rendering: `"repository: <root>"` then one line per file:
 `"  <ok|FAIL|warn>  <file, at the path it was read from>  <detail>"`, optionally followed by an
@@ -1803,8 +1908,21 @@ repository: /path/to/src/schema/fixtures/bankai-repo
   ok    nen/colors.yml  3 categories, 13 values
   ok    nen/gates.json  5 reviewer identities
   ok    nen/contract.json  dependency (nen >= 0.3, pinned v0.3.0), project (2 lanes: web, android; 10 verbs; 3 toolchain entries)
+  ok    nen/workflow.json  absent (defaults apply)
 ```
 (from a real run against the bundled fixture repo)
+
+The same fixture after `nen scaffold init` has written a policy into it, and then with that policy's
+coverage ladder edited so it no longer ascends:
+
+```text
+  ok    nen/workflow.json  coverage 80/85/90 (touched), branch '{model}/{persona}/{descriptor}' off 'main', checks: build
+```
+```text
+  FAIL  nen/workflow.json  /tmp/site/nen/workflow.json: at coverage, states a ladder that does not ascend: minimum 95, recommended 85, ideal 90. The three rungs mean 'stop below this', 'aim for this', 'this is the target', so they must satisfy minimum <= recommended <= ideal -- nen will not guess which of the three was mistyped
+```
+exit 1 for the second. (both from real runs against a scratch copy of the bundled fixture; the absolute
+path is elided to `/tmp/site`)
 
 The same verb against the bundled **un-migrated** fixture, which carries the four files at the legacy
 location and no contract:
@@ -1823,6 +1941,7 @@ repository: /path/to/src/schema/fixtures/legacy-repo
   warn  schemas/gates.json  5 reviewer identities
         ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.4.0.
   ok    nen/contract.json  absent (optional)
+  ok    nen/workflow.json  absent (defaults apply)
 ```
 exit 0 — an un-migrated repository still passes for the whole v0.3 line.
 (from a real run against the bundled fixture repo)
@@ -2959,7 +3078,9 @@ It still never generates scenario-specific project *code* — a framework's own 
 
 ### `nen scaffold init`
 
-Nine steps, each reporting `created` / `appended` / `skipped` / `would-create` / `would-append` / `refused` with the reason. In order: resolve the stack (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; add the stack's CI workflow; append `.nen/` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
+Eleven steps, each reporting `created` / `appended` / `skipped` / `would-create` / `would-append` / `refused` with the reason. In order: resolve the stack **and the policy** (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; install the trunk-guarding pre-commit hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; write [`nen/workflow.json`](#nenworkflowjson)'s policy into absence; add the stack's CI workflow; append `.nen/` and the policy's `reports.dir` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
+
+**Both git hooks are made out of `nen/workflow.json`, which is why the policy is resolved first.** The commit-msg hook bakes in, *as data*, every attribution trailer the policy does not admit — so it needs no `nen` on `PATH` at the moment of commit — and the pre-commit hook bakes in `branch.base` and refuses a commit made on that branch. A policy file that is **already there wins and is never overwritten**: this run is generated *from* it, and overwriting it would install guards enforcing the rules that had just been deleted. A policy that is there and **malformed** refuses the whole run at exit **2**, before the first write, naming the pointer — nen will not scaffold around a file it could not read. The policy this run writes admits exactly the two trailer keys `--agent-trailer` and `--run-trailer` named, so a repository that also uses one of the other [attribution trailers](#nenworkflowjson) adds it to `commits.allowedAttributionTrailers` and re-runs.
 
 `--agent-trailer`/`--run-trailer`/`--marker-env` are caller data (which trailer pair and environment variable mark an automated commit is a convention of the target repository, not a literal this binary ships) and are validated as legal git-trailer-key / shell-identifier shapes, since each is interpolated into the generated hook script.
 
@@ -2986,8 +3107,8 @@ nen scaffold init --repo <path>
 | `--agent-trailer <key>` | yes | The git trailer key marking the acting agent. | Must match `[A-Za-z0-9][A-Za-z0-9-]*`; refused otherwise. |
 | `--run-trailer <key>` | yes | The git trailer key marking the run. | Same shape rule. |
 | `--marker-env <VAR>` | yes | The environment variable the hook reads to recognise an automated commit. | Must match `[A-Za-z_][A-Za-z0-9_]*`. |
-| `--hook-path <path>` | no | Where the commit-msg hook is installed. | Defaults to `.git/hooks/commit-msg`. **Contained**: a value resolving outside `--repo` (`../outside/evil-hook`, or an absolute path elsewhere) is exit 2 naming the flag and where it landed, decided before the first write — the same rule [`shu`](#family-shu) applies to a path a declaration states. The hook is written `0755`, because `git` silently skips a `commit-msg` hook that is not executable. |
-| `--force` | no | Overwrite a DIFFERENT existing hook at `--hook-path`. | Without it, a foreign hook there is refused (exit 1), not silently replaced; the existing file is backed up to `<path>.bak` first when `--force` is given. A hook with identical generated content is left alone either way. **It covers the hook only** — there is deliberately no override for a conflicting CI file, declaration or migration. |
+| `--hook-path <path>` | no | Where the commit-msg hook is installed, and the DIRECTORY the `pre-commit` hook goes in beside it. | Defaults to `.git/hooks/commit-msg`; `--hook-path .husky/commit-msg` puts the trunk guard at `.husky/pre-commit`. There is deliberately no second flag — two flags would be two ways to write the two guards to two unrelated places, which is a repository with one installed and the other somewhere nobody looks. **Contained**: a value resolving outside `--repo` (`../outside/evil-hook`, or an absolute path elsewhere) is exit 2 naming the flag and where it landed, decided before the first write — the same rule [`shu`](#family-shu) applies to a path a declaration states. The hook is written `0755`, because `git` silently skips a `commit-msg` hook that is not executable. |
+| `--force` | no | Overwrite a DIFFERENT existing hook at `--hook-path`, or at the `pre-commit` path beside it. | Without it, a foreign hook at either path is refused (exit 1), not silently replaced; the existing file is backed up to `<path>.bak` first when `--force` is given. A hook with identical generated content is left alone either way. **It covers the two hooks only** — there is deliberately no override for a conflicting CI file, declaration, policy or migration. |
 | `--canon-values-path <path>` | no | Where to write the canon-values template. | Only written if nothing is already there. Contained the same way `--hook-path` is. |
 | `--scenario <name>` | no | Recorded in the canon-values template. | |
 | `--nen-ref vX.Y.Z` | no | The nen release the generated workflow pins. | Left off, nen writes the **greater** of this binary's own version and the minimum `templates/index.json` declares — the first release carrying the `nen shu` verbs the workflow runs. A ref below that minimum is exit 2 naming both; so is anything that is not a `vX.Y.Z` tag. When the written ref is not this binary's own version, the report says so, and says nen cannot verify offline that a release exists for it. |
@@ -3000,9 +3121,9 @@ nen scaffold init --repo <path>
 
 **The `schemas/` → `nen/` migration is a COPY.** Each of the four taxonomy files found only under `schemas/` is copied to `nen/`, the original is **left in place**, and the `git rm` line is printed for the caller to run (and only for a copy that actually happened). A legacy file that is a **symlink** is `refused` naming both paths: `copyFileSync` follows it, so nen would be copying whatever it points at into the repository under a taxonomy file's name and then telling the caller to stage it. A delete is not recoverable if some tool in the estate still reads the old path, and this verb's hook rule already established refuse-and-report over destroy; the `nen/` copy wins immediately because [the loader prefers it](#taxonomy-as-data), so the new behaviour arrives before the removal does, and [`schema check`](#nen-schema-check) reports the leftover as shadowed until it happens. A file present in **both** with identical bytes is `skipped` (only the removal is left); one present in both with **different** bytes is `refused`, naming both paths, with no `--force` — two disagreeing taxonomies is not a merge nen can make.
 
-**`.gitignore` is APPENDED to, byte for byte.** The file's own bytes are written back unchanged and the appended line matches its own line ending, so a CRLF `.gitignore` is not silently rewritten wholesale. The action is `appended` (or `would-append` under `--dry-run`) rather than `created`, because the file was already there and the caller's own lines are still in it.
+**`.gitignore` is APPENDED to, byte for byte.** The file's own bytes are written back unchanged and the appended lines match its own line ending, so a CRLF `.gitignore` is not silently rewritten wholesale. The action is `appended` (or `would-append` under `--dry-run`) rather than `created`, because the file was already there and the caller's own lines are still in it. **Two entries**, decided separately: `.nen/`, which is nen's own generated output, and the policy's `reports.dir` — read out of `nen/workflow.json` rather than assumed, so a repository that renamed it does not get the wrong line ignored in silence. A file that already carries one of the two gets the one it is missing, not a `skipped` row about the one it has.
 
-**Idempotence.** A second run changes nothing and says so per item: the hook, the declaration, the workflow and the `.gitignore` entry all report `skipped` when what is on disk is already exactly what this run would write. That is the one place this verb is more permissive than `shu detect --write`, which refuses on *presence*; anything whose content differs is still refused here.
+**Idempotence.** A second run changes nothing and says so per item: both hooks, the declaration, the policy, the CI workflow and the `.gitignore` entries all report `skipped` when what is on disk is already exactly what this run would write. That is the one place this verb is more permissive than `shu detect --write`, which refuses on *presence*; anything whose content differs is still refused here.
 
 **Idempotence holds within a release, not across one.** The declaration this
 verb writes is [`shu detect`](#nen-shu-detect)'s proposal, and that proposal
@@ -3016,7 +3137,7 @@ it out — an absent `targets` and an empty one behave identically, and
 [`shu deploy`](#nen-shu-deploy) refuses at 2 with the block to paste either
 way). Every other step still reports `skipped`.
 
-**Output and exit codes** — the first three lines are v0.2.0's, unchanged: `created directories: <list>` (or `(none -- all already existed)`), `hook: <outcome> (<path>)`, and `canon-values: <path>` if one was written. Under `--dry-run` the first reads `would create directories:` and the second `hook: would-install`, because a preview that said `created` about directories that are not there would be the one line in the report that lies; `--dry-run` is new here, so no v0.2.0 caller reads that spelling. Then `stack: <id>`, one line per migration, one line per write, detect's notes, and the toolchain table. `--json` is a versioned contract, keys in order: `{ contract: "nen.scaffold.init/v0.1", writes: [{ path, action, why }], migrated: [{ from, to, action, why }], tools, exitCode }`, where `action` is `created`/`appended`/`skipped`/`would-create`/`would-append`/`refused`, `path` is repo-relative, and `tools` is [`shu tools`](#nen-shu-tools)'s own `nen.shu.tools/v0.1` document or `null`. **A `refused` row is always published**, in `writes[]` alongside the rest — a report that listed only what succeeded would be a report that says "done".
+**Output and exit codes** — the opening lines are v0.2.0's, with the trunk guard's own line between the second and the third: `created directories: <list>` (or `(none -- all already existed)`), `hook: <outcome> (<path>)`, `pre-commit: <outcome> (<path>)`, and `canon-values: <path>` if one was written. Both hook outcomes are one of `installed` / `unchanged` / `refused` / `would-install`, decided the same way. Under `--dry-run` the first reads `would create directories:` and the second `hook: would-install`, because a preview that said `created` about directories that are not there would be the one line in the report that lies; `--dry-run` is new here, so no v0.2.0 caller reads that spelling. Then `stack: <id>`, one line per migration, one line per write, detect's notes, and the toolchain table. `--json` is a versioned contract, keys in order: `{ contract: "nen.scaffold.init/v0.1", writes: [{ path, action, why }], migrated: [{ from, to, action, why }], tools, exitCode }`, where `action` is `created`/`appended`/`skipped`/`would-create`/`would-append`/`refused`, `path` is repo-relative, and `tools` is [`shu tools`](#nen-shu-tools)'s own `nen.shu.tools/v0.1` document or `null`. **A `refused` row is always published**, in `writes[]` alongside the rest — a report that listed only what succeeded would be a report that says "done".
 
 Under `--json`, stdout is exactly one document and the prose the shape has no field for — `detect`'s open questions, the toolchain table and its advice — is relayed to **stderr** rather than dropped, the way the [`shu`](#family-shu) verbs relay a child's output.
 
@@ -3031,11 +3152,14 @@ nen scaffold init --repo /tmp/site --accept-detected --directories src,docs \
 ```text
 created directories: /tmp/site/src, /tmp/site/docs, /tmp/site/.git/hooks
 hook: installed (/tmp/site/.git/hooks/commit-msg)
+pre-commit: installed (/tmp/site/.git/hooks/pre-commit)
 stack: gatsby
 created: .git/hooks/commit-msg -- installed
+created: .git/hooks/pre-commit -- installed
 created: nen/contract.json -- the project block, written into absence
+created: nen/workflow.json -- the delivery policy, written into absence -- every key in it carries nen's own default, so editing one line changes one thing
 created: .github/workflows/nen-shu.yml -- the 'full' template's workflow for gatsby
-created: .gitignore -- created, ignoring '.nen/'
+created: .gitignore -- created, ignoring '.nen/' and 'Reports/'
 a lane's NAME is proposed from the directory it lives in (or from the stack id at the repository root) and is yours to change -- it is the token '--lane' takes, and nothing in nen reads meaning into it.
 lane:          gatsby  (gatsby)
 mode:          check
@@ -3045,7 +3169,9 @@ tools:         (none declared)
 
 ### `nen scaffold new`
 
-A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI workflow, `.gitignore`, the commit-msg hook when a trailer convention is stated, and `nen/contract.json` — **proposed by `shu detect` off the marker this verb just wrote**, so "scaffolded a project" and "declared a stack" stop being two chores with two chances to disagree.
+A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI workflow, `.gitignore` (ignoring `.nen/` and `Reports/`), the commit-msg hook when a trailer convention is stated, the trunk-guarding `pre-commit` hook **always**, [`nen/workflow.json`](#nenworkflowjson)'s policy, and `nen/contract.json` — **proposed by `shu detect` off the marker this verb just wrote**, so "scaffolded a project" and "declared a stack" stop being two chores with two chances to disagree.
+
+**The trunk guard is unconditional; the commit-msg hook is not**, and the difference is what each one needs. The commit-msg hook enforces a trailer convention nen does not have and will not invent, so it is written only when `--agent-trailer`/`--run-trailer`/`--marker-env` state one; the `pre-commit` hook refuses a commit on `branch.base`, and every repository has a trunk. A fresh tree is also the one place that guard is free — nothing has been committed to it yet. Both are generated from the policy this verb writes, and `iteration.lane` in that policy is the lane the declaration ends up declaring, so the two files cannot name different lanes.
 
 **Every post-step is PRINTED and none is run.** No repository is initialised, no dependency is installed, no native project is generated, and no network call is made — including the toolchain check, which `init` runs and this verb only names. Writing into a fresh directory and writing to the host are two different consents.
 
@@ -3343,6 +3469,10 @@ Validates the SHAPE of a Conventional Commits message -- a declared type, a non-
 
 Builds and validates one Conventional Commits header (`type(scope)!: subject`) plus optional body paragraph and trailers, from the type set `feat, fix, chore, docs, refactor, test, perf, build, ci`. `--trailer` keys are caller data (a specific persona's trailer convention lives in the calling skill, never a literal in this binary).
 
+**A repository may state which ATTRIBUTION trailers it admits, and then this verb enforces it.** When [`nen/workflow.json`](#nenworkflowjson) is present under `--repo`, a `--trailer` whose key is attribution-shaped and is *not* listed in that file's `commits.allowedAttributionTrailers` is refused at exit **2**, naming the trailer and the file. Attribution-shaped means one of `Assisted-by`, `Claude-Session`, `Co-Authored-By`, `Generated-by`, `Generated-with`, `Reviewed-by`, `Signed-off-by` — the keys that say *who or what produced this commit* — plus every key the file's own `commits.forbiddenTrailers` adds; matching **ignores case**, because every tool that reads the finished commit does. `Closes`, `Refs` and a project's own agent trailer are untouched.
+
+**With no workflow file, nothing is refused and this verb behaves exactly as it always has.** The list is never nen's: `commits.allowedAttributionTrailers` is the repository's, and a guard that fired without the repository having asked for it would be this verb deciding somebody's commit convention for them. The policy is read **only when the invocation carries at least one `--trailer`** — a message that could not have violated it never touches the filesystem. A workflow file that is present and **malformed** is exit **1**, naming the pointer: the invocation was correct, and nen will not shape a message under a policy it could not read.
+
 **Usage**
 
 ```text
@@ -3360,9 +3490,18 @@ nen commit format --type feat --subject "a short imperative subject"
 | `--scope <scope>` | no | The parenthesised scope. | Given but empty is refused -- omit the flag entirely instead. |
 | `--breaking` | no | Adds the `!` marker after type/scope. | |
 | `--body "paragraph"` | no | ONE paragraph. | This parser does not support repeating `--body`; pass one paragraph and use blank lines inside it for multiple, if the shell allows a multi-line value. |
-| `--trailer key=value,key2=value2` | no | Comma-separated `key=value` pairs. | A key containing `:` or empty is refused. |
+| `--trailer key=value,key2=value2` | no | Comma-separated `key=value` pairs. | A key containing `:` or empty is refused. An attribution-shaped key the repository's `nen/workflow.json` does not admit is refused too — see above. |
+| `--repo <path>` | no | The repository whose `nen/workflow.json` states the trailer policy. | Defaults to the cwd, and is opened **only** when this invocation carries a `--trailer`. |
 
-**Output and exit codes** -- prints the formatted message. `--json`: `{ message }`. All shape violations print as plain `nen:` lines even under `--json`. Exit 0 on a valid shape; exit 2 on any shape violation (never 1 -- there is no partial-success or network-failure mode here).
+**Output and exit codes** -- prints the formatted message. `--json`: `{ message }`. All shape violations and policy refusals print as plain `nen:` lines even under `--json`, and **every** one of them is printed, not just the first -- a shape violation and a refused trailer in the same invocation are two problems reported together. Exit 0 on a valid shape; exit 2 on any shape violation or trailer-policy refusal; exit **1** in exactly one case, a `nen/workflow.json` that is present and could not be read.
+
+```bash
+nen commit format --type fix --subject "stop dropping the last row" --trailer "Co-Authored-By=A" --repo .
+```
+```text
+nen: trailer key 'Co-Authored-By' is an attribution trailer this repository refuses. '/tmp/site/nen/workflow.json' admits 'Akatsuki-Agent', 'Akatsuki-Run' under commits.allowedAttributionTrailers, and 'Co-Authored-By' is not one of them. Drop the trailer, or add its key to that list
+```
+exit 2. (from a real run against a scratch repository scaffolded by `nen scaffold init`; the absolute path is elided to `/tmp/site`)
 
 **Example**
 
@@ -5250,10 +5389,15 @@ Renders the gate-stop banner and the padded-markdown efforts table -- the ceremo
 
 Prints the banner (who is asking, which gate, whether the push-notification rung was already fired) followed by a table read from a markdown pipe-table file (or stdin via `-`). `--template` instead emits a blank 5-column table to fill in, with no banner and no signal line -- nothing is being waited on yet.
 
+**Rungs 2 and 3 stay the host's, and `--mark` is how the host rings them.** Nen only ever shells out to `git` and `gh`, and neither is a notification primitive, so this command fires nothing and never will. What the two rungs do not need is for *nen* to fire them: `--mark` records the stop as a fact -- `.nen/last-stop.json`, carrying `{ contract, who, gate, notified, at }` -- and a `Stop` hook on your own machine reads that file and rings whatever the platform has. The split is the one this verb already draws about rung 1: nen states the fact, the host acts on it.
+
+The marker goes under the dot-prefixed, gitignored `.nen/` (generated output), never the committed `nen/`; the directory is created when absent, and an existing marker is **replaced**, because the latest stop is the one a hook should ring for. It is written **last**, after every refusal this verb can make -- a hook ringing for a banner nobody saw is worse than one that never rang. `--mark` is the only form of this verb that writes anything, which is why the row is `write-flag-gated` on it in [izanami's table](#nen-parse-izanami).
+
 **Usage**
 
 ```text
-nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [efforts.md | -]
+nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
+         [--repo <path>] [efforts.md | -]
 nen stop --template
 ```
 
@@ -5265,9 +5409,10 @@ nen stop --template
 | `--gate <g>` | no | The human gate being asked for: `G1` epic approval, `G1-M` release into build, `G2` merge, `G3` release go/no-go, `G4` policy/spec change, `G5` decision/human-only action. | An unrecognised gate name is refused (exit 2). |
 | `--notified` | no | States rung 1 (push notification) was already fired by the caller. | Nen never fires it itself. |
 | `efforts.md \| -` (positional) | no | A markdown pipe table (header + rows) to render below the banner; `-` reads stdin. | Resolved against `--repo` (default cwd) when a relative path is given. |
+| `--mark` | no | Also write `.nen/last-stop.json` under `--repo`: `{ contract, who, gate, notified, at }`. | The ONLY form of this verb that writes. The instant is the invocation's own clock, ISO-8601, so a host hook's freshness window is provable rather than raced. `--mark --template` is exit 2: a blank table waits on nothing, so there is no stop to record. A marker that cannot be written is exit **1** with the errno -- a caller who typed `--mark` asked for a rung to be armed, and "the banner rendered and the marker did not" is where somebody waits for a bell that never rings. |
 | `--template` | no | Emit a blank 5-column table (`Effort`, `Open issues & PRs`, `Status (gate)`, `Thought flow`, `Session / lane`) instead of the banner. | Mutually exclusive in effect with the banner mode -- no signal line is printed, since nothing is being waited on. |
 
-**Output and exit codes** -- the banner is `=== YOUR INPUT IS NEEDED ===...`, then `who:`/`gate:` lines if given, the rung-1/rung-2-3 status lines, then the rendered padded-markdown table (or nothing, with a note that "no banner above => nothing needs you right now" -- though the banner itself is unconditional whenever this command runs without `--template`). `--json`: `{ template: true, rows }` for `--template`; otherwise `{ who, gate, notified, rows }` (the banner text itself is not part of the JSON -- only the structured fields are). Exit 0 on a normal render; exit 2 on an unrecognised `--gate` value, or when the `efforts.md`/`-` argument names a file that cannot be read.
+**Output and exit codes** -- the banner is `=== YOUR INPUT IS NEEDED ===...`, then `who:`/`gate:` lines if given, the rung-1/rung-2-3 status lines, then the rendered padded-markdown table (or nothing, with a note that "no banner above => nothing needs you right now" -- though the banner itself is unconditional whenever this command runs without `--template`). `--json`: `{ template: true, rows }` for `--template`; otherwise `{ who, gate, notified, rows, marker }` (the banner text itself is not part of the JSON -- only the structured fields are). `marker` is `null` unless `--mark` was given, and otherwise carries `{ path, contract, who, gate, notified, at }`; the file on disk carries every one of those but `path`, since a file that names where it is is wrong the moment a checkout moves. The text form gains one line, `marked: <path> -- a host hook may ring rungs 2-3 off it.` Exit 0 on a normal render; exit 2 on an unrecognised `--gate` value, on `--mark --template`, or when the `efforts.md`/`-` argument names a file that cannot be read; exit 1 when `--mark` could not write the marker.
 
 **Example**
 
@@ -5289,6 +5434,30 @@ see the table below. No banner above => nothing needs you right now.
 ```
 (run for real, against a local `efforts.md` authored for this example — the table above is the renderer's own padded output, byte for byte)
 
+And the same verb asked to leave a marker behind:
+
+```bash
+nen stop --who Kurapika --gate G5 --mark --repo /tmp/site
+```
+```text
+=== YOUR INPUT IS NEEDED ==============================
+who: Kurapika
+gate: G5 -- decision / human-only action
+rung 1 (push notification): NOT fired -- the caller's to have sent, before this renders.
+rungs 2-3 (OS notification, audible cue): not fired by nen -- only git/gh subprocesses are ever shelled out to.
+see the table below. No banner above => nothing needs you right now.
+marked: /tmp/site/.nen/last-stop.json -- a host hook may ring rungs 2-3 off it.
+```
+```json
+{
+  "contract": "nen.stop.mark/v0.1",
+  "who": "Kurapika",
+  "gate": "G5",
+  "notified": false,
+  "at": "2026-09-10T05:27:13.269Z"
+}
+```
+(run for real against a scratch repository; the absolute path is elided to `/tmp/site`)
 ## Reports
 
 The two halves of an effort report: the facts, and the fill that turns them
@@ -5422,7 +5591,6 @@ wrote Reports/effort.html
 <p>93.74% of lines on 'nen'</p>
 ```
 (both run for real, `effort.html` being the six-line template above. Note the escaping: the merge commit's `'origin/main'` came out as `&#39;origin/main&#39;` from a `{{subject}}` cell, which is the default and the point. With a `coverage` of `null` the last paragraph is simply absent — the `{{#if}}` block is skipped, not blanked. The same render with `--out ../escape.html` prints `--out '../escape.html' resolves outside the repository at … 'report render' writes the report INTO the repository it is reporting on and nowhere else` at exit 2)
-
 ## Developer workflows
 
 Six end-to-end scenarios, composed only from verbs that exist in v0.2.0. Every

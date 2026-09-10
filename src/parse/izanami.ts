@@ -1238,7 +1238,22 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },
   stage: { subcommands: { triage: RO("reads 'git status --porcelain'; stages nothing") } },
-  stop: { subcommands: { "*": RO("renders the gate-stop banner; fires nothing itself") } },
+  // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
+  // table are still a pure render -- this verb fires no notification and never
+  // could (../stop/command.ts's header states why) -- but `--mark` writes
+  // `.nen/last-stop.json`, which is a file on disk and therefore not something
+  // a read-only loop may do on every iteration. The bare form stays read-only
+  // for the reason `nen wake fire` and `nen shu deploy` are: absent the flag,
+  // this verb provably writes nothing, which is a property of nen rather than a
+  // claim about somebody else's file.
+  stop: {
+    subcommands: {
+      "*": GATED(
+        ["--mark"],
+        "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads",
+      ),
+    },
+  },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
   wake: {
     subcommands: {
