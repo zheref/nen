@@ -226,6 +226,46 @@ describe("resolveIdentities", () => {
     expect(() => resolveIdentities(empty, undefined, [], [])).toThrow(IdentityError);
   });
 
+  // ── the schemas/ fallback's removal: a legacy-only gates.json is ABSENT ────
+  //
+  // Through v0.4.0 a `schemas/gates.json` with no `nen/gates.json` beside it
+  // still answered this read, through ../schema/source.ts's fallback. That
+  // fallback is gone: `resolveSchemaFile` never resolves to the legacy path
+  // any more, so this repository is now the SAME as one carrying no gates
+  // file at all -- `--reviewers` must still win, and the closing refusal
+  // (when neither is given) must name the migration.
+  function legacyOnlyRepo(): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-pr-ready-legacy-"));
+    mkdirSync(join(root, "schemas"), { recursive: true });
+    writeFileSync(
+      join(root, "schemas", "gates.json"),
+      readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8"),
+    );
+    return root;
+  }
+
+  it("falls through to --reviewers for a repo carrying ONLY the legacy schemas/gates.json", () => {
+    const root = legacyOnlyRepo();
+    const resolved = resolveIdentities(root, undefined, ["alice", "bob"], ["alice"]);
+    expect(resolved.source).toBe("flags");
+    expect(resolved.path).toBeNull();
+    expect(resolved.identities.baseReviewers).toEqual(["alice", "bob"]);
+  });
+
+  it("names the legacy copy and the migration when NEITHER --reviewers nor nen/gates.json is given", () => {
+    const root = legacyOnlyRepo();
+    try {
+      resolveIdentities(root, undefined, [], []);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(IdentityError);
+      const message = (error as IdentityError).message;
+      expect(message).toContain("schemas/gates.json");
+      expect(message).toContain("nen scaffold init --accept-detected");
+      expect(message).toContain("v0.5.0");
+    }
+  });
+
   // ── zheref/nen#8 item 4: WHICH FILE a relative `--gates` names ─────────────
   //
   // `readFileSync(gatesFlag)` inherits `process.cwd()`, so
