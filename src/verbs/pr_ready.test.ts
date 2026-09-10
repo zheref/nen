@@ -30,6 +30,7 @@ import {
   type ReviewThreadPage,
 } from "../github/graphql.js";
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { PROGRAM, VERSION } from "../version.js";
 import { SchemaError } from "../schema/errors.js";
 import { GATES_FILE, schemaPath } from "../schema/source.js";
 import { loadRepoRegistry } from "../schema/repos.js";
@@ -578,7 +579,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       identities: { source: "schema", path: "/repo/nen/gates.json" },
       warnings: [],
       evaluatedAt: "2025-01-01T00:00:00Z",
-      generator: { program: "nen", version: "0.0.0" },
+      generator: { program: "nen", version: "0.0.0", executable: "/opt/nen/nen-linux-x64" },
     },
     ...overrides,
   };
@@ -593,6 +594,16 @@ describe("renderExplain", () => {
     expect(text).toMatch(/2\s+unevaluated\s+CON-32\(a\)/);
     expect(text).toContain("What the gate does NOT decide:");
     expect(text).toContain("CON-32(c): Approximated.");
+  });
+
+  it("names WHICH BINARY decided the verdict", () => {
+    // zheref/nen#16. `--json`'s `meta.generator` has carried `program` and
+    // `version` since v0.1; this rendering -- the one a human reads at a gate --
+    // named neither, so it could not say whether the verdict came from the
+    // bootstrap-cached binary, a locally built one, or `bun src/index.ts` out of
+    // a working tree. Those three can carry the same version string.
+    const text = renderExplain(sampleReport()).join("\n");
+    expect(text).toContain("decided by nen 0.0.0 (/opt/nen/nen-linux-x64) at 2025-01-01T00:00:00Z");
   });
 
   it("prints the remedy line only when one is present", () => {
@@ -650,6 +661,7 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
 function stubDeps(source: PrStateSource | null): PrReadyDeps {
   return {
     now: (): string => "2025-01-01T00:00:00Z",
+    executable: (): string => "/opt/nen/nen-linux-x64",
     openSource: (): { ok: true; source: PrStateSource } | { ok: false; message: string } =>
       source === null ? { ok: false, message: "no usable token" } : { ok: true, source },
   };
@@ -721,6 +733,20 @@ describe("prReady -- unevaluated is never mistaken for a verdict", () => {
     expect(report.remedy).not.toBeNull();
     // NOT ONE conjunct row is `ready` on an unevaluated verdict.
     expect(report.conjuncts.every((c): boolean => c.status !== "ready")).toBe(true);
+  });
+
+  it("carries the deciding binary on the UNEVALUATED path too", async () => {
+    // zheref/nen#16. An unevaluated report is the one a caller is most likely to
+    // be puzzled by, so it is the one that must least be able to hide which
+    // binary produced it -- and it is built by a different function from the
+    // decided path, which is exactly how a field ends up on one and not the
+    // other.
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(null));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.meta.generator.program).toBe(PROGRAM);
+    expect(report.meta.generator.version).toBe(VERSION);
+    expect(report.meta.generator.executable).toBe("/opt/nen/nen-linux-x64");
   });
 
   it("fetchPrState throwing -> 'unevaluated', with the token-grants remedy", async () => {
