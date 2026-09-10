@@ -2923,8 +2923,10 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 
 **Output and exit codes** — human lines: `(no --write) would collate` or
 `collated <n> fragment(s) into <path> ### v<version> — <theme>`, then each
-fragment name; `--json` top-level keys: `version`, `theme`, `fragments[]`,
-`written`. Exit 0 on any completed run — there is no "drift" verdict here,
+fragment name **in the order it was written into the section** — newest-first
+by the leading `<n>-` prefix, the same order the section itself reads, so the
+manifest can be cross-checked against it line for line. `--json` top-level
+keys: `version`, `theme`, `fragments[]` (that same order), `written`. Exit 0 on any completed run — there is no "drift" verdict here,
 only "wrote/didn't write". Exit 2 on a missing required flag. Exit 1 on an
 unreadable `--changelog`: the read at `src/changelog/command.ts:130` is
 unguarded, so the ENOENT escapes as a raw

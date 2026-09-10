@@ -134,18 +134,35 @@ function collateCmd(context: CommandContext): number {
     content: normalizeEol(readFileSync(resolvePath(fragmentDirFull, name), "utf8")),
   }));
 
-  const rewritten = collateIntoChangelog(changelogText, version, theme, sortFragments(fragments));
+  // SORTED ONCE, AND THE MANIFEST IS READ OFF THE SORTED LIST (zheref/nen#34).
+  // The section was rendered from `sortFragments(fragments)` -- newest-first by
+  // the leading `<n>-` prefix, this project's own convention -- while the
+  // manifest was printed from `names`, which is `readdirSync` order. Two
+  // orderings of one set, by construction: at any fragment count, the manifest
+  // listed `10-a.md, 20-b.md, 30-c.md` about a section that reads FRAG-30,
+  // FRAG-20, FRAG-10. Nothing was ever dropped or misattributed -- the written
+  // content was always right -- but the manifest is the record a caller
+  // cross-checks the section against, and a record in a different order from
+  // the thing it records is worse than no record: `getsuga` relays it to the
+  // maintainer as the answer to "did my fragment land where I expected".
+  const ordered = sortFragments(fragments);
+  const rewritten = collateIntoChangelog(changelogText, version, theme, ordered);
 
   if (write) {
     writeFileSync(changelogFull, rewritten, "utf8");
     for (const name of names) unlinkSync(resolvePath(fragmentDirFull, name));
   }
 
+  const collated = ordered.map((fragment): string => fragment.name);
   const lines = [
     `${write ? "collated" : "(no --write) would collate"} ${fragments.length} fragment(s) into ${changelogPath} ### v${version.replace(/^v/, "")} — ${theme}`,
-    ...names.map((name): string => `  ${name}`),
+    ...collated.map((name): string => `  ${name}`),
   ];
-  emit(context.io, context.json, { version, theme, fragments: names, written: write }, lines);
+  // `--json`'s `fragments[]` moves with it. It is the same claim in machine
+  // form -- "these, in this order, are what was written" -- so leaving it in
+  // readdir order while the text was corrected would be keeping the defect for
+  // the consumer least able to notice it.
+  emit(context.io, context.json, { version, theme, fragments: collated, written: write }, lines);
   return 0;
 }
 
