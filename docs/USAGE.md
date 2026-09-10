@@ -104,8 +104,10 @@ The root wins, which is the decision
 its reasoning generalises without change: every other path a verb reads is
 anchored there, and the failure the exception produced was silent and wrong.
 Where a path also travels onward — `issue comment`/`issue edit-body` hand
-`--body-file` to `gh` — it is resolved **once**, to an absolute path, so nen and
-`gh` cannot disagree about which file it is.
+`--body-file` to `gh` — the **resolved** path is what travels, so nen and
+`gh` cannot disagree about which file it is. The root is resolved before the
+read, so a malformed `--repo` stays the usage error (exit 2) it is rather than
+becoming a "could not read" at exit 1 about a file nobody had a path to yet.
 
 ### Containment
 

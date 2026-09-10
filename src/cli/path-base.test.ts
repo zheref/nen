@@ -107,3 +107,21 @@ describe("a relative path flag resolves against --repo, not the process's direct
     expect(result.out).toContain("absolute:stage");
   });
 });
+
+describe("a malformed --repo stays the usage error it is", () => {
+  it("is not swallowed by the read's own catch (Copilot, PR #197)", async () => {
+    // `resolveRepoRoot` used to be called INSIDE the try guarding the file
+    // read, so a `--repo` that is an owner/name slug rather than a path came
+    // back as exit 1 under "could not read --input" -- about a file nobody had
+    // a path to yet. Wrong code and wrong sentence at once.
+    const cwd = mkdtempSync(join(tmpdir(), "nen-base-cwd-"));
+    const result = await fromElsewhere(
+      effortCommand,
+      ["effort", "classify", "--input", "rows.json"],
+      cwd,
+      "owner/name",
+    );
+    expect(result.code).toBe(2);
+    expect(`${result.out}${result.err}`).not.toContain("could not read --input");
+  });
+});

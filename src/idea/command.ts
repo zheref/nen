@@ -93,7 +93,9 @@ export const ideaCommand: Command = {
     const root = assertRepoRoot({ repoFlag });
     let submittedBody: string;
     try {
-      // // Resolved against --repo's root, one base for every path flag (zheref/nen#100). Read RAW: the read-back compares bytes, so normalising here would
+      // Resolved against --repo's root, one base for every path flag
+      // (zheref/nen#100). Read RAW: the read-back compares bytes, so
+      // normalising here would
       // make nen disagree with itself about what it sent.
       submittedBody = readFileSync(resolveAgainstRepo(root, bodyFile), "utf8");
     } catch (error) {

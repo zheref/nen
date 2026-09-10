@@ -781,6 +781,14 @@ describe("nen issue comment -- the general comment primitive", () => {
       expect(result.code).toBe(0);
       const parsed = JSON.parse(result.out.join("\n")) as { body: string };
       expect(parsed.body).toBe("the file under --repo\n");
+      // AND THE PATH HANDED TO `gh` IS THE SAME ONE (Copilot, PR #197). The
+      // dry-run transcript carries the argv, so this asserts that the resolved
+      // absolute path travels onward rather than the typed relative string --
+      // previewing one file while posting another would re-open the split this
+      // whole change closes.
+      const printed = result.out.join("\n");
+      expect(printed).toContain(join(repoDir, "rel.md"));
+      expect(printed).not.toContain('"rel.md"');
     } finally {
       process.chdir(previous);
     }

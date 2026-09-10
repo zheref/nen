@@ -189,7 +189,9 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
     throw new VerbUsageError(`unknown 'canon mirror' subcommand '${mirrorSub ?? "(none)"}'. Try 'generate' or 'check'.`);
   }
   const inputs = readCanonValuesInputs(context);
-  // // Resolved against --repo's root, one base for every path flag (zheref/nen#100). Every one of this verb's five path flags resolves the same way -- and
+  // Resolved against --repo's root, one base for every path flag
+  // (zheref/nen#100). Every one of this verb's five path flags resolves the
+  // same way -- and
   // they must, because generate reads --rules-dir and writes --out-dir while
   // check reads --mirror-dir and compares: two of them landing in different
   // trees is a diff against the wrong mirror, reported as drift.

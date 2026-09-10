@@ -773,10 +773,15 @@ function comment(context: CommandContext): number {
     );
   }
 
+  // THE RESOLVED PATH TRAVELS ONWARD, not the typed one (Copilot, PR #197).
+  // `commentArgv` puts this into `gh --body-file`, and handing `gh` the
+  // relative string while reading the resolved one would preview one file and
+  // post another -- exactly the split zheref/nen#100 closes, re-opened one
+  // line later. `bodyPath` is absolute, so it is unambiguous wherever `gh` runs.
   const request: CommentRequest =
-    bodyFile === undefined
+    bodyPath === undefined
       ? { issue, body, source: "inline" }
-      : { issue, body, source: "file", bodyFile };
+      : { issue, body, source: "file", bodyFile: bodyPath };
   const argv = commentArgv(target, request);
 
   if (context.args.booleans.has("dry-run")) {
@@ -925,7 +930,9 @@ function editBody(context: CommandContext): number {
     return 0;
   }
 
-  writeIssueBody(context.seams, target, issue, bodyFile);
+  // The resolved path, for the reason comment() states: `gh` must be handed the
+  // same file this verb read and counted (Copilot, PR #197).
+  writeIssueBody(context.seams, target, issue, bodyPath);
   if (context.json) {
     context.io.out(
       JSON.stringify(

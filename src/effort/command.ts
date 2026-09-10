@@ -52,10 +52,15 @@ export const effortCommand: Command = {
     const path = context.args.values["input"];
     if (path === undefined) throw new VerbUsageError("--input <path.json> is required.");
 
+  // RESOLVED OUTSIDE THE TRY (Copilot, PR #197). A malformed `--repo` throws a
+  // RepoRootError, which ../index.ts maps to the usage exit 2 it is -- but only
+  // if it is allowed to propagate. Inside the read's own catch it became exit 1
+  // under a "could not read --input" message about a file nobody had a path to
+  // yet, which is the wrong code and the wrong sentence at once.
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     let inputs: EffortInput[];
     try {
-      // // Resolved against --repo's root, one base for every path flag (zheref/nen#100).
-      const full = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), path);
+      const full = resolveAgainstRepo(root, path);
       const parsed: unknown = JSON.parse(readFileSync(full, "utf8").replace(/\r\n/g, "\n"));
       if (!Array.isArray(parsed)) throw new Error("expected a JSON array");
       inputs = parsed as EffortInput[];

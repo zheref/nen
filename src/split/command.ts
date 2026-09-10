@@ -54,8 +54,11 @@ export const splitCommand: Command = {
       throw new VerbUsageError("--branches named no paths.");
     }
 
-    // // Resolved against --repo's root, one base for every path flag (zheref/nen#100). A diff is read RAW: its hunk headers count bytes, so normalising
-    // line endings here would make the comparison disagree with the file.
+    // Resolved against --repo's root, one base for every path flag
+    // (zheref/nen#100), and resolved BEFORE the try so a malformed --repo stays
+    // the usage error it is rather than becoming "could not read --original".
+    // A diff is read RAW: its hunk headers count bytes, so normalising line
+    // endings here would make the comparison disagree with the file.
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     let original: string;
     try {
