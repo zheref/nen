@@ -41,7 +41,9 @@
 
 import { readFileSync } from "node:fs";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
-import { GIT, must, outputLines } from "../seam/exec.js";
+import { GIT, must } from "../seam/exec.js";
+import { rawLines } from "../seam/lines.js";
+import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { advisoryFor, type CoverageAdvisory } from "./coverage/advisory.js";
 import { openDeclaration } from "./declaration.js";
 import { ShuRefusal } from "./exit.js";
@@ -54,7 +56,7 @@ import {
   type CoverageReport,
   type CoverageSource,
 } from "./coverage/report.js";
-import { bandRows, readLadder } from "./coverage/ladder.js";
+import { bandRows } from "./coverage/ladder.js";
 import { filterTouched, grainOf, type CoverageGrain, type TouchedFilter } from "./coverage/touched.js";
 import { CoverageReportError, type CoverageMeasure, type CoverageTarget } from "./coverage/shape.js";
 import { insideRepo, renderReport, runVerb, type ShuArtifactReport, type ShuReport } from "./run.js";
@@ -420,6 +422,7 @@ export function runCoverage(
 ): number {
   const threshold = parseThreshold(options.threshold);
   validateTouched(options);
+  const ladder = readLadder(repoRoot, options, threshold);
   // A HOLDER RATHER THAN A `let`: the assignment happens inside a callback, and
   // a `let` narrowed to `null` at its declaration is a type error at every read
   // below -- the compiler does not follow a closure it did not call.
@@ -452,7 +455,7 @@ export function runCoverage(
     // reader needs. So it is rendered, with a document carrying the refusal's
     // own code, and the refusal then goes on to ../shu/command.ts unchanged.
     if (error instanceof ShuRefusal && captured.report !== null) {
-      report(context, captured.report, repoRoot, options, threshold, error.code);
+      report(context, captured.report, repoRoot, options, threshold, ladder, error.code);
     }
     throw error;
   }
@@ -460,7 +463,47 @@ export function runCoverage(
   const run = captured.report;
   /* c8 ignore next 2 -- runVerb emits exactly once on every path that returns */
   if (run === null) return exitCode;
-  return report(context, run, repoRoot, options, threshold, exitCode);
+  return report(context, run, repoRoot, options, threshold, ladder, exitCode);
+}
+
+/**
+ * The ladder this invocation reports against, through the ONE loader.
+ *
+ * READ BEFORE THE RUN, NOT DURING THE REPORT, and the reason is what
+ * `loadWorkflow` does with a policy file it cannot read: a malformed
+ * `nen/workflow.json` is a `SchemaError` naming the pointer, and a refusal a
+ * caller has to sit through a whole coverage build to hear is a refusal
+ * delivered at the worst possible moment. Every other fact about the
+ * invocation -- `--threshold`'s number, `--touched`'s pairing -- is settled
+ * before anything is spawned, and the repository's own policy is no different.
+ *
+ * READ ONLY WHEN THERE IS NO EXPLICIT `--threshold` TO OVERRIDE IT, and only
+ * under `--touched`: ./coverage/ladder.ts's header says why the scope is the
+ * touched set rather than a plain run, and why a typed `--threshold` replaces
+ * the file's policy for that one run instead of being reconciled against it.
+ * Neither case touches the filesystem at all.
+ *
+ * AN ABSENT FILE IS A LADDER, NOT THE ABSENCE OF ONE. `loadWorkflow` answers
+ * `present: false` carrying the published 80 / 85 / 90, so `--touched` bands
+ * every row in a repository that has not written a policy yet; the report
+ * carries `present` so a reader can tell a declared rung from an assumed one.
+ * That is a change from the stand-in reader this replaced, which answered
+ * "no ladder" and banded nothing.
+ *
+ * `source` IS THE REPO-RELATIVE NAME, NOT `loaded.path`. See
+ * ./coverage/report.ts's `CoverageLadderReport`: this document gets pasted into
+ * issues, and `relativiseTargets` below exists precisely so that it does not
+ * carry somebody's home directory out of the machine that ran it.
+ */
+function readLadder(
+  repoRoot: string,
+  options: CoverageOptions,
+  threshold: number | null,
+): CoverageLadderReport | null {
+  if (!options.touched || threshold !== null) return null;
+  const loaded = loadWorkflow(repoRoot);
+  const { minimum, recommended, ideal } = loaded.workflow.coverage;
+  return { minimum, recommended, ideal, source: WORKFLOW_FILE, present: loaded.present };
 }
 
 /**
@@ -477,6 +520,7 @@ function report(
   repoRoot: string,
   options: CoverageOptions,
   threshold: number | null,
+  ladder: CoverageLadderReport | null,
   exitCode: number,
 ): number {
   // The executor's own rendering, first: to stdout as text, to stderr under
@@ -488,17 +532,12 @@ function report(
   const touched = options.touched
     ? computeTouched(context, repoRoot, options.base as string, parsed, threshold)
     : null;
-  // THE LADDER IS READ ONLY WHEN THERE IS NO EXPLICIT --threshold TO OVERRIDE
-  // IT, and only under --touched -- ../coverage/ladder.ts's own header says
-  // why the scope is --touched and not a plain run. A repository with no
-  // 'nen/workflow.json' (or one with no usable coverage block) gets exactly
-  // what --touched already did before this field existed: readLadder()
-  // answers null rather than a refusal, on purpose.
-  const ladder = touched !== null && threshold === null ? readLadder(repoRoot) : null;
-  const ladderReport: CoverageLadderReport | null =
-    ladder === null ? null : { ...ladder, source: "nen/workflow.json" };
+  // THE LADDER WAS DECIDED BEFORE THE RUN (see readLadder above): it is null
+  // exactly when this invocation has none -- no --touched, or an explicit
+  // --threshold overriding the file -- and otherwise carries the three rungs,
+  // whether or not the repository declared them.
   const targets =
-    touched === null ? parsed.targets : ladder === null ? touched.filter.rows : bandRows(touched.filter.rows, ladder);
+    touched === null || ladder === null ? (touched?.filter.rows ?? parsed.targets) : bandRows(touched.filter.rows, ladder);
   const document: CoverageReport = assembleCoverage({
     lane: run.lane,
     stack: run.stack,
@@ -516,7 +555,7 @@ function report(
             matched: touched.filter.matched,
             unmatched: touched.filter.unmatched,
           },
-    ladder: ladderReport,
+    ladder,
   });
   emit(
     context.io,
@@ -548,7 +587,15 @@ function computeTouched(
   threshold: number | null,
 ): { readonly files: readonly string[]; readonly filter: TouchedFilter; readonly grain: CoverageGrain } {
   const result = must(context.seams, GIT, ["diff", "--name-only", `${base}...HEAD`], { cwd: repoRoot });
-  const files = outputLines(result.stdout);
+  // `rawLines`, NEVER `outputLines`: THESE ARE PATHS, AND A PATH'S SPACES ARE
+  // PART OF IT. ../seam/lines.ts exists for exactly this distinction --
+  // `outputLines` trims, which is right for turning a subprocess's stderr into
+  // a sentence and wrong for output whose exact columns are the data. A file
+  // committed as `src/ odd .ts` is a file git names with its spaces intact, and
+  // a trimmed copy of that name matches no coverage row, so the one file the
+  // caller most needs banded would be reported `unmatched` with nothing to say
+  // why. (Raised by Copilot on zheref/nen#147.)
+  const files = rawLines(result.stdout);
   const grain: CoverageGrain = parsed.source === null ? "file" : grainOf(parsed.source.format);
   return { files, filter: filterTouched(parsed.targets, files, grain, threshold), grain };
 }

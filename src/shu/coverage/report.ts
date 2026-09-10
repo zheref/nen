@@ -74,16 +74,40 @@ export interface TouchedReport {
  * RESTATED FOR THE SAME REASON `COVERAGE_CONTRACT` IS: ../coverage/ladder.ts
  * imports `thresholdMet` from THIS file, and importing ladder.ts back would be
  * a cycle. The two shapes are structural rather than pinned by a test, because
- * this one carries an extra field (`source`) ladder.ts's own `CoverageLadder`
- * does not: ../coverage.ts is the one place that reads both and is where a
- * drift between them would first fail to typecheck.
+ * this one carries two fields (`source`, `present`) ladder.ts's own
+ * `CoverageLadder` does not: ../coverage.ts is the one place that reads both
+ * and is where a drift between them would first fail to typecheck.
  */
 export interface CoverageLadderReport {
   readonly minimum: number;
   readonly recommended: number;
   readonly ideal: number;
-  /** Where nen read it from. Currently always `nen/workflow.json`. */
+  /**
+   * The path nen read it from, or WOULD have read it from -- always the
+   * repo-relative `nen/workflow.json`, never the absolute path the loader
+   * hands back.
+   *
+   * REPO-RELATIVE BECAUSE THIS DOCUMENT LEAVES THE MACHINE. `relativiseTargets`
+   * in ../coverage.ts exists so that a `--json` document pasted into an issue
+   * does not carry somebody's home directory in its row names; a `source` of
+   * `/Users/<username>/work/<repo>/nen/workflow.json` would put it straight
+   * back, one key further down.
+   */
   readonly source: string;
+  /**
+   * Whether that file exists, or these three numbers are the DEFAULTS.
+   *
+   * THE NUMBERS ALONE CANNOT ANSWER IT, AND THE DIFFERENCE IS WORTH A KEY. An
+   * absent `nen/workflow.json` is not "no ladder": ../../schema/workflow.ts's
+   * loader answers `present: false` carrying 80 / 85 / 90, because a policy
+   * default invents nobody's vocabulary and the alternative is banding nothing
+   * at all for every repository that has not written the file yet. But a
+   * repository that DECLARED 80 and one that was ASSUMED to want 80 are
+   * different facts, and a reader deciding whether to argue with a band needs
+   * the second one stated rather than guessed at from three numbers that
+   * happen to equal the defaults.
+   */
+  readonly present: boolean;
 }
 
 /** KEY ORDER IS THE CONTRACT, and ../coverage.test.ts pins it. */
@@ -109,13 +133,16 @@ export interface CoverageReport {
   /** null without `--touched`. APPENDED rather than inserted, so every reader who indexed the first eight keys by position is unaffected. */
   readonly touched: TouchedReport | null;
   /**
-   * `nen/workflow.json`'s coverage ladder, or null.
+   * The coverage ladder in force, or null when this run has none.
    *
-   * ONLY EVER NON-NULL UNDER `--touched` WITH `--threshold` ABSENT AND A
-   * `workflow.json` DECLARING ONE -- ../coverage/ladder.ts's own header says
-   * why the scope is `--touched` and not a plain run. Present, it means every
-   * touched row also carries its own `band`; absent, `--touched`'s rows are
-   * exactly what they were before this field existed.
+   * NULL IS ABOUT THE INVOCATION, NEVER ABOUT THE REPOSITORY. It is non-null
+   * under `--touched` with `--threshold` ABSENT, and null otherwise --
+   * ../coverage/ladder.ts's own header says why the scope is `--touched` and
+   * not a plain run, and why an explicit `--threshold` overrides the file
+   * rather than being reconciled against it. Whether the repository actually
+   * declared the rungs is `ladder.present`, not `ladder === null`: a repository
+   * with no `nen/workflow.json` still gets the published 80 / 85 / 90 and still
+   * bands every touched row.
    */
   readonly ladder: CoverageLadderReport | null;
 }
@@ -314,10 +341,17 @@ export function renderCoverage(
     // never both -- see ../coverage/ladder.ts's own header for why it is read
     // only when --threshold was not given.
     const l = report.ladder;
+    // "DEFAULTS" IS SAID OUT LOUD, not left to be inferred from the numbers.
+    // 80 / 85 / 90 read identically whether a repository chose them or nen
+    // supplied them, and the sentence that tells a reader which one they are
+    // looking at is also the sentence that tells them where to change it.
+    const where = l.present
+      ? l.source
+      : `${l.source} is absent -- these are nen's defaults`;
     lines.push(
       labelled(
         "ladder",
-        `${l.source} -- minimum ${l.minimum}% / recommended ${l.recommended}% / ideal ${l.ideal}%. REPORTED per row as 'band', and never enforced: nen exits ${report.exitCode} here, whatever the bands say.`,
+        `${where} -- minimum ${l.minimum}% / recommended ${l.recommended}% / ideal ${l.ideal}%. REPORTED per row as 'band', and never enforced: nen exits ${report.exitCode} here, whatever the bands say.`,
       ),
     );
   }

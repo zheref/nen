@@ -430,14 +430,18 @@ flags:
                    { base, files, matched, unmatched } -- 'files' is
                    everything git named, 'matched' and 'unmatched' partition
                    it by whether a row claimed it. WHEN --threshold IS NOT
-                   GIVEN, nen also reads <repo>/nen/workflow.json's
-                   'coverage.{minimum,recommended,ideal}' (absent file or an
-                   incomplete block is silently no ladder, never a refusal)
-                   and reports each row's own 'band' against it instead of
-                   'met' -- --json's 'ladder' key names the three numbers and
-                   'nen/workflow.json' as the source, or null. STILL NEVER
-                   GATES, either way: the exit code is the run's, exactly as
-                   bare --threshold is.
+                   GIVEN, nen also loads <repo>/nen/workflow.json's
+                   'coverage.{minimum,recommended,ideal}' -- the same loader
+                   'nen schema check' validates -- and reports each row's own
+                   'band' against it instead of 'met'. An ABSENT file is the
+                   published default ladder (80/85/90), not the absence of
+                   one: every touched row is still banded, and --json's
+                   'ladder' carries 'present: false' so a reader can tell an
+                   assumed rung from a declared one. A file that is present
+                   and MALFORMED is exit 1 naming the pointer, refused BEFORE
+                   the declared tool is spawned. STILL NEVER GATES, either
+                   way: the exit code is the run's, exactly as bare
+                   --threshold is.
   --base <ref>     'coverage' only, and only WITH --touched -- given without
                    it, exit 2: it names the ref --touched diffs against and
                    has nothing to do on its own. No default: nen never
@@ -640,16 +644,20 @@ flags:
                    the matched rows, and each carries its own 'met' when
                    --threshold was also given -- reported per file, on top of
                    the aggregate 'threshold.met' above.
-                   'ladder' is { minimum, recommended, ideal, source } read off
-                   <repo>/nen/workflow.json's own 'coverage' block, and ONLY
-                   under --touched with --threshold ABSENT -- an explicit
+                   'ladder' is { minimum, recommended, ideal, source, present }
+                   from <repo>/nen/workflow.json's own 'coverage' block, and
+                   ONLY under --touched with --threshold ABSENT -- an explicit
                    --threshold overrides the file's policy for that run rather
-                   than being reconciled against it. Present, each row then
+                   than being reconciled against it. Non-null, each row also
                    carries its own 'band': under-minimum | minimum |
-                   recommended | ideal, never alongside 'met'. Absent (no such
-                   file, or an incomplete 'coverage' block), rows carry neither
-                   key -- a repository that has not adopted the file sees
-                   --touched exactly as it always behaved. STILL NEVER GATES.
+                   recommended | ideal, never alongside 'met'. 'source' is the
+                   repo-relative 'nen/workflow.json', never an absolute path,
+                   and 'present' is false when that file does not exist -- in
+                   which case the three numbers are nen's own defaults
+                   (80/85/90) and the rows are banded against them all the
+                   same. null means this INVOCATION has no ladder (no
+                   --touched, or a --threshold that replaced it), never that
+                   the repository has none. STILL NEVER GATES.
                    On 'test-report' it is a FIFTH contract
                    ('nen.shu.test-report/v0.1'), keys in order:
                    { contract, lane, stack, report, tests, passed, failed,

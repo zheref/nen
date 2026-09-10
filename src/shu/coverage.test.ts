@@ -755,6 +755,38 @@ describe("--touched --base <ref>", () => {
     });
   });
 
+  it("matches a path whose OWN NAME carries spaces -- git's line is data, not a message", async () => {
+    // `git diff --name-only` prints a path with its spaces intact, and a
+    // trimmed copy of ' odd .ts' matches no row: the one touched file would be
+    // reported unmatched with nothing to say why. ../seam/lines.ts's rawLines
+    // exists for exactly this, and this test is what keeps it here.
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["coverage-summary.json"] } } },
+    });
+    writeFileSync(
+      join(repo, "coverage-summary.json"),
+      JSON.stringify({
+        total: { lines: { total: 4, covered: 4 } },
+        "src/ odd .ts": { lines: { total: 4, covered: 4 } },
+      }),
+    );
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "src/ odd .ts\n" } }],
+      });
+      const parsed = document(result);
+      expect(parsed.touched?.files).toEqual(["src/ odd .ts"]);
+      expect(parsed.touched?.matched).toEqual(["src/ odd .ts"]);
+      expect(parsed.touched?.unmatched).toEqual([]);
+      expect(parsed.targets.map((row): string => row.name)).toEqual(["src/ odd .ts"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("adds 'met' per row when --threshold is given, against that row's own counts", async () => {
     const result = await capture(
       ["coverage", "--touched", "--base", "main", "--threshold", "80", "--json"],
@@ -778,12 +810,15 @@ describe("--touched --base <ref>", () => {
     expect(parsed.threshold).toEqual({ value: 80, met: true });
   });
 
-  it("no threshold: a row carries no 'met' key at all", async () => {
+  it("no threshold: a row carries no 'met' key at all -- 'band' instead, from the ladder", async () => {
     const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
       script: [ok(WEB), { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\n" } }],
     });
     const raw = JSON.parse(result.out.join("\n")) as { targets: readonly Record<string, unknown>[] };
-    expect(Object.keys(raw.targets[0] ?? {})).toEqual(["name", "lines", "branches"]);
+    // 'met' answers an EXPLICIT --threshold and there was none; 'band' answers
+    // the ladder, which -- since the loader's defaults apply to a repository
+    // that declares no policy -- is always in force under --touched.
+    expect(Object.keys(raw.targets[0] ?? {})).toEqual(["name", "lines", "branches", "band"]);
   });
 
   it("still never gates: exit 0 even when a touched row misses the bar", async () => {
@@ -949,6 +984,7 @@ describe("the coverage ladder, when --threshold is absent", () => {
         recommended: 85,
         ideal: 90,
         source: "nen/workflow.json",
+        present: true,
       });
       // No row carries 'met': there was no --threshold to answer for.
       expect(parsed.targets.every((row): boolean => row.met === undefined)).toBe(true);
@@ -990,7 +1026,7 @@ describe("the coverage ladder, when --threshold is absent", () => {
     }
   });
 
-  it("no nen/workflow.json: 'ladder' is null and no row carries 'band' -- unchanged from before this existed", async () => {
+  it("no nen/workflow.json: the DEFAULT ladder still bands, and 'present' says it was assumed", async () => {
     const repo = withLadderProject(undefined);
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
@@ -998,21 +1034,82 @@ describe("the coverage ladder, when --threshold is absent", () => {
         script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
       });
       const parsed = document(result);
-      expect(parsed.ladder).toBeNull();
-      expect(parsed.targets.every((row): boolean => row.band === undefined)).toBe(true);
+      expect(parsed.ladder).toEqual({
+        minimum: 80,
+        recommended: 85,
+        ideal: 90,
+        source: "nen/workflow.json",
+        present: false,
+      });
+      // The bands are real, not a placeholder: 84.62% is 'minimum', 75% is not.
+      const byName = new Map(parsed.targets.map((row): [string, string | null | undefined] => [row.name, row.band]));
+      expect(byName.get("packages/core/src/index.ts")).toBe("minimum");
+      expect(byName.get("packages/app/src/main.ts")).toBe("under-minimum");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
   });
 
-  it("an incomplete coverage block (missing 'ideal') is treated as no ladder, silently", async () => {
-    const repo = withLadderProject({ minimum: 80, recommended: 85 });
+  it("names the absent file in the text line, so 80 is never mistaken for a declared 80", async () => {
+    const repo = withLadderProject(undefined);
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
+      });
+      expect(result.out.join("\n")).toMatch(
+        /^ladder:\s+nen\/workflow\.json is absent -- these are nen's defaults -- minimum 80%/m,
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a partial coverage block takes the DEFAULT for every rung it omits", async () => {
+    // The loader's rule, not this verb's: every key is optional and every
+    // default is published, so 'ideal' left out is 90 rather than "no ladder".
+    const repo = withLadderProject({ minimum: 50, recommended: 70 });
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
         script: [ok("x y"), { match: DIFF_MAIN, result: { code: 0, stdout: BOTH_TOUCHED } }],
       });
-      expect(document(result).ladder).toBeNull();
+      expect(document(result).ladder).toEqual({
+        minimum: 50,
+        recommended: 70,
+        ideal: 90,
+        source: "nen/workflow.json",
+        present: true,
+      });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a MALFORMED workflow.json refuses at 1, naming the pointer, before the tool is spawned", async () => {
+    const repo = withLadderProject(undefined);
+    writeFileSync(join(repo, "nen", "workflow.json"), JSON.stringify({ coverage: { minimum: "80" } }));
+    try {
+      // No script entry for 'x y' at all: if the declared tool were spawned,
+      // the seam would fail on an unscripted invocation rather than on this.
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], { repo, script: [] });
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).toContain("coverage.minimum");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a near-miss key is refused rather than silently keeping the default", async () => {
+    const repo = withLadderProject(undefined);
+    writeFileSync(
+      join(repo, "nen", "workflow.json"),
+      JSON.stringify({ coverage: { minimun: 95, recommended: 85, ideal: 90 } }),
+    );
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], { repo, script: [] });
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).toContain("minimum");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

@@ -1,81 +1,17 @@
-// src/shu/coverage/ladder.test.ts -- `nen/workflow.json`'s coverage ladder:
-// the tiny stand-in reader (residue -- see ./ladder.ts's own header), and the
-// pure banding arithmetic it hands rows through.
+// src/shu/coverage/ladder.test.ts -- the pure banding arithmetic `--touched`
+// hands its rows through, against the ladder ../coverage.ts loads out of
+// `nen/workflow.json`.
+//
+// THE READER'S OWN TESTS ARE GONE BECAUSE THE READER IS. This module carried a
+// stand-in `readLadder` -- a `JSON.parse` with three number checks -- until the
+// policy file's real loader landed; its five tests moved with it, and the
+// absent-file / malformed-file / missing-block cases are now
+// ../../schema/workflow.test.ts's, tested once against the loader every reader
+// shares. What is left here is the arithmetic, which was never the loader's.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { bandOf, bandRows, readLadder } from "./ladder.js";
+import { bandOf, bandRows } from "./ladder.js";
 import { counts, target } from "./shape.js";
-
-function withWorkflow(coverage: unknown): string {
-  const dir = mkdtempSync(join(tmpdir(), "nen-coverage-ladder-"));
-  mkdirSync(join(dir, "nen"));
-  if (coverage !== undefined) {
-    writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ coverage }));
-  }
-  return dir;
-}
-
-describe("readLadder", () => {
-  it("reads minimum/recommended/ideal off nen/workflow.json", () => {
-    const repo = withWorkflow({ minimum: 80, recommended: 85, ideal: 90, scope: "touched" });
-    try {
-      expect(readLadder(repo)).toEqual({ minimum: 80, recommended: 85, ideal: 90 });
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("is null when the file does not exist -- no refusal, this file is optional", () => {
-    const repo = mkdtempSync(join(tmpdir(), "nen-coverage-ladder-"));
-    try {
-      expect(readLadder(repo)).toBeNull();
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("is null on invalid JSON", () => {
-    const dir = mkdtempSync(join(tmpdir(), "nen-coverage-ladder-"));
-    mkdirSync(join(dir, "nen"));
-    writeFileSync(join(dir, "nen", "workflow.json"), "{ not json");
-    try {
-      expect(readLadder(dir)).toBeNull();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("is null when there is no 'coverage' block at all", () => {
-    // withWorkflow(undefined) creates 'nen/' but skips the file; write one
-    // here with a DIFFERENT top-level key and no 'coverage' at all.
-    const repo = withWorkflow(undefined);
-    writeFileSync(join(repo, "nen", "workflow.json"), JSON.stringify({ branch: { base: "main" } }));
-    try {
-      expect(readLadder(repo)).toBeNull();
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("is null when any of the three is missing or not a finite number", () => {
-    for (const coverage of [
-      { minimum: 80, recommended: 85 }, // no ideal
-      { minimum: 80, recommended: 85, ideal: "90" }, // a string, not a number
-      { minimum: 80, recommended: 85, ideal: Infinity },
-      {},
-    ]) {
-      const repo = withWorkflow(coverage);
-      try {
-        expect(readLadder(repo), JSON.stringify(coverage)).toBeNull();
-      } finally {
-        rmSync(repo, { recursive: true, force: true });
-      }
-    }
-  });
-});
 
 const LADDER = { minimum: 80, recommended: 85, ideal: 90 };
 

@@ -1,23 +1,29 @@
-// src/shu/coverage/ladder.ts -- `nen/workflow.json`'s coverage ladder
-// (minimum/recommended/ideal), and the band a row falls in against it.
+// src/shu/coverage/ladder.ts -- the band a row falls in against the coverage
+// ladder (minimum/recommended/ideal) `nen/workflow.json` states.
 //
-// RESIDUE, NAMED AS SUCH: THE REAL LOADER DOES NOT EXIST YET. The workflow
-// policy file's schema and loader (`src/schema/workflow.ts`, validated by `nen
-// schema check`) is landing in a sibling change; until it does, `readLadder`
-// below reads the THREE numbers this verb needs straight off the JSON file,
-// with no validation beyond "are these three finite numbers" -- no `$schema`
-// check, no report of an otherwise-malformed document, nothing this verb does
-// not itself need. When the real loader lands, this function is replaced by a
-// call into it and this file's own JSON.parse goes away; every sentence in
-// this header is written to make that swap obvious rather than to justify a
-// permanent second reader of the same file.
+// THIS FILE NO LONGER READS THE FILE, AND THAT IS THE POINT. The first cut of
+// `--touched` carried a tiny stand-in reader here -- a `JSON.parse` of
+// `nen/workflow.json` that checked three numbers and nothing else -- named in
+// its own header as residue, because the policy file's schema and loader did
+// not exist yet. They do now (`../../schema/workflow.ts`, validated by `nen
+// schema check`), so ../coverage.ts calls `loadWorkflow` and hands the three
+// numbers down. A second reader of the same file is exactly the drift the
+// stand-in's header promised to avoid: one file, one loader, one set of
+// defaults.
+//
+// WHAT THE LOADER'S DEFAULTS MEAN HERE. `loadWorkflow` answers `present: false`
+// with the published defaults -- 80 / 85 / 90 -- rather than "no policy", so a
+// repository that has not written a `workflow.json` yet is banded against the
+// design's own rungs instead of getting no bands at all. The report says which
+// of the two it was (`ladder.present`), so a reader can tell a declared 80 from
+// an assumed one; see ./report.ts's `CoverageLadderReport`.
 //
 // SCOPED TO `--touched`, NEVER TO A PLAIN RUN. The design's own shape for the
 // file states `"coverage": { "minimum": 80, "recommended": 85, "ideal": 90,
 // "scope": "touched" }` -- the ladder is a policy about the files a CHANGE
 // touched, the same scope `--threshold`'s own header already names, and a
-// plain `nen shu coverage` has no such set to band. ../coverage.ts reads this
-// module only when `--touched` was given and `--threshold` was not: an
+// plain `nen shu coverage` has no such set to band. ../coverage.ts reads the
+// policy only when `--touched` was given and `--threshold` was not: an
 // explicit `--threshold` is the caller overriding the file's policy for this
 // one run, not a second number to reconcile against it.
 //
@@ -25,52 +31,22 @@
 // where a row sits, not a verdict this binary is entitled to enforce -- see
 // ./report.ts's header for zheref/nen#91 v3 q16.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { thresholdMet } from "./report.js";
 import type { CoverageBand, CoverageMeasure, CoverageTarget } from "./shape.js";
 
+/**
+ * The three rungs, and nothing else.
+ *
+ * STRUCTURAL ON PURPOSE, so that ../../schema/workflow.ts's `CoveragePolicy`
+ * (which carries `scope` and `raw` besides) satisfies it without this module
+ * importing the schema layer. The banding arithmetic below is pure -- it takes
+ * numbers, not a document -- and keeping it that way is what lets ./report.ts
+ * hold the reporting shape and the loader hold the reading.
+ */
 export interface CoverageLadder {
   readonly minimum: number;
   readonly recommended: number;
   readonly ideal: number;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-/**
- * `<repoRoot>/nen/workflow.json`'s `coverage.{minimum,recommended,ideal}`.
- *
- * NULL ON ANYTHING THIS TINY READ CANNOT ANSWER FOR -- no file, unreadable
- * text, invalid JSON, no `coverage` block, or any of the three not a finite
- * number -- rather than a refusal. `--threshold` is optional and so is this
- * file: a repository that has not adopted `workflow.json` yet must see
- * `coverage --touched` work exactly as it always did, silently, rather than
- * fail a run over a policy file it never declared. The real loader (once it
- * lands) is the place a genuinely malformed `workflow.json` gets reported --
- * this tiny stand-in only ever falls back to "no ladder", never to a refusal.
- */
-export function readLadder(repoRoot: string): CoverageLadder | null {
-  let text: string;
-  try {
-    text = readFileSync(join(repoRoot, "nen", "workflow.json"), "utf8");
-  } catch {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const coverage = (parsed as Readonly<Record<string, unknown>>)["coverage"];
-  if (typeof coverage !== "object" || coverage === null) return null;
-  const { minimum, recommended, ideal } = coverage as Readonly<Record<string, unknown>>;
-  if (!isFiniteNumber(minimum) || !isFiniteNumber(recommended) || !isFiniteNumber(ideal)) return null;
-  return { minimum, recommended, ideal };
 }
 
 /**
