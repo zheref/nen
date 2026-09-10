@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseStatusPorcelain, triageStage } from "./triage.js";
+import { DEFAULT_LARGE_BYTES, parseStatusPorcelain, triageStage } from "./triage.js";
 
 describe("parseStatusPorcelain -- -z / NUL-delimited format", () => {
   it("parses ordinary modified/added/deleted/untracked entries", () => {
@@ -132,5 +132,79 @@ describe("triageStage -- the ignored bucket (zheref/nen#169)", () => {
     const result = triageStage(entries);
     expect(result.flagged).toEqual([]);
     expect(result.ignored).toHaveLength(2);
+  });
+});
+
+// zheref/nen#57. `hatsu:tensho` and `hatsu:jujisho` each independently kept
+// local-config and file-size checks as by-eye judgement on top of this verb's
+// five detectors -- two skills compensating the same way is the shape of a gap
+// rather than a preference.
+describe("triageStage -- local-config filenames", () => {
+  function flagsFor(path: string): readonly string[] {
+    const result = triageStage([
+      { path, indexStatus: "?", worktreeStatus: "?", ignored: false },
+    ]);
+    return result.flagged[0]?.reasons ?? [];
+  }
+
+  it("flags the '.local' infix wherever a tool puts it", () => {
+    for (const path of [
+      ".claude/settings.local.json",
+      "config.local.json",
+      "app/config.local.yml",
+      "notes.local",
+    ]) {
+      expect(flagsFor(path), path).toContain("local-config");
+    }
+  });
+
+  it("leaves an ordinary path alone, including one that merely CONTAINS 'local'", () => {
+    // A filename check that fired on `localisation.ts` or `src/local/index.ts`
+    // would bury the rows that need a decision under ones that do not, which is
+    // the defect zheref/nen#169's `ignored` bucket exists to undo.
+    for (const path of ["src/localisation.ts", "src/local/index.ts", "locale.json", "src/index.ts"]) {
+      expect(flagsFor(path), path).not.toContain("local-config");
+    }
+  });
+
+  it("carries BOTH reasons where a file is local config AND secret-shaped", () => {
+    // '.env.local' is each of those independently, and "present all flags at
+    // once" is this module's own rule.
+    expect(flagsFor(".env.local")).toEqual(["secret-shape", "local-config"]);
+  });
+});
+
+describe("triageStage -- unusually large files", () => {
+  const entry = { path: "big.txt", indexStatus: "?", worktreeStatus: "?", ignored: false } as const;
+
+  it("flags a file at or over the threshold, and not one under it", () => {
+    const at = triageStage([entry], { sizes: new Map([["big.txt", 100]]), largeBytes: 100 });
+    expect(at.flagged[0]?.reasons).toContain("large");
+    const under = triageStage([entry], { sizes: new Map([["big.txt", 99]]), largeBytes: 100 });
+    expect(under.flagged).toEqual([]);
+    expect(under.clean).toEqual(["big.txt"]);
+  });
+
+  it("uses one mebibyte when the caller states no threshold", () => {
+    expect(DEFAULT_LARGE_BYTES).toBe(1024 * 1024);
+    const big = triageStage([entry], { sizes: new Map([["big.txt", DEFAULT_LARGE_BYTES]]) });
+    expect(big.flagged[0]?.reasons).toContain("large");
+    const ordinary = triageStage([entry], { sizes: new Map([["big.txt", 4096]]) });
+    expect(ordinary.clean).toEqual(["big.txt"]);
+  });
+
+  it("never flags a path it was given no size for -- unmeasured is not small", () => {
+    // The one reading this must not produce. A deletion has no file to stat,
+    // and a caller that measured nothing has claimed nothing.
+    const unmeasured = triageStage([entry], { sizes: new Map(), largeBytes: 1 });
+    expect(unmeasured.flagged).toEqual([]);
+  });
+
+  it("keeps a large file's OTHER reasons alongside it", () => {
+    const result = triageStage(
+      [{ path: "dump.local.json", indexStatus: "?", worktreeStatus: "?", ignored: false }],
+      { sizes: new Map([["dump.local.json", 5_000_000]]) },
+    );
+    expect(result.flagged[0]?.reasons).toEqual(["local-config", "large"]);
   });
 });

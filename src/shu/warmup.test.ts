@@ -457,6 +457,23 @@ describe("a dirty working copy", () => {
     expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, STATUS]);
   });
 
+  it("flags a local-config path on the list of work about to be lost", async () => {
+    // zheref/nen#57 added `local-config` to ../stage/triage.ts, and this caller
+    // keeps it deliberately (Copilot, PR #189): a `settings.local.json` is
+    // unrecoverable personal settings that exist nowhere else, which is exactly
+    // this list's subject. `large` cannot appear here at all -- this caller
+    // hands triageStage no sizes, and an unmeasured path is never flagged
+    // large -- so the filter needs no entry for it.
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([ok(STATUS, "?? config.local.json\0?? notes.md\0")]),
+    });
+    expect(result.code).toBe(2);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/\?\? config\.local\.json {2}\[local-config\]/);
+    expect(said).not.toMatch(/large/);
+    expect(said).toMatch(/\?\? notes\.md$/m);
+  });
+
   it("says, in the refusal itself, that ignored files are never touched", async () => {
     const result = await capture(["warmup", "--branch", BRANCH], { script: happyPath([ok(STATUS, DIRTY)]) });
     expect(result.err.join("\n")).toMatch(/Ignored files are NEVER touched/);

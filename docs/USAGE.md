@@ -1524,6 +1524,8 @@ without `-f`, so there is nothing to ask.
 
 Reads `git status --porcelain=v1 -z --ignored -uall` and reasons over every
 entry: a secret-looking name (`.env`, `*.pem`, `*.key`, `credentials*`), a
+**local-config filename** (the `.local` infix — `settings.local.json`,
+`.env.local`, `config.local.yml`), a file **at or over `--large-bytes`**, a
 binary, a path outside `--scope`, or a deleted path whose basename
 `--mentions` never names — each of these is FLAGGED, needing a human's yes
 before it is staged. A git-ignored entry is a FACT rather than a question (a
@@ -1540,6 +1542,7 @@ with every reason it matched, `secret-shape` included, and never appears in
 
 ```text
 nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
+                 [--large-bytes <n>]
 ```
 
 **Arguments**
@@ -1549,7 +1552,21 @@ nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
 | `--repo <path>` | **yes** | the working tree whose unstaged files are triaged | unbracketed in usage; omitted is refused at exit 2 (#28) |
 | `--scope <a,b>` | no | in-scope path prefixes | omit to skip the out-of-scope check entirely |
 | `--mentions <text>` | no | free text (a commit message draft, a PR description) searched for a deleted path's basename | an unmentioned deletion is flagged, never silently staged |
+| `--large-bytes <n>` | no | bytes at or above which a file is flagged `large` | default **1048576** (1 MiB) — no ordinary source file trips it, a multi-megabyte accident does. A default exists here where [`loop slots --local-cap`](#nen-loop-slots) refuses one, because that flag is a concurrency *guard* whose forgotten default silently widens what is allowed, while this is a *detection* threshold on a verb that decides nothing and whose default errs toward flagging. A zero or negative value is refused at exit 2. |
 | `--json` | no | machine-readable triage | — |
+
+**The two detectors added for [#57](https://github.com/zheref/nen/issues/57).**
+`local-config` is a **filename** check like the secret shape, not a directory
+rule: `.claude/` and `.vscode/` hold committed project configuration as often as
+personal settings, and flagging every file in them would bury the rows that need
+a decision under the ones that do not. `large` is measured at the CLI seam and
+handed to the pure module, and a path the verb could not measure — a deletion, a
+broken symlink — is **never** flagged `large`, because "not measured" must not
+render as "measured and small". **An ignored path is not measured either**: it
+can never reach `flagged`, never affects the exit code and is never listed in
+text, so statting a `node_modules/` tree would buy one unread `--json` field for
+thousands of synchronous stats on every invocation. Both travel alongside every other reason a file
+matched: `.env.local` comes back `[secret-shape, local-config]`.
 
 **Output and exit codes** — human lines: `clean: <n> file(s)` then each
 clean path; `ignored: <n> file(s), not listed` (a count only — this verb has
