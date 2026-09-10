@@ -30,6 +30,9 @@ async function capture(argv: readonly string[], repoFlag: string | null, run: Se
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },
+    runStreamed: (): never => {
+      throw new Error("this verb has no watched form");
+    },
     platform: "linux",
   };
   const code = await runFamily(changelogCommand, argv, repoFlag, false, io, seams);

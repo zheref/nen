@@ -17,10 +17,14 @@ import {
   mustJson,
   normalizeEol,
   outputLines,
+  outputWindow,
   spawnInteractiveRunner,
   spawnRunner,
+  spawnStreamedRunner,
   ToolError,
+  type OutputWindow,
   type Seams,
+  type StreamedChunk,
 } from "./exec.js";
 
 /** A real-spawn Seams (no scripting) for the `must`/`mustJson` tests below. */
@@ -28,6 +32,7 @@ function realSeams(): Seams {
   return {
     run: spawnRunner,
     runInteractive: spawnInteractiveRunner,
+    runStreamed: spawnStreamedRunner,
     now: (): Date => new Date(),
     env: {},
     platform: process.platform,
@@ -108,6 +113,10 @@ describe("defaultSeams", () => {
     expect(seams.runInteractive).toBe(spawnInteractiveRunner);
     expect(seams.platform).toBe(process.platform);
   });
+
+  it("wires the streamed runner, so no caller can fall through to a real spawn", () => {
+    expect(defaultSeams().runStreamed).toBe(spawnStreamedRunner);
+  });
 });
 
 describe("spawnInteractiveRunner -- the long-running seam", () => {
@@ -181,6 +190,95 @@ describe("spawnInteractiveRunner -- the long-running seam", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("outputWindow -- the arithmetic both streaming runners share", () => {
+  it("measures elapsed from the start and quiet from the last output", () => {
+    expect(outputWindow(0, 40, 100)).toEqual({ elapsedMs: 100, quietMs: 60 });
+  });
+
+  it("reports the whole run as quiet when nothing has been said yet", () => {
+    // `lastOutputAt` starts AT the start, so a child that has printed nothing
+    // has been quiet for exactly as long as it has been running -- and the two
+    // budgets are then the same number, which is what makes a guard on a silent
+    // build fire on the elapsed one rather than immediately.
+    expect(outputWindow(10, 10, 90)).toEqual({ elapsedMs: 80, quietMs: 80 });
+  });
+});
+
+describe("spawnStreamedRunner -- the watched seam", () => {
+  it("relays output as it arrives, stamped, and answers the child's own code", async () => {
+    const chunks: StreamedChunk[] = [];
+    const result = await spawnStreamedRunner(
+      process.execPath,
+      ["-e", "process.stdout.write('one\\n'); console.error('two'); process.exit(3)"],
+      { onOutput: (chunk): void => void chunks.push(chunk) },
+    );
+    expect(result.code).toBe(3);
+    expect(result.spawnFailed).toBe(false);
+    expect(result.abandoned).toBe(false);
+    expect(chunks.map((chunk): string => chunk.stream).sort()).toEqual(["stderr", "stdout"]);
+    expect(chunks.map((chunk): string => chunk.text).join("")).toContain("one");
+    expect(chunks.every((chunk): boolean => chunk.atMs >= 0)).toBe(true);
+  });
+
+  it("reports a missing binary as spawnFailed, never as an exit code", async () => {
+    const result = await spawnStreamedRunner("definitely-not-a-real-binary-xyz", []);
+    expect(result.spawnFailed).toBe(true);
+    expect(result.abandoned).toBe(false);
+  });
+
+  it("creates no watcher at all when nobody is watching", async () => {
+    // A streamed run with no `onWindow` is a plain spawn with its output
+    // relayed. Nothing here can assert the absence of a timer directly; what it
+    // CAN assert is that such a run still completes normally, which a caller
+    // relies on for every step that declares no guard.
+    const result = await spawnStreamedRunner(process.execPath, ["-e", "process.exit(0)"]);
+    expect(result).toMatchObject({ code: 0, spawnFailed: false, abandoned: false });
+  });
+
+  it("consults the watcher on the interval, and honours 'reset' and 'stop'", async () => {
+    // A REAL CHILD, A TINY CLOCK. The child sleeps ~120ms in silence while the
+    // watcher is consulted every 5ms; the verdicts are the two that keep it
+    // running, and the assertion is that the seam kept asking and then stopped.
+    const windows: OutputWindow[] = [];
+    const result = await spawnStreamedRunner(
+      process.execPath,
+      ["-e", "setTimeout(() => process.exit(0), 120)"],
+      {
+        pollMs: 5,
+        onWindow: (window): "reset" | "stop" => {
+          windows.push(window);
+          return windows.length < 3 ? "reset" : "stop";
+        },
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(windows.length).toBe(3);
+    // `reset` restarted the quiet window each time, so the third consultation
+    // reports a SHORTER quiet than elapsed -- which is the whole point of the
+    // verdict, and the thing a copy of the arithmetic would have got wrong.
+    const last = windows[2] as OutputWindow;
+    expect(last.quietMs).toBeLessThan(last.elapsedMs);
+  });
+
+  it("abandons a child rather than killing it, and says so", async () => {
+    // The child outlives this call by design: nen never signals what it
+    // started. It exits on its own a moment later, and the assertion is about
+    // what the RUNNER answered -- no code, `abandoned: true` -- because that is
+    // what a caller branches on.
+    const started = Date.now();
+    const result = await spawnStreamedRunner(
+      process.execPath,
+      ["-e", "setTimeout(() => process.exit(0), 2000)"],
+      { pollMs: 5, onWindow: (): "abandon" => "abandon" },
+    );
+    expect(result.abandoned).toBe(true);
+    expect(result.code).toBeNull();
+    expect(result.signal).toBeNull();
+    // It returned long before the child's own two seconds were up.
+    expect(Date.now() - started).toBeLessThan(1500);
   });
 });
 

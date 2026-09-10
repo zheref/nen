@@ -66,6 +66,9 @@ function refusingSeams(): Seams {
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },
+    runStreamed: (): never => {
+      throw new Error("this verb has no watched form");
+    },
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
     platform: "linux",
