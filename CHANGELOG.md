@@ -47,7 +47,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Fixed
 
-- **bootstrap** — `nen bootstrap --help` prints the whole exit-code contract. It described the flags and named no exit code at all, so a caller scripting around the verb — distinguishing "no `--ref`" from "script not found" from any other failure — had to discover **7** empirically, and `7` is the singular outlier among refusals that otherwise use 1 or 2 (closes #58).
+- **bootstrap** — `nen bootstrap --help` prints the whole exit-code contract. It described the flags and named no exit code at all, so a caller scripting around the verb — distinguishing "no `--ref`" from "script not found" from any other failure — had to discover **7** empirically, and `7` is the singular outlier among refusals that otherwise use 1 or 2 (closes [#58](https://github.com/zheref/nen/issues/58), [#190](https://github.com/zheref/nen/pull/190)).
 
   The table says what each code means and, for the two that matter most, what to do about it: **4** is the only retryable one, **5** and **6** must never be retried (a mismatching binary does not become trustworthy by being asked for again, and neither does an absent manifest), and **7** is the wrapper's own — the one code the script itself can never return, which is precisely why it is 7 rather than 1. "The bootstrap failed" and "the bootstrap never ran" are different facts, and only the first says anything about the release the caller asked for.
 
