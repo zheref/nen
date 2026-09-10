@@ -103,6 +103,31 @@ describe("nen repo resolve -- dispatches through the union registry", () => {
     expect(result.err.join("\n")).toMatch(/--from applies only to the no-token form/);
     expect(result.err.join("\n")).toMatch(/--repo <path>/);
   });
+
+  // A --repo with no nen/repos.json (and no legacy schemas/repos.json) is a
+  // PRECONDITION this verb cannot proceed without at all -- there is no
+  // registry to resolve a token against, which is a different failure from
+  // "the token did not match", and must not be reported the same way an
+  // unresolved token is (exit 1, above): a caller pointed at a repo that has
+  // not adopted the registry gets exit 2, matching this family's other
+  // "cannot proceed as given" refusals (an omitted --from-token conflict, an
+  // omitted --repo on 'scenario').
+  it("refuses a --repo with no nen/repos.json at exit 2, naming the file, not a token failure", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "nen-no-registry-"));
+    const result = await capture(["repo", "resolve", "KP"], undefined, empty);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/nen[/\\]repos\.json: no such file/);
+  });
+
+  // Same defect, no-token (origin) form: the registry is opened before the
+  // origin is ever read, so the missing-file refusal fires first and the
+  // same way.
+  it("refuses a --repo with no nen/repos.json at exit 2 on the no-token form too", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "nen-no-registry-"));
+    const result = await capture(["repo", "resolve"], undefined, empty);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/nen[/\\]repos\.json: no such file/);
+  });
 });
 
 describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged into this family)", () => {
@@ -147,11 +172,15 @@ describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged 
   });
 
   // The three downstream causes the one old refusal conflated (zheref/nen#28),
-  // one test each. Cause 1: the --repo path carries no nen/repos.json.
-  it("scenario names a --repo path with no nen/repos.json as exactly that (exit 1)", async () => {
+  // one test each. Cause 1: the --repo path carries no nen/repos.json --
+  // a PRECONDITION this verb cannot proceed past at all, so it is exit 2
+  // (usage/precondition), the same code 'repo resolve' refuses with for the
+  // identical absent-registry defect, not exit 1 (that is reserved for a
+  // registry that IS present and simply does not record what was asked).
+  it("scenario names a --repo path with no nen/repos.json as exactly that (exit 2)", async () => {
     const empty = mkdtempSync(join(tmpdir(), "nen-no-registry-"));
     const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, empty);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/nen[/\\]repos\.json: no such file/);
   });
 

@@ -46,6 +46,18 @@ export default [
     rules,
   },
   {
-    ignores: ["node_modules/**", "dist/**", "**/fixtures/**", "coverage/**"],
+    // `.claude/**` -- Kurapika's own worktrees live under `.claude/worktrees/`
+    // (see .gitignore), each one a FULL checkout with its own `coverage/`,
+    // `node_modules/` and `dist/`. Every pattern in this array is anchored to
+    // THIS config's own directory (see the file header on why two blocks exist
+    // above, and note ESLint's flat-config `ignores` does NOT match at any
+    // depth the way gitignore does) -- so `coverage/**` alone ignores the
+    // root's own report but not `.claude/worktrees/<branch>/coverage/**` one
+    // directory further down, and `eslint .` swept a sibling worktree's
+    // generated `coverage/lcov-report/*.js`, warning on its stale
+    // `eslint-disable` comments on every `nen shu lint` run in a checkout that
+    // happened to have another worktree sitting there. `.claude/` carries no
+    // source this repository lints -- it is untracked (see .gitignore).
+    ignores: ["node_modules/**", "dist/**", "**/fixtures/**", "coverage/**", ".claude/**"],
   },
 ];

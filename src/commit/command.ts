@@ -1,4 +1,4 @@
-// src/commit/command.ts -- `nen commit format`.
+// src/commit/command.ts -- `nen commit format` and `nen commit check`.
 //
 // THE ONE THING THIS VERB READS FROM A REPOSITORY, AND WHY IT IS NOT A LITERAL.
 // ./format.ts's header is explicit that a trailer KEY is the caller's data and
@@ -19,7 +19,7 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { SchemaError } from "../schema/errors.js";
-import { loadWorkflow, trailerRefusal, WORKFLOW_FILE } from "../schema/workflow.js";
+import { attributionRefusalMessages, loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { PROGRAM } from "../version.js";
 import { proofRelativePath } from "../shu/proof.js";
 import { runCheck } from "./check.js";
@@ -81,8 +81,8 @@ pointer: nen will not shape a message under a policy it could not read.
 exits 0 -- the lane, the moment, and the git TREE it built -- and removes it when
 the build comes out red, so a proof never outlives the tree it proved.
 --require-proof <lane> reads that file and compares its tree against this
-working copy's, computed the same way (a scratch index, never yours: git add -A
-then git write-tree, with .nen/ excluded).
+working copy's, computed the same way (a scratch index, never yours: git add -A,
+then git rm --cached for .nen/, then git write-tree).
 
   exit 0  the proof is there, it is for that lane, and its tree is this tree
   exit 1  one of the three differences, named: there is no proof, it records a
@@ -99,6 +99,13 @@ ref moves. Read the code and decide, as with 'shu coverage --threshold'.`;
  * it can see in one pass (../cli/command.ts's `splitIntegerList` states the
  * argument), and a caller fixing one refused trailer at a time is exactly the
  * round trip that costs a session.
+ *
+ * THE WORDING ITSELF LIVES IN ../schema/workflow.ts's attributionRefusalMessages
+ * NOW, shared with `nen wc squash` -- the other caller that shapes a whole
+ * commit message under this same policy -- so the two verbs cannot drift into
+ * two different sentences for the same refusal. This function's own job is
+ * unchanged: decide WHETHER to look (no trailers, no read at all) and load
+ * the policy the caller's --repo points at.
  */
 function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): readonly string[] {
   // NO WORK AT ALL WHEN THERE ARE NO TRAILERS, and that is not an optimisation:
@@ -108,27 +115,10 @@ function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): 
   if (trailers.length === 0) return [];
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const loaded = loadWorkflow(root);
-  if (!loaded.present) return [];
-  const allowed = loaded.workflow.commits.allowedAttributionTrailers;
-  const refusals: string[] = [];
-  for (const trailer of trailers) {
-    const refused = trailerRefusal(loaded.workflow.commits, trailer.key);
-    if (refused === null) continue;
-    // TWO WHOLE SENTENCES, NOT ONE WITH A HOLE IN IT. An empty allow-list and a
-    // populated one are different facts about the repository and read as
-    // different sentences; splicing a clause into a shared frame produced
-    // "lists no allowed attribution trailer at all, and 'X' is not among them"
-    // -- among WHAT -- which is the one line of this refusal a reader has to
-    // parse twice.
-    refusals.push(
-      allowed.length === 0
-        ? `trailer key '${trailer.key}' is an attribution trailer this repository refuses. '${loaded.path}' admits none at all: its commits.allowedAttributionTrailers is empty. Drop the trailer, or add '${refused}' to that list`
-        : `trailer key '${trailer.key}' is an attribution trailer this repository refuses. '${loaded.path}' admits ${allowed
-            .map((key): string => `'${key}'`)
-            .join(", ")} under commits.allowedAttributionTrailers, and '${refused}' is not one of them. Drop the trailer, or add its key to that list`,
-    );
-  }
-  return refusals;
+  return attributionRefusalMessages(
+    loaded,
+    trailers.map((trailer): string => trailer.key),
+  );
 }
 
 /**

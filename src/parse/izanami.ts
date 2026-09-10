@@ -1028,6 +1028,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // that provably sends nothing (../issue/command.ts prints the argv and
       // the exact bytes and returns before postComment).
       comment: DRY("posts a caller-supplied comment on GitHub unless --dry-run is given"),
+      // Dry-run-gated for the same reason 'attach-sub' below is: --dry-run
+      // STILL reads GitHub (to certify the number is an issue, not a pull
+      // request), but that read never writes -- the same "still reads GitHub"
+      // shape the shared --dry-run-discipline table already documents for
+      // this family's other two certifying verbs.
+      "edit-body": DRY("replaces an issue's body via gh issue edit --body-file unless --dry-run is given; --dry-run still reads GitHub to certify the number is an issue"),
       "attach-sub": DRY("attaches sub-issues unless --dry-run is given"),
       "consolidate-close": DRY("attaches and closes issues unless --dry-run is given"),
       "chain-position": RO("computes a chain position -- pure computation"),
@@ -1072,6 +1078,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
       "request-reviews": MUT("gh pr edit --add-reviewer"),
+      // Dry-run-gated, the same shape 'issue edit-body' carries: --dry-run
+      // still reads GitHub (repos/<t>/pulls/<n>, to certify the number IS a
+      // pull request) but that read never writes.
+      "edit-body": DRY("replaces a pull request's body via gh pr edit --body-file unless --dry-run is given; --dry-run still reads GitHub to certify the number is a pull request"),
     },
   },
   quality: {
@@ -1318,7 +1328,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       until: RO("re-classifies its own --command against this very table before the first observation"),
     },
   },
-  wc: { subcommands: { classify: RO("classifies the working copy over git reads") } },
+  wc: {
+    subcommands: {
+      classify: RO("classifies the working copy over git reads"),
+      squash: MUT("resets the branch and commits -- git reset --soft plus git commit -F"),
+    },
+  },
 };
 
 // The three commands ../index.ts answers BEFORE the registry (its own header
