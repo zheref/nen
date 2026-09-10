@@ -229,6 +229,45 @@ describe("personas", () => {
     expect(content).toContain("Scout reads and reports.");
   });
 
+  it("refuses a persona that would mirror to a file with NO frontmatter", () => {
+    // Both roads to the same empty block are refused, because the file that
+    // would be written is the same file: nothing for the surface to route on.
+    const dir = tempDir();
+    writeFileSync(join(dir, "prose.md"), "just prose, no fence\n");
+    const bare = (): unknown =>
+      generateSurfaceMirror({
+        row: row("cursor"),
+        skills: readSourceSkills(SKILLS),
+        agents: readSourceAgents(dir),
+        invocationPrefix: null,
+      });
+    expect(bare).toThrow(SurfaceMirrorError);
+    expect(bare).toThrow(/no '---' frontmatter block at all/);
+
+    const onlyForeign = tempDir();
+    writeFileSync(join(onlyForeign, "toolsy.md"), "---\ntools: Read, Grep\ncolor: blue\n---\n\nprose\n");
+    expect(() =>
+      generateSurfaceMirror({
+        row: row("cursor"),
+        skills: readSourceSkills(SKILLS),
+        agents: readSourceAgents(onlyForeign),
+        invocationPrefix: null,
+      }),
+    ).toThrow(/holds none of the keys this surface reads/);
+  });
+
+  it("accepts the same prose persona for a surface whose personas ARE prose", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "prose.md"), "just prose, no fence\n");
+    const files = generateSurfaceMirror({
+      row: row("codex"),
+      skills: readSourceSkills(SKILLS),
+      agents: readSourceAgents(dir),
+      invocationPrefix: null,
+    });
+    expect(at(files, "AGENTS.md")).toContain("## prose");
+  });
+
   it("are absent entirely when no --agents directory was given", () => {
     expect(generate("codex", false).map((file): string => file.path)).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
     expect(generate("cursor", false).map((file): string => file.path)).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
@@ -291,6 +330,49 @@ describe("writing", () => {
     const result = writeSurfaceMirror(out, files, row("codex"));
     expect(result.deleted).toEqual([]);
     expect(readFileSync(join(out, "README.md"), "utf8")).toContain("hand written");
+  });
+
+  it("does NOT delete an UNMARKED orphan, however exactly it sits where one would", () => {
+    // The hole the first cut had (zheref/nen#149, review): the write path
+    // refused to OVERWRITE an unmarked SKILL.md and then deleted one whose
+    // source had gone. Same file, same hand, destroyed instead of protected
+    // because it happened to be orphaned rather than shadowed.
+    const { out, files } = materialize("codex");
+    mkdirSync(join(out, "handmade"));
+    writeFileSync(join(out, "handmade", "SKILL.md"), "---\nname: handmade\n---\n\nsomebody's own skill\n");
+    const result = writeSurfaceMirror(out, files, row("codex"));
+    expect(result.deleted).toEqual([]);
+    expect(readFileSync(join(out, "handmade", "SKILL.md"), "utf8")).toContain("somebody's own skill");
+    // And check agrees, because both read the same list: an `extra` a
+    // regenerate could not clear would be drift nobody can fix.
+    expect(checkSurfaceMirror(out, files, row("codex")).extra).toEqual([]);
+  });
+
+  it("DOES delete an orphan marked for ANOTHER surface -- still this generator's output", () => {
+    const { out, files } = materialize("codex");
+    mkdirSync(join(out, "gamma"));
+    writeFileSync(join(out, "gamma", "SKILL.md"), `${markerFor("cursor")}\nfrom another run\n`);
+    expect(writeSurfaceMirror(out, files, row("codex")).deleted).toEqual(["gamma/SKILL.md"]);
+  });
+
+  it("leaves an unmarked persona file alone too, for both agent shapes", () => {
+    const cursor = materialize("cursor");
+    writeFileSync(join(cursor.out, "agents", "handmade.md"), "---\nname: handmade\n---\n\nours\n");
+    expect(writeSurfaceMirror(cursor.out, cursor.files, row("cursor")).deleted).toEqual([]);
+
+    const codex = materialize("codex");
+    // An AGENTS.md that is not ours is protected on BOTH paths: not overwritten
+    // (the clobber guard) and not deleted (this one), whichever way the run
+    // arrives at it.
+    const noAgents = generateSurfaceMirror({
+      row: row("codex"),
+      skills: readSourceSkills(SKILLS),
+      agents: [],
+      invocationPrefix: PREFIX,
+    });
+    writeFileSync(join(codex.out, "AGENTS.md"), "# our project's own instructions\n");
+    expect(writeSurfaceMirror(codex.out, noAgents, row("codex")).deleted).toEqual([]);
+    expect(readFileSync(join(codex.out, "AGENTS.md"), "utf8")).toContain("our project's own");
   });
 
   it("REFUSES to overwrite a destination that carries no marker, before writing anything", () => {

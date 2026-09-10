@@ -5995,9 +5995,17 @@ nested fence) is never mistaken for the real one, the same anchoring
 **What is mirrored, and what is not.** Only `<name>/SKILL.md` — a skill
 directory's `scripts/`, `references/` and assets are left where they are, and a
 mirror directory may hold them beside the generated file without either verb
-touching them. The **filename universe** these two verbs consider their own is
-exactly `<name>/SKILL.md` plus the row's own persona location; anything else
-under `--out` is never deleted and never reported as `extra`.
+touching them. The **filename universe** these two verbs consider their own has
+**two** conditions: a file must sit at one of the row's own locations
+(`<name>/SKILL.md`, or the persona location) **and carry a generated marker**.
+An unmarked file is somebody's own work wherever it sits, so it is never
+overwritten, never deleted as an orphan, and never reported as `extra` — a
+`SKILL.md` written by hand in the mirror directory is as untouchable as a
+`README.md` beside it. The gate is "carries *a* marker", not "carries *this*
+surface's": a file generated for another surface whose source has since gone is
+still this generator's output, and is exactly what `check` calls `extra` and
+`generate` deletes. Both verbs read the same list, so what one reports the other
+clears.
 
 ### `nen surface mirror generate`
 
@@ -6031,7 +6039,7 @@ nen surface mirror generate --source <dir> --surface codex|cursor --out <dir>
 | `--source <dir>` | **yes** | the directory whose **subdirectories** are the skills | one holding no `<name>/SKILL.md` is refused at exit 2, never mirrored as empty: an empty generation would delete the whole mirror as orphaned, so the one plausible typo (`--source` pointed one level too high) would quietly empty it instead of saying so |
 | `--surface <name>` | **yes** | which row of the table above | anything else is refused at exit 2, listing the ones that exist |
 | `--out <dir>` | **yes** | where the mirror is written | a path resolving **inside** `--source` (its own directory included) is refused at exit 2 — the mirror would become part of the source, and the next run would mirror its own output. Created if absent |
-| `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused |
+| `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused. On a surface that keeps personas as **files**, a persona that would mirror to an **empty frontmatter block** — no fence in the source, or a fence holding only keys that surface does not read — is refused at exit 2: the file written would carry no frontmatter at all, and there would be nothing for the surface to route on. On a surface whose personas are **prose** (the appendix), the same file is fine, because frontmatter is not a concept there |
 | `--invocation-prefix <p>` | no | the **source's own** invocation namespace, e.g. `myplugin:` | caller data, never a literal in this binary (§3), for the same reason [`canon mirror generate`](#nen-canon-mirror-generate)'s `--header-template` is a flag. Without it nothing is rewritten; with it, mentions of skills *outside* the mirrored set are rewritten too, because a half-rewritten document is worse than an unrewritten one |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
 | `--repo <path>` | no | Not used — this verb operates purely on the paths given. | |

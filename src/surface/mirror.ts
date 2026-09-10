@@ -226,6 +226,24 @@ function agentFiles(options: GenerateOptions): readonly GeneratedFile[] {
     return options.agents.map((agent): GeneratedFile => {
       const document = splitDocument(agent.text);
       const front = renderFrontmatter(document.entries, new Set(rule.keys));
+      // A `files` surface reads a persona AS frontmatter-bearing markdown, so a
+      // mirror with an EMPTY block cannot be one (zheref/nen#149, review).
+      // Emitting it anyway would write a persona file with no frontmatter at
+      // all -- nothing for the surface to route on, and the marker sitting on
+      // line 1 of a document whose shape that surface's own page describes
+      // differently. That the row REQUIRES no key is a statement about which
+      // keys must be filled in; it is not a statement that the block itself is
+      // optional. Both ways of arriving at an empty block are refused -- no
+      // fence in the source, or a fence holding only keys this surface does not
+      // read -- because the file that would be written is the same file.
+      if (front === "") {
+        const because = document.hasFrontmatter
+          ? `its frontmatter holds none of the keys this surface reads (${rule.keys.join(", ")})`
+          : "it has no '---' frontmatter block at all";
+        throw new SurfaceMirrorError(
+          `'${agent.relative}' would mirror to a persona file with no frontmatter, because ${because}. '${options.row.surface}' reads a persona as frontmatter-bearing markdown (${options.row.agentSource}), so there would be nothing for it to route on. Fix the source rather than the mirror.`,
+        );
+      }
       const content = `${front}${markerFor(options.row.surface)}\n${document.body}`;
       return {
         path: `${rule.dir}/${agent.stem}${rule.extension}`,
@@ -261,31 +279,50 @@ export function generateSurfaceMirror(options: GenerateOptions): readonly Genera
  * The files under `outDir` this verb considers ITS OWN -- the only ones it will
  * ever delete, and the only ones a check calls EXTRA.
  *
+ * TWO CONDITIONS, AND THE SECOND IS THE MARKER (zheref/nen#149, review). A file
+ * is ours only if it sits at one of the row's own locations AND carries a
+ * generated marker. The first cut had only the location test, which made
+ * `writeSurfaceMirror` inconsistent with itself: it REFUSED to overwrite an
+ * unmarked `<name>/SKILL.md` and then happily DELETED one whose source had gone
+ * -- the same file, the same hand, destroyed instead of protected because it
+ * was orphaned rather than shadowed. "This verb never touches a file it did not
+ * write" has to hold for the delete path too, or it is not a property.
+ *
+ * The gate is deliberately "carries A marker", not "carries THIS surface's": a
+ * file generated for another surface and now sourceless is still this
+ * generator's output, and is the case `check` reports as EXTRA and `generate`
+ * removes. And `check` and `generate` read the SAME list, so what one calls
+ * extra is exactly what the other deletes -- an `extra` a regenerate could not
+ * clear would be drift nobody can fix.
+ *
  * Anything else a repository keeps in the mirror directory (a README, a
- * reference file beside a SKILL.md, an unrelated subdirectory) is outside the
- * universe and is never touched, which is ../canon/mirror.ts's rule and the
- * reason its own docstring gives for having one.
+ * reference file beside a SKILL.md, an unrelated subdirectory, a SKILL.md
+ * somebody wrote by hand) is outside the universe and is never touched, which
+ * is ../canon/mirror.ts's rule and the reason its own docstring gives for
+ * having one.
  */
 export function universeFiles(outDir: string, row: SurfaceRow): readonly string[] {
+  const ours = (relative: string): boolean => {
+    const path = join(outDir, ...relative.split("/"));
+    return existsSync(path) && statSync(path).isFile() && readMarker(readFileSync(path, "utf8")) !== null;
+  };
+
   if (!existsSync(outDir)) return [];
   const found: string[] = [];
   for (const entry of readdirSync(outDir).sort()) {
-    const path = join(outDir, entry);
-    if (!statSync(path).isDirectory()) continue;
-    const skill = join(path, "SKILL.md");
-    if (existsSync(skill) && statSync(skill).isFile()) found.push(`${entry}/SKILL.md`);
+    if (!statSync(join(outDir, entry)).isDirectory()) continue;
+    if (ours(`${entry}/SKILL.md`)) found.push(`${entry}/SKILL.md`);
   }
   const rule = row.agents;
   if (rule.kind === "files") {
     const dir = join(outDir, rule.dir);
     if (existsSync(dir) && statSync(dir).isDirectory()) {
       for (const entry of readdirSync(dir).sort()) {
-        if (entry.endsWith(rule.extension) && statSync(join(dir, entry)).isFile()) found.push(`${rule.dir}/${entry}`);
+        if (entry.endsWith(rule.extension) && ours(`${rule.dir}/${entry}`)) found.push(`${rule.dir}/${entry}`);
       }
     }
-  } else {
-    const file = join(outDir, rule.file);
-    if (existsSync(file) && statSync(file).isFile()) found.push(rule.file);
+  } else if (ours(rule.file)) {
+    found.push(rule.file);
   }
   return found.sort();
 }
