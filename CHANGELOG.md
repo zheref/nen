@@ -4,6 +4,14 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Added
+
+- **pr** — `nen pr request-reviews` gains `--add-bots <id,...>`: GitHub Bot node ids, routed through the `requestReviews` GraphQL mutation's `botIds` (`union:true`) — the one mutation that actually resolves a Bot reviewer, unlike `gh pr edit --add-reviewer`'s `requestReviewsByLogin`, which never resolves a Bot at all (verified live against a real Copilot reviewer node). Every `--add-reviewers` login is now resolved FIRST — against the pull request's own known bots (its `reviewRequests`/`timelineItems`) and `--target`'s collaborators — and routed to whichever mutation actually reaches it; a login resolving to NEITHER is refused at exit **2**, naming it, and pointing at `--add-bots`. `--dry-run` performs the same resolution and prints which route each name or id would take, without requesting anything. The bot route reports success from the mutation's OWN response (which bots now read as pending review), never assumed from the ids this verb sent — the identical mutation call has been observed answering `NOT_FOUND` for a botId under one token and succeeding under another, a permission-scoped difference in what a token can resolve, not a flake (closes #160)
+
+### Fixed
+
+- **pr** — `nen pr request-reviews`'s empty-input refusal now names its OWN flags: `no reviewers named -- --add-reviewers takes a comma-separated list of logins, or --add-bots a comma-separated list of node ids`, rather than `--reviewers`, which belongs to `pr ready`/`pr next-blocker` and was never this verb's own spelling (closes #95)
+
 ### Changed
 
 - **docs**, **schema** — `Hatsu-Agent` and `Akatsuki-Agent` are documented as the two conventional provenance-trailer keys this project's family uses to record which plane (local vs. autonomous CI) made a commit — never an AI-authorship claim, and neither shipped as a default. `docs/USAGE.md` gains a "Two provenance trailers" subsection under [`nen/workflow.json`](docs/USAGE.md#nenworkflowjson), linked from `nen scaffold init`'s `--agent-trailer` notes; `templates/workflow.json`'s `commits` block gains a `$comment` naming both (the written default's `allowedAttributionTrailers` stays empty — nen ships no convention). nen's own `nen/workflow.json` now admits both: `commits.allowedAttributionTrailers` is `["Hatsu-Agent", "Akatsuki-Agent"]`, with a `$comment` stating the maintainer's ruling that `Akatsuki-Agent` is recorded only by an Akatsuki roster (CI-plane) agent and `Hatsu-Agent` only by Hatsu's local roster ([#164](https://github.com/zheref/nen/pull/164))
