@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderBoard } from "../board/render.js";
 import { runFamily, type Io } from "../index.js";
 import type { Seams } from "../seam/exec.js";
-import { stopCommand } from "./command.js";
+import { MARKER_FILE, STOP_MARK_CONTRACT, stopCommand } from "./command.js";
 
 // NEVER `defaultSeams()` HERE (review finding) -- see board/command.test.ts's
 // own note on the same fix. A `run` that throws converts a future regression
@@ -143,5 +143,106 @@ describe("nen stop", () => {
     const result = await capture(["stop", "--from", "efforts.md", "--gate", "G2"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/unknown option '--from'/);
+  });
+});
+
+// ── --mark: the one form of this verb that writes ───────────────────────────
+
+describe("nen stop --mark -- the marker a host hook rings off", () => {
+  function marker(root: string): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(root, ".nen", "last-stop.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it("writes nothing at all without the flag", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    const result = await capture(["stop", "--gate", "G5"], root);
+    expect(result.code).toBe(0);
+    expect(existsSync(join(root, ".nen"))).toBe(false);
+  });
+
+  it("records who, which gate, whether rung 1 fired, and when -- creating .nen/", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    const result = await capture(["stop", "--who", "someone", "--gate", "G5", "--mark"], root);
+    expect(result.code).toBe(0);
+    expect(marker(root)).toEqual({
+      contract: STOP_MARK_CONTRACT,
+      who: "someone",
+      gate: "G5",
+      notified: false,
+      // The INSTANT comes from the seam, which is why this is an equality and
+      // not a "roughly now": a freshness window a host hook checks has to be
+      // provable rather than raced.
+      at: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("goes under the GENERATED '.nen/', never the committed 'nen/'", async () => {
+    // The one-character difference is what keeps `git add nen/` after a stop
+    // from staging this file.
+    expect(MARKER_FILE).toBe(".nen/last-stop.json");
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    await capture(["stop", "--mark"], root);
+    expect(existsSync(join(root, "nen"))).toBe(false);
+  });
+
+  it("carries --notified through, so a hook knows which rungs are left", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    await capture(["stop", "--gate", "G2", "--notified", "--mark"], root);
+    expect(marker(root)["notified"]).toBe(true);
+  });
+
+  it("replaces an existing marker: the LATEST stop is the one to ring for", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    await capture(["stop", "--gate", "G2", "--mark"], root);
+    await capture(["stop", "--gate", "G5", "--mark"], root);
+    expect(marker(root)["gate"]).toBe("G5");
+  });
+
+  it("says on screen that it marked, and publishes the marker in --json", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    const text = await capture(["stop", "--gate", "G5", "--mark"], root);
+    expect(text.out.join("\n")).toContain("marked:");
+    const json = await capture(["stop", "--gate", "G5", "--mark", "--json"], root);
+    const parsed = JSON.parse(json.out.join("\n")) as { marker: { gate: string } | null };
+    expect(parsed.marker?.gate).toBe("G5");
+  });
+
+  it("publishes marker:null when the flag was not given, so the field is always there", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    const result = await capture(["stop", "--gate", "G5", "--json"], root);
+    expect((JSON.parse(result.out.join("\n")) as { marker: unknown }).marker).toBeNull();
+  });
+
+  it("refuses --mark with --template, which waits on nothing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    const result = await capture(["stop", "--template", "--mark"], root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/contradict/);
+    expect(existsSync(join(root, ".nen"))).toBe(false);
+  });
+
+  it("exits 1 with the errno when the marker cannot be written", async () => {
+    // A caller who typed --mark asked for a rung to be armed; "the banner
+    // rendered and the marker did not" is where somebody waits for a bell that
+    // will never ring. A FILE where the directory has to go fails mkdir on
+    // every platform.
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    writeFileSync(join(root, ".nen"), "not a directory\n", "utf8");
+    const result = await capture(["stop", "--gate", "G5", "--mark"], root);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not write/);
+    expect(result.err.join("\n")).toMatch(/EEXIST|ENOTDIR|EACCES|EPERM/);
+  });
+
+  it("does not mark when the efforts file could not be read", async () => {
+    // The marker is written LAST, after every refusal: a hook ringing for a
+    // banner nobody saw is worse than one that never rang.
+    const root = mkdtempSync(join(tmpdir(), "nen-stop-mark-"));
+    const result = await capture(["stop", "--gate", "G5", "--mark", "no-such-efforts.md"], root);
+    expect(result.code).not.toBe(0);
+    expect(existsSync(join(root, ".nen", "last-stop.json"))).toBe(false);
   });
 });
