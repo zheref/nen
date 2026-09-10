@@ -6,7 +6,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Added
 
-- **schema**, **pr** — `nen/gates.json` may declare CON-30's `dependabot_carve_out`, and `nen pr ready` **reads and applies it**. The field has existed as data since zheref/akatsuki-ai#9 and no build parsed it: `nen schema check` reported `ok` because the block was IGNORED, not because it was understood, so the shim workflow and the decider were agreeing about a rule only one of them could see (closes #18).
+- **schema**, **pr** — `nen/gates.json` may declare CON-30's `dependabot_carve_out`, and `nen pr ready` **reads and applies it**. The field has existed as data since zheref/akatsuki-ai#9 and no build parsed it: `nen schema check` reported `ok` because the block was IGNORED, not because it was understood, so the shim workflow and the decider were agreeing about a rule only one of them could see (closes [#18](https://github.com/zheref/nen/issues/18), [#182](https://github.com/zheref/nen/pull/182)).
 
   ```json
   "dependabot_carve_out": {
