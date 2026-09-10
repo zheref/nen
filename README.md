@@ -327,7 +327,7 @@ that repository's `nen/` directory at the path given by `--repo`
 dot-prefixed, gitignored `.nen/` — the one-character difference is deliberate,
 so staging `nen/` after a run can never pick up a build log.
 
-**Migrating from `schemas/`.** Through the v0.3 line Nen still reads the four
+**Migrating from `schemas/`.** Through the v0.4 line Nen still reads the four
 taxonomy files from a repository's legacy `schemas/` directory when `nen/` does
 not carry them, so a repository that has not moved yet keeps working unchanged.
 `nen schema check` names every file it read from the legacy location, and fails
@@ -342,7 +342,7 @@ the same change. `--gates` deliberately refuses rather than falling back: a flag
 that quietly read a different file than the one it was handed would be worse
 than an error. `nen/contract.json` has no legacy location at all — it is new in
 this line, so nothing under `schemas/` is ever read as one. The fallback is
-removed in **v0.4.0**.
+removed in **v0.5.0**.
 
 A repository that carries none of these files can still use Nen's
 repository-agnostic verbs (`nen commit format`, `nen ref format`, ...); a
