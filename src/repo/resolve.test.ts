@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { allRepos, ownerNameFromRemote, RepoResolutionError, resolve, resolveToken } from "./resolve.js";
 import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 function registry(overrides: Partial<RepoRegistry> = {}): RepoRegistry {
   const consumers = overrides.consumers ?? [
@@ -147,6 +148,7 @@ describe("resolve", () => {
         },
         now: (): Date => new Date(),
         env: {},
+        probePort: noPortProbe,
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
         },
@@ -174,6 +176,7 @@ describe("resolve", () => {
         }),
         now: (): Date => new Date(),
         env: {},
+        probePort: noPortProbe,
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
         },
@@ -203,6 +206,7 @@ describe("resolve", () => {
         }),
         now: (): Date => new Date(),
         env: {},
+        probePort: noPortProbe,
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
         },
@@ -231,6 +235,7 @@ describe("resolve", () => {
         }),
         now: (): Date => new Date(),
         env: {},
+        probePort: noPortProbe,
         runInteractive: (): never => {
           throw new Error("resolve makes no interactive subprocess call");
         },
@@ -258,6 +263,7 @@ describe("resolve", () => {
           }),
           now: (): Date => new Date(),
           env: {},
+          probePort: noPortProbe,
           runInteractive: (): never => {
             throw new Error("resolve makes no interactive subprocess call");
           },

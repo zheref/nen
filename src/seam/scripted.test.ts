@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScriptedSeams } from "./scripted.js";
+import { noPortProbe, ScriptedSeams } from "./scripted.js";
 
 describe("ScriptedSeams", () => {
   it("answers a matching call", () => {
@@ -233,5 +233,37 @@ describe("ScriptedSeams", () => {
         /unscripted streamed subprocess: 'tool build'/,
       );
     });
+  });
+});
+
+describe("the recorded port probe", () => {
+  it("answers from the table, and records every port it was asked about", async () => {
+    const seams = new ScriptedSeams([], { ports: { 3000: "open", 5173: "refused", 9999: "timeout" } });
+    expect(await seams.probePort(3000)).toBe("open");
+    expect(await seams.probePort(5173)).toBe("refused");
+    expect(await seams.probePort(9999)).toBe("timeout");
+    expect(seams.probedPorts).toEqual([3000, 5173, 9999]);
+  });
+
+  it("THROWS on a port nobody scripted, exactly as an unscripted call does", async () => {
+    // A verb that reached for the network without a fixture saying so is the
+    // finding; a stub that quietly answered `refused` would hide it, and the
+    // test's verdict would then depend on what the host is listening on.
+    const seams = new ScriptedSeams([]);
+    await expect(seams.probePort(3000)).rejects.toThrow(/unscripted port probe: 127\.0\.0\.1:3000/);
+    // It is still RECORDED, so a failure names what was asked for.
+    expect(seams.probedPorts).toEqual([3000]);
+  });
+
+  it("opens no socket: an empty table is not a fall-through to the real seam", async () => {
+    const seams = new ScriptedSeams([], { ports: { 1: "refused" } });
+    expect(await seams.probePort(1)).toBe("refused");
+  });
+});
+
+describe("noPortProbe -- the stub every other family's Seams carries", () => {
+  it("refuses by name rather than answering", () => {
+    expect(() => noPortProbe(8080)).toThrow(/this family never probes a port/);
+    expect(() => noPortProbe(8080)).toThrow(/127\.0\.0\.1:8080/);
   });
 });

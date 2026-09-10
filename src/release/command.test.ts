@@ -7,6 +7,7 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { releaseCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping (review finding).
@@ -25,6 +26,7 @@ async function capture(argv: readonly string[], repoFlag: string | null, run: Se
     run,
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
+    probePort: noPortProbe,
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },

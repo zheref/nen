@@ -468,7 +468,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Scaffold template:** `minimal` -- a project skeleton plus nen/contract.json. nen never generates a `.pbxproj`.
 
-**Coverage report (advisory, never opened):** none recorded -- The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is no shell in this family and therefore no redirection. A lane that wants this parsed states a step that writes the JSON to a path and names that path under the verb's `artifacts`. The `.xcresult` bundle itself is not a format nen reads. (this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209))
+**Coverage report (advisory, never opened):** none recorded -- The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is still no shell in this family and therefore no redirection OPERATOR, but there is now a declared one: a lane that wants this parsed states `stdoutTo` on that step (a repo-relative path with `xccov` in its name, since the reader recognises a report by name) and names the same path under the verb's `artifacts`. nen writes the captured stdout to it itself. The `.xcresult` bundle itself is not a format nen reads. (this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209))
 
 ### Verbs
 

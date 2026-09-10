@@ -996,3 +996,233 @@ describe("project.launch", () => {
     expect(contract.project?.raw["launchpad"]).toEqual({});
   });
 });
+
+// ── stdoutTo ────────────────────────────────────────────────────────────────
+//
+// The key that answers a shell this family does not have. `nen shu` captures a
+// child's stdout already; `stdoutTo` says to write those bytes to a file rather
+// than relay them, which is what an `xccov`-shaped extraction step -- one that
+// PRINTS the report nen then parses -- has needed since the coverage reader
+// landed. Everything refused below is refused at LOAD, because each shape is a
+// declaration that can never be honoured rather than a run that fails.
+
+describe("project.verbs.<lane>.<verb>.stdoutTo", () => {
+  function verb(invocation: unknown): unknown {
+    return { ...PROJECT, verbs: { web: { coverage: invocation } } };
+  }
+
+  it("is null when the key is absent, on both invocation forms", () => {
+    const command = parse({ project: PROJECT }).project?.verbs["web"]?.["build"];
+    expect(command?.kind === "command" ? command.stdoutTo : "not a command").toBeNull();
+    const stepped = parse({ project: verb({ steps: [{ exe: "tool", argv: ["go"] }] }) }).project
+      ?.verbs["web"]?.["coverage"];
+    expect(stepped?.kind === "steps" ? stepped.steps[0]?.stdoutTo : "not steps").toBeNull();
+  });
+
+  it("reads a repo-relative path on an {exe, argv} invocation", () => {
+    const invocation = parse({
+      project: verb({ exe: "tool", argv: ["report"], stdoutTo: "nen/reports/coverage.json" }),
+    }).project?.verbs["web"]?.["coverage"];
+    expect(invocation?.kind === "command" ? invocation.stdoutTo : null).toBe(
+      "nen/reports/coverage.json",
+    );
+  });
+
+  it("reads it PER STEP, which is the shape the reason for this key has", () => {
+    // The row that motivates the key is two steps: one that produces a bundle
+    // and one that prints a report out of it. Only the second redirects.
+    const invocation = parse({
+      project: verb({
+        steps: [
+          { exe: "tool", argv: ["test"] },
+          { exe: "tool", argv: ["extract"], stdoutTo: "nen/reports/xccov.json" },
+        ],
+      }),
+    }).project?.verbs["web"]?.["coverage"];
+    expect(invocation?.kind === "steps" ? invocation.steps.map((s): unknown => s.stdoutTo) : []).toEqual([
+      null,
+      "nen/reports/xccov.json",
+    ]);
+  });
+
+  it("refuses an ABSOLUTE path, in either family's spelling", () => {
+    for (const value of ["/etc/hosts", "\\\\windows\\\\path", "C:/temp/out.json", "C:\\\\temp\\\\out.json"]) {
+      const error = refusal({ project: verb({ exe: "tool", argv: ["go"], stdoutTo: value }) });
+      expect(error.pointer, value).toBe("project.verbs.web.coverage.stdoutTo");
+      expect(error.message, value).toContain("is an ABSOLUTE path");
+    }
+  });
+
+  it("refuses a path that climbs out of the tree with '..'", () => {
+    for (const value of ["../escape.json", "nen/../../escape.json", "..\\escape.json"]) {
+      const error = refusal({ project: verb({ exe: "tool", argv: ["go"], stdoutTo: value }) });
+      expect(error.message, value).toContain("climbs out of the repository with '..'");
+    }
+    // And a directory that merely BEGINS with dots is not an escape: the check
+    // is on whole segments, exactly as ../repo/contain.ts's is.
+    const fine = parse({
+      project: verb({ exe: "tool", argv: ["go"], stdoutTo: "..hidden/out.json" }),
+    }).project?.verbs["web"]?.["coverage"];
+    expect(fine?.kind === "command" ? fine.stdoutTo : null).toBe("..hidden/out.json");
+  });
+
+  it("refuses a GLOB, because nen expands nothing and would write that name", () => {
+    for (const value of ["reports/*.json", "reports/out?.json", "reports/out[12].json"]) {
+      const error = refusal({ project: verb({ exe: "tool", argv: ["go"], stdoutTo: value }) });
+      expect(error.message, value).toContain("carries a glob character");
+    }
+  });
+
+  it("refuses an empty string, a blank one, and a non-string, by pointer", () => {
+    // `""` is refused by the shared string reader; `"   "` is the one this key
+    // has to catch itself, because a path of three spaces is a filename nobody
+    // meant and every later reader would print it as if it were one.
+    expect(refusal({ project: verb({ exe: "tool", argv: ["go"], stdoutTo: "" }) }).message).toContain(
+      "expected a non-empty string",
+    );
+    expect(refusal({ project: verb({ exe: "tool", argv: ["go"], stdoutTo: "   " }) }).message).toContain(
+      "is empty",
+    );
+    const error = refusal({ project: verb({ exe: "tool", argv: ["go"], stdoutTo: 7 }) });
+    expect(error.pointer).toBe("project.verbs.web.coverage.stdoutTo");
+  });
+
+  it("names the STEP's own pointer when a step's value is the bad one", () => {
+    const error = refusal({
+      project: verb({
+        steps: [
+          { exe: "tool", argv: ["a"] },
+          { exe: "tool", argv: ["b"], stdoutTo: "../out.json" },
+        ],
+      }),
+    });
+    expect(error.pointer).toBe("project.verbs.web.coverage.steps[1].stdoutTo");
+  });
+});
+
+// ── the `port` precondition ─────────────────────────────────────────────────
+
+describe("project.preconditions -- kind 'port'", () => {
+  function withRow(row: unknown): unknown {
+    return { ...PROJECT, preconditions: { web: [row] } };
+  }
+
+  it("reads a port NUMBER and its direction", () => {
+    const contract = parse({
+      project: withRow({ kind: "port", value: 3000, expect: "listening", why: "the API" }),
+    });
+    const row = contract.project?.preconditions["web"]?.[0];
+    expect(row?.value).toBe(3000);
+    expect(row?.expect).toBe("listening");
+    expect(row?.why).toBe("the API");
+  });
+
+  it("accepts both directions, and nothing else", () => {
+    for (const expected of ["listening", "free"]) {
+      expect(
+        parse({ project: withRow({ kind: "port", value: 5173, expect: expected }) }).project
+          ?.preconditions["web"]?.[0]?.expect,
+      ).toBe(expected);
+    }
+    const error = refusal({ project: withRow({ kind: "port", value: 5173, expect: "busy" }) });
+    expect(error.pointer).toBe("project.preconditions.web[0].expect");
+    expect(error.message).toContain("CLOSED set: listening, free");
+  });
+
+  it("refuses a port row with no direction: nen will not pick one", () => {
+    const error = refusal({ project: withRow({ kind: "port", value: 5173 }) });
+    expect(error.pointer).toBe("project.preconditions.web[0].expect");
+    expect(error.message).toContain("got nothing (the field is absent)");
+  });
+
+  it("refuses 'expect' on any OTHER kind rather than dropping it silently", () => {
+    const error = refusal({ project: withRow({ kind: "path", value: "deps", expect: "free" }) });
+    expect(error.pointer).toBe("project.preconditions.web[0].expect");
+    expect(error.message).toContain("nen reads 'expect' on 'port' rows alone");
+  });
+
+  it("refuses a value that is not a whole number in 1..65535", () => {
+    for (const value of ["3000", 0, 65_536, 3000.5, -1, true, null]) {
+      const error = refusal({ project: withRow({ kind: "port", value, expect: "free" }) });
+      expect(error.pointer, String(value)).toBe("project.preconditions.web[0].value");
+      expect(error.message, String(value)).toContain("expected a port NUMBER between 1 and 65535");
+    }
+    // The two ends of the range are legal.
+    for (const value of [1, 65_535]) {
+      expect(
+        parse({ project: withRow({ kind: "port", value, expect: "free" }) }).project
+          ?.preconditions["web"]?.[0]?.value,
+      ).toBe(value);
+    }
+  });
+
+  it("leaves a LIST value alone, as it does for every assertable kind", () => {
+    // The executor reports a list-valued row as "cannot assert" rather than
+    // guessing which element was meant, so the loader has nothing to add.
+    const row = parse({
+      project: withRow({ kind: "port", value: ["3000", "3001"], expect: "free" }),
+    }).project?.preconditions["web"]?.[0];
+    expect(row?.value).toEqual(["3000", "3001"]);
+    expect(row?.expect).toBe("free");
+  });
+
+  it("gives every other kind a null 'expect'", () => {
+    expect(
+      parse({ project: withRow({ kind: "path", value: "deps" }) }).project?.preconditions["web"]?.[0]
+        ?.expect,
+    ).toBeNull();
+  });
+});
+
+// ── the evidence BLOCK KEY, guarded like launch's ───────────────────────────
+
+describe("the project-level block keys whose own NAME is guarded", () => {
+  it("refuses a misspelling of 'evidence', naming what it would cost", () => {
+    for (const key of ["evidences", "Evidence", "evidenc"]) {
+      const error = refusal({
+        project: { ...PROJECT, [key]: { globs: ["**/*.png"], mechanism: "files-changed" } },
+      });
+      expect(error.pointer, key).toBe(`project.${key}`);
+      expect(error.message, key).toContain("the block nen reads for 'nen shu evidence'");
+      expect(error.message, key).toContain("Spell it 'evidence'");
+    }
+  });
+
+  it("names each misspelling for the shape it actually is", () => {
+    // `evidences` is ONE letter longer than `evidence`, so the distance rule
+    // reaches it and says so -- unlike `launches`, which is two insertions from
+    // `launch` and is the reason the plural shape exists at all.
+    for (const [key, phrase] of [
+      ["evidences", "is one letter away from 'evidence'"],
+      ["Evidence", "differs from 'evidence' only in case"],
+      ["evidenc", "is one letter away from 'evidence'"],
+    ] as const) {
+      const error = refusal({ project: { ...PROJECT, [key]: { globs: ["a"] } } });
+      expect(error.message, key).toContain(phrase);
+    }
+  });
+
+  it("still refuses a misspelling of 'launch', which arrived first", () => {
+    const error = refusal({ project: { ...PROJECT, evidences: {}, launches: {} } });
+    // Whichever fires, it fires by pointer -- the loop is over the FILE's keys,
+    // so the first misspelt key in the document is the one named.
+    expect(["project.evidences", "project.launches"]).toContain(error.pointer);
+  });
+
+  it("leaves 'targets' and its siblings unswept, and keeps their own guard", () => {
+    // The older optional blocks are deliberately not swept at the BLOCK level:
+    // a declaration written against 0.3.0 may park a `"target"` or `"host"` key
+    // there, and refusing it is a change with its own blast radius. What
+    // `targets` keeps is the PER-ENTRY guard, which still fires.
+    const kept = parse({ project: { ...PROJECT, target: {}, host: {}, profile: {} } });
+    expect(kept.project?.raw["target"]).toEqual({});
+    expect(kept.project?.raw["host"]).toEqual({});
+    const error = refusal({ project: { ...PROJECT, targets: { prod: { arg: ["--prod"] } } } });
+    expect(error.pointer).toBe("project.targets.prod.arg");
+  });
+
+  it("keeps a project-level key that is nobody's misspelling of either", () => {
+    const contract = parse({ project: { ...PROJECT, $evidence: "a note", evidently: {} } });
+    expect(contract.project?.raw["evidently"]).toEqual({});
+  });
+});

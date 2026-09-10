@@ -130,6 +130,24 @@ export const EVIDENCE_MECHANISMS = ["public-mirror", "files-changed", "embedded"
 
 export type EvidenceMechanism = (typeof EVIDENCE_MECHANISMS)[number];
 
+/**
+ * What a `port` precondition says about the port -- CLOSED, and REQUIRED on
+ * every row of that kind.
+ *
+ * THERE IS NO DEFAULT DIRECTION, and that is why this is a declared field
+ * rather than an inference. Both facts are preconditions of real builds: an
+ * end-to-end suite needs the app's server ALREADY LISTENING, and a dev server
+ * needs its port FREE or it will not bind. Guessing which one a declaration
+ * meant would let nen refuse a machine that is in exactly the state the
+ * repository asked for.
+ */
+export const PORT_EXPECTATIONS = ["listening", "free"] as const;
+
+export type PortExpectation = (typeof PORT_EXPECTATIONS)[number];
+
+/** The highest port number there is. A declaration outside 1..this is refused. */
+const MAX_PORT = 65_535;
+
 // ── the two blocks ──────────────────────────────────────────────────────────
 
 export interface BootstrapPin {
@@ -205,6 +223,22 @@ export interface InvocationStep {
   readonly argv: readonly string[];
   /** This step's own guard, or null -- the invocation's applies otherwise. */
   readonly stall: StallGuard | null;
+  /**
+   * Where this step's stdout goes, or null.
+   *
+   * `stdoutTo` IS THE ANSWER TO A SHELL THIS FAMILY DOES NOT HAVE. There is no
+   * `sh -c` anywhere on this path -- an argv is a list, always -- so a tool that
+   * PRINTS the thing nen needs to read had, until this key, nowhere to put it:
+   * the bundled Apple profile's own coverage row extracts a JSON report to
+   * stdout, and `nen shu coverage` parses a FILE. A declaration naming
+   * `stdoutTo` says "write this step's stdout there", and nen writes the bytes
+   * itself. No shell, no redirection operator, no second process: the seam
+   * already captures the child's stdout, and this is where those bytes land.
+   *
+   * `null` IS THE ORDINARY CASE and means what it always meant -- the step's
+   * output is relayed to the terminal as it finishes.
+   */
+  readonly stdoutTo: string | null;
 }
 
 export type Invocation =
@@ -213,6 +247,8 @@ export type Invocation =
       readonly exe: string;
       readonly argv: readonly string[];
       readonly stall: StallGuard | null;
+      /** Repo-relative file this invocation's stdout is written to, or null. */
+      readonly stdoutTo: string | null;
       readonly why: string | null;
       readonly raw: Readonly<Record<string, unknown>>;
     }
@@ -245,8 +281,18 @@ export interface ToolchainEntry {
 export interface Precondition {
   /** The repository's own word for what is being asserted. Not a closed set. */
   readonly kind: string;
-  /** A path, or an argv list -- whichever the kind means. */
-  readonly value: string | readonly string[];
+  /** A path, a port NUMBER, or an argv list -- whichever the kind means. */
+  readonly value: string | number | readonly string[];
+  /**
+   * Which way round a `port` row is asserted, or null on every other kind.
+   *
+   * IT LIVES ON THE ROW RATHER THAN IN THE KIND (`port-free`, `port-listening`)
+   * so that one kind reads one value: a reader asking "which port" finds
+   * `value` whichever direction the row wanted, and a later kind that needs a
+   * direction of its own has a field to use rather than a naming convention to
+   * copy.
+   */
+  readonly expect: PortExpectation | null;
   readonly why: string | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -496,6 +542,69 @@ export function requireArgv(path: string, pointer: string, value: unknown): read
     throw new SchemaError(path, pointer, "expected an argv array with at least the program name, got an empty array");
   }
   return value.map((item, index): string => requireString(path, `${pointer}[${index}]`, item));
+}
+
+/**
+ * A path that would be read as a GLOB by something downstream, or as a step
+ * OUTSIDE the tree. `stdoutTo` is refused for either at LOAD.
+ *
+ * WHY AT LOAD AND NOT AT THE WRITE. A `stdoutTo` of `../../etc/hosts` or of
+ * `reports/*.json` is not a run that fails; it is a declaration that can never
+ * be honoured, and the run that discovers it is the run that has already
+ * spawned the tool whose output was going there. The two shapes checked here
+ * are the two a reader cannot see:
+ *
+ *   * an ESCAPE -- an absolute path, or one with a `..` segment in it. This is
+ *     the lexical half of ../repo/contain.ts's question, asked where there is
+ *     no repository root to resolve against; ../shu/run.ts asks the REAL half
+ *     (symlinks resolved) again before it writes, because a `nen/` symlinked
+ *     out of the tree makes a perfectly innocent-looking path land elsewhere.
+ *   * a GLOB -- `*`, `?` or a `[...]` class. nen expands nothing: the path is
+ *     used verbatim, so `reports/*.json` would create a file with a literal
+ *     asterisk in its name and every later reader would look for the expansion
+ *     instead. `project.evidence.globs` is where a pattern belongs.
+ */
+const STDOUT_TO_GLOB = /[*?[\]]/;
+
+/** An absolute path, in either family's spelling, plus the Windows drive form. */
+const ABSOLUTE_PATH = /^(?:[\\/]|[A-Za-z]:[\\/])/;
+
+/**
+ * One `stdoutTo` value, checked. Exported for the profiles pack's own loader,
+ * which states the same key in a different file: a second copy of this rule
+ * would be a second rule.
+ */
+export function requireStdoutTo(path: string, pointer: string, value: unknown): string {
+  const text = requireString(path, pointer, value);
+  if (text.trim() === "") {
+    throw new SchemaError(
+      path,
+      pointer,
+      "is empty. It names the repo-relative FILE this step's stdout is written to; a step that wanted its output on the terminal states no 'stdoutTo' at all",
+    );
+  }
+  if (ABSOLUTE_PATH.test(text)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `names '${text}', which is an ABSOLUTE path. Every path a declaration states is relative to the repository root, and nen will not write outside the tree '--repo' pointed it at -- least of all on a path a repository could change without the person running the verb seeing it`,
+    );
+  }
+  if (text.split(/[\\/]/).includes("..")) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `names '${text}', which climbs out of the repository with '..'. Every path a declaration states is relative to the repository root, and nen will not write outside the tree '--repo' pointed it at`,
+    );
+  }
+  if (STDOUT_TO_GLOB.test(text)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `names '${text}', which carries a glob character ('*', '?' or a '[...]' class). nen expands nothing here: the path is used verbatim, so this would create one file with that character literally in its name and every later reader would go looking for the expansion. State the one file this step's stdout goes to`,
+    );
+  }
+  return text;
 }
 
 export function requireEnum<T extends string>(
@@ -779,6 +888,7 @@ export function parseInvocation(path: string, pointer: string, value: unknown): 
           // and three fast bookkeeping commands, and giving the fast ones the
           // compile's budget would be declaring a guard that can never fire.
           stall: parseStall(path, `${at}.stall`, record["stall"]),
+          stdoutTo: optionalStdoutTo(path, `${at}.stdoutTo`, record["stdoutTo"]),
         };
       }),
       stall: parseStall(path, `${pointer}.stall`, raw["stall"]),
@@ -791,9 +901,16 @@ export function parseInvocation(path: string, pointer: string, value: unknown): 
     exe: requireString(path, `${pointer}.exe`, raw["exe"]),
     argv: requireArgv(path, `${pointer}.argv`, raw["argv"]),
     stall: parseStall(path, `${pointer}.stall`, raw["stall"]),
+    stdoutTo: optionalStdoutTo(path, `${pointer}.stdoutTo`, raw["stdoutTo"]),
     why,
     raw,
   };
+}
+
+/** `stdoutTo` where the key is optional: absent and `null` both mean "no file". */
+function optionalStdoutTo(path: string, pointer: string, value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  return requireStdoutTo(path, pointer, value);
 }
 
 function parseVerbs(
@@ -874,6 +991,52 @@ function parseToolchain(path: string, value: unknown): Record<string, ToolchainE
   return toolchain;
 }
 
+/**
+ * One `port` precondition's value: a whole number in 1..65535, as a NUMBER.
+ *
+ * A STRING IS REFUSED RATHER THAN COERCED, and the refusal names the fix. A
+ * port is a number in every other file a developer writes it in, `"3000"` and
+ * `3000` are two different JSON values, and a loader that quietly read the
+ * first as the second would be guessing on behalf of a declaration that could
+ * just as easily have meant a service name. `0` is refused with the rest:
+ * connecting to port 0 is not a question about a port at all.
+ */
+function requirePort(path: string, pointer: string, value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_PORT) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `expected a port NUMBER between 1 and ${MAX_PORT}, got ${describeValue(value)}. Write it as a JSON number -- 3000, not "3000" -- because nen opens a TCP connection to 127.0.0.1 on it and a value it has to guess at is a check that could never honestly pass`,
+    );
+  }
+  return value;
+}
+
+/** `expect` -- required on a `port` row, refused on every other kind. */
+function parseExpect(
+  path: string,
+  at: string,
+  kind: string,
+  value: unknown,
+): PortExpectation | null {
+  if (kind !== "port") {
+    if (value === undefined || value === null) return null;
+    throw new SchemaError(
+      path,
+      `${at}.expect`,
+      `is stated on a precondition of kind '${kind}', and nen reads 'expect' on 'port' rows alone (${PORT_EXPECTATIONS.join(", ")}). Preserved as an unknown key it would be read by nobody, so this row would assert something other than what it plainly says. Drop the key, or state the kind that uses it`,
+    );
+  }
+  if (value === undefined || value === null) {
+    throw new SchemaError(
+      path,
+      `${at}.expect`,
+      `expected one of ${PORT_EXPECTATIONS.join(", ")}, got nothing (the field is absent). A port precondition says which way round it is asserted, and nen will not pick: 'listening' is satisfied when the connection is accepted, 'free' when it is refused, and both are real preconditions of real builds`,
+    );
+  }
+  return requireEnum(path, `${at}.expect`, value, PORT_EXPECTATIONS);
+}
+
 function parsePreconditions(
   path: string,
   value: unknown,
@@ -893,18 +1056,22 @@ function parsePreconditions(
       const raw = requireRecord(path, at, item);
       const rawValue = raw["value"];
       // `kind` is the repository's own word and is NOT a closed set here: nen
-      // does not yet act on preconditions, and closing an enum nobody has
-      // declared would refuse a repository for stating a true fact about
-      // itself. What IS checked is that a value is a path or an argv list --
-      // the two shapes any future assertion can be written against.
-      const parsedValue: string | readonly string[] = Array.isArray(rawValue)
-        ? requireArgv(path, `${at}.value`, rawValue)
-        : requireString(path, `${at}.value`, rawValue);
+      // acts on three of them and a declaration may state a fourth this release
+      // reports as "cannot assert", and closing the enum would refuse a
+      // repository for stating a true fact about itself. What IS checked is the
+      // SHAPE of the value -- a path, a port number, or an argv list -- which
+      // is read from the kind, because those are the shapes an assertion can be
+      // written against.
       const kind = requireString(path, `${at}.kind`, raw["kind"]);
-      // THE ONE KIND WHOSE VALUE THIS LOADER CAN CHECK, and it checks it here
-      // rather than at the assertion for the reason every other shape in this
-      // file is refused at load: a `{"kind": "env", "value": "PATH=evil"}` row
-      // is not a check that fails, it is a check that CANNOT pass, and a
+      const parsedValue: string | number | readonly string[] = Array.isArray(rawValue)
+        ? requireArgv(path, `${at}.value`, rawValue)
+        : kind === "port"
+          ? requirePort(path, `${at}.value`, rawValue)
+          : requireString(path, `${at}.value`, rawValue);
+      // THE TWO KINDS WHOSE VALUE THIS LOADER CAN CHECK, and it checks them
+      // here rather than at the assertion for the reason every other shape in
+      // this file is refused at load: a `{"kind": "env", "value": "PATH=evil"}`
+      // row is not a check that fails, it is a check that CANNOT pass, and a
       // repository learns that on the run that loads the file rather than on
       // the run that was about to deploy. A LIST value is left alone -- the
       // executor already reports an assertable kind given a list as "cannot
@@ -915,6 +1082,14 @@ function parsePreconditions(
       return {
         kind,
         value: parsedValue,
+        // `expect` IS REQUIRED ON A `port` ROW AND REFUSED ON EVERY OTHER,
+        // rather than merely ignored elsewhere: a key nen reads on one kind and
+        // silently drops on another is a key a maintainer will eventually write
+        // on the wrong row and never hear about. A LIST-valued port row is
+        // still held to it -- the executor reports that row as "cannot assert",
+        // and a row that cannot say which direction it meant is a second thing
+        // wrong with it rather than a reason to stop asking.
+        expect: parseExpect(path, at, kind, raw["expect"]),
         why: optionalString(path, `${at}.why`, raw["why"]),
         raw,
       };
@@ -1282,7 +1457,16 @@ function parseEvidence(path: string, value: unknown): EvidenceBlock {
   return { globs, mechanism, scene, suiteSuffix, raw };
 }
 
-/** One `{exe, argv}` pair, wherever a declaration states a bare step. */
+/**
+ * One `{exe, argv}` pair, wherever a declaration states a bare step.
+ *
+ * NO `stdoutTo` HERE, DELIBERATELY. This reader serves a launch target's device
+ * `resolve` probe and its `after` steps, and neither is a place a file could
+ * honestly be written: a probe's stdout is the document nen SEARCHES for a
+ * device id -- it is an input, not an output -- and an after-step runs once a
+ * long-running verb has already had this terminal. `stdoutTo` lives on the
+ * lane's own invocation, where the executor captures output at all.
+ */
 function parseStep(
   path: string,
   pointer: string,
@@ -1400,6 +1584,55 @@ function parseLaunch(path: string, value: unknown): Record<string, LaunchTarget>
   return launch;
 }
 
+/**
+ * The project-level BLOCK keys whose own name is guarded against a near-miss,
+ * each with what a silently-preserved misspelling of it would cost.
+ *
+ * TWO OF ELEVEN, AND THAT IS A SCOPE RATHER THAN AN INCONSISTENCY. Both are
+ * OPTIONAL blocks whose ABSENCE MEANS `{}` or `null`, so `"launches": { … }`,
+ * `"Launch": { … }`, `"evidences": { … }` or `"Evidence": { … }` is preserved
+ * verbatim, read by nobody, and the verb that wanted it answers "this
+ * repository declares none" about a file that plainly declares plenty. Both are
+ * also NEW enough that nothing in the field can already be relying on a
+ * misspelling of them.
+ *
+ * `targets`, `hosts`, `toolchain` and `profiles` have the identical hole and
+ * are still deliberately NOT swept: widening this to them would refuse
+ * declarations already written against 0.3.0 -- a parked `"host"` or `"target"`
+ * key is a near-miss of a real one -- and that is a change with its own blast
+ * radius rather than a rider on this one. `targets` keeps the guard it has,
+ * which is the PER-ENTRY one (`refuseNearMissKey` on each target's four keys).
+ */
+const GUARDED_BLOCK_KEYS: readonly { readonly key: string; readonly cost: string }[] = [
+  {
+    key: "launch",
+    cost:
+      "the block nen reads for 'nen shu dev|run --target'. Preserved as an unknown key it would be read by nobody, and every --target this repository declares would be refused as undeclared",
+  },
+  {
+    key: "evidence",
+    cost:
+      "the block nen reads for 'nen shu evidence'. Preserved as an unknown key it would be read by nobody, and that verb would refuse at exit 2 saying this repository declares no evidence block -- about a file that plainly declares one",
+  },
+];
+
+/** A project-level block key one typo from a guarded one, refused by name. */
+function refuseNearMissBlockKey(path: string, raw: Readonly<Record<string, unknown>>): void {
+  for (const key of Object.keys(raw)) {
+    if (key.startsWith("$")) continue;
+    for (const { key: known, cost } of GUARDED_BLOCK_KEYS) {
+      if (key === known) continue;
+      const how = nearMissOf(key, known);
+      if (how === null) continue;
+      throw new SchemaError(
+        path,
+        `project.${key}`,
+        `${how}, ${cost}. Spell it '${known}'`,
+      );
+    }
+  }
+}
+
 export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
   const raw = requireRecord(path, "project", value);
   if (raw["lanes"] === undefined) {
@@ -1416,31 +1649,7 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
       "expected the per-lane verb map, got nothing (the field is absent). A project block with no verbs declares a stack nothing can be run against; state the verbs, using {\"unsupported\": \"<why>\"} for the ones this repository genuinely has none of",
     );
   }
-  // THE BLOCK KEY ITSELF IS GUARDED, and `launch` is the only project-level key
-  // this release guards, which is a scope rather than an inconsistency.
-  //
-  // `launch` is OPTIONAL and ABSENT MEANS `{}` -- so `"launches": { … }` or
-  // `"Launch": { … }` is preserved verbatim, read by nobody, and `nen shu dev
-  // --target iphone` answers "this repository declares no launch targets"
-  // about a file that plainly declares four. That is the same silence the
-  // per-entry guard below exists for, one level up, and it is worth catching
-  // where the block is NEW: nothing in the field can already be relying on a
-  // misspelling of a key that did not exist until this release.
-  //
-  // The older optional blocks (`targets`, `hosts`, `toolchain`, `profiles`)
-  // have the identical hole and are deliberately NOT swept here: widening this
-  // to them would refuse declarations already written against 0.3.0 -- a parked
-  // `"host"` or `"target"` key is a near-miss of a real one -- and that is a
-  // change with its own blast radius, not a rider on this one.
-  for (const key of Object.keys(raw)) {
-    if (key.startsWith("$") || key === "launch") continue;
-    if (nearMissOf(key, "launch") === null) continue;
-    throw new SchemaError(
-      path,
-      `project.${key}`,
-      `${nearMissOf(key, "launch") ?? ""}, the block nen reads for 'nen shu dev|run --target'. Preserved as an unknown key it would be read by nobody, and every --target this repository declares would be refused as undeclared. Spell it 'launch'`,
-    );
-  }
+  refuseNearMissBlockKey(path, raw);
   const lanes = parseLanes(path, raw["lanes"]);
   const defaultLaneRaw = raw["defaultLane"];
   const defaultLane = optionalString(path, "project.defaultLane", defaultLaneRaw);

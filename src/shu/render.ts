@@ -50,7 +50,7 @@ import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, usesToken } from "./launch.js";
  * can spawn". This module renders a plan and runs nothing, so the same sharing
  * costs no edge at all.
  */
-export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
+export const ASSERTABLE_KINDS: readonly string[] = ["path", "env", "port"];
 
 /**
  * The verbs that send something SOMEWHERE, and therefore require `--target`.
@@ -123,6 +123,23 @@ export interface RenderedStep {
   readonly exe: string;
   readonly argv: readonly string[];
   /**
+   * Where this step's stdout goes, and WHERE IN THE FILE that was said.
+   *
+   * IT IS PART OF THE STEP AND NOT A SIDE TABLE, because `--dry-run` prints the
+   * steps and the whole promise of a dry run is that what it prints is what
+   * runs. A file a step writes that the dry run did not mention is a file that
+   * appeared without being approved.
+   *
+   * `pointer` IS CARRIED RATHER THAN RECOMPUTED, for `RenderedPrecondition
+   * .pointer`'s reason one field down: a `{exe, argv}` row states the key at
+   * `project.verbs.<lane>.<verb>.stdoutTo` and a `{steps}` row states it at
+   * `…steps[<i>].stdoutTo`, and the two are indistinguishable once the row has
+   * been flattened into a step list. ./run.ts refuses an unwritable redirect BY
+   * POINTER, and a refusal naming a file position that does not exist is one a
+   * reader cannot act on.
+   */
+  readonly stdoutTo: { readonly path: string; readonly pointer: string } | null;
+  /**
    * The guard this step runs under, or absent/null for none.
    *
    * OPTIONAL RATHER THAN REQUIRED because a step is also what a device probe
@@ -137,7 +154,9 @@ export interface RenderedStep {
 /** A precondition as the declaration states it, before anything asserts it. */
 export interface RenderedPrecondition {
   readonly kind: string;
-  readonly value: string | readonly string[];
+  readonly value: string | number | readonly string[];
+  /** `listening`/`free` on a `port` row, null on every other kind. */
+  readonly expect: string | null;
   readonly why: string | null;
   /**
    * Where the ASSERTED VALUE lives in the declaration, e.g.
@@ -395,16 +414,30 @@ export function declaredHostsFor(project: ProjectBlock, verb: string): readonly 
  * here: nothing is merged field by field, because half a budget from one place
  * and half from another is a guard nobody can read off the file.
  */
-function stepsOf(invocation: Invocation): readonly RenderedStep[] {
+function stepsOf(invocation: Invocation, pointer: string): readonly RenderedStep[] {
   if (invocation.kind === "command") {
-    return [{ exe: invocation.exe, argv: invocation.argv, stall: invocation.stall }];
+    return [
+      {
+        exe: invocation.exe,
+        argv: invocation.argv,
+        stall: invocation.stall,
+        stdoutTo:
+          invocation.stdoutTo === null
+            ? null
+            : { path: invocation.stdoutTo, pointer: `${pointer}.stdoutTo` },
+      },
+    ];
   }
   if (invocation.kind === "steps") {
     return invocation.steps.map(
-      (step): RenderedStep => ({
+      (step, index): RenderedStep => ({
         exe: step.exe,
         argv: step.argv,
         stall: step.stall ?? invocation.stall,
+        stdoutTo:
+          step.stdoutTo === null
+            ? null
+            : { path: step.stdoutTo, pointer: `${pointer}.steps[${index}].stdoutTo` },
       }),
     );
   }
@@ -498,7 +531,9 @@ function artifactsOf(raw: Readonly<Record<string, unknown>>, pointer: string): r
  * argv (`renderInvocation`) and the argv a TARGET composed onto it
  * (`resolveTarget`). One scanner, two sentences.
  */
-function unsubstituted(steps: readonly RenderedStep[]): readonly string[] {
+function unsubstituted(
+  steps: readonly { readonly exe: string; readonly argv: readonly string[] }[],
+): readonly string[] {
   const found: string[] = [];
   for (const step of steps) {
     for (const token of [step.exe, ...step.argv]) {
@@ -520,6 +555,33 @@ function refuseUnsubstituted(steps: readonly RenderedStep[], lane: string, verb:
   if (unique.length === 0) return;
   throw new VerbUsageError(
     `'${verb}' on lane '${lane}' names ${unique.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute: ${placeholderRule(unique)} Write the literal argv this lane runs under project.verbs.${lane}.${verb}, or run the verb on a lane whose declaration carries none.`,
+  );
+}
+
+/**
+ * `stdoutTo` ON A LONG-RUNNING VERB IS REFUSED, before anything spawns.
+ *
+ * `dev` and `run` hand this terminal to the child -- stdio inherited, nothing
+ * captured (../seam/exec.ts's own split) -- so nen never sees a byte of their
+ * output and the file could not be written however hard it tried. A row like
+ * that is not a run that fails; it is a declaration that can never be honoured,
+ * and the alternative it wants (a captured verb, or a step of one) fits in the
+ * refusal. It is refused HERE rather than at the spawn so a `--dry-run` cannot
+ * print `stdout -> …` for a file no run would ever produce.
+ */
+function refuseStdoutToOnLongRunning(
+  steps: readonly RenderedStep[],
+  lane: string,
+  verb: string,
+): void {
+  if (!LAUNCHING_VERBS.includes(verb)) return;
+  const declared = steps.filter((step): boolean => step.stdoutTo !== null);
+  const first = declared[0];
+  if (first === undefined) return;
+  throw new VerbUsageError(
+    `'${verb}' on lane '${lane}' declares 'stdoutTo' (${declared
+      .map((step): string => `'${step.stdoutTo?.path ?? ""}'`)
+      .join(", ")}), and '${verb}' is long-running: nen inherits this terminal and hands it to the child, so the child's output goes to the screen and nen never sees it. There is nothing for nen to write to '${first.stdoutTo?.path ?? ""}'. Put the step that produces this file under a CAPTURED verb -- every verb but ${LAUNCHING_VERBS.join(" and ")} -- or drop 'stdoutTo' and let the child print to the terminal, which is what a long-running verb is for. The long-running verbs are: ${LAUNCHING_VERBS.join(", ")}.`,
   );
 }
 
@@ -567,9 +629,10 @@ export function renderInvocation(
   }
 
   const pointer = `project.verbs.${lane}.${request.verb}`;
-  const steps = stepsOf(invocation);
+  const steps = stepsOf(invocation, pointer);
   refuseUnsubstituted(steps, lane, request.verb);
   refuseUnguardableStall(steps, lane, request.verb);
+  refuseStdoutToOnLongRunning(steps, lane, request.verb);
 
   return {
     lane,
@@ -612,6 +675,7 @@ function lanePreconditions(
     (entry, index): RenderedPrecondition => ({
       kind: entry.kind,
       value: entry.value,
+      expect: entry.expect,
       why: entry.why,
       pointer: `project.preconditions.${lane}[${index}].value`,
     }),
@@ -808,6 +872,7 @@ export function resolveTarget(
           (name): RenderedPrecondition => ({
             kind: "env",
             value: name,
+            expect: null,
             why: `required by the deploy target '${requested}'. nen asserts the variable is SET and never reads, compares or prints its value.`,
             // The index into what the FILE says, not into the sorted list a
             // reader never saw: a pointer is an address somebody opens.
@@ -929,11 +994,24 @@ export function resolveLaunch(
         target.device === null
           ? null
           : { name: target.device.name, kind: target.device.kind, id: null },
-      probe: target.device?.resolve ?? null,
-      after: target.after,
+      // NEITHER CARRIES A `stdoutTo`, AND THE LOADER DOES NOT LET THEM: a
+      // probe's stdout is the document nen searches for a device id, and an
+      // after-step follows a verb that already owned this terminal. The field
+      // is filled in as null here so one step shape serves the whole executor.
+      probe: bareStep(target.device?.resolve ?? null),
+      after: target.after.map(
+        (step): RenderedStep => ({ exe: step.exe, argv: step.argv, stdoutTo: null }),
+      ),
     },
     steps,
   };
+}
+
+/** A declared `{exe, argv}` as a RenderedStep that writes no file. */
+function bareStep(
+  step: { readonly exe: string; readonly argv: readonly string[] } | null,
+): RenderedStep | null {
+  return step === null ? null : { exe: step.exe, argv: step.argv, stdoutTo: null };
 }
 
 /**
@@ -944,7 +1022,7 @@ export function resolveLaunch(
  * printed line on spaces gets a different command. The quotes say where the
  * element boundaries are, and the usage text says so.
  */
-export function renderArgv(step: RenderedStep): string {
+export function renderArgv(step: { readonly exe: string; readonly argv: readonly string[] }): string {
   return [step.exe, ...step.argv]
     .map((token): string => (/[\s'"]/.test(token) ? `'${token.replace(/'/g, "'\\''")}'` : token))
     .join(" ");

@@ -11,7 +11,9 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 import {
+  connectProbe,
   defaultSeams,
   must,
   mustJson,
@@ -31,6 +33,7 @@ import {
 function realSeams(): Seams {
   return {
     run: spawnRunner,
+    probePort: connectProbe,
     runInteractive: spawnInteractiveRunner,
     runStreamed: spawnStreamedRunner,
     now: (): Date => new Date(),
@@ -326,5 +329,51 @@ describe("mustJson -- parses stdout as JSON after must()'s check", () => {
     expect(() =>
       mustJson(seams, process.execPath, ["-e", "console.log('not json')"]),
     ).toThrow(ToolError);
+  });
+});
+
+describe("connectProbe -- the real loopback probe", () => {
+  it("answers 'open' for a port something is listening on", async () => {
+    const server = createServer();
+    await new Promise<void>((resolve): void => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    /* c8 ignore next -- `listen` on an inet socket always reports an object */
+    const port = address === null || typeof address === "string" ? 0 : address.port;
+    try {
+      expect(await connectProbe(port)).toBe("open");
+    } finally {
+      await new Promise<void>((resolve): void => {
+        server.close((): void => resolve());
+      });
+    }
+  });
+
+  it("answers 'refused' for the same port once nothing is listening", async () => {
+    // THE PAIR IS THE POINT. A probe that answered "refused" for everything
+    // would pass the first half of this suite as easily as a correct one, so
+    // the two verdicts are proved against the SAME port, one after the other.
+    const server = createServer();
+    await new Promise<void>((resolve): void => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    /* c8 ignore next -- `listen` on an inet socket always reports an object */
+    const port = address === null || typeof address === "string" ? 0 : address.port;
+    expect(await connectProbe(port)).toBe("open");
+    await new Promise<void>((resolve): void => {
+      server.close((): void => resolve());
+    });
+    expect(await connectProbe(port)).toBe("refused");
+  });
+
+  it("leaves nothing behind: the probe destroys its socket either way", async () => {
+    // An undestroyed socket keeps the process alive after the verb has printed
+    // its report, which is a hang a user meets as "nen never came back".
+    const before = process.getActiveResourcesInfo?.().length ?? 0;
+    await connectProbe(1);
+    const after = process.getActiveResourcesInfo?.().length ?? 0;
+    expect(after).toBeLessThanOrEqual(before + 1);
   });
 });
