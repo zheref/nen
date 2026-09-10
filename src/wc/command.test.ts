@@ -56,8 +56,84 @@ describe("nen wc classify -- CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
   });
 
+  it("prints the branch on its own line, on the ordinary path", async () => {
+    const result = await capture(["wc", "classify"], [
+      { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/x\n" } },
+      { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
+      { match: "git rev-list --count main..HEAD", result: { stdout: "0\n" } },
+      { match: "git log main..HEAD --format=%s", result: { stdout: "" } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("branch: feature/x");
+  });
+
   it("refuses an unknown subcommand", async () => {
     expect((await capture(["wc", "bogus"])).code).toBe(2);
+  });
+});
+
+// ── a detached HEAD (zheref/nen#163) ────────────────────────────────────────
+//
+// A worktree added with `--detach`, a bisect, a rebase step. Each is an
+// ORDINARY working copy: the classification is decided by trunk-or-not and
+// dirty-or-not, and both are answerable without a branch name. This used to
+// refuse at exit 1 -- "the tree is not clean", which it was not saying -- and
+// print that prose on stdout under --json.
+
+describe("nen wc classify -- a detached HEAD", () => {
+  const DETACHED: readonly ScriptedCall[] = [
+    { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
+    { match: "git rev-parse --short HEAD", result: { stdout: "1a2b3c4\n" } },
+    { match: "git status --porcelain=v1 -uall", result: { stdout: " M x.ts\n" } },
+    { match: "git rev-list --count main..HEAD", result: { stdout: "2\n" } },
+    { match: "git log main..HEAD --format=%s", result: { stdout: "second\nfirst\n" } },
+  ];
+
+  it("classifies it, at exit 0, saying where HEAD is standing", async () => {
+    const result = await capture(["wc", "classify"], DETACHED);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("case: on-branch-dirty");
+    expect(result.out).toContain("branch: (detached HEAD at 1a2b3c4)");
+    expect(result.out.join("\n")).toContain("on a detached HEAD at 1a2b3c4");
+  });
+
+  it("--json is ONE document, with branch: null and the sha beside it", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+    const code = await runFamily(wcCommand, ["wc", "classify"], BANKAI_REPO, true, io, new ScriptedSeams(DETACHED));
+    expect(code).toBe(0);
+    // Parses at all, which is the half the issue was about: the refusal used to
+    // print its prose on stdout under --json.
+    const parsed = JSON.parse(out.join("\n")) as { state: Record<string, unknown>; result: Record<string, unknown> };
+    expect(parsed.state["branch"]).toBeNull();
+    expect(parsed.state["detachedAt"]).toBe("1a2b3c4");
+    expect(parsed.state["isTrunk"]).toBe(false);
+    expect(parsed.result["case"]).toBe("on-branch-dirty");
+    expect(err).toEqual([]);
+  });
+
+  it("a CLEAN detached HEAD is on-branch-clean, at exit 0", async () => {
+    const result = await capture(["wc", "classify"], [
+      { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
+      { match: "git rev-parse --short HEAD", result: { stdout: "1a2b3c4\n" } },
+      { match: "git status --porcelain=v1 -uall", result: { stdout: "" } },
+      { match: "git rev-list --count main..HEAD", result: { stdout: "0\n" } },
+      { match: "git log main..HEAD --format=%s", result: { stdout: "" } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("case: on-branch-clean");
+    expect(result.out).toContain("branch: (detached HEAD at 1a2b3c4)");
+  });
+
+  it("still exits non-zero, with an EMPTY stdout, when HEAD resolves to no commit at all", async () => {
+    const result = await capture(["wc", "classify"], [
+      { match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } },
+      { match: "git rev-parse --short HEAD", result: { code: 128, stderr: "fatal: ambiguous argument 'HEAD'" } },
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/resolves to no commit/);
   });
 });
 

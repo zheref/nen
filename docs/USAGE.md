@@ -1202,9 +1202,21 @@ Reports one of `must-move` (on the trunk, dirty), `on-branch-dirty` (on a
 branch with uncommitted work — whether it is the same effort as the
 branch's existing commits is a judgement this verb hands you evidence for,
 never decides), or `on-branch-clean` (nothing to commit). A git command that
-FAILS (a detached HEAD, a `--base` that does not resolve) is never folded
+FAILS (a `--base` that does not resolve, an unreadable status) is never folded
 into one of the three cases as an empty/zero reading; it is reported as an
 error and exits non-zero.
+
+**A detached `HEAD` is classified like any other working copy**, not refused.
+The classification is decided by *trunk-or-not* and *dirty-or-not*, and a
+detached `HEAD` answers both: it is standing on no branch, so it is never the
+trunk (`must-move` cannot apply — a commit made there lands on no branch at
+all), and its tree is as dirty as any other. The branch is one **field of the
+answer**, not a precondition of it: `--json` reports `branch: null` beside a new
+`detachedAt` (the short sha), and the text output reads
+`branch: (detached HEAD at <short sha>)`. A worktree added with `--detach`, a
+bisect and a rebase step are all ordinary working copies. The one refusal left
+is a `HEAD` that names no branch **and** resolves to no commit — a repository
+with no commits yet, where there is nothing to classify.
 
 **Usage**
 
@@ -1220,12 +1232,15 @@ nen wc classify --repo <path> [--base main]
 | `--base <branch>` | no | the PR's target base | default `main`; where the checkout would be cut from and what a dirty trunk must move off of |
 | `--json` | no | machine-readable classification | — |
 
-**Output and exit codes** — human lines: `case: <case>`, then indented
-evidence lines; `--json` top-level keys: `state` (`branch`, `isTrunk`,
-`dirty`, `aheadOfBase`, `existingCommitSubjects[]`, `uncommittedPaths[]`),
-`result` (`case`, `evidence[]`). Exit 0 for any of the three cases (a report,
-not a guard); exit 1 when the underlying git command fails (detached HEAD, an
-unresolvable `--base`); exit 2 on a missing `--repo`.
+**Output and exit codes** — human lines: `case: <case>`, then `branch: <name>`
+(or `branch: (detached HEAD at <short sha>)`), then indented evidence lines;
+`--json` top-level keys: `state` (`branch` — `null` on a detached `HEAD` —,
+`detachedAt`, `isTrunk`, `dirty`, `aheadOfBase`, `existingCommitSubjects[]`,
+`uncommittedPaths[]`), `result` (`case`, `evidence[]`). Exit 0 for any of the
+three cases (a report, not a guard), **including on a detached `HEAD`**; exit 1
+when the underlying git command fails (an unresolvable `--base`, an unreadable
+status, a `HEAD` that resolves to no commit at all); exit 2 on a missing
+`--repo`.
 
 **Example**
 
@@ -1234,9 +1249,45 @@ nen wc classify --repo .
 ```
 ```text
 case: on-branch-clean
+branch: docs-usage-part1-scratch
   on 'docs-usage-part1-scratch' with nothing uncommitted -- open or report the existing PR
 ```
-(from a real run, on a throwaway local branch created and deleted for this check; a detached HEAD in the same checkout instead prints `nen wc: could not determine the current branch ... this usually means a detached HEAD` at exit 1, and an unresolvable `--base` prints `could not count commits ahead of base` at exit 1)
+(from a real run, on a throwaway local branch created and deleted for this check; an unresolvable `--base` prints `could not count commits ahead of base` at exit 1)
+
+**Example — a detached `HEAD`** (a real run, in a worktree added with
+`git worktree add --detach`, with one tracked file edited)
+
+```bash
+nen wc classify --repo /tmp/wt-demo/detached
+```
+```text
+case: on-branch-dirty
+branch: (detached HEAD at 9ed03cf)
+  on a detached HEAD at 9ed03cf, 0 commit(s) ahead of base, 1 uncommitted path(s) -- whether these are the SAME effort as the branch's existing commits is a judgement this module does not make; the commit subjects and paths below are the evidence for it
+```
+```bash
+nen wc classify --repo /tmp/wt-demo/detached --json
+```
+```json
+{
+  "state": {
+    "branch": null,
+    "detachedAt": "9ed03cf",
+    "isTrunk": false,
+    "dirty": false,
+    "aheadOfBase": 0,
+    "existingCommitSubjects": [],
+    "uncommittedPaths": []
+  },
+  "result": {
+    "case": "on-branch-clean",
+    "evidence": [
+      "on a detached HEAD at 9ed03cf with nothing uncommitted -- open or report the existing PR"
+    ]
+  }
+}
+```
+(exit 0 on both; the `--json` run was made against the same worktree with the edit reverted)
 
 ### `nen wc squash`
 
