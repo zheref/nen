@@ -4,6 +4,10 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Added
+
+- **repo** — nen declares itself: `nen/contract.json` (a `project` block only -- one lane, `nen`, stack `bun-cli`, since none of this release's seven reference stacks names a Bun-native CLI and the field is a free string everywhere it is read; `build`/`test`/`lint`/`dev`/`archive` running this repository's own `bun run` scripts, `coverage` adding `@vitest/coverage-v8` and an `lcov` reporter so `nen shu coverage` has a report to parse, and `ui-test`/`run`/`release`/`deploy` as declared `{"unsupported": "<why>"}` seats) and `nen/workflow.json` (the Hatsu policy block -- branch template, iteration checks, the coverage ladder, notification rungs, the allowed/forbidden commit trailers, the model matrix). `workflow.json` is read by nobody in this release; `nen schema check` gains no row for it and no verb loads it until the schema and loader land in 0.4.0. `coverage/` and `Reports/` are added to `.gitignore` and to `eslint.config.js`'s ignore list, so a local `nen shu coverage` run leaves no residue for `nen shu lint` to trip over
+
 ## v0.3.0 — 2026-09-08
 
 ### Fixed
