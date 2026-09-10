@@ -1,8 +1,8 @@
 // src/split/command.ts -- `nen split verify`: the jujisho completeness proof.
 
-import { readFileSync } from "node:fs";
+
 import { resolveRepoRoot } from "../repo/root.js";
-import { resolveAgainstRepo } from "../cli/inputs.js";
+import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { verifySplit } from "./verify.js";
 
@@ -60,22 +60,28 @@ export const splitCommand: Command = {
     // A diff is read RAW: its hunk headers count bytes, so normalising line
     // endings here would make the comparison disagree with the file.
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-    let original: string;
-    try {
-      original = readFileSync(resolveAgainstRepo(root, originalPath), "utf8");
-    } catch (error) {
-      context.io.err(`nen: could not read --original '${originalPath}': ${String(error)}`);
-      return 1;
-    }
-    const branches: string[] = [];
-    for (const path of branchPaths) {
-      try {
-        branches.push(readFileSync(resolveAgainstRepo(root, path), "utf8"));
-      } catch (error) {
-        context.io.err(`nen: could not read branch diff '${path}': ${String(error)}`);
-        return 1;
-      }
-    }
+    // READ THROUGH THE SHARED READER, so an unreadable diff is the named exit-2
+    // refusal every other path flag gives rather than exit 1 (zheref/nen#101).
+    // A mistyped `--original` is "you typed it wrong", and this verb's whole
+    // answer is a comparison between files: one of them being absent is not a
+    // verdict about a split, it is a question that was never asked.
+    //
+    // `raw: true` -- a diff's hunk headers count bytes, so normalising line
+    // endings here would make the comparison disagree with the file it read.
+    const original = readTextFile(
+      resolveAgainstRepo(root, originalPath),
+      root,
+      "--original names the diff every branch is compared against, so an unreadable one is refused rather than compared against nothing.",
+      true,
+    );
+    const branches = branchPaths.map((path): string =>
+      readTextFile(
+        resolveAgainstRepo(root, path),
+        root,
+        `--branches listed '${path}', and it could not be read -- a branch missing from the comparison would read as a hunk nobody carried.`,
+        true,
+      ),
+    );
 
     const result = verifySplit(original, branches);
     if (context.json) {

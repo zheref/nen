@@ -315,3 +315,23 @@ describe("nen changelog completeness", () => {
     });
   });
 });
+
+// zheref/nen#101. `--changelog` was read with a bare `readFileSync`, so a
+// mistyped path escaped as `nen changelog: ENOENT: no such file or directory,
+// open '<path>'` at exit 1 -- a raw errno under the code that means "the thing
+// you asked for did not work", for what is a typo. The sibling verb one
+// function down (`completeness`) already used the shared reader.
+describe("nen changelog collate -- an unreadable --changelog is a usage refusal", () => {
+  it("refuses at exit 2, naming the resolved path and what the file was for", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const result = await capture(
+      ["changelog", "collate", "--version", "v1.1.0", "--theme", "t", "--changelog", "nope.md", "--fragment-dir", "changelog.d"],
+      dir,
+    );
+    expect(result.code).toBe(2);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/could not read/);
+    expect(said).toMatch(/ENOENT/);
+    expect(said).toMatch(/names the file this verb REWRITES/);
+  });
+});

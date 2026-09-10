@@ -1,7 +1,7 @@
 // src/changelog/command.ts -- `nen changelog fragment-required`, `nen
 // changelog collate` and `nen changelog completeness`.
 
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import {
   emit,
@@ -133,11 +133,27 @@ function collateCmd(context: CommandContext): number {
   const changelogFull = isAbsolute(changelogPath) ? changelogPath : resolvePath(root, changelogPath);
   const fragmentDirFull = isAbsolute(fragmentDir) ? fragmentDir : resolvePath(root, fragmentDir);
 
-  const changelogText = normalizeEol(readFileSync(changelogFull, "utf8"));
+  // READ THROUGH THE SHARED READER, so an unreadable --changelog is the named
+  // exit-2 refusal every other path flag gives (zheref/nen#101). A bare
+  // `readFileSync` here let the ENOENT escape as
+  // `nen changelog: ENOENT: no such file or directory, open '<path>'` at exit
+  // 1 -- "the thing you asked for did not work" for what is a mistyped path,
+  // and a raw errno where the sibling verb one function down (`completeness`,
+  // which already used this reader) says what the file was for. The
+  // `--fragment-dir` half of this same verb was fixed the same way in #83.
+  const changelogText = readTextFile(
+    changelogFull,
+    root,
+    "--changelog names the file this verb REWRITES, so an unreadable one is refused rather than collated into nothing.",
+  );
   const names = existsSync(fragmentDirFull) ? readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md")) : [];
   const fragments: Fragment[] = names.map((name): Fragment => ({
     name,
-    content: normalizeEol(readFileSync(resolvePath(fragmentDirFull, name), "utf8")),
+    content: readTextFile(
+      resolvePath(fragmentDirFull, name),
+      root,
+      `--fragment-dir listed '${name}', and it could not be read -- collating a fragment set with one of them silently missing would put a release note nowhere.`,
+    ),
   }));
 
   // ONE ORDER, AND THE MANIFEST IS READ OFF IT (zheref/nen#34).

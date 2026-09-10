@@ -1,9 +1,9 @@
 // src/canon/command.ts -- `nen canon resolve` and `nen canon mirror
 // generate|check`, sync_canon.py's port.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { resolveRepoRoot } from "../repo/root.js";
-import { resolveAgainstRepo } from "../cli/inputs.js";
+import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { commaList } from "../cli/comma.js";
@@ -191,19 +191,22 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
   const inputs = readCanonValuesInputs(context);
   // Resolved against --repo's root, one base for every path flag
   // (zheref/nen#100). Every one of this verb's five path flags resolves the
-  // same way -- and
-  // they must, because generate reads --rules-dir and writes --out-dir while
-  // check reads --mirror-dir and compares: two of them landing in different
-  // trees is a diff against the wrong mirror, reported as drift.
+  // same way -- and they must, because generate reads --rules-dir and writes
+  // --out-dir while check reads --mirror-dir and compares: two of them landing
+  // in different trees is a diff against the wrong mirror, reported as drift.
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
 
-  let valuesText: string;
-  try {
-    valuesText = readFileSync(resolveAgainstRepo(root, inputs.canonValuesPath), "utf8");
-  } catch (error) {
-    context.io.err(`nen: could not read --canon-values '${inputs.canonValuesPath}': ${String(error)}`);
-    return 1;
-  }
+  // READ THROUGH THE SHARED READER, so an unreadable --canon-values is the
+  // named exit-2 refusal every other path flag gives rather than exit 1
+  // (zheref/nen#101). Every rule this verb mirrors is keyed by a value from
+  // this file: without it there is no mirror to generate and nothing to check
+  // one against, which is a question that was never asked rather than a
+  // comparison that came out negative.
+  const valuesText = readTextFile(
+    resolveAgainstRepo(root, inputs.canonValuesPath),
+    root,
+    "--canon-values names the vocabulary every mirrored rule is keyed by, so an unreadable one is refused rather than mirrored against nothing.",
+  );
   const { values } = parseCanonValues(valuesText);
   const scenario = resolveScenarioArg(context, valuesText);
   if (scenario === null) return 2;

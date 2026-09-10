@@ -55,6 +55,16 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Fixed
 
+- **changelog**, **split**, **canon** — an unreadable input file is an **actionable exit-2 refusal**, not a raw errno at exit 1. Three verbs read a caller-named path with a bare `readFileSync`, so a mistyped one escaped as `nen changelog: ENOENT: no such file or directory, open '<path>'` — a raw errno under the code that means "the thing you asked for did not work", for what is "you typed it wrong" (closes #101).
+
+  All three route through the shared reader now, so the refusal names the RESOLVED path, the errno, and what the file was for — the same shape every other path flag already gave, and the shape `changelog collate`'s own `--fragment-dir` got in #83 and `completeness` one function below it already used:
+
+  ```
+  nen split: could not read '/nope/a.diff' (ENOENT). --original names the diff every branch is compared against, so an unreadable one is refused rather than compared against nothing.
+  ```
+
+  `split verify`'s move from 1 to 2 is the substantive one: this verb's whole answer is a comparison between files, so one of them being absent is a question that was never asked rather than a verdict that came out negative — and a branch file that could not be read now says WHICH one. `canon mirror check`'s matters for a second reason: while an unreadable `--canon-values` and real drift both answered 1, the two were indistinguishable by exit code alone, and a caller had to read the stderr line to tell a typo from a finding. `docs/USAGE.md`'s three notes recording these as known gaps are replaced by what the verbs now do.
+
 - **idea** — `nen idea --help` documents `--forbid-family <ns>:<family>`. The flag was declared in the family's own spec and forwarded into `fileIdea`'s `FileRequest` exactly as `issue file`'s is, so it worked — and neither the help nor the `USAGE` constant mentioned it, which left the source tree as the only thing that said it existed (closes [#94](https://github.com/zheref/nen/issues/94), [#196](https://github.com/zheref/nen/pull/196)). A test now asserts that **every** value flag the spec accepts appears in the help, because a flag the parser takes and the help never names is how this one went unmentioned in the first place.
 
   Alongside it, this family's fifth copy of the `--target` check joins the rule #93 just settled: a MALFORMED `--target` exited 1 here — printed and returned, rather than refused — which would have left `nen idea file --target not-a-slug` as the single verb answering differently from every other verb that takes the flag. It goes through `requireTargetFlag` + `parseCallerToken` now, exits 2 for both a missing and a malformed value, and carries the same sentence about which of the two flags it is.

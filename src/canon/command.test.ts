@@ -150,6 +150,26 @@ describe("nen canon mirror generate|check -- CLI wiring", () => {
     return { rulesDir, canonValues, outDir: join(base, "out") };
   }
 
+  // zheref/nen#101. `--canon-values` was read with a bare `readFileSync` and an
+  // unreadable one exited 1 -- "the thing you asked for did not work" for what
+  // is a mistyped path, and without saying what the file was for.
+  it("refuses an unreadable --canon-values at exit 2, naming the path and its purpose", async () => {
+    const { rulesDir, outDir } = fixture();
+    const result = await capture([
+      "canon", "mirror", "generate",
+      "--rules-dir", rulesDir,
+      "--canon-values", join(tmpdir(), "nen-canon-does-not-exist.yml"),
+      "--out-dir", outDir,
+      "--ref", "v1.0.0",
+      "--header-template", HEADER_TEMPLATE,
+    ]);
+    expect(result.code).toBe(2);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/could not read/);
+    expect(said).toMatch(/ENOENT/);
+    expect(said).toMatch(/every mirrored rule is keyed by/);
+  });
+
   it("generate writes the mirror and exits 0", async () => {
     const { rulesDir, canonValues, outDir } = fixture();
     const result = await capture([
