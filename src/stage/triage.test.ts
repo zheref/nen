@@ -52,9 +52,11 @@ describe("triageStage -- detects, never decides; every flag reported, not just t
     expect(result.flagged.map((f): string => f.path)).toEqual(entries.map((e): string => e.path));
   });
 
-  it("flags an ignored file", () => {
+  it("reports an ignored file in its own bucket, never in flagged (zheref/nen#169)", () => {
     const result = triageStage([{ path: "node_modules/x", indexStatus: "!", worktreeStatus: "!", ignored: true }]);
-    expect(result.flagged[0]?.reasons).toEqual(["ignored"]);
+    expect(result.ignored).toEqual([{ path: "node_modules/x", reasons: ["ignored"] }]);
+    expect(result.flagged).toEqual([]);
+    expect(result.clean).toEqual([]);
   });
 
   it("flags a binary by extension", () => {
@@ -84,10 +86,11 @@ describe("triageStage -- detects, never decides; every flag reported, not just t
     expect(triageStage(entries, { mentionedText: "removes old.ts as dead code" }).flagged).toEqual([]);
   });
 
-  it("reports EVERY reason a file matches, not just the first", () => {
+  it("reports EVERY reason a file matches, not just the first -- including inside the ignored bucket", () => {
     const entries = [{ path: ".env", indexStatus: "!", worktreeStatus: "!", ignored: true }];
     const result = triageStage(entries, { scopePrefixes: ["src/"] });
-    expect([...(result.flagged[0]?.reasons ?? [])].sort()).toEqual(["ignored", "out-of-scope", "secret-shape"]);
+    expect([...(result.ignored[0]?.reasons ?? [])].sort()).toEqual(["ignored", "out-of-scope", "secret-shape"]);
+    expect(result.flagged).toEqual([]);
   });
 
   it("a file matching nothing is clean", () => {
@@ -95,5 +98,39 @@ describe("triageStage -- detects, never decides; every flag reported, not just t
     const result = triageStage(entries, { scopePrefixes: ["src/"] });
     expect(result.clean).toEqual(["src/a.ts"]);
     expect(result.flagged).toEqual([]);
+    expect(result.ignored).toEqual([]);
+  });
+});
+
+describe("triageStage -- the ignored bucket (zheref/nen#169)", () => {
+  it("keeps a secret-shape inside an ignored tree in 'ignored', with the reason recorded, never in 'flagged'", () => {
+    const entries = [{ path: "build/secrets/.env", indexStatus: "!", worktreeStatus: "!", ignored: true }];
+    const result = triageStage(entries);
+    expect(result.ignored).toEqual([{ path: "build/secrets/.env", reasons: ["ignored", "secret-shape"] }]);
+    expect(result.flagged).toEqual([]);
+  });
+
+  it("splits a mixed tree into clean, flagged and ignored, and the exit-deciding bucket (flagged) carries only paths a commit could contain", () => {
+    const entries = [
+      { path: "src/a.ts", indexStatus: "M", worktreeStatus: " ", ignored: false }, // clean
+      { path: ".env", indexStatus: "?", worktreeStatus: "?", ignored: false }, // flagged: secret-shape
+      { path: "node_modules/x/index.js", indexStatus: "!", worktreeStatus: "!", ignored: true }, // ignored
+      { path: "node_modules/y/.env", indexStatus: "!", worktreeStatus: "!", ignored: true }, // ignored, secret-shape too
+    ];
+    const result = triageStage(entries);
+    expect(result.clean).toEqual(["src/a.ts"]);
+    expect(result.flagged).toEqual([{ path: ".env", reasons: ["secret-shape"] }]);
+    expect(result.ignored.map((f): string => f.path)).toEqual(["node_modules/x/index.js", "node_modules/y/.env"]);
+    expect(result.ignored.every((f): boolean => f.reasons.includes("ignored"))).toBe(true);
+  });
+
+  it("a tree with only ignored rows leaves 'flagged' empty", () => {
+    const entries = [
+      { path: "node_modules/x", indexStatus: "!", worktreeStatus: "!", ignored: true },
+      { path: ".cursor/rules/foo.mdc", indexStatus: "!", worktreeStatus: "!", ignored: true },
+    ];
+    const result = triageStage(entries);
+    expect(result.flagged).toEqual([]);
+    expect(result.ignored).toHaveLength(2);
   });
 });
