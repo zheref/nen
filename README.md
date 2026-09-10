@@ -359,10 +359,10 @@ exercises all three platforms on every change for exactly this reason.
 
 ## The verb surface
 
-`nen --help` lists every command family (35); each
+`nen --help` lists every command family (36); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-84 verbs outside the binary — each one's purpose, arguments, exit codes and
+87 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -379,24 +379,29 @@ they compose into. The families group roughly as:
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`
 - **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,
   `ui-test`, `lint`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
-  `tools`, `warmup`), which run what a *target project* declares in its own
-  `nen/contract.json` — never anything Nen decided
+  `test-report`, `tools`, `warmup`), which run what a *target project* declares
+  in its own `nen/contract.json` — never anything Nen decided
 - **This repository's own dev loop** — `dev` (`test`, `lint`, `replay`)
 - **Skill-grammar parsing** — `parse`
 - **Supply** — `bootstrap`, `wake`, `stop`
+- **Reports** — `report` (`data`, `render`): the facts an effort's report is
+  made of, and the fill that turns them into one
 
 Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
 `nen shu` runs those verbs today, against any repository that declares them.
-All thirteen execute — `nen shu build --dry-run` prints the exact argv, cwd and
+All fourteen execute — `nen shu build --dry-run` prints the exact argv, cwd and
 environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
 a `nen/contract.json` project block from the markers on disk and never writes
 one without `--write`; `nen shu tools` checks the **host** toolchain the
 declaration pins, exits 5 naming the install command per tool, and installs only
 through `corepack` with `--install` — every other declared installer is
-verify-only in this release. `nen shu warmup` is the one verb in the family that
+verify-only in this release. `nen shu coverage` and `nen shu test-report` each
+run a lane's declared command and then **parse what it wrote** — a coverage
+report, a results file or a whole directory of JUnit XML — into one shape, and
+refuse a damaged report by name rather than printing a plausible number for it. `nen shu warmup` is the one verb in the family that
 mutates git state: it warms a **working copy** (clean → fetch → fast-forward the
 trunk → cut your branch → verify the declared build), refusing at exit 2 rather
 than guessing at every step. Every check that needs no mutation is made *before*

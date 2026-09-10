@@ -10,8 +10,8 @@ the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
-`scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 35 command
-families, 84 verbs, every flag checked against the binary this repository
+`scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
+families, 87 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -27,7 +27,7 @@ directory, resolved at the call site and never from wherever the executable
 itself lives (so a bootstrap-cached binary under `~/.cache/nen` still reads the
 checkout you are standing in).
 
-Fifteen verbs require it by name instead of defaulting, because each one either
+Sixteen verbs require it by name instead of defaulting, because each one either
 mutates or reports on whatever it is pointed at, and a silent cwd default turned
 a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`pr next-blocker`](#nen-pr-next-blocker),
@@ -43,8 +43,9 @@ a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`issue consolidate-close`](#nen-issue-consolidate-close),
 [`idea file`](#nen-idea-file),
 [`scaffold init`](#nen-scaffold-init),
-[`canon resolve`](#nen-canon-resolve) and
-[`parse futon`](#nen-parse-futon).
+[`canon resolve`](#nen-canon-resolve),
+[`parse futon`](#nen-parse-futon) and
+[`report data`](#nen-report-data).
 Twenty-nine verbs accept it and never read it at all — they work entirely from
 the paths and slugs they are handed. Every verb of
 [`effort`](#family-effort), [`epic`](#family-epic), [`loop`](#family-loop),
@@ -77,7 +78,8 @@ costs you a run. **Most** path flags resolve a relative value against
 `--repo`'s root (an absolute value is always used as-is): `--rows-from`,
 `--board-from`, `--gates`, `--changelog`, `--fragment-dir`, `--wakes-from`,
 `--body-from`, `--requirements-from`, `--ledger`, `--questions-from`,
-`--answers-from`, and every taxonomy file a verb opens for itself.
+`--answers-from`, `--tiers`, `--template`, `--data`, `--out`, and every taxonomy
+file a verb opens for itself.
 
 **A closed set of own-path flags does not** — they are handed to
 `readFileSync`/`writeFileSync` unresolved, so a relative value resolves
@@ -221,7 +223,7 @@ verb does by default:
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr request-reviews`](#nen-pr-request-reviews), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
-| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All nine are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` additionally **parses** the report its run produced — and its `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read |
+| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` carries the table's one **second** read gate, `--from-artifacts`, which never reaches the executor at all |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is its one writing form: `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself. So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
@@ -434,7 +436,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 84 verbs, grouped as the README groups them. **Reads** is what a
+All 87 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -483,6 +485,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
+| [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop | git (rev-parse/symbolic-ref/log/diff), nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file | yes |
+| [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name | caller-named --template + --data files; writes --out, inside --repo, unless --dry-run | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
@@ -513,6 +517,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu run`](#nen-shu-run) | start a lane's PRODUCTION build locally; long-running, on this terminal | nen/contract.json (project block); inherits stdio unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu deploy`](#nen-shu-deploy) | send a build to a declared, NAMED target -- TWO flags and no single-flag path to acting: --target is required and has no default, --run is required before anything is sent, and a lane whose deploy is a seat refuses with its own reason whatever --target says | nen/contract.json (project block + project.targets: the destination's args, the env NAMES it requires, or the sentence saying it has no command line); spawns the declared argv only with --run | yes |
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name | yes |
+| [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
@@ -3600,13 +3605,16 @@ run — which is how a `--json` reader tells a dry run from a real one; `exitCod
 is nen's. Under `--json` a step's own output is relayed to **stderr**, so stdout
 stays exactly one document.
 
-[`shu coverage`](#nen-shu-coverage) is the one executing verb whose `--json`
-document is **not** that shape: it runs through the same executor and then
-parses the report the run produced, so its stdout carries
+[`shu coverage`](#nen-shu-coverage) and
+[`shu test-report`](#nen-shu-test-report) are the two executing verbs whose
+`--json` document is **not** that shape: each runs through the same executor and
+then parses what the run produced, so their stdout carries
 `nen.shu.coverage/v0.1` — `{ contract, lane, stack, total, targets, threshold,
-report, exitCode }` — and the executor's own report is rendered to **stderr**
-instead, where every argv, duration and precondition row still is. Nothing is
-lost and stdout is still exactly one object.
+report, exitCode }` — and `nen.shu.test-report/v0.1` — `{ contract, lane, stack,
+report, tests, passed, failed, skipped, total, exitCode }` — and the executor's
+own report is rendered to **stderr** instead, where every argv, duration and
+precondition row still is. Nothing is lost and stdout is still exactly one
+object.
 
 `--json` is **refused at exit 2** on [`shu dev`](#nen-shu-dev) and
 [`shu run`](#nen-shu-run) unless `--dry-run` is also given. Those two hand this
@@ -4059,7 +4067,10 @@ log:           dry run -- nothing was executed, so there is no output to capture
 
 ### `nen shu test`
 
-Run the lane's test suite, from its declared `test` invocation.
+Run the lane's test suite, from its declared `test` invocation. It reports the
+runner's own output and the **exit code**, and nothing about which tests ran; for
+that, [`nen shu test-report`](#nen-shu-test-report) runs this same invocation and
+then parses the results file it names under `artifacts`.
 
 **Usage**
 
@@ -4397,6 +4408,196 @@ threshold:     80% -- met. This is REPORTED and never enforced: nen exits 0 here
 ```
 (run against this repository's own coverage fixture declaration; the same run
 with `--threshold 95` prints `95% -- NOT met` and still exits **0**)
+
+### `nen shu test-report`
+
+Run the lane's **`test`** command — through the same executor as every other
+verb, with the same refusals and the same `--dry-run` — and then **parse the
+results file that run produced** into one shape: a row per test, and the four
+counts. Same `dry-run-gated` classification as [`test`](#nen-shu-test), with one
+extra certified form: `--from-artifacts`, which reads and starts nothing.
+
+**There is no `test-report` row to declare.** This verb runs
+`project.verbs.<lane>.test` and reads *that* row's `artifacts`. A repository
+which has already said how its tests run has said everything nen needs, and a
+second, nearly identical invocation to keep in step is how a declaration ends up
+with the two halves disagreeing.
+
+**Usage**
+
+```text
+nen shu test-report [--repo <path>] [--lane <name>] [--from-artifacts] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--lane <name>` | no | Which lane's tests to report on. | Defaults to `project.defaultLane`, as everywhere else in this family. |
+| `--from-artifacts` | no | **Run nothing**: read the results file the lane's `test` declares and parse whatever is on disk. | The one read-only form beside `--dry-run`, and the one izanami certifies read-only for a different reason — it never reaches the executor at all. nen cannot tell how old the file is, and says so on the second line of its output. |
+| `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The results file may well be on disk from a previous run; a dry run does not read it. Giving this together with `--from-artifacts` is **exit 2**: both start nothing, and they answer different questions. |
+
+**Where the report comes from — the `test` verb's own `artifacts`.** nen parses
+the first path under `project.verbs.<lane>.test.artifacts` it recognises, and it
+never searches a tree for one:
+
+```json
+"test": {
+  "exe": "pnpm", "argv": ["--filter", "@kro/core", "test", "--reporter=json",
+                          "--outputFile=reports/test-results.json"],
+  "artifacts": ["reports/test-results.json"]
+}
+```
+
+**A directory is a legitimate artifact**, and for one very common shape it is the
+*only* honest one: a runner that writes one XML file per suite is declared by
+naming the directory it writes them into, and nen reads every `*.xml` under it —
+recursively, in sorted order — and merges them into one report.
+
+```json
+"test": {
+  "exe": "./gradlew", "argv": [":app:testDebugUnitTest"],
+  "artifacts": ["app/build/test-results/testDebugUnitTest"]
+}
+```
+
+`artifacts` are **literal paths**: nen expands no globs — there is no shell in
+this program — so the doubled-star pattern a runner's own documentation prints is
+refused with that sentence and the directory form named as the answer. The path
+is resolved against the **repository root**, not the lane's `cwd`, like every
+other path in a declaration; one that escapes the repository is exit 2 naming it.
+
+**Which artifact, in two passes.** A `test` verb routinely names several outputs.
+nen takes the first whose **name** states a format it reads (`*.xml`, `*.json`);
+only if none does does it take the first whose last segment carries **no
+extension at all** — the shape of a directory. That order is what keeps the
+weaker rule from shadowing the stronger one: a lane declaring
+`["build/libs/app", "build/test-results/test"]` gets the directory, and one
+declaring `["build/libs/app", "reports/results.xml"]` gets the XML rather than a
+refusal about a binary. Both passes are by **name**, because `--dry-run` has to
+say which path a real run would parse and has nothing on disk to look at; what a
+path actually **is** is then settled by the filesystem, and what a file
+**contains** by its bytes.
+
+A lane that declares none — or declares only artifacts nen does not recognise —
+is **exit 1** naming the field to add and listing the formats.
+
+**Formats.** Chosen by file name first and confirmed against the bytes, so a
+report under an unfamiliar name is still read and a name that lies is still
+caught:
+
+| `report.format` | what it is | conventionally |
+|---|---|---|
+| `junit` | JUnit XML — the shape almost every runner on earth can be asked to write. `<failure>` and `<error>` are both failures; `<skipped>` is a skip; `time` is **seconds** | `*.xml`, one file **or a directory of them** |
+| `assertion-results` | the `testResults[].assertionResults[]` JSON a JavaScript runner writes with its JSON reporter. The test **file** is the suite; `duration` is **milliseconds** | any `*.json` the reporter is pointed at (commonly `test-results.json`) |
+| `xcresult-summary` | the JSON test summary a **declared** result-bundle extraction step writes. It states its totals and lists only its failures | any `*.json` that step's output is redirected into |
+
+**nen never opens a result bundle itself.** A bundle is a directory in a
+proprietary layout and the only supported way to read one is the vendor's own
+extraction tool — so the *declaration* runs that as a second step of its own
+`test` row and names the JSON it writes. nen reads the file the repository said
+it would produce, and spawns nothing it was not told about:
+
+```json
+"test": { "steps": [
+  { "exe": "xcodebuild", "argv": ["test", "-resultBundlePath", "reports/App.xcresult", "…"] },
+  { "exe": "xcrun", "argv": ["xcresulttool", "get", "test-results", "summary",
+                             "--path", "reports/App.xcresult", "--format", "json",
+                             "--output-path", "reports/test-summary.json"] }
+], "artifacts": ["reports/test-summary.json"] }
+```
+
+**Three statuses, out of the eight words the formats spell between them.**
+`passed`, `failed`, `skipped`. An `error` is a **failure** — a caller deciding
+whether to ship cannot treat "it did not get as far as failing" as anything
+else. `pending`, `todo` and `disabled` are **skips**. An `Expected Failure` is a
+**pass**: the suite did what it said it would. A word nen has not met is exit 1
+naming it and listing the ones it reads, rather than a guess — guessing wrong in
+one direction makes a red suite look green.
+
+**Suite names are made repo-relative**, exactly as
+[`shu coverage`](#nen-shu-coverage)'s row names are and for the same reason: one
+of these formats names a suite with the **absolute** path of the test file, so a
+`--json` document or a pasted table would otherwise carry your account name and
+directory layout out of the machine that ran it.
+
+**A report that is damaged is a refusal, never a number.** A `<testcase>` with no
+`name`; a status word nen does not read; a count that is a string; a summary
+stating 4 passed + 2 failed + 1 skipped out of 5 tests — each is exit 1 naming
+the file and the field, rather than a plausible total assembled around the
+damage. Inside a **directory** artifact the same rule reaches one file deep: an
+`*.xml` under it that carries no `<testsuite>` refuses the whole read by name,
+because reading the half of a tree nen understood and printing a total for it is
+exactly the failure this verb must not have. (A file that is not `*.xml` at all —
+a runner's binary cache, a properties file, an HTML page — was never a candidate
+and is simply not collected.)
+
+**A run that FAILED is still parsed, and that is the point.** This is the one
+place this verb disagrees with [`shu coverage`](#nen-shu-coverage), which refuses
+to parse anything after a non-zero run. A failing suite is the *interesting*
+report, and a verb that went silent exactly when the tests went red would be
+useless in the case it exists for. The staleness risk that rule protects against
+is answered rather than denied: **the exit code is always the run's**, so a
+caller reading the code gets the run's verdict whatever the file said, and the
+numbers are reported beside it and never instead of it.
+
+**A run that started NOTHING parses nothing**, and that half is unchanged: a dry
+run, an unmet precondition, a program that could not be spawned. There the file
+on disk is certainly not this invocation's, and nen says `(nothing parsed)` with
+the reason.
+
+**The failures never move the exit code**, in either direction — the same line
+`--threshold` draws on `shu coverage`. `failed: 3` does not make a green run red;
+`failed: 0` does not make a red one green. Under `--from-artifacts`, where
+nothing ran at all, the code is about the **read**: `0` for a report that parsed,
+however red it was. Read `failed` and decide.
+
+**Output and exit codes** — `0`/`1`/`2`/`3`/`4`/`5` as the family's table above,
+plus: **exit 1** when the report is missing, unreadable, in no format nen reads,
+or not declared at all. Because the verb runs `test`, its refusals are `test`'s:
+a lane with no `test` row is **exit 4** in the declaration's own words, in every
+form including `--from-artifacts`, because the artifact list is a property of
+that invocation. On **exit 5** the executor's report is still printed, and under
+`--json` stdout still carries exactly one document.
+
+**The per-test table is not capped**, and it is ordered **failures first** —
+skips, then passes. A red row eleven hundred lines down a passing suite is a row
+nobody reads. The `--json` document keeps the **report's own** order instead,
+because a machine reader comparing two runs wants the order the runner produced.
+
+**`--json`** is a different contract from the other executing verbs
+(`nen.shu.test-report/v0.1`), keys in order: `{ contract, lane, stack, report,
+tests, passed, failed, skipped, total, exitCode }`, where each `tests[]` row is
+`{ name, suite, status, durationMs }`. `suite` and `durationMs` are `null` where
+the report states neither. The four counts are `null` exactly when nothing was
+parsed, so **a dry run is told by `exitCode: 0` with `total: null`**.
+`tests.length` is **not** another spelling of `total`: the summary format states
+its totals and lists only its failures, and the text rendering says so on a
+`rows:` line when the two differ. The executor's own report goes to stderr in
+this mode.
+
+**Example**
+
+```bash
+nen shu test-report --lane droid --from-artifacts
+```
+```text
+lane:          droid  (gradle-android)
+read:          --from-artifacts -- nothing was run. The report below is whatever is on disk, written by whichever run last wrote it; nen cannot tell how old it is.
+report:        reports/results  (junit)
+totals:        5 tests -- 3 passed, 1 failed, 1 skipped
+tests:
+  outcome  time     test
+  FAILED   12.00ms  placeholder.CartTest > refusesANegativeQuantity
+  skipped  --       placeholder.TotalsTest > appliesADiscount
+  passed   12.00ms  placeholder.CartTest > addsOneItem
+  passed   21.00ms  placeholder.CartTest > addsTwoItems
+  passed   30.00ms  placeholder.TotalsTest > sumsAnEmptyCart
+```
+(run against this repository's own test-report fixture declaration, whose `droid`
+lane declares a **directory** of one XML file per suite; the same lane without
+`--from-artifacts` runs the declared command first and prints the executor's
+report above these lines)
 
 ### `nen shu tools`
 
@@ -5257,7 +5458,139 @@ marked: /tmp/site/.nen/last-stop.json -- a host hook may ring rungs 2-3 off it.
 }
 ```
 (run for real against a scratch repository; the absolute path is elided to `/tmp/site`)
+## Reports
 
+The two halves of an effort report: the facts, and the fill that turns them
+into one. Both are local — no `gh`, no network — and neither decides anything:
+no coverage bar is applied, no readiness is computed, nothing is published.
+
+<a id="family-report"></a>
+
+**`nen report`**
+
+`data` gathers what is on a branch against a base — commits, changed files, the artifacts a run left under `.nen/`, the coverage report the lane's declaration names — into one document; `render` fills a template with that document and writes the result. They are two verbs and not one for the same reason [`board build`](#nen-board-build) and [`board render`](#nen-board-render) are: a verb that gathered AND filled would be a verb whose facts exist only inside the rendering that consumed them, so you could neither diff them, store them beside the report, nor re-render from them. `render` takes any JSON, so a caller who assembles their own facts is not locked out of the templating.
+
+### `nen report data`
+
+One document describing this branch against `--base`: the commits (`<base>..HEAD`), the changed files (`<base>...HEAD` — three dots, the merge-base set a pull request shows), the evidence rows (an empty list in this release: `nen shu evidence` owns them), the lane's coverage report **if one is already on disk**, the build proof, and the last recorded stop. **Read-only**: it runs four `git` reads, opens files, and has no write path in any flag combination.
+
+Every absence is `null` and no absence is a failure — a repository with no coverage report, no build proof and no recorded stop still produces the whole document, with the reason for each null on stderr. What is *not* folded into a null is a git command that FAILS: an unresolvable `--base` is refused by name at exit 2 before anything is read, and a failed `git log`/`git diff` is refused rather than reported as a branch with nothing on it. `repo` carries the checkout's directory **name**, never its absolute path — this document gets filled into a report that gets pasted into a pull request.
+
+**Usage**
+
+```text
+nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | **yes** | the working tree this report describes | unbracketed in usage; omitted is refused at exit 2 (#28) |
+| `--base <ref>` | **yes** | what this branch is measured against | the trunk, or the commit the effort was cut from; a ref that does not resolve is refused at exit 2 naming it, with nothing read |
+| `--lane <name>` | no | which declared lane's coverage report and build proof to read | defaults to the declaration's own `defaultLane`; with neither, both fields are `null`. A value that would escape the tree through `.nen/proof/<lane>.json` is refused at exit 2 |
+| `--tiers <file>` | no | a JSON object mapping a tier name to its paths | `{ "<tier>": ["<path prefix or glob>", …] }`. The file's **key order is the precedence** — the first tier whose patterns match a path wins. A pattern with no `*`/`?` is a path **prefix** matched on segment boundaries (`src/report` claims `src/report/data.ts`, never `src/reporting.ts`); one with them is a narrow glob (`*` stops at `/`, `**` crosses it, `?` is one character). Without the flag every file's `tier` is `null` |
+| `--json` | no | the document itself | — |
+
+**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`). Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
+
+`evidence` is **an empty list in this release, and the empty list is the seam**: the rows belong to `nen shu evidence --base <ref>`, which reads `project.evidence` (globs, mechanism, a `{suite}-{scene}` template) and which does not exist yet. The field ships now so a template written against this contract does not change shape when the verb lands — `{{#each evidence}}` renders nothing today and renders rows tomorrow. This verb deliberately does **not** glob a tree for them: that answer must come from the one verb that owns `project.evidence`, or the two will disagree the first time a scene template changes.
+
+**Example**
+
+```bash
+nen report data --repo . --base origin/main --tiers tiers.json
+```
+```text
+repo: report-family on 'opus/kurapika/report-family', base 'origin/main'
+generated: 2026-09-10T05:15:27.751Z
+commits: 4
+  fe71eafb Merge remote-tracking branch 'origin/main' into opus/kurapika/report-family
+  9d647966 docs(changelog): link the report family bullet to its PR
+  e17af580 docs(report): document the report family, its two verbs and the counts
+  5e70ff32 feat(report): add the report family -- data and render
+files: 13 (13 tiered)
+  M    CHANGELOG.md  [docs]
+  M    README.md  [docs]
+  M    docs/USAGE.md  [docs]
+  M    src/cli/registry.ts  [source]
+  M    src/parse/izanami.ts  [source]
+  A    src/report/command.ts  [source]
+  A    src/report/data.test.ts  [tests]
+  A    src/report/data.ts  [source]
+  A    src/report/fixtures/report.html  [source]
+  A    src/report/render.test.ts  [tests]
+  A    src/report/render.ts  [source]
+  A    src/report/template.test.ts  [tests]
+  A    src/report/template.ts  [source]
+evidence: 0 row(s) -- 'nen shu evidence' fills this; this verb never globs a tree
+coverage: 93.74% lines on 'nen' (lcov, coverage/lcov.info)
+proof: none
+last stop: none
+```
+(run for real, in this repository's own worktree while the family was being written; `tiers.json` was `{"tests": ["src/**/*.test.ts"], "source": ["src"], "docs": ["docs", "README.md", "CHANGELOG.md"]}`. The coverage line is this repository's OWN declaration answering: `nen/contract.json` names lane `nen`, whose `coverage` verb declares `coverage/lcov.info`, and that file was on disk from a previous [`shu coverage`](#nen-shu-coverage) run — this verb read it and spawned nothing. Before that run it printed `coverage: none read`, with `coverage: lane 'nen' declares 'coverage/lcov.info', which is not there. Run 'nen shu coverage --repo <path> --lane nen' to produce it; reported as null.` on stderr)
+
+### `nen report render`
+
+Fills a template with a data document and writes the result. The **whole** template language is four constructs: `{{token}}` (HTML-escaped), `{{{token}}}` (raw), `{{#each <list>}}…{{/each}}` (nested; `{{.}}` is a scalar item and `{{@index}}` its position) and `{{#if <key>}}…{{/if}}`. There are no helpers, no partials, no comments and no expressions — nen fills reports, it does not run them, and the whole language fits in a sentence on purpose.
+
+A token the data document has not got is **refused at exit 2 naming it**, because a blank cell in a published report reads as a fact (there were no commits) rather than as a mistake. A present `null` renders as the empty string — that is the data document's own way of saying there is nothing to say — and an object or a list reaching a value tag is refused, since `[object Object]` is the same silent wrong answer one indirection along. Inside `{{#each}}` a row's own field wins and resolution walks outward to the document for one it has not got; a missing **later** segment of a dotted path is an unknown token rather than a reason to try the next scope out.
+
+**Usage**
+
+```text
+nen report render --template <file> --data <file> --out <file> [--dry-run] [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--template <file>` | **yes** | the template to fill | read **raw**: its own line endings survive into the output, so a CRLF template writes a CRLF report |
+| `--data <file>` | **yes** | the JSON document every token is answered from | typically [`report data --json`](#nen-report-data)'s output, but any JSON works |
+| `--out <file>` | **yes** | where to write | must resolve **inside** `--repo`, **with symlinks resolved** — a `Reports/` that is a link out of the tree is refused naming the link. Parent directories are created |
+| `--dry-run` | no | print every token the template names and write nothing | it still parses **and renders**, so its refusals are the real run's; a refusal on a dry run also lists the tokens, so the advice to run it is not a loop |
+| `--repo <path>` | no | the tree `--out` is checked against | bracketed: defaults to the current directory, which is the tree the report belongs to |
+| `--json` | no | the render report | — |
+
+**Output and exit codes** — human lines: `template:`, `data:`, `out:`, `tokens: <n>` then one indented token per line, then `wrote <out>` or `(dry run) nothing written`. `--json` keys, in this order: `contract` (`nen.report.render/v0.1`), `template`, `out` (both **as the caller typed them**, never resolved — an absolute path in a document destined for a PR body carries a home directory with it), `tokens[]` (first-appearance order, de-duplicated), `written` (`false` on `--dry-run`). Exit 0 on a fill; exit 2 on a missing flag, an `--out` outside the tree, an unreadable template, a `--data` that is not JSON, a tag this language does not have, a block left open, a token the data has not got, or a value with no text form. Nothing is written on any refusal.
+
+**Example**
+
+```bash
+nen report data --repo . --base origin/main --json > report-data.json
+nen report render --repo . --template effort.html --data report-data.json --out Reports/effort.html
+```
+```text
+template: effort.html
+data: report-data.json
+out: Reports/effort.html
+tokens: 11
+  repo
+  branch
+  base
+  generatedAt
+  commits
+  @index
+  sha
+  subject
+  coverage
+  coverage.total.lines.percent
+  coverage.lane
+wrote Reports/effort.html
+```
+```text
+<h1>report-family -- opus/kurapika/report-family</h1>
+<p>against origin/main, generated 2026-09-10T05:15:35.200Z</p>
+<table>
+<tr><td>0</td><td>fe71eafb3e6c0478c1e4f6403eb4fb91a7060cf6</td><td>Merge remote-tracking branch &#39;origin/main&#39; into opus/kurapika/report-family</td></tr>
+<tr><td>1</td><td>9d647966a95dd126c660b18c3dd276320ea5bccb</td><td>docs(changelog): link the report family bullet to its PR</td></tr>
+<tr><td>2</td><td>e17af5808a8a3f5d887d379f553822d8ad306c69</td><td>docs(report): document the report family, its two verbs and the counts</td></tr>
+<tr><td>3</td><td>5e70ff32ed78b267edf7434b80e0a6d0ed7fd4c2</td><td>feat(report): add the report family -- data and render</td></tr>
+</table>
+<p>93.74% of lines on 'nen'</p>
+```
+(both run for real, `effort.html` being the six-line template above. Note the escaping: the merge commit's `'origin/main'` came out as `&#39;origin/main&#39;` from a `{{subject}}` cell, which is the default and the point. With a `coverage` of `null` the last paragraph is simply absent — the `{{#if}}` block is skipped, not blanked. The same render with `--out ../escape.html` prints `--out '../escape.html' resolves outside the repository at … 'report render' writes the report INTO the repository it is reporting on and nowhere else` at exit 2)
 ## Developer workflows
 
 Six end-to-end scenarios, composed only from verbs that exist in v0.2.0. Every
@@ -5875,6 +6208,7 @@ rather than the reader. See [per-stack notes](#nen-shu-detect) under
 | coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s two-step row is withheld naming the **simulator**, not the result bundle: the bundle path is the one value `detect` contributes rather than reads (it is an *output*, and nen's own generated output lives under `.nen/`). The note says so, and says four more things a maintainer would otherwise meet as a failure — the path is **lane-relative** (an `ios/` lane writes `ios/.nen/`); `.nen/` is the line [`nen scaffold init`](#nen-scaffold-init) appends to your `.gitignore`, so a repository stood up another way must ignore it itself; `xcodebuild` **refuses an existing `-resultBundlePath`**, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value carries something per-run; and the value must move in every step of the row at once. **The bundle is not the report.** When you fill that row in, the path to declare under `project.verbs.<lane>.coverage.artifacts` is the file the *second* step's JSON lands in — `xcrun xccov view --report --json` writes to stdout, so redirect it, and give the file a name with `xccov` in it — because an `.xcresult` is a **directory** and the coverage reader recognises a report by its name. What a run produced is then **parsed**: nen reads the first path under the verb's own `artifacts` whose format it recognises — the Istanbul/Vitest JSON summary, `xccov` JSON, Cobertura XML, JaCoCo XML, LCOV — into a total and a row per target, and refuses a report it cannot honestly read (truncated, or claiming more covered lines than lines) by name rather than printing a plausible number for it. `--threshold` reports `met` against the **counts** and never changes the exit code, in either direction. |
 | host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. |
 | start a piece of work (clean, fetch, branch, prove it builds) | **yes — the git half everywhere, the build half where a lane declares one** | [`shu warmup`](#nen-shu-warmup) | One line for the five things a developer does by hand at the start of every task: refuse (or, with `--discard`, destroy) uncommitted work, fetch, fast-forward the trunk, cut the branch **you** name from its fresh tip, then run the lane's declared `build` — and its `test` with `--tests`. The **only** `shu` verb that mutates git state, so `--repo` is required and every step refuses rather than guessing; `--dry-run` prints every git and toolchain command and runs none of them. A repository with no `project` block still gets the git half and exits 0. Not [`warmup`](#nen-warmup), which sweeps a registry for stale pins and reads only. |
+| report on a piece of work | **yes — the facts and the fill** | [`report data`](#nen-report-data), [`report render`](#nen-report-render) | `report data` gathers what is on the branch against a base — commits, changed files (with a tier from your own `--tiers` table), the lane's coverage report **if one is already on disk**, the build proof under `.nen/proof/<lane>.json`, the last recorded stop — into one document, reading and never writing. `report render` fills a template with it: four constructs and nothing else, an unknown token refused **naming it** rather than published as a blank cell, and `--out` refused unless it resolves inside the repository with symlinks resolved. It never runs the coverage command — [`shu coverage`](#nen-shu-coverage) is the verb that produces the report this one reads, and both parse it with the same reader. `evidence` is an empty list until `nen shu evidence` lands; the field ships now so a template written today does not change shape when it does. |
 
 The remaining work is tracked in
 [zheref/nen#91](https://github.com/zheref/nen/issues/91), *stack-aware developer

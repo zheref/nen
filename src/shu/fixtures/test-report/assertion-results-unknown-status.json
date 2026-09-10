@@ -1,0 +1,10 @@
+{
+  "testResults": [
+    {
+      "name": "/home/placeholder/checkout/src/cart.test.ts",
+      "assertionResults": [
+        { "fullName": "cart > adds one item", "status": "flaky", "duration": 12 }
+      ]
+    }
+  ]
+}

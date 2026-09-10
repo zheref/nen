@@ -26,7 +26,7 @@ describe("the family's registration", () => {
     expect(findCommand("shu")).toBe(shuCommand);
   });
 
-  it("carries all thirteen verbs, in the order the design lists them", () => {
+  it("carries all fourteen verbs, in the order the design lists them", () => {
     expect(SHU_SUBCOMMANDS).toEqual([
       "detect",
       "build",
@@ -39,6 +39,7 @@ describe("the family's registration", () => {
       "run",
       "deploy",
       "coverage",
+      "test-report",
       "tools",
       "warmup",
     ]);
@@ -48,10 +49,11 @@ describe("the family's registration", () => {
     expect(Object.keys(SHU_SUBCOMMAND_FLAGS).sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 
-  it("splits the thirteen into the ten that execute a lane's invocation, and three that do not", () => {
+  it("splits the fourteen into the eleven that execute a lane's invocation, and three that do not", () => {
     // `detect` reads markers, `tools` probes the host, and `warmup` mutates git
-    // state and then DELEGATES to the ten. None of the three goes through
-    // ./run.ts's runVerb directly, which is what EXECUTING_VERBS names.
+    // state and then DELEGATES to the rest. None of the three goes through
+    // ./run.ts's runVerb directly, which is what EXECUTING_VERBS names --
+    // `test-report` does, running the lane's `test` row before it parses.
     expect([...EXECUTING_VERBS, "detect", "tools", "warmup"].sort()).toEqual([...SHU_SUBCOMMANDS].sort());
   });
 
@@ -108,7 +110,7 @@ describe("each verb owns its flags", () => {
 });
 
 describe("the help text", () => {
-  it("documents all thirteen verbs", async () => {
+  it("documents all fourteen verbs", async () => {
     const result = await capture(["--help"]);
     expect(result.code).toBe(0);
     const help = result.out.join("\n");

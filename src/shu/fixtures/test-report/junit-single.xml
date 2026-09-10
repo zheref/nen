@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- one <testsuite> root, no classname anywhere, and one case carrying BOTH
+     outcome children: the suite name has to come off the enclosing tag, and the
+     worse of the two children has to win. -->
+<testsuite name="placeholder.SessionTest" tests="3" errors="1" time="0.009">
+  <testcase name="opensASession" time="0.004"/>
+  <testcase name="closesASession" time="0.004">
+    <error message="connection refused" type="IOException"/>
+    <system-out>reconnecting</system-out>
+  </testcase>
+  <testcase name="retriesOnce" time="0.001">
+    <skipped message="skipped after the failing setup"/>
+    <failure message="gave up after one retry"/>
+  </testcase>
+</testsuite>

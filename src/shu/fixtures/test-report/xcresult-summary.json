@@ -1,0 +1,21 @@
+{
+  "devicesAndConfigurations": [],
+  "environmentDescription": "Placeholder · Build 1",
+  "expectedFailures": 0,
+  "failedTests": 1,
+  "finishTime": 1757000100.5,
+  "passedTests": 3,
+  "result": "Failed",
+  "skippedTests": 1,
+  "startTime": 1757000000,
+  "testFailures": [
+    {
+      "failureText": "XCTAssertEqual failed: (\"-1\") is not (\"0\")",
+      "targetName": "PlaceholderTests",
+      "testName": "refusesANegativeQuantity()",
+      "testIdentifier": 3
+    }
+  ],
+  "title": "Test - Placeholder",
+  "totalTestCount": 5
+}

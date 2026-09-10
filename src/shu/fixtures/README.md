@@ -39,3 +39,7 @@ directory listing and as an assertion in a test.
 The executor's own fixture is elsewhere — `src/schema/fixtures/shu-repo/`, a
 repository root carrying a `nen/contract.json` rather than markers, because a
 declaration and a marker scan are different inputs to different code.
+
+Two subdirectories here are not marker trees at all: `coverage/` and
+`test-report/` hold the REPORT files those two verbs' parsers are read against,
+as text rather than as a tree anything scans. Each has its own README.

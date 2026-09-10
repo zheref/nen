@@ -46,3 +46,12 @@ export const markerTree = (name: string): string => join(MARKERS, name);
  */
 export const COVERAGE_REPORTS = join(FIXTURES, "coverage");
 export const coverageReport = (name: string): string => join(COVERAGE_REPORTS, name);
+
+/**
+ * The test REPORT fixtures -- one per format, plus each format's empty and
+ * malformed shapes. Reports, not marker trees: nothing detects anything about
+ * them. `test-report/README.md` says what each one is for and why every happy
+ * fixture states the same five tests.
+ */
+export const TEST_REPORTS = join(FIXTURES, "test-report");
+export const testReport = (name: string): string => join(TEST_REPORTS, name);
