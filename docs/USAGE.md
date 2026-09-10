@@ -12,7 +12,7 @@ repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the **v0.4.0 line** (`report`,
 `shu test-report`, `shu evidence` and the `nen/workflow.json` policy file are
 new in it, and none of them is in v0.3.0): 37 command
-families, 90 verbs, every flag checked against the binary this repository
+families, 92 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -113,8 +113,10 @@ thing from the checkout on disk, so it gets a different flag. `--target
 <owner/name>` is the usual spelling — [`pr fetch`](#nen-pr-fetch),
 [`pr next-blocker`](#nen-pr-next-blocker), [`pr retarget`](#nen-pr-retarget),
 [`pr request-reviews`](#nen-pr-request-reviews),
+[`pr edit-body`](#nen-pr-edit-body),
 [`run rerun-failed`](#nen-run-rerun-failed), the whole
-[`issue`](#family-issue) family, [`idea file`](#nen-idea-file),
+[`issue`](#family-issue) family (including
+[`issue edit-body`](#nen-issue-edit-body)), [`idea file`](#nen-idea-file),
 [`labels sync`](#nen-labels-sync), [`labels rename`](#nen-labels-rename),
 [`repo inventory`](#nen-repo-inventory) and
 [`repo scenario`](#nen-repo-scenario) all take it. Four OTHER spellings cover
@@ -191,9 +193,12 @@ published `3`–`7` unchanged, and those numbers mean the script's things, not
 these. A caller branching on `3`/`4`/`5` must know which of the two it invoked.
 
 One inconsistency is worth knowing before it surprises you: a missing
-`--target` exits `1` rather than `2` on sixteen verbs — every verb routed
-through one of the four families' local `requireTarget()` helpers. See the
-note under [`labels sync`](#nen-labels-sync), and
+`--target` exits `1` rather than `2` on eighteen verbs — every verb routed
+through one of the four families' local `requireTarget()` helpers (including
+[`issue edit-body`](#nen-issue-edit-body) and
+[`pr edit-body`](#nen-pr-edit-body), which reuse the SAME helper as the rest
+of their families rather than inventing a one-off exit-2 spelling for
+themselves). See the note under [`labels sync`](#nen-labels-sync), and
 [zheref/nen#93](https://github.com/zheref/nen/issues/93).
 
 ### `--dry-run` discipline
@@ -210,6 +215,7 @@ verb does by default:
 |---|---|---|---|
 | [`issue file`](#nen-issue-file) | no | `--dry-run` | fully offline — no network call at all |
 | [`issue comment`](#nen-issue-comment) | no | `--dry-run` | fully offline; also prints the exact bytes of the body |
+| [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count and first/last line |
 | [`issue attach-sub`](#nen-issue-attach-sub) | no | `--dry-run` | **still reads GitHub** to certify every number is an issue, not a PR |
 | [`issue consolidate-close`](#nen-issue-consolidate-close) | no | `--dry-run` | **still reads GitHub** for the object-class check and the open-PR guard |
 | [`labels sync`](#nen-labels-sync) | no | `--dry-run` | fully offline |
@@ -223,6 +229,7 @@ verb does by default:
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr request-reviews`](#nen-pr-request-reviews), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
+| [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, before printing the byte count and first/last line |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` carries the table's one **second** read gate, `--from-artifacts`, which never reaches the executor at all |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
@@ -230,7 +237,7 @@ verb does by default:
 | [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is its one writing form: `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself. So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
 | [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
-"Still reads GitHub" matters in CI: a dry run of those three needs a token even
+"Still reads GitHub" matters in CI: a dry run of those five needs a token even
 though it writes nothing.
 
 ### Taxonomy as data
@@ -438,7 +445,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 90 verbs, grouped as the README groups them. **Reads** is what a
+All 92 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -454,6 +461,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | gh pr edit --add-reviewer, once per name | github (gh) | yes |
+| [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -500,6 +508,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`issue`](#family-issue) | [`nen issue consolidate-close`](#nen-issue-consolidate-close) | the file-&gt;attach-&gt;close choreography: union labels, reduce one severity family to its strongest label, guard every child for an open PR, close each with a comment | nen/labels.json; gh (api reads, sub_issues POST, issue close/comment) | yes |
 | [`issue`](#family-issue) | [`nen issue chain-position`](#nen-issue-chain-position) | classify where an OPEN issue sits on its delivery chain, from its labels alone | gh (api read) | yes |
 | [`issue`](#family-issue) | [`nen issue terminus`](#nen-issue-terminus) | classify which object ends an issue's delivery run (its own PR, each child's PR, or one integration-branch delivery PR) | gh (api read) | yes |
+| [`issue`](#family-issue) | [`nen issue edit-body`](#nen-issue-edit-body) | replaces an issue's body outright with a file's bytes, certifying the number is an ISSUE (never a PR) before any write | gh (api read to certify, issue edit unless --dry-run) | yes |
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
@@ -961,6 +970,73 @@ nen pr request-reviews --target zheref/nen --pr 9 --add-reviewers copilot,sasuke
 requested copilot, sasuke on zheref/nen#9
 ```
 (from `src/pr/command.test.ts`, which scripts `gh pr edit 9 --repo zheref/nen --add-reviewer copilot --add-reviewer sasuke` — this verb reaches GitHub, so it was not run live here)
+
+### `nen pr edit-body`
+
+Replaces a pull request's body OUTRIGHT with a file's bytes — no trimming, no
+template, the file becomes the body exactly, through `gh pr edit
+--body-file`. Unlike [`issue comment`](#nen-issue-comment), which
+deliberately accepts either object class, this verb never writes the wrong
+object: the number is CERTIFIED as a pull request (`gh api
+repos/<target>/pulls/<n>` resolves 200) before anything is written. A number
+that does not resolve there is refused rather than guessed at — the wording
+never claims the number IS an issue, only that it is not a pull request,
+because a 404/410 from `pulls/<n>` cannot tell "an issue" apart from
+"nothing at all".
+
+**Usage**
+
+```text
+nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The GitHub repository. | Missing exits 1. |
+| `--pr <n>` | yes | The pull request to replace the body of. | Read with a strict `/^\d+$/` guard (like [`issue comment`](#nen-issue-comment)'s `--issue`, unlike this file's own `requirePr()`) — `1e3` or `0x0c` are refused rather than silently accepted as 1000/12, because this is a MUTATING read. |
+| `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) so `gh` reads the same bytes this verb previewed. | There is no inline `--body`. An unreadable path, or one holding only whitespace, is refused (exit 2). |
+| `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — this verb is not network-free even under `--dry-run`, the same shape [`issue attach-sub`](#nen-issue-attach-sub) has. |
+
+**Output and exit codes** — human line on a real write: `replaced
+<target>#<pr>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh pr
+edit ...` followed by `target:`/`number:`/`bytes:`/`first line:`/`last
+line:`. `--json`: `{ contract: "nen.pr.edit-body/v0.1", target, number,
+bytes, written, dryRun }` — exactly those six fields, dry run or not. Exit 0
+on success (dry or real); exit 2 on a malformed/absent `--pr`, an
+empty/unreadable `--body-file`, or a number that does not certify as a pull
+request; exit 1 if `gh pr edit` itself fails after certification passed.
+
+**Example**
+
+```bash
+nen pr edit-body --target zheref/nen --pr 141 \
+  --body-file body.md --dry-run
+```
+```text
+would run: gh pr edit 141 --repo zheref/nen --body-file body.md
+target: zheref/nen
+number: 141
+bytes: 225
+first line: ## What this changes for you
+last line: Run `nen pr cascade-main --repo . --no-push` against a conflicted fixture.
+```
+(a real run against `zheref/nen#141` — read-only: the certifying `gh api
+repos/zheref/nen/pulls/141` call reached GitHub, `gh pr edit` did not)
+
+Handed an issue's number instead, the certification refuses before anything
+is written — this is `zheref/nen#93`, a genuine open issue, run live against
+`pr edit-body`:
+
+```text
+nen pr: #93 does not read as a pull request in zheref/nen (the pulls
+endpoint answered 404) -- 'nen pr edit-body' replaces a PULL REQUEST's body
+only, and it is certified before any write, so nothing was changed. If #93
+is an issue, ask 'nen issue edit-body' instead.
+Run 'nen pr --help'.
+```
+exit 2
 
 <a id="family-gate"></a>
 
@@ -2904,6 +2980,73 @@ Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up.
 --- end of body (no trailing newline) ---
 ```
 (from a real run in `--dry-run` mode — no GitHub write, no network)
+
+### `nen issue edit-body`
+
+Replaces an issue's body OUTRIGHT with a file's bytes — no trimming, no
+template, the file becomes the body exactly, through `gh issue edit
+--body-file`. UNLIKE [`issue comment`](#nen-issue-comment), a number that
+names a pull request is refused (exit 2), never accepted: a comment adds to
+a timeline either way, but replacing the whole body is not additive and is
+invisible the moment the command exits — the same hazard
+[`attach-sub`](#nen-issue-attach-sub)/[`consolidate-close`](#nen-issue-consolidate-close)
+refuse a pull request for. The number is certified over the same
+`issues/{n}` read `readIssue` already performs for this family, before any
+write.
+
+**Usage**
+
+```text
+nen issue edit-body --target <owner/name> --issue <n> --body-file <path> [--dry-run]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The GitHub repository. | Missing exits 1. |
+| `--issue <n>` | yes | The issue to replace the body of. | Read with the same strict `/^\d+$/` guard `comment`'s `--issue` uses — `1e3` or `0x0c` are refused rather than silently accepted as 1000/12, because this is a MUTATING read. |
+| `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) so `gh` reads the same bytes this verb previewed. | There is no inline `--body` — that flag belongs to [`issue comment`](#nen-issue-comment). An unreadable path, or one holding only whitespace, is refused (exit 2). |
+| `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has. |
+
+**Output and exit codes** — human line on a real write: `replaced
+<target>#<issue>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh
+issue edit ...` followed by `target:`/`number:`/`bytes:`/`first line:`/`last
+line:`. `--json`: `{ contract: "nen.issue.edit-body/v0.1", target, number,
+bytes, written, dryRun }` — exactly those six fields, dry run or not. Exit 0
+on success (dry or real); exit 2 on a malformed/absent `--issue`, an
+empty/unreadable `--body-file`, or a number that certifies as a pull
+request; exit 1 if `gh issue edit` itself fails after certification passed.
+
+**Example**
+
+```bash
+nen issue edit-body --target zheref/nen --issue 93 \
+  --body-file body.md --dry-run
+```
+```text
+would run: gh issue edit 93 --repo zheref/nen --body-file body.md
+target: zheref/nen
+number: 93
+bytes: 259
+first line: ## Finding
+last line: permanently.
+```
+(a real run against `zheref/nen#93` — read-only: the certifying `gh api
+repos/zheref/nen/issues/93` call reached GitHub, `gh issue edit` did not)
+
+Handed a pull request's number instead, the certification refuses before
+anything is written — this is `zheref/nen#141`, a genuine (closed) pull
+request, run live against `issue edit-body`:
+
+```text
+nen issue: #141 names a pull request in zheref/nen, not an issue -- 'nen
+issue edit-body' replaces an ISSUE's body only, and it is certified before
+any write, so nothing was changed. Ask 'nen pr edit-body' for the pull
+request's body instead.
+Run 'nen issue --help'.
+```
+exit 2
 
 ### `nen issue attach-sub`
 
