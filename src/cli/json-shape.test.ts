@@ -62,12 +62,27 @@ const SECTIONS = new Map<string, string>(
  * spelling would be a rule about formatting wearing this one's clothes, and the
  * churn would land on ninety-two sections that are not wrong.
  *
- * What all of them do have within a few hundred characters of the word
- * `--json` is a key listing, a named result type, a pointer to a shared shape,
- * or the word "document". That is the union below.
+ * What all of them do have close to the word `--json` is one of: "top-level"
+ * (keys), "keys, in this order", a named result type ("the full ..."), an
+ * object literal in backticks, a fenced json block, "an ARRAY", or a pointer to
+ * the shared run report. That is the union below.
+ *
+ * IT SPANS LINES, and must (Copilot, PR #192). This document is wrapped prose:
+ * a `--json` mention routinely ends one line and its key listing begins the
+ * next, so a `[^\n]` window would have been a rule about where Markdown happens
+ * to wrap -- forcing reflows that have nothing to do with the guarantee, and
+ * passing or failing a section on its line breaks.
+ *
+ * AND THE ALTERNATION IS TIGHT BECAUSE THE WINDOW IS WIDE. A cross-line window
+ * with a loose arm -- a bare `:` before a backtick, or any `{` -- matches the
+ * next unrelated code span a few lines down: measured against this document
+ * before the gaps were filled, that let EIGHT of the seventeen real ones
+ * through. Every arm here is a phrase that only ever introduces a shape, and an
+ * object literal has to be a CLOSED `{...}` in backticks rather than an opening
+ * brace.
  */
 const CLAIMS_A_SHAPE =
-  /`--json`[^\n]{0,400}?(top-level|`\{|:\s*`|shape|the full |document|shared run report|an ARRAY)/s;
+  /`--json`[\s\S]{0,240}?(top-level|keys, in this order|the full |an ARRAY|shared run report|```json|`\{[^`]*\}`)/;
 
 describe("every verb that emits --json says what shape it emits", () => {
   it("reads a verb index that is actually there", () => {
@@ -98,12 +113,20 @@ describe("every verb that emits --json says what shape it emits", () => {
   });
 
   it("claims no shape for a verb the index marks `no`", () => {
-    // The other direction, and it is not symmetry for its own sake: the three
-    // `no` rows are the verbs that hand their stdout to a child or to a
-    // subprocess's own stdio, and a documented `--json` shape on one of those
-    // would be a promise nen cannot keep.
+    // The other direction, and it is not symmetry for its own sake: the `no`
+    // rows are the verbs that hand their stdout to a child or print one bare
+    // path, and a documented `--json` shape on one of those would be a promise
+    // nen cannot keep.
+    //
+    // THE SAME PREDICATE, not a phrasing of its own (Copilot, PR #192). A guard
+    // that rejected one spelling would let the next spelling through, which is
+    // the failure mode of every check written against an example instead of
+    // against the property. These sections say `--json` only to say they have
+    // none, so the shared predicate must find no claim in them -- and if a
+    // future edit gives one of them a real shape, this goes red and the index
+    // row is what has to change.
     const wrong = ROWS.filter(
-      (row): boolean => !row.json && /`--json` top-level keys/.test(SECTIONS.get(row.verb) ?? ""),
+      (row): boolean => !row.json && CLAIMS_A_SHAPE.test(SECTIONS.get(row.verb) ?? ""),
     );
     expect(wrong.map((row): string => row.verb)).toEqual([]);
   });

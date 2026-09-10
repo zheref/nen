@@ -4319,7 +4319,7 @@ when nothing was run, which is how a reader tells a dry run from a real one;
 `exitCode` is nen's own. Under `--json` a step's own output goes to **stderr**,
 so stdout stays exactly one document.
 
-Five verbs of this family answer a **different** contract instead, because they
+Six verbs of this family answer a **different** contract instead, because they
 report on something other than a run: [`detect`](#nen-shu-detect)
 (`nen.shu.detect/v0.1`), [`tools`](#nen-shu-tools) (`nen.shu.tools/v0.1`),
 [`coverage`](#nen-shu-coverage) (`nen.shu.coverage/v0.1`),
