@@ -63,7 +63,14 @@ export interface Slot {
    * True when the separator itself sits inside `[ ... ]` (`[@<gate>]`), so a
    * line may omit separator and slot together. False for a separator written
    * OUTSIDE the brackets (`onto [<target-branch>]`): there the literal is
-   * required even when the bracketed slot after it is omitted.
+   * required whenever the line says anything at all.
+   *
+   * "AT ALL" IS THE QUALIFICATION zheref/nen#170 added. On a grammar where
+   * every slot is bracketed, the EMPTY line omits the clause and its literal
+   * together and parses -- identically to the bare literal -- because the
+   * invocation with nothing in it is the ordinary one for such a skill. A
+   * grammar carrying one required slot is unaffected: the empty line still
+   * refuses, naming that slot.
    */
   readonly separatorOptional: boolean;
   readonly optional: boolean;
@@ -108,7 +115,10 @@ export class GrammarError extends Error {
 //   [ ... ]             an optional trailing clause -- a separator plus its slot
 //                       (`[@<gate>]`, `[every <mode>]`), a slot behind a literal
 //                       written outside the brackets (`onto [<target-branch>]`),
-//                       or literal words alone (`[then sweep]`)
+//                       or literal words alone (`[then sweep]`). When EVERY slot
+//                       a template declares is bracketed, the empty line is a
+//                       complete invocation of it and parses with every clause
+//                       absent -- zheref/nen#170
 //   [+]                 an optional literal suffix on the slot just declared,
 //                       recognised by its bracket group holding NOTHING ELSE
 
@@ -366,6 +376,16 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   const missing: string[] = [];
   const problems: string[] = [];
   const clausePresent: boolean[] = grammar.clauses.map((): boolean => false);
+  // A GRAMMAR WITH NOTHING REQUIRED IN IT HAS AN EMPTY INVOCATION (zheref/nen#170).
+  // `at [<gate>]` used to refuse `--line ""` -- "the line must open with the
+  // literal 'at'" -- while `--line "at"` parsed with the clause absent, so the
+  // ordinary invocation of a skill whose only clause is optional was the one
+  // spelling a caller had to be told about. Literal-only `[ ... ]` clauses are
+  // optional by construction and take no part in this; it is the SLOTS that
+  // decide, and when every one of them is bracketed the whole line may be
+  // omitted. A grammar carrying one required slot still refuses, at 2, with
+  // that slot named -- which is the check below, unchanged.
+  const nothingRequired = grammar.slots.every((slot): boolean => slot.optional);
 
   // RIGHT TO LEFT (see the header). Each separator -- and each literal-only
   // clause, which is resolved exactly like a separator that captures nothing --
@@ -424,8 +444,11 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
       const stripped = stripLeading(text, first.separator, first.separatorKind);
       if (stripped !== null) {
         text = stripped.trim();
-      } else if (first.separatorOptional && first.optional) {
-        // The whole `[word <slot>]` clause is optional; its absence parses.
+      } else if ((first.separatorOptional || nothingRequired) && first.optional) {
+        // The whole clause is omissible: either the template bracketed the
+        // separator too (`[onto <slot>]`), or the separator is outside the
+        // brackets (`at [<gate>]`) and NOTHING in this grammar is required, so
+        // an empty line supplies nothing and that is a complete invocation.
         // Text that is neither the clause nor nothing belongs to no slot.
         if (text !== "") {
           problems.push(
@@ -506,8 +529,22 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
       continue;
     }
     const slot = grammar.slots[entry.index];
-    const value = slot === undefined ? undefined : byName.get(slot.name);
-    if (value !== undefined) echo.push(`${value.name}: ${value.value}${value.suffix ? " (+)" : ""}`);
+    if (slot === undefined) continue;
+    const value = byName.get(slot.name);
+    if (value !== undefined) {
+      echo.push(`${value.name}: ${value.value}${value.suffix ? " (+)" : ""}`);
+      continue;
+    }
+    // AN OPTIONAL SLOT NOBODY FILLED IS ECHOED AS ABSENT, rather than left out
+    // (zheref/nen#170). The echo exists because "a split nobody noticed" is the
+    // whole failure mode, and a slot that is simply MISSING from the echo is
+    // indistinguishable from a template that never declared it -- which, on a
+    // grammar whose only clause is optional, made the successful parse print
+    // nothing at all. `slots[]` still carries only what was supplied; this line
+    // is the report, not the data. A REQUIRED slot never reaches here with no
+    // value: `missing` has already turned that into a problem, and an echo is
+    // only ever printed for a parse that succeeded.
+    if (slot.optional) echo.push(`${slot.name}: (clause absent)`);
   }
 
   return {

@@ -1223,9 +1223,21 @@ Reports one of `must-move` (on the trunk, dirty), `on-branch-dirty` (on a
 branch with uncommitted work — whether it is the same effort as the
 branch's existing commits is a judgement this verb hands you evidence for,
 never decides), or `on-branch-clean` (nothing to commit). A git command that
-FAILS (a detached HEAD, a `--base` that does not resolve) is never folded
+FAILS (a `--base` that does not resolve, an unreadable status) is never folded
 into one of the three cases as an empty/zero reading; it is reported as an
 error and exits non-zero.
+
+**A detached `HEAD` is classified like any other working copy**, not refused.
+The classification is decided by *trunk-or-not* and *dirty-or-not*, and a
+detached `HEAD` answers both: it is standing on no branch, so it is never the
+trunk (`must-move` cannot apply — a commit made there lands on no branch at
+all), and its tree is as dirty as any other. The branch is one **field of the
+answer**, not a precondition of it: `--json` reports `branch: null` beside a new
+`detachedAt` (the short sha), and the text output reads
+`branch: (detached HEAD at <short sha>)`. A worktree added with `--detach`, a
+bisect and a rebase step are all ordinary working copies. The one refusal left
+is a `HEAD` that names no branch **and** resolves to no commit — a repository
+with no commits yet, where there is nothing to classify.
 
 **Usage**
 
@@ -1241,12 +1253,15 @@ nen wc classify --repo <path> [--base main]
 | `--base <branch>` | no | the PR's target base | default `main`; where the checkout would be cut from and what a dirty trunk must move off of |
 | `--json` | no | machine-readable classification | — |
 
-**Output and exit codes** — human lines: `case: <case>`, then indented
-evidence lines; `--json` top-level keys: `state` (`branch`, `isTrunk`,
-`dirty`, `aheadOfBase`, `existingCommitSubjects[]`, `uncommittedPaths[]`),
-`result` (`case`, `evidence[]`). Exit 0 for any of the three cases (a report,
-not a guard); exit 1 when the underlying git command fails (detached HEAD, an
-unresolvable `--base`); exit 2 on a missing `--repo`.
+**Output and exit codes** — human lines: `case: <case>`, then `branch: <name>`
+(or `branch: (detached HEAD at <short sha>)`), then indented evidence lines;
+`--json` top-level keys: `state` (`branch` — `null` on a detached `HEAD` —,
+`detachedAt`, `isTrunk`, `dirty`, `aheadOfBase`, `existingCommitSubjects[]`,
+`uncommittedPaths[]`), `result` (`case`, `evidence[]`). Exit 0 for any of the
+three cases (a report, not a guard), **including on a detached `HEAD`**; exit 1
+when the underlying git command fails (an unresolvable `--base`, an unreadable
+status, a `HEAD` that resolves to no commit at all); exit 2 on a missing
+`--repo`.
 
 **Example**
 
@@ -1255,9 +1270,45 @@ nen wc classify --repo .
 ```
 ```text
 case: on-branch-clean
+branch: docs-usage-part1-scratch
   on 'docs-usage-part1-scratch' with nothing uncommitted -- open or report the existing PR
 ```
-(from a real run, on a throwaway local branch created and deleted for this check; a detached HEAD in the same checkout instead prints `nen wc: could not determine the current branch ... this usually means a detached HEAD` at exit 1, and an unresolvable `--base` prints `could not count commits ahead of base` at exit 1)
+(from a real run, on a throwaway local branch created and deleted for this check; an unresolvable `--base` prints `could not count commits ahead of base` at exit 1)
+
+**Example — a detached `HEAD`** (a real run, in a worktree added with
+`git worktree add --detach`, with one tracked file edited)
+
+```bash
+nen wc classify --repo /tmp/wt-demo/detached
+```
+```text
+case: on-branch-dirty
+branch: (detached HEAD at 9ed03cf)
+  on a detached HEAD at 9ed03cf, 0 commit(s) ahead of base, 1 uncommitted path(s) -- whether these are the SAME effort as the branch's existing commits is a judgement this module does not make; the commit subjects and paths below are the evidence for it
+```
+```bash
+nen wc classify --repo /tmp/wt-demo/detached --json
+```
+```json
+{
+  "state": {
+    "branch": null,
+    "detachedAt": "9ed03cf",
+    "isTrunk": false,
+    "dirty": false,
+    "aheadOfBase": 0,
+    "existingCommitSubjects": [],
+    "uncommittedPaths": []
+  },
+  "result": {
+    "case": "on-branch-clean",
+    "evidence": [
+      "on a detached HEAD at 9ed03cf with nothing uncommitted -- open or report the existing PR"
+    ]
+  }
+}
+```
+(exit 0 on both; the `--json` run was made against the same worktree with the edit reverted)
 
 ### `nen wc squash`
 
@@ -5643,6 +5694,15 @@ for stale pins and unanswered handbook questions, and reads only. This one warms
 collision is resolved by nesting, exactly as `nen dev` / [`nen shu dev`](#nen-shu-dev) already is, and
 the two compose in that order rather than replacing each other.
 
+**In a linked worktree, the trunk is somebody else's.** The ordinary shape of a worktree-based flow is a
+primary checkout standing on `main` with every effort in its own `git worktree` beside it — and git
+**refuses** to force-move a branch that is checked out anywhere (`fatal: cannot force update the branch
+'main' used by worktree at '…'`). Warmup reads `git worktree list --porcelain` before the fast-forward: if
+another worktree holds the trunk, the local update is **skipped**, that worktree is named
+(`trunk held by worktree <path>; cutting from origin/<trunk> directly`), and `--branch` is cut from
+`origin/<trunk>` exactly as it always was — the cut never read the local ref. `--dry-run` reads the same
+list and prints the same decision.
+
 **Nothing is ever rolled back.** A step that fails leaves the tree exactly where it got to and says so,
 with the report listing what did run. Undoing a fetch, deleting a branch or restoring files would be a
 second mutation on a working copy nen has just discovered it does not understand.
@@ -5664,7 +5724,7 @@ nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard] [--tes
 | `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). |
 | `--tests` | no | Also run the lane's declared `test` after the build. | Off by default — a test suite is the slow half and a warm-up is the fast one. The test is skipped when the build did not pass. |
 | `--lane <name>` | no | Which lane the build/test verification runs on. | Defaults to `project.defaultLane`. An unknown lane is refused at 2 **before a single git call** — a caller who mistyped it must not have their working copy cleaned to find out. The lane is then **resolved again** from the declaration on the branch this verb cut, which is the tree the build actually runs in. |
-| `--dry-run` | no | Print every command, in order, and run **nothing**. | Not even the fetch, and not one probe. Because it reads no git state, three of its lines say what a real run would spell differently: which fast-forward shape applies, that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
+| `--dry-run` | no | Print every command, in order, and **mutate nothing**. | It performs exactly **one** command and the list is closed: `git worktree list --porcelain`, the one question the plan cannot honestly guess at (see above). Not the fetch, not the status, not a probe. That row carries its real exit code and is labelled `ran:`; every other row is labelled `would run:`, and `dryRun` on the report says which form this is. Two lines still say what a real run would decide differently: that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
 | `--json` | no | The report as one object. | See below. |
 
 **The remote is `origin`, and only `origin`.** There is no `--remote`: a flag like that would have to
@@ -5688,12 +5748,13 @@ that is not a local branch, a name git will not accept, a name that is already a
 | 2 | `git -c core.quotePath=false status --porcelain=v1 -z -uall` | the tree is dirty and there is no `--discard` (exit 2, every path listed, with a [`stage triage`](#nen-stage-triage) flag beside a filename shaped like a secret or a binary). An **unreadable** status refuses too — it is never read as a clean one |
 | 3 | `git remote` | `origin` is not among them (exit 2, listing what is) |
 | 4 | `git show-ref --verify --quiet refs/heads/<trunk>` | there is no such local branch (exit 2, naming `--from`). A code *above* 1 is git failing to answer and is reported as that, never as "absent" |
+| 4a | `git worktree list --porcelain` | it cannot be read at all (exit 2). Its answer decides step 9, and only step 9. An unanswered question is never read as "nothing else holds the trunk" — that reading is what made the fast-forward fail half-way through a run that had already fetched |
 | 5 | `git check-ref-format --branch <name>` | git will not accept the name (exit 2, quoting git's own refusal) |
 | 6 | `git show-ref --verify --quiet refs/heads/<name>` | the name is already a local branch (exit 2) |
 | 6a | `git reset --hard`, then `git clean -fd`, then the status read **again** | only with `--discard`, and only when there was something to discard. The re-read refuses at 2 if anything survived — see [below](#what---discard-removes) |
 | 7 | `git fetch origin` | it fails (exit 1 — a *step* failure, not a refusal) |
 | 8 | `git merge-base --is-ancestor <trunk> origin/<trunk>` | the local trunk has **diverged** (exit 2). A code *above* 1 is git failing to answer and is reported as that, never as "diverged" |
-| 9 | `git merge --ff-only origin/<trunk>` *(on the trunk)* or `git branch --force <trunk> origin/<trunk>` *(not on it)* | it fails. Two shapes because git has two: a checked-out branch cannot be moved by `branch --force`, and one that is not checked out cannot be advanced by `merge` |
+| 9 | `git merge --ff-only origin/<trunk>` *(this checkout is on the trunk)*, `git branch --force <trunk> origin/<trunk>` *(no worktree holds it)*, or **nothing at all** *(another worktree holds it)* | it fails. Three shapes because git has three: a checked-out branch cannot be moved by `branch --force`, one that is not checked out cannot be advanced by `merge`, and one checked out in **another** worktree cannot be moved from here at all — so it is skipped, named, and step 11 cuts from the fetched ref regardless |
 | 10 | `git ls-remote --heads origin refs/heads/<name>` | the name is already on `origin` (exit 2) — **or the look-up itself failed**, which is never read as "absent". The ref is spelled in **full**: `ls-remote` matches a bare pattern against the *tail* of every ref on slash boundaries, so `--branch x` asked as a bare `x` would match an existing `refs/heads/feat/x` and refuse a name that is free |
 | 11 | `git switch -c <name> origin/<trunk>` | it fails |
 | 12 | the lane's declared `build`, then (with `--tests`) its `test` | see the exit codes below |
@@ -5764,13 +5825,16 @@ therefore each refused **with** the report; every refusal made before the fetch 
 the `--discard` re-read (step 6a), which already carried one for a destruction of its own. stdout is
 therefore always either empty or exactly one document of the published shape, and never an error object.
 
-`--json` is `{ contract, repo, trunk, remote, branch, discard, steps, lane, exitCode }`, in that order,
+`--json` is `{ contract, repo, trunk, remote, branch, discard, dryRun, steps, lane, exitCode }`, in that order,
 with `contract: "nen.shu.warmup/v0.1"`. Each `steps[]` row is `{ kind, argv, exitCode, durationMs, note }`,
 where `kind` is `git | build | test` and `argv` is the **whole** command line, executable first — and is
 **empty** on the row of a delegated verb the executor refused before it rendered one (a lane that seats
 `test` as `unsupported`, say), so the last row of that report is not a *successful build* sitting beside an
-exit code of 4. `exitCode` and `durationMs` are `null` **exactly** when nothing was run — a dry run, a step
-the run never reached, or that same unrendered row — and `lane` is `null` when there is no declaration.
+exit code of 4. `exitCode` and `durationMs` are `null` **exactly** when nothing was run — a *planned* step of a dry run, a
+step the run never reached, or that same unrendered row — and `lane` is `null` when there is no
+declaration. `dryRun` exists because a dry run is no longer "nothing was executed": it performs the one
+worktree read above, whose row carries a real exit code like any other, so `steps[].exitCode` alone can no
+longer tell the two forms apart.
 
 **Example — the dry run**
 
@@ -5790,6 +5854,7 @@ would run:     git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PI
 would run:     git -c core.quotePath=false status --porcelain=v1 -z -uall
 would run:     git remote
 would run:     git show-ref --verify --quiet refs/heads/main
+ran:           git worktree list --porcelain  -- exit 0 in 14ms
 would run:     git check-ref-format --branch my-idea
 would run:     git show-ref --verify --quiet refs/heads/my-idea
 would run:     git fetch origin
@@ -5801,9 +5866,49 @@ would run:     pnpm turbo run build
 ```
 
 (most lines also carry an indented note saying what that step decides or refuses on; they are elided
-here. exit 0, and **nothing at all is spawned**. The orphan-commit count on line 2 is one of the three a
-real run may spell differently: it asks it only when line 1 comes back empty. With `--discard` the plan
-gains `git reset --hard`, `git clean -fd` and a second `git status` after line 8.)
+here. exit 0, and the only thing spawned is the `worktree list` — the one row labelled `ran:`. The
+orphan-commit count on line 2 is one of the two a real run may spell differently: it asks it only when
+line 1 comes back empty. With `--discard` the plan gains `git reset --hard`, `git clean -fd` and a second
+`git status` after line 9.)
+
+**Example — the trunk is checked out in another worktree** (a real run, against a throwaway repository
+with a primary checkout on `main` and an effort in a linked worktree beside it; `git branch --force main
+origin/main` typed by hand in that worktree answers `fatal: cannot force update the branch 'main' used by
+worktree at '…/primary'` at exit 128)
+
+```bash
+nen shu warmup --repo /tmp/wt-demo/effort --branch my-idea
+```
+```text
+repo:          /tmp/wt-demo/effort
+remote:        origin
+trunk:         main
+branch:        my-idea
+discard:       no -- a dirty working copy refuses
+lane:          (none -- no declaration, so build/test verification was skipped)
+ran:           git branch --show-current  -- exit 0 in 13ms
+               on 'my-idea-holder'
+ran:           git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD  -- exit 0 in 14ms
+ran:           git -c core.quotePath=false status --porcelain=v1 -z -uall  -- exit 0 in 14ms
+               clean -- nothing staged, modified or untracked
+ran:           git remote  -- exit 0 in 12ms
+               remotes: origin
+ran:           git show-ref --verify --quiet refs/heads/main  -- exit 0 in 14ms
+               the trunk to fast-forward, assumed because --from was not given
+ran:           git worktree list --porcelain  -- exit 0 in 14ms
+               trunk held by worktree /tmp/wt-demo/primary; cutting from origin/main directly. The local 'main' is left exactly where it is -- moving it is git's to refuse, and nothing here needs it moved
+ran:           git check-ref-format --branch my-idea  -- exit 0 in 12ms
+ran:           git show-ref --verify --quiet refs/heads/my-idea  -- exit 1 in 12ms
+ran:           git fetch origin  -- exit 0 in 30ms
+ran:           git merge-base --is-ancestor main origin/main  -- exit 0 in 11ms
+ran:           git ls-remote --heads origin refs/heads/my-idea  -- exit 0 in 18ms
+ran:           git switch -c my-idea origin/main  -- exit 0 in 16ms
+               cut from origin/main, the tip this run just fetched
+```
+
+(exit 0; there is **no** `git branch --force` row at all, and the same run under `--dry-run` prints the
+same decision on the same `worktree list` row. Some notes are elided here. The other worktree is left
+exactly as it was: still on `main`, still pointing where it did.)
 
 **Example — a dirty tree, refused**
 
@@ -5987,9 +6092,19 @@ nen parse <skill> --grammar <template> --line <invocation>
 |---|---|---|---|
 | `<skill>` (positional) | yes | The skill name; used only to build the corrected line. | Any name other than `futon`/`izanagi`/`izanami`. |
 | `--grammar <template>` | yes | The template, exactly as the skill documents it. | A template the engine cannot split unambiguously is a usage error (exit 2), same as an unparseable `--line`. |
-| `--line <text>` | yes | The invocation to parse. | |
+| `--line <text>` | yes | The invocation to parse. | **May be empty** when every clause of the grammar is optional -- see below. |
 
-**Output and exit codes** -- on a match, echoes the parse one clause per line (`<slot>: <value>[ (+)]`, `[<clause>]: present`). On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
+**An empty `--line` is a complete invocation when nothing is required.** For a
+grammar whose every slot is bracketed (`at [<gate:…>]`), `--line ""` and
+`--line "at"` parse **identically**, both reporting `gate: (clause absent)` at
+exit 0: the invocation with nothing in it is the ordinary one for a skill whose
+only clause is optional, and a caller should not have to know to spell a bare
+`at`. This holds however the template writes the separator -- inside the
+brackets (`[onto <slot>]`) or outside them (`at [<gate>]`). A grammar carrying a
+**required** clause is unaffected: an empty line still refuses at exit 2, naming
+the slot, with the corrected line to paste.
+
+**Output and exit codes** -- on a match, echoes the parse one clause per line: a supplied slot as `<slot>: <value>[ (+)]`, an optional slot nobody filled as `<slot>: (clause absent)`, and a literal-only clause the line carried as `[<clause>]: present`. On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`; `slots[]` still carries only what the line supplied, so the `(clause absent)` line is the report rather than the data. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
 
 **Example**
 
@@ -6001,6 +6116,31 @@ target: app
 env: prod
 ```
 (run for real)
+
+**Example — the two spellings of "no clause"** (both run for real)
+
+```bash
+nen parse jutaisho --grammar "at [<gate:G2|G4>]" --line ""
+```
+```text
+gate: (clause absent)
+```
+```bash
+nen parse jutaisho --grammar "at [<gate:G2|G4>]" --line "at"
+```
+```text
+gate: (clause absent)
+```
+```bash
+nen parse backlog-state --grammar "<repo>[@<gate:G1|G2>]" --line ""
+```
+```text
+nen parse: <repo> is required and the line does not supply it.
+
+Corrected line:
+  backlog-state <repo>
+```
+(exit 0, exit 0, exit 2: `<repo>` is required, so the empty line is still a refusal there)
 
 ### `nen parse futon`
 
