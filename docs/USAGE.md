@@ -4592,6 +4592,8 @@ Given, the verb becomes three things, in this order:
 
 All three run in the lane's `cwd` and are given the verb's own declared `env`: a launch is one lane operation, and an installer that could not see the variables the build was given would be a second environment nobody declared. Only the **names** are ever reported, here as everywhere.
 
+**Which refusal answers first, when `--target` is given.** A target belongs to **one** of the two long-running verbs, and that is a fact about the declaration — true on every lane and every host — while a lane's `unsupported` seat is a fact about one row. So the target's own verb is checked **before the lane is even read**: `nen shu run --target <a target declared for dev>` is exit **2** naming the fix (`run 'dev --target <name>'`), never the lane's exit 4. It used to be the other way round, and on any lane where the other verb is seated or simply undeclared the caller got a dead end — *"'run' is unsupported on lane 'device'"*, true, and pointing at a row they never wanted — while nen already held the sentence that ends the problem one check further down. Everything else keeps the order it had: a lane's seat still answers **4** when the target's verb *does* match (there the seat is the whole answer), a target with **no command line at all** still answers 4 in the repository's own words, and a `--target` this block does not declare is still exit 2 listing the ones it does.
+
 `--dry-run` prints all three as `would run:` lines with the tokens **unfilled**, plus one `substitutes:` line saying what each stands for, and spawns nothing at all — the probe included, which is what keeps this form read-only in [izanami's table](#nen-parse-izanami). `--json` still needs `--dry-run`, and the document's `target` is then `{ name, verb, lane, args, artifact, device: { name, kind, id }, probe, after }`, with `id` null exactly because nothing was probed.
 
 ```text
@@ -4647,7 +4649,7 @@ Four things on that page are the point, and each is a rule rather than a renderi
 
 ### `nen shu run`
 
-Start the lane's **production or staging** build, locally. The distinguishing property against `dev` is the build configuration, not the lifetime — `run` is long-running too, goes through the same interactive seam, refuses `--json` without `--dry-run` for the same reason, and takes the same optional `--target`. A launch target declares which of the two verbs it belongs to; naming a `dev` target on `run` (or the reverse) is exit 2, because the two are different builds and nen carries a target across in neither direction.
+Start the lane's **production or staging** build, locally. The distinguishing property against `dev` is the build configuration, not the lifetime — `run` is long-running too, goes through the same interactive seam, refuses `--json` without `--dry-run` for the same reason, and takes the same optional `--target`. A launch target declares which of the two verbs it belongs to; naming a `dev` target on `run` (or the reverse) is exit 2, because the two are different builds and nen carries a target across in neither direction. That check runs **before the lane's own row is read**, so it is the answer even on a lane where the other verb is `unsupported` or undeclared — see [which refusal answers first](#nen-shu-dev).
 
 ### `nen shu deploy`
 

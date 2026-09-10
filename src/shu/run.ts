@@ -63,6 +63,7 @@ import {
   isLaunchTarget,
   LAUNCHING_VERBS,
   launchLane,
+  refuseCrossVerbTarget,
   renderArgv,
   renderInvocation,
   resolveLaunch,
@@ -863,6 +864,19 @@ export async function runVerb(
 ): Promise<number> {
   refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
+  // A TARGET DECLARED FOR THE OTHER LONG-RUNNING VERB IS REFUSED BEFORE THE
+  // LANE'S OWN ROW IS EVEN READ, and the order is the fix rather than a
+  // preference. `dev` and `run` are different builds and a target belongs to
+  // one of them -- a fact about the declaration, true on every lane -- while a
+  // seat is a fact about one row. Rendered first, the seat answered on any lane
+  // where the other verb is `unsupported` or simply undeclared, so a caller who
+  // named a `dev` target on `run` was told `'run' is unsupported on lane '<x>'`
+  // (exit 4, and a dead end) while nen already held the sentence that ends it.
+  // Everything else this function's contract says stays where it was: the seat
+  // keeps exit 4 whenever the target's verb DOES match.
+  if (LAUNCHING_VERBS.includes(options.verb)) {
+    refuseCrossVerbTarget(project, options.verb, options.target);
+  }
   // THE TARGET'S LANE IS READ BEFORE ANYTHING IS RENDERED, and that ordering is
   // the whole point of the key. Rendered on the invocation's lane first, a
   // target whose OWN lane is the only one declaring the verb was refused by the

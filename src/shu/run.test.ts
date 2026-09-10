@@ -2504,6 +2504,103 @@ describe("a launch target may name the artifact {artifact} stands for", () => {
   });
 });
 
+// ── (i.4) which refusal answers first when --target is given ───────────────
+//
+// A TARGET BELONGS TO ONE VERB, which is a fact about the DECLARATION and true
+// on every lane; a seat is a fact about ONE ROW. Rendered first, the seat won on
+// any lane where the other verb is `unsupported` or simply undeclared, and the
+// caller got a dead end -- "'run' is unsupported on lane 'device'", exit 4,
+// sending them to write a `run` row they never wanted -- while nen already held
+// the sentence that ends the problem.
+
+describe("the target's own verb answers before the lane's seat", () => {
+  it("refuses at 2 naming the fix, where the caller's lane declares no such verb", async () => {
+    // The fixture's `install` is declared for `dev` on the `device` lane, and
+    // that lane declares no `run` at all. Before the reorder this answered
+    // `lane 'device' (xcode-ios) declares no 'run'` at exit 4.
+    const result = await capture(["run", "--lane", "device", "--target", "install"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(
+      "launch target 'install' is declared for 'dev', and this is 'run'",
+    );
+    expect(result.err.join("\n")).toContain("run 'dev --target install'");
+    expect(result.err.join("\n")).not.toContain("declares no 'run'");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses at 2 where the caller's lane SEATS the other verb, in the repo's words", async () => {
+    // THE SHAPE THE FINDING CAME IN. A lane that declares `dev` and seats `run`
+    // is an ordinary declaration, and the seat's exit 4 is a true sentence that
+    // leads nowhere: the caller does not want this lane's `run`, they want the
+    // target's `dev`.
+    const project = {
+      lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          dev: { exe: "placeholder-tool", argv: ["serve"] },
+          run: { unsupported: "this lane ships through a store, not a local server." },
+        },
+      },
+      launch: {
+        handset: {
+          verb: "dev",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{device.id}"] }],
+        },
+      },
+    };
+    const result = await withDeclaration(project, ["run", "--target", "handset"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(
+      "launch target 'handset' is declared for 'dev', and this is 'run'",
+    );
+    expect(result.err.join("\n")).not.toContain("ships through a store");
+  });
+
+  it("keeps the seat's exit 4 when the target's verb DOES match", async () => {
+    // THE HALF THE REORDER MUST NOT TOUCH. Here the seat is the whole answer --
+    // there is no better sentence behind it -- so it stays where it was, at 4,
+    // in the declaration's own words.
+    const project = {
+      lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          build: { exe: "placeholder-tool", argv: ["build"] },
+          dev: { unsupported: "there is no local server for this lane." },
+        },
+      },
+      launch: {
+        handset: {
+          verb: "dev",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{device.id}"] }],
+        },
+      },
+    };
+    const result = await withDeclaration(project, ["dev", "--target", "handset"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain("there is no local server for this lane.");
+  });
+
+  it("leaves the seated TARGET's own exit 4 exactly where it was", async () => {
+    // `farm` has no command line at all, and that refusal is the target's own
+    // rather than a lane's -- the early check is silent on it by construction.
+    const result = await capture(["run", "--target", "farm"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain("device farm's own web console");
+  });
+
+  it("leaves an UNDECLARED target's exit 2 speaking about the caller's lane", async () => {
+    const result = await capture(["run", "--lane", "device", "--target", "nope"]);
+    expect(result.code).toBe(4);
+    // The lane the caller named declares no `run`, and there is no target to
+    // read a better sentence off -- so the lane still answers, as it must.
+    expect(result.err.join("\n")).toContain("declares no 'run'");
+  });
+});
+
 describe("a launch target hangs off a verb that hands over the terminal", () => {
   it("names exactly the verbs that go through the interactive seam", () => {
     // THE TWO LISTS MUST AGREE, and they are computed in different modules for
