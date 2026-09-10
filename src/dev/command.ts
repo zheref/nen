@@ -35,7 +35,13 @@ usage:
 
 Each of these is a DEV verb: it runs this checkout's own tooling and needs a
 checkout to run it in -- a compiled binary has no harness, no linter and no
-corpus slice to replay.`;
+corpus slice to replay.
+
+  --repo <path>    The checkout whose own tooling and corpus slice these
+                   verbs run against. Defaults to the current directory,
+                   so a call made from anywhere else needs it: the
+                   taxonomy-missing refusal you would otherwise meet is
+                   this flag's absence, not a missing file.`;
 
 export const devCommand: Command = {
   name: "dev",

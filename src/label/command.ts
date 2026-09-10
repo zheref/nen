@@ -56,7 +56,15 @@ Apply a label to one object, logged.
                      (CON-38's dry-run-first convention,
                      scripts/sync-labels.sh). With --run, the ledger records
                      "applied" or "failed" -- whichever GitHub actually did,
-                     written AFTER the call resolves.`;
+                     written AFTER the call resolves.
+
+  --repo <path>    The checkout whose nen/labels.json the label is checked
+                   against, and the root --ledger defaults under. NOT
+                   --repo-slug, which is the owner/name the mutation runs
+                   against. Defaults to the current directory, so a call
+                   made from anywhere else needs it: the taxonomy-missing
+                   refusal you would otherwise meet is this flag's
+                   absence, not a missing file.`;
 
 const DEFAULT_LEDGER = "label-ledger.jsonl";
 

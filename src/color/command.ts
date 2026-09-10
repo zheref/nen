@@ -24,7 +24,14 @@ are true of one row, and report the first match.
                      failed.
 
 There is no built-in colour table and no fallback. A set the precedence cannot
-rank is reported as unresolved (exit 1) rather than picked from arbitrarily.`;
+rank is reported as unresolved (exit 1) rather than picked from arbitrarily.
+
+  --repo <path>    The checkout whose nen/colors.yml supplies the
+                   vocabulary and the precedence order. Defaults to the
+                   current directory, so a call made from anywhere else
+                   needs it: the taxonomy-missing refusal you would
+                   otherwise meet is this flag's absence, not a missing
+                   file.`;
 
 export const colorCommand: Command = {
   name: "color",

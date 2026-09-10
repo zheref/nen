@@ -38,7 +38,13 @@ and an unperformed check must never render as a clean one.
                            in the human output and as { "checked": false } in
                            --json, never as a silent "no gaps" (review
                            finding: "not checked" must never render as clean).
-  --answers-from <path>    A JSON object: { "<repo>": ["<question-id>", ...] }.`;
+  --answers-from <path>    A JSON object: { "<repo>": ["<question-id>", ...] }.
+
+  --repo <path>    The checkout whose nen/repos.json supplies the consumer
+                   set. Defaults to the current directory, so a call made
+                   from anywhere else needs it: the taxonomy-missing
+                   refusal you would otherwise meet is this flag's
+                   absence, not a missing file.`;
 
 /**
  * "Not run" and "run and found nothing" are different verdicts (review

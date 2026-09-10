@@ -26,7 +26,13 @@ compute:
 record:
   The same computation, appended to a ledger for audit (one line per consumer,
   per invocation) -- this verb never opens a repin PR itself; it records the
-  decision a caller then acts on.`;
+  decision a caller then acts on.
+
+  --repo <path>    The checkout whose nen/repos.json supplies the consumer
+                   set. Defaults to the current directory, so a call made
+                   from anywhere else needs it: the taxonomy-missing
+                   refusal you would otherwise meet is this flag's
+                   absence, not a missing file.`;
 
 const DEFAULT_WORKFLOWS_DIR = ".github/workflows";
 const DEFAULT_LEDGER = "fanout-ledger.jsonl";

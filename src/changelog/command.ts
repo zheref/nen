@@ -53,7 +53,13 @@ completeness:
   flag to use the default; an EMPTY value is refused (it would resolve to the
   repository root), and so is a path that is not a directory. A directory
   that does not exist contributes no fragments rather than refusing: a
-  repository that has collated everything has none at the cut point.`;
+  repository that has collated everything has none at the cut point.
+
+  --repo <path>    The checkout that --changelog and --fragment-dir
+                   resolve against. Defaults to the current directory, so
+                   a call made from anywhere else needs it: the
+                   taxonomy-missing refusal you would otherwise meet is
+                   this flag's absence, not a missing file.`;
 
 function readIfGiven(path: string | undefined, cwd: string): string {
   return path === undefined ? "" : readTextFile(path, cwd);

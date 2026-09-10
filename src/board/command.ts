@@ -48,7 +48,14 @@ diff:
 
 All three verbs validate the board shape at the read seam before using it: a
 malformed --rows-from, --board-from, --before or --after refuses by file, row
-and field (exit 2) rather than crashing.`;
+and field (exit 2) rather than crashing.
+
+  --repo <path>    The checkout whose nen/colors.yml and nen/labels.json
+                   supply the row colours and the label vocabulary.
+                   Defaults to the current directory, so a call made from
+                   anywhere else needs it: the taxonomy-missing refusal
+                   you would otherwise meet is this flag's absence, not a
+                   missing file.`;
 
 // EVERY ROW IS VALIDATED AT THE JSON BOUNDARY, NOT CAST PAST IT (#32).
 // `readJsonFile<readonly BoardRow[]>` was a compile-time assertion about

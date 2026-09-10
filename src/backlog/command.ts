@@ -64,7 +64,14 @@ order:
                             REFUSED, never silently ignored.
   --affects-consumers <id|n,...>
                             Rows that affect consumer behaviour/DX. Same
-                            token forms as --blocks, same refusal.`;
+                            token forms as --blocks, same refusal.
+
+  --repo <path>    The checkout whose nen/labels.json supplies the
+                   severity and lane vocabulary these rows are read
+                   against. Defaults to the current directory, so a call
+                   made from anywhere else needs it: the taxonomy-missing
+                   refusal you would otherwise meet is this flag's
+                   absence, not a missing file.`;
 
 interface RawGhIssue {
   readonly number: number;
