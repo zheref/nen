@@ -54,6 +54,7 @@ import { shuCommand } from "../shu/command.js";
 import { splitCommand } from "../split/command.js";
 import { stageCommand } from "../stage/command.js";
 import { stopCommand } from "../stop/command.js";
+import { surfaceCommand } from "../surface/command.js";
 import { tagCommand } from "../tag/command.js";
 import { wakeCommand } from "../wake/command.js";
 import { warmupCommand } from "../warmup/command.js";
@@ -90,6 +91,7 @@ export const COMMANDS: readonly Command[] = [
   splitCommand,
   stageCommand,
   stopCommand,
+  surfaceCommand,
   tagCommand,
   wakeCommand,
   warmupCommand,
