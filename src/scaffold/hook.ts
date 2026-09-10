@@ -123,11 +123,10 @@ export interface HookSpec {
 // automated commit outright and names the fix: admit the key, or regenerate
 // with a different `--agent-trailer`.
 //
-// MATCHING IGNORES CASE (`grep -i`/`grep` without `-i` where the key is
-// compared literally against what `nen scaffold init` resolved, not against
-// caller input), for ../schema/workflow.ts's own reason: every tool that
-// reads the finished commit reads a trailer key without regard to case, so a
-// guard one capital defeats is not a guard.
+// MATCHING IGNORES CASE EVERYWHERE (`grep -i` throughout: the refusals above,
+// the required-trailer check(s) below), for ../schema/workflow.ts's own
+// reason: every tool that reads the finished commit reads a trailer key
+// without regard to case, so a guard one capital defeats is not a guard.
 export function renderCommitMsgHook(
   spec: HookSpec,
   refusedTrailers: readonly string[] = [],
@@ -147,7 +146,7 @@ fi
   const automatedHalf = !agentTrailerAdmitted
     ? `  echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit), but this repository's nen/workflow.json does not admit '${spec.agentTrailer}' under commits.allowedAttributionTrailers -- no automated commit can carry a trailer this policy does not list. Add '${spec.agentTrailer}' to that list (or regenerate this hook with a different --agent-trailer), then re-run 'nen scaffold init'." >&2
   exit 1`
-    : `  if ! grep -qE '^${spec.agentTrailer}: .+' "\$msg_file"; then
+    : `  if ! grep -qiE '^${spec.agentTrailer}: .+' "\$msg_file"; then
     echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit) but the message carries no '${spec.agentTrailer}: <value>' trailer." >&2
     exit 1
   fi
@@ -155,7 +154,7 @@ ${
   spec.runTrailer === null
     ? ""
     : `
-  if ! grep -qE '^${spec.runTrailer}: .+' "\$msg_file"; then
+  if ! grep -qiE '^${spec.runTrailer}: .+' "\$msg_file"; then
     echo "commit-msg: ${spec.markerEnvVar} is set (an automated commit) but the message carries no '${spec.runTrailer}: <value>' trailer." >&2
     exit 1
   fi

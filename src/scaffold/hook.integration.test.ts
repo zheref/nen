@@ -153,6 +153,24 @@ describe.skipIf(!HAVE_GIT)("the generated commit-msg hook, run by a real git com
     expect(`${automated.stderr ?? ""}`).toContain("X-Agent");
   });
 
+  // The required-trailer check matched case exactly (`grep -qE`) while the
+  // refused-trailer checks matched without regard to case (`grep -qiE`), so
+  // an automated commit whose trailer key differed only in case from the
+  // spec's was refused for "carrying no trailer" even though every reader of
+  // the finished commit (../schema/workflow.ts's own trailer matching) would
+  // have recognised it. Both halves now match case-insensitively.
+  it("accepts the required agent trailer in ANY case -- not just the refused list", () => {
+    const spec: HookSpec = { agentTrailer: "Hatsu-Agent", runTrailer: null, markerEnvVar: "NEN_AUTOMATED" };
+    const root = repoWith([], "main", true, spec);
+    expect(git(root, ["switch", "-q", "-c", "work"]).status).toBe(0);
+    const automated = spawnSync(
+      "git",
+      [...WHO, "commit", "--allow-empty", "-m", "feat: automated\n\nhatsu-agent: x"],
+      { cwd: root, encoding: "utf8", env: { ...process.env, NEN_AUTOMATED: "1" } },
+    );
+    expect(automated.status).toBe(0);
+  });
+
   it("refuses nothing at all when the policy admits everything", () => {
     const root = repoWith([]);
     expect(commitOffTrunk(root, "work", "feat: a thing\n\nCo-Authored-By: A <a@b>").status).toBe(0);

@@ -337,7 +337,7 @@ function readHookSpec(
     if (!required && agentTrailerFlag === undefined && runTrailerFlag === undefined) return undefined;
     throw new VerbUsageError(
       required
-        ? `scaffold init requires --marker-env <VAR>: the generated commit-msg hook reads it to recognise an automated commit. --agent-trailer <key> is optional -- omitted, it defaults to '${defaultAgentTrailer()}', this project family's own CI-plane provenance trailer (docs/USAGE.md's "Two provenance trailers") -- and --run-trailer <key> is optional with no default: state it, and the same key under nen/workflow.json's commits.runTrailer, to also require a run identifier on every automated commit. Missing: --marker-env.`
+        ? `scaffold init requires --marker-env <VAR>: the generated commit-msg hook reads it to recognise an automated commit. --agent-trailer <key> is optional -- omitted, it defaults to '${defaultAgentTrailer()}', this project family's own CI-plane provenance trailer (docs/USAGE.md's "Two provenance trailers") -- and --run-trailer <key> is optional with no default: when this repository's nen/workflow.json does not exist yet, this run writes commits.runTrailer from it and the generated hook then also requires a run identifier; when nen/workflow.json already exists, that file's own commits.runTrailer wins and this flag is ignored (a printed note says so) -- edit the file directly to change it. Missing: --marker-env.`
         : "--marker-env <VAR> is required alongside --agent-trailer/--run-trailer: without it nothing marks a commit as automated, so neither flag has anything to act on. Omit all three and the hook becomes a printed post-step instead.",
     );
   }

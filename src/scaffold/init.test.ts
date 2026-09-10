@@ -221,6 +221,49 @@ describe("scaffoldInit -- nen/workflow.json", () => {
     expect(hook).not.toContain("grep -qE '^X-Agent: .+'");
   });
 
+  // Copilot review, zheref/nen#175: the hook's runTrailer was taken from
+  // `options.hook` (this invocation's `--run-trailer`) even when an EXISTING
+  // `nen/workflow.json` already states -- or omits -- `commits.runTrailer`.
+  // Every other part of the generated hooks already lets an existing policy
+  // win over this invocation's flags (the trunk name, the refused-trailer
+  // list, whether `--agent-trailer`'s key is admitted); `runTrailer` is not
+  // an exception. Both directions:
+  it("derives the hook's runTrailer from an EXISTING policy that states one, not from an absent --run-trailer", () => {
+    const root = tempRoot();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(
+      join(root, "nen", "workflow.json"),
+      JSON.stringify({ commits: { allowedAttributionTrailers: ["X-Agent"], runTrailer: "Policy-Run" } }),
+    );
+    const result = scaffoldInit({
+      root,
+      platform: "linux",
+      directories: [],
+      hook: { agentTrailer: "X-Agent", runTrailer: null, markerEnvVar: "X_AUTOMATED" },
+      stack: STACK,
+    });
+    const hook = readFileSync(result.hookWritten, "utf8");
+    // The policy's OWN run trailer is required on an automated commit, even
+    // though this invocation's --run-trailer named none.
+    expect(hook).toContain("grep -qiE '^Policy-Run: .+'");
+  });
+
+  it("does NOT require a --run-trailer the EXISTING policy never asked for, and notes why", () => {
+    const root = tempRoot();
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(
+      join(root, "nen", "workflow.json"),
+      JSON.stringify({ commits: { allowedAttributionTrailers: ["X-Agent"] } }),
+    );
+    const result = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
+    const hook = readFileSync(result.hookWritten, "utf8");
+    // HOOK carries --run-trailer 'X-Run', but the existing policy states no
+    // commits.runTrailer -- the existing policy wins, so the generated hook
+    // requires no run identifier at all.
+    expect(hook).not.toContain("X-Run");
+    expect(result.notes.some((note) => note.includes("--run-trailer") && note.includes("X-Run"))).toBe(true);
+  });
+
   it("regenerating from an UNCHANGED policy is byte-stable (zheref/nen#167)", () => {
     const root = tempRoot();
     const first = scaffoldInit({ root, platform: "linux", directories: [], hook: HOOK, stack: STACK });
