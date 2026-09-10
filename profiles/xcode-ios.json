@@ -159,7 +159,7 @@
   "reportDefault": {
     "$comment": "ADVISORY ONLY, and the one thing `nen shu coverage` may say about a report location it was not given. That verb parses the report a DECLARATION names under the coverage verb's `artifacts`; when a repository names none, this path (or this reason) is quoted in the refusal and NEVER opened. `path: null` is the honest answer for a stack whose report location does not exist or is not conventional.",
     "path": null,
-    "why": "The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is no shell in this family and therefore no redirection. A lane that wants this parsed states a step that writes the JSON to a path and names that path under the verb's `artifacts`. The `.xcresult` bundle itself is not a format nen reads.",
+    "why": "The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is still no shell in this family and therefore no redirection OPERATOR, but there is now a declared one: a lane that wants this parsed states `stdoutTo` on that step (a repo-relative path with `xccov` in its name, since the reader recognises a report by name) and names the same path under the verb's `artifacts`. nen writes the captured stdout to it itself. The `.xcresult` bundle itself is not a format nen reads.",
     "source": "this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209)"
   },
   "notes": [

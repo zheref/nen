@@ -8,6 +8,7 @@ import { RepoRootError } from "./repo/root.js";
 import { ALT_REPO, BANKAI_REPO, LEGACY_REPO } from "./schema/fixtures/paths.js";
 import { defaultSeams, type CommandResult, type Seams } from "./seam/exec.js";
 import { VERSION } from "./version.js";
+import { noPortProbe } from "./seam/scripted.js";
 
 // `capture` is ASYNC because ./index.ts's `run()` is (../verbs/pr_ready.ts
 // reads GitHub over the network). Every call site below awaits it.
@@ -44,6 +45,7 @@ async function captureWithSeams(
     run: runFn,
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
+    probePort: noPortProbe,
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },

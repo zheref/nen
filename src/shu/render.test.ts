@@ -6,6 +6,7 @@ import { VerbUsageError } from "../cli/command.js";
 import { parseProjectBlock, type ProjectBlock } from "../schema/contract.js";
 import { ShuRefusal } from "./exit.js";
 import {
+  ASSERTABLE_KINDS,
   isLaunchTarget,
   LAUNCHING_VERBS,
   REFUSED_PLACEHOLDERS,
@@ -78,7 +79,7 @@ describe("renderInvocation", () => {
 
   it("renders a single-command verb as one step, exe apart from argv", () => {
     const rendered = renderInvocation(project(), request);
-    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"] }]);
+    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"], stdoutTo: null }]);
     expect(rendered.lane).toBe("one");
     expect(rendered.stack).toBe("stack-a");
     expect(rendered.cwdRelative).toBe(".");
@@ -276,14 +277,16 @@ describe("resolveTarget", () => {
   it("appends the target's args to the declared argv, in the declared order", () => {
     const block = deployable({ prod: { args: ["--env", "production"] } });
     const resolved = resolveTarget(block, plan(block), "prod");
-    expect(resolved.steps).toEqual([{ exe: "tool", argv: ["publish", "--env", "production"] }]);
+    expect(resolved.steps).toEqual([
+      { exe: "tool", argv: ["publish", "--env", "production"], stdoutTo: null },
+    ]);
     expect(resolved.target).toEqual({ name: "prod", args: ["--env", "production"], requiresEnv: [] });
   });
 
   it("leaves the argv alone for a name-only target -- naming it is the requirement", () => {
     const block = deployable({ prod: {} });
     expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish"] },
+      { exe: "tool", argv: ["publish"], stdoutTo: null },
     ]);
   });
 
@@ -297,10 +300,17 @@ describe("resolveTarget", () => {
     });
     const resolved = resolveTarget(block, plan(block), "prod");
     expect(resolved.preconditions).toEqual([
-      { kind: "path", value: "deps", why: null, pointer: "project.preconditions.one[0].value" },
+      {
+        kind: "path",
+        value: "deps",
+        expect: null,
+        why: null,
+        pointer: "project.preconditions.one[0].value",
+      },
       {
         kind: "env",
         value: "A_TOKEN",
+        expect: null,
         why: expect.stringContaining("never reads, compares or prints its value") as unknown as string,
         // THE ROW'S OWN ADDRESS, and it is the index into what the FILE says
         // rather than into the byte-ordered list -- A_TOKEN is declared second.
@@ -309,6 +319,7 @@ describe("resolveTarget", () => {
       {
         kind: "env",
         value: "B_TOKEN",
+        expect: null,
         why: expect.stringContaining("required by the deploy target 'prod'") as unknown as string,
         pointer: "project.targets.prod.requiresEnv[0]",
       },
@@ -327,6 +338,7 @@ describe("resolveTarget", () => {
       {
         kind: "env",
         value: "DUP",
+        expect: null,
         why: expect.stringContaining("required by the deploy target 'prod'") as unknown as string,
         pointer: "project.targets.prod.requiresEnv[0]",
       },
@@ -352,12 +364,14 @@ describe("resolveTarget", () => {
       {
         kind: "env",
         value: "SHARED_TOKEN",
+        expect: null,
         why: "the lane's own",
         pointer: "project.preconditions.one[0].value",
       },
       {
         kind: "env",
         value: "ONLY_THE_TARGETS",
+        expect: null,
         why: expect.stringContaining("required by the deploy target 'prod'") as unknown as string,
         pointer: "project.targets.prod.requiresEnv[1]",
       },
@@ -381,7 +395,7 @@ describe("resolveTarget", () => {
     // it does in a lane's argv.
     const ordinary = deployable({ prod: { args: ["--define={\"NODE_ENV\":\"production\"}"] } });
     expect(resolveTarget(ordinary, plan(ordinary), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish", "--define={\"NODE_ENV\":\"production\"}"] },
+      { exe: "tool", argv: ["publish", "--define={\"NODE_ENV\":\"production\"}"], stdoutTo: null },
     ]);
   });
 
@@ -460,7 +474,7 @@ describe("resolveTarget", () => {
     // with one step does not ask anyone to guess.
     const block = deployable({ prod: { args: ["--prod"] } }, { steps: [{ exe: "tool", argv: ["publish"] }] });
     expect(resolveTarget(block, plan(block), "prod").steps).toEqual([
-      { exe: "tool", argv: ["publish", "--prod"] },
+      { exe: "tool", argv: ["publish", "--prod"], stdoutTo: null },
     ]);
   });
 
@@ -508,7 +522,7 @@ describe("resolveTarget", () => {
     // And the plan it was handed is untouched: a target is resolved ONTO a
     // plan, not INTO one.
     expect(before.target).toBeNull();
-    expect(before.steps).toEqual([{ exe: "tool", argv: ["publish"] }]);
+    expect(before.steps).toEqual([{ exe: "tool", argv: ["publish"], stdoutTo: null }]);
   });
 });
 
@@ -534,5 +548,125 @@ describe("the two things --target can name", () => {
     const both = TARGETED_VERBS.filter((verb): boolean => LAUNCHING_VERBS.includes(verb));
     expect(both).toEqual([]);
     expect(LAUNCHING_VERBS).toEqual(["dev", "run"]);
+  });
+});
+
+// ── stdoutTo, through the renderer ─────────────────────────────────────────
+
+describe("stdoutTo reaches the rendered step, and is refused where it cannot", () => {
+  const request = { lane: null, verb: "build", platform: "linux" };
+
+  it("carries the value from an {exe, argv} invocation", () => {
+    const rendered = renderInvocation(
+      project({ verbs: { one: { build: { exe: "tool", argv: ["go"], stdoutTo: "out/log.json" } } } }),
+      request,
+    );
+    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["go"], stdoutTo: "out/log.json" }]);
+  });
+
+  it("carries it PER STEP on a multi-step row, leaving the others null", () => {
+    const rendered = renderInvocation(
+      project({
+        verbs: {
+          one: {
+            build: {
+              steps: [
+                { exe: "tool", argv: ["first"] },
+                { exe: "tool", argv: ["second"], stdoutTo: "out/second.json" },
+              ],
+            },
+          },
+        },
+      }),
+      request,
+    );
+    expect(rendered.steps.map((step): string | null => step.stdoutTo)).toEqual([
+      null,
+      "out/second.json",
+    ]);
+  });
+
+  it("survives a target's appended arguments", () => {
+    // A destination adds arguments to a step; it does not change where that
+    // step's output goes, and dropping the field would silently turn a declared
+    // file write back into terminal output the moment somebody named a target.
+    const block = parseProjectBlock("/fixture/nen/contract.json", {
+      lanes: { one: { stack: "stack-a", cwd: "." } },
+      defaultLane: "one",
+      verbs: { one: { deploy: { exe: "tool", argv: ["publish"], stdoutTo: "out/deploy.json" } } },
+      targets: { prod: { args: ["--prod"] } },
+    });
+    const plan = renderInvocation(block, { lane: null, verb: "deploy", platform: "linux" });
+    expect(resolveTarget(block, plan, "prod").steps).toEqual([
+      { exe: "tool", argv: ["publish", "--prod"], stdoutTo: "out/deploy.json" },
+    ]);
+  });
+
+  it("refuses it on a LONG-RUNNING verb, which never lets nen see its output", () => {
+    for (const verb of LAUNCHING_VERBS) {
+      const block = project({
+        verbs: { one: { [verb]: { exe: "tool", argv: ["serve"], stdoutTo: "out/log.txt" } } },
+      });
+      expect(() => renderInvocation(block, { lane: null, verb, platform: "linux" })).toThrow(
+        VerbUsageError,
+      );
+      expect(() => renderInvocation(block, { lane: null, verb, platform: "linux" })).toThrow(
+        /nen inherits this terminal and hands it to the child/,
+      );
+      // And it names the file, so a reader knows which row to edit.
+      expect(() => renderInvocation(block, { lane: null, verb, platform: "linux" })).toThrow(
+        /out\/log\.txt/,
+      );
+    }
+  });
+
+  it("leaves a long-running verb WITHOUT the key exactly as it was", () => {
+    const rendered = renderInvocation(
+      project({ verbs: { one: { dev: { exe: "tool", argv: ["serve"] } } } }),
+      { lane: null, verb: "dev", platform: "linux" },
+    );
+    expect(rendered.steps).toEqual([{ exe: "tool", argv: ["serve"], stdoutTo: null }]);
+  });
+
+  it("refuses a long-running MULTI-STEP row on the first offending step", () => {
+    const block = project({
+      verbs: {
+        one: {
+          dev: {
+            steps: [
+              { exe: "tool", argv: ["a"] },
+              { exe: "tool", argv: ["b"], stdoutTo: "out/b.txt" },
+            ],
+          },
+        },
+      },
+    });
+    expect(() => renderInvocation(block, { lane: null, verb: "dev", platform: "linux" })).toThrow(
+      /out\/b\.txt/,
+    );
+  });
+});
+
+describe("the precondition kinds this release asserts", () => {
+  it("names port beside path and env", () => {
+    expect(ASSERTABLE_KINDS).toEqual(["path", "env", "port"]);
+  });
+
+  it("carries a port row's direction onto the rendered plan", () => {
+    const rendered = renderInvocation(
+      project({
+        preconditions: { one: [{ kind: "port", value: 3000, expect: "listening", why: "the API" }] },
+      }),
+      { lane: null, verb: "build", platform: "linux" },
+    );
+    expect(rendered.preconditions).toEqual([
+      {
+        kind: "port",
+        value: 3000,
+        expect: "listening",
+        why: "the API",
+        pointer: "project.preconditions.one[0].value",
+      },
+    ]);
   });
 });

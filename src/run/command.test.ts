@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { runCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping -- see ../label/command.test.ts's header for why.
@@ -23,6 +24,7 @@ async function capture(
     run: runFn,
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
+    probePort: noPortProbe,
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },

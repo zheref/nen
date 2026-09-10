@@ -9,6 +9,7 @@ import type { Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
 import { prCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 // NEVER `defaultSeams()` HERE (review finding) -- see board/command.test.ts's
 // own note on the same fix. A `run` that throws converts a future regression
@@ -20,6 +21,7 @@ const STUB_SEAMS: Seams = {
   },
   now: (): Date => new Date("2026-01-01T00:00:00Z"),
   env: {},
+  probePort: noPortProbe,
   runInteractive: (): never => {
     throw new Error("this verb has no interactive form");
   },

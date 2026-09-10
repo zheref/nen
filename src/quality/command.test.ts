@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { qualityCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 async function capture(argv: readonly string[]): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
@@ -23,6 +24,7 @@ async function capture(argv: readonly string[]): Promise<{ code: number; out: st
     },
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
+    probePort: noPortProbe,
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },

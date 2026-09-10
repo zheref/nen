@@ -20,11 +20,13 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import type { Seams } from "../seam/exec.js";
 import { reportCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 const REFUSING_SEAMS: Seams = {
   run: (): never => {
     throw new Error("'report render' spawns nothing: it reads two files and writes one.");
   },
+  probePort: noPortProbe,
   runInteractive: (): never => {
     throw new Error("this verb has no interactive form");
   },

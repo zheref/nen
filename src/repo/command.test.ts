@@ -6,6 +6,7 @@ import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { repoCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 async function capture(
   argv: readonly string[],
@@ -30,6 +31,7 @@ async function capture(
     run,
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
+    probePort: noPortProbe,
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },

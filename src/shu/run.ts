@@ -40,10 +40,11 @@
 // `--target` says WHERE, `--run` says NOW, and `--run --dry-run` is refused
 // rather than resolved in either direction.
 
-import { lstatSync } from "node:fs";
+import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
-import { containedPath } from "../repo/contain.js";
-import type { Seams } from "../seam/exec.js";
+import { containedPath, realContainment } from "../repo/contain.js";
+import { PORT_PROBE_TIMEOUT_MS, type Seams } from "../seam/exec.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
 import {
@@ -57,6 +58,7 @@ import {
   TARGETED_VERBS,
   type HostVerdict,
   type RenderedInvocation,
+  type RenderedPrecondition,
   type RenderedStep,
   type ResolvedLaunch,
   type ResolvedTarget,
@@ -81,7 +83,17 @@ export const INTERACTIVE_VERBS: readonly string[] = ["dev", "run"];
 
 export interface AssertedPrecondition {
   readonly kind: string;
-  readonly value: string | readonly string[];
+  readonly value: string | number | readonly string[];
+  /**
+   * Which way round a `port` row was asserted, null on every other kind.
+   *
+   * IN THE DOCUMENT BECAUSE THE VERDICT IS MEANINGLESS WITHOUT IT. `port 3000
+   * -- FAIL` says nothing on its own: a reader has to know whether nen wanted
+   * something listening there or wanted it clear, and a `--json` consumer that
+   * had to go back to the declaration to find out would be reading half a
+   * report.
+   */
+  readonly expect: string | null;
   /** true, false, or null for "nen cannot assert this kind". */
   readonly satisfied: boolean | null;
 }
@@ -90,6 +102,12 @@ export interface ShuStepReport {
   readonly exe: string;
   readonly argv: readonly string[];
   readonly cwd: string;
+  /**
+   * The repo-relative file this step's stdout was (or would be) written to, or
+   * null. Declared under `project.verbs.<lane>.<verb>.stdoutTo`, or on one
+   * entry of that verb's `steps`.
+   */
+  readonly stdoutTo: string | null;
   /** The TOOL's own exit code, verbatim. `null` when nothing was run. */
   readonly exitCode: number | null;
   readonly durationMs: number | null;
@@ -210,45 +228,83 @@ export function insideRepo(repoRoot: string, value: string, pointer: string): st
  * because a precondition is a fact about the repository rather than about the
  * directory a verb happens to run in.
  */
-export function assertPreconditions(
+export async function assertPreconditions(
   plan: RenderedInvocation,
   repoRoot: string,
   seams: Seams,
-): readonly AssertedPrecondition[] {
-  return plan.preconditions.map((entry): AssertedPrecondition => {
-    // THE ROW'S OWN ADDRESS, CARRIED FROM ./render.ts rather than computed from
-    // its index here. Two blocks contribute rows to this one list now -- the
-    // lane's `preconditions`, and the variable NAMES a resolved `deploy` target
-    // requires -- so an index into the MERGED list addressed the wrong file
-    // position for every row of the second kind, naming a
-    // `project.preconditions.<lane>[i]` that does not exist.
+): Promise<readonly AssertedPrecondition[]> {
+  const asserted: AssertedPrecondition[] = [];
+  // IN ORDER, ONE AT A TIME, rather than `Promise.all`. The rows are printed in
+  // declaration order and a `port` row opens a socket; asserting them
+  // concurrently would open every declared port at once for no gain a reader
+  // can see, and would make the order the probes happened depend on the event
+  // loop rather than on the file.
+  for (const entry of plan.preconditions) {
+    asserted.push(await assertOne(entry, repoRoot, seams));
+  }
+  return asserted;
+}
+
+/**
+ * One row, asserted. See `assertPreconditions` above for what that means.
+ *
+ * THE ROW'S OWN ADDRESS COMES FROM ./render.ts rather than from an index here.
+ * Two blocks contribute rows to one list -- the lane's `preconditions`, and the
+ * variable NAMES a resolved `deploy` target requires -- so an index into the
+ * MERGED list addressed the wrong file position for every row of the second
+ * kind, naming a `project.preconditions.<lane>[i]` that does not exist.
+ *
+ * IT IS USED VERBATIM, WITH NOTHING APPENDED. `RenderedPrecondition.pointer` is
+ * ALWAYS the pointer to the value being asserted -- a lane row's own pointer
+ * already carries `.value` (../render.ts's `lanePreconditions`), and a target's
+ * `requiresEnv` row already names its leaf directly (no `.value` to append: the
+ * array element IS the string).
+ */
+async function assertOne(
+  entry: RenderedPrecondition,
+  repoRoot: string,
+  seams: Seams,
+): Promise<AssertedPrecondition> {
+  const unassertable: AssertedPrecondition = {
+    kind: entry.kind,
+    value: entry.value,
+    expect: entry.expect,
+    satisfied: null,
+  };
+  if (!ASSERTABLE_KINDS.includes(entry.kind)) return unassertable;
+  if (Array.isArray(entry.value)) {
+    // An assertable kind given the wrong value SHAPE is also "cannot assert":
+    // a path is one string, and a list of them is a declaration nen cannot
+    // read the intent of without guessing which element it meant.
+    return unassertable;
+  }
+  if (entry.kind === "port") {
+    // THE ONE ROW THAT REACHES THE NETWORK, and it reaches loopback only: nen
+    // opens a TCP connection to 127.0.0.1 on the declared port and destroys it.
+    // Nothing is read, nothing is written, and no other host can be named.
     //
-    // USED VERBATIM, WITH NOTHING APPENDED. `RenderedPrecondition.pointer` is
-    // ALWAYS the pointer to the value being asserted here -- a lane row's own
-    // pointer already carries `.value` (../render.ts's `lanePreconditions`),
-    // and a target's `requiresEnv` row already names its leaf directly
-    // (`project.targets.<name>.requiresEnv[<i>]`, no `.value` to append: the
-    // array element IS the string). Appending `.value` here used to fix the
-    // first shape and silently break the second, naming a file position that
-    // does not exist for every row a target contributed.
-    const pointer = entry.pointer;
-    if (!ASSERTABLE_KINDS.includes(entry.kind)) {
-      return { kind: entry.kind, value: entry.value, satisfied: null };
-    }
-    if (Array.isArray(entry.value)) {
-      // An assertable kind given the wrong value SHAPE is also "cannot assert":
-      // a path is one string, and a list of them is a declaration nen cannot
-      // read the intent of without guessing which element it meant.
-      return { kind: entry.kind, value: entry.value, satisfied: null };
-    }
-    const value = entry.value as string;
-    if (entry.kind === "path") {
-      return { kind: entry.kind, value, satisfied: entryExists(insideRepo(repoRoot, value, pointer)) };
-    }
-    // `env`: the NAME is the value, and the variable's own value is never read,
-    // compared or reported -- presence is the whole assertion.
-    return { kind: entry.kind, value, satisfied: seams.env[value] !== undefined };
-  });
+    // A TIMEOUT IS `null`, NOT `false`. "Nothing answered in time" is the
+    // absence of a fact, and reporting it as "the port is free" would be the
+    // same lie as reporting an unperformed check as a clean one -- so it lands
+    // where every other unassertable row lands, at exit 2, saying so.
+    const verdict = await seams.probePort(entry.value as number);
+    return {
+      ...unassertable,
+      satisfied:
+        verdict === "timeout" ? null : entry.expect === "free" ? verdict === "refused" : verdict === "open",
+    };
+  }
+  const value = entry.value as string;
+  if (entry.kind === "path") {
+    return {
+      ...unassertable,
+      value,
+      satisfied: entryExists(insideRepo(repoRoot, value, entry.pointer)),
+    };
+  }
+  // `env`: the NAME is the value, and the variable's own value is never read,
+  // compared or reported -- presence is the whole assertion.
+  return { ...unassertable, value, satisfied: seams.env[value] !== undefined };
 }
 
 // THE KIND COLUMN IS AS WIDE AS THIS REPORT NEEDS, not a fixed five. `kind` is
@@ -264,17 +320,31 @@ function kindWidth(preconditions: readonly AssertedPrecondition[]): number {
 function describePrecondition(entry: AssertedPrecondition, width: number): string {
   const mark = entry.satisfied === true ? "ok  " : entry.satisfied === false ? "FAIL" : "????";
   const value = Array.isArray(entry.value) ? entry.value.join(" ") : String(entry.value);
+  // THE DIRECTION IS PRINTED BESIDE THE VALUE, not only in the failure tail: a
+  // row reading `ok   port 3000` says nothing about which state was wanted, and
+  // a reader checking a table before they let a build run is checking exactly
+  // that.
+  const asked = entry.expect === null ? "" : ` (expect ${entry.expect})`;
   const tail =
     entry.satisfied === true
       ? ""
       : entry.satisfied === false
         ? entry.kind === "env"
           ? " -- not set in this environment"
-          : " -- not present"
-        : ` -- nen cannot assert a precondition of kind '${entry.kind}'${
-            Array.isArray(entry.value) ? " stated as a LIST of values" : ""
-          } in this release (it asserts: ${ASSERTABLE_KINDS.join(", ")}, each as one string). An unperformed check is never reported as a clean one`;
-  return `  ${mark}  ${entry.kind.padEnd(width)} ${value}${tail}`;
+          : entry.kind === "port"
+            ? entry.expect === "free"
+              ? " -- something is listening on it"
+              : " -- the connection was refused; nothing is listening"
+            : " -- not present"
+        : entry.kind === "port" && !Array.isArray(entry.value)
+          ? // THE PROBE RAN AND ANSWERED NOTHING, which is neither state: a
+            // dropped SYN, a loaded host, a listener that accepted and went
+            // quiet. Reported where every other unassertable row is reported.
+            ` -- the connection to 127.0.0.1:${String(entry.value)} neither completed nor was refused within ${PORT_PROBE_TIMEOUT_MS}ms, so nen cannot say whether it is ${entry.expect === "free" ? "free" : "listening"}. An unperformed check is never reported as a clean one`
+          : ` -- nen cannot assert a precondition of kind '${entry.kind}'${
+              Array.isArray(entry.value) ? " stated as a LIST of values" : ""
+            } in this release (it asserts: ${ASSERTABLE_KINDS.join(", ")} -- 'path' and 'env' as one string, 'port' as one number). An unperformed check is never reported as a clean one`;
+  return `  ${mark}  ${entry.kind.padEnd(width)} ${value}${asked}${tail}`;
 }
 
 /**
@@ -402,12 +472,18 @@ export function renderReport(report: ShuReport): readonly string[] {
     // because it could not be SPAWNED at all -- "exit null in nullms" would
     // claim a code that was never produced, so a streamed step says plainly
     // that it did not start instead.
+    // WHERE THIS STEP'S OUTPUT GOES, ON THE STEP'S OWN LINE. A dry run is a
+    // promise that what it prints is what runs, and a file appearing on disk
+    // that no `would run:` line mentioned would break it. It is printed on a
+    // REAL run too, for the same reason `artifacts` is: the line that says what
+    // ran should say what it wrote.
+    const redirect = step.stdoutTo === null ? "" : `  stdout -> ${step.stdoutTo}`;
     const detail =
       step.exitCode !== null
-        ? `${argv}  -- exit ${step.exitCode} in ${step.durationMs}ms`
+        ? `${argv}${redirect}  -- exit ${step.exitCode} in ${step.durationMs}ms`
         : report.log.mode === "streamed"
-          ? `${argv}  -- did not start`
-          : argv;
+          ? `${argv}${redirect}  -- did not start`
+          : `${argv}${redirect}`;
     lines.push(labelled(verbPrefix, detail));
   }
   // WHAT A REAL RUN WOULD PUT WHERE, printed only where the steps above still
@@ -429,8 +505,23 @@ export function renderReport(report: ShuReport): readonly string[] {
             .join(", "),
         ),
   );
+  // BESIDE `artifacts`, AND IT IS THE OTHER HALF OF THE SAME QUESTION. Both
+  // lines answer "which files does this run put on disk": `artifacts` names the
+  // ones the TOOL writes and nen only reports, this one names the ones NEN
+  // writes -- a step's own stdout, redirected by the declaration. Printed even
+  // when empty, exactly as `artifacts` is, so the absence is a stated fact
+  // rather than a line a reader has to notice is missing.
+  const redirects = stdoutTargets(report.steps);
+  lines.push(
+    labelled("stdout to", redirects.length === 0 ? "(none declared)" : redirects.join(", ")),
+  );
   lines.push(labelled("log", report.log.why));
   return lines;
+}
+
+/** The files this run's steps redirect their stdout to, in step order. */
+function stdoutTargets(steps: readonly ShuStepReport[]): readonly string[] {
+  return steps.flatMap((step): readonly string[] => (step.stdoutTo === null ? [] : [step.stdoutTo]));
 }
 
 const LOG: Readonly<Record<ShuLogReport["mode"], string>> = {
@@ -442,8 +533,29 @@ const LOG: Readonly<Record<ShuLogReport["mode"], string>> = {
     "not captured -- an interactive verb hands this terminal to the child, so nen never sees its output. This is the pre-flight, printed as TEXT before the handover: --json is refused on a long-running verb because stdout then belongs to the child, and '--dry-run --json' is the machine-readable form of this same report.",
 };
 
-function logReport(mode: ShuLogReport["mode"]): ShuLogReport {
-  return { mode, captured: false, path: null, why: LOG[mode] };
+/**
+ * `log` describes NEN's OWN TRANSCRIPT of the run, and `stdoutTo` does not
+ * change it: `captured` and `path` stay false and null because nen still keeps
+ * no transcript of its own, and there is no single file to name when several
+ * steps each redirect somewhere different.
+ *
+ * WHAT IT DOES CHANGE IS THE SENTENCE. "each step's own stdout and stderr were
+ * relayed as it finished" stops being true the moment one of them went to a
+ * file instead, and a `log.why` that says something a reader can see is false
+ * is worse than one that says less. So the clause is appended, naming the
+ * files, and only when there are any -- every run without `stdoutTo` reads
+ * exactly as it always did.
+ */
+function logReport(mode: ShuLogReport["mode"], redirected: readonly string[] = []): ShuLogReport {
+  // THE TENSE FOLLOWS THE MODE, because this line is read beside `would run:`
+  // as often as beside `ran:` -- and a dry run reporting that a file "was
+  // written" would be claiming the one thing a dry run promises not to do.
+  const written = mode === "dry-run" ? "would be written" : "was written";
+  const why =
+    redirected.length === 0
+      ? LOG[mode]
+      : `${LOG[mode]} ${redirected.length} step${redirected.length === 1 ? "" : "s"} declared 'stdoutTo', so ${redirected.length === 1 ? "its" : "their"} stdout ${written} to a file instead of the terminal: ${redirected.join(", ")}.`;
+  return { mode, captured: false, path: null, why };
 }
 
 function artifactReports(
@@ -480,7 +592,19 @@ function assemble(
     exitCode,
     durationMs,
     artifacts: artifactReports(plan, repoRoot),
-    log: logReport(mode),
+    log: logReport(mode, stdoutTargets(steps)),
+  };
+}
+
+/** A step that has not run: the argv, where its stdout goes, and two nulls. */
+function unrun(step: RenderedStep, cwd: string): ShuStepReport {
+  return {
+    exe: step.exe,
+    argv: step.argv,
+    cwd,
+    stdoutTo: step.stdoutTo,
+    exitCode: null,
+    durationMs: null,
   };
 }
 
@@ -601,7 +725,11 @@ function refuseImpossibleFlags(context: CommandContext, options: RunOptions): vo
  *      anything spawns at all. Without it the resolved plan is printed and
  *      nothing is started, at exit 0.
  */
-export function runVerb(context: CommandContext, repoRoot: string, options: RunOptions): number {
+export async function runVerb(
+  context: CommandContext,
+  repoRoot: string,
+  options: RunOptions,
+): Promise<number> {
   refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
   const rendered = renderInvocation(project, {
@@ -621,7 +749,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
       ? resolveLaunch(project, rendered, options.target)
       : rendered;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
-  const preconditions = assertPreconditions(plan, repoRoot, context.seams);
+  const preconditions = await assertPreconditions(plan, repoRoot, context.seams);
 
   const unmet = preconditions.filter((entry): boolean => entry.satisfied !== true);
   if (unmet.length > 0) {
@@ -630,7 +758,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     // anywhere, and a refusal that printed only prose would make `--json`
     // useless in the one case it is most wanted.
     const steps = plannedSteps(plan).map(
-      (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+      (step): ShuStepReport => unrun(step, cwd),
     );
     emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
     const cannot = unmet.filter((entry): boolean => entry.satisfied === null);
@@ -656,7 +784,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
   const gated = TARGETED_VERBS.includes(options.verb) && !options.run;
   if (options.dryRun || gated) {
     const steps = plannedSteps(plan).map(
-      (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+      (step): ShuStepReport => unrun(step, cwd),
     );
     emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
     // ON STDERR, NOT IN THE DOCUMENT, so `--json` stdout stays exactly one
@@ -670,6 +798,19 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     return 0;
   }
 
+  // THE LAST THING CHECKED BEFORE THE FIRST SPAWN, and checked for EVERY step
+  // at once rather than one at a time as each is reached. A run whose third
+  // step cannot write its file is a run that should not have started its
+  // first: the tool has already spent its minutes by then, and the refusal
+  // arrives after the work rather than instead of it.
+  //
+  // NOT ON A DRY RUN, deliberately. A dry run touches nothing and asks the
+  // filesystem nothing it does not have to; the containment rule that could be
+  // decided from the text alone was already decided when the file LOADED, and
+  // "is something already sitting at this path" is a fact about the moment of
+  // the run rather than about the declaration.
+  for (const step of plan.steps) refuseUnwritableRedirect(step, repoRoot, plan);
+
   const launch = launchOf(plan);
   if (launch !== null) {
     return runLaunch(context, plan, launch, cwd, repoRoot, preconditions, options.sink);
@@ -678,6 +819,44 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     return runInteractively(context, plan, cwd, repoRoot, preconditions, options.sink);
   }
   return runCaptured(context, plan, cwd, repoRoot, preconditions, options.sink);
+}
+
+/**
+ * Refuse a `stdoutTo` nen could not honestly write to, before anything spawns.
+ *
+ * THE LOADER ALREADY REFUSED THE SHAPES IT COULD SEE -- an absolute path, a
+ * `..` segment, a glob -- and this is the half only a filesystem can answer:
+ *
+ *   * A DIRECTORY AT THE PATH. `writeFileSync` on one throws EISDIR mid-run,
+ *     after the tool has finished, and the caller would meet it as a crash
+ *     rather than as a refusal naming the declaration.
+ *   * A SYMLINK THAT LEAVES THE TREE. `nen/reports` linked to `/tmp/elsewhere`
+ *     makes `nen/reports/coverage.json` land outside the repository while every
+ *     line nen printed still said `nen/reports/coverage.json`. ../repo/contain
+ *     .ts's `realContainment` is the same check `nen scaffold init` makes
+ *     before it writes, and for the same reason: nen writes what its report
+ *     says it writes.
+ */
+function refuseUnwritableRedirect(
+  step: RenderedStep,
+  repoRoot: string,
+  plan: RenderedInvocation,
+): void {
+  if (step.stdoutTo === null) return;
+  const pointer = `project.verbs.${plan.lane}.${plan.verb}.stdoutTo`;
+  const absolute = insideRepo(repoRoot, step.stdoutTo, pointer);
+  const containment = realContainment(repoRoot, absolute);
+  if (!containment.contained) {
+    throw new VerbUsageError(
+      `${pointer} names '${step.stdoutTo}', which would be written to '${containment.real}', outside the repository at ${repoRoot}: '${containment.link ?? absolute}' is a symlink pointing at '${containment.target ?? containment.real}'. nen writes what its report says it writes, so this write is refused rather than followed.`,
+    );
+  }
+  const entry = lstatSync(absolute, { throwIfNoEntry: false });
+  if (entry !== undefined && entry.isDirectory()) {
+    throw new VerbUsageError(
+      `${pointer} names '${step.stdoutTo}', and a DIRECTORY is already there. nen writes this step's stdout to that path as a file; it will not remove a directory to make room for one, and discovering this after the tool had run would mean spending the whole build to learn it. Name a file, or move what is in the way.`,
+    );
+  }
 }
 
 /**
@@ -731,6 +910,43 @@ function relay(context: CommandContext, stdout: string, stderr: string): void {
   }
 }
 
+/**
+ * Write one step's captured stdout to the file its declaration named.
+ *
+ * NO SHELL, NO REDIRECTION OPERATOR, NO SECOND PROCESS. ../seam/exec.ts already
+ * captures a child's stdout -- that is what `run` is -- so this is the ordinary
+ * `writeFileSync` those bytes were always one line away from. `sh -c 'cmd >
+ * file'` would have been the other way to get here, and it is the way this
+ * family exists to refuse: an argv is a list, and a string form is one `sh -c`
+ * away from a shell.
+ *
+ * PARENT DIRECTORIES ARE CREATED, and only the ones under the repository root
+ * -- `refuseUnwritableRedirect` has already proved the path stays in the tree
+ * with its symlinks resolved. A declaration naming `nen/reports/coverage.json`
+ * on a fresh clone should not have to also declare a step that makes the
+ * directory: nen is writing the file, so nen makes room for it.
+ *
+ * THE BYTES ARE THE CHILD'S, with the seam's one normalisation already applied
+ * (CRLF -> LF, ../seam/exec.ts). Nothing is trimmed, re-encoded or parsed: a
+ * later reader -- `nen shu coverage`, most likely -- opens the file and decides
+ * for itself, exactly as it would if a shell had written it.
+ */
+function writeRedirect(
+  step: RenderedStep,
+  stdout: string,
+  repoRoot: string,
+  plan: RenderedInvocation,
+): void {
+  if (step.stdoutTo === null) return;
+  const absolute = insideRepo(
+    repoRoot,
+    step.stdoutTo,
+    `project.verbs.${plan.lane}.${plan.verb}.stdoutTo`,
+  );
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, stdout, "utf8");
+}
+
 function runCaptured(
   context: CommandContext,
   plan: RenderedInvocation,
@@ -748,7 +964,18 @@ function runCaptured(
       ...(Object.keys(plan.env).length === 0 ? {} : { env: plan.env }),
     });
     const durationMs = context.seams.now().getTime() - stepStarted;
-    relay(context, result.stdout, result.stderr);
+    // A REDIRECTED STEP'S STDOUT DOES NOT ALSO GO TO THE TERMINAL. That is what
+    // a redirect MEANS everywhere a developer has met one, and printing the
+    // bytes twice would bury the report under the very document the declaration
+    // asked nen to file away. Its STDERR is relayed as it always was, because
+    // that is where a tool says what went wrong -- and a tool that failed with
+    // its output in a file is exactly when a reader needs the diagnostic.
+    relay(context, step.stdoutTo === null ? result.stdout : "", result.stderr);
+    // WRITTEN WHATEVER THE TOOL EXITED, and written before the exit code is
+    // read below. A tool that printed half a report and then failed leaves that
+    // half on disk, which is what a redirect does and what a reader debugging
+    // the failure wants; a step that never STARTED wrote nothing to write.
+    if (!result.spawnFailed) writeRedirect(step, result.stdout, repoRoot, plan);
     // `result.code` is MEANINGLESS on a spawn failure (../seam/exec.ts's own
     // words for it) -- typically -1, a value with no exit-code meaning at all --
     // and `durationMs` measured nothing since the process never started. Both
@@ -759,6 +986,7 @@ function runCaptured(
       exe: step.exe,
       argv: step.argv,
       cwd,
+      stdoutTo: step.stdoutTo,
       exitCode: result.spawnFailed ? null : result.code,
       durationMs: result.spawnFailed ? null : durationMs,
     });
@@ -813,7 +1041,7 @@ function runInteractively(
   sink: ReportSink | undefined,
 ): number {
   const steps = plan.steps.map(
-    (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+    (step): ShuStepReport => unrun(step, cwd),
   );
   emitReport(context, sink, assemble(plan, cwd, repoRoot, preconditions, steps, null, null, "interactive"));
   return handOver(context, plan, cwd);
@@ -907,6 +1135,10 @@ function runLaunch(
       exe: probe.exe,
       argv: probe.argv,
       cwd,
+      // A PROBE NEVER REDIRECTS. Its stdout is the document nen searches for a
+      // device id -- an input, not an output -- and the loader gives a device's
+      // `resolve` step no `stdoutTo` key to state.
+      stdoutTo: null,
       exitCode: result.spawnFailed ? null : result.code,
       durationMs: result.spawnFailed ? null : durationMs,
     });
@@ -955,10 +1187,10 @@ function runLaunch(
       [
         ...steps,
         ...plan.steps.map(
-          (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+          (step): ShuStepReport => unrun(step, cwd),
         ),
         ...after.map(
-          (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+          (step): ShuStepReport => unrun(step, cwd),
         ),
       ],
       null,

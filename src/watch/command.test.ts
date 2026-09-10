@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { watchCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 // A Seams whose run() results come from a queue -- one per call -- since the
 // SAME observation command is invoked repeatedly with an evolving answer
@@ -11,6 +12,7 @@ class QueueSeams implements Seams {
   readonly now = (): Date => new Date("2026-01-01T00:00:00Z");
   readonly env = {};
   readonly platform: NodeJS.Platform = "linux";
+  probePort: Seams["probePort"] = noPortProbe;
   runInteractive: Seams["runInteractive"] = (): never => {
     throw new Error("watch until never spawns an interactive child -- it observes");
   };

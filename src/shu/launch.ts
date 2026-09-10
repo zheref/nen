@@ -73,17 +73,21 @@ export function tokensUsed(steps: readonly Step[]): readonly string[] {
  * printed step shows `{device.id}` unfilled, because nothing was probed and nen
  * does not print a value it did not read.
  */
-export function substituteSteps(
-  steps: readonly Step[],
+export function substituteSteps<T extends Step>(
+  steps: readonly T[],
   values: { readonly deviceId: string | null; readonly artifact: string | null },
-): readonly Step[] {
+): readonly T[] {
   const fill = (piece: string): string => {
     let out = piece;
     if (values.deviceId !== null) out = out.split(DEVICE_ID_TOKEN).join(values.deviceId);
     if (values.artifact !== null) out = out.split(ARTIFACT_TOKEN).join(values.artifact);
     return out;
   };
-  return steps.map((step): Step => ({ exe: fill(step.exe), argv: step.argv.map(fill) }));
+  // GENERIC, AND SPREAD RATHER THAN REBUILT, so a step that carries MORE than
+  // an exe and an argv keeps it. `../shu/render.ts`'s step also says where its
+  // stdout goes, and a substitution that rebuilt the object from two fields
+  // would silently turn a declared file write back into terminal output.
+  return steps.map((step): T => ({ ...step, exe: fill(step.exe), argv: step.argv.map(fill) }));
 }
 
 /**

@@ -283,6 +283,8 @@ export function buildPlans(
       probe: {
         exe: dependency.versionProbe[0] ?? dependencyName,
         argv: dependency.versionProbe.slice(1),
+        // A PROBE NEVER REDIRECTS: nen reads its stdout to find a version.
+        stdoutTo: null,
       },
       // The block states the shape of its own answer -- a bare version on
       // stdout -- rather than carrying a `versionFrom` field, so this is the
@@ -309,7 +311,7 @@ export function buildPlans(
     plans.push({
       name: entry.tool,
       required: true,
-      probe: { exe: entry.probe[0] ?? "", argv: entry.probe.slice(1) },
+      probe: { exe: entry.probe[0] ?? "", argv: entry.probe.slice(1), stdoutTo: null },
       versionFrom: entry.versionFrom,
       installer: entry.installer,
       pinned: renderPin(pin),

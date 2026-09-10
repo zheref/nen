@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import type { Seams } from "../seam/exec.js";
 import { boardCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 // NEVER `defaultSeams()` HERE (review finding, src/seam/exec.ts's own header:
 // "NO SHIPPED VERB IMPORTS `node:child_process`, and no test in this
@@ -20,6 +21,7 @@ const STUB_SEAMS: Seams = {
   },
   now: (): Date => new Date("2026-01-01T00:00:00Z"),
   env: {},
+  probePort: noPortProbe,
   runInteractive: (): never => {
     throw new Error("this verb has no interactive form");
   },

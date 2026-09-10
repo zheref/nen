@@ -46,8 +46,20 @@
 // refusal on the platform it happens to be running on -- so "xcodebuild on linux
 // exits 3" and "msbuild on darwin exits 3" would each be provable on exactly one
 // of the three CI lanes, which is the same as not being provable at all.
+//
+// A TCP CONNECT IS A SEAM FOR THE SAME REASON A SUBPROCESS IS, and it is the one
+// member here that is ASYNC. `nen shu` asserts a precondition of kind `port` by
+// trying to open `127.0.0.1:<port>` -- "is the dev server already up", "is this
+// port still free" -- and node offers no synchronous way to ask. Behind a seam,
+// a test states the answer it means and proves both directions on every CI lane;
+// in front of one, a test would be racing whatever else happens to be listening
+// on the machine it runs on, which is the definition of a flake. It answers with
+// a THREE-member verdict rather than a boolean, because "nothing answered in
+// time" is not "nothing is there": ../shu/run.ts reports a timeout as `satisfied:
+// null` -- cannot assert -- exactly as it reports a kind it does not know.
 
 import { spawnSync } from "node:child_process";
+import { connect } from "node:net";
 import { constants as osConstants } from "node:os";
 
 /** The two external tools this binary is allowed to know about (D16). */
@@ -106,10 +118,47 @@ export type InteractiveRunner = (
   options?: Omit<RunOptions, "stdin">,
 ) => InteractiveResult;
 
+/**
+ * What one attempt to open a TCP connection said.
+ *
+ * THREE OUTCOMES, NOT TWO, and the third is the one a boolean gets wrong. A
+ * refused connection is a POSITIVE fact -- something answered, and it said no
+ * -- and it is what "the port is free" looks like on every platform. A timeout
+ * is the absence of a fact: a firewall dropping the SYN, a host under load, a
+ * listener that accepted and then said nothing. Collapsing the two would let
+ * nen report "this port is free" about a port it never actually reached, which
+ * is the same lie as reporting an unperformed check as a clean one.
+ */
+export type PortVerdict = "open" | "refused" | "timeout";
+
+/**
+ * Try to open a TCP connection to `127.0.0.1:<port>` and say what happened.
+ *
+ * LOOPBACK ONLY, AND THE HOST IS NOT A PARAMETER. The precondition this exists
+ * for is "is the thing this build needs already running ON THIS MACHINE", and a
+ * declaration that could name a host would be a declaration that can make nen
+ * connect to an arbitrary address on a repository's say-so. There is no reading
+ * and no writing either way: the socket is opened and destroyed.
+ */
+export type PortProbe = (port: number) => Promise<PortVerdict>;
+
+/**
+ * How long a port probe waits before it answers `timeout`.
+ *
+ * SHORT ON PURPOSE. A loopback connect either completes in microseconds or is
+ * refused in microseconds; anything slower than this is a machine that cannot
+ * answer the question, and a precondition table is not the place to spend
+ * seconds finding that out. Exported so the refusal text and the tests can name
+ * the same number rather than two that drift.
+ */
+export const PORT_PROBE_TIMEOUT_MS = 500;
+
 export interface Seams {
   readonly run: Runner;
   /** A long-running child, on this terminal. See InteractiveRunner. */
   readonly runInteractive: InteractiveRunner;
+  /** One TCP connect against loopback. See PortProbe. */
+  readonly probePort: PortProbe;
   /** The instant this invocation reasons about. Read once per verb, not per row. */
   readonly now: () => Date;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -232,10 +281,48 @@ export const spawnInteractiveRunner: InteractiveRunner = (
   }
 };
 
+/**
+ * The real port probe: one loopback connect, destroyed the instant it answers.
+ *
+ * IT SETTLES EXACTLY ONCE, and the guard is why this is more than four lines.
+ * A socket can emit `connect` and then `error`, or `error` and then `close`, and
+ * a promise that resolved twice would take whichever raced first -- so the
+ * resolution is latched, the timer is cleared on every path, and the socket is
+ * destroyed before the verdict is returned rather than left for the event loop
+ * to collect (an undestroyed socket keeps this process alive after the verb has
+ * printed its report).
+ *
+ * ECONNREFUSED IS THE ONLY ERROR THAT MEANS `refused`. Every other errno --
+ * EHOSTUNREACH, EACCES, EMFILE -- is nen failing to ask rather than the host
+ * answering, and reporting one of those as "the port is free" would be a
+ * precondition that passes because the check broke.
+ */
+export const connectProbe: PortProbe = async (port): Promise<PortVerdict> =>
+  new Promise<PortVerdict>((resolve): void => {
+    const socket = connect({ port, host: "127.0.0.1" });
+    let settled = false;
+    const finish = (verdict: PortVerdict): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(verdict);
+    };
+    const timer = setTimeout((): void => finish("timeout"), PORT_PROBE_TIMEOUT_MS);
+    // `unref` so a probe in flight never holds the process open on its own; the
+    // promise above is what the caller is waiting on.
+    if (typeof timer.unref === "function") timer.unref();
+    socket.once("connect", (): void => finish("open"));
+    socket.once("error", (error: NodeJS.ErrnoException): void =>
+      finish(error.code === "ECONNREFUSED" ? "refused" : "timeout"),
+    );
+  });
+
 export function defaultSeams(): Seams {
   return {
     run: spawnRunner,
     runInteractive: spawnInteractiveRunner,
+    probePort: connectProbe,
     now: (): Date => new Date(),
     env: process.env,
     platform: process.platform,
