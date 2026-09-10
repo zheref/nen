@@ -452,7 +452,7 @@ function zeroMajorCeilingMinor(floor: Floor, build: Build): number {
  * IT IS THE EXACT RANGE `satisfiesMinimum` APPLIES, which is why it takes the
  * same build: a table that printed `>=0.7.0 <0.8.0` beside a satisfied `0.8.0`
  * would be a report contradicting itself in two adjacent columns.
- * ./toolchain.test.ts sweeps both functions over the same versions and fails
+ * ./tools.test.ts sweeps both functions over the same versions and fails
  * when they disagree by one input.
  */
 export function renderMinimum(floor: Floor, build: Build = thisBuild()): string {
