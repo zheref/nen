@@ -851,27 +851,41 @@ function withinOneEdit(a: string, b: string): boolean {
 }
 
 /**
- * True when `key` is a spelling a reader would take for `known`.
+ * How `key` misspells `known`, IN WORDS, or null when it does not.
  *
- * THREE SHAPES, AND EACH ONE IS A TYPO A REVIEWER'S EYE SLIDES OVER:
+ * IT RETURNS THE SENTENCE RATHER THAN A BOOLEAN, and that is the whole reason
+ * this function is shaped the way it is. The rule catches three shapes, and a
+ * refusal that described all three as "one letter away" would be WRONG about
+ * two of them -- a maintainer told that `WHY` is one letter from `why`, or that
+ * `launches` is one letter from `launch`, is being handed a false clue about
+ * their own file while they are trying to fix it. So the phrase is decided
+ * where the match is decided, and there is no way to add a fourth shape without
+ * writing the words for it.
  *
- *   * distance 1 -- `arg`, `requireEnv`, `Args`, `resolver` (see above);
- *   * a CASE SLIP of any width -- `WHY`, `Launch`, `Device`. Three
- *     substitutions is outside the radius above and is still the same word,
- *     and a JSON key is case-sensitive everywhere in this family;
- *   * an ENGLISH PLURAL of a singular key, or the singular of a plural one --
- *     `launches`, `verbs`, `names`. `launches` is TWO insertions from `launch`,
- *     so the distance rule alone let the one key this whole block is about
- *     through: a `"launches": { … }` block would be preserved verbatim, read
- *     by nobody, and `--target` would answer "this repository declares no
- *     launch targets" about a file that plainly declares four.
+ * THE THREE SHAPES, AND EACH ONE IS A TYPO A REVIEWER'S EYE SLIDES OVER:
+ *
+ *   * a CASE SLIP of any width -- `WHY`, `Launch`, `Device`. Checked FIRST,
+ *     because it is the strongest claim: the key is the same word. Three
+ *     substitutions is outside the distance radius below and is still the same
+ *     word, and a JSON key is case-sensitive everywhere in this family;
+ *   * distance 1 -- `arg`, `requireEnv`, `Args`, `resolver`, `verbs`. Checked
+ *     SECOND, so a one-letter plural (`verbs`, `devices`) is reported as the
+ *     letter it is rather than as a grammatical form nobody was thinking about;
+ *   * an ENGLISH PLURAL two letters out -- `launches`. That is the one key this
+ *     whole block is about and the distance rule alone let it through: a
+ *     `"launches": { … }` block would be preserved verbatim, read by nobody,
+ *     and `--target` would answer "this repository declares no launch targets"
+ *     about a file that plainly declares four.
  */
-function nearMissOf(key: string, known: string): boolean {
+function nearMissOf(key: string, known: string): string | null {
   const lower = key.toLowerCase();
   const target = known.toLowerCase();
-  if (lower === target) return true;
-  if (lower.replace(/(?:es|s)$/, "") === target.replace(/(?:es|s)$/, "")) return true;
-  return withinOneEdit(key, known);
+  if (lower === target) return `differs from '${known}' only in case`;
+  if (withinOneEdit(key, known)) return `is one letter away from '${known}'`;
+  if (lower.replace(/(?:es|s)$/, "") === target.replace(/(?:es|s)$/, "")) {
+    return `is '${known}' with an English plural on it`;
+  }
+  return null;
 }
 
 /**
@@ -904,12 +918,12 @@ function refuseNearMissKey(
 ): void {
   for (const key of Object.keys(raw)) {
     if (key.startsWith("$") || known.includes(key)) continue;
-    const meant = known.find((candidate): boolean => nearMissOf(key, candidate));
+    const meant = known.find((candidate): boolean => nearMissOf(key, candidate) !== null);
     if (meant === undefined) continue;
     throw new SchemaError(
       path,
       `${pointer}.${key}`,
-      `is one letter away from '${meant}', which is a key nen reads, and is not a key nen reads. ${what} keys are ${known.join(
+      `${nearMissOf(key, meant) ?? ""}, which IS a key nen reads, and is not itself one. ${what} keys are ${known.join(
         ", ",
       )}; every OTHER key is preserved verbatim for a later release, and that is exactly why this one cannot be: '${key}' would be kept, read by nobody, and this entry would run with '${meant}' silently unset. Fix the spelling, or rename the key to something that is not a near-miss of one of them`,
     );
@@ -1143,11 +1157,11 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
   // change with its own blast radius, not a rider on this one.
   for (const key of Object.keys(raw)) {
     if (key.startsWith("$") || key === "launch") continue;
-    if (!nearMissOf(key, "launch")) continue;
+    if (nearMissOf(key, "launch") === null) continue;
     throw new SchemaError(
       path,
       `project.${key}`,
-      `is a misspelling of 'launch', the block nen reads for 'nen shu dev|run --target'. Preserved as an unknown key it would be read by nobody, and every --target this repository declares would be refused as undeclared. Spell it 'launch'`,
+      `${nearMissOf(key, "launch") ?? ""}, the block nen reads for 'nen shu dev|run --target'. Preserved as an unknown key it would be read by nobody, and every --target this repository declares would be refused as undeclared. Spell it 'launch'`,
     );
   }
   const lanes = parseLanes(path, raw["lanes"]);

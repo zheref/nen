@@ -362,25 +362,35 @@ describe("project", () => {
     expect(refusal({ project: { ...PROJECT, targets: [] } }).pointer).toBe("project.targets");
   });
 
-  it("refuses a key one letter away from one nen reads, naming the key it meant", () => {
+  it("refuses a near-miss key by pointer, SAYING WHICH misspelling it is", () => {
     // THE FAILURE THIS BLOCK WAS PARSED TO PREVENT, and the half a wrong-TYPE
     // check does not reach: `{"arg": ["--prod"]}` is a perfectly-shaped list
     // under a key nothing reads, so the flag is accepted, nothing is appended,
     // and a DIFFERENT command deploys at exit 0.
-    for (const [key, meant] of [
-      ["arg", "args"],
-      ["Args", "args"],
-      ["argss", "args"],
-      ["requireEnv", "requiresEnv"],
-      ["requiresEnvs", "requiresEnv"],
-      ["unsuported", "unsupported"],
-      ["hy", "why"],
+    //
+    // AND THE PHRASE IS THE ONE THAT IS TRUE OF THAT KEY. The rule catches three
+    // shapes, and calling all three "one letter away" hands a maintainer a false
+    // clue about their own file at the exact moment they are trying to fix it:
+    // `WHY` is three substitutions from `why` and is the same word. (The
+    // English-plural shape needs a plural two letters out, which none of these
+    // four keys has; `launches` is where it fires, below.)
+    for (const [key, phrase] of [
+      ["arg", "is one letter away from 'args'"],
+      ["argss", "is one letter away from 'args'"],
+      ["requireEnv", "is one letter away from 'requiresEnv'"],
+      ["requiresEnvs", "is one letter away from 'requiresEnv'"],
+      ["unsuported", "is one letter away from 'unsupported'"],
+      ["hy", "is one letter away from 'why'"],
+      ["Args", "differs from 'args' only in case"],
+      ["WHY", "differs from 'why' only in case"],
     ] as const) {
       const error = refusal({
         project: { ...PROJECT, targets: { prod: { [key]: ["--prod"] } } },
       });
       expect(error.pointer, key).toBe(`project.targets.prod.${key}`);
-      expect(error.message, key).toContain(`is one letter away from '${meant}'`);
+      expect(error.message, key).toContain(phrase);
+      // Whichever phrase it is, the way out names the key that was meant.
+      expect(error.message, key).toContain("Fix the spelling");
     }
   });
 
@@ -843,7 +853,17 @@ describe("project.launch", () => {
     for (const key of ["launches", "Launch", "launchs"]) {
       const error = refusal({ project: { ...PROJECT, [key]: { box: { verb: "dev" } } } });
       expect(error.pointer, key).toBe(`project.${key}`);
-      expect(error.message, key).toContain("is a misspelling of 'launch'");
+      expect(error.message, key).toContain("the block nen reads for 'nen shu dev|run --target'");
+    }
+    // AND EACH ONE IS NAMED FOR THE MISSPELLING IT ACTUALLY IS -- the plural
+    // shape exists for exactly this key, which the one-edit rule cannot reach.
+    for (const [key, phrase] of [
+      ["launches", "is 'launch' with an English plural on it"],
+      ["Launch", "differs from 'launch' only in case"],
+      ["launchs", "is one letter away from 'launch'"],
+    ] as const) {
+      const error = refusal({ project: { ...PROJECT, [key]: { box: { verb: "dev" } } } });
+      expect(error.message, key).toContain(phrase);
     }
   });
 
