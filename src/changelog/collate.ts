@@ -28,7 +28,16 @@ export interface Fragment {
   readonly content: string;
 }
 
-/** Sort fragments newest-first by their leading `<n>-` numeric prefix; no prefix sorts last. */
+/**
+ * Sort fragments newest-first by their leading `<n>-` numeric prefix; no prefix
+ * sorts last.
+ *
+ * IDEMPOTENT, and relied upon to be: `collateIntoChangelog` applies it to
+ * whatever it is handed, so the section is newest-first even for a caller that
+ * did not sort -- while `../changelog/command.ts` also applies it, to decide the
+ * ONE order both the written section and the printed manifest are read off
+ * (zheref/nen#34). Two applications, one order.
+ */
 export function sortFragments(fragments: readonly Fragment[]): Fragment[] {
   const withKey = fragments.map((fragment): { fragment: Fragment; key: number } => {
     const match = /^(\d+)-/.exec(fragment.name);

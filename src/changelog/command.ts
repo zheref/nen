@@ -134,7 +134,8 @@ function collateCmd(context: CommandContext): number {
     content: normalizeEol(readFileSync(resolvePath(fragmentDirFull, name), "utf8")),
   }));
 
-  // SORTED ONCE, AND THE MANIFEST IS READ OFF THE SORTED LIST (zheref/nen#34).
+  // ONE ORDER, AND THE MANIFEST IS READ OFF IT (zheref/nen#34).
+  //
   // The section was rendered from `sortFragments(fragments)` -- newest-first by
   // the leading `<n>-` prefix, this project's own convention -- while the
   // manifest was printed from `names`, which is `readdirSync` order. Two
@@ -145,6 +146,17 @@ function collateCmd(context: CommandContext): number {
   // cross-checks the section against, and a record in a different order from
   // the thing it records is worse than no record: `getsuga` relays it to the
   // maintainer as the answer to "did my fragment land where I expected".
+  //
+  // `collateIntoChangelog` SORTS AGAIN, and that is left alone deliberately
+  // rather than removed as a redundancy (Copilot, PR #184). It is an exported
+  // function whose contract is that the section it renders is newest-first
+  // whatever order it was handed; taking the sort out would move that guarantee
+  // into its callers, where the next one to forget it produces a wrong
+  // CHANGELOG rather than a wrong log line. `sortFragments` is idempotent, so
+  // the second application costs one comparison pass and changes nothing --
+  // what the line below establishes is not that the sort happens once, but that
+  // the ORDER is decided in one place and everything this verb reports is read
+  // off that one decision.
   const ordered = sortFragments(fragments);
   const rewritten = collateIntoChangelog(changelogText, version, theme, ordered);
 
