@@ -182,8 +182,23 @@ export interface ResolvedLaunch {
   readonly name: string;
   /** Which long-running verb the declaration hangs this target off. */
   readonly verb: string;
+  /**
+   * The lane THIS TARGET named, or null when it named none.
+   *
+   * IT IS NOT THE LANE THE PLAN RAN ON -- that is `ShuReport.lane`, two fields
+   * up, and it is the same string whenever this one is non-null. What this
+   * field answers is the question a reader of the report actually has: whether
+   * the lane on that line is the one they asked for or the one the declaration
+   * chose for them.
+   */
+  readonly lane: string | null;
   /** What this target appended to the verb's declared argv, in order. */
   readonly args: readonly string[];
+  /**
+   * The path `{artifact}` is substituted with, when the target overrides the
+   * verb's own first artifact; null when it does not.
+   */
+  readonly artifact: string | null;
   readonly device: ResolvedDevice | null;
   /** The declared device probe, or null when the device needs none. */
   readonly probe: RenderedStep | null;
@@ -762,16 +777,31 @@ const SIMULATED = "simulator";
  *      production binary is the mistake this key exists to prevent;
  *   4. `args` on a multi-step verb -- exit 2, the same refusal a deploy target
  *      gets and for the same reason;
- *   5. an `after` step naming `{artifact}` on a verb declaring none, or
- *      `{device.id}` on a target declaring no device -- exit 2. A token nothing
- *      can fill would otherwise reach a real command line as itself;
+ *   5. an `after` step naming `{artifact}` on a verb declaring none AND a
+ *      target declaring no `artifact` of its own, or `{device.id}` on a target
+ *      declaring no device -- exit 2. A token nothing can fill would otherwise
+ *      reach a real command line as itself;
  *   6. a device with neither a `resolve` probe nor `kind: "simulator"` -- exit
- *      2. There is no third way to learn an id, and nen invents none.
+ *      2. There is no third way to learn an id, and nen invents none;
+ *   7. an `artifact` no after-step names -- exit 2. The key's ONLY effect is
+ *      what `{artifact}` becomes, so a target that declares one and never
+ *      writes the token has stated a path nothing reads, which is the same
+ *      silence a misspelt key produces and is refused for the same reason;
+ *   8. a `lane` that disagrees with an EXPLICIT `--lane` -- exit 2, naming
+ *      both. Two stated facts, and nen picks between stated facts nowhere else
+ *      in this family either.
+ *
+ * AND ONE THING IT DOES RATHER THAN REFUSES: a target that declares a `lane`
+ * RE-RENDERS the plan on that lane. Everything downstream -- the cwd, the
+ * preconditions, the artifacts, the host verdict -- is read off the returned
+ * plan, so re-rendering is what makes a cross-lane launch one lane operation
+ * rather than one lane's verb run against another lane's directory.
  */
 export function resolveLaunch(
   project: ProjectBlock,
   plan: RenderedInvocation,
   requested: string,
+  requestedLane: string | null,
 ): RenderedInvocation {
   const declared = byteOrder(Object.keys(project.launch));
   const target = Object.prototype.hasOwnProperty.call(project.launch, requested)
@@ -802,16 +832,46 @@ export function resolveLaunch(
       `launch target '${requested}' is declared for '${target.verb}', and this is '${plan.verb}'. project.launch.${requested}.verb says which of the two long-running verbs the target's arguments and after-steps were written against, and nen does not carry them across: run '${target.verb} --target ${requested}', or declare a separate target for '${plan.verb}'.`,
     );
   }
-  const steps = appendArgs(plan, target.args, requested, "the device");
+  // THE LANE, BEFORE ANY OF THE CHECKS BELOW READ THE PLAN. `args` are appended
+  // to a lane's argv, `{artifact}` falls back to a lane's artifacts, and the
+  // multi-step refusal counts a lane's steps -- all three would be measured
+  // against the wrong row if the re-render happened after them.
+  let onLane = plan;
+  if (target.lane !== null && target.lane !== plan.lane) {
+    if (requestedLane !== null) {
+      throw new VerbUsageError(
+        `--lane '${requestedLane}' and launch target '${requested}' disagree: project.launch.${requested}.lane says '${target.lane}'. A launch target names the lane its verb, its arguments and its after-steps were written against, and nen does not pick between two stated facts: drop --lane to take the target's own, or name the target that belongs to '${requestedLane}'.`,
+      );
+    }
+    onLane = renderInvocation(project, {
+      lane: target.lane,
+      verb: plan.verb,
+      platform: plan.host.platform,
+    });
+  }
+  if (target.artifact !== null && !usesToken(target.after, ARTIFACT_TOKEN)) {
+    // THE KEY HAS EXACTLY ONE EFFECT, AND IT IS THIS TOKEN. A target declaring
+    // an artifact that no after-step names has written a path nen reads and
+    // then puts nowhere -- indistinguishable, from the outside, from a
+    // declaration whose override is silently not working.
+    throw new VerbUsageError(
+      `launch target '${requested}' declares an artifact and no after-step names ${ARTIFACT_TOKEN}. project.launch.${requested}.artifact has one effect and one only -- it is what ${ARTIFACT_TOKEN} is substituted with -- so a target that never writes the token has stated a path nothing reads. Write ${ARTIFACT_TOKEN} into the step that needs it, or drop the key.`,
+    );
+  }
+  const steps = appendArgs(onLane, target.args, requested, "the device");
   const composed = unsubstituted([...steps, ...target.after]);
   if (composed.length > 0) {
     throw new VerbUsageError(
-      `launch target '${requested}' composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this target needs under project.launch.${requested} -- a launch target is a fact this repository states, and the only tokens nen fills in are ${DEVICE_ID_TOKEN} and ${ARTIFACT_TOKEN}.`,
+      `launch target '${requested}' composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${onLane.verb}' on lane '${onLane.lane}': ${placeholderRule(composed)} Write the literal argument this target needs under project.launch.${requested} -- a launch target is a fact this repository states, and the only tokens nen fills in are ${DEVICE_ID_TOKEN} and ${ARTIFACT_TOKEN}.`,
     );
   }
-  if (usesToken(target.after, ARTIFACT_TOKEN) && plan.artifacts.length === 0) {
+  if (
+    usesToken(target.after, ARTIFACT_TOKEN) &&
+    onLane.artifacts.length === 0 &&
+    target.artifact === null
+  ) {
     throw new VerbUsageError(
-      `launch target '${requested}' names ${ARTIFACT_TOKEN} in an after-step, and '${plan.verb}' on lane '${plan.lane}' declares no artifacts. ${ARTIFACT_TOKEN} is the FIRST entry of project.verbs.${plan.lane}.${plan.verb}.artifacts, and nen never guesses where a build put its output -- knowing that would mean knowing the toolchain. Declare the artifact on the verb, or write the path this step needs literally.`,
+      `launch target '${requested}' names ${ARTIFACT_TOKEN} in an after-step, and '${onLane.verb}' on lane '${onLane.lane}' declares no artifacts. ${ARTIFACT_TOKEN} is the FIRST entry of project.verbs.${onLane.lane}.${onLane.verb}.artifacts, and nen never guesses where a build put its output -- knowing that would mean knowing the toolchain. Declare the artifact on the verb, write project.launch.${requested}.artifact to name the one this target installs, or write the path this step needs literally.`,
     );
   }
   if (usesToken(target.after, DEVICE_ID_TOKEN) && target.device === null) {
@@ -829,15 +889,17 @@ export function resolveLaunch(
     );
   }
   return {
-    ...plan,
+    ...onLane,
     target: {
       name: requested,
-      // `plan.verb`, WHICH THE CHECK ABOVE HAS JUST PROVED EQUAL to the
+      // `onLane.verb`, WHICH THE CHECK ABOVE HAS JUST PROVED EQUAL to the
       // declaration's own -- rather than `target.verb`, which the loader types
       // as nullable for the `unsupported` arm this function returned from long
       // before here.
-      verb: plan.verb,
+      verb: onLane.verb,
+      lane: target.lane,
       args: target.args,
+      artifact: target.artifact,
       device:
         target.device === null
           ? null

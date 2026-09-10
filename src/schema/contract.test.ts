@@ -927,7 +927,108 @@ describe("project.launch", () => {
       project: { ...PROJECT, launch: { farm: { unsupported: "no command", verb: "dev" } } },
     });
     expect(error.pointer).toBe("project.launch.farm");
-    expect(error.message).toContain("has no verb, arguments, device or after-steps either");
+    expect(error.message).toContain(
+      "has no verb, lane, arguments, artifact, device or after-steps either",
+    );
+    // THE TWO NEWEST KEYS ARE IN THE SAME LIST, and each one alone is enough:
+    // an `unsupported` target that named a lane or an artifact would be a row
+    // saying "there is no command line for this, and here is where its build
+    // lives", and honouring either half is a choice about somebody else's
+    // machine that this refusal exists to decline.
+    for (const key of ["lane", "artifact"] as const) {
+      const both = refusal({
+        project: {
+          ...PROJECT,
+          launch: { farm: { unsupported: "no command", [key]: key === "lane" ? "web" : "out/a" } },
+        },
+      });
+      expect(both.pointer, key).toBe("project.launch.farm");
+      expect(both.message, key).toContain(`'${key}'`);
+    }
+  });
+
+  // ── lane and artifact: the two per-target overrides ───────────────────────
+  //
+  // A LAUNCH TARGET IS THE ONE PLACE THE TWO ORDINARY DEFAULTS ARE BOTH WRONG.
+  // The lane a developer iterates in is not the lane that builds for a handset,
+  // and the FIRST artifact a build declares is not the one an installer takes.
+  // Both defaults stay exactly where they were for every target that says
+  // nothing; these two keys are how a target says otherwise, in the file rather
+  // than on somebody's command line.
+
+  it("reads a per-target lane and artifact, and leaves both null when absent", () => {
+    const contract = parse({
+      project: {
+        lanes: { web: { stack: "nextjs", cwd: "." }, device: { stack: "xcode-ios", cwd: "." } },
+        verbs: {
+          web: { dev: { exe: "placeholder-tool", argv: ["serve"] } },
+          device: { dev: { exe: "placeholder-tool", argv: ["build"] } },
+        },
+        launch: {
+          plain: { verb: "dev", device: DEVICE },
+          both: {
+            verb: "dev",
+            lane: "device",
+            artifact: "build/device/Placeholder.signed",
+            device: DEVICE,
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+          },
+        },
+      },
+    });
+    expect(contract.project?.launch["plain"]?.lane).toBeNull();
+    expect(contract.project?.launch["plain"]?.artifact).toBeNull();
+    expect(contract.project?.launch["both"]?.lane).toBe("device");
+    expect(contract.project?.launch["both"]?.artifact).toBe("build/device/Placeholder.signed");
+  });
+
+  it("refuses a lane the project does not declare, by pointer, listing the ones it does", () => {
+    // AT LOAD, NOT AT LAUNCH. `nen schema check` reads this block; a lane that
+    // was renamed last week would otherwise load clean and refuse only when
+    // somebody reached for their phone -- which is the expensive moment.
+    const error = refusal({
+      project: { ...PROJECT, launch: { box: { verb: "dev", lane: "handheld", device: DEVICE } } },
+    });
+    expect(error.pointer).toBe("project.launch.box.lane");
+    expect(error.message).toContain("names lane 'handheld'");
+    expect(error.message).toContain("declared: web");
+  });
+
+  it("refuses an EMPTY artifact, which would substitute as nothing at all", () => {
+    const error = refusal({
+      project: { ...PROJECT, launch: { box: { verb: "dev", artifact: "", device: DEVICE } } },
+    });
+    expect(error.pointer).toBe("project.launch.box.artifact");
+    expect(error.message).toContain("is an empty string");
+  });
+
+  it("refuses the wrong TYPE under either new key", () => {
+    const bad = (launch: unknown): string | null =>
+      refusal({ project: { ...PROJECT, launch } }).pointer;
+    expect(bad({ box: { verb: "dev", lane: ["web"] } })).toBe("project.launch.box.lane");
+    expect(bad({ box: { verb: "dev", artifact: ["out/app"] } })).toBe(
+      "project.launch.box.artifact",
+    );
+  });
+
+  it("refuses the PLURAL of each new key, which is the typo they invite", () => {
+    // `artifacts` is what the VERB row calls its own list and `lanes` is what
+    // the project block calls its map, so writing either on a launch target is
+    // the natural slip -- and preserved verbatim it would leave the target
+    // running on the default lane, or installing the verb's first artifact,
+    // while the file plainly names another. Both are ONE INSERTION out, so the
+    // refusal reports the letter rather than the grammar (`nearMissOf` checks
+    // the distance rule before the plural one, deliberately).
+    for (const [key, meant] of [
+      ["lanes", "lane"],
+      ["artifacts", "artifact"],
+    ] as const) {
+      const error = refusal({
+        project: { ...PROJECT, launch: { box: { verb: "dev", [key]: "web" } } },
+      });
+      expect(error.pointer, key).toBe(`project.launch.box.${key}`);
+      expect(error.message, key).toContain(`is one letter away from '${meant}'`);
+    }
   });
 
   it("refuses the shapes a typo produces, by pointer", () => {

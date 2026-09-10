@@ -750,7 +750,7 @@ describe("refusals", () => {
   it("exit 2 naming every declared lane when --lane is unknown", async () => {
     const result = await capture(["build", "--lane", "nope"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/Declared: web, native, pages\./);
+    expect(result.err.join("\n")).toMatch(/Declared: web, native, pages, device\./);
   });
 
   it("exit 4 listing the lane's declared verbs when it declares no such verb", async () => {
@@ -1693,7 +1693,7 @@ describe("dev/run --target: the flag is OPTIONAL and names a device", () => {
     const result = await capture(["dev", "--target", "nope"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("is not declared under project.launch");
-    expect(result.err.join("\n")).toContain("Declared: bench, farm, handset, sim.");
+    expect(result.err.join("\n")).toContain("Declared: bench, farm, handset, install, sim.");
     expect(result.seams.calls).toEqual([]);
   });
 
@@ -1990,6 +1990,280 @@ describe("the tokens a launch target may name, and what must exist to fill them"
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("{scheme}");
+  });
+});
+
+// ── (i.2) the two per-target overrides: `lane` and `artifact` ──────────────
+//
+// THE TWO DEFAULTS A LAUNCH TARGET IS THE WRONG PLACE FOR. `defaultLane` is the
+// lane a developer ITERATES in, and `artifacts[0]` is the thing a lane BUILDS --
+// while a launch is the one operation that cares about a DEVICE build and the
+// thing an installer TAKES, which are routinely a different lane and a later
+// artifact. The fixture's `install` row declares both at once, because in the
+// field they arrive together: the signed package the second lane produces.
+
+describe("a launch target may name its own lane, and the verb is read from THAT lane", () => {
+  it("runs the target's lane rather than defaultLane, end to end", async () => {
+    const result = await capture(["dev", "--target", "install"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: {
+            code: 0,
+            stdout: JSON.stringify({
+              devices: [{ name: "Placeholder Handset Pro", udid: "U-0001" }],
+            }),
+          },
+        },
+        ok("placeholder-build-tool -destination generic/platform=placeholder-device build"),
+        ok(
+          "placeholder-installer install --device U-0001 build/device/Placeholder.signed",
+        ),
+      ],
+    });
+    expect(result.code).toBe(0);
+    // THE MIDDLE THIRD IS THE `device` LANE'S ARGV, not `web`'s `pnpm exec next
+    // dev`. That one line is the whole feature: without it the installer would
+    // put a simulator build on a handset and report success.
+    expect(spawned(result.seams)).toEqual([
+      "placeholder-device-tool list --json",
+      "placeholder-build-tool -destination generic/platform=placeholder-device build",
+      "placeholder-installer install --device U-0001 build/device/Placeholder.signed",
+    ]);
+    expect(result.out.join("\n")).toContain("lane:          device");
+  });
+
+  it("says on the target line WHOSE decision the lane was", async () => {
+    // `lane:` already carries the name. What it cannot say is whether the
+    // caller asked for it, and a cross-lane launch mistaken for one is exactly
+    // the misreading this clause exists to prevent.
+    const result = await capture(["dev", "--target", "install", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(
+      "target:        install  (appends no argument)  -- on lane 'device', which this target declares",
+    );
+    // AND A TARGET THAT NAMES NO LANE SAYS NOTHING -- the clause is not decoration.
+    const plain = await capture(["dev", "--target", "sim", "--dry-run"]);
+    expect(plain.out.join("\n")).toContain("target:        sim  (appends: --placeholder-simulated)");
+    expect(plain.out.join("\n")).not.toContain("which this target declares");
+  });
+
+  it("refuses an EXPLICIT --lane that disagrees with the target's own", async () => {
+    // TWO STATED FACTS, AND NEN PICKS BETWEEN STATED FACTS NOWHERE. Honouring
+    // the flag would run the wrong build; honouring the declaration would
+    // ignore an instruction the caller typed.
+    const result = await capture(["dev", "--lane", "web", "--target", "install", "--dry-run"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(
+      "--lane 'web' and launch target 'install' disagree: project.launch.install.lane says 'device'",
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("accepts a --lane that AGREES, because there is nothing to pick between", async () => {
+    const result = await capture(["dev", "--lane", "device", "--target", "install", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain("lane:          device");
+  });
+});
+
+describe("a launch target may name the artifact {artifact} stands for", () => {
+  it("substitutes the target's own path, not the verb's first entry", async () => {
+    // The fixture's `device` lane declares TWO artifacts, in build order; the
+    // installer takes the second, and `{artifact}` alone can only ever be the
+    // first.
+    const result = await capture(["dev", "--target", "install"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: {
+            code: 0,
+            stdout: JSON.stringify([{ name: "Placeholder Handset Pro", udid: "U-9" }]),
+          },
+        },
+        ok("placeholder-build-tool -destination generic/platform=placeholder-device build"),
+        ok("placeholder-installer install --device U-9 build/device/Placeholder.signed"),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams).at(-1)).toBe(
+      "placeholder-installer install --device U-9 build/device/Placeholder.signed",
+    );
+  });
+
+  it("names the override AS an override on the dry run's substitutes line", async () => {
+    // A path that is not `artifacts[0]`, printed with no explanation, reads as
+    // nen having taken the wrong entry rather than as the declaration saying so.
+    const result = await capture(["dev", "--target", "install", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual([
+      "placeholder-device-tool list --json",
+      "placeholder-build-tool -destination generic/platform=placeholder-device build",
+      "placeholder-installer install --device {device.id} {artifact}",
+    ]);
+    expect(result.out.join("\n")).toContain(
+      "{artifact} <- build/device/Placeholder.signed  (project.launch.install.artifact, not the verb's own)",
+    );
+    // THE `artifacts:` LINE STILL SAYS WHAT THE VERB DECLARES. The two answer
+    // different questions -- what this build produces, and what this target
+    // installs -- and collapsing them would hide the override rather than show it.
+    expect(result.out.join("\n")).toContain("build/device/Placeholder.app");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("carries lane and artifact in the --dry-run --json document", async () => {
+    const result = await capture(["dev", "--target", "install", "--dry-run", "--json"]);
+    const report = JSON.parse(result.out.join("\n")) as {
+      lane: string;
+      target: { name: string; lane: string | null; artifact: string | null };
+    };
+    expect(report.lane).toBe("device");
+    expect(report.target.lane).toBe("device");
+    expect(report.target.artifact).toBe("build/device/Placeholder.signed");
+  });
+
+  it("leaves both null on a target that declares neither", async () => {
+    const result = await capture(["dev", "--target", "handset", "--dry-run", "--json"]);
+    const report = JSON.parse(result.out.join("\n")) as {
+      target: { lane: string | null; artifact: string | null };
+    };
+    expect(report.target.lane).toBeNull();
+    expect(report.target.artifact).toBeNull();
+  });
+
+  it("lets a target's artifact stand in for a verb that declares none", async () => {
+    // The refusal above ("declares no artifacts") is about a token nothing can
+    // fill. A target that supplies the path HAS filled it, so the refusal must
+    // not fire -- and the after-step gets the declared path.
+    const result = await withDeclaration(
+      launchable({
+        box: {
+          verb: "dev",
+          artifact: "out/signed/app",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+        },
+      }),
+      ["dev", "--target", "box"],
+      { script: [ok("placeholder-tool serve"), ok("placeholder-installer put out/signed/app")] },
+    );
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams).at(-1)).toBe("placeholder-installer put out/signed/app");
+  });
+
+  it("refuses an artifact that resolves outside the tree, before anything spawns", async () => {
+    const result = await withDeclaration(
+      launchable({
+        box: {
+          verb: "dev",
+          artifact: "../outside/app",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+        },
+      }),
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("project.launch.box.artifact names '../outside/app'");
+    expect(result.err.join("\n")).toContain("resolves outside the repository");
+    // A DRY RUN THAT PRINTED THE PLAN FIRST would have told the caller the
+    // declaration is fine, which is why the check runs before the report.
+    expect(result.out.join("\n")).not.toContain("would run:");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("leaves the after-step's tokens UNFILLED while still saying what it would read", async () => {
+    // THE DRY RUN'S WHOLE CONTRACT, ON THE ONE SUBSTITUTION THAT NEEDS NO PROBE.
+    // `{artifact}` is knowable without spawning anything, and it would be easy
+    // to fill it in the printed step "because we know it" -- which would make
+    // the two tokens on the same line behave differently and make the printed
+    // argv something other than what a real run would compose from. So the step
+    // keeps BOTH tokens as themselves, and the `substitutes:` line is where the
+    // value is stated. The `--json` document says the same thing twice over:
+    // `after` verbatim, `target.artifact` resolved.
+    const result = await capture(["dev", "--target", "install", "--dry-run", "--json"]);
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as {
+      target: { artifact: string | null; after: readonly { argv: readonly string[] }[] };
+      artifacts: readonly { value: string }[];
+      log: { mode: string };
+    };
+    expect(report.target.after[0]?.argv).toEqual([
+      "install",
+      "--device",
+      "{device.id}",
+      "{artifact}",
+    ]);
+    expect(report.target.artifact).toBe("build/device/Placeholder.signed");
+    // AND THE `artifacts` DOCUMENT IS STILL THE VERB'S OWN LIST, both entries in
+    // declaration order, with the override sitting beside it rather than inside it.
+    expect(report.artifacts.map((entry): string => entry.value)).toEqual([
+      "build/device/Placeholder.app",
+      "build/device/Placeholder.signed",
+    ]);
+    expect(report.log.mode).toBe("dry-run");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("renders the same on `run`, which is the other verb a target may hang off", async () => {
+    // `LAUNCHING_VERBS` is two, and every rule above was proved on `dev`. A
+    // target on `run` is a PRODUCTION build -- the one whose signed artifact is
+    // most likely to be the second entry -- so the overrides have to render
+    // there too, and on the lane the target names rather than the default.
+    const result = await withDeclaration(
+      {
+        lanes: {
+          quick: { stack: "placeholder-stack", cwd: "." },
+          shipping: { stack: "placeholder-stack", cwd: "." },
+        },
+        defaultLane: "quick",
+        verbs: {
+          quick: { run: { exe: "placeholder-tool", argv: ["serve"] } },
+          shipping: {
+            run: { exe: "placeholder-tool", argv: ["serve", "--release"], artifacts: ["out/app"] },
+          },
+        },
+        launch: {
+          ship: {
+            verb: "run",
+            lane: "shipping",
+            artifact: "out/app.signed",
+            device: { name: "Bench", kind: "simulator" },
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}", "{device.id}"] }],
+          },
+        },
+      },
+      ["run", "--target", "ship", "--dry-run"],
+    );
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual([
+      "placeholder-tool serve --release",
+      "placeholder-installer put {artifact} {device.id}",
+    ]);
+    expect(result.out.join("\n")).toContain("lane:          shipping");
+    expect(result.out.join("\n")).toContain(
+      "-- on lane 'shipping', which this target declares",
+    );
+    expect(result.out.join("\n")).toContain(
+      "{artifact} <- out/app.signed  (project.launch.ship.artifact, not the verb's own)",
+    );
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses an artifact no after-step names, rather than reading a path nowhere", async () => {
+    const result = await withDeclaration(
+      launchable({
+        box: {
+          verb: "dev",
+          artifact: "out/signed/app",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-launcher", argv: ["open", "{device.id}"] }],
+        },
+      }),
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("declares an artifact and no after-step names {artifact}");
   });
 });
 

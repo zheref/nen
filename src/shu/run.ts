@@ -303,7 +303,13 @@ function substitutionNotes(report: ShuReport): readonly string[] {
         : `${DEVICE_ID_TOKEN} <- the id of device '${name}', read from the probe above`;
     }
     /* c8 ignore next -- `tokensUsed` returns only this family's two tokens */
-    return `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
+    // THE OVERRIDE IS NAMED AS AN OVERRIDE, not just printed. A reader checking
+    // this line already knows the rule is "the verb's first artifact"; a path
+    // that is not that one, printed with no explanation, reads as nen having
+    // taken the wrong entry rather than as the declaration having said so.
+    return target.artifact !== null
+      ? `${ARTIFACT_TOKEN} <- ${target.artifact}  (project.launch.${target.name}.artifact, not the verb's own)`
+      : `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
   });
   return [labelled("substitutes", notes.join("; "))];
 }
@@ -338,6 +344,12 @@ export function renderReport(report: ShuReport): readonly string[] {
           launch.args.length === 0
             ? "  (appends no argument)"
             : `  (appends: ${renderArgv({ exe: launch.args[0] as string, argv: launch.args.slice(1) })})`
+        }${
+          // THE LANE, ONLY WHEN THE TARGET CHOSE IT. `lane:` two lines up
+          // already carries the name; what it cannot say is whose decision it
+          // was, and a cross-lane launch that looked like the caller's own
+          // `--lane` is the one thing a reader of this report would misread.
+          launch.lane === null ? "" : `  -- on lane '${launch.lane}', which this target declares`
         }`,
       ),
     );
@@ -618,9 +630,23 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
   const plan = TARGETED_VERBS.includes(options.verb)
     ? resolveTarget(project, rendered, options.target)
     : LAUNCHING_VERBS.includes(options.verb) && options.target !== null
-      ? resolveLaunch(project, rendered, options.target)
+      ? resolveLaunch(project, rendered, options.target, options.lane)
       : rendered;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
+  // THE TARGET'S OWN ARTIFACT IS A PATH, SO IT IS HELD TO EVERY OTHER DECLARED
+  // PATH'S RULE -- and it is checked HERE, before the dry-run report is emitted,
+  // because a `--dry-run` that printed `install ../../etc/passwd` as the thing
+  // it would run has already told a caller the declaration is fine. The rule
+  // itself is ../repo/contain.ts's, shared rather than copied: a second
+  // containment test is a second rule the day either one is widened.
+  const declaredArtifact = launchOf(plan);
+  if (declaredArtifact !== null && declaredArtifact.artifact !== null) {
+    insideRepo(
+      repoRoot,
+      declaredArtifact.artifact,
+      `project.launch.${declaredArtifact.name}.artifact`,
+    );
+  }
   const preconditions = assertPreconditions(plan, repoRoot, context.seams);
 
   const unmet = preconditions.filter((entry): boolean => entry.satisfied !== true);
@@ -934,7 +960,12 @@ function runLaunch(
     deviceId = launch.device.name;
   }
 
-  const artifact = plan.artifacts[0] ?? null;
+  // THE TARGET'S OWN ARTIFACT WINS OVER THE VERB'S FIRST ONE, and the fallback
+  // is unchanged for every target that declares none: "the first entry of the
+  // verb's artifacts" is the right answer for the thing a lane BUILDS and the
+  // wrong one for the thing a device INSTALLS, and a build routinely produces
+  // both. ../schema/contract.ts's `LaunchTarget.artifact` carries the argument.
+  const artifact = launch.artifact ?? plan.artifacts[0] ?? null;
   const after = substituteSteps(launch.after, { deviceId, artifact });
   const resolved: RenderedInvocation = {
     ...plan,
