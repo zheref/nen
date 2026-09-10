@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="placeholder.TotalsTest" tests="2" failures="0" skipped="1" time="0.030">
+  <testcase classname="placeholder.TotalsTest" name="sumsAnEmptyCart" time="0.030"/>
+  <testcase classname="placeholder.TotalsTest" name="appliesADiscount">
+    <skipped message="pending the discount table"/>
+  </testcase>
+</testsuite>

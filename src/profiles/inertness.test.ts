@@ -154,15 +154,21 @@ const ALLOWED_IMPORTERS: readonly string[] = [
 ];
 
 /**
- * The coverage PARSERS: on neither side, by construction.
+ * The REPORT parsers: on neither side, by construction.
  *
  * They read a file somebody else's build tool wrote and turn it into numbers.
  * They must not reach the pack (a parser that took a path from the catalogue
  * would be nen opening a file nobody declared) and they must not reach the seam
  * (a parser that could spawn is not a parser). Both directions are one
  * assertion below, over the same resolved graph every other rule here uses.
+ *
+ * TWO DIRECTORIES, ONE RULE. `nen shu coverage` and `nen shu test-report` are
+ * built the same way -- run the lane's declared verb through the executor, then
+ * parse what it wrote -- and each keeps its parsing half in a directory of its
+ * own. A second verb of that shape must inherit the guarantee rather than a
+ * copy of the argument for it.
  */
-const COVERAGE_PARSERS = "src/shu/coverage/";
+const REPORT_PARSERS: readonly string[] = ["src/shu/coverage/", "src/shu/test-report/"];
 
 // The module every spawn in this repository goes through, and the node builtins
 // it is the only legitimate user of. A module that reaches any of these is a
@@ -1085,14 +1091,26 @@ describe("the profiles pack is inert", () => {
     });
   });
 
-  it("keeps the coverage parsers off both sides: no pack, no seam, at any depth", () => {
+  it("keeps the report parsers off both sides: no pack, no seam, at any depth", () => {
     // A DIRECTORY RULE RATHER THAN A FILE LIST, so a sixth format module joins
     // it by existing. The two halves of `nen shu coverage` meet only in
     // `src/shu/command.ts`, which spawns nothing itself; everything under
-    // `src/shu/coverage/` is pure computation over text, and this is what says
-    // so about the real graph rather than about the headers.
-    const modules = SHIPPED.filter((module): boolean => module.name.startsWith(COVERAGE_PARSERS));
+    // `src/shu/coverage/` and `src/shu/test-report/` is computation over text
+    // and the files a declaration named, and this is what says so about the
+    // real graph rather than about the headers.
+    const modules = SHIPPED.filter((module): boolean =>
+      REPORT_PARSERS.some((directory): boolean => module.name.startsWith(directory)),
+    );
     expect(modules.length).toBeGreaterThan(3);
+    // BOTH DIRECTORIES ARE ACTUALLY IN THE SWEEP. A prefix that matched nothing
+    // -- a directory renamed, a verb moved -- would leave this rule passing
+    // over half of what it claims.
+    for (const directory of REPORT_PARSERS) {
+      expect(
+        modules.some((module): boolean => module.name.startsWith(directory)),
+        directory,
+      ).toBe(true);
+    }
     const offending: string[] = [];
     for (const module of modules) {
       for (const reached of reachableFrom(GRAPH, module.name)) {
