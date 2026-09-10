@@ -15,7 +15,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { readJsonFile, readTextFile } from "../cli/inputs.js";
-import { parseTarget, type Target } from "../github/target.js";
+import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
 import {
   GLOBAL_FLAGS,
@@ -25,6 +25,7 @@ import {
   type Command,
   type CommandContext,
   requireTargetFlag,
+  parseCallerToken,
 } from "../cli/command.js";
 import {
   closedSince,
@@ -294,7 +295,14 @@ function refuseForeignFlags(context: CommandContext, subcommand: string): void {
 }
 
 function requireTarget(context: CommandContext): Target {
-  return parseTarget(requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API."));
+  const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
+  // A MALFORMED value is the same mistake as a missing one -- a typo in a flag
+  // -- so `parseTarget`'s own refusal is re-raised as a usage error and exits 2
+  // rather than 1 (zheref/nen#93; Copilot, PR #195).
+  return parseCallerToken(
+    (): Target => parseTarget(raw),
+    (error: unknown): boolean => error instanceof TargetError,
+  );
 }
 
 const USAGE = `nen issue -- reconcile the backlog, then file into it.

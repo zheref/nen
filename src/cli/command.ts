@@ -153,11 +153,14 @@ export function requireRepoFlag(context: CommandContext, why: string): string {
  * already exited 2 through `requireValue`, which is what made the odd one out
  * hard to see.
  *
- * THE PARSE IS THE CALLER'S AND ITS REFUSAL IS THEIRS TOO. A malformed value
- * (`--target not-a-slug`) is `parseTarget`'s own `TargetError` and reaches
- * ../index.ts through `parseCallerToken`, which already routes a domain
- * parser's refusal to exit 2 with the message intact. This helper answers only
- * the ABSENCE, which is the case no parser is given a chance to see.
+ * IT RETURNS THE RAW VALUE, and the four families parse it through
+ * `parseCallerToken` -- so a MALFORMED `--target` exits 2 as well as an absent
+ * one. It did not, before: `parseTarget`'s `TargetError` is not a
+ * `VerbUsageError`, so `--target not-a-slug` came back as exit 1 while
+ * `--target` missing came back as exit 2 after this helper landed, which would
+ * have replaced one inconsistency with a narrower one (Copilot, PR #195). They
+ * are the same mistake -- a typo in a flag -- and `parseCallerToken`'s own
+ * docblock already names that class.
  *
  * `why` is the family's own sentence about what the flag is FOR -- the pr and
  * issue families say the thing worth saying, that `--target` is the GitHub side

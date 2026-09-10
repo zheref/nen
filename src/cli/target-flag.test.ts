@@ -1,12 +1,19 @@
-// src/cli/target-flag.test.ts -- one refusal for `--target`, across sixteen
-// verbs (zheref/nen#93).
+// src/cli/target-flag.test.ts -- one refusal for `--target` (zheref/nen#93).
 //
 // WHY A SWEEP RATHER THAN FOUR CASES. The defect was not that one verb had the
 // wrong code: it was that FOUR families each kept a private `requireTarget`,
 // so the answer to "what does a forgotten --target do" depended on which family
 // you asked. Four hand-written cases would have re-created exactly that -- four
-// places to keep agreeing -- so this drives every verb the four families
-// declare as requiring the flag, through the real CLI, and asserts one answer.
+// places to keep agreeing -- so this drives the verbs through the real CLI and
+// asserts one answer.
+//
+// FOURTEEN OF THE SIXTEEN are in the table below, and the two that are not are
+// named with their reasons rather than quietly dropped (Copilot, PR #195):
+// `pr cascade-main` just under this comment, and `pr edit-body`, whose
+// `--body-file` is read before `--target` so a row for it would assert a file
+// refusal while looking like it asserted a flag one. Both reach the same helper
+// and answer the same way; neither can be driven here without teaching this
+// table about something other than `--target`.
 
 import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
@@ -60,6 +67,21 @@ async function refusal(command: Command, argv: readonly string[]): Promise<{ cod
 describe("a missing --target is a USAGE error, in every family that takes one", () => {
   it("drives a non-trivial number of verbs, so the sweep is not silently empty", () => {
     expect(VERBS.length).toBeGreaterThan(10);
+  });
+
+  it("answers the same way for a MALFORMED --target as for a missing one", () => {
+    // The same mistake -- a typo in a flag -- and it used to answer
+    // differently: `parseTarget`'s TargetError is not a VerbUsageError, so
+    // `--target not-a-slug` exited 1 while `--target` missing exited 2 (Copilot,
+    // PR #195). Fixing only the absence would have replaced one inconsistency
+    // with a narrower one.
+    return Promise.all(
+      VERBS.map(async ([command, argv]): Promise<void> => {
+        const result = await refusal(command, [...argv, "--target", "not-a-slug"]);
+        expect(result.code, `${argv.join(" ")}: ${result.err}`).toBe(2);
+        expect(result.err).toMatch(/owner\/name/);
+      }),
+    ).then((): void => undefined);
   });
 
   for (const [command, argv] of VERBS) {

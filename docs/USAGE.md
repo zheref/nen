@@ -220,8 +220,11 @@ keep a private `requireTarget` that threw a plain error, so sixteen verbs across
 `repo`, `labels`, `pr` and `issue` answered a forgotten flag with exit **1** —
 "the thing you asked for did not work" — when the truth was "you typed it
 wrong", and a retry wrapper honouring that distinction would retry a typo
-forever ([#93](https://github.com/zheref/nen/issues/93)). A *malformed* value is
-the domain parser's own refusal and has always been exit 2.
+forever ([#93](https://github.com/zheref/nen/issues/93)). A *malformed* value
+(`--target not-a-slug`) is exit 2 too: it is the same mistake -- a typo in a
+flag -- and `parseTarget`'s own refusal is re-raised through `parseCallerToken`
+with its message intact. It used to be exit 1, which fixing only the absence
+would have left as a narrower version of the same inconsistency.
 
 A non-zero exit is never a pass. [`pr ready`](#nen-pr-ready) exits 1 on
 `unevaluated` — "GitHub could not be read" — exactly as it does on `not-ready`,
