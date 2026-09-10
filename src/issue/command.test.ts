@@ -1936,6 +1936,76 @@ describe("nen issue consolidate-close -- the caller-supplied close comment", () 
     expect(err).toMatch(/posts no comment/);
   });
 
+  // zheref/nen#33. The lines were COMPUTED, RETURNED and unreachable: the log
+  // line said "the lines are in this report" while the text renderer printed the
+  // log and not the lines, which was true of `--json` and false of the thing a
+  // text caller was looking at. A fallback that is detected and then not shown
+  // is a fallback nobody can perform.
+  it("attach-sub PRINTS the fallback task list, and says who performs it", async () => {
+    const result = await capture(
+      ["issue", "attach-sub", "--target", "o/n", "--parent", "1", "--children", "2"],
+      [
+        PARENT_1,
+        {
+          match: "gh api repos/o/n/issues/2",
+          result: {
+            stdout: JSON.stringify({ number: 2, id: 22, title: "a child", state: "open", labels: [] }),
+          },
+        },
+        {
+          match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=22",
+          result: { code: 1, stderr: "HTTP 404: Not Found" },
+        },
+      ],
+    );
+    expect(result.code).toBe(1);
+    const out = result.out.join("\n");
+    expect(out).toContain("fallback task list for the parent's body:");
+    expect(out).toContain("- [ ] #2");
+    // Who performs it, and the invocation that does -- nen has a verb for
+    // exactly this write and the caller should not have to find it.
+    expect(out).toContain("nen does NOT write this");
+    expect(out).toContain("nen issue edit-body --target o/n --issue 1 --body-file <file>");
+    // And the discipline the fallback carries with it.
+    expect(out).toContain("say which form was used");
+  });
+
+  it("attach-sub prints no fallback block when the endpoint is fine", async () => {
+    const result = await capture(
+      ["issue", "attach-sub", "--target", "o/n", "--parent", "1", "--children", "2"],
+      [
+        PARENT_1,
+        {
+          match: "gh api repos/o/n/issues/2",
+          result: {
+            stdout: JSON.stringify({ number: 2, id: 22, title: "a child", state: "open", labels: [] }),
+          },
+        },
+        {
+          match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=22",
+          result: {},
+        },
+      ],
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).not.toContain("fallback task list");
+  });
+
+  it("issue --help says the fallback is DETECTED here and performed by the caller", async () => {
+    const out = (await capture(["issue", "--help"])).out.join("\n");
+    expect(out).toMatch(/does NOT perform the write/);
+    // THE WHOLE INVOCATION, --target included. A help block whose entire job is
+    // to say what to run must be copy/pastable: `issue edit-body` requires
+    // --target the same way this verb does, and an invocation missing it fails
+    // for a reader who trusted the text (Copilot, PR #183). Matched across the
+    // line wrap the help block puts in, so the assertion pins the command
+    // rather than one line's happening to hold all of it.
+    const helpText = out.replace(/\s+/g, " ");
+    expect(helpText).toContain(
+      "nen issue edit-body --target <owner/name> --issue <parent> --body-file <f>",
+    );
+  });
+
   it("issue --help documents both close-comment flags and the placeholder vocabulary", async () => {
     const result = await capture(["issue", "--help"]);
     const out = result.out.join("\n");

@@ -261,6 +261,23 @@ export interface AttachReport {
    * Present when the API answered in a way that says the sub-issues endpoint is
    * not available here. The task-list lines are handed back so the caller can
    * use the documented fallback KNOWINGLY -- and say which form was used.
+   *
+   * DETECTED HERE, PERFORMED BY THE CALLER, and that division is deliberate
+   * rather than unfinished (zheref/nen#33). This verb makes exactly one kind of
+   * write -- `POST issues/{parent}/sub_issues` -- and the fallback is a
+   * different one: a read-modify-write that REPLACES the parent's body. Doing
+   * that silently, as a consequence of a 404 nobody asked about, would mean an
+   * `attach-sub` run could clobber a body somebody edited between this run's
+   * read and its write, on a code path only reachable where the endpoint is
+   * missing and therefore the least exercised one in the verb. The same
+   * reasoning keeps the close comment out of this verb (see this file's header).
+   *
+   * What changed for zheref/nen#33 is that the division is now STATED and the
+   * lines are now REACHABLE: `--help` says who performs it, and the text
+   * rendering prints the lines and the exact `nen issue edit-body` invocation
+   * that applies them. Before, the log line said "the lines are in this report"
+   * and the text renderer printed the log without the lines -- true only for a
+   * caller who had passed `--json`.
    */
   readonly fallbackTaskList: readonly string[] | null;
   readonly log: readonly string[];
@@ -362,7 +379,7 @@ export function attachSub(
     if (fallback === null && looksUnavailable(result.stderr)) {
       fallback = children.map((entry): string => `- [ ] #${entry}`);
       log.push(
-        "the sub-issues endpoint answered 404/410 -- it is not available here. The documented fallback is a task list in the parent's body; the lines are in this report, and whichever form is used must be SAID, because a claimed sub-issue graph that does not exist misleads every later sweep.",
+        "the sub-issues endpoint answered 404/410 -- it is not available here. The documented fallback is a task list in the parent's body; nen does NOT perform it (this verb writes only to issues/{parent}/sub_issues, and rewriting a body is a different write on the least-exercised path in the verb). The lines are below, and whichever form is used must be SAID, because a claimed sub-issue graph that does not exist misleads every later sweep.",
       );
     }
   }
