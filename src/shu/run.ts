@@ -48,14 +48,20 @@ import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
 import {
   ASSERTABLE_KINDS,
+  isLaunchTarget,
+  LAUNCHING_VERBS,
   renderArgv,
   renderInvocation,
+  resolveLaunch,
   resolveTarget,
   TARGETED_VERBS,
   type HostVerdict,
   type RenderedInvocation,
+  type RenderedStep,
+  type ResolvedLaunch,
   type ResolvedTarget,
 } from "./render.js";
+import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, findDevice, substituteSteps, tokensUsed } from "./launch.js";
 
 /**
  * The two long-running verbs. They go through the interactive seam -- stdio
@@ -128,8 +134,15 @@ export interface ShuReport {
    * all because this is the one verb whose blast radius is other people's
    * users -- a deploy report that did not say WHERE it deployed is a report
    * nobody can audit afterwards.
+   *
+   * ON `dev` AND `run` IT IS THE LAUNCH TARGET (`ResolvedLaunch`), when one was
+   * named -- the device, its resolved id, and the steps that run after the verb
+   * exits. Two shapes under one key, told apart by their own fields
+   * (`requiresEnv` against `device`), with the verb two fields up saying which
+   * to expect. A `--target` nobody typed leaves this null, exactly as it is on
+   * every other verb.
    */
-  readonly target: ResolvedTarget | null;
+  readonly target: ResolvedTarget | ResolvedLaunch | null;
   readonly steps: readonly ShuStepReport[];
   readonly cwd: string;
   /**
@@ -264,6 +277,37 @@ function describePrecondition(entry: AssertedPrecondition, width: number): strin
   return `  ${mark}  ${entry.kind.padEnd(width)} ${value}${tail}`;
 }
 
+/**
+ * The `substitutes:` line of a launch dry run, or nothing.
+ *
+ * IT IS DERIVED FROM THE REPORT, like every other line here, so `--json` and
+ * the text rendering cannot disagree about what a run would fill in: the tokens
+ * come from the after-steps the document carries, the device name from
+ * `target.device`, the artifact from `artifacts[0]`.
+ */
+function substitutionNotes(report: ShuReport): readonly string[] {
+  const target = report.target;
+  if (!isLaunchTarget(target)) return [];
+  const used = tokensUsed(target.after);
+  if (used.length === 0) return [];
+  const artifact = report.artifacts[0];
+  const notes = used.map((token): string => {
+    if (token === DEVICE_ID_TOKEN) {
+      const device = target.device;
+      /* c8 ignore next -- `resolveLaunch` refuses this token with no device */
+      const name = device === null ? "" : device.name;
+      // A SIMULATED DEVICE HAS NO PROBE AND NEEDS NONE: its name IS its id, so
+      // the note says that rather than pointing at a line that is not there.
+      return target.probe === null
+        ? `${DEVICE_ID_TOKEN} <- '${name}' itself -- a simulated device is addressed by its name, so nothing is probed`
+        : `${DEVICE_ID_TOKEN} <- the id of device '${name}', read from the probe above`;
+    }
+    /* c8 ignore next -- `tokensUsed` returns only this family's two tokens */
+    return `${ARTIFACT_TOKEN} <- ${artifact === undefined ? "(the verb declares none)" : artifact.value}`;
+  });
+  return [labelled("substitutes", notes.join("; "))];
+}
+
 const LABEL_WIDTH = 15;
 
 function labelled(label: string, value: string): string {
@@ -280,7 +324,34 @@ export function renderReport(report: ShuReport): readonly string[] {
   // run. `args` is what this target APPENDED, so a reader can see which part of
   // the line below came from the destination rather than from the lane. Only
   // NAMES appear for the environment, here as everywhere.
-  if (report.target !== null) {
+  if (isLaunchTarget(report.target)) {
+    // THE LAUNCH TARGET, and it is printed high for the deploy target's reason:
+    // it is the fact a reader checks before they let the argv run. A device
+    // whose id is still null is a device nothing has probed yet -- a dry run --
+    // and it says so rather than showing an empty column.
+    const launch = report.target;
+    const device = launch.device;
+    lines.push(
+      labelled(
+        "target",
+        `${launch.name}${
+          launch.args.length === 0
+            ? "  (appends no argument)"
+            : `  (appends: ${renderArgv({ exe: launch.args[0] as string, argv: launch.args.slice(1) })})`
+        }`,
+      ),
+    );
+    if (device !== null) {
+      lines.push(
+        labelled(
+          "device",
+          `${device.name}${device.kind === null ? "" : ` (${device.kind})`}${
+            device.id === null ? "  -- id not resolved (nothing was probed)" : `  id ${device.id}`
+          }`,
+        ),
+      );
+    }
+  } else if (report.target !== null) {
     const target = report.target;
     // QUOTED THE SAME WAY THE `would run:` LINE QUOTES ITS OWN ARGV --
     // `renderArgv` implements the project's one quoting rule, and a target's
@@ -339,6 +410,13 @@ export function renderReport(report: ShuReport): readonly string[] {
           : argv;
     lines.push(labelled(verbPrefix, detail));
   }
+  // WHAT A REAL RUN WOULD PUT WHERE, printed only where the steps above still
+  // carry the tokens unfilled. A dry run spawns nothing -- the device probe
+  // included -- so `{device.id}` is shown as itself and this line is the whole
+  // of what a reader would otherwise have to infer: which token stands for
+  // what, and which value the substitution reads. A run that HAS probed prints
+  // the filled-in argv instead, and needs no line.
+  for (const line of substitutionNotes(report)) lines.push(line);
   lines.push(labelled("cwd", report.cwd));
   lines.push(labelled("env", report.env.length === 0 ? "(none added)" : report.env.join(", ")));
   lines.push(
@@ -413,7 +491,18 @@ export interface RunOptions {
   readonly verb: string;
   readonly lane: string | null;
   readonly dryRun: boolean;
-  /** `deploy`'s mandatory `--target`. Null for every other verb. */
+  /**
+   * `deploy`'s MANDATORY destination, or `dev`/`run`'s OPTIONAL device. Null on
+   * every other verb, which do not read it -- ./command.ts's per-subcommand
+   * flag table refuses it there.
+   *
+   * ONE FLAG, TWO BLOCKS, AND THE VERB SAYS WHICH. On `deploy` it names a key
+   * of `project.targets` and is required with no default ever; on `dev` and
+   * `run` it names a key of `project.launch` and is optional -- bare, those two
+   * verbs run the lane's declared argv exactly as they always have, which is
+   * why a repository declaring its first launch target breaks no script that
+   * ran `nen shu dev` yesterday.
+   */
   readonly target: string | null;
   /**
    * `deploy`'s mandatory `--run`. False for every other verb, which do not
@@ -520,9 +609,17 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     verb: options.verb,
     platform: context.seams.platform,
   });
+  // TWO BLOCKS BEHIND ONE FLAG, AND THE VERB PICKS. `deploy` always resolves a
+  // destination (the flag is required there, and `resolveTarget` is what
+  // refuses its absence); `dev` and `run` resolve a DEVICE only when one was
+  // named, because a bare `nen shu dev` is the ordinary local iteration this
+  // verb has always been and a repository declaring its first launch target
+  // must not change what that line does.
   const plan = TARGETED_VERBS.includes(options.verb)
     ? resolveTarget(project, rendered, options.target)
-    : rendered;
+    : LAUNCHING_VERBS.includes(options.verb) && options.target !== null
+      ? resolveLaunch(project, rendered, options.target)
+      : rendered;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
   const preconditions = assertPreconditions(plan, repoRoot, context.seams);
 
@@ -532,7 +629,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     // debugging "why will this not run" needs the table more here than
     // anywhere, and a refusal that printed only prose would make `--json`
     // useless in the one case it is most wanted.
-    const steps = plan.steps.map(
+    const steps = plannedSteps(plan).map(
       (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
     );
     emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
@@ -558,7 +655,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
   // the careful thing -- and every wrapper script would learn to ignore it.
   const gated = TARGETED_VERBS.includes(options.verb) && !options.run;
   if (options.dryRun || gated) {
-    const steps = plan.steps.map(
+    const steps = plannedSteps(plan).map(
       (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
     );
     emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
@@ -573,10 +670,37 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     return 0;
   }
 
+  const launch = launchOf(plan);
+  if (launch !== null) {
+    return runLaunch(context, plan, launch, cwd, repoRoot, preconditions, options.sink);
+  }
   if (INTERACTIVE_VERBS.includes(plan.verb)) {
     return runInteractively(context, plan, cwd, repoRoot, preconditions, options.sink);
   }
   return runCaptured(context, plan, cwd, repoRoot, preconditions, options.sink);
+}
+
+/**
+ * The launch target on a plan, or null -- the one place the two shapes of
+ * `RenderedInvocation.target` are told apart, so no other reader has to.
+ */
+export function launchOf(plan: RenderedInvocation): ResolvedLaunch | null {
+  return isLaunchTarget(plan.target) ? plan.target : null;
+}
+
+/**
+ * Every step this plan would spawn, in the order it would spawn them.
+ *
+ * A LAUNCH IS THREE THINGS AND THE REPORT SAYS SO: the device probe, then the
+ * lane's own verb, then the after-steps. `--dry-run` prints exactly this list
+ * as `would run:` lines, which is what makes "the thing you approve is the
+ * thing that runs" true for a launch as it already is for every other verb --
+ * a plan that printed only the middle third would be approving a third of it.
+ */
+export function plannedSteps(plan: RenderedInvocation): readonly RenderedStep[] {
+  const launch = launchOf(plan);
+  if (launch === null) return plan.steps;
+  return [...(launch.probe === null ? [] : [launch.probe]), ...plan.steps, ...launch.after];
 }
 
 function emitReport(context: CommandContext, sink: ReportSink | undefined, report: ShuReport): void {
@@ -692,7 +816,17 @@ function runInteractively(
     (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
   );
   emitReport(context, sink, assemble(plan, cwd, repoRoot, preconditions, steps, null, null, "interactive"));
+  return handOver(context, plan, cwd);
+}
 
+/**
+ * The handover itself, split out from the report so a LAUNCH can do the same
+ * thing between a probe and a set of after-steps.
+ *
+ * Nothing about it changed in the split: the same steps, the same env, the same
+ * two refusals, and the same "stop at the first one that did not exit 0".
+ */
+function handOver(context: CommandContext, plan: RenderedInvocation, cwd: string): number {
   let code = 0;
   for (const [index, step] of plan.steps.entries()) {
     const result = context.seams.runInteractive(step.exe, step.argv, {
@@ -714,4 +848,186 @@ function runInteractively(
     }
   }
   return code;
+}
+
+/**
+ * `dev`/`run` WITH `--target`: probe the device, hand over the terminal, then
+ * run the declared after-steps against the id the probe reported.
+ *
+ * THE ORDER IS THE WHOLE VERB, and each third is refused in its own way:
+ *
+ *   1. THE PROBE, through the CAPTURED seam -- nen has to read its output, so
+ *      this one step of a long-running verb is not interactive. It could not be
+ *      started -> 5; it ran and failed -> 1; it ran and did not name the device
+ *      -> 5, listing what it DID offer.
+ *   2. THE PRE-FLIGHT REPORT, carrying the resolved id and the substituted
+ *      after-steps. It is printed BEFORE the handover for `runInteractively`'s
+ *      reason: once the child owns this terminal, nen's own output is
+ *      interleaved with a build's.
+ *   3. THE VERB, interactively, exactly as a bare `dev` runs it.
+ *   4. THE AFTER-STEPS, captured and relayed, in order, stopping at the first
+ *      one that did not exit 0. They run only if the verb exited 0 -- installing
+ *      a build that failed to build is not a thing to attempt.
+ *
+ * A VERB THAT NEVER EXITS NEVER REACHES ITS AFTER-STEPS, and that is a property
+ * of what was declared rather than a limitation here: a launch target whose
+ * `verb` starts a watcher is a target whose after-steps run when the developer
+ * stops it. The docs say so; nen does not background anything.
+ */
+function runLaunch(
+  context: CommandContext,
+  plan: RenderedInvocation,
+  launch: ResolvedLaunch,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+  sink: ReportSink | undefined,
+): number {
+  const env = Object.keys(plan.env).length === 0 ? {} : { env: plan.env };
+  const steps: ShuStepReport[] = [];
+  let deviceId: string | null = null;
+
+  if (launch.device !== null && launch.probe !== null) {
+    const probe = launch.probe;
+    const startedAt = context.seams.now().getTime();
+    const result = context.seams.run(probe.exe, probe.argv, { cwd, ...env });
+    const durationMs = context.seams.now().getTime() - startedAt;
+    // THE PROBE'S STDOUT IS DATA, NOT OUTPUT. It is the document nen is about
+    // to search, and relaying a device list to the terminal every time somebody
+    // launches would bury the report under it. Its STDERR is relayed, because
+    // that is where a probe says what went wrong.
+    relay(context, "", result.stderr);
+    steps.push({
+      exe: probe.exe,
+      argv: probe.argv,
+      cwd,
+      exitCode: result.spawnFailed ? null : result.code,
+      durationMs: result.spawnFailed ? null : durationMs,
+    });
+    if (result.spawnFailed) {
+      throw new ShuRefusal(
+        EXIT_TOOL_NOT_INSTALLED,
+        `the device probe could not be started: '${probe.exe}'. This repository's declaration names it under project.launch.${launch.name}.device.resolve; install it, or put it on PATH. nen never installs a toolchain on a repository's say-so.`,
+      );
+    }
+    if (result.code !== 0) {
+      emitReport(
+        context,
+        sink,
+        assemble(plan, cwd, repoRoot, preconditions, steps, 1, durationMs, "streamed"),
+      );
+      context.io.err(
+        `the device probe failed: ${renderArgv(probe)} -- exited ${result.code}. nen exits 1 whatever the tool's own code was. Nothing was launched: the device for '${launch.name}' was never resolved.`,
+      );
+      return 1;
+    }
+    deviceId = resolvedId(launch, result.stdout);
+  } else if (launch.device !== null) {
+    // NO PROBE, AND `resolveLaunch` HAS ALREADY PROVED THIS IS A SIMULATED
+    // DEVICE: its name IS its id, so nothing is spawned to learn one.
+    deviceId = launch.device.name;
+  }
+
+  const artifact = plan.artifacts[0] ?? null;
+  const after = substituteSteps(launch.after, { deviceId, artifact });
+  const resolved: RenderedInvocation = {
+    ...plan,
+    target: {
+      ...launch,
+      device: launch.device === null ? null : { ...launch.device, id: deviceId },
+      after,
+    },
+  };
+  emitReport(
+    context,
+    sink,
+    assemble(
+      resolved,
+      cwd,
+      repoRoot,
+      preconditions,
+      [
+        ...steps,
+        ...plan.steps.map(
+          (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+        ),
+        ...after.map(
+          (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+        ),
+      ],
+      null,
+      null,
+      "interactive",
+    ),
+  );
+
+  const code = handOver(context, plan, cwd);
+  if (code !== 0) {
+    context.io.err(
+      `'${plan.verb}' did not exit 0, so the ${after.length} after-step${after.length === 1 ? "" : "s"} of launch target '${launch.name}' ${after.length === 1 ? "was" : "were"} not run.`,
+    );
+    return code;
+  }
+  return runAfter(context, after, cwd, env, launch.name);
+}
+
+/**
+ * The id the probe's output gives for this target's device, or a refusal.
+ *
+ * EXIT 5 FOR BOTH ABSENCES, and 5 is the right code rather than a convenient
+ * one: it is this family's "the thing nen was told to reach is not on this
+ * host", which is exactly what a disconnected, asleep or renamed device is. Not
+ * 1, because nothing failed -- the probe ran and answered; not 2, because the
+ * command line was correct and the fix is to plug something in.
+ */
+function resolvedId(launch: ResolvedLaunch, stdout: string): string {
+  /* c8 ignore next -- runLaunch only calls this with a device declared */
+  const device = launch.device;
+  /* c8 ignore next */
+  if (device === null) throw new ShuRefusal(EXIT_TOOL_NOT_INSTALLED, "no device declared.");
+  const lookup = findDevice(device.name, stdout);
+  if (!lookup.found) {
+    throw new ShuRefusal(
+      EXIT_TOOL_NOT_INSTALLED,
+      `the device '${device.name}' is not among ${
+        lookup.sawKind === "names"
+          ? `the devices the probe reported (${lookup.saw.length === 0 ? "it reported none" : lookup.saw.map((name): string => `'${name}'`).join(", ")})`
+          : `the probe's output (${lookup.saw.length === 0 ? "it printed nothing" : `it printed: ${lookup.saw.join(" | ")}`})`
+      }. project.launch.${launch.name}.device.name is matched exactly, as the repository writes it -- nen never picks a device for you, not even when there is only one. Connect it, wake it, or fix the name.`,
+    );
+  }
+  if (lookup.id === null) {
+    throw new ShuRefusal(
+      EXIT_TOOL_NOT_INSTALLED,
+      `the probe named the device '${device.name}' and gave nen no id for it. nen reads an id from one of identifier, id, udid or serial in JSON output, or -- in plain output -- from the first token on the device's own line that is at least six characters of letters, digits, '.', '_', ':' or '-' and carries a digit. Declare a probe whose output carries one of those, or write the id this target needs literally into its after-steps.`,
+    );
+  }
+  return lookup.id;
+}
+
+/** The after-steps, captured and relayed, stopping at the first non-zero. */
+function runAfter(
+  context: CommandContext,
+  after: readonly RenderedStep[],
+  cwd: string,
+  env: { readonly env?: Readonly<Record<string, string>> },
+  target: string,
+): number {
+  for (const [index, step] of after.entries()) {
+    const result = context.seams.run(step.exe, step.argv, { cwd, ...env });
+    relay(context, result.stdout, result.stderr);
+    if (result.spawnFailed) {
+      throw new ShuRefusal(
+        EXIT_TOOL_NOT_INSTALLED,
+        `after-step ${index + 1} of ${after.length} could not be started: '${step.exe}'. This repository's declaration names it under project.launch.${target}.after; install it, or put it on PATH.`,
+      );
+    }
+    if (result.code !== 0) {
+      context.io.err(
+        `after-step ${index + 1} of ${after.length} failed: ${renderArgv(step)} -- exited ${result.code}. The build ran; getting it onto the device did not. nen exits 1 whatever the tool's own code was.`,
+      );
+      return 1;
+    }
+  }
+  return 0;
 }

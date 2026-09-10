@@ -724,3 +724,134 @@ describe("loadContract, against the bundled fixtures", () => {
     }
   });
 });
+
+// ── project.launch ──────────────────────────────────────────────────────────
+//
+// The block `nen shu dev|run --target` reads. It is parsed rather than
+// preserved for `project.targets`' reason, one release later and with one more
+// hole to close: this block contributes not just ARGUMENTS to a spawned argv
+// but a whole second and third command (the device probe, the after-steps), so
+// a key nobody reads here is a launch that silently does two thirds of what the
+// file says.
+
+describe("project.launch", () => {
+  const DEVICE = { name: "Placeholder Handset", kind: "simulator" } as const;
+
+  it("is absent-means-empty, exactly as targets is", () => {
+    expect(parse({ project: PROJECT }).project?.launch).toEqual({});
+  });
+
+  it("reads a whole target: verb, args, device, after, why", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        launch: {
+          box: {
+            verb: "dev",
+            args: ["--flag"],
+            device: {
+              name: "Placeholder Handset",
+              resolve: { exe: "placeholder-probe", argv: ["list"] },
+            },
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+            why: "the bench",
+            note: "an unknown key, preserved",
+          },
+        },
+      },
+    });
+    const target = contract.project?.launch["box"];
+    expect(target?.verb).toBe("dev");
+    expect(target?.args).toEqual(["--flag"]);
+    expect(target?.device?.name).toBe("Placeholder Handset");
+    expect(target?.device?.resolve).toEqual({ exe: "placeholder-probe", argv: ["list"] });
+    expect(target?.after).toEqual([{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }]);
+    expect(target?.why).toBe("the bench");
+    // UNKNOWN KEYS ARE PRESERVED HERE TOO -- this schema's convention, and the
+    // reason the near-miss guard below has to exist at all.
+    expect(target?.raw["note"]).toBe("an unknown key, preserved");
+  });
+
+  it("requires a verb, out of a CLOSED two-member set", () => {
+    expect(refusal({ project: { ...PROJECT, launch: { box: { device: DEVICE } } } }).pointer).toBe(
+      "project.launch.box.verb",
+    );
+    const wrong = refusal({
+      project: { ...PROJECT, launch: { box: { verb: "build", device: DEVICE } } },
+    });
+    expect(wrong.pointer).toBe("project.launch.box.verb");
+    expect(wrong.message).toContain("dev, run");
+  });
+
+  it("reads a target with no command line at all as its own sentence", () => {
+    const contract = parse({
+      project: { ...PROJECT, launch: { farm: { unsupported: "a web console, not a command" } } },
+    });
+    expect(contract.project?.launch["farm"]?.unsupported).toBe("a web console, not a command");
+    expect(contract.project?.launch["farm"]?.verb).toBeNull();
+  });
+
+  it("refuses a target that is unsupported AND carries something to run", () => {
+    const error = refusal({
+      project: { ...PROJECT, launch: { farm: { unsupported: "no command", verb: "dev" } } },
+    });
+    expect(error.pointer).toBe("project.launch.farm");
+    expect(error.message).toContain("has no verb, arguments, device or after-steps either");
+  });
+
+  it("refuses the shapes a typo produces, by pointer", () => {
+    const bad = (launch: unknown): string | null =>
+      refusal({ project: { ...PROJECT, launch } }).pointer;
+    expect(bad({ box: "a string" })).toBe("project.launch.box");
+    expect(bad({ box: { verb: "dev", args: "--flag" } })).toBe("project.launch.box.args");
+    expect(bad({ box: { verb: "dev", after: {} } })).toBe("project.launch.box.after");
+    expect(bad({ box: { verb: "dev", after: [{ exe: "x" }] } })).toBe("project.launch.box.after[0].argv");
+    expect(bad({ box: { verb: "dev", device: { kind: "simulator" } } })).toBe(
+      "project.launch.box.device.name",
+    );
+    expect(bad({ box: { verb: "dev", device: { name: "n", resolve: { argv: ["x"] } } } })).toBe(
+      "project.launch.box.device.resolve.exe",
+    );
+    // A STRING argv is refused everywhere in this family, this block included.
+    expect(bad({ box: { verb: "dev", device: { name: "n", resolve: { exe: "p", argv: "list" } } } })).toBe(
+      "project.launch.box.device.resolve.argv",
+    );
+  });
+
+  it("refuses a key one spelling away from one nen reads, in the target and in the device", () => {
+    for (const [launch, pointer, meant] of [
+      [{ box: { verb: "dev", arg: ["--flag"] } }, "project.launch.box.arg", "args"],
+      [{ box: { verb: "dev", devices: {} } }, "project.launch.box.devices", "device"],
+      [{ box: { verb: "dev", afters: [] } }, "project.launch.box.afters", "after"],
+      [{ box: { verbs: "dev" } }, "project.launch.box.verbs", "verb"],
+      [
+        { box: { verb: "dev", device: { name: "n", resolver: { exe: "p", argv: ["l"] } } } },
+        "project.launch.box.device.resolver",
+        "resolve",
+      ],
+    ] as const) {
+      const error = refusal({ project: { ...PROJECT, launch } });
+      expect(error.pointer, pointer).toBe(pointer);
+      expect(error.message, pointer).toContain(`is one letter away from '${meant}'`);
+    }
+  });
+
+  it("refuses a misspelling of the BLOCK KEY, which no other guard would catch", () => {
+    // `"launches": {...}` parses cleanly, is preserved as an unknown key, and
+    // makes every --target this repository declares answer "not declared". The
+    // distance rule alone does not reach it: `launches` is two insertions away.
+    for (const key of ["launches", "Launch", "launchs"]) {
+      const error = refusal({ project: { ...PROJECT, [key]: { box: { verb: "dev" } } } });
+      expect(error.pointer, key).toBe(`project.${key}`);
+      expect(error.message, key).toContain("is a misspelling of 'launch'");
+    }
+  });
+
+  it("keeps a project-level key that is nobody's misspelling of it", () => {
+    const contract = parse({
+      project: { ...PROJECT, $launch: "a note", lunchbox: {}, launchpad: {} },
+    });
+    expect(contract.project?.raw["lunchbox"]).toEqual({});
+    expect(contract.project?.raw["launchpad"]).toEqual({});
+  });
+});

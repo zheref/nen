@@ -73,8 +73,12 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   lint: { values: ["lane"], booleans: ["dry-run"] },
   archive: { values: ["lane"], booleans: ["dry-run"] },
   release: { values: ["lane"], booleans: ["dry-run"] },
-  dev: { values: ["lane"], booleans: ["dry-run"] },
-  run: { values: ["lane"], booleans: ["dry-run"] },
+  // `--target` ON THESE TWO NAMES A DEVICE, NOT A DESTINATION: a key of
+  // `project.launch` rather than of `project.targets`, and OPTIONAL rather than
+  // required. `--run` stays `deploy`'s alone -- these two have always spawned
+  // without it, and a gate arriving with a flag would break every script.
+  dev: { values: ["lane", "target"], booleans: ["dry-run"] },
+  run: { values: ["lane", "target"], booleans: ["dry-run"] },
   deploy: { values: ["lane", "target"], booleans: ["dry-run", "run"] },
   coverage: { values: ["lane", "threshold"], booleans: ["dry-run"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
@@ -147,8 +151,11 @@ verbs:
   archive     Produce the lane's distributable artifact.
   release     Publish it, where the lane declares a publication step.
   dev         Start the lane's DEBUG build. Long-running: nen inherits this
-              terminal and hands it to the child.
-  run         Start the lane's PRODUCTION build, locally. Also long-running.
+              terminal and hands it to the child. With --target <name> it
+              launches a declared DEVICE instead: the probe, the verb, then
+              the target's after-steps. Bare, it is exactly what it always was.
+  run         Start the lane's PRODUCTION build, locally. Also long-running,
+              and it takes the same optional --target.
   deploy      Send a build to a declared, NAMED target: --target <name> [--run].
               --target is required and has no default, not even when exactly
               one target exists. Bare, this is a safe, exit-0 plan -- the
@@ -236,6 +243,48 @@ the declaration:
                           unsupported  this destination has no command line at
                                        all (a provider's git integration, a CI
                                        action). Exit 4, in the repo's words.
+  project.launch        { "<name>": { verb, args, device, after, unsupported,
+                        why } }, the LAUNCH targets 'dev' and 'run' take. A
+                        different block from project.targets and a different
+                        vocabulary: that one says where a build is SENT, this
+                        one says which DEVICE a local run lands on. --target is
+                        OPTIONAL here -- a bare 'dev' runs the lane's declared
+                        'dev', as it always has -- and a name this block does
+                        not carry is exit 2 listing the ones it does:
+                          verb         'dev' or 'run': which long-running verb
+                                       this target launches through. Required.
+                                       Naming it on the other one is exit 2 --
+                                       they are different builds.
+                          args         appended to that verb's argv, in order.
+                                       Refused on a multi-step row, as a deploy
+                                       target's are.
+                          device       { name, kind, resolve }. 'name' is
+                                       matched EXACTLY against what the probe
+                                       printed; nen never picks a device, not
+                                       even when there is one. 'resolve' is a
+                                       declared { exe, argv } probe whose output
+                                       nen searches -- JSON (a 'name' property,
+                                       with identifier/id/udid/serial from the
+                                       same object, one of its direct children,
+                                       or up to two enclosing objects) or plain
+                                       lines (the line carrying the name, and
+                                       its first token of six-plus characters
+                                       that carries a digit). A device the probe
+                                       did not name is exit 5 listing what it
+                                       DID offer. 'kind': "simulator" with no
+                                       probe resolves the id to the name itself
+                                       and spawns nothing; any other device with
+                                       no probe is exit 2.
+                          after        [{ exe, argv }] run once the verb exits 0,
+                                       in order, with {device.id} and {artifact}
+                                       substituted -- {artifact} being the FIRST
+                                       entry of the verb's own 'artifacts'.
+                                       Naming {artifact} on a verb that declares
+                                       none, or {device.id} with no device, is
+                                       exit 2: a token nothing can fill must not
+                                       reach a command line as itself.
+                          unsupported  this target has no command line at all.
+                                       Exit 4, in the repo's words.
 
   project.toolchain     { "<tool>": { version, probe, versionFrom, installer,
                         why } } -- the HOST tools 'tools' checks. 'version' is
@@ -316,7 +365,23 @@ flags:
   --tests          'warmup' only. Also run the lane's declared 'test' after the
                    build, through the same executor. Off by default, because a
                    test suite is the slow half and a warm-up is the fast one.
-  --target <name>  'deploy' only. Must name a key of project.targets. Required,
+  --target <name>  On 'dev' and 'run', a key of project.launch: WHICH DEVICE
+                   this local run lands on. OPTIONAL there, with no default
+                   ever -- a bare 'dev' runs the lane's declared 'dev' exactly
+                   as it always has, so a repository declaring its first launch
+                   target changes nothing about the line anyone ran yesterday.
+                   Given, the verb becomes three things in order: the declared
+                   device probe (captured, so nen can read it), the lane's own
+                   verb (interactive, as ever, with the target's 'args'
+                   appended), and the target's 'after' steps with {device.id}
+                   and {artifact} substituted. --dry-run prints all three as
+                   'would run:' with the tokens UNFILLED and one 'substitutes:'
+                   line saying what each stands for -- nothing is spawned, the
+                   probe included, so there is no id for nen to have printed.
+                   A verb that never exits never reaches its after-steps; that
+                   is what the declaration asked for, and nen backgrounds
+                   nothing.
+                   On 'deploy' it must name a key of project.targets. Required,
                    with no default ever -- not even when there is exactly one.
                    It is resolved AFTER the lane, the verb, the host and the
                    placeholders, and before the preconditions: a lane whose
@@ -376,10 +441,20 @@ flags:
                    keys in order:
                    { contract, lane, stack, verb, target, steps, cwd, env,
                      host, preconditions, exitCode, durationMs, artifacts,
-                     log }. 'target' is null on every verb but 'deploy', where
-                   it is { name, args, requiresEnv } -- the destination that
-                   was resolved, what it appended to the argv, and the
-                   variable NAMES it requires. Never a value of one.
+                     log }. 'target' is null unless a destination or a device
+                   was resolved. On 'deploy' it is { name, args, requiresEnv }
+                   -- the destination, what it appended to the argv, and the
+                   variable NAMES it requires. Never a value of one. On 'dev'
+                   and 'run' with --target it is
+                   { name, verb, args, device, probe, after }, where 'device'
+                   is { name, kind, id } and 'id' is null exactly when nothing
+                   was probed (every dry run), and 'after' carries the steps
+                   as they would spawn -- tokens unfilled on a dry run,
+                   substituted on a real one. The two shapes are told apart by
+                   their own fields ('requiresEnv' against 'device'), with
+                   'verb' two keys up saying which to expect. 'steps' on a
+                   launch is all three thirds in order: the probe, the verb,
+                   the after-steps.
                    On 'warmup' it is a different contract again
                    ('${WARMUP_CONTRACT}'), keys in order:
                    { contract, repo, trunk, remote, branch, discard, steps,
@@ -515,6 +590,11 @@ exit codes:
      CHECK verdict for a host where anything is missing or is not the pinned
      version. Never 1: a missing tool is not a failed build, and a caller that
      retried a 1 would retry forever on a machine that is simply not set up.
+     ON A LAUNCH IT IS ALSO THE DEVICE: a --target whose declared device the
+     probe did not name (the refusal lists what it DID offer), or named with no
+     id nen recognises. Same code for the same reason -- the thing nen was told
+     to reach is not on this host, the command line was correct, and the fix is
+     to connect, wake or rename something rather than to retype the line.
      Under --install the code is 0 when everything nen COULD install now
      passes, even if verify-only tools are still absent -- otherwise the
      install form is permanently red on a machine nen can never fix, and the

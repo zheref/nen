@@ -19,7 +19,12 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { assertPreconditions, INTERACTIVE_VERBS } from "./run.js";
-import { renderArgv, type RenderedInvocation, type RenderedPrecondition } from "./render.js";
+import {
+  LAUNCHING_VERBS,
+  renderArgv,
+  type RenderedInvocation,
+  type RenderedPrecondition,
+} from "./render.js";
 
 const TOKEN = "PLACEHOLDER_LANE_TOKEN";
 /** The one value the fixture declares for a child's environment. */
@@ -1649,5 +1654,352 @@ describe("no verb answers 4 merely because nen has not built it", () => {
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/--branch is required/);
     expect(result.err.join("\n")).not.toMatch(/not implemented/);
+  });
+});
+
+// ── (i) launch targets: `dev`/`run --target <name>` ────────────────────────
+//
+// THE VERB BECOMES THREE THINGS AND THE TESTS CHECK ALL THREE, in order and
+// across the two seams: the device probe is CAPTURED (nen has to read it), the
+// lane's own verb is INTERACTIVE (it always was), and the after-steps are
+// captured again. `ScriptedSeams` records which seam took each call, so "the
+// probe went through the interactive seam" would fail here rather than pass
+// quietly and hang a real terminal.
+
+/** A one-lane declaration with a `dev` and whatever launch block a test needs. */
+function launchable(
+  launch: unknown,
+  dev: unknown = { exe: "placeholder-tool", argv: ["serve"] },
+): Readonly<Record<string, unknown>> {
+  return {
+    lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+    defaultLane: "only",
+    verbs: { only: { dev } },
+    launch,
+  };
+}
+
+describe("dev/run --target: the flag is OPTIONAL and names a device", () => {
+  it("runs the lane's declared dev untouched when no --target is given", async () => {
+    // THE COMPATIBILITY PROMISE. The fixture declares four launch targets; a
+    // bare `dev` must still be the line it was before any of them existed.
+    const result = await capture(["dev"], { script: [ok("pnpm exec next dev")] });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual(["pnpm exec next dev"]);
+    expect(result.out.join("\n")).not.toMatch(/^target:/m);
+  });
+
+  it("refuses a --target the launch block does not declare, listing what it does", async () => {
+    const result = await capture(["dev", "--target", "nope"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("is not declared under project.launch");
+    expect(result.err.join("\n")).toContain("Declared: bench, farm, handset, sim.");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("answers a target with no command line at all at 4, in the repo's own words", async () => {
+    const result = await capture(["dev", "--target", "farm"]);
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain("device farm's own web console");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses a target declared for the OTHER long-running verb", async () => {
+    // `dev` and `run` are different BUILDS. Carrying a target across would
+    // install a production binary from a debug target's after-steps, reporting
+    // success the whole way.
+    const result = await capture(["dev", "--target", "bench"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("is declared for 'run', and this is 'dev'");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses --target on a verb that takes none", async () => {
+    const result = await capture(["build", "--target", "sim"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("not read by 'shu build'");
+  });
+});
+
+describe("a launch dry run prints all three thirds and spawns nothing", () => {
+  it("prints the probe, the verb and the after-step, tokens UNFILLED", async () => {
+    const result = await capture(["dev", "--target", "handset", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(wouldRun(result.out)).toEqual([
+      "placeholder-device-tool list --json",
+      "pnpm exec next dev",
+      "placeholder-installer install --device {device.id}",
+    ]);
+    // NOTHING WAS SPAWNED -- the probe included. That is what makes `--dry-run`
+    // the form ../parse/izanami.ts can certify read-only on these two verbs.
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("says what a real run would substitute, and reads the id from the probe", async () => {
+    const result = await capture(["dev", "--target", "handset", "--dry-run"]);
+    expect(result.out.join("\n")).toContain(
+      "substitutes:   {device.id} <- the id of device 'Placeholder Handset Pro', read from the probe above",
+    );
+  });
+
+  it("says a SIMULATED device is its own id, since there is no probe to read", async () => {
+    const result = await capture(["dev", "--target", "sim", "--dry-run"]);
+    expect(wouldRun(result.out)).toEqual([
+      "pnpm exec next dev --placeholder-simulated",
+      "placeholder-launcher open --device {device.id}",
+    ]);
+    expect(result.out.join("\n")).toContain(
+      "{device.id} <- 'Placeholder Handset 9' itself -- a simulated device is addressed by its name",
+    );
+  });
+
+  it("carries the target as one document under --dry-run --json", async () => {
+    const result = await capture(["dev", "--target", "handset", "--dry-run", "--json"]);
+    const report = JSON.parse(result.out.join("\n")) as {
+      target: { name: string; verb: string; device: { name: string; id: string | null }; after: unknown[] };
+      steps: readonly { exe: string }[];
+    };
+    expect(report.target.name).toBe("handset");
+    expect(report.target.verb).toBe("dev");
+    expect(report.target.device).toEqual({ name: "Placeholder Handset Pro", kind: null, id: null });
+    expect(report.target.after).toEqual([
+      { exe: "placeholder-installer", argv: ["install", "--device", "{device.id}"] },
+    ]);
+    expect(report.steps.map((step): string => step.exe)).toEqual([
+      "placeholder-device-tool",
+      "pnpm",
+      "placeholder-installer",
+    ]);
+  });
+
+  it("still refuses --json without --dry-run: the child owns stdout", async () => {
+    const result = await capture(["dev", "--target", "sim", "--json"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("is long-running");
+  });
+});
+
+describe("a real launch: probe, hand over, then the after-steps", () => {
+  const PROBED = JSON.stringify({
+    devices: [
+      { name: "Placeholder Other", udid: "OTHER-0000" },
+      { name: "Placeholder Handset Pro", udid: "U-0001" },
+    ],
+  });
+
+  it("resolves the id, substitutes it, and runs the three in order across two seams", async () => {
+    const result = await capture(["dev", "--target", "handset"], {
+      script: [
+        { match: "placeholder-device-tool list --json", result: { code: 0, stdout: PROBED } },
+        ok("pnpm exec next dev"),
+        ok("placeholder-installer install --device U-0001"),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual([
+      "placeholder-device-tool list --json",
+      "pnpm exec next dev",
+      "placeholder-installer install --device U-0001",
+    ]);
+    expect(result.seams.calls.map((call): boolean => call.interactive)).toEqual([false, true, false]);
+    expect(result.out.join("\n")).toContain("id U-0001");
+  });
+
+  it("spawns no probe for a simulated device: its name IS its id", async () => {
+    const result = await capture(["dev", "--target", "sim"], {
+      script: [
+        ok("pnpm exec next dev --placeholder-simulated"),
+        ok("placeholder-launcher open --device Placeholder Handset 9"),
+      ],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual([
+      "pnpm exec next dev --placeholder-simulated",
+      "placeholder-launcher open --device Placeholder Handset 9",
+    ]);
+  });
+
+  it("refuses at 5, listing what the probe DID offer, and starts nothing", async () => {
+    const result = await capture(["dev", "--target", "handset"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: { code: 0, stdout: JSON.stringify({ devices: [{ name: "Placeholder Other" }] }) },
+        },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("'Placeholder Handset Pro' is not among the devices");
+    expect(result.err.join("\n")).toContain("'Placeholder Other'");
+    // The verb never started: an unscripted call would have thrown, and the
+    // recorded list is the probe alone.
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --json"]);
+  });
+
+  it("refuses at 5 when the probe named the device and gave no id", async () => {
+    const result = await capture(["dev", "--target", "handset"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: { code: 0, stdout: JSON.stringify([{ name: "Placeholder Handset Pro" }]) },
+        },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("gave nen no id for it");
+  });
+
+  it("refuses at 5 when the probe itself could not be started", async () => {
+    const result = await capture(["dev", "--target", "handset"], {
+      script: [
+        { match: "placeholder-device-tool list --json", result: { spawnFailed: true, stderr: "no such file" } },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("the device probe could not be started");
+  });
+
+  it("exits 1 when the probe ran and failed, and launches nothing", async () => {
+    const result = await capture(["dev", "--target", "handset"], {
+      script: [{ match: "placeholder-device-tool list --json", result: { code: 3, stderr: "not authorised" } }],
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("the device probe failed");
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --json"]);
+  });
+
+  it("does not run the after-steps when the verb itself did not exit 0", async () => {
+    // Installing a build that failed to build is not a thing to attempt.
+    const result = await capture(["dev", "--target", "sim"], {
+      script: [{ match: "pnpm exec next dev --placeholder-simulated", result: { code: 2 } }],
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("was not run");
+    expect(spawned(result.seams)).toEqual(["pnpm exec next dev --placeholder-simulated"]);
+  });
+
+  it("exits 1 on a failing after-step, saying which half of the launch failed", async () => {
+    const result = await capture(["dev", "--target", "sim"], {
+      script: [
+        ok("pnpm exec next dev --placeholder-simulated"),
+        {
+          match: "placeholder-launcher open --device Placeholder Handset 9",
+          result: { code: 7, stderr: "device is locked" },
+        },
+      ],
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("The build ran; getting it onto the device did not.");
+  });
+
+  it("refuses at 5 when an after-step's program is not installed", async () => {
+    const result = await capture(["dev", "--target", "sim"], {
+      script: [
+        ok("pnpm exec next dev --placeholder-simulated"),
+        {
+          match: "placeholder-launcher open --device Placeholder Handset 9",
+          result: { spawnFailed: true, stderr: "no such file" },
+        },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("after-step 1 of 1 could not be started");
+  });
+});
+
+describe("the tokens a launch target may name, and what must exist to fill them", () => {
+  it("substitutes {artifact} with the FIRST artifact the verb declares", async () => {
+    const result = await withDeclaration(
+      launchable(
+        {
+          box: {
+            verb: "dev",
+            device: { name: "Bench", kind: "simulator" },
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}", "--on", "{device.id}"] }],
+          },
+        },
+        { exe: "placeholder-tool", argv: ["serve"], artifacts: ["out/app", "out/second"] },
+      ),
+      ["dev", "--target", "box"],
+      { script: [ok("placeholder-tool serve"), ok("placeholder-installer put out/app --on Bench")] },
+    );
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual([
+      "placeholder-tool serve",
+      "placeholder-installer put out/app --on Bench",
+    ]);
+  });
+
+  it("refuses {artifact} on a verb that declares none, before anything spawns", async () => {
+    const result = await withDeclaration(
+      launchable({
+        box: {
+          verb: "dev",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+        },
+      }),
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("declares no artifacts");
+  });
+
+  it("refuses {device.id} on a target that declares no device", async () => {
+    const result = await withDeclaration(
+      launchable({
+        box: { verb: "dev", after: [{ exe: "placeholder-launcher", argv: ["open", "{device.id}"] }] },
+      }),
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("names {device.id} in an after-step and declares no device");
+  });
+
+  it("refuses a device that says neither how to find its id nor that it needs none", async () => {
+    const result = await withDeclaration(
+      launchable({ box: { verb: "dev", device: { name: "Bench", kind: "handset" } } }),
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("says neither how to find its id nor that it needs none");
+  });
+
+  it("refuses a target's args on a multi-step verb, naming the DEVICE", async () => {
+    const result = await withDeclaration(
+      launchable(
+        { box: { verb: "dev", args: ["--flag"], device: { name: "Bench", kind: "simulator" } } },
+        { steps: [{ exe: "placeholder-tool", argv: ["one"] }, { exe: "placeholder-tool", argv: ["two"] }] },
+      ),
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("will not guess which of them reaches the device");
+  });
+
+  it("refuses one of the reference pack's own placeholders in an after-step", async () => {
+    const result = await withDeclaration(
+      launchable({
+        box: {
+          verb: "dev",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-launcher", argv: ["open", "{scheme}"] }],
+        },
+      }),
+      ["dev", "--target", "box", "--dry-run"],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("{scheme}");
+  });
+});
+
+describe("a launch target hangs off a verb that hands over the terminal", () => {
+  it("names exactly the verbs that go through the interactive seam", () => {
+    // THE TWO LISTS MUST AGREE, and they are computed in different modules for
+    // different reasons: `INTERACTIVE_VERBS` is about which seam a verb uses,
+    // `LAUNCHING_VERBS` is the schema's closed set for `project.launch.<n>.verb`.
+    // A launch target hanging off a CAPTURED verb would resolve a device and
+    // then never hand anybody a terminal.
+    expect([...LAUNCHING_VERBS].sort()).toEqual([...INTERACTIVE_VERBS].sort());
   });
 });

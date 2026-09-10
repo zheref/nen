@@ -27,7 +27,8 @@
 
 import { VerbUsageError } from "../cli/command.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
-import type { Invocation, ProjectBlock } from "../schema/contract.js";
+import { LAUNCH_VERBS, type Invocation, type ProjectBlock } from "../schema/contract.js";
+import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, usesToken } from "./launch.js";
 
 /**
  * The precondition kinds this release can assert. Everything else refuses.
@@ -64,6 +65,23 @@ export const ASSERTABLE_KINDS: readonly string[] = ["path", "env"];
  * on every verb that is not in it.
  */
 export const TARGETED_VERBS: readonly string[] = ["deploy"];
+
+/**
+ * The verbs that take a LAUNCH target -- `project.launch`'s `--target`, which
+ * is a different block, a different vocabulary and a different flag meaning
+ * from `TARGETED_VERBS`' one above.
+ *
+ * IT IS THE SCHEMA'S OWN CLOSED SET, re-exported rather than restated, so
+ * "which verbs may carry a launch target" is one fact: the loader refuses a
+ * `project.launch.<name>.verb` outside it, and ./command.ts's flag table admits
+ * `--target` on exactly these two plus `deploy`.
+ *
+ * AND THE TWO SETS MUST NOT OVERLAP. `deploy`'s `--target` is REQUIRED and
+ * names a destination; this one is OPTIONAL and names a device. A verb in both
+ * lists would have a flag with two meanings and no way to tell them apart --
+ * ./render.test.ts pins that the intersection is empty.
+ */
+export const LAUNCHING_VERBS: readonly string[] = [...LAUNCH_VERBS];
 
 /** One command, as it will be spawned: exe apart from argv, never a string. */
 export interface RenderedStep {
@@ -135,12 +153,74 @@ export interface ResolvedTarget {
   readonly requiresEnv: readonly string[];
 }
 
+/**
+ * The DEVICE a launch target resolved to, as the report prints it.
+ *
+ * `id` IS NULL UNTIL A PROBE HAS RUN, which is exactly what a dry run reports:
+ * nothing was spawned, so nen has no id, and printing one it had not read would
+ * be the same lie as an unperformed precondition rendering as a clean one.
+ */
+export interface ResolvedDevice {
+  readonly name: string;
+  /** The repository's own word for what this device is, or null. */
+  readonly kind: string | null;
+  /** The id the probe reported, or null when nothing was probed. */
+  readonly id: string | null;
+}
+
+/**
+ * The launch target a `dev`/`run` resolved to, as the report prints it.
+ *
+ * IT SHARES THE REPORT'S `target` KEY WITH `ResolvedTarget`, and the two are
+ * told apart by their own fields: a deploy target carries `requiresEnv`, a
+ * launch target carries `verb`, `device` and `after`. One document shape per
+ * family is this CLI's rule; one KEY whose contents depend on the verb is the
+ * narrowest way to keep it while saying two different true things -- and the
+ * verb is in the same document, two fields up, so no reader has to guess.
+ */
+export interface ResolvedLaunch {
+  readonly name: string;
+  /** Which long-running verb the declaration hangs this target off. */
+  readonly verb: string;
+  /** What this target appended to the verb's declared argv, in order. */
+  readonly args: readonly string[];
+  readonly device: ResolvedDevice | null;
+  /** The declared device probe, or null when the device needs none. */
+  readonly probe: RenderedStep | null;
+  /**
+   * The steps that run once the verb exits -- SUBSTITUTED on a real run, and
+   * left exactly as the declaration wrote them on a dry one, because a dry run
+   * printing a filled-in `{device.id}` would be printing a value nen never read.
+   */
+  readonly after: readonly RenderedStep[];
+}
+
+/**
+ * Which of the two shapes `RenderedInvocation.target` is carrying.
+ *
+ * THE DISCRIMINANT IS A FIELD ONLY ONE OF THEM HAS, not a `kind` tag, because a
+ * tag would have to be added to `ResolvedTarget` too -- and that object is
+ * already published in `deploy`'s `--json` document, where a new key is a
+ * change to somebody's golden file for no gain a reader can use. `device` is
+ * present on exactly one of the two and is the field a reader is looking for
+ * anyway.
+ */
+export function isLaunchTarget(
+  target: ResolvedTarget | ResolvedLaunch | null,
+): target is ResolvedLaunch {
+  return target !== null && "device" in target;
+}
+
 export interface RenderedInvocation {
   readonly lane: string;
   readonly stack: string;
   readonly verb: string;
-  /** The destination, on a verb that takes one. Null on every other verb. */
-  readonly target: ResolvedTarget | null;
+  /**
+   * The destination or the device, on a verb that takes one; null everywhere
+   * else. `deploy` resolves a `ResolvedTarget`; `dev` and `run` resolve a
+   * `ResolvedLaunch` when -- and only when -- `--target` was given.
+   */
+  readonly target: ResolvedTarget | ResolvedLaunch | null;
   /** Repo-relative, forward-slashed -- the lane's own `cwd`. */
   readonly cwdRelative: string;
   readonly steps: readonly RenderedStep[];
@@ -483,6 +563,11 @@ function appendArgs(
   plan: RenderedInvocation,
   args: readonly string[],
   target: string,
+  // WHAT THE APPENDED ARGUMENTS REACH, in the refusal's own words. A deploy
+  // target's args reach a destination; a launch target's reach a device. One
+  // rule, two vocabularies -- and a sentence that said "destination" of a
+  // phone would be nen describing somebody's own machine wrongly.
+  reaches = "the destination",
 ): readonly RenderedStep[] {
   if (args.length === 0) return plan.steps;
   const first = plan.steps[0];
@@ -504,7 +589,7 @@ function appendArgs(
       `target '${target}' appends ${args.length} argument${args.length === 1 ? "" : "s"} (${
         /* c8 ignore next -- args.length === 0 already returned above */
         firstArg === undefined ? "" : renderArgv({ exe: firstArg, argv: restArgs })
-      }), and '${plan.verb}' on lane '${plan.lane}' declares ${plan.steps.length} steps. nen will not guess which of them reaches the destination: write the destination's arguments into the step that does, under project.verbs.${plan.lane}.${plan.verb}, and drop this target's 'args' -- or declare a single-step ${plan.verb} row.`,
+      }), and '${plan.verb}' on lane '${plan.lane}' declares ${plan.steps.length} steps. nen will not guess which of them reaches ${reaches}: write those arguments into the step that does, under project.verbs.${plan.lane}.${plan.verb}, and drop this target's 'args' -- or declare a single-step ${plan.verb} row.`,
     );
   }
   return [{ exe: first.exe, argv: [...first.argv, ...args] }];
@@ -643,6 +728,124 @@ export function resolveTarget(
           }),
         ),
     ],
+  };
+}
+
+/** The block a repository with no launch targets pastes, and then edits. */
+const LAUNCH_STUB =
+  '"launch": { "<name>": { "verb": "dev", "args": ["<argument appended to the verb\'s argv>"], "device": { "name": "<the name your own device list shows>", "kind": "simulator", "resolve": { "exe": "<probe>", "argv": ["<argument>"] } }, "after": [ { "exe": "<program>", "argv": ["--device", "{device.id}", "{artifact}"] } ] } }';
+
+/** The one value of `device.kind` nen reads, and what reading it means. */
+const SIMULATED = "simulator";
+
+/**
+ * Resolve `dev`/`run`'s `--target` onto a rendered plan, or refuse.
+ *
+ * THE FLAG IS OPTIONAL HERE AND MANDATORY ON `deploy`, and the asymmetry is the
+ * whole difference between the two blocks. A deploy with no destination is a
+ * deploy nen would have to CHOOSE a destination for, so it refuses; a `dev`
+ * with no target is the ordinary local iteration this verb has always done, and
+ * refusing it the day a repository declares its first launch target would break
+ * every script that ran `nen shu dev` yesterday. So a missing `--target` is not
+ * an error at any number of declared targets, including zero -- ./run.ts simply
+ * never calls this.
+ *
+ * WHAT IS STILL REFUSED, IN THIS ORDER, and every one of them before anything
+ * spawns:
+ *
+ *   1. a `--target` naming no declared key -- exit 2, listing what IS declared
+ *      (or the block to paste, when the repository declares none);
+ *   2. a target the declaration seats as `unsupported` -- exit 4, in its own
+ *      sentence, exactly as an unsupported verb row answers;
+ *   3. a target declared for the OTHER verb -- exit 2. `dev` and `run` are
+ *      different builds, and running a debug target's after-steps against a
+ *      production binary is the mistake this key exists to prevent;
+ *   4. `args` on a multi-step verb -- exit 2, the same refusal a deploy target
+ *      gets and for the same reason;
+ *   5. an `after` step naming `{artifact}` on a verb declaring none, or
+ *      `{device.id}` on a target declaring no device -- exit 2. A token nothing
+ *      can fill would otherwise reach a real command line as itself;
+ *   6. a device with neither a `resolve` probe nor `kind: "simulator"` -- exit
+ *      2. There is no third way to learn an id, and nen invents none.
+ */
+export function resolveLaunch(
+  project: ProjectBlock,
+  plan: RenderedInvocation,
+  requested: string,
+): RenderedInvocation {
+  const declared = byteOrder(Object.keys(project.launch));
+  const target = Object.prototype.hasOwnProperty.call(project.launch, requested)
+    ? project.launch[requested]
+    : undefined;
+  if (target === undefined) {
+    throw new VerbUsageError(
+      `--target '${requested}' is not declared under project.launch. ${
+        declared.length === 0
+          ? `This repository declares no launch targets at all; '${plan.verb}' without --target runs the lane's declared '${plan.verb}' and is what it has always done. Add one before naming it -- ${LAUNCH_STUB}.`
+          : `Declared: ${declared.join(", ")}.`
+      }`,
+    );
+  }
+  if (target.unsupported !== null) {
+    throw new ShuRefusal(
+      EXIT_UNSUPPORTED_VERB,
+      `launch target '${requested}' has no command line at all, so there is nothing for nen to run on lane '${plan.lane}' (${plan.stack}). The declaration's own reason: ${target.unsupported}`,
+    );
+  }
+  if (target.verb !== plan.verb) {
+    // A TARGET BELONGS TO ONE VERB, and the declaration says which. `dev` is a
+    // debug build and `run` is a production one; a target's `args` and its
+    // after-steps are written against exactly one of them, and honouring them
+    // on the other would install the wrong binary on somebody's phone while
+    // reporting success.
+    throw new VerbUsageError(
+      `launch target '${requested}' is declared for '${target.verb}', and this is '${plan.verb}'. project.launch.${requested}.verb says which of the two long-running verbs the target's arguments and after-steps were written against, and nen does not carry them across: run '${target.verb} --target ${requested}', or declare a separate target for '${plan.verb}'.`,
+    );
+  }
+  const steps = appendArgs(plan, target.args, requested, "the device");
+  const composed = unsubstituted([...steps, ...target.after]);
+  if (composed.length > 0) {
+    throw new VerbUsageError(
+      `launch target '${requested}' composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this target needs under project.launch.${requested} -- a launch target is a fact this repository states, and the only tokens nen fills in are ${DEVICE_ID_TOKEN} and ${ARTIFACT_TOKEN}.`,
+    );
+  }
+  if (usesToken(target.after, ARTIFACT_TOKEN) && plan.artifacts.length === 0) {
+    throw new VerbUsageError(
+      `launch target '${requested}' names ${ARTIFACT_TOKEN} in an after-step, and '${plan.verb}' on lane '${plan.lane}' declares no artifacts. ${ARTIFACT_TOKEN} is the FIRST entry of project.verbs.${plan.lane}.${plan.verb}.artifacts, and nen never guesses where a build put its output -- knowing that would mean knowing the toolchain. Declare the artifact on the verb, or write the path this step needs literally.`,
+    );
+  }
+  if (usesToken(target.after, DEVICE_ID_TOKEN) && target.device === null) {
+    throw new VerbUsageError(
+      `launch target '${requested}' names ${DEVICE_ID_TOKEN} in an after-step and declares no device. Add project.launch.${requested}.device -- {"name": "<the name your own device list shows>"} plus either a "resolve" probe or "kind": "${SIMULATED}" -- or write the id this step needs literally.`,
+    );
+  }
+  if (target.device !== null && target.device.resolve === null && target.device.kind !== SIMULATED) {
+    // THE TWO WAYS TO KNOW AN ID, AND THERE IS NO THIRD. A probe reports one; a
+    // simulated device IS addressed by its name. A device that is neither leaves
+    // nen with a name and no id, and the honest answer is to say so before
+    // anything spawns rather than to hand a half-resolved plan to a run.
+    throw new VerbUsageError(
+      `project.launch.${requested}.device names '${target.device.name}' and says neither how to find its id nor that it needs none. Give it a "resolve" probe -- {"exe": "<program>", "argv": ["<argument>"]}, whose output nen searches for this name -- or declare "kind": "${SIMULATED}", which resolves the id to the name itself and spawns nothing.`,
+    );
+  }
+  return {
+    ...plan,
+    target: {
+      name: requested,
+      // `plan.verb`, WHICH THE CHECK ABOVE HAS JUST PROVED EQUAL to the
+      // declaration's own -- rather than `target.verb`, which the loader types
+      // as nullable for the `unsupported` arm this function returned from long
+      // before here.
+      verb: plan.verb,
+      args: target.args,
+      device:
+        target.device === null
+          ? null
+          : { name: target.device.name, kind: target.device.kind, id: null },
+      probe: target.device?.resolve ?? null,
+      after: target.after,
+    },
+    steps,
   };
 }
 
