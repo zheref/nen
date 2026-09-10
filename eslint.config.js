@@ -46,6 +46,6 @@ export default [
     rules,
   },
   {
-    ignores: ["node_modules/**", "dist/**", "**/fixtures/**"],
+    ignores: ["node_modules/**", "dist/**", "**/fixtures/**", "coverage/**"],
   },
 ];

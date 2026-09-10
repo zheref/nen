@@ -2,12 +2,17 @@ node_modules/
 dist/
 *.log
 .DS_Store
+coverage/
 
 # Nen's own generated output. NOT `nen/`, which is committed configuration --
 # the one-character difference is the whole boundary: `nen/` holds files a human
 # wrote and review reads, `.nen/` holds logs and other disposable output. A
 # single directory for both would mean staging a build log by accident.
 .nen/
+
+# Hatsu's rikugan reports, written under this repository when Kurapika runs
+# here -- final-report output only, never committed configuration.
+Reports/
 
 # A read-only bankai-scaffold reference clone used while porting scripts and
 # skills into this repository. It is scratch space for the port, not part of
