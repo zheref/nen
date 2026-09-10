@@ -824,3 +824,41 @@ export function trailerRefusal(commits: CommitsPolicy, key: string): string | nu
   );
   return refused ?? null;
 }
+
+/**
+ * Every attribution-trailer refusal message a LOADED policy has for a set of
+ * caller-typed trailer keys, worded once so `nen commit format` and `nen wc
+ * squash` -- the two callers that shape a commit message under this policy --
+ * cannot drift into two different sentences for the same refusal.
+ *
+ * TAKES BARE KEYS, NOT ../commit/format.ts's `Trailer` PAIRS, on purpose:
+ * this module is read by every taxonomy loader and must not grow a dependency
+ * on a commit-formatting type merely to describe one of its own fields.
+ *
+ * AN ABSENT POLICY REFUSES NOTHING, exactly as `nen commit format` has always
+ * behaved: only a repository that STATES `nen/workflow.json` gets an opinion
+ * about its trailers.
+ */
+export function attributionRefusalMessages(
+  loaded: LoadedWorkflow,
+  trailerKeys: readonly string[],
+): readonly string[] {
+  if (!loaded.present) return [];
+  const allowed = loaded.workflow.commits.allowedAttributionTrailers;
+  const refusals: string[] = [];
+  for (const key of trailerKeys) {
+    const refused = trailerRefusal(loaded.workflow.commits, key);
+    if (refused === null) continue;
+    // TWO WHOLE SENTENCES, NOT ONE WITH A HOLE IN IT -- see ../commit/
+    // command.ts's original header for why an empty and a populated allow
+    // list are different facts that read as different sentences.
+    refusals.push(
+      allowed.length === 0
+        ? `trailer key '${key}' is an attribution trailer this repository refuses. '${loaded.path}' admits none at all: its commits.allowedAttributionTrailers is empty. Drop the trailer, or add '${refused}' to that list`
+        : `trailer key '${key}' is an attribution trailer this repository refuses. '${loaded.path}' admits ${allowed
+            .map((k): string => `'${k}'`)
+            .join(", ")} under commits.allowedAttributionTrailers, and '${refused}' is not one of them. Drop the trailer, or add its key to that list`,
+    );
+  }
+  return refusals;
+}

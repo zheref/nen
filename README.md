@@ -362,7 +362,7 @@ exercises all three platforms on every change for exactly this reason.
 `nen --help` lists every command family (37); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-92 verbs outside the binary — each one's purpose, arguments, exit codes and
+93 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
