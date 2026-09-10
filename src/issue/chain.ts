@@ -154,6 +154,25 @@ function carries(issue: IssueSummary, map: RoleMap, role: ChainRole): string | n
   return null;
 }
 
+/**
+ * The four roles whose ABSENCE from the map can refuse a verdict, and the only
+ * four (zheref/nen#55).
+ *
+ * A position that a MAPPED role positively matches is decided and returned
+ * before this is ever consulted -- so partial credit already exists for every
+ * issue whose labels answer the question. What remains is the one case where it
+ * cannot: an issue that matched nothing, where "carries no building label" and
+ * "building was never mapped, so this issue's building label (if any) was never
+ * checked" read identically, and only one of them is `routable`. That is
+ * exactly the case a partial answer would get wrong, which is why this list is
+ * short rather than absent.
+ *
+ * The other four -- researched, approved-team, approved-direct, chore -- are
+ * reported in `unmappedRoles` when absent and never block a verdict, so a target
+ * repository whose taxonomy genuinely lacks one needs no placeholder for it.
+ */
+export const CRITICAL_ROLES: readonly ChainRole[] = ["building", "in-review", "idea", "epic"];
+
 export type ChainPositionName =
   | "closed"
   | "building"
@@ -214,11 +233,24 @@ export function classifyChainPosition(issue: IssueSummary, map: RoleMap): ChainP
   // `carries()`, and only one of them is actually "routable". A role left
   // unmapped is reported as unmapped, never guessed past -- the module's own
   // header rule, applied to the LAST branch as much as the first three.
-  const criticalForRoutable: readonly ChainRole[] = ["building", "in-review", "idea", "epic"];
-  const unmappedCritical = criticalForRoutable.filter((role): boolean => (map.get(role) ?? []).length === 0);
+  const unmappedCritical = CRITICAL_ROLES.filter((role): boolean => (map.get(role) ?? []).length === 0);
   if (unmappedCritical.length > 0) {
+    const optional = CHAIN_ROLES.filter((role): boolean => !CRITICAL_ROLES.includes(role));
     evidence.push(
-      `role(s) ${unmappedCritical.join(", ")} were never mapped, so 'routable' cannot be told apart from 'building'/'in-review'/'idea'/'epic' for this issue -- a run that reads a building issue as routable releases it twice. Supply --chain-labels for each; guessing which label means 'building' is exactly what this check exists to refuse.`,
+      // DERIVED FROM CRITICAL_ROLES, not restated (Copilot, PR #187). That
+      // constant is the source of truth for which roles can refuse, and a
+      // hard-coded list beside it is a second place the answer lives -- which
+      // is how a message comes to describe a rule the code stopped following.
+      `role(s) ${unmappedCritical.join(", ")} were never mapped, so 'routable' cannot be told apart from ${CRITICAL_ROLES.map((role): string => `'${role}'`).join("/")} for this issue -- a run that reads a building issue as routable releases it twice. Supply --chain-labels for each; guessing which label means '${CRITICAL_ROLES[0] ?? "building"}' is exactly what this check exists to refuse.`,
+    );
+    // WHICH ROLES ARE ACTUALLY REQUIRED, said here rather than left to be
+    // inferred (zheref/nen#55). Only these four can ever produce this refusal,
+    // and reading the message without that fact leads a caller to supply the
+    // full eight-role map on every call -- including roles a target
+    // repository's taxonomy genuinely lacks. The other four are reported in
+    // `unmappedRoles` and never block a verdict.
+    evidence.push(
+      `only ${CRITICAL_ROLES.join(", ")} can produce this refusal; ${optional.join(", ")} are optional and never block a verdict (they are reported under unmappedRoles when absent), so a taxonomy that genuinely lacks one needs no placeholder for it.`,
     );
     return { issue: issue.number, position: "undecidable", evidence, unmappedRoles: unmapped };
   }
