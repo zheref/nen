@@ -28,6 +28,11 @@
 // the rest as real entries; the next loader that key-walks a data map inherits
 // this same obligation, not just `../repos.ts`'s two call sites
 // (`product_codes`, and the per-caller pin fields on a consumer entry).
+// Applied, as of zheref/nen#80, by every key-walked map in shipped code:
+// `../repos.ts`'s two, `../schema/contract.ts`'s five, and
+// `../shadow/run.ts`'s `closedOraclePrs` -- the last one to inherit it, which
+// had documented the hazard in its data file's prose instead. A note beside a
+// walk records a defect; it does not prevent one.
 
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
