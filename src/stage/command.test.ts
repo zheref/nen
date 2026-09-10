@@ -73,3 +73,61 @@ describe("nen stage triage -- CLI wiring", () => {
     expect((await capture(["stage", "bogus"])).code).toBe(2);
   });
 });
+
+// zheref/nen#169: a git-ignored path leaves 'flagged' for its own bucket --
+// a count in text (this verb has no --verbose flag, so the paths themselves
+// are never listed there), a full array under --json, and it never moves the
+// exit code.
+describe("nen stage triage -- the ignored bucket (zheref/nen#169)", () => {
+  it("on a mixed tree, counts ignored separately from clean and flagged, and never lists ignored paths in text", async () => {
+    const result = await capture(["stage", "triage"], [
+      {
+        match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall",
+        result: { stdout: " M src/a.ts\0?? .env\0!! node_modules/x\0!! node_modules/y/.env\0" },
+      },
+    ]);
+    expect(result.code).toBe(1);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/clean: 1 file\(s\)/);
+    expect(out).toMatch(/ {2}src\/a\.ts/);
+    expect(out).toMatch(/ignored: 2 file\(s\), not listed/);
+    expect(out).not.toMatch(/node_modules/);
+    expect(out).toMatch(/flagged: 1 file\(s\)/);
+    expect(out).toMatch(/\.env {2}\[secret-shape\]/);
+  });
+
+  it("on a tree with only ignored rows, exits 0 -- the exit code follows 'flagged' only", async () => {
+    const result = await capture(["stage", "triage"], [
+      {
+        match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall",
+        result: { stdout: "!! node_modules/x\0!! node_modules/y/.env\0" },
+      },
+    ]);
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/clean: 0 file\(s\)/);
+    expect(out).toMatch(/ignored: 2 file\(s\), not listed/);
+    expect(out).not.toMatch(/flagged/);
+    expect(out).not.toMatch(/node_modules/);
+  });
+
+  it("--json carries the full ignored array, with a secret-shape reason preserved and never inside flagged", async () => {
+    const result = await capture(
+      ["stage", "triage", "--json"],
+      [
+        {
+          match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall",
+          result: { stdout: "!! node_modules/y/.env\0" },
+        },
+      ],
+    );
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as {
+      clean: string[];
+      flagged: unknown[];
+      ignored: { path: string; reasons: string[] }[];
+    };
+    expect(parsed.flagged).toEqual([]);
+    expect(parsed.ignored).toEqual([{ path: "node_modules/y/.env", reasons: ["ignored", "secret-shape"] }]);
+  });
+});
