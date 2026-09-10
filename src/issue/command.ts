@@ -373,6 +373,15 @@ usage:
       attaching a pull request as a sub-issue succeeds and is invisible
       afterwards. A mixed list attaches nothing at all, rather than the issues
       in it. Ask the 'nen pr' family about a pull request.
+      WHERE THE SUB-ISSUES ENDPOINT IS ABSENT (404/410), the documented fallback
+      is a task list in the parent's body. This verb DETECTS that and hands the
+      lines back -- printed here, and 'fallbackTaskList' under --json -- but it
+      does NOT perform the write: it posts only to issues/{parent}/sub_issues,
+      and replacing a body is a different write, on the one path in this verb
+      that is reachable only where the endpoint is missing. Apply it yourself
+      with 'nen issue edit-body --issue <parent> --body-file <f>', whose file is
+      the parent's CURRENT body plus those lines (that verb REPLACES a body),
+      and say which form was used: a task list is not a sub-issue graph.
 
   nen issue consolidate-close --target <owner/name> --parent <n>
                               --children 1,2 --repo <path>
@@ -935,6 +944,32 @@ function attach(context: CommandContext): number {
     return report.failed.length === 0 ? 0 : 1;
   }
   for (const line of report.log) context.io.out(line);
+  // THE FALLBACK LINES, PRINTED (zheref/nen#33). They were computed, returned,
+  // and reachable only under `--json` -- while the log line above said "the
+  // lines are in this report", which was true of the JSON and false of the
+  // thing a text caller was looking at. A fallback that is detected and then
+  // not shown is a fallback nobody can perform.
+  //
+  // The invocation is spelled out because nen has a verb for exactly this write
+  // and the caller should not have to find it: `issue edit-body` REPLACES a
+  // body from a file, so the file is the parent's current body with these lines
+  // appended -- stated that way rather than as "append", because the verb
+  // replaces and a caller who hands it only the lines loses the body.
+  if (report.fallbackTaskList !== null) {
+    context.io.out("");
+    context.io.out("fallback task list for the parent's body:");
+    for (const line of report.fallbackTaskList) context.io.out(`  ${line}`);
+    context.io.out("");
+    context.io.out(
+      `nen does NOT write this. To apply it, put the CURRENT body of #${parent} plus these lines in a file and run:`,
+    );
+    context.io.out(
+      `  nen issue edit-body --target ${target.slug} --issue ${parent} --body-file <file>`,
+    );
+    context.io.out(
+      "Then say which form was used: a task list is not a sub-issue graph, and a later sweep that reads one as the other is wrong about the whole chain.",
+    );
+  }
   if (report.failed.length > 0) {
     context.io.err(`nen: ${report.failed.length} child/children could not be attached.`);
     return 1;

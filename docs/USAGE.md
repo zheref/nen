@@ -3428,7 +3428,20 @@ nen issue attach-sub --target <owner/name> --parent <n> --children 1,2
 | `--children 1,2` | yes | Comma-separated child issue numbers. | Same PR-name refusal applies per-entry; a child that could not be READ at all (rather than certified-as-a-PR) is instead recorded in `failed` and its siblings still proceed. |
 | `--dry-run` | no | Print the exact `gh api ... sub_issues` calls that would run; write nothing. | Still reads `--parent` and every `--children` entry over `gh api` to certify their object class first -- **this is not network-free**, unlike `issue file --dry-run`. |
 
-**Output and exit codes** -- human rendering is the run's own `log` lines: `would run: gh api --method POST repos/<slug>/issues/<parent>/sub_issues -F sub_issue_id=<id>   (#<child> -> id <id>)` under `--dry-run`, or `attached #<child> (id <id>) to #<parent>` for a real write; a 404/410 from the sub-issues endpoint is reported with the documented task-list fallback. `--json`: the `AttachReport` -- `{ attached, failed, fallbackTaskList, log }`, or `{ parent, children, pullRequests, refused: true, reason }` on the object-class refusal. Exit 0 when every child attached; exit 1 when one or more children failed to attach, OR when the object-class certification refused (nothing is attached in that case).
+**When the sub-issues endpoint is absent (404/410).** The documented fallback is a task list in the parent's body. This verb DETECTS that case and hands the lines back -- printed in the human rendering, and `fallbackTaskList` under `--json` -- but it does **not** perform the write. It posts to `issues/{parent}/sub_issues` and nothing else; replacing a body is a different write, a read-modify-write that could clobber an edit made between this run's read and its own, on the one path in the verb reachable only where the endpoint is missing and therefore the least exercised. Apply it yourself:
+
+```text
+fallback task list for the parent's body:
+  - [ ] #41
+  - [ ] #52
+
+nen does NOT write this. To apply it, put the CURRENT body of #12 plus these lines in a file and run:
+  nen issue edit-body --target zheref/bankai-core --issue 12 --body-file <file>
+```
+
+[`issue edit-body`](#nen-issue-edit-body) **replaces** a body, so the file is the parent's current body *plus* those lines -- handing it only the lines loses the body. And say which form was used: a task list is not a sub-issue graph, and a later sweep that reads one as the other is wrong about the whole chain.
+
+**Output and exit codes** -- human rendering is the run's own `log` lines: `would run: gh api --method POST repos/<slug>/issues/<parent>/sub_issues -F sub_issue_id=<id>   (#<child> -> id <id>)` under `--dry-run`, or `attached #<child> (id <id>) to #<parent>` for a real write; a 404/410 from the sub-issues endpoint is reported with the task-list fallback block above. `--json`: the `AttachReport` -- `{ attached, failed, fallbackTaskList, log }`, or `{ parent, children, pullRequests, refused: true, reason }` on the object-class refusal. Exit 0 when every child attached; exit 1 when one or more children failed to attach, OR when the object-class certification refused (nothing is attached in that case).
 
 **Example**
 
