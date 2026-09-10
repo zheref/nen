@@ -2333,11 +2333,12 @@ describe("stdoutTo writes a step's stdout to the declared file", () => {
     }
   });
 
-  it("refuses at exit 2, not a stack trace, when the path cannot be inspected", async () => {
-    // An ancestor of the declared path is a FILE, so `lstat` answers ENOTDIR
-    // rather than "nothing there" -- and the write a few steps later is certain
-    // to fail. Letting the errno escape would end the verb as a crash instead of
-    // as this family's exit 2 with the declaration named.
+  it("refuses at exit 2, not a stack trace, when an ANCESTOR of the path is a file", async () => {
+    // The write a few steps later is certain to fail, and the two platforms do
+    // not agree about how: POSIX `lstat` throws ENOTDIR, Windows says the path
+    // is simply not there. Walking up the path asks a question both can answer,
+    // so the refusal is the same sentence on all three CI lanes -- and it is a
+    // refusal rather than a crash mid-run.
     const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-enotdir-"));
     try {
       mkdirSync(join(dir, "nen"));
@@ -2349,7 +2350,9 @@ describe("stdoutTo writes a step's stdout to the declared file", () => {
       );
       const result = await capture(["build"], { repo: dir });
       expect(result.code).toBe(2);
-      expect(result.err.join("\n")).toMatch(/nen cannot tell what is at that path: ENOTDIR/);
+      expect(result.err.join("\n")).toMatch(
+        /'nen\/out' -- an ancestor of it -- is a FILE rather than a directory/,
+      );
       expect(spawned(result.seams)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

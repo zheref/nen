@@ -40,8 +40,8 @@
 // `--target` says WHERE, `--run` says NOW, and `--run --dry-run` is refused
 // rather than resolved in either direction.
 
-import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { lstatSync, mkdirSync, writeFileSync, type Stats } from "node:fs";
+import { dirname, relative, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { containedPath, realContainment } from "../repo/contain.js";
 import { PORT_PROBE_TIMEOUT_MS, type Seams } from "../seam/exec.js";
@@ -851,25 +851,61 @@ function refuseUnwritableRedirect(step: RenderedStep, repoRoot: string): void {
       `${pointer} names '${declared}', which would be written to '${containment.real}', outside the repository at ${repoRoot}: '${containment.link ?? absolute}' is a symlink pointing at '${containment.target ?? containment.real}'. nen writes what its report says it writes, so this write is refused rather than followed.`,
     );
   }
-  // `throwIfNoEntry: false` COVERS ONLY ENOENT, which is the ordinary case here
-  // -- the file has not been written yet. Everything else still throws: an
-  // EACCES on a parent, or an ENOTDIR because an ancestor of this path is a
-  // FILE. Both are certain to fail the write a few steps later, and letting
-  // them escape would end the verb as a stack trace rather than as this
-  // family's exit 2 -- so the errno is caught and named here, where the
-  // declaration that asked for it can be named beside it.
-  let entry;
-  try {
-    entry = lstatSync(absolute, { throwIfNoEntry: false });
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code ?? "an unknown error";
+  // THE WALK IS UP THE PATH, NOT ONE `lstat` ON IT, and the reason is a
+  // platform difference that a single stat cannot see. An ancestor directory
+  // that is really a FILE makes this write certain to fail -- POSIX says so
+  // loudly (`lstat` throws ENOTDIR), and Windows says the path is simply not
+  // there (ENOENT, which `throwIfNoEntry: false` folds into "nothing here
+  // yet"). Asking each ancestor in turn gives the same refusal on both, which
+  // is the whole reason this repository's CI runs three of them.
+  let probe = absolute;
+  for (;;) {
+    const entry = inspect(probe, declared, pointer);
+    if (entry === undefined) {
+      const parent = dirname(probe);
+      /* c8 ignore next -- `insideRepo` has already proved this is under a root */
+      if (parent === probe) return;
+      probe = parent;
+      continue;
+    }
+    if (probe === absolute) {
+      if (!entry.isDirectory()) return;
+      throw new VerbUsageError(
+        `${pointer} names '${declared}', and a DIRECTORY is already there. nen writes this step's stdout to that path as a file; it will not remove a directory to make room for one, and discovering this after the tool had run would mean spending the whole build to learn it. Name a file, or move what is in the way.`,
+      );
+    }
+    if (entry.isDirectory()) return;
     throw new VerbUsageError(
-      `${pointer} names '${declared}', and nen cannot tell what is at that path: ${code}. This step's stdout is written there as a file, so a path nen cannot even inspect is one it will not promise to write -- most often an ancestor directory that is really a file (ENOTDIR), or one this user cannot read (EACCES). Fix the path, or the permissions on it.`,
+      `${pointer} names '${declared}', and '${relative(repoRoot, probe).split(sep).join("/")}' -- an ancestor of it -- is a FILE rather than a directory. nen creates the parent directories of the file it writes, and it cannot create one inside a file, so this write is refused before the tool runs rather than after it. Name a path whose ancestors are all directories, or move what is in the way.`,
     );
   }
-  if (entry !== undefined && entry.isDirectory()) {
+}
+
+/**
+ * `lstat`, with "nothing there" as a value and every other errno as a refusal.
+ *
+ * TWO ERRNOS ARE AN ABSENCE, and the second is the one that matters here --
+ * ../repo/contain.ts's own walk draws the same line for the same reason.
+ * `throwIfNoEntry: false` folds ENOENT into `undefined` by itself; ENOTDIR is
+ * folded in beside it, because it says an ANCESTOR of this path is a file,
+ * which means this path is not there and the walk above must keep going up
+ * until it reaches the ancestor that IS. Answering "cannot inspect" to that
+ * would report the correct exit code with the wrong sentence -- and would say a
+ * different sentence on Windows, where the same tree answers ENOENT.
+ *
+ * Everything else -- an EACCES on a parent, most often -- is certain to fail
+ * the write a few steps later, and letting it escape would end the verb as a
+ * stack trace rather than as this family's exit 2.
+ */
+function inspect(path: string, declared: string, pointer: string): Stats | undefined {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "an unknown error";
+    if (code === "ENOTDIR" || code === "ENOENT") return undefined;
+    /* c8 ignore next 4 -- an errno no test can produce on all three CI lanes */
     throw new VerbUsageError(
-      `${pointer} names '${declared}', and a DIRECTORY is already there. nen writes this step's stdout to that path as a file; it will not remove a directory to make room for one, and discovering this after the tool had run would mean spending the whole build to learn it. Name a file, or move what is in the way.`,
+      `${pointer} names '${declared}', and nen cannot tell what is at '${path}': ${code}. This step's stdout is written there as a file, so a path nen cannot even inspect is one it will not promise to write to. Fix the path, or the permissions on it.`,
     );
   }
 }
@@ -949,8 +985,21 @@ function relay(context: CommandContext, stdout: string, stderr: string): void {
 function writeRedirect(step: RenderedStep, stdout: string, repoRoot: string): void {
   if (step.stdoutTo === null) return;
   const absolute = insideRepo(repoRoot, step.stdoutTo.path, step.stdoutTo.pointer);
-  mkdirSync(dirname(absolute), { recursive: true });
-  writeFileSync(absolute, stdout, "utf8");
+  try {
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, stdout, "utf8");
+  } catch (error) {
+    /* c8 ignore next 6 -- the pre-flight above refuses every shape it can see */
+    // THE LAST RESORT, and it should be unreachable: `refuseUnwritableRedirect`
+    // asked every question a filesystem can answer before the tool started. What
+    // is left is a race -- something created a directory at this path while the
+    // tool ran -- or a permission that changed under us, and either is worth a
+    // sentence naming the declaration rather than a stack trace.
+    const code = (error as NodeJS.ErrnoException).code ?? "an unknown error";
+    throw new VerbUsageError(
+      `${step.stdoutTo.pointer} names '${step.stdoutTo.path}', and writing this step's stdout there failed: ${code}. The tool ran and its output is lost. nen checked this path before starting it, so something changed on disk in between.`,
+    );
+  }
 }
 
 function runCaptured(
