@@ -25,12 +25,17 @@ different things.
   names are data. Its `nen/contract.json` carries **`dependency` only** — the
   shape a plugin repository has, and the proof the two blocks are independent.
 - `legacy-repo/schemas/` — **not migrated**, and nothing under `nen/`. The same
-  four taxonomy files as `bankai-repo`, at the pre-v0.3 location, so the
-  `schemas/` fallback is exercised by a real repository root rather than by a
-  temp directory a test builds. It is the ONLY thing in this tree keeping the
-  old layout alive, which is what makes the v0.5.0 removal a deletion of one
-  directory and one map in `src/schema/source.ts` — with a test that goes red if
-  anything else still depends on it.
+  four taxonomy files as `bankai-repo`, at the pre-v0.3 location. Through v0.4.0
+  it proved the `schemas/` fallback; that fallback is removed in v0.5.0, and
+  this fixture now proves the OPPOSITE fact instead -- every taxonomy-reading
+  verb refuses this repository exactly as it would refuse one with no taxonomy
+  at all, and the refusal names the migration (`nen scaffold init
+  --accept-detected`). It stays a fixture, rather than a temp directory a test
+  builds, so that refusal is proved against a real repository root. (The
+  `LEGACY_LOCATION` map in `src/schema/source.ts` survives the same release,
+  for the same reason: it is no longer a search order, but it is still how the
+  refusal names the file it found and how `nen scaffold init` knows which four
+  files to copy.)
 
 - `shu-repo/nen/contract.json` — a **`project`-only** contract, and the one the
   `nen shu` executor is proved against. It is shaped after the Next.js product

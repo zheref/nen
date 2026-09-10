@@ -260,32 +260,38 @@ repository's `nen/` directory, at the path `--repo` names:
 dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
 one-character difference is what keeps a build log out of a review.
 
-**The legacy `schemas/` location.** Before v0.3 the four taxonomy files lived in
-a `schemas/` directory. Nen still reads them from there when `nen/` does not
-carry them, so an un-migrated repository keeps working through the v0.4 line;
-that fallback is **removed in v0.5.0**. It is read-only — nothing in nen writes
-to `schemas/` — and [`schema check`](#nen-schema-check) is where the migration
-state is reported: a file read from the legacy location gets a `warn` row naming
-the canonical path, and a file present in BOTH with different bytes is a
-*shadowed leftover* that fails the check, because `nen/` wins the read and the
-copy somebody may still be editing is the one nen ignores. That comparison is
-**byte-exact**: two copies differing only in line endings (a CRLF/LF drift a
-checkout can produce on its own) count as different, because "identical" is
-what licenses deleting one of them. A "no such file" refusal names both
-locations.
+**The legacy `schemas/` location — removed in v0.5.0.** Before v0.3 the four
+taxonomy files lived in a `schemas/` directory; v0.3.0 through v0.4.0 read
+`schemas/` as a fallback when `nen/` did not carry a file, so an un-migrated
+repository kept working. That fallback is gone: `nen/` is the only directory
+anything ever reads a taxonomy file from. A repository that still carries a
+file only under `schemas/` is, from every verb's point of view, the SAME as one
+carrying it nowhere — the refusal it gets is the ordinary "no such file" one,
+with one addition: it names the legacy copy it found and the way out, **run
+`nen scaffold init --accept-detected`** (or copy the file by hand). The
+migration path is a verb, not a fallback — see [`scaffold
+init`](#nen-scaffold-init) below.
 
-The fallback covers the four taxonomy files and nothing else. `nen/contract.json`
-is new in this line and has **no** legacy location — no released nen ever read
-one — so a repository's own unrelated file under `schemas/` is never claimed as
-a nen contract.
+[`schema check`](#nen-schema-check) still reports the migration state, in a
+different shape: a REQUIRED file present only under `schemas/` FAILS the check
+by the same refusal, and a file that loaded from `nen/` with a `schemas/` copy
+still sitting beside it is a *leftover* — a `warn` row naming the copy and the
+`git rm` that clears it. It is a `warn`, not a `FAIL`, because `nen/` is the
+only file anything reads now: a stale duplicate is clutter to delete, never a
+correctness risk, so whether its bytes still agree with `nen/`'s no longer
+matters to this check.
 
-**An explicitly pinned path does not move on its own.** The fallback answers only
-for paths nen resolves itself. A caller that hard-codes a location — `pr ready
---gates schemas/gates.json`, or `gate derive --policy-paths "schemas/,…"` — is
-naming a path, and nen takes it literally: `--gates` deliberately does not fall
-back, since a flag that quietly read a different file than the one it was handed
-would be worse than a refusal. Move those pins along with the files, in the same
-change; `schema check` will not warn about them, because it never sees them.
+The migration table covers the four taxonomy files and nothing else.
+`nen/contract.json` and `nen/workflow.json` are new in this line and have
+**no** legacy location — no released nen ever read one under `schemas/` — so a
+repository's own unrelated file there is never claimed as a nen contract.
+
+**An explicitly pinned path was never covered by the fallback, and still isn't.**
+A caller that hard-codes a location — `pr ready --gates schemas/gates.json`, or
+`gate derive --policy-paths "schemas/,…"` — is naming a path, and nen takes it
+literally: `--gates` does not resolve through `nen/`-vs-`schemas/` at all. Move
+those pins along with the files, in the same change; `schema check` will not
+warn about them, because it never sees them.
 
 #### `nen/workflow.json`
 
@@ -481,7 +487,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
-| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and where it was read from | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
+| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
@@ -2063,22 +2069,17 @@ a malformed contract; and the closing refusal for that case does **not** say "ne
 to fall back on", because for this one file it has: nen is deliberately declining to apply its own
 default over a policy the repository states and nen could not parse.
 
-It is also where the `schemas/` → `nen/` migration is reported. A file read from the legacy `schemas/`
-location gets a `warn` row printed at the path it was actually read from, followed by an indented
-`^ legacy location…` line naming the canonical path and the v0.5.0 removal. A file present in BOTH
-places whose bytes DIFFER is a **shadowed leftover**: the row FAILS the report even though the file
-loaded, because `nen/` won the read and the copy somebody may still be editing is the one nen ignores.
-Identical bytes in both places is an `ok` row with a note saying the deletion is free. The comparison
-is **byte-exact** — a CRLF/LF drift between the two copies counts as different, since "identical" is
-the finding that licenses deleting one of them.
-
-A fourth state exists for the case where the comparison could not be made at all: both copies are
-present, and one of them will not open (`EACCES`, a symlink cycle). That row is an **unverified
-leftover**, and it fails the report for the same fail-closed reason — but it says so in its own words
-and names the errno, rather than asserting bytes it never compared. The distinction is not cosmetic:
-when it is the `nen/` copy that cannot be read, "the bytes differ, nen read the `nen/` one, delete the
-legacy copy" is three claims that are false and one instruction that would delete the only readable
-file the repository has left.
+It is also where the `schemas/` → `nen/` migration is reported, in the shape v0.5.0 left it: `nen/` is
+the only directory anything reads, so the report distinguishes two, unrelated findings instead of the
+four the fallback needed. A REQUIRED file present only under `schemas/` FAILS the report exactly as an
+absent file always has — its `detail` is the ordinary "no such file" refusal, with one addition: it
+names the legacy copy it found and the migration (`nen scaffold init --accept-detected`, or copy it by
+hand). A file that DID load from `nen/`, with a `schemas/` copy still sitting beside it, is a
+**leftover**: a `warn` row, never a `FAIL`, with an indented `^ a legacy '<path>' copy is still
+there…` line naming the `git rm` that clears it. It is a `warn` because `nen/` is the only file anything
+reads now — a stale duplicate is clutter to delete, not a correctness risk, so whether its bytes still
+agree with `nen/`'s no longer changes the verdict, and detecting the leftover is a stat, never a read: an
+unopenable `schemas/` copy (a directory, a broken symlink) is still reported as a leftover to delete.
 
 **Usage**
 
@@ -2094,17 +2095,18 @@ nen schema check --repo <path> [--json]
 | `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }` — `checks[]` carries one row per file, `nen/workflow.json` last. |
 
 **Output and exit codes** — human rendering: `"repository: <root>"` then one line per file:
-`"  <ok|FAIL|warn>  <file, at the path it was read from>  <detail>"`, optionally followed by an
-indented `"        ^ <migration note>"` line. `--json` matches exactly: `{ root, ok, checks,
-deprecations }`, each check carrying `{ file, path, location, ok, detail, required, shadow, shadowed,
-note }` in that key order for every row — `location` is `"nen"` or `"schemas"`, `shadow` is
-`"none" | "identical" | "different" | "unknown"` (what the two copies had to say to each other, so a
-machine reader can tell "the bytes disagree" from "nen could not look"), `shadowed` is the boolean that
-fails the row, and `deprecations` lists every migration note in row order (empty for a fully migrated
-repository). Exit 0 when every REQUIRED file loaded and validated and nothing is shadowed; exit 1 when
-any required file failed (absent, unreadable, or invalid) or any file's legacy copy is unaccounted for
-— different bytes, or a comparison nen could not make — `gates.json` failing only because it is absent
-does not trip this, and neither does an absent `nen/contract.json`.
+`"  <ok|FAIL|warn>  <nen/…>  <detail>"` — always the canonical `nen/` spelling, whether or not the file
+loaded — optionally followed by an indented `"        ^ <leftover note>"` line. `--json` matches
+exactly: `{ root, ok, checks, deprecations }`, each check carrying `{ file, path, ok, detail, required,
+legacy, note }` in that key order for every row — `file`/`path` are always the `nen/` spelling, `legacy`
+is `true` when a `schemas/<file>` copy is present on disk (detected, never read; `false` for
+`nen/contract.json` and `nen/workflow.json`, which have no legacy location), `note` is the leftover
+sentence when `legacy` is `true` AND the row itself is `ok` (`null` otherwise — a failing row's own
+`detail` already names the migration, so `note` does not repeat it), and `deprecations` lists every
+`note` in row order (empty for a fully migrated repository, and for one carrying no legacy copy at all).
+Exit 0 when every REQUIRED file loaded and validated — a `warn` row never trips this, leftover or
+absent-and-optional alike; exit 1 when any required file failed to load, whether it is missing outright
+or present only under the legacy `schemas/` location.
 
 **Example**
 
@@ -2142,19 +2144,37 @@ nen schema check --repo src/schema/fixtures/legacy-repo
 ```
 ```text
 repository: /path/to/src/schema/fixtures/legacy-repo
-  warn  schemas/labels.json  13 labels
-        ^ legacy location. Move it to 'nen/labels.json'; the schemas/ fallback is removed in v0.5.0.
-  warn  schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
-        ^ legacy location. Move it to 'nen/repos.json'; the schemas/ fallback is removed in v0.5.0.
-  warn  schemas/colors.yml  3 categories, 13 values
-        ^ legacy location. Move it to 'nen/colors.yml'; the schemas/ fallback is removed in v0.5.0.
-  warn  schemas/gates.json  5 reviewer identities
-        ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.5.0.
+  FAIL  nen/labels.json  /path/to/src/schema/fixtures/legacy-repo/nen/labels.json: no such file. Nen reads this repository's taxonomy from 'nen/labels.json' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/labels.json' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
+  FAIL  nen/repos.json  /path/to/src/schema/fixtures/legacy-repo/nen/repos.json: no such file. Nen reads this repository's taxonomy from 'nen/repos.json' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/repos.json' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
+  FAIL  nen/colors.yml  /path/to/src/schema/fixtures/legacy-repo/nen/colors.yml: no such file. Nen reads this repository's taxonomy from 'nen/colors.yml' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/colors.yml' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
+  warn  nen/gates.json  /path/to/src/schema/fixtures/legacy-repo/nen/gates.json: no such file. Nen reads this repository's taxonomy from 'nen/gates.json' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/gates.json' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
   ok    nen/contract.json  absent (optional)
   ok    nen/workflow.json  absent (defaults apply)
+nen: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.
 ```
-exit 0 — an un-migrated repository still passes through the v0.4 line.
-(from a real run against the bundled fixture repo)
+exit 1 — an un-migrated repository is refused exactly like one with no taxonomy at all; `gates.json`
+still only `warn`s, because its absence never failed the report even before v0.3.0 introduced `schemas/`.
+(from a real run against the bundled fixture repo; the absolute path is elided to `/path/to/…`)
+
+And the same fixture with `nen/labels.json` scaffolded in but the `schemas/` copy left behind — the
+**leftover** case, against a scratch copy so the `git rm` advice is not run for real:
+
+```bash
+nen schema check --repo /tmp/site
+```
+```text
+repository: /tmp/site
+  warn  nen/labels.json  13 labels
+        ^ a legacy 'schemas/labels.json' copy is still there, beside 'nen/labels.json'. Delete it (git rm -r schemas/labels.json, or rm -r schemas/labels.json if it was never committed) -- the schemas/ fallback was removed in v0.5.0.
+  ok    nen/repos.json  3 consumers, 6 product codes, latest v0.11.2
+  ok    nen/colors.yml  3 categories, 13 values
+  ok    nen/gates.json  5 reviewer identities
+  ok    nen/contract.json  dependency (nen >= 0.3, pinned v0.3.0), project (2 lanes: web, android; 10 verbs; 3 toolchain entries)
+  ok    nen/workflow.json  absent (defaults apply)
+```
+exit 0 — the leftover never fails the report.
+(from a real run against a scratch copy of the bundled fixture, with `schemas/labels.json` left in
+place after `nen/labels.json` was copied in; the absolute path is elided to `/tmp/site`)
 
 <a id="family-color"></a>
 
@@ -3396,7 +3416,7 @@ nen scaffold init --repo <path>
 
 **A filesystem failure is a row, not a crash.** An unwritable path, a directory in the way, a read-only checkout: the errno becomes a `refused` write, the run continues, and the report is still printed — under `--json` too. A run that threw here used to exit 1 with empty stdout, having already written several files it never reported.
 
-**The `schemas/` → `nen/` migration is a COPY.** Each of the four taxonomy files found only under `schemas/` is copied to `nen/`, the original is **left in place**, and the `git rm` line is printed for the caller to run (and only for a copy that actually happened). A legacy file that is a **symlink** is `refused` naming both paths: `copyFileSync` follows it, so nen would be copying whatever it points at into the repository under a taxonomy file's name and then telling the caller to stage it. A delete is not recoverable if some tool in the estate still reads the old path, and this verb's hook rule already established refuse-and-report over destroy; the `nen/` copy wins immediately because [the loader prefers it](#taxonomy-as-data), so the new behaviour arrives before the removal does, and [`schema check`](#nen-schema-check) reports the leftover as shadowed until it happens. A file present in **both** with identical bytes is `skipped` (only the removal is left); one present in both with **different** bytes is `refused`, naming both paths, with no `--force` — two disagreeing taxonomies is not a merge nen can make.
+**The `schemas/` → `nen/` migration is a COPY.** Each of the four taxonomy files found only under `schemas/` is copied to `nen/`, the original is **left in place**, and the `git rm` line is printed for the caller to run (and only for a copy that actually happened). A legacy file that is a **symlink** is `refused` naming both paths: `copyFileSync` follows it, so nen would be copying whatever it points at into the repository under a taxonomy file's name and then telling the caller to stage it. A delete is not recoverable if some tool in the estate still reads the old path, and this verb's hook rule already established refuse-and-report over destroy; the `nen/` copy is [the only one anything ever reads](#taxonomy-as-data), so the new behaviour arrives before the removal does, and [`schema check`](#nen-schema-check) reports the leftover as a `warn` until it happens. A file present in **both** with identical bytes is `skipped` (only the removal is left); one present in both with **different** bytes is `refused`, naming both paths, with no `--force` — two disagreeing taxonomies is not a merge nen can make (`schema check`'s own `warn` does not make this distinction, because it no longer opens the `schemas/` copy at all — this verb still does, because it is the one that has to decide whether copying over the canonical file is safe).
 
 **`.gitignore` is APPENDED to, byte for byte.** The file's own bytes are written back unchanged and the appended lines match its own line ending, so a CRLF `.gitignore` is not silently rewritten wholesale. The action is `appended` (or `would-append` under `--dry-run`) rather than `created`, because the file was already there and the caller's own lines are still in it. **Two entries**, decided separately: `.nen/`, which is nen's own generated output, and the policy's `reports.dir` — read out of `nen/workflow.json` rather than assumed, so a repository that renamed it does not get the wrong line ignored in silence. A file that already carries one of the two gets the one it is missing, not a `skipped` row about the one it has.
 
@@ -3892,13 +3912,14 @@ proposes one.
 |---|---|
 | `project.lanes` | `{ "<lane>": { "stack": "<id>", "cwd": "<repo-relative>" } }`. A stack is a **per-lane** property: one repository is routinely several builds. |
 | `project.defaultLane` | Which lane `--lane` defaults to. `null` is legal and means `--lane` is required — even when there is exactly one lane, so a second lane arriving later cannot silently change what a scripted `nen shu build` builds. |
-| `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported), `artifacts` (repo-relative paths the verb produces, which nen reports and never creates) and `stall` (below). |
+| `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported), `artifacts` (repo-relative paths the verb produces, which nen reports and never creates) `stall` and `stdoutTo` (both below). |
 | `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `test`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. `--dry-run` prints it as an `on stall:` line under the step it guards. |
+| `stdoutTo` | On an invocation, or on one entry of its `steps`: the **repo-relative file** that step's stdout is written to. There is still no shell and no redirection **operator** — nen already captures a child's stdout, and this says to write those bytes to a file rather than relay them. It is the answer for a tool that **prints** the thing nen then parses (`xccov view --report --json` is the bundled example: `nen shu coverage` reads a *file*). Refused **at load** for a path that is absolute, carries a `..` segment, or carries a glob character (`*`, `?`, `[…]`) — nen expands nothing, so a glob would create a file with that character in its name; refused **at the run**, before anything spawns, when a directory is already at the path or a symlink would land the write outside the tree. Refused outright on `dev` and `run`: those hand the terminal to the child, so nen never sees their output. The file is written whatever the tool exited (a half report is what a redirect leaves), and **not** written for a step that could not start. That step's stdout does not also go to the terminal; its **stderr** still does. `--dry-run` prints `stdout -> <path>` on the step, the report lists every such file beside `artifacts`, and `--json` carries `steps[].stdoutTo`. It works on a step that also carries a `stall` guard: that step's output arrives from the streaming seam as chunks rather than as one buffer, so the chunks are held and joined rather than relayed. |
 | `project.preconditions` | `{ "<lane>": [ { kind, value, why } ] }`. Nen **asserts** these and **never performs** them. |
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
 | `project.targets` | `{ "<name>": { args, requiresEnv, unsupported, why } }` — the deploy destinations, and a **project-level** map rather than a per-lane one. `--target` must name a key of it, and there is no default — not even when there is exactly one. The **command** stays in `project.verbs.<lane>.deploy`, where every other verb's command is; a target says where that command sends it. `args` are appended to that argv, in order — refused on a multi-step row (which step reaches the destination is a guess), and refused, like any other argv, when they carry one of the reference pack's own placeholder tokens. `requiresEnv` names variables that must be **set**, asserted exactly as a precondition of kind `env` is — the value is never read, compared, logged or printed, so a credential belongs in the environment and never in this file; each entry is held to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) at load, because a name no environment could carry is a row that could only ever report `FAIL`. Repeats are collapsed, and a variable the lane's own preconditions already declare is asserted **once**. `unsupported` is the destination that has **no command line at all** (a hosting provider's own push integration, a CI action): exit 4 in the repository's own words, and the sentence is required rather than just the key. All four keys are optional; `{}` is a legal name-only target, and naming it is still mandatory. **Unknown keys are preserved** here as everywhere in this schema — with one exception: a key that misspells one of the four is **refused by pointer, naming the key it meant and which misspelling it is** — one letter out (`arg`, `requireEnv`), the same word in a different case (`Args`, `WHY`), or that key with an English plural on it — because preserving it means the flag was accepted, nothing was appended, and a different command deployed at exit 0. **Target names are the repository's own** and nen constrains them no more than it constrains a lane name: a name carrying a space or a leading `-` is legal, is listed verbatim in every refusal, and a leading `-` reaches `--target` only through the `--target=<name>` spelling. See [`nen shu deploy`](#nen-shu-deploy). |
 | `project.launch` | `{ "<name>": { verb, lane, args, artifact, device, after, unsupported, why } }` — the **launch** targets `nen shu dev` and `nen shu run` take, and a project-level map like `targets`. A different block and a different vocabulary: `targets` says where a build is **sent**, `launch` says which **device** a local run lands on. `--target` is **optional** here — a bare `dev` runs the lane's declared `dev`, as it always has — and a name this block does not carry is exit 2 listing the ones it does. `verb` is `dev` or `run`, required, out of a closed set: the two are different builds, so naming a `dev` target on `run` is exit 2 rather than a silent cross-over. `args` are appended to that verb's argv, refused on a multi-step row exactly as a deploy target's are, and refused at exit 2 when they name `{device.id}` or `{artifact}`: substitution reaches the target's `after` steps and nowhere else, so a token here is not unfillable but simply unfilled, and would reach the child process as itself. `device` is `{ name, kind, resolve }`: `name` is matched **exactly** against what the probe printed (never a prefix, never a case fold, never "the only one connected" — nen does not pick a device); `resolve` is a declared `{ exe, argv }` probe whose output nen searches, as JSON (a `name` property, with `identifier`/`id`/`udid`/`serial` from the same object, one of its direct children, or up to two enclosing objects) or as plain lines (the line carrying the name, and its first token of six-plus characters that carries a digit); `kind: "simulator"` with no probe resolves the id to the **name itself** and spawns nothing, while any other device with no probe is exit 2. A device the probe did not name is **exit 5 listing what it did offer**, and a name two id-bearing candidates carry is exit 5 naming both rather than a guess. `lane` is which lane that verb is read from, **optional**, and absent means the lane `--lane` named or, with no flag, `project.defaultLane` — it exists because a device build is routinely a different declared row from the one a developer iterates in, and a target that could not say so would install whatever the default lane produced; it must name a **declared** lane (refused by pointer at load, listing the ones that are) and an explicit `--lane` that disagrees with it is exit 2 naming both, because nen picks between two stated facts nowhere. It is read **before anything is rendered**, so a target whose own lane is the only one declaring the verb is reachable without retyping `--lane` — a lane the declaration overrode does not get to refuse the run first. `artifact` is the repo-relative path `{artifact}` stands for **instead of** the verb's first artifact, also optional: "the first artifact" is the right answer for the thing a lane *builds* and the wrong one for the thing a device *installs*, and a build routinely produces both. It is refused **outside the tree** (pointer `project.launch.<name>.artifact`, the same containment rule every declared path gets), refused as an empty string, and refused when **no after-step names `{artifact}`** — the key has one effect and a target that never writes the token has stated a path nothing reads. `after` is `[{ exe, argv }]` run once the verb exits 0, with `{device.id}` and `{artifact}` substituted — `{artifact}` is the **first** entry of the verb's own `artifacts` unless the target overrides it, and naming either token with nothing to fill it is exit 2 before anything spawns. `unsupported` is the target with **no command line at all** (a device farm's web console): exit 4 in the repository's own words, and it may not be declared beside anything that would be run. **Unknown keys are preserved** here as everywhere — except a key one spelling away from one nen reads (`arg`, `devices`, `resolver`, `verbs`, `lanes`, `artifacts`, and the block key itself as `launches` or `Launch`), which is **refused by pointer naming the key it meant and which misspelling it is** — one letter out, a case slip, or an English plural. See [`nen shu dev`](#nen-shu-dev). |
-| `project.evidence` | `{ globs, mechanism, scene, suiteSuffix }` — what [`shu evidence`](#nen-shu-evidence) matches a changed file against, **project-level** like `targets` rather than per-lane. `globs` (required, at least one) is a list of `*`/`**`/`?` patterns; `mechanism` (required) is one of `public-mirror` \| `files-changed` \| `embedded`, the repository's own answer to "how does a survivor reach a human" — `evidence` never mirrors, embeds or lists files itself, it only reports which mechanism a later step should use. `scene` (default `"{suite}-{scene}"`) and `suiteSuffix` (default `"SnapshotTests"`) are read by a later mirroring step, not by this release of `evidence` itself, which reports `suite` and `scene` as separate row fields. Refused by pointer, exactly as `targets` is and saying which misspelling it is, for a key that misspells one of the four. Absent block: exit 2 naming it. |
+| `project.evidence` | `{ globs, mechanism, scene, suiteSuffix }` — what [`shu evidence`](#nen-shu-evidence) matches a changed file against, **project-level** like `targets` rather than per-lane. `globs` (required, at least one) is a list of `*`/`**`/`?` patterns; `mechanism` (required) is one of `public-mirror` \| `files-changed` \| `embedded`, the repository's own answer to "how does a survivor reach a human" — `evidence` never mirrors, embeds or lists files itself, it only reports which mechanism a later step should use. `scene` (default `"{suite}-{scene}"`) and `suiteSuffix` (default `"SnapshotTests"`) are read by a later mirroring step, not by this release of `evidence` itself, which reports `suite` and `scene` as separate row fields. Refused by pointer, exactly as `targets` is and saying which misspelling it is, for a key that misspells one of the four — **and for a misspelling of the block key itself** (`evidences`, `Evidence`, `evidenc`), which no per-entry guard could catch: preserved as an unknown key it would be read by nobody, and this verb would refuse saying the repository declares no evidence block, about a file that plainly declares one. `launch`'s block key is guarded the same way; the older optional blocks (`targets`, `hosts`, `toolchain`, `profiles`) are deliberately **not**, because a declaration written against 0.3.0 may already park a near-miss key there. Absent block: exit 2 naming it. |
 
 **Preconditions are asserted, never performed.** A declaration saying
 `{ "kind": "path", "value": "node_modules" }` is telling nen that a dependency
@@ -3910,13 +3931,15 @@ postinstall scripts. This release asserts two kinds:
 |---|---|---|
 | `path` | one repo-root-relative path | the entry exists (a dangling symlink, or a path nen cannot `lstat` at all, counts as present-and-broken, not absent) |
 | `env` | one variable **name**, held at load to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) | the variable is set. Its value is never read, compared or printed. `NAME=value`, `A B` and `--flag` are refused by pointer when the file loads rather than reported `FAIL` forever: a name no environment could carry is a check that cannot pass, which is a refusal wearing a check's clothes |
+| `port` | one port **number**, 1–65535, written as a JSON number (`3000`, not `"3000"`) — plus `expect`, which is **required** and is `listening` or `free` | nen opens a TCP connection to **`127.0.0.1:<port>`** and destroys it. `listening` is satisfied when the connection is **accepted**; `free` when it is **refused**. Nothing is read or written either way, and the host is not a parameter — a declaration cannot make nen connect anywhere else. A connect that neither completes nor is refused within 500 ms is `satisfied: null` — *cannot assert* — and refuses at exit 2 like every other unassertable row: "nothing answered in time" is not "nothing is there". `expect` on any other kind is refused by pointer rather than silently dropped |
 
 A kind nen cannot assert is reported as `satisfied: null` — *"cannot assert"* —
 and **refuses at exit 2**. It is never reported as a pass: a check that could
 not be performed must never render as one that came back clean. That covers a
-kind this release does not know **and** a kind it does know stated as a *list*
-of values: `{"kind": "path", "value": ["a", "b"]}` is not a path, and reading
-the first element would be nen guessing which one the declaration meant.
+kind this release does not know, a `port` whose probe **timed out**, **and** a
+kind it does know stated as a *list* of values: `{"kind": "path", "value":
+["a", "b"]}` is not a path, and reading the first element would be nen guessing
+which one the declaration meant.
 
 **Every path a declaration states is relative to the repository root**, and one
 that resolves outside it — a lane `cwd` of `../..`, a precondition path of
@@ -3944,8 +3967,12 @@ preconditions, exitCode, durationMs, artifacts, log, proof }`. `contract` is
 appended to the argv, and the variable names it requires. Never a value of one.
 `steps[].exitCode` is the **tool's** own code and is `null` when nothing was
 run — which is how a `--json` reader tells a dry run from a real one; `exitCode`
-is nen's. Under `--json` a step's own output is relayed to **stderr**, so stdout
-stays exactly one document.
+is nen's. `steps[].stdoutTo` is the repo-relative file that step's stdout goes
+to, or `null`. `preconditions[].expect` is `listening`/`free` on a `port` row
+and `null` on every other kind — the verdict is meaningless without it. Under
+`--json` a step's own output is relayed to **stderr**, so stdout stays exactly
+one document; a step with `stdoutTo` sends its stdout to the file instead, and
+only its stderr is relayed.
 
 `steps[].stall` is `null` unless that step declares a guard, and otherwise
 `{ elapsedMs, quietMs, maxStrikes, onStall, strikes, at, stalled }` — the
@@ -7135,7 +7162,7 @@ rather than the reader. See [per-stack notes](#nen-shu-detect) under
 | dev (debug run) | **yes — any lane that declares one** | [`shu dev`](#nen-shu-dev) | Starts the lane's declared debug process, long-running, on this terminal. Nen still starts no simulator, emulator, device or daemon of its own. |
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. It is `compose-desktop`'s **only** row — `{gw} run`, the one invocation that lane has, which `detect` proposes end to end. On `expo` it is the verb that *builds and launches* a native lane, which is why `detect` proposes no `build` there and withholds `run` itself until the declaration names a platform — `expo run:{platform}` unedited is exit **2**. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
 | deploy | **the verb exists; `--target` and `--run` are both mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`, with the target's own `args` appended and the variables its `requiresEnv` names asserted (never read). Two flags and no single-flag path to acting: there is no default target, ever, and without `--run` the verb prints the fully resolved plan and spawns nothing at exit 0. The destination is resolved **after** the lane, the verb and the host, so a lane whose `deploy` is a seat answers exit 4 with its own reason whatever `--target` says, while a runnable row with no target is exit 2 naming what is declared. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push, proposed only where the tree declares the publishing tool); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. `detect` proposes `"targets": {}` on every stack and a destination on none. |
-| coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s two-step row is withheld naming the **simulator**, not the result bundle: the bundle path is the one value `detect` contributes rather than reads (it is an *output*, and nen's own generated output lives under `.nen/`). The note says so, and says four more things a maintainer would otherwise meet as a failure — the path is **lane-relative** (an `ios/` lane writes `ios/.nen/`); `.nen/` is the line [`nen scaffold init`](#nen-scaffold-init) appends to your `.gitignore`, so a repository stood up another way must ignore it itself; `xcodebuild` **refuses an existing `-resultBundlePath`**, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value carries something per-run; and the value must move in every step of the row at once. **The bundle is not the report.** When you fill that row in, the path to declare under `project.verbs.<lane>.coverage.artifacts` is the file the *second* step's JSON lands in — `xcrun xccov view --report --json` writes to stdout, so redirect it, and give the file a name with `xccov` in it — because an `.xcresult` is a **directory** and the coverage reader recognises a report by its name. What a run produced is then **parsed**: nen reads the first path under the verb's own `artifacts` whose format it recognises — the Istanbul/Vitest JSON summary, `xccov` JSON, Cobertura XML, JaCoCo XML, LCOV — into a total and a row per target, and refuses a report it cannot honestly read (truncated, or claiming more covered lines than lines) by name rather than printing a plausible number for it. `--threshold` reports `met` against the **counts** and never changes the exit code, in either direction. |
+| coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s two-step row is withheld naming the **simulator**, not the result bundle: the bundle path is the one value `detect` contributes rather than reads (it is an *output*, and nen's own generated output lives under `.nen/`). The note says so, and says four more things a maintainer would otherwise meet as a failure — the path is **lane-relative** (an `ios/` lane writes `ios/.nen/`); `.nen/` is the line [`nen scaffold init`](#nen-scaffold-init) appends to your `.gitignore`, so a repository stood up another way must ignore it itself; `xcodebuild` **refuses an existing `-resultBundlePath`**, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value carries something per-run; and the value must move in every step of the row at once. **The bundle is not the report.** When you fill that row in, the path to declare under `project.verbs.<lane>.coverage.artifacts` is the file the *second* step's JSON lands in — `xcrun xccov view --report --json` writes to stdout, so give that step a `stdoutTo` naming the same path (nen writes the captured bytes itself; there is no shell and no redirection operator), and give the file a name with `xccov` in it — because an `.xcresult` is a **directory** and the coverage reader recognises a report by its name. What a run produced is then **parsed**: nen reads the first path under the verb's own `artifacts` whose format it recognises — the Istanbul/Vitest JSON summary, `xccov` JSON, Cobertura XML, JaCoCo XML, LCOV — into a total and a row per target, and refuses a report it cannot honestly read (truncated, or claiming more covered lines than lines) by name rather than printing a plausible number for it. `--threshold` reports `met` against the **counts** and never changes the exit code, in either direction. |
 | host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. |
 | start a piece of work (clean, fetch, branch, prove it builds) | **yes — the git half everywhere, the build half where a lane declares one** | [`shu warmup`](#nen-shu-warmup) | One line for the five things a developer does by hand at the start of every task: refuse (or, with `--discard`, destroy) uncommitted work, fetch, fast-forward the trunk, cut the branch **you** name from its fresh tip, then run the lane's declared `build` — and its `test` with `--tests`. The **only** `shu` verb that mutates git state, so `--repo` is required and every step refuses rather than guessing; `--dry-run` prints every git and toolchain command and runs none of them. A repository with no `project` block still gets the git half and exits 0. Not [`warmup`](#nen-warmup), which sweeps a registry for stale pins and reads only. |
 | report on a piece of work | **yes — the facts and the fill** | [`report data`](#nen-report-data), [`report render`](#nen-report-render) | `report data` gathers what is on the branch against a base — commits, changed files (with a tier from your own `--tiers` table), the lane's coverage report **if one is already on disk**, the build proof under `.nen/proof/<lane>.json`, the last recorded stop — into one document, reading and never writing. `report render` fills a template with it: four constructs and nothing else, an unknown token refused **naming it** rather than published as a blank cell, and `--out` refused unless it resolves inside the repository with symlinks resolved. It never runs the coverage command — [`shu coverage`](#nen-shu-coverage) is the verb that produces the report this one reads, and both parse it with the same reader. `evidence` is an empty list until `nen shu evidence` lands; the field ships now so a template written today does not change shape when it does. |

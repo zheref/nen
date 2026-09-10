@@ -3,6 +3,7 @@ import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { Seams } from "../seam/exec.js";
 import { colorCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 // NEVER `defaultSeams()` HERE (review finding, see ../board/command.test.ts's
 // own note): a `run` that throws turns a future regression -- this family
@@ -14,6 +15,7 @@ const STUB_SEAMS: Seams = {
   },
   now: (): Date => new Date("2026-01-01T00:00:00Z"),
   env: {},
+  probePort: noPortProbe,
   runInteractive: (): never => {
     throw new Error("this verb has no interactive form");
   },

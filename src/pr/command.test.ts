@@ -9,6 +9,7 @@ import type { Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
 import { prCommand } from "./command.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 /** A throwaway file, for edit-body's --body-file. */
 function tempFile(name: string, contents: string): string {
@@ -27,6 +28,7 @@ const STUB_SEAMS: Seams = {
   },
   now: (): Date => new Date("2026-01-01T00:00:00Z"),
   env: {},
+  probePort: noPortProbe,
   runInteractive: (): never => {
     throw new Error("this verb has no interactive form");
   },

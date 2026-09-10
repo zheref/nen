@@ -15,11 +15,32 @@ import {
   type CommandResult,
   type InteractiveResult,
   type InteractiveRunner,
+  type PortProbe,
+  type PortVerdict,
   type Runner,
   type Seams,
   type StreamedResult,
   type StreamedRunner,
 } from "./exec.js";
+/**
+ * The port probe for a family that never opens one, which is every family but
+ * `shu`.
+ *
+ * IT THROWS RATHER THAN ANSWERING, for the reason ../seam/exec.ts's header
+ * gives about every member of `Seams`: a seam nobody has to provide is a seam a
+ * test can silently fall through to the real one on. A verb that reached for
+ * the network in a suite that never expected it is the finding, and a stub that
+ * quietly answered `refused` would hide it.
+ *
+ * SHARED SO THE STUB IS ONE SENTENCE IN ONE PLACE. Thirty test files build a
+ * `Seams` literal for a family whose verbs only shell out; thirty copies of a
+ * throwing lambda would be thirty chances to write one that returns instead.
+ */
+export const noPortProbe: PortProbe = (port): Promise<PortVerdict> => {
+  throw new Error(
+    `this family never probes a port, and something asked for 127.0.0.1:${port}. A verb that reached for the network here is the finding -- use ScriptedSeams with a 'ports' table if it is meant to.`,
+  );
+};
 
 /**
  * ONE MOMENT IN A WATCHED CHILD'S LIFE, on a clock the test owns.
@@ -102,10 +123,20 @@ export interface RecordedRun {
 
 export class ScriptedSeams implements Seams {
   readonly calls: RecordedRun[] = [];
+  /**
+   * Every port this run probed, in order, whether or not it was scripted.
+   *
+   * RECORDED FOR `calls`'s REASON: a verb that probed a port nobody declared,
+   * or probed one twice, is the finding -- and the port number never reaches
+   * the argv table above, so a flat list of subprocess calls could not show it.
+   */
+  readonly probedPorts: number[] = [];
   readonly now: () => Date;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly platform: NodeJS.Platform;
   private readonly script: readonly ScriptedCall[];
+  /** The verdict this fixture gives each port. An unlisted port throws. */
+  private readonly ports: Readonly<Record<number, PortVerdict>>;
   /** How many times each command line has been answered, for `find`'s ordering. */
   private readonly answered = new Map<string, number>();
 
@@ -121,12 +152,21 @@ export class ScriptedSeams implements Seams {
        * therefore proves the same thing on all three CI lanes.
        */
       platform?: NodeJS.Platform;
+      /**
+       * What a TCP connect to each port answers. A port not listed here throws
+       * on probe, exactly as an unscripted subprocess does: a verb that reached
+       * for the network without a fixture saying so is the finding, and falling
+       * through to a real connect would make the test's verdict depend on
+       * whatever else happens to be listening on the machine running it.
+       */
+      ports?: Readonly<Record<number, PortVerdict>>;
     } = {},
   ) {
     this.script = [...script];
     this.now = options.now ?? ((): Date => new Date("2026-01-01T00:00:00Z"));
     this.env = options.env ?? {};
     this.platform = options.platform ?? process.platform;
+    this.ports = options.ports ?? {};
   }
 
   /**
@@ -275,5 +315,22 @@ export class ScriptedSeams implements Seams {
       abandoned: false,
       durationMs: timeline.exitAtMs ?? last,
     };
+  };
+
+  /**
+   * The recorded port probe. No socket is opened and no timer is set: the
+   * fixture's table IS the answer, so a `listening` precondition and a `free`
+   * one are both provable on every CI lane and neither depends on what the host
+   * happens to be running.
+   */
+  probePort: PortProbe = async (port): Promise<PortVerdict> => {
+    this.probedPorts.push(port);
+    const verdict = this.ports[port];
+    if (verdict === undefined) {
+      throw new Error(
+        `unscripted port probe: 127.0.0.1:${port}. Add it to the fixture's 'ports' table, or fix the caller that probed it -- an unexpected probe is the finding, not the fixture's gap.`,
+      );
+    }
+    return verdict;
   };
 }

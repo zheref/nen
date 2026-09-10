@@ -45,6 +45,7 @@ import { scaffoldCommand } from "./command.js";
 import { MIGRATED_FILES, scaffoldInit, type ToolsOutcome } from "./init.js";
 import { postStepDir } from "./new.js";
 import { compareNenRefs, minimumNenRef } from "./templates.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 const TRAILERS = ["--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"];
 const HOOK = { agentTrailer: "X-Agent", runTrailer: "X-Run", markerEnvVar: "X_AUTOMATED" };
@@ -63,6 +64,7 @@ function refusingSeams(): Seams {
     run: (): CommandResult => {
       throw new Error("this invocation must spawn NOTHING");
     },
+    probePort: noPortProbe,
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },

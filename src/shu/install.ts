@@ -200,8 +200,10 @@ function corepackSteps(tool: string, version: string): readonly RenderedStep[] {
     // repositories in the design's inventory run the enabler as its own CI step
     // before the activation, because the activation fails on a host where the
     // shim was never turned on.
-    { exe: COREPACK, argv: ["enable"] },
-    { exe: COREPACK, argv: ["prepare", `${tool}@${version}`, "--activate"] },
+    // NEITHER REDIRECTS. `stdoutTo` belongs to a step a DECLARATION states;
+    // these two are nen's own, and an installer's output is relayed as it runs.
+    { exe: COREPACK, argv: ["enable"], stdoutTo: null },
+    { exe: COREPACK, argv: ["prepare", `${tool}@${version}`, "--activate"], stdoutTo: null },
   ];
 }
 

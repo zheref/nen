@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { watchUntil } from "./until.js";
+import { noPortProbe } from "../seam/scripted.js";
 
 // A Seams whose run() results come from a queue -- one per call -- so a test
 // can script "false, false, true" without a real subprocess or a real clock.
@@ -10,6 +11,7 @@ class QueueSeams implements Seams {
   readonly now = (): Date => new Date("2026-01-01T00:00:00Z");
   readonly env = {};
   readonly platform: NodeJS.Platform = "linux";
+  probePort: Seams["probePort"] = noPortProbe;
   runInteractive: Seams["runInteractive"] = (): never => {
     throw new Error("watch until never spawns an interactive child -- it observes");
   };

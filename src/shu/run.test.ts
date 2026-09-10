@@ -10,12 +10,21 @@
 // and the win32 one.
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import { PORT_PROBE_TIMEOUT_MS, type PortVerdict } from "../seam/exec.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { assertPreconditions, INTERACTIVE_VERBS } from "./run.js";
@@ -37,6 +46,14 @@ interface Options {
   readonly repo?: string;
   /** A clock that advances a second per read, for the duration assertions. */
   readonly ticking?: boolean;
+  /**
+   * What a TCP connect to each port answers. An unlisted port THROWS, exactly
+   * as an unscripted subprocess does -- so a verb that reached for the network
+   * without this table saying so is the finding rather than a silent pass, and
+   * no test's verdict depends on what the host running it happens to be
+   * listening on.
+   */
+  readonly ports?: Readonly<Record<number, PortVerdict>>;
 }
 
 interface Captured {
@@ -57,6 +74,7 @@ async function capture(argv: readonly string[], options: Options = {}): Promise<
   const seams = new ScriptedSeams(options.script ?? [], {
     env: options.env ?? { [TOKEN]: "a value no output may carry" },
     platform: options.platform ?? "linux",
+    ...(options.ports === undefined ? {} : { ports: options.ports }),
     now: (): Date =>
       new Date(Date.UTC(2026, 0, 1) + (options.ticking === true ? (tick += 1) * 1000 : 0)),
   });
@@ -399,6 +417,7 @@ describe("--json -- the pinned key order", () => {
       "exe",
       "argv",
       "cwd",
+      "stdoutTo",
       "exitCode",
       "durationMs",
       "stall",
@@ -468,10 +487,15 @@ describe("preconditions -- asserted and never performed", () => {
       preconditions: readonly { kind: string; value: string; satisfied: boolean | null }[];
     };
     expect(report.preconditions).toEqual([
-      { kind: "path", value: "deps", satisfied: true },
-      { kind: "env", value: TOKEN, satisfied: true },
+      { kind: "path", value: "deps", expect: null, satisfied: true },
+      { kind: "env", value: TOKEN, expect: null, satisfied: true },
     ]);
-    expect(Object.keys(report.preconditions[0] ?? {})).toEqual(["kind", "value", "satisfied"]);
+    expect(Object.keys(report.preconditions[0] ?? {})).toEqual([
+      "kind",
+      "value",
+      "expect",
+      "satisfied",
+    ]);
   });
 
   it("refuses at exit 2 when a declared path is not there, and spawns nothing", async () => {
@@ -501,6 +525,7 @@ describe("preconditions -- asserted and never performed", () => {
     expect(report.preconditions).toContainEqual({
       kind: "command",
       value: ["placeholder-probe", "--version"],
+      expect: null,
       satisfied: null,
     });
     expect(result.err.join("\n")).toMatch(/1 nen cannot assert/);
@@ -527,7 +552,7 @@ describe("preconditions -- asserted and never performed", () => {
       preconditions: readonly { kind: string; value: unknown; satisfied: boolean | null }[];
     };
     expect(report.preconditions).toEqual([
-      { kind: "path", value: ["deps", "other"], satisfied: null },
+      { kind: "path", value: ["deps", "other"], expect: null, satisfied: null },
     ]);
     expect(result.err.join("\n")).toMatch(/1 nen cannot assert/);
   });
@@ -674,22 +699,23 @@ function planWith(preconditions: readonly RenderedPrecondition[]): RenderedInvoc
 }
 
 describe("assertPreconditions asserts entry.pointer verbatim", () => {
-  it("a lane-shaped pointer, which already carries '.value'", () => {
+  it("a lane-shaped pointer, which already carries '.value'", async () => {
     const plan = planWith([
       {
         kind: "path",
         value: "../../etc/passwd",
+        expect: null,
         why: null,
         // What ./render.ts's `lanePreconditions` now builds: the leaf itself.
         pointer: "project.preconditions.only[0].value",
       },
     ]);
-    expect(() => assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).toThrow(
+    await expect(assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).rejects.toThrow(
       /^project\.preconditions\.only\[0\]\.value names '\.\.\/\.\.\/etc\/passwd'/,
     );
   });
 
-  it("a target-shaped pointer, appending nothing -- the regression this pins", () => {
+  it("a target-shaped pointer, appending nothing -- the regression this pins", async () => {
     // No real declaration produces a `path`-kind row at this address (a
     // target's `requiresEnv` is always `env`-kind); this constructs the shape
     // directly to prove the function's own contract, independent of what
@@ -698,13 +724,14 @@ describe("assertPreconditions asserts entry.pointer verbatim", () => {
       {
         kind: "path",
         value: "../../etc/passwd",
+        expect: null,
         why: null,
         // What ./render.ts's `resolveTarget` builds for a `requiresEnv` row:
         // already the leaf, with NO '.value' to append.
         pointer: "project.targets.production.requiresEnv[0]",
       },
     ]);
-    expect(() => assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).toThrow(
+    await expect(assertPreconditions(plan, SHU_REPO, new ScriptedSeams([]))).rejects.toThrow(
       /^project\.targets\.production\.requiresEnv\[0\] names '\.\.\/\.\.\/etc\/passwd'/,
     );
   });
@@ -1786,7 +1813,13 @@ describe("a launch dry run prints all three thirds and spawns nothing", () => {
     expect(report.target.verb).toBe("dev");
     expect(report.target.device).toEqual({ name: "Placeholder Handset Pro", kind: null, id: null });
     expect(report.target.after).toEqual([
-      { exe: "placeholder-installer", argv: ["install", "--device", "{device.id}"] },
+      {
+        exe: "placeholder-installer",
+        argv: ["install", "--device", "{device.id}"],
+        // AN AFTER-STEP NEVER REDIRECTS: the loader gives it no `stdoutTo` key
+        // to state, and it follows a verb that already owned this terminal.
+        stdoutTo: null,
+      },
     ]);
     expect(report.steps.map((step): string => step.exe)).toEqual([
       "placeholder-device-tool",
@@ -2493,6 +2526,455 @@ describe("a name two devices carry is a refusal, not a choice", () => {
     });
     expect(result.code).toBe(5);
     expect(result.err.join("\n")).toContain("matches 2 devices the probe reported");
+  });
+});
+
+// ── (i) stdoutTo -- the redirect this family has no shell for ───────────────
+//
+// The declaration says where a step's stdout goes; nen writes the bytes the
+// seam already captured. NOTHING here spawns a shell, and the pair of
+// assertions that matters is on both sides of the same fact: the file has the
+// child's output IN it, and the terminal does NOT.
+
+describe("stdoutTo writes a step's stdout to the declared file", () => {
+  /**
+   * A declaration in a temporary repository that OUTLIVES the run, so a test
+   * can read what was written. `withDeclaration` above deletes its tree in a
+   * `finally`, which is right for every refusal but useless for a verb whose
+   * whole subject is a file on disk.
+   */
+  async function inRepo(
+    project: unknown,
+    argv: readonly string[],
+    options: Options,
+    check: (root: string, result: Captured) => void,
+  ): Promise<void> {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({ $schema: "nen.contract/v0.1", project }),
+      );
+      check(dir, await capture(argv, { ...options, repo: dir }));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const REDIRECTED = { exe: "placeholder-tool", argv: ["report"], stdoutTo: "nen/out/report.json" };
+
+  it("writes the child's stdout, creating the parent directories", async () => {
+    await inRepo(
+      oneLane({}, REDIRECTED),
+      ["build"],
+      { script: [{ match: "placeholder-tool report", result: { code: 0, stdout: '{"total":91}\n' } }] },
+      (root, result) => {
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(root, "nen", "out", "report.json"), "utf8")).toBe('{"total":91}\n');
+      },
+    );
+  });
+
+  it("keeps that stdout OFF the terminal, and still relays stderr", async () => {
+    await inRepo(
+      oneLane({}, REDIRECTED),
+      ["build"],
+      {
+        script: [
+          {
+            match: "placeholder-tool report",
+            result: { code: 0, stdout: "THE-REPORT-BODY", stderr: "a warning" },
+          },
+        ],
+      },
+      (_root, result) => {
+        // The bytes went to the file, which is what a redirect MEANS; printing
+        // them as well would bury the report under the document nen was asked
+        // to file away.
+        expect(result.out.join("\n")).not.toContain("THE-REPORT-BODY");
+        expect(result.err.join("\n")).toContain("a warning");
+      },
+    );
+  });
+
+  it("says where it went: on the step's line, beside artifacts, and in log.why", async () => {
+    await inRepo(
+      oneLane({}, REDIRECTED),
+      ["build"],
+      { script: [{ match: "placeholder-tool report", result: { code: 0, stdout: "x" } }] },
+      (_root, result) => {
+        const text = result.out.join("\n");
+        expect(text).toMatch(/ran:\s+placeholder-tool report {2}stdout -> nen\/out\/report\.json/);
+        expect(text).toMatch(/stdout to:\s+nen\/out\/report\.json/);
+        expect(text).toContain("1 step declared 'stdoutTo'");
+        // PAST TENSE ON A REAL RUN, and the dry-run test below pins the other
+        // half: a dry run saying a file "was written" would claim the one thing
+        // a dry run promises not to do.
+        expect(text).toContain("its stdout was written to a file");
+      },
+    );
+  });
+
+  it("prints 'stdout -> <path>' on a DRY RUN and writes nothing", async () => {
+    await inRepo(
+      oneLane({}, REDIRECTED),
+      ["build", "--dry-run"],
+      {},
+      (root, result) => {
+        expect(result.code).toBe(0);
+        expect(spawned(result.seams)).toEqual([]);
+        expect(wouldRun(result.out)).toEqual([
+          "placeholder-tool report  stdout -> nen/out/report.json",
+        ]);
+        expect(existsSync(join(root, "nen", "out"))).toBe(false);
+        expect(result.out.join("\n")).toContain("its stdout would be written to a file");
+      },
+    );
+  });
+
+  it("carries stdoutTo per step in --json, null on the steps without it", async () => {
+    await inRepo(
+      oneLane({}, {
+        steps: [
+          { exe: "placeholder-tool", argv: ["test"] },
+          { exe: "placeholder-tool", argv: ["extract"], stdoutTo: "nen/out/xccov.json" },
+        ],
+      }),
+      ["build", "--dry-run", "--json"],
+      {},
+      (_root, result) => {
+        const report = JSON.parse(result.out.join("\n")) as {
+          steps: readonly { stdoutTo: string | null }[];
+        };
+        expect(report.steps.map((step): string | null => step.stdoutTo)).toEqual([
+          null,
+          "nen/out/xccov.json",
+        ]);
+      },
+    );
+  });
+
+  it("writes what the tool printed even when the tool FAILED", async () => {
+    // A redirect writes whatever the tool put on stdout, and a half-written
+    // report is exactly what a reader debugging the failure wants to open.
+    await inRepo(
+      oneLane({}, REDIRECTED),
+      ["build"],
+      { script: [{ match: "placeholder-tool report", result: { code: 3, stdout: "half a report" } }] },
+      (root, result) => {
+        expect(result.code).toBe(1);
+        expect(readFileSync(join(root, "nen", "out", "report.json"), "utf8")).toBe("half a report");
+      },
+    );
+  });
+
+  it("writes nothing for a step that could not be STARTED", async () => {
+    await inRepo(
+      oneLane({}, REDIRECTED),
+      ["build"],
+      { script: [{ match: "placeholder-tool report", result: { spawnFailed: true } }] },
+      (root, result) => {
+        expect(result.code).toBe(5);
+        expect(existsSync(join(root, "nen", "out", "report.json"))).toBe(false);
+      },
+    );
+  });
+
+  it("refuses at exit 2 when a DIRECTORY is already at the path, before spawning", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-dir-"));
+    try {
+      mkdirSync(join(dir, "nen", "out", "report.json"), { recursive: true });
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane({}, REDIRECTED) }),
+      );
+      const result = await capture(["build"], { repo: dir });
+      expect(result.code).toBe(2);
+      // NOTHING RAN. Discovering this after the tool had finished would mean
+      // spending the whole build to learn it.
+      expect(spawned(result.seams)).toEqual([]);
+      expect(result.err.join("\n")).toMatch(/a DIRECTORY is already there/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a path a SYMLINK redirects out of the tree, naming the link", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-link-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-shu-elsewhere-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      symlinkSync(elsewhere, join(dir, "nen", "out"), "dir");
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane({}, REDIRECTED) }),
+      );
+      const result = await capture(["build"], { repo: dir });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/is a symlink pointing at/);
+      expect(existsSync(join(elsewhere, "report.json"))).toBe(false);
+      expect(spawned(result.seams)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it("redirects only the step that declared it", async () => {
+    await inRepo(
+      oneLane({}, {
+        steps: [
+          { exe: "placeholder-tool", argv: ["test"] },
+          { exe: "placeholder-tool", argv: ["extract"], stdoutTo: "nen/out/xccov.json" },
+        ],
+      }),
+      ["build"],
+      {
+        script: [
+          { match: "placeholder-tool test", result: { code: 0, stdout: "ON-THE-TERMINAL" } },
+          { match: "placeholder-tool extract", result: { code: 0, stdout: "IN-THE-FILE" } },
+        ],
+      },
+      (root, result) => {
+        expect(result.out.join("\n")).toContain("ON-THE-TERMINAL");
+        expect(result.out.join("\n")).not.toContain("IN-THE-FILE");
+        expect(readFileSync(join(root, "nen", "out", "xccov.json"), "utf8")).toBe("IN-THE-FILE");
+      },
+    );
+  });
+
+  it("names the STEP's own pointer when a multi-step row's redirect is unwritable", async () => {
+    // A refusal naming `project.verbs.only.build.stdoutTo` for a key that is
+    // really at `…steps[1].stdoutTo` sends a reader to a file position that
+    // does not exist. The pointer is carried from the renderer for exactly this.
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-ptr-"));
+    try {
+      mkdirSync(join(dir, "nen", "out", "second.json"), { recursive: true });
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({
+          $schema: "nen.contract/v0.1",
+          project: oneLane({}, {
+            steps: [
+              { exe: "placeholder-tool", argv: ["first"] },
+              { exe: "placeholder-tool", argv: ["second"], stdoutTo: "nen/out/second.json" },
+            ],
+          }),
+        }),
+      );
+      const result = await capture(["build"], { repo: dir });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("project.verbs.only.build.steps[1].stdoutTo");
+      expect(result.err.join("\n")).not.toContain("project.verbs.only.build.stdoutTo");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses at exit 2, not a stack trace, when an ANCESTOR of the path is a file", async () => {
+    // The write a few steps later is certain to fail, and the two platforms do
+    // not agree about how: POSIX `lstat` throws ENOTDIR, Windows says the path
+    // is simply not there. Walking up the path asks a question both can answer,
+    // so the refusal is the same sentence on all three CI lanes -- and it is a
+    // refusal rather than a crash mid-run.
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-enotdir-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      // `nen/out` is a FILE, and the declaration writes `nen/out/report.json`.
+      writeFileSync(join(dir, "nen", "out"), "not a directory");
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane({}, REDIRECTED) }),
+      );
+      const result = await capture(["build"], { repo: dir });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(
+        /'nen\/out' -- an ancestor of it -- is a FILE rather than a directory/,
+      );
+      expect(spawned(result.seams)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("redirects a WATCHED step too, holding its stdout off the terminal", async () => {
+    // The two seams write the file the same way. A step with a stall guard goes
+    // through the STREAMING seam, where output arrives as chunks rather than as
+    // one buffer at the end -- so the chunks are held and joined instead of
+    // being relayed line by line, and the file gets the child's own bytes with
+    // the one normalisation the captured path already applies.
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stdout-watched-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({
+          $schema: "nen.contract/v0.1",
+          project: oneLane({}, {
+            exe: "placeholder-tool",
+            argv: ["go"],
+            stdoutTo: "nen/out/watched.json",
+            stall: {
+              elapsedMs: 180_000,
+              quietMs: 60_000,
+              onStall: { exe: "placeholder-killer", argv: ["-9"] },
+            },
+          }),
+        }),
+      );
+      const result = await capture(["build"], {
+        repo: dir,
+        script: [
+          {
+            match: "placeholder-tool go",
+            result: {
+              code: 0,
+              stream: {
+                events: [
+                  { atMs: 10, stream: "stdout", text: '{"exec' },
+                  { atMs: 20, stream: "stdout", text: 'utableLines": 4}\r\n' },
+                  { atMs: 30, stream: "stderr", text: "a warning\n" },
+                ],
+              },
+            },
+          },
+        ],
+      });
+      expect(result.code).toBe(0);
+      // JOINED ACROSS CHUNKS and EOL-normalised over the whole text -- a `\r\n`
+      // can straddle two of them, which is why the seam does not normalise per
+      // chunk and this does not either.
+      expect(readFileSync(join(dir, "nen", "out", "watched.json"), "utf8")).toBe(
+        '{"executableLines": 4}\n',
+      );
+      expect(result.out.join("\n")).not.toContain("executableLines");
+      expect(result.err.join("\n")).toContain("a warning");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("says '(none declared)' beside artifacts when no step redirects", async () => {
+    const result = await capture(["build", "--dry-run"]);
+    expect(result.out.join("\n")).toMatch(/stdout to:\s+\(none declared\)/);
+  });
+});
+
+// ── (j) the `port` precondition ────────────────────────────────────────────
+//
+// The one precondition that reaches the network, and it reaches loopback only.
+// Every verdict below comes from the seam's own table, so both directions are
+// provable on every CI lane and nothing depends on what this host is running.
+
+describe("a precondition of kind 'port'", () => {
+  function portLane(port: number, expected: "listening" | "free"): Readonly<Record<string, unknown>> {
+    return oneLane({
+      preconditions: { only: [{ kind: "port", value: port, expect: expected, why: "the API" }] },
+    });
+  }
+
+  it("is satisfied by an accepted connection when it expects 'listening'", async () => {
+    const result = await withDeclaration(portLane(3000, "listening"), ["build"], {
+      script: [ok("placeholder-tool go")],
+      ports: { 3000: "open" },
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual(["placeholder-tool go"]);
+    expect(result.seams.probedPorts).toEqual([3000]);
+    expect(result.out.join("\n")).toMatch(/ok\s+port\s+3000 \(expect listening\)/);
+  });
+
+  it("refuses at 2 when it expects 'listening' and the connection is refused", async () => {
+    const result = await withDeclaration(portLane(3000, "listening"), ["build"], {
+      ports: { 3000: "refused" },
+    });
+    expect(result.code).toBe(2);
+    expect(spawned(result.seams)).toEqual([]);
+    expect(result.out.join("\n")).toMatch(/FAIL\s+port\s+3000 \(expect listening\) -- the connection was refused/);
+  });
+
+  it("is satisfied by a REFUSED connection when it expects 'free'", async () => {
+    const result = await withDeclaration(portLane(5173, "free"), ["build"], {
+      script: [ok("placeholder-tool go")],
+      ports: { 5173: "refused" },
+    });
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/ok\s+port\s+5173 \(expect free\)/);
+  });
+
+  it("refuses at 2 when it expects 'free' and something is listening", async () => {
+    const result = await withDeclaration(portLane(5173, "free"), ["build"], {
+      ports: { 5173: "open" },
+    });
+    expect(result.code).toBe(2);
+    expect(result.out.join("\n")).toMatch(/FAIL\s+port\s+5173 \(expect free\) -- something is listening on it/);
+  });
+
+  it("reports a TIMEOUT as 'cannot assert' -- never as a pass, and never as free", async () => {
+    // Nothing answered in time: a dropped SYN, a loaded host, a listener that
+    // accepted and went quiet. That is the ABSENCE of a fact, and reporting it
+    // as "the port is free" would be the same lie as reporting an unperformed
+    // check as a clean one.
+    for (const expected of ["listening", "free"] as const) {
+      const result = await withDeclaration(portLane(9999, expected), ["build", "--json"], {
+        ports: { 9999: "timeout" },
+      });
+      expect(result.code, expected).toBe(2);
+      expect(spawned(result.seams), expected).toEqual([]);
+      const report = JSON.parse(result.out.join("\n")) as {
+        preconditions: readonly { satisfied: boolean | null }[];
+      };
+      expect(report.preconditions[0]?.satisfied, expected).toBeNull();
+      expect(result.err.join("\n"), expected).toMatch(/1 nen cannot assert/);
+    }
+  });
+
+  it("names the timeout window rather than pretending to a verdict", async () => {
+    const result = await withDeclaration(portLane(9999, "free"), ["build"], {
+      ports: { 9999: "timeout" },
+    });
+    expect(result.out.join("\n")).toContain(
+      `neither completed nor was refused within ${PORT_PROBE_TIMEOUT_MS}ms`,
+    );
+  });
+
+  it("carries the direction into --json, where the verdict is meaningless without it", async () => {
+    const result = await withDeclaration(portLane(3000, "listening"), ["build", "--dry-run", "--json"], {
+      ports: { 3000: "open" },
+    });
+    const report = JSON.parse(result.out.join("\n")) as {
+      preconditions: readonly { kind: string; value: number; expect: string; satisfied: boolean }[];
+    };
+    expect(report.preconditions).toEqual([
+      { kind: "port", value: 3000, expect: "listening", satisfied: true },
+    ]);
+  });
+
+  it("is asserted on a DRY RUN too, exactly as path and env are", async () => {
+    // A dry run asserts every precondition and spawns nothing; a port row is
+    // not an exception, because "would this run?" is the question a dry run
+    // exists to answer.
+    const result = await withDeclaration(portLane(3000, "listening"), ["build", "--dry-run"], {
+      ports: { 3000: "open" },
+    });
+    expect(result.code).toBe(0);
+    expect(result.seams.probedPorts).toEqual([3000]);
+    expect(spawned(result.seams)).toEqual([]);
+  });
+
+  it("cannot assert a port stated as a LIST, and says so rather than guessing", async () => {
+    const result = await withDeclaration(
+      oneLane({
+        preconditions: { only: [{ kind: "port", value: ["3000", "3001"], expect: "free" }] },
+      }),
+      ["build"],
+      {},
+    );
+    expect(result.code).toBe(2);
+    // NOTHING WAS PROBED: nen does not pick one element of a list.
+    expect(result.seams.probedPorts).toEqual([]);
+    expect(result.out.join("\n")).toContain("nen cannot assert a precondition of kind 'port'");
   });
 });
 
