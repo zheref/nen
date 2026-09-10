@@ -39,6 +39,7 @@ import { basename } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
+import { proofRelativePath } from "../shu/proof.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
 import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
@@ -348,10 +349,14 @@ export function readJsonArtifact(absolute: string, display: string, warn: (line:
  * declaration". Exit 2, naming it.
  */
 export function proofPath(root: string, lane: string): string {
-  const absolute = containedPath(root, `.nen/proof/${lane}.json`);
+  // WHERE A PROOF LIVES IS ../shu/proof.ts's FACT, not this file's. That module
+  // writes the file (`nen shu build`) and `nen commit check` reads it; a second
+  // spelling of the path here would be a second answer the day it moves. Only
+  // the refusal is this verb's own, because it names THIS verb's flag.
+  const absolute = containedPath(root, proofRelativePath(lane));
   if (absolute === null) {
     throw new VerbUsageError(
-      `--lane '${lane}' resolves outside the repository (the build proof would be read from '.nen/proof/${lane}.json'). A lane is a key in this repository's own declaration, not a path.`,
+      `--lane '${lane}' resolves outside the repository (the build proof would be read from '${proofRelativePath(lane)}'). A lane is a key in this repository's own declaration, not a path.`,
     );
   }
   return absolute;
@@ -478,7 +483,7 @@ export function assembleData(
     proof:
       options.lane === null
         ? null
-        : readJsonArtifact(proofPath(root, options.lane), `.nen/proof/${options.lane}.json`, warn),
+        : readJsonArtifact(proofPath(root, options.lane), proofRelativePath(options.lane), warn),
     /* c8 ignore next -- containedPath cannot reject a literal relative path */
     lastStop: lastStop === null ? null : readJsonArtifact(lastStop, ".nen/last-stop.json", warn),
   };

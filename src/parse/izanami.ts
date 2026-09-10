@@ -990,7 +990,22 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   color: { subcommands: { status: RO("resolves a colour by the repository's own precedence") } },
-  commit: { subcommands: { format: RO("formats and validates a message; never runs git commit") } },
+  commit: {
+    subcommands: {
+      format: RO("formats and validates a message; never runs git commit"),
+      // READ-ONLY, WITH THE WHOLE OF WHAT IT DOES STATED. It reads
+      // `.nen/proof/<lane>.json` and hashes the working copy through git
+      // plumbing -- `git add -A` into a SCRATCH index it removes, then
+      // `git write-tree`. The repository's own index is not read or written, no
+      // ref moves, and no tracked file changes; the unreferenced objects git
+      // writes for file contents are what `git status` already writes, and gc
+      // collects them. Nothing a later reader observes as a change, which is
+      // what this table's read-only row means.
+      check: RO(
+        "reads a lane's build proof and hashes the working copy through git plumbing (a scratch index, never the repository's own); it writes no file, moves no ref and refuses no commit",
+      ),
+    },
+  },
   dev: { subcommands: { test: DEV_FORWARDING_CHECKER, lint: DEV_FORWARDING_CHECKER, replay: DEV_CHECKER } },
   effort: { subcommands: { classify: RO("classifies an effort -- pure computation") } },
   epic: { subcommands: { "next-wave": GATED(["--out"], "writes the rewritten body to --out") } },

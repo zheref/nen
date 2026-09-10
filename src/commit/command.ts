@@ -20,6 +20,9 @@ import { assertRepoRoot } from "../repo/root.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadWorkflow, trailerRefusal, WORKFLOW_FILE } from "../schema/workflow.js";
+import { PROGRAM } from "../version.js";
+import { proofRelativePath } from "../shu/proof.js";
+import { runCheck } from "./check.js";
 import {
   COMMIT_TYPES,
   formatCommitMessage,
@@ -38,12 +41,14 @@ function parseTrailers(value: string | undefined): readonly Trailer[] {
   });
 }
 
-const USAGE = `nen commit format -- Conventional Commits formatting, tensho §4.
+const USAGE = `nen commit -- Conventional Commits formatting (tensho §4), and the
+build-proof check that says whether this tree is the one a build proved.
 
 usage:
   nen commit format --type feat --subject "a short imperative subject"
                     [--scope <scope>] [--breaking] [--body "paragraph one"]
                     [--trailer key=value,key2=value2] [--repo <path>]
+  nen commit check  --repo <path> --require-proof <lane> [--json]
 
   --type      one of ${COMMIT_TYPES.join(", ")}
   --body      one paragraph. Repeat --body is not supported by this parser
@@ -69,7 +74,23 @@ commit -- plus every key the file's own 'commits.forbiddenTrailers' adds.
 Matching ignores case, because every tool that reads the finished commit does.
 With NO workflow file, nothing is refused and this verb behaves exactly as it
 always has. A workflow file that is present and MALFORMED is exit 1, naming the
-pointer: nen will not shape a message under a policy it could not read.`;
+pointer: nen will not shape a message under a policy it could not read.
+
+'check' ANSWERS ONE QUESTION: is this working copy the one a green build proved?
+'${PROGRAM} shu build' records ${proofRelativePath("<lane>")} when every step
+exits 0 -- the lane, the moment, and the git TREE it built -- and removes it when
+the build comes out red, so a proof never outlives the tree it proved.
+--require-proof <lane> reads that file and compares its tree against this
+working copy's, computed the same way (a scratch index, never yours: git add -A
+then git write-tree, with .nen/ excluded).
+
+  exit 0  the proof is there, it is for that lane, and its tree is this tree
+  exit 1  one of the three differences, named: there is no proof, it records a
+          different lane, or the tree has moved since the build
+  exit 2  --require-proof or --repo missing, or a lane that escapes the tree
+
+It READS AND DECIDES NOTHING ELSE: no commit is refused, no file is written, no
+ref moves. Read the code and decide, as with 'shu coverage --threshold'.`;
 
 /**
  * Every trailer this invocation carries that the repository's policy refuses.
@@ -110,16 +131,43 @@ function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): 
   return refusals;
 }
 
+/**
+ * WHAT EACH SUBCOMMAND CONSUMES, on ../shu/command.ts's pattern and for its
+ * reason: a family shares one flag spec, so `nen commit check --breaking` would
+ * otherwise parse cleanly and be silently ignored -- and the ignored thing is
+ * the instruction somebody gave.
+ */
+const COMMIT_SUBCOMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  format: ["type", "scope", "subject", "body", "trailer", "breaking"],
+  check: ["require-proof"],
+};
+
+const COMMIT_FLAGS = {
+  values: ["type", "scope", "subject", "body", "trailer", "require-proof"],
+  booleans: ["breaking"],
+};
+
+function refuseForeignFlags(subcommand: string, context: CommandContext): void {
+  const mine = COMMIT_SUBCOMMAND_FLAGS[subcommand] ?? [];
+  const all = [...COMMIT_FLAGS.values, ...COMMIT_FLAGS.booleans];
+  const foreign = [...Object.keys(context.args.values), ...context.args.booleans].filter(
+    (flag): boolean => all.includes(flag) && !mine.includes(flag),
+  );
+  if (foreign.length === 0) return;
+  throw new VerbUsageError(
+    `--${foreign.sort().join(", --")} ${foreign.length === 1 ? "is" : "are"} not read by 'commit ${subcommand}'. A flag accepted and ignored is worse than one refused: the ignored thing is the instruction you gave.`,
+  );
+}
+
 export const commitCommand: Command = {
   name: "commit",
-  summary: "Format and validate a Conventional Commits message.",
+  summary: "Format a Conventional Commits message; check a lane's build proof.",
   usage: USAGE,
-  flags: {
-    values: ["type", "scope", "subject", "body", "trailer"],
-    booleans: ["breaking"],
-  },
+  flags: COMMIT_FLAGS,
   run(context: CommandContext): number {
-    requireSubcommand("commit", context.args, ["format"]);
+    const subcommand = requireSubcommand("commit", context.args, ["format", "check"]);
+    refuseForeignFlags(subcommand, context);
+    if (subcommand === "check") return runCheck(context);
     const type = context.args.values["type"] as CommitType | undefined;
     if (type === undefined) throw new VerbUsageError("--type is required.");
     const subject = context.args.values["subject"];
