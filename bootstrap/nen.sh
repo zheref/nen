@@ -32,7 +32,8 @@
 # verify, because its caller's next act is to EXECUTE that path.
 #
 # Decision logic lives in small argument-taking functions (artifact_for_host,
-# expected_sha, checksum_matches, cache_path, cache_is_valid, verify_or_reject);
+# expected_sha, checksum_matches, cache_slug, cache_path, cache_is_valid,
+# verify_or_reject);
 # main() does the uname, the network and the mv. The split is deliberate: the
 # predicates are then exercisable with no network, which matters here more than
 # usual because this file cannot be covered by the vitest harness that covers
@@ -345,38 +346,58 @@ verify_or_reject() {
   echo "nen bootstrap: SHA-256 MISMATCH for ${label}." >&2
   echo "nen bootstrap:   expected ${expected}" >&2
   echo "nen bootstrap:   actual   ${actual}" >&2
-  echo "nen bootstrap: the downloaded file has been DELETED and nothing was executed. A checksum-unverified download is not an acceptable end state — it converts a source-pinned supply chain into an unpinned one (zheref/bankai-core#740). Re-run to retry; if it mismatches again, the release assets and the SHA256SUMS published beside them disagree, and that is a supply-chain incident, not a flake." >&2
+  # The sentence quoted here is the upstream incident's, cited by name in this
+  # file's header where a maintainer reads it. It is NOT repeated in the emitted
+  # text: src/taxonomy-purity.test.ts sweeps this file now, and a refusal message
+  # is exactly where the name of a system nen serves survives a value-level sweep
+  # (zheref/nen#6 item 1). The reader of the message needs the rule, not the
+  # incident number of a repository they have no access to.
+  echo "nen bootstrap: the downloaded file has been DELETED and nothing was executed. A checksum-unverified download is not an acceptable end state — it converts a source-pinned supply chain into an unpinned one. Re-run to retry; if it mismatches again, the release assets and the SHA256SUMS published beside them disagree, and that is a supply-chain incident, not a flake." >&2
   return "$EXIT_CHECKSUM"
 }
 
-# --- cache_path CACHE_ROOT REF ARTIFACT ---------------------------------------
-# Echo the stable location a verified binary for REF is kept at. Pure string
-# work: it creates nothing and touches nothing, so a caller can ask where a
-# binary WOULD live without side effects.
+# --- cache_slug VALUE ---------------------------------------------------------
+# One path segment, safe to interpolate, derived from an argument this script
+# does not control.
 #
-# Keyed by REF, so two consumers pinned to different nen tags coexist instead of
-# overwriting one another — which is exactly what a source-pinned supply chain
-# means when applied to a binary.
-#
-# REF IS SANITIZED because it arrives from a consumer's pin and is interpolated
-# into a filesystem path. A tag (`v0.1.0`) is harmless, but the same input
-# accepts a branch (`bootstrap/1-scaffold`, which would silently nest the cache)
-# and would accept `../../../.ssh` from a caller that built it from untrusted
-# input. A cache path is not a place to extend trust to an argument.
-cache_path() {
-  local root="${1:-}" ref="${2:-}" artifact="${3:-}" safe_ref
-
-  # Anything outside [A-Za-z0-9._-] becomes '_'. `tr -c` complements the set; the
-  # trailing '-' inside the set is literal.
-  safe_ref="$(printf '%s' "$ref" | tr -c 'A-Za-z0-9._-' '_')"
-  # Dots survive the pass above (tags need them), so `..` survives it too and
-  # traversal is still reachable — collapse it separately, and LOOP because a
-  # single pass over `....` leaves a fresh `..` behind.
-  while [ "$safe_ref" != "${safe_ref//../_}" ]; do
-    safe_ref="${safe_ref//../_}"
+# Anything outside [A-Za-z0-9._-] becomes '_' (`tr -c` complements the set; the
+# trailing '-' inside it is literal), which also flattens the '/' in an
+# `owner/name` and in a branch ref, so a slug is always exactly ONE segment.
+# Dots survive that pass, because tags need them — so `..` survives it too and
+# traversal would still be reachable. It is collapsed separately, in a LOOP,
+# because a single pass over `....` leaves a fresh `..` behind.
+cache_slug() {
+  local safe
+  safe="$(printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._-' '_')"
+  while [ "$safe" != "${safe//../_}" ]; do
+    safe="${safe//../_}"
   done
+  printf '%s' "$safe"
+}
 
-  printf '%s/%s/%s\n' "$root" "$safe_ref" "$artifact"
+# --- cache_path CACHE_ROOT SOURCE REF ARTIFACT --------------------------------
+# Echo the stable location a verified binary for SOURCE at REF is kept at. Pure
+# string work: it creates nothing and touches nothing, so a caller can ask where
+# a binary WOULD live without side effects.
+#
+# Keyed by SOURCE **and** REF, so two consumers pinned to different nen tags — or
+# to the same tag in a FORK or a MIRROR — coexist instead of overwriting one
+# another, which is exactly what a source-pinned supply chain means when applied
+# to a binary. The source half is zheref/nen#6 item 3: keyed on ref alone, two
+# `--source` values at the same tag collided in one slot. The checksum gate meant
+# that collision was DETECTED rather than executed (a mismatch is a refusal, not
+# a wrong binary), so it never cost correctness — it cost a fork or a mirror a
+# permanent cache miss and a confusing refusal about bytes that were fine.
+#
+# BOTH ARE SANITIZED because both arrive from a consumer's pin and are
+# interpolated into a filesystem path. A tag (`v0.1.0`) is harmless, but the same
+# input accepts a branch (`bootstrap/1-scaffold`, which would silently nest the
+# cache) and would accept `../../../.ssh` from a caller that built it from
+# untrusted input. A cache path is not a place to extend trust to an argument.
+cache_path() {
+  local root="${1:-}" source_repo="${2:-}" ref="${3:-}" artifact="${4:-}"
+
+  printf '%s/%s/%s/%s\n' "$root" "$(cache_slug "$source_repo")" "$(cache_slug "$ref")" "$artifact"
 }
 
 # --- cache_is_valid CACHED_PATH EXPECTED_HEX ----------------------------------
@@ -441,7 +462,9 @@ attached to that same release, caches it, and prints its path on stdout.
   --ref        tag/ref to fetch (or $NEN_REF). REQUIRED.
   --source     owner/name to fetch release assets from (or $NEN_SOURCE).
                NOT a filesystem path: `nen --repo` is the flag that takes one.
-  --cache-dir  cache root (or $NEN_CACHE_DIR).
+  --cache-dir  cache root (or $NEN_CACHE_DIR). A verified binary is cached at
+               <root>/<source>/<ref>/<artifact>, so two sources at one ref —
+               a fork or a mirror beside the upstream — never share a slot.
 
 Exit codes: 0 ok · 2 usage · 3 unsupported host · 4 binary download failed
             5 CHECKSUM VERIFICATION FAILED · 6 manifest missing/unfetchable/malformed
@@ -486,12 +509,35 @@ main() {
   # An owner/name is required to have exactly the shape of one. A path slipped in
   # here (the `--repo`/`--source` confusion this script's header is about) would
   # otherwise reach the network and come back as a bewildering 404.
+  #
+  # `a/..` USED TO PASS: the leading-dot arm only sees a dot in the FIRST
+  # position, so a traversal segment on the right of the slash walked through,
+  # and the reasoning that it was harmless depended entirely on the sanitiser in
+  # `cache_path` neutralising it downstream (zheref/nen#6 item 4). A shape check
+  # whose correctness rests on a second layer is not a shape check, so both
+  # segments are now examined: neither may be empty, `.` or `..`. GitHub itself
+  # accepts neither as an owner or a repository name, so nothing legitimate is
+  # refused — and `a/..` now stops here, at the flag that was misused, instead of
+  # reaching the network as a 404 about a repository nobody asked for.
+  local source_repo_bad=0
   case "$source_repo" in
     */*/*|/*|.*|"")
       echo "nen bootstrap: --source takes a GitHub 'owner/name' (got '${source_repo}'). It is NOT a filesystem path — 'nen --repo <path>' is the flag that takes one." >&2
       return "$EXIT_USAGE"
       ;;
-    */*) : ;;
+    */*)
+      case "${source_repo%%/*}" in
+        ""|"."|"..") source_repo_bad=1 ;;
+        *) source_repo_bad=0 ;;
+      esac
+      case "${source_repo#*/}" in
+        ""|"."|"..") source_repo_bad=1 ;;
+      esac
+      if [ "$source_repo_bad" -eq 1 ]; then
+        echo "nen bootstrap: --source takes a GitHub 'owner/name' (got '${source_repo}') — neither half may be empty, '.' or '..'. It is NOT a filesystem path — 'nen --repo <path>' is the flag that takes one." >&2
+        return "$EXIT_USAGE"
+      fi
+      ;;
     *)
       echo "nen bootstrap: --source takes a GitHub 'owner/name' (got '${source_repo}')." >&2
       return "$EXIT_USAGE"
@@ -538,7 +584,7 @@ main() {
   [ "$rc" -eq 0 ] || return "$rc"
 
   local cached
-  cached="$(cache_path "$cache_root" "$ref" "$artifact")"
+  cached="$(cache_path "$cache_root" "$source_repo" "$ref" "$artifact")"
 
   if cache_is_valid "$cached" "$expected"; then
     # The only fast path, and it is gated on the CHECKSUM rather than on the
