@@ -18,12 +18,22 @@
 //     path that does not exist yet and for a caller that only needs to compute
 //     one.
 //   * `realContainment` asks the same of the path the kernel would actually
-//     write to: the deepest ancestor that EXISTS is resolved through every
-//     symlink first. A lexically contained `<root>/nen/contract.json` lands
-//     outside the repository the moment `<root>/nen` is a symlink, and the
-//     report would still have said `nen/contract.json`.
+//     reach: the deepest ancestor that EXISTS is resolved through every symlink
+//     first. A lexically contained `<root>/nen/contract.json` lands outside the
+//     repository the moment `<root>/nen` is a symlink, and the report would
+//     still have said `nen/contract.json`.
 //
-// NEITHER THROWS. The caller composes the refusal, because the two callers name
+// THE LEXICAL ONE IS NEVER THE WHOLE ANSWER FOR A PATH THAT IS ABOUT TO BE USED.
+// That was the shape of zheref/nen#157: `../shu/run.ts`'s `insideRepo` asked
+// `containedPath` alone, so a symlinked `cwd`, precondition, artifact, launch
+// artifact or `stdoutTo` walked out of the tree while every line nen printed
+// said otherwise. It asks both now. The lexical half alone stays right for a
+// caller that only COMPUTES a path rather than reaching one: `../shu/proof.ts`
+// deciding where a proof would be written, `../report/data.ts` where one would
+// be read, `../surface/command.ts` asking whether one flag-stated directory
+// sits under another.
+//
+// NEITHER THROWS. The caller composes the refusal, because the callers name
 // different things in it -- a declaration pointer, or the flag the value came
 // from -- and a shared message would name neither well.
 
@@ -112,6 +122,18 @@ function realOf(path: string): string | null {
  * `/tmp/elsewhere` makes `<root>/nen/contract.json` land at
  * `/tmp/elsewhere/contract.json`, which is not under the root however the
  * report spells it.
+ *
+ * A CASE-INSENSITIVE ROOT IS NOT A REDIRECT, and that is the win32 half of this
+ * function -- shared, as it happens, with the macOS default filesystem. Both ends
+ * go through the SAME `realpath`, which preserves the spelling the caller gave
+ * for a component it did not have to resolve, so a `--repo C:\Repo` whose
+ * declaration is read from `c:\repo` produces `realRoot` and `anchorReal` with
+ * the same case and `redirected` stays false; and `isContained`'s `relative`
+ * then compares them the way the PLATFORM does -- case-insensitively on win32,
+ * case-sensitively on POSIX -- rather than the way a hand-rolled `startsWith`
+ * would. Comparing normalised case here instead would call every path on a
+ * case-sensitive host contained the moment its spelling merely matched. Pinned
+ * end to end in ../shu/run.test.ts § the repository boundary.
  */
 export function realContainment(root: string, absolute: string): RealContainment {
   const realRoot = realOf(resolve(root));
