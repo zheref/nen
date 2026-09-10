@@ -109,6 +109,27 @@ export const INSTALLERS = [
 
 export type Installer = (typeof INSTALLERS)[number];
 
+/**
+ * How `nen shu evidence` gets a changed snapshot in front of a human once it
+ * has found one, in the repository's own words -- CLOSED for the same reason
+ * `VERSION_FROM` is: an unknown mechanism is a declaration nothing downstream
+ * has been built to honour, and refusing it here, by name, beats a skill
+ * discovering that three steps further on.
+ *
+ *   * `public-mirror`  -- the KroApple convention (`ci_scripts/pr_screenshots.sh`):
+ *     this repository is private, so the PNGs are pushed to a public sibling
+ *     and referenced by a SHA-pinned raw URL. `nen shu evidence` never pushes
+ *     anything itself -- it reports the rows a mirroring step would need.
+ *   * `files-changed`  -- the repository is already public (or the images are
+ *     not meant to render inline at all): the changed-file list IS the
+ *     evidence, with no host to push to.
+ *   * `embedded`       -- the PNGs are small enough to carry as data URIs
+ *     directly in a generated report, with no external host at all.
+ */
+export const EVIDENCE_MECHANISMS = ["public-mirror", "files-changed", "embedded"] as const;
+
+export type EvidenceMechanism = (typeof EVIDENCE_MECHANISMS)[number];
+
 // ── the two blocks ──────────────────────────────────────────────────────────
 
 export interface BootstrapPin {
@@ -230,6 +251,42 @@ export interface DeployTarget {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * `project.evidence` -- what `nen shu evidence` filters a changed-file set
+ * against, and how a later step gets one of the survivors in front of a human.
+ *
+ * A PROJECT-LEVEL BLOCK, NOT A PER-LANE ONE, on the same reasoning `targets`
+ * already carries: a snapshot test suite is not scoped to a lane's own build
+ * the way `verbs` and `preconditions` are, and a repository whose iOS lane and
+ * Android lane both record snapshots wants one glob set matched against the
+ * WHOLE diff, not two lanes each asking half the question.
+ */
+export interface EvidenceBlock {
+  /**
+   * The glob patterns a changed path is matched against (`*`, `**`, `?` --
+   * ../shu/evidence/glob.ts). REQUIRED, and non-empty: a block that named no
+   * glob would match nothing on every run and report an always-empty result,
+   * which is a repository that meant to declare evidence and typed nothing --
+   * refused rather than let stand as an evidence gate that is quietly always
+   * satisfied.
+   */
+  readonly globs: readonly string[];
+  readonly mechanism: EvidenceMechanism;
+  /**
+   * The template a later, mirroring step renders `{suite}` and `{scene}`
+   * into to name one surviving row -- the KroApple convention's own
+   * `scene_of()` returns exactly this, joined. `nen shu evidence` itself
+   * reports `suite` and `scene` SEPARATELY (its `rows[]` shape), so this
+   * template is read by nobody in THIS release; it is validated and carried
+   * on `raw` for the mirroring step this design defers.
+   */
+  readonly scene: string;
+  /** The suffix stripped off an ancestor directory's name to name a suite. */
+  readonly suiteSuffix: string;
+  /** The block exactly as the file states it, every key preserved. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface ProjectBlock {
   /** The review stack recorded for this repo, for cross-checking the registry. */
   readonly scenario: string | null;
@@ -245,6 +302,8 @@ export interface ProjectBlock {
   readonly targets: Readonly<Record<string, DeployTarget>>;
   /** Per-verb allowlist of `process.platform` values; `*` means every verb. */
   readonly hosts: Readonly<Record<string, readonly string[]>>;
+  /** `nen shu evidence`'s glob/mechanism declaration. `null` when absent. */
+  readonly evidence: EvidenceBlock | null;
   /** The block exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -750,7 +809,7 @@ function withinOneEdit(a: string, b: string): boolean {
 }
 
 /**
- * A key that is one typo away from one of the four, refused by the name it meant.
+ * A key that is one typo away from a KNOWN set, refused by the name it meant.
  *
  * THIS IS THE HALF THAT WAS MISSING, and the header below promised it. Refusing
  * a wrong TYPE catches `"args": "--prod"`; it does not catch `"arg": ["--prod"]`,
@@ -765,22 +824,33 @@ function withinOneEdit(a: string, b: string): boolean {
  * verbatim on `raw` for a later release to read. The line between the two is
  * distance 1 from a key nen acts on -- close enough that no reader would spot
  * it, far enough that nothing deliberate lands there.
+ *
+ * GENERALISED OVER THE KNOWN SET rather than hard-coded to `project.targets`'
+ * four, because `project.evidence` (../shu/evidence/) needs the identical
+ * refusal over its own four keys and a second copy of this loop would be a
+ * second rule that drifts the first time either widens. `describeConsequence`
+ * is the one thing that legitimately differs between the two callers -- what a
+ * silently-dropped key actually breaks -- so it is the caller's own sentence,
+ * not a guess this function makes about a block it does not otherwise know.
  */
 function refuseNearMissKey(
   path: string,
   pointer: string,
   raw: Readonly<Record<string, unknown>>,
+  knownKeys: readonly string[],
+  subject: string,
+  describeConsequence: (meant: string) => string,
 ): void {
   for (const key of Object.keys(raw)) {
-    if (key.startsWith("$") || TARGET_KEYS.includes(key)) continue;
-    const meant = TARGET_KEYS.find((known): boolean => withinOneEdit(key, known));
+    if (key.startsWith("$") || knownKeys.includes(key)) continue;
+    const meant = knownKeys.find((known): boolean => withinOneEdit(key, known));
     if (meant === undefined) continue;
     throw new SchemaError(
       path,
       `${pointer}.${key}`,
-      `is one letter away from '${meant}', which is a key nen reads, and is not a key nen reads. A target's four keys are ${TARGET_KEYS.join(
+      `is one letter away from '${meant}', which is a key nen reads, and is not a key nen reads. ${subject}'s keys are ${knownKeys.join(
         ", ",
-      )}; every OTHER key is preserved verbatim for a later release, and that is exactly why this one cannot be: '${key}' would be kept, read by nobody, and this destination would deploy with '${meant}' silently unset. Fix the spelling, or rename the key to something that is not a near-miss of one of the four`,
+      )}; every OTHER key is preserved verbatim for a later release, and that is exactly why this one cannot be: '${key}' would be kept, read by nobody, and ${describeConsequence(meant)}. Fix the spelling, or rename the key to something that is not a near-miss of one of ${subject}'s keys`,
     );
   }
 }
@@ -822,7 +892,14 @@ function parseTargets(path: string, value: unknown): Record<string, DeployTarget
     if (name.startsWith("$")) continue;
     const pointer = `project.targets.${name}`;
     const raw = requireRecord(path, pointer, entry);
-    refuseNearMissKey(path, pointer, raw);
+    refuseNearMissKey(
+      path,
+      pointer,
+      raw,
+      TARGET_KEYS,
+      "A target",
+      (meant): string => `this destination would deploy with '${meant}' silently unset`,
+    );
     const unsupported =
       raw["unsupported"] === undefined || raw["unsupported"] === null
         ? null
@@ -858,6 +935,81 @@ function parseTargets(path: string, value: unknown): Record<string, DeployTarget
     };
   }
   return targets;
+}
+
+/** The four keys `project.evidence` is made of. Nen's, not the repo's. */
+const EVIDENCE_KEYS: readonly string[] = ["globs", "mechanism", "scene", "suiteSuffix"];
+
+/** `{suite}-{scene}` -- the KroApple convention's own joined form. */
+const DEFAULT_EVIDENCE_SCENE = "{suite}-{scene}";
+
+/** The suffix `pr_screenshots.sh`'s `scene_of()` strips off a `*SnapshotTests` directory. */
+const DEFAULT_EVIDENCE_SUITE_SUFFIX = "SnapshotTests";
+
+/**
+ * `project.evidence` -- parsed rather than preserved, for the same reason
+ * `project.targets` is: the moment a value here decides what `nen shu
+ * evidence` matches and reports, an unparsed map means a typo reaches that
+ * verb as SILENCE -- a mistyped 'glob' key preserved on `raw`, read by
+ * nobody, and every run reporting no evidence changed on a branch that
+ * changed plenty.
+ */
+function parseEvidence(path: string, value: unknown): EvidenceBlock {
+  const raw = requireRecord(path, "project.evidence", value);
+  refuseNearMissKey(
+    path,
+    "project.evidence",
+    raw,
+    EVIDENCE_KEYS,
+    "project.evidence",
+    (meant): string =>
+      meant === "globs"
+        ? "'nen shu evidence' would match the changed-file set against nothing and report an empty result on every run, indistinguishable from a branch that genuinely changed no evidence"
+        : meant === "mechanism"
+          ? "a later step would not know how this repository wants a survivor put in front of a human"
+          : meant === "scene"
+            ? "a later mirroring step would name its destination with the default template rather than this repository's own"
+            : "a suite name would be derived by stripping the default suffix rather than this repository's own",
+  );
+  if (raw["globs"] === undefined) {
+    throw new SchemaError(
+      path,
+      "project.evidence.globs",
+      "expected the glob list, got nothing (the field is absent). 'nen shu evidence' matches the changed-file set against these patterns ('*', '**' and '?'); a block naming none would match nothing on every run, which is the same silent always-empty result a mistyped key produces",
+    );
+  }
+  const globs = requireArray(path, "project.evidence.globs", raw["globs"]).map(
+    (item, index): string => requireString(path, `project.evidence.globs[${index}]`, item),
+  );
+  if (globs.length === 0) {
+    throw new SchemaError(
+      path,
+      "project.evidence.globs",
+      "is an empty array. At least one glob is required, for the same reason an absent list is refused above: a block that matches nothing is a block indistinguishable from one that was never declared",
+    );
+  }
+  if (raw["mechanism"] === undefined) {
+    throw new SchemaError(
+      path,
+      "project.evidence.mechanism",
+      `expected one of ${EVIDENCE_MECHANISMS.join(", ")}, got nothing (the field is absent). This is how a later step gets a changed snapshot in front of a human, and nen will not guess it`,
+    );
+  }
+  const mechanism = requireEnum(
+    path,
+    "project.evidence.mechanism",
+    raw["mechanism"],
+    EVIDENCE_MECHANISMS,
+  );
+  const scene =
+    raw["scene"] === undefined
+      ? DEFAULT_EVIDENCE_SCENE
+      : requireString(path, "project.evidence.scene", raw["scene"]);
+  const suiteSuffix =
+    raw["suiteSuffix"] === undefined
+      ? DEFAULT_EVIDENCE_SUITE_SUFFIX
+      : requireString(path, "project.evidence.suiteSuffix", raw["suiteSuffix"]);
+  return { globs, mechanism, scene, suiteSuffix, raw };
 }
 
 export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
@@ -899,6 +1051,10 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
       raw["hosts"] === undefined || raw["hosts"] === null
         ? {}
         : parseHosts(path, "project.hosts", raw["hosts"]),
+    evidence:
+      raw["evidence"] === undefined || raw["evidence"] === null
+        ? null
+        : parseEvidence(path, raw["evidence"]),
     raw,
   };
 }

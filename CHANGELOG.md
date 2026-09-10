@@ -4,6 +4,10 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Added
+
+- **shu** — new verb `nen shu evidence --base <ref>`: matches `git diff --name-status <base>...HEAD` — through the seam, spawning no invocation the target repository declared, only `git diff` itself — against a new project-level `project.evidence` block (`globs`, required and non-empty; `mechanism`, one of `public-mirror` \| `files-changed` \| `embedded`; `scene` and `suiteSuffix`, both defaulted), derives each surviving file's **suite** and **scene** and reports them grouped suite → scene. Suite/scene derivation generalises KroApple's own `ci_scripts/pr_screenshots.sh` (`scene_of()`): the nearest ancestor directory whose name ends with `suiteSuffix` names the suite (suffix stripped), falling back to the immediate parent directory when no such ancestor exists; the scene is the basename with its extension, a trailing `.<n>` and the `test_snapshot_`/`test_` prefixes stripped, in that order. The glob matcher (`*`, `**`, `?`) is a small, dependency-free module of its own, with `**` correctly matching zero directories on either side (`**/*.png` matches a root-level file, `a/**/b` matches `a/b`). A repository with no `project.evidence` block is exit 2 naming it — the one usage refusal this verb has; no changed file matching a glob is exit 0 with an empty `rows`/`suites` set, never an error. `--json` publishes `nen.shu.evidence/v0.1`. `project.evidence` refuses a key one edit from one of its four, by pointer, exactly as `project.targets` already does.
+
 ## v0.3.0 — 2026-09-08
 
 ### Fixed

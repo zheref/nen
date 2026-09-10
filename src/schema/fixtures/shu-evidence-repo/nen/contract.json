@@ -1,0 +1,16 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- 'nen shu evidence's own repository. SEPARATE FROM shu-repo ON PURPOSE: that fixture declares no project.evidence at all, which is the 'missing block' case this verb must answer for, and adding one there would delete that case from the suite in exchange for saving one directory. This fixture's single lane exists only because project.lanes/project.verbs are required on every project block regardless of whether project.evidence is declared -- 'nen shu evidence' itself reads no lane at all.",
+
+  "project": {
+    "lanes": { "web": { "stack": "nextjs", "cwd": "." } },
+    "defaultLane": "web",
+    "verbs": { "web": { "build": { "exe": "placeholder-build-tool", "argv": ["build"] } } },
+
+    "evidence": {
+      "globs": ["**/__Snapshots__/**/*.png"],
+      "mechanism": "public-mirror",
+      "why": "KroApple-shaped: a private repo whose recorded snapshots are mirrored to a public sibling for inline rendering."
+    }
+  }
+}

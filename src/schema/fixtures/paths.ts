@@ -65,3 +65,16 @@ export const SHU_TOOLS_REPO = join(FIXTURES, "shu-tools-repo");
  * the suite in exchange for saving one directory.
  */
 export const SHU_COVERAGE_REPO = join(FIXTURES, "shu-coverage-repo");
+
+/**
+ * A repository whose `nen/contract.json` carries a `project.evidence` block:
+ * a KroApple-shaped glob and the `public-mirror` mechanism, plus the one lane
+ * every project block requires regardless of whether `evidence` is declared
+ * (`nen shu evidence` itself reads no lane at all).
+ *
+ * SEPARATE FROM `SHU_REPO` FOR THE SAME REASON `SHU_TOOLS_REPO` IS. That
+ * fixture declares NO `project.evidence` at all, which is the "missing block"
+ * case this verb must answer for; adding one there would delete that case
+ * from the suite in exchange for saving one directory.
+ */
+export const SHU_EVIDENCE_REPO = join(FIXTURES, "shu-evidence-repo");
