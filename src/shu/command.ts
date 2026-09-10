@@ -294,7 +294,12 @@ the declaration:
                                        its first token of six-plus characters
                                        that carries a digit). A device the probe
                                        did not name is exit 5 listing what it
-                                       DID offer. 'kind': "simulator" with no
+                                       DID offer, and a name TWO id-bearing
+                                       candidates carry is exit 5 naming both:
+                                       plain output has no field boundaries, so
+                                       a name that is the beginning of a longer
+                                       one matches both rows, and nen picks
+                                       neither. 'kind': "simulator" with no
                                        probe resolves the id to the name itself
                                        and spawns nothing; any other device with
                                        no probe is exit 2.

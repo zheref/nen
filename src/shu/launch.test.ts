@@ -33,6 +33,7 @@ describe("findDevice, over JSON output", () => {
     expect(findDevice("Placeholder B", out)).toEqual({
       found: true,
       id: "BBBB-2222",
+      ambiguous: [],
       saw: ["Placeholder A", "Placeholder B"],
       sawKind: "names",
     });
@@ -92,6 +93,7 @@ describe("findDevice, over JSON output", () => {
     expect(findDevice("Placeholder Z", out)).toEqual({
       found: false,
       id: null,
+      ambiguous: [],
       saw: ["Placeholder A", "Placeholder B"],
       sawKind: "names",
     });
@@ -137,6 +139,7 @@ describe("findDevice, over plain output", () => {
     expect(lookup).toEqual({
       found: false,
       id: null,
+      ambiguous: [],
       saw: [
         "List of attached devices",
         "PH1234567890   device  usb:1-2 model:Placeholder_A",
@@ -160,6 +163,7 @@ describe("findDevice, over plain output", () => {
     expect(findDevice("Placeholder A", "")).toEqual({
       found: false,
       id: null,
+      ambiguous: [],
       saw: [],
       sawKind: "lines",
     });
@@ -196,5 +200,56 @@ describe("the two tokens this family fills in", () => {
       REFUSED_PLACEHOLDERS.includes(token),
     );
     expect(overlap).toEqual([]);
+  });
+});
+
+describe("two candidates for one name: nen picks neither", () => {
+  // THE FAILURE A SUBSTRING MATCH MAKES POSSIBLE, and the one Copilot's review
+  // of #143 named: plain output has no field boundaries, so a declared name
+  // that is the BEGINNING of a longer one is carried by both rows. Taking the
+  // first would put the build on somebody else's device and report success.
+  const TWO = [
+    "Placeholder Handset      PH-0001  connected",
+    "Placeholder Handset Pro  PH-0002  connected",
+  ].join("\n");
+
+  it("refuses a plain-text name that two id-bearing lines carry", () => {
+    const lookup = findDevice("Placeholder Handset", TWO);
+    expect(lookup.found).toBe(true);
+    expect(lookup.id).toBeNull();
+    expect(lookup.ambiguous).toEqual([
+      "Placeholder Handset      PH-0001  connected",
+      "Placeholder Handset Pro  PH-0002  connected",
+    ]);
+  });
+
+  it("resolves the longer name, which only its own line carries", () => {
+    expect(findDevice("Placeholder Handset Pro", TWO).id).toBe("PH-0002");
+  });
+
+  it("is not confused by a summary line that names the device and offers no id", () => {
+    // A probe that prints a heading above its table carries the name twice and
+    // means one device. Only the row offers an id, so there is one candidate.
+    const withHeading = ["Found 1: Placeholder Handset", "Placeholder Handset  PH-0001"].join("\n");
+    expect(findDevice("Placeholder Handset", withHeading).id).toBe("PH-0001");
+  });
+
+  it("refuses two JSON objects that share a name and disagree about the id", () => {
+    const out = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1" },
+      { name: "Placeholder A", udid: "AAAA-2" },
+    ]);
+    const lookup = findDevice("Placeholder A", out);
+    expect(lookup.found).toBe(true);
+    expect(lookup.id).toBeNull();
+    expect(lookup.ambiguous).toEqual(["AAAA-1", "AAAA-2"]);
+  });
+
+  it("is NOT ambiguous when the same device is described twice with one id", () => {
+    const out = JSON.stringify([
+      { name: "Placeholder A", udid: "AAAA-1" },
+      { name: "Placeholder A", udid: "AAAA-1" },
+    ]);
+    expect(findDevice("Placeholder A", out).id).toBe("AAAA-1");
   });
 });

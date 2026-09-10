@@ -1002,6 +1002,20 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
       }. project.launch.${launch.name}.device.name is matched exactly, as the repository writes it -- nen never picks a device for you, not even when there is only one. Connect it, wake it, or fix the name.`,
     );
   }
+  if (lookup.ambiguous.length > 0) {
+    // NEN PICKS NEITHER, and this is the case a plain-text match cannot tell
+    // apart on its own: `Handset` is carried by the `Handset Pro` row exactly
+    // as it is by the `Handset` row, and taking the first would put the build
+    // on somebody else's phone at exit 0. Refused with both candidates, so the
+    // fix -- a fuller name, or a probe that prints one device per line -- is
+    // visible in the refusal itself.
+    throw new ShuRefusal(
+      EXIT_TOOL_NOT_INSTALLED,
+      `the name '${device.name}' matches ${lookup.ambiguous.length} ${
+        lookup.sawKind === "names" ? "devices the probe reported" : "of the probe's own lines"
+      }, and nen will not pick one of them: ${lookup.ambiguous.map((entry): string => `'${entry}'`).join(", ")}. project.launch.${launch.name}.device.name is the whole match, so a name that is the beginning of a longer one matches both. Write the fuller name, or declare a probe that prints one device per line.`,
+    );
+  }
   if (lookup.id === null) {
     throw new ShuRefusal(
       EXIT_TOOL_NOT_INSTALLED,

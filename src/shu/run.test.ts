@@ -2003,3 +2003,50 @@ describe("a launch target hangs off a verb that hands over the terminal", () => 
     expect([...LAUNCHING_VERBS].sort()).toEqual([...INTERACTIVE_VERBS].sort());
   });
 });
+
+describe("a name two devices carry is a refusal, not a choice", () => {
+  it("exits 5 naming both candidates, and launches nothing", async () => {
+    // `Placeholder Handset Pro` is the fixture's declared name; a probe whose
+    // output carries it on two id-bearing lines -- the device and a longer one
+    // it is the beginning of -- is exactly the case a plain `includes` cannot
+    // tell apart, so nen resolves neither.
+    const result = await capture(["dev", "--target", "handset"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: {
+            code: 0,
+            stdout: [
+              "Placeholder Handset Pro      PH-0001  connected",
+              "Placeholder Handset Pro Max  PH-0002  connected",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("matches 2 of the probe's own lines");
+    expect(result.err.join("\n")).toContain("PH-0001");
+    expect(result.err.join("\n")).toContain("PH-0002");
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --json"]);
+  });
+
+  it("exits 5 when two JSON objects share the name and disagree about the id", async () => {
+    const result = await capture(["dev", "--target", "handset"], {
+      script: [
+        {
+          match: "placeholder-device-tool list --json",
+          result: {
+            code: 0,
+            stdout: JSON.stringify([
+              { name: "Placeholder Handset Pro", udid: "U-1" },
+              { name: "Placeholder Handset Pro", udid: "U-2" },
+            ]),
+          },
+        },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("matches 2 devices the probe reported");
+  });
+});

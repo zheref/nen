@@ -100,6 +100,20 @@ export interface DeviceLookup {
   readonly found: boolean;
   /** Its id, or null when the output named it and carried no id. */
   readonly id: string | null;
+  /**
+   * The competing candidates when MORE THAN ONE carried the name, and empty
+   * otherwise. Non-empty means nen resolved nothing on purpose.
+   *
+   * THE FOURTH OUTCOME, AND IT IS THE ONE A SUBSTRING MATCH MAKES POSSIBLE.
+   * JSON is compared whole (`node.name === name`), but plain output has no
+   * field boundaries to compare against -- a line is a line -- so a declared
+   * `Handset` is carried by the `Handset Pro` row exactly as it is by the
+   * `Handset` row. Taking the first would resolve a DIFFERENT DEVICE and say
+   * nothing, which is the one failure this whole file exists to prevent. Two
+   * candidates that both offer an id are therefore a refusal listing both, and
+   * the same rule covers the JSON shape where two objects share one name.
+   */
+  readonly ambiguous: readonly string[];
   /** What the probe offered instead: every device NAME, or its own LINES. */
   readonly saw: readonly string[];
   readonly sawKind: "names" | "lines";
@@ -182,34 +196,48 @@ function namesIn(node: unknown, found: string[] = []): string[] {
   return found;
 }
 
-/** The id of the object whose own `name` is `name`, searching outward. */
-function idForName(node: unknown, name: string, ancestors: readonly Record<string, unknown>[]): string | null | undefined {
+/**
+ * EVERY object whose own `name` is `name`, as the id each one resolves to
+ * (`null` where that object offers none), in encounter order.
+ *
+ * IT COLLECTS RATHER THAN STOPPING AT THE FIRST, and the difference is a wrong
+ * device rather than a slow one: two objects sharing one name is a real shape
+ * (the same simulator name under two runtimes, the same handset seen over two
+ * transports) and the FIRST of them is not more correct than the second. What
+ * comes back is every candidate, so the caller can refuse rather than pick.
+ */
+function idsForName(
+  node: unknown,
+  name: string,
+  ancestors: readonly Record<string, unknown>[],
+  found: (string | null)[],
+): (string | null)[] {
   if (Array.isArray(node)) {
-    for (const item of node) {
-      const answer = idForName(item, name, ancestors);
-      if (answer !== undefined) return answer;
-    }
-    return undefined;
+    for (const item of node) idsForName(item, name, ancestors, found);
+    return found;
   }
-  if (!isRecord(node)) return undefined;
+  if (!isRecord(node)) return found;
   if (node["name"] === name) {
     const here = idNear(node);
-    if (here !== null) return here;
+    if (here !== null) {
+      found.push(here);
+      return found;
+    }
     for (const ancestor of ancestors.slice(-ANCESTOR_LIMIT).reverse()) {
       const above = idNear(ancestor);
-      if (above !== null) return above;
+      if (above !== null) {
+        found.push(above);
+        return found;
+      }
     }
-    // FOUND, WITH NO ID: `null` rather than `undefined`, and the difference is
-    // the third outcome `DeviceLookup` exists for. `undefined` would go on
-    // searching and end as "no such device", which is a sentence contradicting
-    // what the reader can see.
-    return null;
+    // FOUND, WITH NO ID: `null` rather than nothing at all, and the difference
+    // is the third outcome `DeviceLookup` exists for. Dropping it would end as
+    // "no such device", a sentence contradicting what the reader can see.
+    found.push(null);
+    return found;
   }
-  for (const value of Object.values(node)) {
-    const answer = idForName(value, name, [...ancestors, node]);
-    if (answer !== undefined) return answer;
-  }
-  return undefined;
+  for (const value of Object.values(node)) idsForName(value, name, [...ancestors, node], found);
+  return found;
 }
 
 /** Punctuation a probe wraps an id in. Stripped from both ends of a token. */
@@ -276,14 +304,39 @@ export function findDevice(name: string, stdout: string): DeviceLookup {
     document = undefined;
   }
   if (document !== undefined && (isRecord(document) || Array.isArray(document))) {
-    const id = idForName(document, name, []);
-    if (id === undefined) {
-      return { found: false, id: null, saw: [...new Set(namesIn(document))].sort(), sawKind: "names" };
-    }
-    return { found: true, id, saw: [...new Set(namesIn(document))].sort(), sawKind: "names" };
+    const saw = [...new Set(namesIn(document))].sort();
+    const candidates = idsForName(document, name, [], []);
+    if (candidates.length === 0) return { found: false, id: null, ambiguous: [], saw, sawKind: "names" };
+    const ids = [...new Set(candidates.filter((id): id is string => id !== null))];
+    // TWO OBJECTS, ONE NAME, TWO IDS: nen picks neither. One id reached twice
+    // is not an ambiguity -- it is the same device described twice, which some
+    // probes do -- so the set is what decides, not the count of matches.
+    if (ids.length > 1) return { found: true, id: null, ambiguous: ids, saw, sawKind: "names" };
+    return { found: true, id: ids[0] ?? null, ambiguous: [], saw, sawKind: "names" };
   }
   const lines = linesOf(text);
-  const matching = lines.find((line): boolean => line.includes(name));
-  if (matching === undefined) return { found: false, id: null, saw: lines, sawKind: "lines" };
-  return { found: true, id: idOnLine(matching, name), saw: lines, sawKind: "lines" };
+  const matching = lines.filter((line): boolean => line.includes(name));
+  if (matching.length === 0) return { found: false, id: null, ambiguous: [], saw: lines, sawKind: "lines" };
+  // THE LINES THAT ACTUALLY OFFER AN ID ARE THE CANDIDATES, and the narrowing
+  // is what keeps this usable. A probe that prints a summary line naming the
+  // device above its table carries the name TWICE and means one device; only
+  // the table row offers an id, so there is one candidate and no ambiguity.
+  // Two rows that BOTH offer an id are two devices, and one of them is a
+  // longer name this one is a prefix of -- which is exactly the case a plain
+  // `includes` cannot tell apart and must therefore not resolve.
+  const withIds = matching.flatMap((line): readonly string[] => {
+    const id = idOnLine(line, name);
+    return id === null ? [] : [line];
+  });
+  if (withIds.length > 1) {
+    return { found: true, id: null, ambiguous: withIds, saw: lines, sawKind: "lines" };
+  }
+  const only = withIds[0];
+  return {
+    found: true,
+    id: only === undefined ? null : idOnLine(only, name),
+    ambiguous: [],
+    saw: lines,
+    sawKind: "lines",
+  };
 }
