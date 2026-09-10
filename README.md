@@ -37,15 +37,15 @@ on any integrity gap (unfetchable manifest, missing entry, digest mismatch)
 rather than falling back to an unverified download:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.3.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.4.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.4.0
 ```
 
 It prints the path to a verified, executable binary on stdout and nothing
 else, so it composes directly:
 
 ```
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)"
 "$nen" --version
 ```
 
@@ -115,11 +115,11 @@ shell profile, or a CI job's setup step — and reuse the path; `nen bootstrap`
 is the in-CLI form of the same fetch, for re-pinning from an existing checkout:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.3.0)" && "$nen" --version
-nen bootstrap --ref v0.3.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.4.0)" && "$nen" --version
+nen bootstrap --ref v0.4.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
-Once a release is published for `v0.3.0`, the first prints `0.3.0`. Until then
+Once a release is published for `v0.4.0`, the first prints `0.4.0`. Until then
 both refuse at exit 6 — the tag exists but no release does, so there is no
 `SHA256SUMS` to verify a binary against, and assets exist only once a release
 is published, as [Install](#install) says. `--ref v0.1.0` resolves today.
@@ -327,7 +327,7 @@ that repository's `nen/` directory at the path given by `--repo`
 dot-prefixed, gitignored `.nen/` — the one-character difference is deliberate,
 so staging `nen/` after a run can never pick up a build log.
 
-**Migrating from `schemas/`.** Through the v0.3 line Nen still reads the four
+**Migrating from `schemas/`.** Through the v0.4 line Nen still reads the four
 taxonomy files from a repository's legacy `schemas/` directory when `nen/` does
 not carry them, so a repository that has not moved yet keeps working unchanged.
 `nen schema check` names every file it read from the legacy location, and fails
@@ -342,7 +342,7 @@ the same change. `--gates` deliberately refuses rather than falling back: a flag
 that quietly read a different file than the one it was handed would be worse
 than an error. `nen/contract.json` has no legacy location at all — it is new in
 this line, so nothing under `schemas/` is ever read as one. The fallback is
-removed in **v0.4.0**.
+removed in **v0.5.0**.
 
 A repository that carries none of these files can still use Nen's
 repository-agnostic verbs (`nen commit format`, `nen ref format`, ...); a

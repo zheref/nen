@@ -645,6 +645,30 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     ]);
   });
 
+  // Copilot review (PR #151): splitting the preview on a bare "\n" left a
+  // CRLF file's displayed last line carrying a trailing "\r" -- a caller
+  // reading `last line: last line\r` could not tell whether that was really
+  // in the file. `bytes` still counts every raw byte the CRLF file holds
+  // (31, not 28): this fix touches only what the preview SPLITS ON, never
+  // the bytes `--body-file` reads or reports.
+  it("--dry-run's first/last line preview strips a CRLF cleanly, with no trailing \\r", async () => {
+    const path = tempFile("crlf.md", "first line\r\nmiddle\r\nlast line\r\n");
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--dry-run"],
+      null,
+      new ScriptedSeams([CERTIFY_12]),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      `would run: gh pr edit 12 --repo zheref/nen --body-file ${path}`,
+      "target: zheref/nen",
+      "number: 12",
+      "bytes: 31",
+      "first line: first line",
+      "last line: last line",
+    ]);
+  });
+
   it("--dry-run --json carries dryRun: true, written: false, and no other fields", async () => {
     const path = tempFile("body.md", "hi");
     const result = await capture(

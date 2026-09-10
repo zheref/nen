@@ -525,10 +525,20 @@ function doRequestReviews(context: CommandContext): number {
   return result.ok ? 0 : 1;
 }
 
-/** The first and last line of a body, for --dry-run's summary. */
+/**
+ * The first and last line of a body, for --dry-run's summary.
+ *
+ * PREVIEW ONLY -- the trailing newline stripped here and the separator split
+ * on are never fed back into `body` or `bytes`, which stay exactly what was
+ * read off disk. Splitting on a bare "\n" left a CRLF file's last displayed
+ * line carrying a trailing "\r" (Copilot review): a caller reading `last
+ * line: done\r` could not tell whether that was really in the file or an
+ * artifact of this rendering. `/\r?\n/` treats CRLF as one line break for
+ * the preview without touching how the actual write reads the file.
+ */
 function bodyBookends(body: string): { readonly first: string; readonly last: string } {
-  const withoutTrailingNewline = body.endsWith("\n") ? body.slice(0, -1) : body;
-  const lines = withoutTrailingNewline.split("\n");
+  const withoutTrailingNewline = body.replace(/\r?\n$/, "");
+  const lines = withoutTrailingNewline.split(/\r?\n/);
   return { first: lines[0] ?? "", last: lines[lines.length - 1] ?? "" };
 }
 

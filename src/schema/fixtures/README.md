@@ -28,7 +28,7 @@ different things.
   four taxonomy files as `bankai-repo`, at the pre-v0.3 location, so the
   `schemas/` fallback is exercised by a real repository root rather than by a
   temp directory a test builds. It is the ONLY thing in this tree keeping the
-  old layout alive, which is what makes the v0.4.0 removal a deletion of one
+  old layout alive, which is what makes the v0.5.0 removal a deletion of one
   directory and one map in `src/schema/source.ts` — with a test that goes red if
   anything else still depends on it.
 
