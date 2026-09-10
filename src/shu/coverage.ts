@@ -535,9 +535,10 @@ function report(
   // THE LADDER WAS DECIDED BEFORE THE RUN (see readLadder above): it is null
   // exactly when this invocation has none -- no --touched, or an explicit
   // --threshold overriding the file -- and otherwise carries the three rungs,
-  // whether or not the repository declared them.
-  const targets =
-    touched === null || ladder === null ? (touched?.filter.rows ?? parsed.targets) : bandRows(touched.filter.rows, ladder);
+  // whether or not the repository declared them. Which rows there are and
+  // whether they are banded are two separate questions, asked separately.
+  const rows = touched === null ? parsed.targets : touched.filter.rows;
+  const targets = ladder === null ? rows : bandRows(rows, ladder);
   const document: CoverageReport = assembleCoverage({
     lane: run.lane,
     stack: run.stack,
