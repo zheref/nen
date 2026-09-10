@@ -44,7 +44,7 @@ describe("buildCandidates -- a $-prefixed key is metadata, not a repository", ()
   it("skips a $comment placed INSIDE the map, and keeps every real entry", () => {
     const candidates = buildCandidates(
       targets({
-        $comment: [] as unknown as readonly number[],
+        $comment: [],
         "o/one": [1, 2],
         "o/two": [3],
       }),
@@ -60,7 +60,7 @@ describe("buildCandidates -- a $-prefixed key is metadata, not a repository", ()
   it("would otherwise have tried to fetch pull requests from a repository named '$comment'", () => {
     // The failure this closes, stated as the thing that would have happened:
     // the walk hands each key to the fetch as a repo slug.
-    const candidates = buildCandidates(targets({ $note: [9] as readonly number[] }), null);
+    const candidates = buildCandidates(targets({ $note: [9] }), null);
     expect(candidates).toEqual([]);
   });
 
