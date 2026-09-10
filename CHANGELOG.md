@@ -47,7 +47,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Fixed
 
-- **parse** — `nen parse izanami` / `nen watch until` accept a **single-quoted `--jq` value** on a `gh api` read, which is the commonest spelling of that read there is and had been refusing since the scan-faithfulness gate landed (closes #78).
+- **parse** — `nen parse izanami` / `nen watch until` accept a **single-quoted `--jq` value** on a `gh api` read, which is the commonest spelling of that read there is and had been refusing since the scan-faithfulness gate landed (closes [#78](https://github.com/zheref/nen/issues/78), [#191](https://github.com/zheref/nen/pull/191)).
 
   A `'...'` span with no inner quote and no newline is exactly ONE word to every shell this table has been checked against, and its content is literal: no expansion, no substitution, no word splitting. So the `gh api` row folds such a `--jq` value into one inert placeholder before scanning. That is not a weaker gate — the fold changes neither the argument vector's length nor any other word in it, so the absence claims the read-only verdict rests on (no non-GET method, no `-f`/`-F`/`--field`/`--raw-field`/`--input`, not graphql) are scanned over a line the shell would agree with. The line is made provable rather than less proven. `--jq='<expr>'`, `-q '<expr>'` and a value containing spaces all fold the same way.
 
