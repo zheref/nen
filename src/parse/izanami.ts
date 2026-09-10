@@ -1972,8 +1972,14 @@ export function foldQuotedJqValue(line: string): string {
   const parts = line.split(/([ \t]+)/);
   for (let index = 0; index < parts.length; index += 1) {
     const token = parts[index] ?? "";
-    // `--jq='<expr>'` -- one token, folded in place.
-    const inline = /^(--jq=)('[^'\n\r]*')$/.exec(token);
+    // ONE TOKEN, folded in place. Three spellings, because pflag accepts three
+    // and they are the same safe shape (Copilot, PR #191): the long `--jq=`,
+    // the shorthand `-q=`, and the shorthand with its value ATTACHED. That last
+    // one has no long-flag twin -- `--jq'.name'` is the single word `--jq.name`
+    // to a shell, an unknown long flag rather than a flag and its value, and
+    // still refuses -- while `-q'.name'` is `-q.name`, which pflag reads as
+    // `-q` carrying `.name`, exactly as the unquoted form already does here.
+    const inline = /^(--jq=|-q=|-q)('[^'\n\r]*')$/.exec(token);
     if (inline !== null) {
       parts[index] = `${inline[1] ?? ""}${JQ_PLACEHOLDER}`;
       continue;

@@ -7556,8 +7556,9 @@ every shell this table has been checked against, and its content is literal — 
 expansion, no substitution, no word splitting. So the row folds it into one
 inert placeholder before scanning, which changes neither the argument vector's
 length nor any other word in it: the gate is not weakened, the line is made
-provable. `--jq='<expr>'`, `-q '<expr>'` and a value containing spaces all fold
-the same way.
+provable. `--jq='<expr>'`, `-q '<expr>'`, `-q='<expr>'`, the attached `-q'<expr>'`
+and a value containing spaces all fold the same way -- pflag takes a shorthand
+value three ways and all three are the same safe shape.
 
 Three shapes still refuse, each for its own reason:
 

@@ -1269,6 +1269,11 @@ describe("classifyCommand -- the gh/git rows' own scan-dependence (#70)", () => 
       "gh api repos/o/r --jq '.name'",
       "gh api repos/o/r --jq='.name'",
       "gh api repos/o/r -q '.name'",
+      // pflag takes a shorthand value three ways, and all three are the same
+      // safe shape (Copilot, PR #191).
+      "gh api repos/o/r -q='.name'",
+      "gh api repos/o/r -q'.name'",
+      "gh api repos/o/r -q.name",
       "gh api repos/o/r --jq '.items[] .name'",
       "gh api repos/o/r --jq ''",
       "gh api repos/o/r --jq .name",
@@ -1297,8 +1302,12 @@ describe("classifyCommand -- the gh/git rows' own scan-dependence (#70)", () => 
 
   it("folds only a WHOLE token, so --jq'.name' is left as the one word it is", () => {
     // `--jq'.name'` is the single word `--jq.name` to a shell -- an unknown
-    // long flag, not a flag and its value.
+    // LONG flag, not a flag and its value. Its shorthand twin is different and
+    // folds: `-q'.name'` is `-q.name`, which pflag reads as `-q` carrying
+    // `.name`, exactly as the unquoted spelling already did. The asymmetry is
+    // pflag's, not this fold's.
     expect(classifyCommand("gh api repos/o/r --jq'.name'").classification).toBe("unknown");
+    expect(classifyCommand("gh api repos/o/r -q'.name'").classification).toBe("read-only");
   });
 
   it("folds the value and nothing else, so the rest of the line still decides", () => {
@@ -1306,6 +1315,7 @@ describe("classifyCommand -- the gh/git rows' own scan-dependence (#70)", () => 
     // scanned, and each of these still answers the way it did before.
     expect(classifyCommand("gh api repos/o/r --jq '.a' -f title=x").classification).toBe("mutating");
     expect(classifyCommand("gh api repos/o/r --jq '.a' -X DELETE").classification).toBe("mutating");
+    expect(classifyCommand("gh api repos/o/r -q='.a' -X DELETE").classification).toBe("mutating");
     expect(classifyCommand("gh api graphql --jq '.data'").classification).toBe("mutating");
     // And #70's own adversarial repro is untouched: the fold is scoped to --jq,
     // so a quoted METHOD is still the unprovable line that issue pinned.
