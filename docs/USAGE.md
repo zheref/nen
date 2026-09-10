@@ -252,32 +252,38 @@ repository's `nen/` directory, at the path `--repo` names:
 dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
 one-character difference is what keeps a build log out of a review.
 
-**The legacy `schemas/` location.** Before v0.3 the four taxonomy files lived in
-a `schemas/` directory. Nen still reads them from there when `nen/` does not
-carry them, so an un-migrated repository keeps working through the v0.4 line;
-that fallback is **removed in v0.5.0**. It is read-only — nothing in nen writes
-to `schemas/` — and [`schema check`](#nen-schema-check) is where the migration
-state is reported: a file read from the legacy location gets a `warn` row naming
-the canonical path, and a file present in BOTH with different bytes is a
-*shadowed leftover* that fails the check, because `nen/` wins the read and the
-copy somebody may still be editing is the one nen ignores. That comparison is
-**byte-exact**: two copies differing only in line endings (a CRLF/LF drift a
-checkout can produce on its own) count as different, because "identical" is
-what licenses deleting one of them. A "no such file" refusal names both
-locations.
+**The legacy `schemas/` location — removed in v0.5.0.** Before v0.3 the four
+taxonomy files lived in a `schemas/` directory; v0.3.0 through v0.4.0 read
+`schemas/` as a fallback when `nen/` did not carry a file, so an un-migrated
+repository kept working. That fallback is gone: `nen/` is the only directory
+anything ever reads a taxonomy file from. A repository that still carries a
+file only under `schemas/` is, from every verb's point of view, the SAME as one
+carrying it nowhere — the refusal it gets is the ordinary "no such file" one,
+with one addition: it names the legacy copy it found and the way out, **run
+`nen scaffold init --accept-detected`** (or copy the file by hand). The
+migration path is a verb, not a fallback — see [`scaffold
+init`](#nen-scaffold-init) below.
 
-The fallback covers the four taxonomy files and nothing else. `nen/contract.json`
-is new in this line and has **no** legacy location — no released nen ever read
-one — so a repository's own unrelated file under `schemas/` is never claimed as
-a nen contract.
+[`schema check`](#nen-schema-check) still reports the migration state, in a
+different shape: a REQUIRED file present only under `schemas/` FAILS the check
+by the same refusal, and a file that loaded from `nen/` with a `schemas/` copy
+still sitting beside it is a *leftover* — a `warn` row naming the copy and the
+`git rm` that clears it. It is a `warn`, not a `FAIL`, because `nen/` is the
+only file anything reads now: a stale duplicate is clutter to delete, never a
+correctness risk, so whether its bytes still agree with `nen/`'s no longer
+matters to this check.
 
-**An explicitly pinned path does not move on its own.** The fallback answers only
-for paths nen resolves itself. A caller that hard-codes a location — `pr ready
---gates schemas/gates.json`, or `gate derive --policy-paths "schemas/,…"` — is
-naming a path, and nen takes it literally: `--gates` deliberately does not fall
-back, since a flag that quietly read a different file than the one it was handed
-would be worse than a refusal. Move those pins along with the files, in the same
-change; `schema check` will not warn about them, because it never sees them.
+The migration table covers the four taxonomy files and nothing else.
+`nen/contract.json` and `nen/workflow.json` are new in this line and have
+**no** legacy location — no released nen ever read one under `schemas/` — so a
+repository's own unrelated file there is never claimed as a nen contract.
+
+**An explicitly pinned path was never covered by the fallback, and still isn't.**
+A caller that hard-codes a location — `pr ready --gates schemas/gates.json`, or
+`gate derive --policy-paths "schemas/,…"` — is naming a path, and nen takes it
+literally: `--gates` does not resolve through `nen/`-vs-`schemas/` at all. Move
+those pins along with the files, in the same change; `schema check` will not
+warn about them, because it never sees them.
 
 #### `nen/workflow.json`
 
@@ -470,7 +476,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
-| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and where it was read from | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
+| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
@@ -1900,22 +1906,17 @@ a malformed contract; and the closing refusal for that case does **not** say "ne
 to fall back on", because for this one file it has: nen is deliberately declining to apply its own
 default over a policy the repository states and nen could not parse.
 
-It is also where the `schemas/` → `nen/` migration is reported. A file read from the legacy `schemas/`
-location gets a `warn` row printed at the path it was actually read from, followed by an indented
-`^ legacy location…` line naming the canonical path and the v0.5.0 removal. A file present in BOTH
-places whose bytes DIFFER is a **shadowed leftover**: the row FAILS the report even though the file
-loaded, because `nen/` won the read and the copy somebody may still be editing is the one nen ignores.
-Identical bytes in both places is an `ok` row with a note saying the deletion is free. The comparison
-is **byte-exact** — a CRLF/LF drift between the two copies counts as different, since "identical" is
-the finding that licenses deleting one of them.
-
-A fourth state exists for the case where the comparison could not be made at all: both copies are
-present, and one of them will not open (`EACCES`, a symlink cycle). That row is an **unverified
-leftover**, and it fails the report for the same fail-closed reason — but it says so in its own words
-and names the errno, rather than asserting bytes it never compared. The distinction is not cosmetic:
-when it is the `nen/` copy that cannot be read, "the bytes differ, nen read the `nen/` one, delete the
-legacy copy" is three claims that are false and one instruction that would delete the only readable
-file the repository has left.
+It is also where the `schemas/` → `nen/` migration is reported, in the shape v0.5.0 left it: `nen/` is
+the only directory anything reads, so the report distinguishes two, unrelated findings instead of the
+four the fallback needed. A REQUIRED file present only under `schemas/` FAILS the report exactly as an
+absent file always has — its `detail` is the ordinary "no such file" refusal, with one addition: it
+names the legacy copy it found and the migration (`nen scaffold init --accept-detected`, or copy it by
+hand). A file that DID load from `nen/`, with a `schemas/` copy still sitting beside it, is a
+**leftover**: a `warn` row, never a `FAIL`, with an indented `^ a legacy '<path>' copy is still
+there…` line naming the `git rm` that clears it. It is a `warn` because `nen/` is the only file anything
+reads now — a stale duplicate is clutter to delete, not a correctness risk, so whether its bytes still
+agree with `nen/`'s no longer changes the verdict, and detecting the leftover is a stat, never a read: an
+unopenable `schemas/` copy (a directory, a broken symlink) is still reported as a leftover to delete.
 
 **Usage**
 
@@ -1931,17 +1932,18 @@ nen schema check --repo <path> [--json]
 | `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }` — `checks[]` carries one row per file, `nen/workflow.json` last. |
 
 **Output and exit codes** — human rendering: `"repository: <root>"` then one line per file:
-`"  <ok|FAIL|warn>  <file, at the path it was read from>  <detail>"`, optionally followed by an
-indented `"        ^ <migration note>"` line. `--json` matches exactly: `{ root, ok, checks,
-deprecations }`, each check carrying `{ file, path, location, ok, detail, required, shadow, shadowed,
-note }` in that key order for every row — `location` is `"nen"` or `"schemas"`, `shadow` is
-`"none" | "identical" | "different" | "unknown"` (what the two copies had to say to each other, so a
-machine reader can tell "the bytes disagree" from "nen could not look"), `shadowed` is the boolean that
-fails the row, and `deprecations` lists every migration note in row order (empty for a fully migrated
-repository). Exit 0 when every REQUIRED file loaded and validated and nothing is shadowed; exit 1 when
-any required file failed (absent, unreadable, or invalid) or any file's legacy copy is unaccounted for
-— different bytes, or a comparison nen could not make — `gates.json` failing only because it is absent
-does not trip this, and neither does an absent `nen/contract.json`.
+`"  <ok|FAIL|warn>  <nen/…>  <detail>"` — always the canonical `nen/` spelling, whether or not the file
+loaded — optionally followed by an indented `"        ^ <leftover note>"` line. `--json` matches
+exactly: `{ root, ok, checks, deprecations }`, each check carrying `{ file, path, ok, detail, required,
+legacy, note }` in that key order for every row — `file`/`path` are always the `nen/` spelling, `legacy`
+is `true` when a `schemas/<file>` copy is present on disk (detected, never read; `false` for
+`nen/contract.json` and `nen/workflow.json`, which have no legacy location), `note` is the leftover
+sentence when `legacy` is `true` AND the row itself is `ok` (`null` otherwise — a failing row's own
+`detail` already names the migration, so `note` does not repeat it), and `deprecations` lists every
+`note` in row order (empty for a fully migrated repository, and for one carrying no legacy copy at all).
+Exit 0 when every REQUIRED file loaded and validated — a `warn` row never trips this, leftover or
+absent-and-optional alike; exit 1 when any required file failed to load, whether it is missing outright
+or present only under the legacy `schemas/` location.
 
 **Example**
 
@@ -1979,19 +1981,37 @@ nen schema check --repo src/schema/fixtures/legacy-repo
 ```
 ```text
 repository: /path/to/src/schema/fixtures/legacy-repo
-  warn  schemas/labels.json  13 labels
-        ^ legacy location. Move it to 'nen/labels.json'; the schemas/ fallback is removed in v0.5.0.
-  warn  schemas/repos.json  3 consumers, 6 product codes, latest v0.11.2
-        ^ legacy location. Move it to 'nen/repos.json'; the schemas/ fallback is removed in v0.5.0.
-  warn  schemas/colors.yml  3 categories, 13 values
-        ^ legacy location. Move it to 'nen/colors.yml'; the schemas/ fallback is removed in v0.5.0.
-  warn  schemas/gates.json  5 reviewer identities
-        ^ legacy location. Move it to 'nen/gates.json'; the schemas/ fallback is removed in v0.5.0.
+  FAIL  nen/labels.json  /path/to/src/schema/fixtures/legacy-repo/nen/labels.json: no such file. Nen reads this repository's taxonomy from 'nen/labels.json' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/labels.json' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
+  FAIL  nen/repos.json  /path/to/src/schema/fixtures/legacy-repo/nen/repos.json: no such file. Nen reads this repository's taxonomy from 'nen/repos.json' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/repos.json' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
+  FAIL  nen/colors.yml  /path/to/src/schema/fixtures/legacy-repo/nen/colors.yml: no such file. Nen reads this repository's taxonomy from 'nen/colors.yml' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/colors.yml' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
+  warn  nen/gates.json  /path/to/src/schema/fixtures/legacy-repo/nen/gates.json: no such file. Nen reads this repository's taxonomy from 'nen/gates.json' in the TARGET repo and has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have. A legacy 'schemas/gates.json' is present -- run 'nen scaffold init --accept-detected' (or copy it) to migrate; the schemas/ fallback was removed in v0.5.0. Point it at a checkout that carries the file with --repo <path>, or add the file.
   ok    nen/contract.json  absent (optional)
   ok    nen/workflow.json  absent (defaults apply)
+nen: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.
 ```
-exit 0 — an un-migrated repository still passes through the v0.4 line.
-(from a real run against the bundled fixture repo)
+exit 1 — an un-migrated repository is refused exactly like one with no taxonomy at all; `gates.json`
+still only `warn`s, because its absence never failed the report even before v0.3.0 introduced `schemas/`.
+(from a real run against the bundled fixture repo; the absolute path is elided to `/path/to/…`)
+
+And the same fixture with `nen/labels.json` scaffolded in but the `schemas/` copy left behind — the
+**leftover** case, against a scratch copy so the `git rm` advice is not run for real:
+
+```bash
+nen schema check --repo /tmp/site
+```
+```text
+repository: /tmp/site
+  warn  nen/labels.json  13 labels
+        ^ a legacy 'schemas/labels.json' copy is still there, beside 'nen/labels.json'. Delete it (git rm schemas/labels.json) -- the schemas/ fallback was removed in v0.5.0.
+  ok    nen/repos.json  3 consumers, 6 product codes, latest v0.11.2
+  ok    nen/colors.yml  3 categories, 13 values
+  ok    nen/gates.json  5 reviewer identities
+  ok    nen/contract.json  dependency (nen >= 0.3, pinned v0.3.0), project (2 lanes: web, android; 10 verbs; 3 toolchain entries)
+  ok    nen/workflow.json  absent (defaults apply)
+```
+exit 0 — the leftover never fails the report.
+(from a real run against a scratch copy of the bundled fixture, with `schemas/labels.json` left in
+place after `nen/labels.json` was copied in; the absolute path is elided to `/tmp/site`)
 
 <a id="family-color"></a>
 
@@ -3166,7 +3186,7 @@ nen scaffold init --repo <path>
 
 **A filesystem failure is a row, not a crash.** An unwritable path, a directory in the way, a read-only checkout: the errno becomes a `refused` write, the run continues, and the report is still printed — under `--json` too. A run that threw here used to exit 1 with empty stdout, having already written several files it never reported.
 
-**The `schemas/` → `nen/` migration is a COPY.** Each of the four taxonomy files found only under `schemas/` is copied to `nen/`, the original is **left in place**, and the `git rm` line is printed for the caller to run (and only for a copy that actually happened). A legacy file that is a **symlink** is `refused` naming both paths: `copyFileSync` follows it, so nen would be copying whatever it points at into the repository under a taxonomy file's name and then telling the caller to stage it. A delete is not recoverable if some tool in the estate still reads the old path, and this verb's hook rule already established refuse-and-report over destroy; the `nen/` copy wins immediately because [the loader prefers it](#taxonomy-as-data), so the new behaviour arrives before the removal does, and [`schema check`](#nen-schema-check) reports the leftover as shadowed until it happens. A file present in **both** with identical bytes is `skipped` (only the removal is left); one present in both with **different** bytes is `refused`, naming both paths, with no `--force` — two disagreeing taxonomies is not a merge nen can make.
+**The `schemas/` → `nen/` migration is a COPY.** Each of the four taxonomy files found only under `schemas/` is copied to `nen/`, the original is **left in place**, and the `git rm` line is printed for the caller to run (and only for a copy that actually happened). A legacy file that is a **symlink** is `refused` naming both paths: `copyFileSync` follows it, so nen would be copying whatever it points at into the repository under a taxonomy file's name and then telling the caller to stage it. A delete is not recoverable if some tool in the estate still reads the old path, and this verb's hook rule already established refuse-and-report over destroy; the `nen/` copy is [the only one anything ever reads](#taxonomy-as-data), so the new behaviour arrives before the removal does, and [`schema check`](#nen-schema-check) reports the leftover as a `warn` until it happens. A file present in **both** with identical bytes is `skipped` (only the removal is left); one present in both with **different** bytes is `refused`, naming both paths, with no `--force` — two disagreeing taxonomies is not a merge nen can make (`schema check`'s own `warn` does not make this distinction, because it no longer opens the `schemas/` copy at all — this verb still does, because it is the one that has to decide whether copying over the canonical file is safe).
 
 **`.gitignore` is APPENDED to, byte for byte.** The file's own bytes are written back unchanged and the appended lines match its own line ending, so a CRLF `.gitignore` is not silently rewritten wholesale. The action is `appended` (or `would-append` under `--dry-run`) rather than `created`, because the file was already there and the caller's own lines are still in it. **Two entries**, decided separately: `.nen/`, which is nen's own generated output, and the policy's `reports.dir` — read out of `nen/workflow.json` rather than assumed, so a repository that renamed it does not get the wrong line ignored in silence. A file that already carries one of the two gets the one it is missing, not a `skipped` row about the one it has.
 

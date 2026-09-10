@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exitCodeFor, reportUnhandled, run, runFamily, type Io } from "./index.js";
@@ -122,17 +122,7 @@ describe("usage errors are exit 2, distinct from failures", () => {
 // The `--json` shape of one row, in the order it is published. Written once so
 // the assertions below cannot drift apart, and so adding a field is a visible
 // edit to a named contract rather than a silent widening.
-const CHECK_KEYS = [
-  "file",
-  "path",
-  "location",
-  "ok",
-  "detail",
-  "required",
-  "shadow",
-  "shadowed",
-  "note",
-] as const;
+const CHECK_KEYS = ["file", "path", "ok", "detail", "required", "legacy", "note"] as const;
 
 describe("nen schema check", () => {
   it("reads the repository --repo names, not the process's own", async () => {
@@ -190,24 +180,21 @@ describe("nen schema check", () => {
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);
     for (const check of checks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
     // A fully migrated repository says so in the machine-readable output as
-    // well as on screen: every row answered from `nen/`, nothing deprecated,
-    // nothing shadowed, no comparison left unmade. That is the shape a
-    // consumer's CI asserts on to know the v0.5.0 removal will not break it.
-    expect(checks.every((c): boolean => c["location"] === "nen")).toBe(true);
-    expect(checks.every((c): boolean => c["note"] === null && c["shadowed"] === false)).toBe(true);
-    expect(checks.every((c): boolean => c["shadow"] === "none")).toBe(true);
+    // well as on screen: no row carries a legacy copy, and nothing is
+    // deprecated. That is the shape a consumer's CI asserts on to know the
+    // v0.5.0 removal did not touch it.
+    expect(checks.every((c): boolean => c["legacy"] === false && c["note"] === null)).toBe(true);
   });
 
   it("publishes ONE key order for every row, including the ones that took the failure path", async () => {
     // `--json` is the stable surface, and a row's key order must not encode
-    // which branch built it. Two rows here never take the success path: the
-    // contract row, whose ABSENCE is rewritten into an `ok` after failing, and
-    // a genuinely failing row. Asserting only against a repository where every
-    // row succeeds proves nothing about either -- which is exactly how the
-    // contract row came to serialise `…, detail, shadowed, note, required`
-    // while the other four said `…, detail, required, shadowed, note`.
+    // which branch built it. Two rows here never take the plain success path:
+    // the contract row, whose ABSENCE is rewritten into an `ok` after failing,
+    // and a genuinely failing row -- the un-migrated fixture's own required
+    // rows, in this release. Asserting only against a repository where every
+    // row succeeds proves nothing about either.
     const legacy = await capture(["schema", "check", "--repo", LEGACY_REPO, "--json"]);
-    expect(legacy.code).toBe(0);
+    expect(legacy.code).toBe(1);
     const legacyChecks = (JSON.parse(legacy.out.join("\n")) as { checks: Record<string, unknown>[] })
       .checks;
     // BY NAME, NOT BY POSITION: a sixth row landed behind the contract's, and a
@@ -234,19 +221,31 @@ describe("nen schema check", () => {
     for (const check of emptyChecks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
   });
 
-  it("prints the LEGACY location a file was actually read from, plus the migration line", async () => {
+  it("an UN-MIGRATED repository FAILS every required row, naming the migration in each one", async () => {
+    // THE FALLBACK'S REPLACEMENT, ON THE CLI. Through v0.4.0 this repository
+    // printed `warn` rows and exited 0. From v0.5.0 it is refused exactly like
+    // a repository with no taxonomy at all -- FAIL for the three always-
+    // required files, `warn` for the optional gates.json -- and every row
+    // names the way out.
     const result = await capture(["schema", "check", "--repo", LEGACY_REPO]);
-    // The un-migrated repository still PASSES through the v0.4 line.
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(1);
     const text = result.out.join("\n");
-    expect(text).toMatch(/warn\s+schemas\/labels\.json\s+13 labels/);
-    expect(text).toContain("^ legacy location. Move it to 'nen/labels.json'");
+    expect(text).toMatch(/FAIL\s+nen\/labels\.json/);
+    expect(text).toMatch(/FAIL\s+nen\/repos\.json/);
+    expect(text).toMatch(/FAIL\s+nen\/colors\.yml/);
+    expect(text).toMatch(/warn\s+nen\/gates\.json/);
+    expect(text).toContain("'nen/labels.json'");
+    expect(text).toContain("'schemas/labels.json'");
+    expect(text).toContain("nen scaffold init --accept-detected");
     expect(text).toContain("removed in v0.5.0");
-    expect(text).not.toContain("nen/labels.json  13 labels");
+    // No row is ever printed AT the legacy path any more -- every row is
+    // named at its canonical `nen/` spelling, loaded or not.
+    expect(text).not.toMatch(/\bschemas\/labels\.json\s+13 labels/);
+    expect(result.err.join("\n")).toMatch(/no built-in copy to fall back on/);
   });
 
-  it("FAILS on a shadowed leftover, and says which file it read", async () => {
-    const root = mkdtempSync(join(tmpdir(), "nen-cli-shadow-"));
+  it("WARNS on a leftover schemas/ copy, and says how to delete it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-leftover-"));
     mkdirSync(join(root, "nen"), { recursive: true });
     mkdirSync(join(root, "schemas"), { recursive: true });
     for (const file of ["labels.json", "repos.json", "colors.yml"]) {
@@ -254,26 +253,26 @@ describe("nen schema check", () => {
     }
     writeFileSync(join(root, "schemas", "labels.json"), '{"labels":[]}');
 
+    // MUTATION GUARD FOR THE SIMPLIFICATION. Through v0.4.0 this exact setup
+    // (different bytes on each side) FAILED at exit 1; now `nen/` is the only
+    // file anything reads, so the leftover is a `warn`, not a `FAIL`, and the
+    // report still passes.
     const result = await capture(["schema", "check", "--repo", root]);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(0);
     const text = result.out.join("\n");
-    expect(text).toMatch(/FAIL\s+nen\/labels\.json\s+13 labels/);
-    expect(text).toContain("^ SHADOWED LEFTOVER: 'schemas/labels.json'");
-    // The stderr refusal describes the RIGHT failure -- not "could not be
-    // read", which is false about a repository whose files all loaded.
-    expect(result.err.join("\n")).toContain("with DIFFERENT contents");
-    expect(result.err.join("\n")).not.toContain("no built-in copy");
+    expect(text).toMatch(/warn\s+nen\/labels\.json\s+13 labels/);
+    expect(text).toContain("^ a legacy 'schemas/labels.json' copy is still there");
+    expect(text).toContain("git rm schemas/labels.json");
+    expect(text).toContain("removed in v0.5.0");
+    expect(result.err).toEqual([]);
 
-    // Make the two copies identical and the same repository passes, with the
-    // deletion offered as a note rather than demanded as a failure.
-    writeFileSync(
-      join(root, "schemas", "labels.json"),
-      readFileSync(join(BANKAI_REPO, "nen", "labels.json"), "utf8"),
-    );
+    // Deleting the leftover the note advised leaves an ordinary `ok` row with
+    // nothing left to say.
+    rmSync(join(root, "schemas", "labels.json"));
     const clean = await capture(["schema", "check", "--repo", root]);
     expect(clean.code).toBe(0);
     expect(clean.out.join("\n")).toMatch(/ok {2}\s+nen\/labels\.json/);
-    expect(clean.out.join("\n")).toContain("^ an identical copy is still at 'schemas/labels.json'");
+    expect(clean.out.join("\n")).not.toContain("schemas/labels.json");
   });
 
   it("carries a contract row: absent when there is none, validated when there is", async () => {
@@ -312,13 +311,12 @@ describe("nen schema check", () => {
     expect(result.err).toEqual([]);
   });
 
-  it("says the comparison FAILED rather than 'the bytes differ' when it could not be made", async () => {
-    // The three claims the shadow sentence makes -- the bytes DIFFER, nen read
-    // the `nen/` copy, delete the legacy one -- are all unproven when one of
-    // the two files will not open, and the third is advice to delete a file on
-    // evidence nobody has. The row still FAILS the report, fail-closed; what
-    // changes is that it says what actually happened, and names the errno.
-    const root = mkdtempSync(join(tmpdir(), "nen-cli-unverified-"));
+  it("WARNS on a leftover even when the schemas/ copy itself cannot be opened", async () => {
+    // Detection is a STAT, never a READ: `nen schema check` no longer opens
+    // the legacy file at all, so a `schemas/` entry that is not even openable
+    // -- a directory, here -- still counts as a leftover to clean up, and the
+    // row it is beside still passes.
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-leftover-dir-"));
     mkdirSync(join(root, "nen"), { recursive: true });
     for (const file of ["labels.json", "repos.json", "colors.yml"]) {
       copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
@@ -326,18 +324,11 @@ describe("nen schema check", () => {
     mkdirSync(join(root, "schemas", "labels.json"), { recursive: true });
 
     const result = await capture(["schema", "check", "--repo", root]);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(0);
     const text = result.out.join("\n");
-    // The file itself LOADED, from the canonical location, and is still FAIL.
-    expect(text).toMatch(/FAIL\s+nen\/labels\.json\s+13 labels/);
-    expect(text).toContain("^ UNVERIFIED LEFTOVER: 'schemas/labels.json'");
-    expect(text).toContain("EISDIR");
-    expect(text).not.toContain("SHADOWED LEFTOVER");
-    expect(text).not.toContain("bytes DIFFER");
-    const err = result.err.join("\n");
-    expect(err).toContain("could not read one of the two to compare them");
-    expect(err).not.toContain("with DIFFERENT contents");
-    expect(err).not.toContain("no built-in copy");
+    expect(text).toMatch(/warn\s+nen\/labels\.json\s+13 labels/);
+    expect(text).toContain("^ a legacy 'schemas/labels.json' copy is still there");
+    expect(result.err).toEqual([]);
   });
 
   // The owner/name-slug refusal is asserted in the exit-code block at the end of

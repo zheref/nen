@@ -113,11 +113,11 @@ describe("checkTaxonomy", () => {
     expect(workflow?.path).toBe(join(root, "nen", "workflow.json"));
   });
 
-  it("names BOTH locations in the not-found message, so a caller knows the fallback exists", () => {
+  it("names the canonical path in the not-found message, and no legacy path when there is none", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
     const labels = checkTaxonomy({ repoFlag: root }).checks[0];
     expect(labels?.detail).toContain("'nen/labels.json'");
-    expect(labels?.detail).toContain("'schemas/labels.json'");
+    expect(labels?.detail).not.toContain("schemas/labels.json");
     // …and the path it names as the one to CREATE is the canonical one.
     expect(labels?.path).toBe(join(root, "nen", "labels.json"));
   });
@@ -219,109 +219,94 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     return root;
   }
 
-  it("a CANONICAL read says so and has nothing to report", () => {
+  it("a CANONICAL read with no legacy copy has nothing to report", () => {
     const check = labelsCheck(migrated());
-    expect(check.location).toBe("nen");
     expect(check.file).toBe("nen/labels.json");
     expect(check.ok).toBe(true);
+    expect(check.legacy).toBe(false);
     expect(check.note).toBeNull();
-    expect(check.shadowed).toBe(false);
     expect(checkTaxonomy({ repoFlag: migrated() }).deprecations).toEqual([]);
   });
 
-  it("a LEGACY read loads, names the canonical path, and dates the removal", () => {
+  it("an UN-MIGRATED repository REFUSES exactly like an absent one, naming the migration", () => {
+    // THE FALLBACK'S REPLACEMENT, PROVED AGAINST A REAL FIXTURE. Through
+    // v0.4.0 this repository PASSED, every row read from `schemas/`. From
+    // v0.5.0 a `schemas/`-only file is the same repository state as no file at
+    // all: every required row FAILS, and the only thing that changed is that
+    // the refusal names the way out.
     const root = LEGACY_REPO;
-    const report = checkTaxonomy({ repoFlag: root });
-    // It still PASSES -- the whole point of the fallback is that an
-    // un-migrated repository keeps working through the v0.4 line.
-    expect(report.ok).toBe(true);
-    const check = report.checks[0];
-    expect(check?.location).toBe("schemas");
-    expect(check?.file).toBe("schemas/labels.json");
-    expect(check?.ok).toBe(true);
-    expect(check?.detail).toMatch(/\d+ labels/);
-    expect(check?.note).toContain("nen/labels.json");
-    expect(check?.note).toContain("v0.5.0");
-    expect(check?.shadowed).toBe(false);
-    // Every one of the four legacy reads is named in `deprecations`, so a
-    // machine reader sees the migration state without parsing prose.
-    expect(report.deprecations.length).toBe(4);
-    expect(report.deprecations[0]).toContain("schemas/labels.json");
-  });
-
-  it("a SHADOWED leftover with different bytes FAILS the report, naming both paths", () => {
-    // MUTATION GUARD. Drop the shadow finding, or let it pass as a warning,
-    // and this goes green-to-red: the repository has two answers, nen picked
-    // one silently, and nothing else on screen would say so.
-    const root = migrated('{"labels":[]}');
     const report = checkTaxonomy({ repoFlag: root });
     expect(report.ok).toBe(false);
     const check = report.checks[0];
-    expect(check?.shadowed).toBe(true);
-    // The file still LOADED, from the canonical location.
-    expect(check?.ok).toBe(true);
-    expect(check?.location).toBe("nen");
-    expect(check?.note).toContain("SHADOWED LEFTOVER");
-    expect(check?.note).toContain("schemas/labels.json");
-    expect(check?.note).toContain("nen/labels.json");
-    expect(report.deprecations.some((d): boolean => d.includes("SHADOWED"))).toBe(true);
+    expect(check?.file).toBe("nen/labels.json");
+    expect(check?.ok).toBe(false);
+    expect(check?.required).toBe(true);
+    expect(check?.detail).toContain("'nen/labels.json'");
+    expect(check?.detail).toContain("'schemas/labels.json'");
+    expect(check?.detail).toContain("nen scaffold init --accept-detected");
+    expect(check?.detail).toContain("v0.5.0");
+    // Detected, but not a note: the failing row's `detail` already names the
+    // migration, so `note` (which feeds `deprecations`) stays empty rather
+    // than repeating the same sentence a second way.
+    expect(check?.legacy).toBe(true);
+    expect(check?.note).toBeNull();
+    expect(report.deprecations).toEqual([]);
   });
 
-  it("an UNCOMPARABLE pair fails the report WITHOUT claiming the bytes differ", () => {
-    // The state the shadow check used to describe as `different`, which made
-    // the row assert three things nobody had checked. It still FAILS -- "we
-    // could not prove they agree" is the fail-closed reading either way -- but
-    // the sentence it fails with is now true.
+  it("a LEFTOVER schemas/ copy is a WARN, never a FAIL, since nen/ is the only file read", () => {
+    // MUTATION GUARD FOR THE SIMPLIFICATION. Through v0.4.0 this exact setup
+    // (different bytes on each side) FAILED the report -- now `nen/` is the
+    // only file anything reads, so the leftover is clutter to delete, not a
+    // correctness risk, and letting it fail the report again would be the
+    // regression this test exists to catch.
+    const root = migrated('{"labels":[]}');
+    const report = checkTaxonomy({ repoFlag: root });
+    expect(report.ok).toBe(true);
+    const check = report.checks[0];
+    expect(check?.ok).toBe(true);
+    expect(check?.legacy).toBe(true);
+    expect(check?.note).toContain("git rm schemas/labels.json");
+    expect(check?.note).toContain("schemas/labels.json");
+    expect(check?.note).toContain("nen/labels.json");
+    expect(check?.note).toContain("v0.5.0");
+    expect(report.deprecations.some((d): boolean => d.includes("nen/labels.json"))).toBe(true);
+  });
+
+  it("the leftover note fires even when the schemas/ copy itself cannot be opened", () => {
+    // Detection is a STAT, never a READ: `nen schema check` no longer opens
+    // the legacy file at all (nothing does, any more), so a `schemas/` entry
+    // that is not even openable -- a directory in this case -- still counts as
+    // a leftover to clean up.
     const root = migrated();
     mkdirSync(join(root, "schemas", "labels.json"), { recursive: true });
     const report = checkTaxonomy({ repoFlag: root });
-    expect(report.ok).toBe(false);
-    const check = report.checks[0];
-    expect(check?.shadow).toBe("unknown");
-    expect(check?.shadowed).toBe(true);
-    // The canonical file loaded fine; it is the comparison that could not run.
-    expect(check?.ok).toBe(true);
-    expect(check?.location).toBe("nen");
-    expect(check?.note).toContain("UNVERIFIED LEFTOVER");
-    // The errno is NAMED, which is what makes the row actionable at all.
-    expect(check?.note).toContain("EISDIR");
-    expect(check?.note).not.toContain("bytes DIFFER");
-    expect(check?.note).not.toContain("SHADOWED LEFTOVER");
-    expect(report.deprecations.some((d): boolean => d.includes("UNVERIFIED"))).toBe(true);
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "does NOT tell an operator to delete the legacy copy when the nen/ one is the broken one",
-    () => {
-      // THE CASE THAT MADE THIS A FINDING. With the canonical copy unreadable,
-      // the old sentence said the bytes DIFFER, that nen read 'nen/labels.json'
-      // (it did not), and that the legacy copy should be deleted -- which is
-      // the only file the repository has left that works.
-      const root = migrated('{"labels":[]}');
-      rmSync(join(root, "nen", "labels.json"));
-      symlinkSync("labels.json", join(root, "nen", "labels.json"));
-      const check = checkTaxonomy({ repoFlag: root }).checks[0];
-      expect(check?.shadow).toBe("unknown");
-      expect(check?.ok).toBe(false);
-      expect(check?.detail).toContain("ELOOP");
-      expect(check?.note).toContain("UNVERIFIED LEFTOVER");
-      expect(check?.note).toContain("ELOOP");
-      expect(check?.note).not.toMatch(/Delete it/);
-      expect(check?.note).not.toContain("Nen read 'nen/labels.json'");
-    },
-  );
-
-  it("a SHADOWED leftover with IDENTICAL bytes is ok, with a note", () => {
-    const root = migrated(readFileSync(join(BANKAI_REPO, "nen", "labels.json"), "utf8"));
-    const report = checkTaxonomy({ repoFlag: root });
     expect(report.ok).toBe(true);
     const check = report.checks[0];
     expect(check?.ok).toBe(true);
-    expect(check?.shadowed).toBe(false);
-    expect(check?.location).toBe("nen");
-    expect(check?.note).toContain("identical copy");
+    expect(check?.legacy).toBe(true);
     expect(check?.note).toContain("schemas/labels.json");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "the leftover note does NOT fire when the canonical file itself is broken",
+    () => {
+      // THE CASE THAT MADE THIS A FINDING, CARRIED FORWARD. Advising "delete
+      // the leftover" rests entirely on `nen/labels.json` being the working
+      // copy -- which is exactly what is NOT true here, so the note stays
+      // silent and the row's own FAIL (by real errno) is the only thing said.
+      const root = migrated('{"labels":[]}');
+      rmSync(join(root, "nen", "labels.json"));
+      symlinkSync("labels.json", join(root, "nen", "labels.json"));
+      const report = checkTaxonomy({ repoFlag: root });
+      expect(report.ok).toBe(false);
+      const check = report.checks[0];
+      expect(check?.ok).toBe(false);
+      expect(check?.detail).toContain("ELOOP");
+      expect(check?.legacy).toBe(true);
+      expect(check?.note).toBeNull();
+      expect(report.deprecations).toEqual([]);
+    },
+  );
 
   /** One row by NAME. Position stopped being an identity when a sixth row landed. */
   function rowFor(root: string, file: string): SchemaCheck | undefined {

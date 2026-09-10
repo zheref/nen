@@ -4,6 +4,15 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Changed
+
+- **schema** — **breaking**: the `schemas/` fallback v0.3.0 announced and v0.4.0 held open is **removed**. `nen/` is the only directory any taxonomy-reading verb ever reads from; a repository still carrying a file only under `schemas/` is refused exactly like one carrying it nowhere, and the refusal names the migration (`nen scaffold init --accept-detected`, or copy the file by hand). `nen schema check` reports the state differently now that there is no read to protect: a REQUIRED file present only under `schemas/` FAILS by that same refusal, and a file that loaded from `nen/` with a `schemas/` copy still sitting beside it is a `warn` **leftover** (naming the `git rm` that clears it) rather than the old `FAIL`-on-differing-bytes *shadowed leftover* — `nen/` is the only file anything reads now, so a stale duplicate is clutter to delete, not a correctness risk, and whether its bytes still agree no longer changes the verdict. `--json`'s `checks[]` rows drop `location`, `shadow` and `shadowed`, and gain `legacy` (boolean: a `schemas/<file>` copy is present on disk, detected, never read). `nen scaffold init`'s `schemas/` → `nen/` copy step is unchanged — it is the migration path, not the fallback, and stays the way out.
+
+### Breaking / consumer notes
+
+- The four taxonomy files (`labels.json`, `repos.json`, `colors.yml`, `gates.json`) resolve from `nen/` only, as of this release; an un-migrated repository now fails `nen schema check` and every verb needing a file it finds only under `schemas/`, where v0.4.0 passed it with a `warn`. Run `nen scaffold init --accept-detected` (or copy the four files by hand) before upgrading past this release. `nen schema check --json`'s row shape changed (see above) — a consumer parsing it must update.
+- zheref/akatsuki-ai#45 pins three guard constants that still name `schemas/`; that repository needs to repin them to `nen/` in the same change that upgrades its nen pin past this release.
+
 ## v0.4.0 — 2026-09-10
 
 ### Added

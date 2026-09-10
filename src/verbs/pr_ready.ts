@@ -614,10 +614,16 @@ export function resolveIdentities(
   // repository -- but "where does gates.json live" is still one question with
   // one answer, and answering it here with a second join is how a repository
   // that has migrated to `nen/` gets told it has no gates file while
-  // `nen schema check` reads one. `resolveSchemaFile` applies the same
-  // `nen/`-then-`schemas/` order every loader uses.
+  // `nen schema check` reads one.
+  //
+  // ONLY THE CANONICAL CANDIDATE ADMITS THIS FILE. A `schemas/gates.json`
+  // with no `nen/gates.json` beside it is, from here down, a repository that
+  // carries no gates file at all -- ../schema/source.ts's own read refuses it
+  // the same way, and this verb must fall through to `--reviewers` exactly as
+  // it would for a repository with neither, rather than trying a read that can
+  // now only throw.
   const inRepo = resolveSchemaFile(repoRoot, GATES_FILE);
-  if (inRepo.canonical.present || (inRepo.legacy?.present ?? false)) {
+  if (inRepo.canonical.present) {
     // Same shaping as the `--gates <path>` branch above: a malformed
     // gates.json must fail as a path-bearing SchemaError, not as a bare
     // SyntaxError with no file/pointer context. readSchemaJson is the shared
@@ -633,7 +639,9 @@ export function resolveIdentities(
   }
   throw new IdentityError(
     `no reviewer identities. This gate never falls back to a built-in reviewer set: a binary that guessed the reviewers would judge this repository against another one's and report success. Give it one of: --gates <path>, a '${GATES_FILE}' in the target repository (looked for at '${inRepo.canonical.path}'${
-      inRepo.legacy === null ? "" : `, and at the legacy '${inRepo.legacy.path}'`
+      inRepo.legacy !== null && inRepo.legacy.present
+        ? ` -- a legacy '${inRepo.legacy.relative}' is present but is never read; run 'nen scaffold init --accept-detected' (or copy it) to migrate, since the schemas/ fallback was removed in v0.5.0`
+        : ""
     }), or --reviewers a,b,c.`,
   );
 }

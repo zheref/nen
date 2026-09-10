@@ -327,22 +327,27 @@ that repository's `nen/` directory at the path given by `--repo`
 dot-prefixed, gitignored `.nen/` — the one-character difference is deliberate,
 so staging `nen/` after a run can never pick up a build log.
 
-**Migrating from `schemas/`.** Through the v0.4 line Nen still reads the four
-taxonomy files from a repository's legacy `schemas/` directory when `nen/` does
-not carry them, so a repository that has not moved yet keeps working unchanged.
-`nen schema check` names every file it read from the legacy location, and fails
-on a *shadowed leftover* — a file present in both places with different bytes,
-where `nen/` wins and the copy somebody may still be editing is the one Nen
-ignores. Moving the four files into `nen/` is the whole migration — with one
-thing to check alongside it: **a path a caller pinned by hand does not move on
-its own.** The fallback only answers for paths Nen resolves itself, so CI that
+**Migrating from `schemas/`.** Before v0.3.0 the four taxonomy files lived in a
+repository's `schemas/` directory; v0.3.0 through v0.4.0 read `schemas/` as a
+fallback when `nen/` did not carry a file, so a repository that had not moved
+yet kept working. That fallback is **removed in v0.5.0**: `nen/` is the only
+directory anything reads a taxonomy file from. A repository that still carries
+a file only under `schemas/` is refused exactly like one carrying it nowhere —
+`nen scaffold init --accept-detected` is the migration, and every refusal
+names it. `nen schema check` still reports the migration state, differently:
+a required file present only under `schemas/` **FAILS** by that same refusal,
+and a file that loaded from `nen/` with a `schemas/` copy still sitting beside
+it is a **leftover** — a `warn` row naming the `git rm` that clears it, never a
+failure, because `nen/` is the only file anything reads and a stale duplicate
+is clutter rather than a correctness risk. One thing to check alongside the
+move: **a path a caller pinned by hand does not move on its own.** CI that
 passes `nen pr ready --gates schemas/gates.json`, or `nen gate derive
 --policy-paths "schemas/,…"`, is naming a literal path and must be updated in
-the same change. `--gates` deliberately refuses rather than falling back: a flag
-that quietly read a different file than the one it was handed would be worse
-than an error. `nen/contract.json` has no legacy location at all — it is new in
-this line, so nothing under `schemas/` is ever read as one. The fallback is
-removed in **v0.5.0**.
+the same change — `--gates` refuses rather than resolving through `nen/`, so a
+flag that quietly read a different file than the one it was handed would be
+worse than an error. `nen/contract.json` and `nen/workflow.json` have no
+legacy location at all — both are new in this line, so nothing under
+`schemas/` is ever read as either one.
 
 A repository that carries none of these files can still use Nen's
 repository-agnostic verbs (`nen commit format`, `nen ref format`, ...); a

@@ -54,7 +54,6 @@ import { parseArgs, UsageError } from "./cli/args.js";
 import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
 import { COMMANDS, findCommand } from "./cli/registry.js";
 import { RepoRootError } from "./repo/root.js";
-import { LEGACY_FALLBACK_REMOVED_IN } from "./schema/source.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { WORKFLOW_FILE } from "./schema/workflow.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
@@ -120,9 +119,12 @@ nen/repos.json, nen/colors.yml, nen/gates.json, the optional nen/contract.json
 and the optional nen/workflow.json -- and report each one's verdict: ok, or
 FAIL naming what is wrong. An absent nen/workflow.json is an ok row reading
 'absent (defaults apply)': every parameter of that file has a default, so a
-repository that states no policy still runs under one. A file found only under
-the legacy schemas/ directory still loads and is reported as such; that
-fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.
+repository that states no policy still runs under one. The legacy schemas/
+directory is never read (removed in v0.5.0): a repository carrying a file only
+there is reported exactly as one carrying it nowhere, and the row names the
+migration -- run 'nen scaffold init --accept-detected', or copy it by hand. A
+schemas/ copy left beside a working nen/ one is a separate, harmless 'warn'
+row: delete it with git rm.
 
   --repo <path>    The target repository's working-tree root. Defaults to the
                    current directory.
@@ -383,20 +385,21 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
   }
   io.out(`repository: ${report.root}`);
   for (const check of report.checks) {
-    // FOUR MARKS, and the two new ones are both about the migration rather
-    // than about the file's contents: a row read from the legacy `schemas/`
-    // location loaded fine and is `warn` because it will stop loading in
-    // v0.4.0, and a row whose legacy copy DIFFERS is `FAIL` because the
-    // repository has two answers and nen silently picked one.
-    const mark = check.shadowed
-      ? "FAIL"
-      : check.ok
-        ? check.location === "schemas"
-          ? "warn"
-          : "ok  "
-        : check.required
-          ? "FAIL"
-          : "warn";
+    // THREE MARKS. `ok` is a clean read with nothing to say; `warn` is either
+    // an optional file's absence (gates.json, contract.json's "optional",
+    // workflow.json's "defaults apply") OR a clean read with a leftover
+    // `schemas/` copy still on disk beside it (`note !== null`) -- clutter to
+    // delete, never a reason to fail; `FAIL` is a REQUIRED file that did not
+    // load, whether it is missing outright or missing under `nen/` with only a
+    // legacy `schemas/` copy present -- the two read identically, because they
+    // are the same repository state from here down.
+    const mark = check.ok
+      ? check.note !== null
+        ? "warn"
+        : "ok  "
+      : check.required
+        ? "FAIL"
+        : "warn";
     io.out(`  ${mark}  ${check.file}  ${check.detail}`);
     // The migration sentence goes on its OWN line, under the row it is about.
     // Folding it into `detail` would put it inside the field `--json` publishes
@@ -405,35 +408,25 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     if (check.note !== null) io.out(`        ^ ${check.note}`);
   }
   if (!report.ok) {
-    // THREE DIFFERENT FAILURES, THREE DIFFERENT SENTENCES. "Could not be read"
-    // is false about a repository whose every file loaded and whose only
-    // problem is a stale duplicate, and a refusal that misdescribes what
-    // happened sends the reader looking for a corrupt file that is not there.
-    // The third exists for the same reason as the second: "with DIFFERENT
-    // contents. Nen read the 'nen/' one. Delete the legacy copy" asserts three
-    // things nen does not know when it could not open one of the two files --
-    // and nominates for deletion the copy that may be the only readable one.
+    // TWO FAILURES, TWO SENTENCES -- exhaustive, because `report.ok` is false
+    // exactly when some REQUIRED check failed, and `nen/workflow.json` is
+    // never required unless it is present and malformed.
     //
-    // A FOURTH ONE, FOR THE ONE FILE THAT DOES HAVE A FALLBACK. Every sentence
-    // below rests on "nen has no built-in copy", which is true of a TAXONOMY
-    // and false of `nen/workflow.json` -- that file's every parameter has a
-    // default (see src/schema/workflow.ts on why a policy default invents
-    // nobody's vocabulary). So when the policy is the only required row that
-    // failed, the refusal says the true thing instead: nen has a default and is
-    // deliberately not applying it over a policy this repository states and nen
-    // could not parse.
+    // The second exists because `nen/workflow.json` is the one file that DOES
+    // have a built-in default. Every sentence below rests on "nen has no
+    // built-in copy", which is true of a TAXONOMY and false of the policy --
+    // so when it is the only required row that failed, the refusal says the
+    // true thing instead: nen has a default and is deliberately not applying
+    // it over a policy this repository states and nen could not parse. Either
+    // way, a row that failed because only a legacy `schemas/` copy was found
+    // already named the migration in its own `detail`, printed above -- this
+    // closing line does not repeat it.
     const failed = report.checks.filter((check): boolean => !check.ok && check.required);
     const unreadable = failed.some((check): boolean => check.file !== WORKFLOW_FILE);
-    const policyOnly = failed.length > 0 && !unreadable;
-    const unverified = report.checks.some((check): boolean => check.shadow === "unknown");
     io.err(
       unreadable
         ? `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`
-        : policyOnly
-        ? `${PROGRAM}: this repository's '${WORKFLOW_FILE}' is present and could not be read -- the pointer is named above. Every parameter in that file HAS a default, and nen is deliberately not applying one: a policy this repository states and nen cannot parse is not a policy nen may quietly replace with its own.`
-        : unverified
-          ? `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', and nen could not read one of the two to compare them. It will not say which copy it served or which one to delete on evidence it does not have -- fix the unreadable path named above, then re-run. The schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`
-          : `${PROGRAM}: this repository carries a legacy 'schemas/' copy of a file it also carries under 'nen/', with DIFFERENT contents. Nen read the 'nen/' one. Delete the legacy copy, or reconcile it -- the schemas/ fallback is removed in ${LEGACY_FALLBACK_REMOVED_IN}.`,
+        : `${PROGRAM}: this repository's '${WORKFLOW_FILE}' is present and could not be read -- the pointer is named above. Every parameter in that file HAS a default, and nen is deliberately not applying one: a policy this repository states and nen cannot parse is not a policy nen may quietly replace with its own.`,
     );
   }
   return report.ok ? 0 : 1;
