@@ -87,10 +87,17 @@ function classifyConflictKind(stages: ReadonlySet<number>): CascadeConflict["kin
   const hasOurs = stages.has(2);
   const hasTheirs = stages.has(3);
   if (hasOurs && hasTheirs) return hasBase ? "both-modified" : "add-add";
-  // Exactly one of ours/theirs is missing an entry -- that side deleted the
-  // path outright while the other kept (and, for it to conflict at all,
-  // changed) it.
-  return hasOurs ? "modify-delete" : "delete-modify";
+  if (hasOurs) return "modify-delete";
+  if (hasTheirs) return "delete-modify";
+  // NEITHER stage 2 nor stage 3 has an entry. For a path git itself lists as
+  // unmerged this cannot happen -- a delete/delete leaves no unmerged entry
+  // at all, so every real conflict carries stage 2, stage 3, or both -- so
+  // reaching here means this module's own read of `ls-files -u` came back
+  // empty for the path (an unparsed line, e.g.), not that git found nothing.
+  // `both-modified` is the least presumptuous of the four answers: unlike
+  // `modify-delete`/`delete-modify`, it does not accuse either side of
+  // deleting anything nen has no actual evidence for.
+  return "both-modified";
 }
 
 /**

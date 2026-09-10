@@ -430,10 +430,16 @@ function cascade(context: CommandContext): number {
     return result.error !== null || result.conflicted ? 1 : 0;
   }
   for (const line of result.log) context.io.out(line);
+  // The placeholder deliberately claims nothing about WHY a side is empty --
+  // it covers both "the merge base resolved and this range genuinely had no
+  // commits" and "the merge base itself could not be resolved, so this range
+  // was never computed at all" (../pr/cascade.ts's collectConflicts()). Only
+  // --json's ours[]/theirs[] arrays exist to tell those two apart.
+  const commitList = (commits: readonly string[]): string => (commits.length === 0 ? "(no commits found)" : commits.join(", "));
   for (const conflict of result.conflicts) {
     context.io.out(`  ${conflict.path}  (${conflict.kind})`);
-    context.io.out(`    ours:   ${conflict.ours.length === 0 ? "(no commits since the merge base)" : conflict.ours.join(", ")}`);
-    context.io.out(`    theirs: ${conflict.theirs.length === 0 ? "(no commits since the merge base)" : conflict.theirs.join(", ")}`);
+    context.io.out(`    ours:   ${commitList(conflict.ours)}`);
+    context.io.out(`    theirs: ${commitList(conflict.theirs)}`);
   }
   if (result.error !== null) {
     context.io.err(`nen: ${result.error}`);

@@ -170,5 +170,31 @@ describe("cascadeMain -- merge, never rebase, and never resolve a conflict itsel
       const result = cascadeMain(seams, "/repo", "develop");
       expect(result.conflicts).toEqual([{ path: "src/a.ts", kind: "add-add", ours: ["ours1"], theirs: ["theirs1"] }]);
     });
+
+    // Review finding (PR #141, Copilot): classifyConflictKind used to fall
+    // through to the asymmetric `delete-modify` whenever a path had no stage
+    // 2 or 3 entry at all -- a specific, accusatory guess about which side
+    // deleted the path, made with no actual evidence for it. That shape is
+    // unreachable from a REAL git conflict (a delete/delete leaves no
+    // unmerged entry to report), so the only way to reach it is this
+    // module's own read of `ls-files -u` coming back empty for a path
+    // `diff --name-only --diff-filter=U` did list -- an unparsed line, most
+    // plausibly. The safe answer in that situation is `both-modified`: the
+    // one kind that accuses neither side of anything.
+    it("falls back to both-modified, never an asymmetric guess, when ls-files -u carries no stage entry for a listed path", () => {
+      const seams = new ScriptedSeams([
+        { match: "git fetch origin main", result: {} },
+        { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+        { match: "git diff --name-only --diff-filter=U", result: { stdout: "mystery.ts\n" } },
+        // No stage line for mystery.ts at all -- ls-files -u and the diff
+        // scan disagree, which this module treats as its own gap, not git's.
+        { match: "git ls-files -u", result: { stdout: "" } },
+        { match: "git merge-base HEAD origin/main", result: { stdout: "base123\n" } },
+        { match: "git log --format=%H base123..HEAD -- mystery.ts", result: {} },
+        { match: "git log --format=%H base123..origin/main -- mystery.ts", result: {} },
+      ]);
+      const result = cascadeMain(seams, "/repo");
+      expect(result.conflicts).toEqual([{ path: "mystery.ts", kind: "both-modified", ours: [], theirs: [] }]);
+    });
   });
 });

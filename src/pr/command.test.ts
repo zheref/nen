@@ -349,6 +349,41 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(parsed.conflicts).toEqual([{ path: "src/a.ts", kind: "add-add", ours: ["ours1"], theirs: ["theirs1"] }]);
   });
 
+  // Review finding (PR #141, Copilot): the text placeholder for an empty
+  // ours[]/theirs[] used to read "(no commits since the merge base)" even
+  // when the merge base itself could not be resolved -- claiming a specific
+  // reason (a resolved, genuinely empty range) that may not be the true one.
+  // Both scenarios below must render the SAME neutral text, which names no
+  // reason at all.
+  it("cascade-main's text placeholder for an empty commit list never claims a specific reason", async () => {
+    const resolvedButEmpty: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: { stdout: "a.ts\n" } },
+      { match: "git ls-files -u", result: { stdout: "100644 aaa 2\ta.ts\n100644 bbb 3\ta.ts\n" } },
+      { match: "git merge-base HEAD origin/main", result: { stdout: "base123\n" } },
+      { match: "git log --format=%H base123..HEAD -- a.ts", result: {} },
+      { match: "git log --format=%H base123..origin/main -- a.ts", result: {} },
+    ];
+    const resolvedResult = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(resolvedButEmpty));
+    const resolvedText = resolvedResult.out.join("\n");
+    expect(resolvedText).toMatch(/ours:\s+\(no commits found\)/);
+    expect(resolvedText).toMatch(/theirs:\s+\(no commits found\)/);
+    expect(resolvedText).not.toMatch(/merge base/);
+
+    const unresolvedBase: readonly ScriptedCall[] = [
+      { match: "git fetch origin main", result: {} },
+      { match: "git merge --no-edit origin/main", result: { code: 1, stderr: "CONFLICT" } },
+      { match: "git diff --name-only --diff-filter=U", result: { stdout: "a.ts\n" } },
+      { match: "git ls-files -u", result: { stdout: "100644 aaa 2\ta.ts\n100644 bbb 3\ta.ts\n" } },
+      { match: "git merge-base HEAD origin/main", result: { code: 1, stderr: "fatal: no merge base" } },
+    ];
+    const unresolvedResult = await capture(["pr", "cascade-main"], BANKAI_REPO, new ScriptedSeams(unresolvedBase));
+    const unresolvedText = unresolvedResult.out.join("\n");
+    expect(unresolvedText).toMatch(/ours:\s+\(no commits found\)/);
+    expect(unresolvedText).toMatch(/theirs:\s+\(no commits found\)/);
+  });
+
   // zheref/nen#20: `--gates` PARSED cleanly on next-blocker (the name sits in
   // this family's declared value flags via the PR_READY_FLAGS spread, for
   // `ready`'s sake) but ./command.ts's blocker() never read it -- silently
