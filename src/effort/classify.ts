@@ -29,6 +29,64 @@
 
 export type EffortClass = "delivering" | "building" | "stalled" | "queued" | "idle" | "state-machine-violation" | "undecidable";
 
+/**
+ * Every value `classifyEffort` can return, as data.
+ *
+ * THE FIVE, AND THE TWO THAT ARE NOT CLASSES OF THE FIVE (zheref/nen#53).
+ * senkei §3's taxonomy has FIVE classes and this verb's own name for itself says
+ * so; `state-machine-violation` and `undecidable` are answers ABOUT the taxonomy
+ * rather than members of it -- the first says two stage labels contradict each
+ * other and the second says nothing here places the object anywhere. Both are
+ * real, reachable output, and `--help` named neither the count nor the second of
+ * them, so a caller reading only `--help` had no signal that `undecidable`
+ * existed at all.
+ *
+ * It is a LIST rather than a sentence because a sentence goes stale, and THREE
+ * checks stand behind it -- one for each way it could:
+ *
+ *   * `satisfies readonly EffortClass[]` refuses a member that is not a class
+ *     (a typo, a name the union dropped). It does NOT check the other
+ *     direction, which is the half that matters more here and the half a first
+ *     draft of this comment claimed it covered (Copilot, PR #186).
+ *   * `EFFORT_CLASS_COVERAGE` below is the other direction: a class in the
+ *     union and not in this list fails `tsc`, and the error NAMES the missing
+ *     one, because the unassignable type is that literal.
+ *   * ../effort/command.test.ts fails the build if a class is in this list and
+ *     not in the help text.
+ *
+ * Together those make the vocabulary the verb prints the vocabulary the verb
+ * has -- which is the whole of zheref/nen#53.
+ */
+export const EFFORT_CLASSES = [
+  "delivering",
+  "building",
+  "stalled",
+  "queued",
+  "idle",
+  "state-machine-violation",
+  "undecidable",
+] as const satisfies readonly EffortClass[];
+
+/**
+ * A COMPILE-TIME PROOF that `EFFORT_CLASSES` covers the whole union.
+ *
+ * `satisfies` only checks that every entry IS an `EffortClass`; adding a member
+ * to the union and forgetting this list would typecheck cleanly, which is
+ * exactly the staleness #53 is about arriving by a new route. `Exclude` reduces
+ * to `never` when the list is complete and to the MISSING LITERAL when it is
+ * not -- and `true` is not assignable to a string literal, so the build fails
+ * naming the class nobody listed.
+ *
+ * Exported rather than a local, because a local would be an unused binding and
+ * the next person to tidy one away would delete the guarantee with it.
+ */
+export type MissingEffortClass = Exclude<EffortClass, (typeof EFFORT_CLASSES)[number]>;
+export const EFFORT_CLASS_COVERAGE: [MissingEffortClass] extends [never] ? true : MissingEffortClass =
+  true;
+
+/** The five that are senkei's taxonomy proper. */
+export const TAXONOMY_CLASSES = ["delivering", "building", "stalled", "queued", "idle"] as const satisfies readonly EffortClass[];
+
 export interface EffortInput {
   readonly kind: "epic" | "child";
   readonly issueState: "open" | "closed";
