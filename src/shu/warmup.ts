@@ -76,6 +76,7 @@ import { resolve } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import type { Io } from "../index.js";
 import { GIT, outputLines, ToolError, type CommandResult } from "../seam/exec.js";
+import { rawLines } from "../seam/lines.js";
 import { parseStatusPorcelain, triageStage, type FlagReason, type StatusEntry } from "../stage/triage.js";
 import { PROGRAM } from "../version.js";
 import { openDeclaration, type OpenedDeclaration } from "./declaration.js";
@@ -143,11 +144,17 @@ export interface TrunkWorktree {
  *
  * A DETACHED WORKTREE HOLDS NO BRANCH and can never be the answer: its record
  * carries `detached` where this one carries `branch`.
+ *
+ * ../seam/lines.ts's `rawLines`, NOT `outputLines`, for that file's own reason:
+ * a worktree's path is data whose exact bytes matter, and `outputLines` trims
+ * every line. A directory whose name ends in a space is rare and entirely
+ * legal, and a trimmed path would be reported to the caller as a directory that
+ * does not exist and compared against `--repo` as a different one.
  */
 export function trunkWorktree(porcelain: string, trunk: string): TrunkWorktree | null {
   const wanted = `branch refs/heads/${trunk}`;
   let path: string | null = null;
-  for (const line of outputLines(porcelain)) {
+  for (const line of rawLines(porcelain)) {
     if (line.startsWith("worktree ")) {
       path = line.slice("worktree ".length);
       continue;

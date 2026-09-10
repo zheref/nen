@@ -1473,6 +1473,20 @@ describe("the trunk checked out in ANOTHER worktree", () => {
     expect(argvOf(result.seams)).toContain(FF_REF);
   });
 
+  it("reads the path as git printed it, trailing space and all", async () => {
+    // The porcelain form is data whose exact bytes matter: a directory name
+    // ending in a space is rare and entirely legal, and a trimmed path names a
+    // directory that does not exist.
+    const spaced = "/Users/someone/Code/nen ";
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([
+        ok(WORKTREES, `worktree ${spaced}\nHEAD 5555555555555555555555555555555555555555\nbranch refs/heads/main\n\n`),
+      ]),
+    });
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(`trunk held by worktree ${spaced};`);
+  });
+
   it("refuses at exit 2 -- BEFORE the fetch -- when the worktree list does not answer", async () => {
     // Fail-closed, this file's discipline everywhere: an unanswered question is
     // never read as "nothing else holds the trunk". That reading is what made
