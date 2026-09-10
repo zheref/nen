@@ -35,7 +35,13 @@ There are no built-in path sets. They are the target repository's canon, and a
 binary carrying one repository's sets would derive that repository's gates
 everywhere it was pointed.
 
-This derives the DIFF's half only. A pull request that is not ready has no gate.`;
+This derives the DIFF's half only. A pull request that is not ready has no gate.
+
+  --repo <path>    The checkout whose nen/gates.json supplies the path
+                   sets. Defaults to the current directory, so a call made
+                   from anywhere else needs it: the taxonomy-missing
+                   refusal you would otherwise meet is this flag's
+                   absence, not a missing file.`;
 
 export const gateCommand: Command = {
   name: "gate",

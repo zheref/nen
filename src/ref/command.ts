@@ -33,7 +33,13 @@ format:
   --no-glyphs      Emit the bare notation without the kind glyph and state mark.
 
 parse:
-  <token>          A token in object notation. Refused, never guessed at.`;
+  <token>          A token in object notation. Refused, never guessed at.
+
+  --repo <path>    The checkout whose nen/repos.json --code is checked
+                   against. Defaults to the current directory, so a call
+                   made from anywhere else needs it: the taxonomy-missing
+                   refusal you would otherwise meet is this flag's
+                   absence, not a missing file.`;
 
 export const refCommand: Command = {
   name: "ref",
