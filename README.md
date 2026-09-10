@@ -375,8 +375,11 @@ they compose into. The families group roughly as:
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`
 - **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,
   `ui-test`, `lint`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
-  `evidence`, `tools`, `warmup`), which run what a *target project* declares in
-  its own `nen/contract.json` — never anything Nen decided
+  `evidence`, `tools`, `warmup`). Most of them run what a *target project*
+  declares in its own `nen/contract.json` — never a command Nen decided; the
+  exceptions are `evidence`, which reads only `git diff`, and `warmup`'s own
+  git half, both of which run a command Nen itself chose rather than the
+  target's declared argv
 - **This repository's own dev loop** — `dev` (`test`, `lint`, `replay`)
 - **Skill-grammar parsing** — `parse`
 - **Supply** — `bootstrap`, `wake`, `stop`
@@ -386,15 +389,17 @@ root — never an owner/name slug) and `--json` where the verb has a
 machine-readable form.
 
 `nen shu` runs those verbs today, against any repository that declares them.
-All fourteen execute — `nen shu build --dry-run` prints the exact argv, cwd and
+Thirteen of the fourteen execute a *declared* invocation in some form —
+`nen shu build --dry-run` prints the exact argv, cwd and
 environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
 a `nen/contract.json` project block from the markers on disk and never writes
 one without `--write`; `nen shu tools` checks the **host** toolchain the
 declaration pins, exits 5 naming the install command per tool, and installs only
 through `corepack` with `--install` — every other declared installer is
-verify-only in this release; `nen shu evidence` matches `git diff
---name-status <base>...HEAD` against `project.evidence.globs` and spawns no
-declared invocation at all — only `git diff`, a command Nen itself chose.
+verify-only in this release. The fourteenth, `nen shu evidence`, is the one
+verb that runs no declared invocation at all: it matches `git diff
+--name-status <base>...HEAD` — a command Nen itself chose — against
+`project.evidence.globs`.
 `nen shu warmup` is the one verb in the family that
 mutates git state: it warms a **working copy** (clean → fetch → fast-forward the
 trunk → cut your branch → verify the declared build), refusing at exit 2 rather

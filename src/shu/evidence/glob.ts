@@ -14,12 +14,21 @@
 // COMPILED TO A REGEXP, NOT WALKED CHARACTER BY CHARACTER AT MATCH TIME. A
 // hand-rolled backtracking matcher is exactly the shape that grows an
 // exponential blowup on a pathological pattern; delegating to the platform's
-// own regex engine, built once per pattern, is both simpler and safer. The
-// translation is careful about ONE thing a naive "replace `**` with `.*`"
-// gets wrong: a bare `**` segment is meant to also match ZERO directories, so
-// `**/foo` matches a root-level `foo` and `a/**/b` matches `a/b`, not only
-// `a/x/b`. See `globToRegExp`'s per-segment cases for how each position earns
-// that "or nothing" behaviour.
+// own regex engine is both simpler and safer. The translation is careful
+// about ONE thing a naive "replace `**` with `.*`" gets wrong: a bare `**`
+// segment is meant to also match ZERO directories, so `**/foo` matches a
+// root-level `foo` and `a/**/b` matches `a/b`, not only `a/x/b`. See
+// `globToRegExp`'s per-segment cases for how each position earns that "or
+// nothing" behaviour.
+//
+// COMPILED ONCE PER PATTERN, CACHED, NOT ONCE PER CALL. `nen shu evidence`
+// matches every changed path against every declared glob, so `matchesGlob`
+// and `matchesAnyGlob` -- the two entry points a caller actually uses --
+// compile a pattern through `compiledGlob` below, which memoizes by the
+// pattern STRING. `globToRegExp` itself stays a plain, uncached function:
+// it is what the cache calls, and what a test compiles directly to inspect
+// the regex a pattern produces without going through the memo table.
+const compiledCache = new Map<string, RegExp>();
 
 /** Escape one character that is a JS regex metacharacter outside our wildcards. */
 function escapeLiteral(char: string): string {
@@ -85,9 +94,24 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${pieces.join("")}$`);
 }
 
+/**
+ * `globToRegExp(pattern)`, memoized by the pattern string -- exported so a
+ * caller matching many paths against the same glob set (../report.ts's whole
+ * job) can compile once up front, and so a test can assert the SAME `RegExp`
+ * instance comes back for a repeated pattern rather than inferring it from
+ * timing.
+ */
+export function compileGlob(pattern: string): RegExp {
+  const cached = compiledCache.get(pattern);
+  if (cached !== undefined) return cached;
+  const compiled = globToRegExp(pattern);
+  compiledCache.set(pattern, compiled);
+  return compiled;
+}
+
 /** One changed path against one glob pattern. */
 export function matchesGlob(path: string, pattern: string): boolean {
-  return globToRegExp(pattern).test(path);
+  return compileGlob(pattern).test(path);
 }
 
 /** One changed path against a LIST of globs -- true the moment any one hits. */

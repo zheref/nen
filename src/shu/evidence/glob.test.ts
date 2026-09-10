@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesAnyGlob, matchesGlob } from "./glob.js";
+import { compileGlob, matchesAnyGlob, matchesGlob } from "./glob.js";
 
 describe("matchesGlob -- '*' stays inside one segment", () => {
   it("matches any run of characters, but never crosses a '/'", () => {
@@ -76,6 +76,21 @@ describe("matchesAnyGlob", () => {
   it("is false when the list is empty or every pattern misses", () => {
     expect(matchesAnyGlob("a.png", [])).toBe(false);
     expect(matchesAnyGlob("a.png", ["*.jpg"])).toBe(false);
+  });
+});
+
+describe("compileGlob -- built once per pattern, not once per call", () => {
+  it("returns the SAME RegExp instance for a repeated pattern string", () => {
+    // The finding this proves: matchesGlob/matchesAnyGlob call compileGlob on
+    // every path, and a pattern repeated across many changed files (the
+    // ordinary case -- one glob, many pngs) must not recompile each time.
+    const first = compileGlob("**/__Snapshots__/**/*.png");
+    const second = compileGlob("**/__Snapshots__/**/*.png");
+    expect(second).toBe(first);
+  });
+
+  it("still compiles a DIFFERENT pattern into its own regex", () => {
+    expect(compileGlob("*.png")).not.toBe(compileGlob("*.jpg"));
   });
 });
 
