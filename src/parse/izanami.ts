@@ -1291,7 +1291,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       until: RO("re-classifies its own --command against this very table before the first observation"),
     },
   },
-  wc: { subcommands: { classify: RO("classifies the working copy over git reads") } },
+  wc: {
+    subcommands: {
+      classify: RO("classifies the working copy over git reads"),
+      squash: MUT("resets the branch and commits -- git reset --soft plus git commit -F"),
+    },
+  },
 };
 
 // The three commands ../index.ts answers BEFORE the registry (its own header

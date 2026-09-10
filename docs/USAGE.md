@@ -11,7 +11,7 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the **v0.3.0 line** (`shu`,
 `scaffold new` and `issue comment` are new in it, and are not in v0.2.0): 36 command
-families, 88 verbs, every flag checked against the binary this repository
+families, 89 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -27,12 +27,13 @@ directory, resolved at the call site and never from wherever the executable
 itself lives (so a bootstrap-cached binary under `~/.cache/nen` still reads the
 checkout you are standing in).
 
-Sixteen verbs require it by name instead of defaulting, because each one either
+Seventeen verbs require it by name instead of defaulting, because each one either
 mutates or reports on whatever it is pointed at, and a silent cwd default turned
 a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`pr next-blocker`](#nen-pr-next-blocker),
 [`pr cascade-main`](#nen-pr-cascade-main),
 [`wc classify`](#nen-wc-classify),
+[`wc squash`](#nen-wc-squash),
 [`stage triage`](#nen-stage-triage),
 [`release resolve-target`](#nen-release-resolve-target),
 [`release self-check`](#nen-release-self-check),
@@ -436,7 +437,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 88 verbs, grouped as the README groups them. **Reads** is what a
+All 89 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -455,6 +456,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
+| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since 'git merge-base --onto HEAD' into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, ignored, binary, out-of-scope and unmentioned-deletion files before staging | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -1083,8 +1085,9 @@ OK -- every hunk in the original lands in exactly one branch, unaltered, and not
 
 Reports tensho's own four-case table for where the current working copy
 sits — on the trunk, on a dirty branch, or on a clean branch — so tensho
-knows whether to move it before opening a PR. It never commits, branches, or
-stashes anything; it only reads git state.
+knows whether to move it before opening a PR (`classify`, read-only); and
+folds a branch's own commits into one before it is pushed (`squash`, aka's
+own residue — the only verb in this family that writes anything).
 
 ### `nen wc classify`
 
@@ -1127,6 +1130,86 @@ case: on-branch-clean
   on 'docs-usage-part1-scratch' with nothing uncommitted -- open or report the existing PR
 ```
 (from a real run, on a throwaway local branch created and deleted for this check; a detached HEAD in the same checkout instead prints `nen wc: could not determine the current branch ... this usually means a detached HEAD` at exit 1, and an unresolvable `--base` prints `could not count commits ahead of base` at exit 1)
+
+### `nen wc squash`
+
+Folds every commit since `git merge-base --onto HEAD` into ONE, whose message
+is `--message-file`'s contents. The one write this family makes, and every
+refusal below runs BEFORE it: a dirty working tree; `--onto` not an ancestor
+of HEAD; any commit in the range already reachable from this branch's own
+`@{upstream}` (fetched first, through the seam) — squashing published history
+is refused outright; a `--message-file` that fails the same shape
+[`nen commit format`](#nen-commit-format) enforces (a Conventional Commits
+header ≤ 72 characters, trailers as `Key: value` lines in the final
+paragraph, and any attribution trailer this repository's
+[`nen/workflow.json`](#nenworkflowjson) does not admit). Fewer than two
+commits to fold is **not** a refusal: exit 0, one line, nothing moves.
+
+**Usage**
+
+```text
+nen wc squash --repo <path> --onto <ref> --message-file <file> [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | **yes** | the working tree being squashed | unbracketed in usage; omitted is refused at exit 2, exactly as `wc classify`'s (#28) |
+| `--onto <ref>` | **yes** | the ref this branch is built on top of | e.g. `main` or `origin/main`; every commit `git merge-base <onto> HEAD` finds is folded |
+| `--message-file <file>` | **yes** | the new commit's whole message | validated to `nen commit format`'s shape before anything moves |
+| `--dry-run` | no | print the commits that would fold and the message | spawns neither `git reset` nor `git commit` |
+| `--json` | no | machine-readable result | `nen.wc.squash/v0.1` — see below |
+
+**Mechanism.** `git reset --soft <merge-base>` then `git commit -F
+<message-file>`, both through the seam, in that order, only once every
+refusal above has passed. `git reset --soft` only moves the branch ref and
+the index — it never deletes a commit object — so a `git commit` that then
+fails leaves the original commits recoverable from `ORIG_HEAD` /
+the reflog, which the verb's own error names. This verb never touches a
+remote except the read-only fetch the upstream check makes, never pushes,
+never force-anything.
+
+**Output and exit codes** — text output is one line per folded commit
+(`<sha> <subject>`, oldest first), then either the new commit line
+(`squashed into <sha>`) or, for `--dry-run`, the message that would have been
+committed. `--json`'s contract is `nen.wc.squash/v0.1`: `{ contract, onto,
+mergeBase, folded: [sha, ...], newSha, dryRun }` — `folded` is oldest first;
+`newSha` is `null` for a dry run and for "nothing to squash". Exit 0 on a
+squash, a dry run, or "nothing to squash"; exit 2 on every refusal above,
+naming it; exit 1 when a git command this verb did not expect to fail fails
+anyway (an unresolvable `--onto`, a fetch that cannot reach the upstream) —
+never folded into one of the exit-2 refusals, exactly as
+[`wc classify`](#nen-wc-classify)'s own git-failure rule.
+
+**Example**
+
+```bash
+nen wc squash --repo . --onto main --message-file message.txt --dry-run
+```
+```text
+would fold 3 commit(s) onto 82d4c9bc5882f21eb8b8d19a27dcedf2406fb316 (--onto main):
+  f362ffd1cc489b413f0ecb40af06a208827d34f3 feat: add one.txt
+  2069b623c8d8885db60ff94bd098ccc821caf271 feat: add two.txt
+  33e9e20d4ef97e60a94a34deb86c8744c5635621 feat: add three.txt
+message:
+  feat(wc): add one/two/three together
+
+  Closes: #99
+```
+```bash
+nen wc squash --repo . --onto main --message-file message.txt
+```
+```text
+  f362ffd1cc489b413f0ecb40af06a208827d34f3 feat: add one.txt
+  2069b623c8d8885db60ff94bd098ccc821caf271 feat: add two.txt
+  33e9e20d4ef97e60a94a34deb86c8744c5635621 feat: add three.txt
+squashed into 2bc2e0e68e8aa13fe7476b190dfccb3e8ac24bf8
+```
+(from a real run, on a throwaway local repository built for this check: three
+commits on `docs-example` folded onto `main` into one, `git log -1 --format=%B`
+afterwards reading exactly `message.txt`'s contents — `feat(wc): add
+one/two/three together`, blank line, `Closes: #99`)
 
 <a id="family-stage"></a>
 
