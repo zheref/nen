@@ -1219,8 +1219,17 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
         ["--run"],
         "sends a build to a declared target once --run is given; without it the verb renders the resolved plan and spawns nothing at all, which is a property of nen rather than a claim about the declaration's argv",
       ),
-      dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given"),
-      run: DRY("starts a long-running production process on this terminal unless --dry-run is given"),
+      // `--target <name>` DOES NOT MOVE EITHER ROW, and that is the point of
+      // stating it here. A launch target adds two more spawns to the bare form
+      // -- the declared device probe before the verb, the declared after-steps
+      // once it exits -- so the targeted form is MORE mutating than the bare
+      // one, never less, and `dry-run-gated` already refuses it. The
+      // `--dry-run` side is unchanged for the reason it was admitted at all: a
+      // dry run of these two spawns nothing whatever, the probe included, which
+      // is a property of nen rather than a claim about the declaration's argv
+      // (../shu/run.test.ts pins zero recorded calls for a targeted dry run).
+      dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given -- and with --target <name> also spawns the declared device probe before it and the target's after-steps once it exits"),
+      run: DRY("starts a long-running production process on this terminal unless --dry-run is given -- and with --target <name> also spawns the declared device probe before it and the target's after-steps once it exits"),
       coverage: DRY("spawns the lane's declared coverage command unless --dry-run is given -- a coverage run writes its report tree by definition"),
       // THE ONE ROW IN THIS TABLE WITH A SECOND READ GATE, and it is a
       // property of nen rather than of anybody's declaration: `--from-artifacts`

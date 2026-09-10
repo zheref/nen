@@ -1837,3 +1837,18 @@ describe("classifyInvocation -- refuse the WHOLE run, not the offending step", (
     ]);
   });
 });
+
+describe("shu's launch targets do not move the dev/run rows", () => {
+  it("classifies '--target <name>' exactly as the bare form does", () => {
+    // A launch target ADDS two spawns to the bare form -- the declared device
+    // probe, and the after-steps -- so the targeted form is more mutating than
+    // the bare one and `dry-run-gated` already covers it. What must keep
+    // holding is the other half: `--dry-run` on either verb spawns nothing at
+    // all, the probe included, which is why it is certifiable in the first
+    // place.
+    expect(classifyCommand("nen shu dev --target sim").classification).toBe("mutating");
+    expect(classifyCommand("nen shu run --target bench").classification).toBe("mutating");
+    expect(classifyCommand("nen shu dev --target sim --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen shu run --target bench --dry-run").classification).toBe("read-only");
+  });
+});
