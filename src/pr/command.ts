@@ -160,14 +160,16 @@ request-reviews:
   (zheref/nen#160). Request on the MAINTAINER's user token -- a bot
   token silently no-ops on the user route (S6); this verb cannot
   enforce which credential ran it, only warn.
-  --add-reviewers <a,b>  Logins, resolved one by one: a login this pull
-                         request already knows as a Bot (its own
-                         reviewRequests or timelineItems) is routed to
-                         the bot mutation; a login that reads as a
-                         collaborator of --target is routed to
-                         'gh pr edit --add-reviewer'; a login that
-                         resolves to NEITHER is refused (exit 2), naming
-                         it, and pointing at --add-bots.
+  --add-reviewers <a,b>  Logins, resolved one by one: an entry containing
+                         a '/' (an 'org/team' slug) is a TEAM and goes
+                         straight to 'gh pr edit --add-reviewer', no
+                         lookup; a bare login this pull request already
+                         knows as a Bot (its own reviewRequests or
+                         timelineItems) is routed to the bot mutation; a
+                         bare login that reads as a collaborator of
+                         --target is routed to 'gh pr edit --add-reviewer';
+                         a bare login that resolves to NEITHER is refused
+                         (exit 2), naming it, and pointing at --add-bots.
   --add-bots <id,id>     Bot NODE IDS (GraphQL global ids, e.g.
                          'BOT_xxxxxxxxxxxx'), passed straight through to
                          the mutation's botIds -- the one way to request
@@ -176,8 +178,8 @@ request-reviews:
                          ./bots.ts's header).
   --dry-run              Resolution still runs (this verb is not
                          network-free even here) but nothing is
-                         requested; prints which route -- bot or user --
-                         each name or id went to instead.
+                         requested; prints which route -- bot, user or
+                         team -- each name or id went to instead.
 
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
@@ -548,31 +550,64 @@ function doRetarget(context: CommandContext): number {
 interface ReviewerRoute {
   readonly name: string;
   readonly via: "add-reviewers" | "add-bots";
-  readonly route: "bot" | "user";
+  readonly route: "bot" | "user" | "team";
   /** The bot's resolved node id -- only ever set on a "bot" route. */
   readonly id: string | null;
 }
 
+/**
+ * `route.route`'s human word for `routeLine()` below -- a `switch` over the
+ * three-member union rather than a chained ternary (Copilot review, PR #177):
+ * a route this file adds a fourth member to in future gets a compiler error
+ * on this function (TypeScript proves the switch exhaustive) instead of a
+ * silent fall-through inside one more `? :`.
+ */
+function routeDetail(route: ReviewerRoute): string {
+  switch (route.route) {
+    case "bot": {
+      // The id is shown only when it is NEW information -- resolved from a
+      // --add-reviewers LOGIN. On an --add-bots route `route.id` is always
+      // the same string as `route.name`; repeating it would tell the reader
+      // nothing `--add-bots BOT_x -> bot [add-bots]` does not already say.
+      const showId = route.id !== null && route.via === "add-reviewers";
+      return `bot${showId ? ` (id ${route.id})` : ""}`;
+    }
+    case "team":
+      return "team";
+    case "user":
+      return "user";
+  }
+}
+
 function routeLine(route: ReviewerRoute): string {
-  // The id is shown only when it is NEW information -- resolved from a
-  // --add-reviewers LOGIN. On an --add-bots route `route.id` is always the
-  // same string as `route.name`; repeating it would tell the reader nothing
-  // `--add-bots BOT_x -> bot [add-bots]` does not already say.
-  const showId = route.route === "bot" && route.id !== null && route.via === "add-reviewers";
-  const detail = route.route === "bot" ? `bot${showId ? ` (id ${route.id})` : ""}` : "user";
-  return `  ${route.name} -> ${detail} [${route.via}]`;
+  return `  ${route.name} -> ${routeDetail(route)} [${route.via}]`;
 }
 
 /**
  * Resolves every `--add-reviewers` login to a route, refusing (exit 2) any
- * that resolves to neither. See ./bots.ts's header for why a Bot and a User
- * need two different reads to tell apart, and why a login that resolves to
- * neither is refused here rather than handed to `gh pr edit --add-reviewer`
- * on the chance it works.
+ * BARE login that resolves to neither a known Bot nor a collaborator. See
+ * ./bots.ts's header for why a Bot and a User need two different reads to
+ * tell apart, and why a login that resolves to neither is refused here
+ * rather than handed to `gh pr edit --add-reviewer` on the chance it works.
  *
- * Returns `null` for `known` when there is nothing to resolve (`logins` is
- * empty) -- the one call this makes (fetchPrAndKnownBots) is skipped
- * entirely rather than spent finding out a bot never named needs no id.
+ * A TEAM SLUG (`org/team`) NEVER REACHES EITHER LOOKUP. `gh pr edit
+ * --add-reviewer` resolves a User login and a team slug through the exact
+ * same `requestReviewsByLogin` mutation -- the bot detour this function also
+ * runs (zheref/nen#160/#174) sits BESIDE that route, not in front of it, and
+ * neither of the two reads that gate entry to it can even answer for a team:
+ * a Bot node never carries a "/" (its `login` is a plain reviewer handle,
+ * see ./bots.ts), and `collaborators(login:)` is a GitHub COLLABORATOR
+ * filter that only ever resolves a user, never a team. Refusing a team slug
+ * for failing a collaborator check that was never about teams regressed
+ * `--add-reviewers org/team` the day #174 added that check in front of
+ * every name uniformly; "/" is the one syntactic tell GitHub itself uses to
+ * write a team slug, so it is used here to route a team STRAIGHT to the
+ * user/team path, resolving nothing first.
+ *
+ * Returns `null` for `known` when nothing NEEDED the known-bots read --
+ * `logins` is empty, or every entry is a team slug -- so `fetchPrAndKnownBots`
+ * is skipped entirely rather than spent finding out a bot never named needs
+ * no id.
  */
 function resolveReviewerLogins(
   seams: Seams,
@@ -582,13 +617,19 @@ function resolveReviewerLogins(
 ): { readonly known: PrAndKnownBots | null; readonly routes: readonly ReviewerRoute[]; readonly resolvedBotIds: readonly string[]; readonly userLogins: readonly string[] } {
   if (logins.length === 0) return { known: null, routes: [], resolvedBotIds: [], userLogins: [] };
 
-  const known = fetchPrAndKnownBots(seams, target, prNumber);
+  let known: PrAndKnownBots | null = null;
   const routes: ReviewerRoute[] = [];
   const resolvedBotIds: string[] = [];
   const userLogins: string[] = [];
   const unresolved: string[] = [];
 
   for (const login of logins) {
+    if (login.includes("/")) {
+      userLogins.push(login);
+      routes.push({ name: login, via: "add-reviewers", route: "team", id: null });
+      continue;
+    }
+    known ??= fetchPrAndKnownBots(seams, target, prNumber);
     const bot = known.bots.find((candidate): boolean => candidate.login.toLowerCase() === login.toLowerCase());
     if (bot !== undefined) {
       resolvedBotIds.push(bot.id);

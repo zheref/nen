@@ -652,6 +652,80 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.out.join("\n")).toMatch(/requested sasuke/);
   });
 
+  // Regression flagged post-#174: that PR started resolving EVERY
+  // --add-reviewers login as a Bot-or-collaborator, uniformly -- which also
+  // caught a TEAM SLUG ('org/team'), refusing it at exit 2 even though
+  // 'gh pr edit --add-reviewer' has always accepted one, unresolved, through
+  // the exact same requestReviewsByLogin mutation a User login travels. A
+  // '/' is the one syntactic tell GitHub itself uses for a team slug, so an
+  // entry containing one now routes straight to the user/team path -- no
+  // known-bots read, no collaborator lookup -- exactly as it did before #174.
+  it("routes a team slug (org/team) straight to gh pr edit --add-reviewer, with no bot-or-collaborator lookup at all", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${requestReviewsArgv(KNOWN_BOTS_TARGET, 9, ["acme/reviewers"]).join(" ")}`, result: {} },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "acme/reviewers"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/requested acme\/reviewers/);
+  });
+
+  it("--dry-run reports a team slug as 'team' and makes no GitHub call to resolve it", async () => {
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "acme/reviewers", "--dry-run"],
+      null,
+      STUB_SEAMS,
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/acme\/reviewers -> team \[add-reviewers\]/);
+  });
+
+  it("a mixed list routes each entry to its own lane -- team straight through, a known bot to the mutation, a collaborator to gh pr edit", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+    ];
+    const result = await capture(
+      [
+        "pr",
+        "request-reviews",
+        "--target",
+        "zheref/nen",
+        "--pr",
+        "9",
+        "--add-reviewers",
+        "acme/reviewers,copilot-pull-request-reviewer,sasuke",
+        "--dry-run",
+      ],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/acme\/reviewers -> team \[add-reviewers\]/);
+    expect(out).toMatch(/copilot-pull-request-reviewer -> bot \(id BOT_1\) \[add-reviewers\]/);
+    expect(out).toMatch(/sasuke -> user \[add-reviewers\]/);
+  });
+
+  it("a bare unknown login still refuses (exit 2) even alongside a team slug that routes cleanly", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "ghost").join(" ")}`, result: COLLABORATOR_NONE },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "acme/reviewers,ghost"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/'ghost'/);
+    expect(result.err.join("\n")).not.toMatch(/acme\/reviewers/);
+    expect(result.err.join("\n")).toMatch(/--add-bots/);
+  });
+
   it("--add-bots routes a node id straight to botIds, with no --add-reviewers resolution at all", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
