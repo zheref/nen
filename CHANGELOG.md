@@ -7,6 +7,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 ### Fixed
 
 - **repo** — `nen repo resolve` and `nen repo scenario` refuse a `--repo` (or, for `resolve`'s no-token form, a current directory) carrying NEITHER `nen/repos.json` NOR the legacy `schemas/repos.json` at exit **2**, naming the file, instead of falling through to a generic exit-1 failure indistinguishable from an unresolved token or an unrecorded scenario. A missing registry is a PRECONDITION neither verb can proceed past at all — the same class of thing as an omitted `--repo` or `--from` beside a token, both already exit 2 in this family — not a data problem inside a file that opened fine. A registry that is present but malformed is unaffected and stays exit 1, matching how `nen commit format` already treats a malformed (as opposed to absent) `nen/workflow.json` (`nen repo inventory` never reads the registry and is unaffected)
+- **shu** — `eslint.config.js` adds `.claude/**` to its ignore list, beside `coverage/**`: `eslint .` was sweeping every sibling worktree under `.claude/worktrees/`, warning on a stale `eslint-disable` comment inside another effort's generated `coverage/lcov-report/*.js` on every `nen shu lint` run. `.gitignore` gains `.claude/worktrees/` (not the whole `.claude/` directory, which carries no tracked files today but may hold committed configuration later)
 
 ### Added
 

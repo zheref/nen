@@ -29,3 +29,13 @@ Reports/
 # skills into this repository. It is scratch space for the port, not part of
 # it -- nothing here is ever imported, and it must never be committed.
 .ref/
+
+# `.claude/worktrees/` -- where Kurapika (and every other local agent) checks
+# out its own working branch via `git worktree add`, one full checkout per
+# effort, each carrying its own `node_modules/`, `dist/` and `coverage/`.
+# `worktrees/` ONLY, not the whole `.claude/` directory: nothing under
+# `.claude/` is tracked today (`git ls-files .claude` is empty), but a
+# committed `.claude/` config -- agent definitions, hooks, skills -- may exist
+# here one day the way it already does in hatsu, and this line must not
+# pre-emptively ignore it.
+.claude/worktrees/
