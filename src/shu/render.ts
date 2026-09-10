@@ -1075,7 +1075,13 @@ export function resolveLaunch(
   // function's contract says "a token nothing can fill would otherwise reach a
   // real command line as itself"; this is the half of that sentence the
   // after-step guard could not reach.
-  const inArgv = tokensUsed(steps);
+  //
+  // AND IT SCANS `target.args`, NOT THE COMPOSED ARGV. The composed steps carry
+  // the verb's OWN declared argv too, and a token there is a different fact about
+  // a different pointer -- true of a bare `nen shu dev` with no target at all,
+  // which this function never sees. Refusing it here would name
+  // `project.launch.<name>.args` for a string the target never wrote.
+  const inArgv = tokensUsed([{ exe: "", argv: target.args }]);
   if (inArgv.length > 0) {
     throw new VerbUsageError(
       `launch target '${requested}' names ${inArgv.join(" and ")} in project.launch.${requested}.args, and nen substitutes ${DEVICE_ID_TOKEN} and ${ARTIFACT_TOKEN} in the target's 'after' steps only. An argument written here reaches '${onLane.verb}' on lane '${onLane.lane}' as the literal token. Move the step that needs the value into 'after', or write the argument this build needs literally.`,

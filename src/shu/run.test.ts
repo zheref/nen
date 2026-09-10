@@ -2245,6 +2245,39 @@ describe("a launch token written into `args` is refused, not delivered as itself
     expect(result.seams.calls).toEqual([]);
   });
 
+  it("does NOT refuse a token the VERB's own argv carries -- that is another pointer", async () => {
+    // Copilot's finding on zheref/nen#158: scanning the composed argv would name
+    // `project.launch.<name>.args` for a string the target never wrote, and would
+    // refuse a declaration that is wrong in a way this refusal is not about --
+    // a bare `nen shu dev` with no target at all has the same verb argv and
+    // never reaches this function.
+    const project = oneLane(
+      {
+        verbs: {
+          only: {
+            dev: {
+              exe: "placeholder-tool",
+              argv: ["serve", "--out", "{artifact}"],
+              artifacts: ["build/Placeholder.app"],
+            },
+          },
+        },
+        launch: {
+          box: {
+            verb: "dev",
+            after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+          },
+        },
+      },
+      undefined,
+    );
+    const result = await withDeclaration(project, ["dev", "--target", "box", "--dry-run"], {
+      platform: "darwin",
+    });
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).not.toContain("in project.launch.box.args");
+  });
+
   it("refuses {device.id} there too, and names both when both are written", async () => {
     const project = oneLane(
       {
