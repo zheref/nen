@@ -555,14 +555,32 @@ interface ReviewerRoute {
   readonly id: string | null;
 }
 
+/**
+ * `route.route`'s human word for `routeLine()` below -- a `switch` over the
+ * three-member union rather than a chained ternary (Copilot review, PR #177):
+ * a route this file adds a fourth member to in future gets a compiler error
+ * on this function (TypeScript proves the switch exhaustive) instead of a
+ * silent fall-through inside one more `? :`.
+ */
+function routeDetail(route: ReviewerRoute): string {
+  switch (route.route) {
+    case "bot": {
+      // The id is shown only when it is NEW information -- resolved from a
+      // --add-reviewers LOGIN. On an --add-bots route `route.id` is always
+      // the same string as `route.name`; repeating it would tell the reader
+      // nothing `--add-bots BOT_x -> bot [add-bots]` does not already say.
+      const showId = route.id !== null && route.via === "add-reviewers";
+      return `bot${showId ? ` (id ${route.id})` : ""}`;
+    }
+    case "team":
+      return "team";
+    case "user":
+      return "user";
+  }
+}
+
 function routeLine(route: ReviewerRoute): string {
-  // The id is shown only when it is NEW information -- resolved from a
-  // --add-reviewers LOGIN. On an --add-bots route `route.id` is always the
-  // same string as `route.name`; repeating it would tell the reader nothing
-  // `--add-bots BOT_x -> bot [add-bots]` does not already say.
-  const showId = route.route === "bot" && route.id !== null && route.via === "add-reviewers";
-  const detail = route.route === "bot" ? `bot${showId ? ` (id ${route.id})` : ""}` : route.route === "team" ? "team" : "user";
-  return `  ${route.name} -> ${detail} [${route.via}]`;
+  return `  ${route.name} -> ${routeDetail(route)} [${route.via}]`;
 }
 
 /**
