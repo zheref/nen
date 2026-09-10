@@ -988,7 +988,10 @@ edit --add-reviewer`, unchanged from before. The split exists because `gh pr
 edit --add-reviewer` resolves through GitHub's `requestReviewsByLogin`
 mutation, which never resolves a Bot reviewer at all — the exact refusal
 this verb used to hand straight back with no route around it
-([zheref/nen#160](https://github.com/zheref/nen/issues/160)). Request on
+([zheref/nen#160](https://github.com/zheref/nen/issues/160)). An
+`--add-reviewers` entry containing a `/` (an `org/team` slug) is a **team**
+and goes straight to `gh pr edit --add-reviewer` with no bot-or-collaborator
+lookup at all, exactly as it did before that resolution existed. Request on
 the MAINTAINER's user token — a bot token silently no-ops on the user route
 (S6); this verb cannot enforce which credential ran it, only warn in its
 usage text.
