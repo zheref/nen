@@ -29,3 +29,7 @@ Reports/
 # skills into this repository. It is scratch space for the port, not part of
 # it -- nothing here is ever imported, and it must never be committed.
 .ref/
+
+# `bun build --compile` drops a `.<hash>.bun-build` scratch file in the repository
+# root while it links the binary. It is build residue, never source.
+.*.bun-build
