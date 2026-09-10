@@ -107,6 +107,27 @@ inconsistency across the surface, and it is tracked as
 the portable habit is to pass an absolute path to any of the flags in this
 table, or to run the verb from the directory those paths are relative to.
 
+### Containment
+
+Every path a declaration states is repo-root-relative, and nen refuses one that
+leaves the tree `--repo` pointed at — at exit **2**, before anything is spawned,
+read or written, naming the pointer that stated it. The test is against the path
+the **kernel would actually reach**, `realpath`-resolved, not against its
+spelling: `build/payload` reads as plainly inside the repository and is refused
+just the same when `build/` is a symlink to somewhere else, with the refusal
+naming the link and where it points
+([zheref/nen#157](https://github.com/zheref/nen/issues/157)). A symlink that
+stays inside the tree is ordinary and allowed — the question is where the path
+lands, never whether a link was involved. It holds for
+`project.lanes.<lane>.cwd`, a `path` precondition, every `artifacts[i]`, a
+[`project.launch.<name>.artifact`](#nen-shu-dev), a step's `stdoutTo`, the
+coverage and test reports [`shu coverage`](#nen-shu-coverage) and
+[`shu test-report`](#nen-shu-test-report) read back, and — the flag-stated
+member of the same family — [`report render --out`](#nen-report-render).
+`nen schema check` does **not** answer it: the loader has no filesystem, so a
+`cwd` of `../../../../etc` reads as a well-formed declaration and is refused at
+the moment of use instead. Pointers are checked at load; paths at use.
+
 ### `--target <owner/name>` names the GitHub repository
 
 A verb that calls `gh` needs the repository on GitHub, which is a different
