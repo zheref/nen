@@ -162,4 +162,25 @@ describe("parseLedger -- an unrecognised file is not a fresh start", () => {
       expect(parseLedger(bad)).toBeNull();
     }
   });
+
+  it("refuses a well-TYPED ledger whose numbers are not meaningful", () => {
+    // Copilot, PR #185. `cap` and `iterations` are the two numbers the whole
+    // enforcement is computed from, and an integer is not the same as a
+    // meaningful one: a cap below 1 is a loop nothing could claim, an
+    // `iterations` below 1 contradicts a ledger that exists only because a claim
+    // was made, and `iterations > cap` is a state the claim rule cannot produce
+    // (it refuses at `>=`). Each would reach the caller as nonsense -- a
+    // negative `remaining`, a cap that never fires -- rather than as a refusal.
+    for (const bad of [
+      { cap: 0 },
+      { cap: -1 },
+      { iterations: 0 },
+      { iterations: -2 },
+      { cap: 3, iterations: 4 },
+    ]) {
+      expect(parseLedger({ ...ledger(), ...bad }), JSON.stringify(bad)).toBeNull();
+    }
+    // The boundary that IS legitimate: a loop sitting exactly at its cap.
+    expect(parseLedger({ ...ledger(), cap: 3, iterations: 3 })).not.toBeNull();
+  });
 });

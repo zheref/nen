@@ -270,7 +270,19 @@ function readLedger(path: string): LoopLedger | null {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
-  } catch {
+  } catch (error) {
+    // ONLY "IT IS NOT THERE" MEANS "NO LEDGER" (Copilot, PR #185). A blanket
+    // catch read EACCES, EPERM, EISDIR and every transient IO failure as "this
+    // loop has not begun", which restarts the count -- handing out a whole
+    // fresh cap on exactly the machine that could not read how much of the old
+    // one was spent. That is the one direction this verb must never fail in,
+    // and it flatly contradicted the paragraph above it.
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      throw new VerbUsageError(
+        `the ledger at ${path} could not be read (${code ?? String(error)}). Refusing rather than treating it as a loop that never began: a fresh start here would hand out a whole cap's worth of iterations on the one machine that cannot tell how much of the old cap was already spent.`,
+      );
+    }
     return null;
   }
   let value: unknown;

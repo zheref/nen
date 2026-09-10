@@ -204,6 +204,17 @@ export function parseLedger(value: unknown): LoopLedger | null {
   if (id === null || line === null || task === null || condition === null) return null;
   if (startedAt === null || lastAt === null || cap === null || iterations === null) return null;
   if (typeof record["released"] !== "boolean") return null;
+  // THE INVARIANTS, CHECKED HERE RATHER THAN TRUSTED DOWNSTREAM (Copilot, PR
+  // #185). `cap` and `iterations` are the two numbers the whole enforcement is
+  // computed from, and a well-typed integer is not the same as a meaningful one:
+  // a cap of 0 or below is a loop nothing could ever claim, an `iterations`
+  // below 1 contradicts a ledger that only exists because a claim was made, and
+  // `iterations > cap` is a state the claim rule cannot produce -- it refuses at
+  // `>=` -- so a file carrying one was written by something else. Each would
+  // reach the caller as nonsense rather than a refusal (a negative `remaining`,
+  // a cap that never fires), and this reader's contract is that anything it does
+  // not recognise is refused rather than half-understood.
+  if (cap < 1 || iterations < 1 || iterations > cap) return null;
   const reason = record["releaseReason"];
   return {
     contract: LOOP_LEDGER_CONTRACT,

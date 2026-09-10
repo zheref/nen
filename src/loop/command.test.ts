@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -256,5 +256,35 @@ describe("nen loop iterate -- izanagi's cap, enforced across a loop", () => {
     });
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("Refusing rather than starting the count again");
+  });
+
+  it("refuses an UNREADABLE ledger rather than reading it as a loop that never began", async () => {
+    // Copilot, PR #185. A blanket catch read EACCES/EPERM/EISDIR as "no ledger",
+    // which restarts the count -- handing out a whole fresh cap on exactly the
+    // machine that cannot tell how much of the old one was spent. Only "it is
+    // not there" means "no ledger". Driven with a DIRECTORY at the ledger's own
+    // path, which reproduces the class (EISDIR) without needing chmod, and so
+    // behaves the same on every CI lane including the one running as root.
+    const root = repo();
+    mkdirSync(join(root, ".nen", "loop", "sweep.json"), { recursive: true });
+    const result = await capture(["loop", "iterate", "--id", "sweep", "--line", LINE], {
+      repoFlag: root,
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("could not be read");
+    expect(result.err.join("\n")).toContain("a whole cap's worth of iterations");
+  });
+
+  it("refuses a ledger whose numbers are not meaningful", async () => {
+    const root = repo();
+    await capture(["loop", "iterate", "--id", "sweep", "--line", LINE], { repoFlag: root });
+    const at = join(root, ".nen", "loop", "sweep.json");
+    const stored = JSON.parse(readFileSync(at, "utf8")) as Record<string, unknown>;
+    writeFileSync(at, JSON.stringify({ ...stored, iterations: 99 }), "utf8");
+    const result = await capture(["loop", "iterate", "--id", "sweep", "--line", LINE], {
+      repoFlag: root,
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("is not a 'nen.loop.iterate/v0.1' ledger");
   });
 });
