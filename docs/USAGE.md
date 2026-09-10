@@ -3989,7 +3989,7 @@ nen canon mirror generate --rules-dir <dir> --canon-values <path>
 | `--header-template <template>` | yes | `{ref}`/`{scenario}`/`{file}` placeholders. | Caller's own convention. |
 | `--not-mirrored a,b` | yes (may be empty) | Rule files excluded from mirroring. | |
 | `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2). |
-| `--repo <path>` | no | Not used -- this verb operates purely on the paths given. | |
+| `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values` and `--out-dir` resolve against this root, not the process's directory; an absolute value is used as-is. It used to say "not used", which was true before that change and is the sentence a caller passing relative paths from outside the repository would have been misled by. |
 
 **Output and exit codes** -- prints `written: <list>`, `unchanged: <list>`, `deleted (orphaned): <list>` (each `(none)` when empty). `--json`: `{ written, unchanged, deleted }`. Exit 0 always on a completed run (there is no "drift" concept here, only "wrote/didn't write"); exit **2** on an unreadable `--canon-values` — the shared reader's named refusal, `could not read '<resolved path>' (ENOENT). --canon-values names the vocabulary every mirrored rule is keyed by, ...`, where it used to be a raw errno at exit 1 ([#101](https://github.com/zheref/nen/issues/101)); exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a rules-dir generation error.
 
@@ -7062,7 +7062,7 @@ nen surface mirror generate --source <dir> --surface codex|cursor --out <dir>
 | `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused. On a surface that keeps personas as **files**, a persona that would mirror to an **empty frontmatter block** — no fence in the source, or a fence holding only keys that surface does not read — is refused at exit 2: the file written would carry no frontmatter at all, and there would be nothing for the surface to route on. On a surface whose personas are **prose** (the appendix), the same file is fine, because frontmatter is not a concept there |
 | `--invocation-prefix <p>` | no | the **source's own** invocation namespace, e.g. `myplugin:` | caller data, never a literal in this binary (§3), for the same reason [`canon mirror generate`](#nen-canon-mirror-generate)'s `--header-template` is a flag. Without it nothing is rewritten; with it, mentions of skills *outside* the mirrored set are rewritten too, because a half-rewritten document is worse than an unrewritten one |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
-| `--repo <path>` | no | Not used — this verb operates purely on the paths given. | |
+| `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values`, `--mirror-dir` and `--markdown-out` resolve against this root, not the process's directory; an absolute value is used as-is. |
 
 **Output and exit codes** — prints `surface:`, `out:`, then `written:`,
 `unchanged:` and `deleted (orphaned):` (each `(none)` when empty); the row's

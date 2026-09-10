@@ -55,10 +55,9 @@ export const splitCommand: Command = {
     }
 
     // Resolved against --repo's root, one base for every path flag
-    // (zheref/nen#100), and resolved BEFORE the try so a malformed --repo stays
-    // the usage error it is rather than becoming "could not read --original".
-    // A diff is read RAW: its hunk headers count bytes, so normalising line
-    // endings here would make the comparison disagree with the file.
+    // (zheref/nen#100), and resolved BEFORE the read so a malformed --repo
+    // stays the usage error it is rather than becoming "could not read
+    // --original".
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     // READ THROUGH THE SHARED READER, so an unreadable diff is the named exit-2
     // refusal every other path flag gives rather than exit 1 (zheref/nen#101).
@@ -66,8 +65,15 @@ export const splitCommand: Command = {
     // answer is a comparison between files: one of them being absent is not a
     // verdict about a split, it is a question that was never asked.
     //
-    // `raw: true` -- a diff's hunk headers count bytes, so normalising line
-    // endings here would make the comparison disagree with the file it read.
+    // `raw: true` -- this verb decides by comparing hunk TEXT for identity, so
+    // the bytes must be the file's own. Normalising `\r\n` to `\n` on one side
+    // of a comparison and not the other reports every hunk of a CRLF branch as
+    // `altered`; normalising both sides would hide a real line-ending change
+    // between them. Either way the answer would be about a rewriting this
+    // process did rather than about the split. (Copilot, PR #198: an earlier
+    // version of this note said hunk headers "count bytes" -- they count LINES.
+    // The reason to read raw is identity of the text, not arithmetic in the
+    // header.)
     const original = readTextFile(
       resolveAgainstRepo(root, originalPath),
       root,
