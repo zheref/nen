@@ -27,6 +27,9 @@ async function capture(argv: readonly string[], run: Seams["run"]): Promise<{ co
     runInteractive: (): never => {
       throw new Error("this verb has no interactive form");
     },
+    runStreamed: (): never => {
+      throw new Error("this verb has no watched form");
+    },
     platform: "linux",
   };
   const code = await runFamily(fanoutCommand, argv, BANKAI_REPO, false, io, seams);

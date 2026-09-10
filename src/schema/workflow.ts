@@ -57,7 +57,7 @@ import {
   requireString,
   SchemaError,
 } from "./errors.js";
-import { withinOneEdit } from "./contract.js";
+import { requireEnum, withinOneEdit } from "./contract.js";
 import { readSchemaJson, resolveSchemaFile, type SchemaLocation } from "./source.js";
 
 /** Where the policy file lives inside the target repository. */
@@ -191,6 +191,16 @@ export interface ReportsPolicy {
 export interface NotificationsPolicy {
   readonly rungs: readonly string[];
   readonly sound: string;
+  /**
+   * How loud an ORDINARY turn is -- one with no gate. `"rung1"` rings only
+   * the first rung `rungs` lists; `"all"` rings every rung `rungs` lists, on
+   * every turn. A gate always rings everything `rungs` lists regardless of
+   * this value, and `turn` can only WITHHOLD an escalation `rungs` already
+   * grants -- it can never conjure a rung `rungs` does not list. nen fires
+   * none of the three rungs itself; this is policy data for whichever host
+   * hook rings them.
+   */
+  readonly turn: "rung1" | "all";
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -268,6 +278,9 @@ export const DEFAULT_REPORT_TEMPLATE = "rikugan";
 export const DEFAULT_CAPTURES = "Reports/captures";
 export const DEFAULT_RUNGS: readonly string[] = ["push", "os", "sound"];
 export const DEFAULT_SOUND = "Glass";
+/** The two values `notifications.turn` may take, in one place. */
+export const TURN_VALUES = ["rung1", "all"] as const;
+export const DEFAULT_TURN: (typeof TURN_VALUES)[number] = "rung1";
 export const DEFAULT_MAX_CYCLES = 20;
 export const DEFAULT_POLL_SECONDS = 300;
 
@@ -302,7 +315,7 @@ export function defaultWorkflow(): Workflow {
       captures: DEFAULT_CAPTURES,
       raw: empty,
     },
-    notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, raw: empty },
+    notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
     commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
     models: { rule: null, surfaces: {}, roles: {}, raw: empty },
@@ -332,7 +345,7 @@ const TESTS_KEYS: readonly string[] = ["required", "extra"];
 const COVERAGE_KEYS: readonly string[] = ["minimum", "recommended", "ideal", "scope"];
 const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
 const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures"];
-const NOTIFICATIONS_KEYS: readonly string[] = ["rungs", "sound"];
+const NOTIFICATIONS_KEYS: readonly string[] = ["rungs", "sound", "turn"];
 const COMMITS_KEYS: readonly string[] = ["allowedAttributionTrailers", "forbiddenTrailers"];
 const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds"];
 
@@ -578,11 +591,16 @@ function parseNotifications(path: string, value: unknown): NotificationsPolicy {
     "notifications",
     value,
     NOTIFICATIONS_KEYS,
-    "A notifications policy's two keys are",
+    "A notifications policy's three keys are",
   );
+  const turnRaw = raw["turn"];
   return {
     rungs: stringsOr(path, "notifications.rungs", raw["rungs"], DEFAULT_RUNGS),
     sound: stringOr(path, "notifications.sound", raw["sound"], DEFAULT_SOUND),
+    turn:
+      turnRaw === undefined || turnRaw === null
+        ? DEFAULT_TURN
+        : requireEnum(path, "notifications.turn", turnRaw, TURN_VALUES),
     raw,
   };
 }
@@ -805,4 +823,42 @@ export function trailerRefusal(commits: CommitsPolicy, key: string): string | nu
     (candidate): boolean => candidate.toLowerCase() === lower,
   );
   return refused ?? null;
+}
+
+/**
+ * Every attribution-trailer refusal message a LOADED policy has for a set of
+ * caller-typed trailer keys, worded once so `nen commit format` and `nen wc
+ * squash` -- the two callers that shape a commit message under this policy --
+ * cannot drift into two different sentences for the same refusal.
+ *
+ * TAKES BARE KEYS, NOT ../commit/format.ts's `Trailer` PAIRS, on purpose:
+ * this module is read by every taxonomy loader and must not grow a dependency
+ * on a commit-formatting type merely to describe one of its own fields.
+ *
+ * AN ABSENT POLICY REFUSES NOTHING, exactly as `nen commit format` has always
+ * behaved: only a repository that STATES `nen/workflow.json` gets an opinion
+ * about its trailers.
+ */
+export function attributionRefusalMessages(
+  loaded: LoadedWorkflow,
+  trailerKeys: readonly string[],
+): readonly string[] {
+  if (!loaded.present) return [];
+  const allowed = loaded.workflow.commits.allowedAttributionTrailers;
+  const refusals: string[] = [];
+  for (const key of trailerKeys) {
+    const refused = trailerRefusal(loaded.workflow.commits, key);
+    if (refused === null) continue;
+    // TWO WHOLE SENTENCES, NOT ONE WITH A HOLE IN IT -- see ../commit/
+    // command.ts's original header for why an empty and a populated allow
+    // list are different facts that read as different sentences.
+    refusals.push(
+      allowed.length === 0
+        ? `trailer key '${key}' is an attribution trailer this repository refuses. '${loaded.path}' admits none at all: its commits.allowedAttributionTrailers is empty. Drop the trailer, or add '${refused}' to that list`
+        : `trailer key '${key}' is an attribution trailer this repository refuses. '${loaded.path}' admits ${allowed
+            .map((k): string => `'${k}'`)
+            .join(", ")} under commits.allowedAttributionTrailers, and '${refused}' is not one of them. Drop the trailer, or add its key to that list`,
+    );
+  }
+  return refusals;
 }

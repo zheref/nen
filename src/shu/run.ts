@@ -43,7 +43,16 @@
 import { lstatSync } from "node:fs";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
-import type { Seams } from "../seam/exec.js";
+import {
+  DEFAULT_POLL_MS,
+  ToolError,
+  type OutputWindow,
+  type Seams,
+  type StreamedChunk,
+  type WatchVerdict,
+} from "../seam/exec.js";
+import type { StallGuard } from "../schema/contract.js";
+import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
 import {
@@ -87,6 +96,35 @@ export interface AssertedPrecondition {
   readonly satisfied: boolean | null;
 }
 
+/**
+ * The stall guard on one step: what was declared, and what happened.
+ *
+ * BOTH HALVES IN ONE OBJECT, because the text rendering is derived from this
+ * report (this file's rule) and a `--dry-run` prints the BUDGETS while a real
+ * run prints the STRIKES. Two fields that could disagree about which guard was
+ * in force is one field too many.
+ *
+ * `at[]` IS MILLISECONDS INTO THE STEP, not a wall clock: a strike is a fact
+ * about how far into this run the build went quiet, and a timestamp would make
+ * two runs of the same build incomparable.
+ *
+ * `stalled` IS THE VERDICT AND IT IS SEPARATE FROM `strikes`. Spending every
+ * strike and recovering is the guard WORKING -- the remedy unwedged the build
+ * and it went on to finish -- while `stalled` means the budgets were breached
+ * again with no remedy left. A reader cannot tell those apart from a count.
+ */
+export interface ShuStallReport {
+  readonly elapsedMs: number;
+  readonly quietMs: number;
+  readonly maxStrikes: number;
+  /** The declared remedy, as it would be spawned. */
+  readonly onStall: RenderedStep;
+  readonly strikes: number;
+  /** Milliseconds into the step at which each remedy ran. */
+  readonly at: readonly number[];
+  readonly stalled: boolean;
+}
+
 export interface ShuStepReport {
   readonly exe: string;
   readonly argv: readonly string[];
@@ -94,6 +132,8 @@ export interface ShuStepReport {
   /** The TOOL's own exit code, verbatim. `null` when nothing was run. */
   readonly exitCode: number | null;
   readonly durationMs: number | null;
+  /** This step's stall guard, or null when it declares none. */
+  readonly stall: ShuStallReport | null;
 }
 
 export interface ShuLogReport {
@@ -159,6 +199,17 @@ export interface ShuReport {
   readonly durationMs: number | null;
   readonly artifacts: readonly ShuArtifactReport[];
   readonly log: ShuLogReport;
+  /**
+   * The build proof this run WROTE, or null.
+   *
+   * IT IS ON EVERY VERB'S REPORT, not only `build`'s, for the reason `target`
+   * is: one family, one document shape, and a reader that had to know which
+   * verbs carry the key would be reading a different contract per verb. Only
+   * `build` ever fills it -- see ./proof.ts -- and it is null on a dry run, on
+   * a red build, and on a green build whose proof could not be written (which
+   * is a line on stderr, never a failed build).
+   */
+  readonly proof: BuildProof | null;
 }
 
 /** `nen.shu.<verb>/v0.1` -- one versioned contract string per verb. */
@@ -420,9 +471,29 @@ export function renderReport(report: ShuReport): readonly string[] {
       step.exitCode !== null
         ? `${argv}  -- exit ${step.exitCode} in ${step.durationMs}ms`
         : report.log.mode === "streamed"
-          ? `${argv}  -- did not start`
+          ? step.stall?.stalled === true
+            ? `${argv}  -- STALLED, still running (nen stopped waiting)`
+            : `${argv}  -- did not start`
           : argv;
     lines.push(labelled(verbPrefix, detail));
+    // THE GUARD, UNDER THE STEP IT GUARDS, so a reader approving a `--dry-run`
+    // sees the remedy beside the command it would be fired at rather than in a
+    // block of its own further down.
+    const stall = step.stall;
+    if (stall !== null) {
+      lines.push(
+        labelled(
+          "on stall",
+          `after ${stall.elapsedMs}ms elapsed AND ${stall.quietMs}ms with no output: ${renderArgv(
+            stall.onStall,
+          )}  (up to ${stall.maxStrikes} time${stall.maxStrikes === 1 ? "" : "s"}${
+            stall.strikes === 0
+              ? ""
+              : `; ran ${stall.strikes} at ${stall.at.map((at): string => `${at}ms`).join(", ")}`
+          }${stall.stalled ? "; STALLED -- every remedy spent" : ""})`,
+        ),
+      );
+    }
   }
   // WHAT A REAL RUN WOULD PUT WHERE, printed only where the steps above still
   // carry the tokens unfilled. A dry run spawns nothing -- the device probe
@@ -443,6 +514,17 @@ export function renderReport(report: ShuReport): readonly string[] {
             .join(", "),
         ),
   );
+  // PRINTED ONLY WHERE THERE IS ONE, unlike every line above it. Ten of the
+  // eleven executing verbs can never write a proof, and a `proof: (none)` row
+  // on all of them would be a line about a thing that verb does not do.
+  if (report.proof !== null) {
+    lines.push(
+      labelled(
+        "proof",
+        `${proofRelativePath(report.proof.lane)}  tree ${report.proof.treeHash} at ${report.proof.at}`,
+      ),
+    );
+  }
   lines.push(labelled("log", report.log.why));
   return lines;
 }
@@ -479,6 +561,7 @@ function assemble(
   exitCode: number | null,
   durationMs: number | null,
   mode: ShuLogReport["mode"],
+  proof: BuildProof | null = null,
 ): ShuReport {
   return {
     contract: contractName(plan.verb),
@@ -495,6 +578,40 @@ function assemble(
     durationMs,
     artifacts: artifactReports(plan, repoRoot),
     log: logReport(mode),
+    proof,
+  };
+}
+
+/**
+ * A step nothing has run yet: the declared guard, no strikes.
+ *
+ * ONE BUILDER FOR EVERY "nothing ran" PATH -- a dry run, the `deploy` gate, an
+ * unmet precondition, the pre-flight before an interactive handover -- so a
+ * `--dry-run` and a real run cannot render the guard differently.
+ */
+function plannedStep(step: RenderedStep, cwd: string): ShuStepReport {
+  return {
+    exe: step.exe,
+    argv: step.argv,
+    cwd,
+    exitCode: null,
+    durationMs: null,
+    stall: declaredStall(step),
+  };
+}
+
+/** The guard a step declares, as a report with nothing having happened yet. */
+function declaredStall(step: RenderedStep): ShuStallReport | null {
+  const guard = step.stall ?? null;
+  if (guard === null) return null;
+  return {
+    elapsedMs: guard.elapsedMs,
+    quietMs: guard.quietMs,
+    maxStrikes: guard.maxStrikes,
+    onStall: guard.onStall,
+    strikes: 0,
+    at: [],
+    stalled: false,
   };
 }
 
@@ -615,7 +732,11 @@ function refuseImpossibleFlags(context: CommandContext, options: RunOptions): vo
  *      anything spawns at all. Without it the resolved plan is printed and
  *      nothing is started, at exit 0.
  */
-export function runVerb(context: CommandContext, repoRoot: string, options: RunOptions): number {
+export async function runVerb(
+  context: CommandContext,
+  repoRoot: string,
+  options: RunOptions,
+): Promise<number> {
   refuseImpossibleFlags(context, options);
   const { project } = openDeclaration(repoRoot);
   // THE TARGET'S LANE IS READ BEFORE ANYTHING IS RENDERED, and that ordering is
@@ -671,7 +792,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
     // anywhere, and a refusal that printed only prose would make `--json`
     // useless in the one case it is most wanted.
     const steps = plannedSteps(plan).map(
-      (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+      (step): ShuStepReport => plannedStep(step, cwd),
     );
     emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
     const cannot = unmet.filter((entry): boolean => entry.satisfied === null);
@@ -697,7 +818,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
   const gated = TARGETED_VERBS.includes(options.verb) && !options.run;
   if (options.dryRun || gated) {
     const steps = plannedSteps(plan).map(
-      (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+      (step): ShuStepReport => plannedStep(step, cwd),
     );
     emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
     // ON STDERR, NOT IN THE DOCUMENT, so `--json` stdout stays exactly one
@@ -718,7 +839,7 @@ export function runVerb(context: CommandContext, repoRoot: string, options: RunO
   if (INTERACTIVE_VERBS.includes(plan.verb)) {
     return runInteractively(context, plan, cwd, repoRoot, preconditions, options.sink);
   }
-  return runCaptured(context, plan, cwd, repoRoot, preconditions, options.sink);
+  return await runCaptured(context, plan, cwd, repoRoot, preconditions, options.sink);
 }
 
 /**
@@ -772,42 +893,221 @@ function relay(context: CommandContext, stdout: string, stderr: string): void {
   }
 }
 
-function runCaptured(
+/**
+ * Assemble whole LINES out of a watched child's chunks and relay them.
+ *
+ * A CHUNK IS NOT A LINE (../seam/exec.ts's `StreamedChunk`), so relaying each
+ * one as it arrives would break a build's output across the terminal at
+ * whatever byte the kernel happened to hand over. The remainder is flushed at
+ * the end, because a tool whose last line carries no newline still said it.
+ * EOL normalisation happens on the assembled text rather than per chunk, for
+ * the reason the seam states: a `\r\n` can straddle two of them.
+ */
+function lineRelay(context: CommandContext): {
+  chunk: (chunk: StreamedChunk) => void;
+  flush: () => void;
+} {
+  const held: Record<StreamedChunk["stream"], string> = { stdout: "", stderr: "" };
+  const write = (stream: StreamedChunk["stream"], line: string): void => {
+    if (line === "") return;
+    if (stream === "stderr") context.io.err(line);
+    else (context.json ? context.io.err : context.io.out)(line);
+  };
+  return {
+    chunk: (chunk): void => {
+      const text = `${held[chunk.stream]}${chunk.text}`.replace(/\r\n/g, "\n");
+      const lines = text.split("\n");
+      held[chunk.stream] = lines.pop() ?? "";
+      for (const line of lines) write(chunk.stream, line);
+    },
+    flush: (): void => {
+      for (const stream of ["stdout", "stderr"] as const) {
+        write(stream, held[stream]);
+        held[stream] = "";
+      }
+    },
+  };
+}
+
+/**
+ * How often to look, derived from what the declaration asked for.
+ *
+ * A FIXED INTERVAL IS WRONG AT BOTH ENDS. The seam's default is five seconds,
+ * which is right for a three-minute budget and useless for a one-second one --
+ * a guard declared in hundreds of milliseconds would fire five seconds late, or
+ * not at all on a step that finished in between. Half the SMALLER budget is the
+ * coarsest interval that can still notice either of them crossing, and the
+ * clamp keeps a tiny declaration from turning into a busy loop and a huge one
+ * from being checked once an hour.
+ */
+function pollFor(guard: StallGuard): number {
+  const half = Math.floor(Math.min(guard.quietMs, guard.elapsedMs) / 2);
+  return Math.max(MIN_POLL_MS, Math.min(DEFAULT_POLL_MS, half));
+}
+
+/** Never busier than this, whatever a declaration asks for. */
+const MIN_POLL_MS = 100;
+
+/** What running one step answered, whichever seam it went through. */
+interface StepOutcome {
+  /** The tool's own code, or null when it never started or was abandoned. */
+  readonly exitCode: number | null;
+  readonly durationMs: number | null;
+  readonly spawnFailed: boolean;
+  readonly stall: ShuStallReport | null;
+}
+
+/**
+ * One WATCHED step: the streaming seam, with this repository's declared remedy
+ * fired at the budgets it declared.
+ *
+ * THE RULE, AND IT IS THE OPERATIONAL CANON THIS EXISTS FOR, UNCHANGED: act
+ * only when BOTH budgets are past -- total elapsed AND a quiet window -- because
+ * a compile can legitimately go quiet early and the elapsed gate is the only
+ * thing that tells a hung one from a healthy one. Each firing resets the quiet
+ * window (the remedy needs a chance to take effect) and costs a strike.
+ *
+ * WHAT NEN DOES NOT DO, AT ANY STRIKE COUNT, is signal the child it started.
+ * The declared remedy kills whatever the repository says to kill -- a wedged
+ * grandchild -- and the build respawns it and carries on; killing the build
+ * itself would throw away every object it has compiled so far, which is the one
+ * thing the canon this implements says never to do. When every strike is spent
+ * and the step is STILL silent, nen stops watching and stops WAITING (the seam's
+ * `abandon`): the child is left running, untouched, the terminal comes back to
+ * the caller, and the report says exactly that. Waiting instead would hang the
+ * caller on the one path where hanging is what they came to be rescued from.
+ */
+async function runWatchedStep(
+  context: CommandContext,
+  step: RenderedStep,
+  guard: StallGuard,
+  cwd: string,
+  env: { readonly env?: Readonly<Record<string, string>> },
+  label: string,
+): Promise<StepOutcome> {
+  const relayer = lineRelay(context);
+  const at: number[] = [];
+  let stalled = false;
+
+  const onWindow = (window: OutputWindow): WatchVerdict => {
+    if (window.elapsedMs < guard.elapsedMs || window.quietMs < guard.quietMs) return "watch";
+    if (at.length >= guard.maxStrikes) {
+      stalled = true;
+      context.io.err(
+        `${label} is STALLED: ${at.length} of ${guard.maxStrikes} declared remedies have run and it has still produced nothing for ${window.quietMs}ms (${window.elapsedMs}ms in). nen does not kill what it started, and will not wait on it either -- the process is STILL RUNNING and is yours to stop. What nen ran is this repository's own project.verbs declaration, nothing nen chose.`,
+      );
+      return "abandon";
+    }
+    at.push(window.elapsedMs);
+    context.io.err(
+      `${label} has produced no output for ${window.quietMs}ms and has been running ${window.elapsedMs}ms -- past this repository's declared budget (elapsedMs ${guard.elapsedMs}, quietMs ${guard.quietMs}). Running its declared remedy, strike ${at.length} of ${guard.maxStrikes}: ${renderArgv(guard.onStall)}`,
+    );
+    const remedy = context.seams.run(guard.onStall.exe, guard.onStall.argv, { cwd, ...env });
+    if (remedy.spawnFailed) {
+      // SAID LOUDLY AND NOT FATAL. The build is still running and may still
+      // recover on its own; what has failed is the repository's own remedy,
+      // which is a fact its maintainer needs and not a reason for nen to give
+      // up on a process that has not failed.
+      context.io.err(
+        `the declared remedy could not be started: '${guard.onStall.exe}'. It is named under this repository's own stall block; install it, or put it on PATH. The step is still running and nen has changed nothing about it.`,
+      );
+    } else {
+      // A NON-ZERO REMEDY IS NOT A FAILURE. The canonical remedy is a targeted
+      // kill, and a kill that matched nothing exits non-zero -- which is the
+      // ordinary answer when the wedged process is already gone. It is reported
+      // and never acted on.
+      relay(context, remedy.stdout, remedy.stderr);
+    }
+    return "reset";
+  };
+
+  const result = await context.seams.runStreamed(step.exe, step.argv, {
+    cwd,
+    ...env,
+    onOutput: relayer.chunk,
+    onWindow,
+    pollMs: pollFor(guard),
+  });
+  relayer.flush();
+
+  const ran = !result.spawnFailed && !result.abandoned;
+  return {
+    exitCode: ran ? result.code : null,
+    durationMs: ran ? result.durationMs : null,
+    spawnFailed: result.spawnFailed,
+    stall: {
+      elapsedMs: guard.elapsedMs,
+      quietMs: guard.quietMs,
+      maxStrikes: guard.maxStrikes,
+      onStall: guard.onStall,
+      strikes: at.length,
+      at,
+      stalled,
+    },
+  };
+}
+
+/** One ORDINARY step: captured, as every step in this family always was. */
+function runCapturedStep(
+  context: CommandContext,
+  step: RenderedStep,
+  cwd: string,
+  env: { readonly env?: Readonly<Record<string, string>> },
+): StepOutcome {
+  const stepStarted = context.seams.now().getTime();
+  const result = context.seams.run(step.exe, step.argv, { cwd, ...env });
+  const durationMs = context.seams.now().getTime() - stepStarted;
+  relay(context, result.stdout, result.stderr);
+  // `result.code` is MEANINGLESS on a spawn failure (../seam/exec.ts's own
+  // words for it) -- typically -1, a value with no exit-code meaning at all --
+  // and `durationMs` measured nothing since the process never started. Both
+  // are reported `null`, the same value this report already uses everywhere
+  // else for "nothing ran" (a dry run, an unreached step): one caller-visible
+  // rule instead of a spawn-failure special case that leaks a sentinel number.
+  return {
+    exitCode: result.spawnFailed ? null : result.code,
+    durationMs: result.spawnFailed ? null : durationMs,
+    spawnFailed: result.spawnFailed,
+    stall: null,
+  };
+}
+
+async function runCaptured(
   context: CommandContext,
   plan: RenderedInvocation,
   cwd: string,
   repoRoot: string,
   preconditions: readonly AssertedPrecondition[],
   sink: ReportSink | undefined,
-): number {
+): Promise<number> {
   const started = context.seams.now().getTime();
   const steps: ShuStepReport[] = [];
+  const env = Object.keys(plan.env).length === 0 ? {} : { env: plan.env };
   for (const [index, step] of plan.steps.entries()) {
-    const stepStarted = context.seams.now().getTime();
-    const result = context.seams.run(step.exe, step.argv, {
-      cwd,
-      ...(Object.keys(plan.env).length === 0 ? {} : { env: plan.env }),
-    });
-    const durationMs = context.seams.now().getTime() - stepStarted;
-    relay(context, result.stdout, result.stderr);
-    // `result.code` is MEANINGLESS on a spawn failure (../seam/exec.ts's own
-    // words for it) -- typically -1, a value with no exit-code meaning at all --
-    // and `durationMs` measured nothing since the process never started. Both
-    // are reported `null`, the same value this report already uses everywhere
-    // else for "nothing ran" (a dry run, an unreached step): one caller-visible
-    // rule instead of a spawn-failure special case that leaks a sentinel number.
+    const label = `step ${index + 1} of ${plan.steps.length}`;
+    const guard = step.stall ?? null;
+    // TWO SEAMS, AND THE DECLARATION PICKS. A step with no guard goes through
+    // the captured seam exactly as it always has -- same call, same buffering,
+    // same output -- because watching a step nobody asked to have watched would
+    // change the behaviour of every verb in this family to buy nothing.
+    const outcome =
+      guard === null
+        ? runCapturedStep(context, step, cwd, env)
+        : await runWatchedStep(context, step, guard, cwd, env, label);
     steps.push({
       exe: step.exe,
       argv: step.argv,
       cwd,
-      exitCode: result.spawnFailed ? null : result.code,
-      durationMs: result.spawnFailed ? null : durationMs,
+      exitCode: outcome.exitCode,
+      durationMs: outcome.durationMs,
+      stall: outcome.stall,
     });
 
-    if (result.spawnFailed) {
+    if (outcome.spawnFailed) {
       // NOT exit 1. "the tool is not installed" and "the tool ran and said no"
       // want different reactions, and ../seam/exec.ts keeps them apart
       // precisely so a caller here does not have to guess.
+      redBuild(context, plan, repoRoot);
       emitReport(
         context,
         sink,
@@ -815,17 +1115,35 @@ function runCaptured(
       );
       throw new ShuRefusal(
         EXIT_TOOL_NOT_INSTALLED,
-        `step ${index + 1} of ${plan.steps.length} could not be started: '${step.exe}'. This repository's declaration names it for '${plan.verb}' on lane '${plan.lane}'; install it, or put it on PATH. nen never installs a toolchain on a repository's say-so.`,
+        `${label} could not be started: '${step.exe}'. This repository's declaration names it for '${plan.verb}' on lane '${plan.lane}'; install it, or put it on PATH. nen never installs a toolchain on a repository's say-so.`,
       );
     }
-    if (result.code !== 0) {
+    if (outcome.stall?.stalled === true) {
+      // A STALLED STEP IS EXIT 1, and it is not the child's verdict -- the child
+      // has not given one and may never. The report carries the strikes, the
+      // budgets and the fact that the process was left running; the sentence
+      // that says so was printed by the watcher as it happened, because a
+      // caller staring at a silent terminal needed it then rather than now.
+      redBuild(context, plan, repoRoot);
       emitReport(
         context,
         sink,
         assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed"),
       );
       context.io.err(
-        `step ${index + 1} of ${plan.steps.length} failed: ${renderArgv(step)} -- exited ${result.code}. nen exits 1 whatever the tool's own code was; the tool's code is in the report above.`,
+        `${label} stalled: ${renderArgv(step)} -- every one of the ${outcome.stall.maxStrikes} declared remedies ran and it went quiet again. nen exits 1; the step itself was never killed and has no exit code to report.`,
+      );
+      return 1;
+    }
+    if (outcome.exitCode !== 0) {
+      redBuild(context, plan, repoRoot);
+      emitReport(
+        context,
+        sink,
+        assemble(plan, cwd, repoRoot, preconditions, steps, 1, context.seams.now().getTime() - started, "streamed"),
+      );
+      context.io.err(
+        `${label} failed: ${renderArgv(step)} -- exited ${outcome.exitCode}. nen exits 1 whatever the tool's own code was; the tool's code is in the report above.`,
       );
       return 1;
     }
@@ -833,9 +1151,72 @@ function runCaptured(
   emitReport(
     context,
     sink,
-    assemble(plan, cwd, repoRoot, preconditions, steps, 0, context.seams.now().getTime() - started, "streamed"),
+    assemble(
+      plan,
+      cwd,
+      repoRoot,
+      preconditions,
+      steps,
+      0,
+      context.seams.now().getTime() - started,
+      "streamed",
+      greenBuild(context, plan, repoRoot),
+    ),
   );
   return 0;
+}
+
+/**
+ * A green `build` writes its proof; every other verb writes nothing.
+ *
+ * A PROOF THAT COULD NOT BE WRITTEN IS A LINE ON STDERR AND NOT A FAILED BUILD.
+ * The build IS green -- that is a fact about the build, and a read-only
+ * filesystem, a git that will not start or a `.nen/` somebody made a file is a
+ * fact about the machine. Turning the second into the first would make a
+ * marker file able to fail a compile, which is exactly the trade
+ * ../report/data.ts refuses in the other direction.
+ */
+function greenBuild(
+  context: CommandContext,
+  plan: RenderedInvocation,
+  repoRoot: string,
+): BuildProof | null {
+  if (plan.verb !== PROOF_VERB) return null;
+  try {
+    return writeProof(context.seams, repoRoot, plan.lane);
+  } catch (error) {
+    context.io.err(
+      `the build was green and its proof could not be written to ${proofRelativePath(plan.lane)}: ${
+        error instanceof ToolError || error instanceof Error ? error.message : String(error)
+      }. The build itself is unaffected; 'nen commit check --require-proof ${plan.lane}' will report that there is no proof.`,
+    );
+    return null;
+  }
+}
+
+/**
+ * A `build` that did NOT come out green removes any proof there was.
+ *
+ * A STALE PROOF IS WORSE THAN NONE. It is a green answer, in a file, to a
+ * question that has since been asked again and answered red -- and every reader
+ * of it (`nen commit check`, `nen report data`) would go on quoting yesterday's
+ * verdict about a tree that no longer builds. Removing it is the only way the
+ * file can keep meaning what it says.
+ *
+ * ONLY A BUILD THAT RAN. An unmet precondition or a refused flag never reaches
+ * here: nothing was executed, so nothing was learned about this tree in either
+ * direction, and an earlier proof is still exactly as true as it was.
+ */
+function redBuild(context: CommandContext, plan: RenderedInvocation, repoRoot: string): void {
+  if (plan.verb !== PROOF_VERB) return;
+  try {
+    removeProof(repoRoot, plan.lane);
+  } catch (error) {
+    /* c8 ignore next 4 -- rmSync(force) raises only on a permission problem */
+    context.io.err(
+      `this lane's build proof could not be removed after a red build (${proofRelativePath(plan.lane)}): ${error instanceof Error ? error.message : String(error)}. Delete it by hand -- it now claims a green build for a tree that did not build.`,
+    );
+  }
 }
 
 /**
@@ -854,7 +1235,7 @@ function runInteractively(
   sink: ReportSink | undefined,
 ): number {
   const steps = plan.steps.map(
-    (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+    (step): ShuStepReport => plannedStep(step, cwd),
   );
   emitReport(context, sink, assemble(plan, cwd, repoRoot, preconditions, steps, null, null, "interactive"));
   return handOver(context, plan, cwd);
@@ -950,6 +1331,9 @@ function runLaunch(
       cwd,
       exitCode: result.spawnFailed ? null : result.code,
       durationMs: result.spawnFailed ? null : durationMs,
+      // A DEVICE PROBE IS NEVER WATCHED. It belongs to a launch, and a launch
+      // hangs off the two verbs ./render.ts's `STALL_GUARDED_VERBS` excludes.
+      stall: null,
     });
     if (result.spawnFailed) {
       throw new ShuRefusal(
@@ -1001,10 +1385,10 @@ function runLaunch(
       [
         ...steps,
         ...plan.steps.map(
-          (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+          (step): ShuStepReport => plannedStep(step, cwd),
         ),
         ...after.map(
-          (step): ShuStepReport => ({ exe: step.exe, argv: step.argv, cwd, exitCode: null, durationMs: null }),
+          (step): ShuStepReport => plannedStep(step, cwd),
         ),
       ],
       null,

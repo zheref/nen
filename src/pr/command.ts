@@ -1,7 +1,8 @@
 // src/pr/command.ts -- `nen pr ready`, `nen pr staleness`, `nen pr body-check`
 // (main), and (verbs/4-remainders, zheref/nen#4) `nen pr fetch`,
 // `nen pr next-blocker`, `nen pr cascade-main`, `nen pr retarget`,
-// `nen pr request-reviews` -- one "pr" family, eight subcommands.
+// `nen pr request-reviews`, `nen pr edit-body` -- one "pr" family, nine
+// subcommands.
 //
 // THREE SUBCOMMANDS, ONE FAMILY. `nen pr ready` (the CON-32 readiness verdict,
 // zheref/nen#2) is the ELDER of the three: it landed on main first, as a direct
@@ -43,6 +44,7 @@ import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
+import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 
 function requireTarget(context: CommandContext): Target {
   const raw = context.args.values["target"];
@@ -71,6 +73,7 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> --add-reviewers a,b
+nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict, the first
@@ -149,7 +152,25 @@ retarget:
 request-reviews:
   gh pr edit --add-reviewer, once per name. Request on the MAINTAINER's
   user token -- a bot token silently no-ops on this call (S6); this verb
-  cannot enforce which credential ran it, only warn.`;
+  cannot enforce which credential ran it, only warn.
+
+edit-body:
+  Replaces the pull request's body OUTRIGHT with the file's bytes -- no
+  trimming, no template, the file becomes the body exactly, through
+  'gh pr edit --body-file'. --body-file is required; there is no inline
+  --body. Refused (exit 2): a missing or unreadable --body-file, an empty
+  or whitespace-only one, a non-numeric/non-positive --pr. The number is
+  CERTIFIED as a pull request before any write -- unlike 'nen issue
+  comment', which deliberately accepts either object class, this verb never
+  writes the wrong object: a number that does not read as a pull request
+  (the target repository's 'pulls/<n>' answers 404/410) is refused before
+  anything changes, worded so it does not claim the number IS an issue --
+  only that it is not a pull request -- and points at 'nen issue edit-body'
+  next. --dry-run still performs that certifying read (this verb is not
+  network-free), then prints the target, the number, the byte count and
+  the first and last line of the body instead of writing. --json:
+  '{ contract: "nen.pr.edit-body/v0.1", target, number, bytes, written,
+  dryRun }'.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -278,7 +299,8 @@ function ready(context: CommandContext): Promise<number> {
 
 export const prCommand: Command = {
   name: "pr",
-  summary: "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews.",
+  summary:
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body.",
   usage: USAGE,
   flags: {
     values: [
@@ -296,8 +318,9 @@ export const prCommand: Command = {
       "trunk",
       "base",
       "add-reviewers",
+      "body-file",
     ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push"],
+    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run"],
   },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("pr", context.args, [
@@ -309,6 +332,7 @@ export const prCommand: Command = {
       "cascade-main",
       "retarget",
       "request-reviews",
+      "edit-body",
     ]);
     // --no-push sits in this family's shared boolean set (above) only because
     // that set has no per-subcommand table (review finding, PR #141) -- so
@@ -321,6 +345,15 @@ export const prCommand: Command = {
     // gap) and growing one is a bigger change than this flag's own PR.
     if (subcommand !== "cascade-main" && context.args.booleans.has("no-push")) {
       throw new VerbUsageError("--no-push is only read by 'pr cascade-main'.");
+    }
+    // Same shape, same reason, for edit-body's own two flags:
+    // `--dry-run` and `--body-file` would otherwise parse cleanly and be
+    // silently ignored on every other `pr` subcommand.
+    if (subcommand !== "edit-body" && context.args.booleans.has("dry-run")) {
+      throw new VerbUsageError("--dry-run is only read by 'pr edit-body'.");
+    }
+    if (subcommand !== "edit-body" && context.args.values["body-file"] !== undefined) {
+      throw new VerbUsageError("--body-file is only read by 'pr edit-body'.");
     }
     switch (subcommand) {
       case "ready":
@@ -337,8 +370,10 @@ export const prCommand: Command = {
         return cascade(context);
       case "retarget":
         return doRetarget(context);
-      default:
+      case "request-reviews":
         return doRequestReviews(context);
+      default:
+        return editBody(context);
     }
   },
 };
@@ -488,4 +523,114 @@ function doRequestReviews(context: CommandContext): number {
   }
   context.io.out(result.message);
   return result.ok ? 0 : 1;
+}
+
+/**
+ * The first and last line of a body, for --dry-run's summary.
+ *
+ * PREVIEW ONLY -- the trailing newline stripped here and the separator split
+ * on are never fed back into `body` or `bytes`, which stay exactly what was
+ * read off disk. Splitting on a bare "\n" left a CRLF file's last displayed
+ * line carrying a trailing "\r" (Copilot review): a caller reading `last
+ * line: done\r` could not tell whether that was really in the file or an
+ * artifact of this rendering. `/\r?\n/` treats CRLF as one line break for
+ * the preview without touching how the actual write reads the file.
+ */
+function bodyBookends(body: string): { readonly first: string; readonly last: string } {
+  const withoutTrailingNewline = body.replace(/\r?\n$/, "");
+  const lines = withoutTrailingNewline.split(/\r?\n/);
+  return { first: lines[0] ?? "", last: lines[lines.length - 1] ?? "" };
+}
+
+// `--pr` IS READ WITH THE HOUSE `/^\d+$/` GUARD HERE, deliberately NOT
+// through this file's own `requirePr()` above (`Number(raw ?? "")`, which
+// accepts `1e3` as 1000 and `0x0c` as 12). ../issue/command.ts's `comment()`
+// draws the same line for the same reason and records it at length: a
+// MUTATING verb that reads a number takes the strict form, because a looser
+// read would silently overwrite the wrong object's body. `requirePr()`
+// predates that discipline and is left as it is for its own four callers
+// (fetch/next-blocker/retarget/request-reviews) -- not this change's fix to
+// make.
+function requirePrStrict(context: CommandContext): number {
+  const raw = context.args.values["pr"];
+  if (raw === undefined) {
+    throw new VerbUsageError("edit-body takes --pr <n>.");
+  }
+  if (!/^\d+$/.test(raw) || Number.parseInt(raw, 10) <= 0) {
+    throw new VerbUsageError(
+      `edit-body takes --pr <n>: a positive whole number, digits only -- got '${raw}'. A looser read would accept '1e3' as 1000 and '0x0c' as 12 and replace the wrong pull request's body.`,
+    );
+  }
+  return Number.parseInt(raw, 10);
+}
+
+function editBody(context: CommandContext): number {
+  const target = requireTarget(context);
+  const pr = requirePrStrict(context);
+
+  const bodyFile = context.args.values["body-file"];
+  if (bodyFile === undefined) {
+    throw new VerbUsageError(
+      "edit-body takes --body-file <path>: a body typed on the command line is a body nobody reviewed, and this verb REPLACES the pull request's body outright.",
+    );
+  }
+
+  // READ RAW AND CHECKED BEFORE ANYTHING IS SENT -- ../issue/command.ts's
+  // comment() makes the same two decisions for the same reasons: a
+  // --dry-run byte count that is not the byte count that would be sent is
+  // not a dry run, and `gh` is handed this SAME path untouched.
+  const body = readTextFile(
+    bodyFile,
+    process.cwd(),
+    "--body-file names the bytes this verb writes as the pull request's new body, so an unreadable one is refused rather than replacing it with nothing.",
+    true,
+  );
+  if (body.trim() === "") {
+    throw new VerbUsageError(
+      `--body-file '${bodyFile}' is empty (or holds only whitespace). Replacing a pull request's body with nothing is never what a caller meant, and it is never assumed.`,
+    );
+  }
+
+  // CERTIFIED BEFORE ANY WRITE -- see ./editbody.ts's header for why a
+  // number that does not read as a pull request is refused (exit 2) rather
+  // than accepted the way 'issue comment' accepts either object class.
+  certifyPullRequest(context.seams, target, pr);
+
+  const bytes = Buffer.byteLength(body, "utf8");
+  const argv = editBodyArgv(target, pr, bodyFile);
+
+  if (context.args.booleans.has("dry-run")) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify(
+          { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: false, dryRun: true },
+          null,
+          2,
+        ),
+      );
+      return 0;
+    }
+    const { first, last } = bodyBookends(body);
+    context.io.out(`would run: gh ${argv.join(" ")}`);
+    context.io.out(`target: ${target.slug}`);
+    context.io.out(`number: ${pr}`);
+    context.io.out(`bytes: ${bytes}`);
+    context.io.out(`first line: ${first}`);
+    context.io.out(`last line: ${last}`);
+    return 0;
+  }
+
+  writePullRequestBody(context.seams, target, pr, bodyFile);
+  if (context.json) {
+    context.io.out(
+      JSON.stringify(
+        { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: true, dryRun: false },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+  context.io.out(`replaced ${target.slug}#${pr}'s body (${bytes} byte(s))`);
+  return 0;
 }

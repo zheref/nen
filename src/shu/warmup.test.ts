@@ -123,6 +123,19 @@ const REMOTE_REF = `git ls-remote --heads origin refs/heads/${BRANCH}`;
 const SWITCH = `git switch -c ${BRANCH} origin/main`;
 const DECLARED_BUILD = "pnpm turbo run build";
 const DECLARED_TEST = "pnpm exec vitest run";
+/**
+ * THE DELEGATED BUILD RECORDS A BUILD PROOF WHEN IT COMES OUT GREEN, and the
+ * first thing that takes is a tree hash from git (../shu/proof.ts). It shows up
+ * in the call order because it really happens: a warm-up that verified a build
+ * has proved something about this tree, and that is exactly what a proof is for.
+ *
+ * ONLY THE FIRST OF ITS TWO CALLS IS HERE, because this fixture scripts neither
+ * -- ScriptedSeams throws on the unscripted one, the proof write reports itself
+ * on stderr, and the BUILD stays green. That is the designed behaviour under
+ * `greenBuild`: a marker file may not fail a compile. The pair is pinned where
+ * it is the subject, in ./proof.test.ts.
+ */
+const PROOF_TREE = "git add -A -- .";
 
 /** The order every git call runs in on a clean tree that is not on the trunk. */
 const CLEAN_ORDER: readonly string[] = [
@@ -236,7 +249,12 @@ describe("the steps, in the one order they may run in", () => {
   it("classifies, then fetches, then branches, then verifies", async () => {
     const result = await capture(["warmup", "--branch", BRANCH, "--tests"], { script: happyPath() });
     expect(result.code).toBe(0);
-    expect(argvOf(result.seams)).toEqual([...CLEAN_ORDER, DECLARED_BUILD, DECLARED_TEST]);
+    expect(argvOf(result.seams)).toEqual([
+      ...CLEAN_ORDER,
+      DECLARED_BUILD,
+      PROOF_TREE,
+      DECLARED_TEST,
+    ]);
   });
 
   it("runs every git call in the repository --repo names, never in the process's own cwd", async () => {
@@ -461,6 +479,7 @@ describe("a dirty working copy", () => {
       REMOTE_REF,
       SWITCH,
       DECLARED_BUILD,
+      PROOF_TREE,
     ]);
     const printed = result.out.join("\n");
     expect(printed).toMatch(/discarding 3 uncommitted path\(s\)/);

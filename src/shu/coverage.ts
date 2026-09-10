@@ -415,11 +415,11 @@ function parseAfterRun(
  * that stdout carries exactly one JSON document. It is not discarded: see this
  * file's header for where it goes in each mode.
  */
-export function runCoverage(
+export async function runCoverage(
   context: CommandContext,
   repoRoot: string,
   options: CoverageOptions,
-): number {
+): Promise<number> {
   const threshold = parseThreshold(options.threshold);
   validateTouched(options);
   const ladder = readLadder(repoRoot, options, threshold);
@@ -433,7 +433,7 @@ export function runCoverage(
 
   let exitCode: number;
   try {
-    exitCode = runVerb(context, repoRoot, {
+    exitCode = await runVerb(context, repoRoot, {
       verb: "coverage",
       lane: options.lane,
       dryRun: options.dryRun,
