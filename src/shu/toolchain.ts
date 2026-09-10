@@ -467,14 +467,36 @@ function ceilingOf(floor: Floor, build: Build): ParsedVersion {
   return { numbers: [0, minor, 0], prerelease: null };
 }
 
-/** Whether an observed version falls inside the range a floor stands for. */
+/**
+ * Whether an observed version falls inside the range a floor stands for.
+ *
+ * THE TWO BOUNDS READ A PRE-RELEASE DIFFERENTLY, ON PURPOSE, and each way
+ * round is the fail-CLOSED one for its own end.
+ *
+ * The FLOOR keeps semver precedence in full, so `0.7.0-rc.1` does not satisfy
+ * `0.7`: a release candidate is not the release, and a floor is a statement
+ * about what has shipped.
+ *
+ * The CEILING COMPARES THE NUMBERS ONLY. Under full precedence `0.9.0-rc.1` is
+ * `< 0.9.0` and slipped inside a `<0.9.0` ceiling -- an observed binary on the
+ * 0.9 LINE, admitted by a build with no idea what 0.9 broke, which is the exact
+ * hole this file's rule exists to close. The pre-floor code had it too
+ * (`0.4.0-rc.1` satisfied a `0.3` pin), so this closes a standing defect rather
+ * than one the widening introduced. At major zero the MINOR is the
+ * breaking-change vehicle, so what matters at the top of the range is which
+ * minor a version is ON and not where it sits inside it -- which is also the
+ * convention every semver range implementation settled on: a pre-release
+ * satisfies a range only where the range names a pre-release at that same
+ * tuple, and a `minimum` names none.
+ */
 export function satisfiesMinimum(floor: Floor, found: string, build: Build = thisBuild()): boolean {
   const observed = parseVersion(found);
   if (observed === null) return false;
   if (compareVersions(observed, { numbers: [floor.major, floor.minor, 0], prerelease: null }) < 0) {
     return false;
   }
-  return compareVersions(observed, ceilingOf(floor, build)) < 0;
+  const asReleased: ParsedVersion = { numbers: observed.numbers, prerelease: null };
+  return compareVersions(asReleased, ceilingOf(floor, build)) < 0;
 }
 
 /**

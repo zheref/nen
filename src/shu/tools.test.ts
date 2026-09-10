@@ -686,6 +686,34 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
     expect(satisfiesMinimum(parseMinimum("0.8", "dependency.minimum"), "0.8.0", later)).toBe(true);
   });
 
+  it("does not let a PRE-RELEASE of the next minor slip under the ceiling", () => {
+    // `0.9.0-rc.1` is `< 0.9.0` under full semver precedence, so it used to
+    // slip inside a `<0.9.0` ceiling -- an observed binary on the 0.9 LINE,
+    // admitted by a build with no idea what 0.9 broke. The pre-floor code had
+    // the same hole one minor down, so this is a standing defect closed rather
+    // than one the widening introduced.
+    const build = buildAt("0.8.0", "0.7");
+    expect(satisfiesMinimum(parseMinimum("0.7", "dependency.minimum"), "0.9.0-rc.1", build)).toBe(
+      false,
+    );
+    expect(satisfiesMinimum(parseMinimum("0.3", "dependency.minimum"), "0.4.0-rc.1", build)).toBe(
+      false,
+    );
+    expect(satisfiesMinimum(parseMinimum("1.4", "dependency.minimum"), "2.0.0-rc.1", build)).toBe(
+      false,
+    );
+    // A pre-release INSIDE the range is still inside it: the ceiling reads the
+    // numbers, it does not refuse every pre-release there is.
+    expect(satisfiesMinimum(parseMinimum("0.7", "dependency.minimum"), "0.8.1-rc.1", build)).toBe(
+      true,
+    );
+    // And the FLOOR keeps full precedence in the other direction: a release
+    // candidate is not the release it precedes.
+    expect(satisfiesMinimum(parseMinimum("0.8", "dependency.minimum"), "0.8.0-rc.1", build)).toBe(
+      false,
+    );
+  });
+
   it("leaves the >=1.0 rule exactly where it was", () => {
     // Above major zero the breaking-change vehicle is the MAJOR, so the floor
     // has nothing to say and must not be consulted: `1.4` means

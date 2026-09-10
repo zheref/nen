@@ -632,8 +632,12 @@ flags:
                    refusal, with no document at all.
                    On 'tools' it is a different contract
                    ('nen.shu.tools/v0.1'), keys in order:
-                   { contract, lane, stack, mode, summary, tools, exitCode },
-                   where summary is
+                   { contract, lane, stack, mode, compatibleMinorFloor,
+                     summary, tools, exitCode },
+                   where compatibleMinorFloor is MAJOR.MINOR -- the lowest
+                   dependency.minimum pin THIS BUILD satisfies, present on
+                   every report including one whose declaration carries no
+                   dependency block -- summary is
                    { checked, satisfied, missing, wrong, notProbed, installed,
                      refused, notInstallable }
                    and each tools[] row is

@@ -2856,11 +2856,17 @@ writes `## vX.Y.0` decides it, in the **same commit** as `VERSION` and
   That is the whole benefit: consumers pinned at or above it read the new binary
   with no repin PR.
 
-The repin bullet itself changes with the rule. It used to be owed
+The pin bullet itself changes with the rule. It used to be owed
 unconditionally — *"repin `0.6` → `0.7`"* on every minor. Now it is owed **only
-when the floor moved**, and a release that leaves the floor alone should say so
-instead: *"the compatibility floor stays `0.7`; a repository pinned `0.7` needs
-no change."*
+when the floor moved**, and the section carries one bullet either way, under a
+**dedicated bold lead-in the guard below matches on**:
+
+- the floor moved → `- **Repin: \`"0.6"\` → \`"0.7"\`, and \`v0.6.0\` → \`v0.7.0\`.** …`
+- the floor stayed → `- **No repin: the compatibility floor stays \`0.7\`.** A repository pinned \`0.7\` needs no change …`
+
+The lead-in must *begin* `Repin:` or `No repin:` — the guard treats any other
+bullet in that section as a real breaking note, which is the safe way for it to
+be wrong.
 
 `src/version.test.ts` is the guard, and it fails the build when the two
 disagree: it reads CHANGELOG.md's **topmost released section** and asserts that
@@ -5987,6 +5993,16 @@ guessing "compatible", which is the fail-open read of the one range where
 compatibility is least guaranteed. The rendered `pinned` range is the *exact*
 range the verdict applies, and a test sweeps both over the same versions, so the
 table can never print a range that disagrees with its own `ok`/`WRONG`.
+
+**A pre-release is read differently at each end of the range**, each way round
+being the fail-closed one for that end. The **floor** keeps semver precedence in
+full, so `0.7.0-rc.1` does not satisfy `0.7` — a release candidate is not the
+release. The **ceiling** compares the numbers only, so `0.9.0-rc.1` does *not*
+sit under a `<0.9.0` ceiling: it is a binary on the 0.9 line, and the minor is
+what the whole rule turns on. (Under plain precedence it did, and so did
+`0.4.0-rc.1` against a `0.3` pin before this release — a standing hole, closed
+here.) A pre-release *inside* the range is still inside it: `0.8.1-rc.1`
+satisfies `0.7` on a 0.8.0 build.
 
 The floor is printed on **every** run, beside the binary's own version
 (`compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)`),

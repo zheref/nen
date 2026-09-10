@@ -61,19 +61,33 @@ interface ReleasedSection {
 const BREAKING_HEADING = "### Breaking / consumer notes";
 
 /**
- * A bullet that only says "repin", which is not by itself a breaking change.
+ * THE DEDICATED MARKER a release cut writes on the pin bullet, and the only
+ * thing this file treats as "not a breaking change".
  *
- * THE REPIN SENTENCE IS THE ONE BULLET THAT USED TO BE UNCONDITIONAL. Under the
- * old exact-minor rule every release owed one, so counting it as evidence of a
- * breaking change would make this guard say "breaking" about every release
- * forever -- which is precisely the reading the compatibility floor exists to
- * end. It is recognised by its own bolded lead-in rather than by position, so a
- * rewording keeps working and a bullet that merely MENTIONS repinning while
- * describing a real break is still counted.
+ * A BOLD LEAD-IN THAT *BEGINS* `Repin:` OR `No repin:`, and nothing looser.
+ * Matching any lead that merely CONTAINS the word would exclude a substantive
+ * bullet such as **"Compatibility requires a repin because …"** and let a
+ * release with real breaking notes ship a stale floor -- the fail-open
+ * direction, which is the whole thing this guard is here to prevent. The marker
+ * is written down in docs/USAGE.md's release section so the cut knows to write
+ * it; a bullet without it counts as substantive, which is the safe way for this
+ * matcher to be wrong.
  */
-function isRepinBullet(bullet: string): boolean {
+const PIN_BULLET = /^(?:no\s+)?repin\b/i;
+
+/**
+ * A bullet that only reports the pin's status, which is not itself a break.
+ *
+ * THE PIN SENTENCE IS THE ONE BULLET THAT USED TO BE UNCONDITIONAL. Under the
+ * old exact-minor rule every release owed a repin, so counting it as evidence
+ * of a breaking change would make this guard say "breaking" about every release
+ * forever -- precisely the reading the compatibility floor exists to end. Under
+ * the new rule the same bullet reports the other outcome too (`No repin: the
+ * compatibility floor stays 0.7`), and both are status rather than breakage.
+ */
+function isPinBullet(bullet: string): boolean {
   const lead = /^\*\*(.+?)\*\*/s.exec(bullet.trim());
-  return lead !== null && /repin/i.test(lead[1] ?? "");
+  return lead !== null && PIN_BULLET.test((lead[1] ?? "").trim());
 }
 
 function topmostRelease(changelog: string): ReleasedSection {
@@ -130,7 +144,7 @@ describe("COMPATIBLE_MINOR_FLOOR", () => {
     // MUST have moved the floor to its own minor; one that carries none (or no
     // such section at all) must have left the floor where it was, which is
     // what lets a consumer's existing pin keep working.
-    const substantive = release.breaking.filter((bullet): boolean => !isRepinBullet(bullet));
+    const substantive = release.breaking.filter((bullet): boolean => !isPinBullet(bullet));
     expect(release.major).toBe(floorMajor);
     if (substantive.length > 0) {
       expect(
@@ -145,14 +159,29 @@ describe("COMPATIBLE_MINOR_FLOOR", () => {
     }
   });
 
+  it("counts a bullet that merely MENTIONS repinning as a breaking note", () => {
+    // The matcher is a marker, not a keyword search. A substantive bullet that
+    // happens to use the word must still count, or a release with real
+    // breaking notes ships a stale floor -- and a stale floor is a build that
+    // silently accepts a pin it breaks.
+    expect(isPinBullet('**Repin: `"0.6"` → `"0.7"`.** …')).toBe(true);
+    expect(isPinBullet("**No repin: the compatibility floor stays `0.7`.** …")).toBe(true);
+    expect(isPinBullet("**Compatibility requires a repin because the exit codes moved.** …")).toBe(
+      false,
+    );
+    expect(isPinBullet("**`nen pr ready` now reads the carve-out.** …")).toBe(false);
+    // No bold lead-in at all is a bullet this matcher must not claim.
+    expect(isPinBullet("Repin: this one has no lead-in")).toBe(false);
+  });
+
   it("reads v0.7.0's section as breaking, which is why the floor is seeded there", () => {
     // The seed, stated as a fact about the file rather than as a constant this
     // test would also have to be edited to change: v0.7.0 moved exit codes and
     // the base every relative own-path flag resolves against, so its notes are
     // breaking and the floor it ships is its own minor. Nothing pinned before
     // this release changes behaviour because of the widening.
-    expect(release.breaking.filter((bullet): boolean => !isRepinBullet(bullet)).length)
+    expect(release.breaking.filter((bullet): boolean => !isPinBullet(bullet)).length)
       .toBeGreaterThan(0);
-    expect(release.breaking.some(isRepinBullet)).toBe(true);
+    expect(release.breaking.some(isPinBullet)).toBe(true);
   });
 });
