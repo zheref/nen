@@ -9,7 +9,7 @@
 // too, which is what makes the darwin-only refusal provable on the linux CI lane
 // and the win32 one.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   existsSync,
   mkdtempSync,
@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -99,6 +99,7 @@ async function withDeclaration(
   project: unknown,
   argv: readonly string[],
   options: Options = {},
+  seed?: (root: string) => void,
 ): Promise<Captured> {
   const dir = mkdtempSync(join(tmpdir(), "nen-shu-decl-"));
   try {
@@ -107,11 +108,44 @@ async function withDeclaration(
       join(dir, "nen", "contract.json"),
       JSON.stringify({ $schema: "nen.contract/v0.1", project }),
     );
+    // `seed` RUNS AFTER THE DECLARATION AND BEFORE THE VERB, which is the only
+    // order the containment tests can use: the links they lay down are what the
+    // declaration already names, and a link made afterwards would be a fact the
+    // run never saw.
+    seed?.(dir);
     return await capture(argv, { ...options, repo: dir });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * A directory outside any repository, and the link that reaches it, cleaned up.
+ *
+ * ONE HELPER RATHER THAN SIX COPIES. Every symlink-escape test below needs the
+ * same three moves -- make somewhere else, make the parent the link will sit in,
+ * point the link at it -- and the sixth copy is the one that forgets the
+ * `rmSync`. The link is `"dir"`-typed to match this file's existing `stdoutTo`
+ * test; Windows makes that one too, which is why that test runs there today.
+ */
+function linkingOut(at: string): (root: string) => void {
+  return (root): void => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-shu-elsewhere-"));
+    outsideDirs.push(elsewhere);
+    const link = join(root, at);
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(elsewhere, link, "dir");
+  };
+}
+
+/** Every `linkingOut` destination this file made, removed after each test. */
+const outsideDirs: string[] = [];
+
+afterEach((): void => {
+  // OUTSIDE THE REPOSITORY IS OUTSIDE `withDeclaration`'s `finally`, so these
+  // are the one thing that tree's own cleanup cannot reach.
+  while (outsideDirs.length > 0) rmSync(outsideDirs.pop() as string, { recursive: true, force: true });
+});
 
 /** A one-lane project block with one `build`, for the declarations above. */
 function oneLane(
@@ -664,6 +698,109 @@ describe("nothing steps outside the tree --repo names", () => {
     expect(result.seams.calls).toEqual([]);
     expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.\/x'/);
     expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
+  });
+
+  // ── the same boundary, asked of the FILESYSTEM (zheref/nen#157) ───────────
+  //
+  // EVERY REFUSAL ABOVE IS LEXICAL, AND A SYMLINK ANSWERS NONE OF THEM. `work`
+  // is not `../work`: it reads as plainly inside the tree and lands wherever
+  // the link points, and until this the whole family said `ok` about it. The
+  // declared paths a run reads or writes get one test each, and the two after
+  // them are the other half of the bargain -- a link that never leaves the tree
+  // is a legitimate declaration, and a root spelled in another case on a
+  // case-insensitive host is not a redirect.
+
+  it("refuses a lane cwd a SYMLINK walks out of the tree, naming the link", async () => {
+    const result = await withDeclaration(
+      { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: "work" } } },
+      ["build"],
+      {},
+      linkingOut("work"),
+    );
+    expect(result.code).toBe(2);
+    // NOTHING SPAWNED. The whole point of the refusal is that it arrives
+    // instead of the run rather than after it.
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names 'work'/);
+    expect(result.err.join("\n")).toMatch(/is a symlink pointing at/);
+    expect(result.err.join("\n")).toMatch(/outside the repository at/);
+  });
+
+  it("refuses a precondition path a SYMLINK walks out, and asserts nothing", async () => {
+    const result = await withDeclaration(
+      oneLane({ preconditions: { only: [{ kind: "path", value: "vault/secret" }] } }),
+      ["build", "--dry-run"],
+      {},
+      linkingOut("vault"),
+    );
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(
+      /project\.preconditions\.only\[0\]\.value names 'vault\/secret'/,
+    );
+    expect(result.err.join("\n")).toMatch(/is a symlink pointing at/);
+    // AND NO TABLE. A precondition row reading `ok   path vault/secret` about a
+    // file outside the tree is the exact sentence this refusal replaces.
+    expect(result.out.join("\n")).not.toContain("vault/secret");
+  });
+
+  it("refuses an artifact a SYMLINK walks out, on a DRY RUN", async () => {
+    // A DRY RUN IS WHERE A REVIEWER LOOKS before they let the real one happen,
+    // so it is the run that must not report clean about this.
+    const result = await withDeclaration(
+      oneLane({}, { exe: "placeholder-tool", argv: ["go"], artifacts: ["out/app"] }),
+      ["build", "--dry-run"],
+      {},
+      linkingOut("out"),
+    );
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/artifacts\[0\] names 'out\/app'/);
+    expect(result.err.join("\n")).toMatch(/is a symlink pointing at/);
+  });
+
+  it("accepts a symlink that never leaves the tree: containment, not a ban on links", async () => {
+    // THE OTHER HALF OF THE RULE, and the one a fix of this shape breaks by
+    // being too eager. A repository pointing `app` at `packages/app` has
+    // declared something entirely ordinary; the question is where the path
+    // LANDS, never whether a link was involved.
+    const result = await withDeclaration(
+      { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: "app" } } },
+      ["build", "--dry-run", "--json"],
+      {},
+      (root): void => {
+        mkdirSync(join(root, "packages", "app"), { recursive: true });
+        symlinkSync(join(root, "packages", "app"), join(root, "app"), "dir");
+      },
+    );
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { cwd: string };
+    expect(basename(report.cwd)).toBe("app");
+  });
+
+  it("does not read a case-flipped root as a redirect on a case-insensitive host", async () => {
+    // WIN32 AND THE macOS DEFAULT FILESYSTEM BOTH MATCH PATHS CASE-INSENSITIVELY,
+    // so `--repo C:\Repo` against a declaration sitting at `c:\repo` must answer
+    // exactly as the exact spelling does. It is a live hazard for a check that
+    // compares two resolved strings, and it is a PROBE rather than a platform
+    // test because a case-SENSITIVE host has no such path to point at: on Linux
+    // the flipped root simply is not there, and this returns without asserting
+    // rather than failing a platform for a property it cannot have.
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-case-"));
+    const flipped = join(dirname(dir), basename(dir).replace("nen-shu-case-", "NEN-SHU-CASE-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane() }),
+      );
+      if (!existsSync(flipped)) return;
+      const result = await capture(["build", "--dry-run", "--json"], { repo: flipped });
+      expect(result.code).toBe(0);
+      expect(result.err.join("\n")).not.toMatch(/symlink/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -2406,6 +2543,35 @@ describe("a launch target may name the artifact {artifact} stands for", () => {
     // A DRY RUN THAT PRINTED THE PLAN FIRST would have told the caller the
     // declaration is fine, which is why the check runs before the report.
     expect(result.out.join("\n")).not.toContain("would run:");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses an artifact a SYMLINK walks out of the tree, naming the link (zheref/nen#157)", async () => {
+    // THE MEASURED REPRODUCTION FROM THE ISSUE, verbatim. `build/payload` is
+    // lexically spotless, so the refusal above never fired for it: the dry run
+    // exited 0, printed `substitutes:   {artifact} <- build/payload`, and the
+    // real run handed that path to the installer -- while `<root>/build` was a
+    // link to a directory nen was never pointed at. The controls in the same
+    // measurement (`../outside/app`, `/etc/passwd`) already exited 2; only this
+    // shape got through.
+    const result = await withDeclaration(
+      launchable({
+        box: {
+          verb: "dev",
+          artifact: "build/payload",
+          device: { name: "Bench", kind: "simulator" },
+          after: [{ exe: "placeholder-installer", argv: ["put", "{artifact}"] }],
+        },
+      }),
+      ["dev", "--target", "box", "--dry-run"],
+      {},
+      linkingOut("build"),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("project.launch.box.artifact names 'build/payload'");
+    expect(result.err.join("\n")).toMatch(/is a symlink pointing at/);
+    expect(result.out.join("\n")).not.toContain("would run:");
+    expect(result.out.join("\n")).not.toContain("{artifact} <- build/payload");
     expect(result.seams.calls).toEqual([]);
   });
 
