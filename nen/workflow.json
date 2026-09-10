@@ -1,0 +1,30 @@
+{
+  "$schema": "nen.workflow/v0.1",
+  "$comment": "Hatsu policy for this repository. NOT READ BY nen 0.3.0 -- `nen schema check` has no row for this file yet, and no verb loads it; it is data hatsu's skills (breath, rasengan, kokusen, gyo, ...) read directly. zheref/nen#108's design adds a loader and a `nen schema check` row for it in 0.4.0, at which point this document is validated rather than merely present.",
+
+  "branch": { "template": "{model}/{persona}/{descriptor}", "base": "main" },
+  "iteration": { "checks": ["build", "lint"], "lane": "nen" },
+  "tests": { "required": ["test"], "extra": [] },
+  "coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope": "touched" },
+  "launch": { "default": null, "fallback": null },
+  "reports": { "dir": "Reports", "retain": "final-only", "template": "rikugan", "captures": "Reports/captures" },
+  "notifications": { "rungs": ["push", "os", "sound"], "sound": "Glass" },
+  "commits": {
+    "allowedAttributionTrailers": ["Akatsuki-Agent"],
+    "forbiddenTrailers": ["Co-Authored-By", "Claude-Session", "Signed-off-by"]
+  },
+  "monitor": { "maxCycles": 20, "pollSeconds": 300 },
+  "models": {
+    "rule": "latest alias only, never a version; subagents never on the frontier tier",
+    "claude": { "frontier": "fable", "deep": "opus", "fast": "sonnet", "economy": "haiku" },
+    "codex": { "frontier": "astra", "deep": "sol", "fast": "terra", "economy": "luna" },
+    "cursor": {
+      "frontier": "grok",
+      "deep": "grok",
+      "fast": "composer",
+      "economy": "composer",
+      "note": "Cursor-native only; provider models there are reserved for Bugbot"
+    },
+    "roles": { "reviewer": "deep", "worker": "fast", "measurer": "fast", "orchestrator": "frontier" }
+  }
+}
