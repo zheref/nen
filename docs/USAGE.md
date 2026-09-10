@@ -1935,9 +1935,11 @@ resolved by guessing which is authoritative) and `undecidable` (no stage label,
 no mode label, no PR and no live integration branch — nothing here places the
 object anywhere). **Handle both in any caller that switches on the class.**
 `--help` used to name the count and five of the six it listed, mentioning
-`undecidable` nowhere at all (zheref/nen#53); it now names all seven, and
-`src/effort/command.test.ts` fails the build if a class the union carries is
-missing from it.
+`undecidable` nowhere at all (zheref/nen#53); it now names all seven with the
+counts derived from the lists rather than written, `src/effort/classify.ts`
+carries a compile-time proof that the list covers the union (the error names
+the missing class), and `src/effort/command.test.ts` fails the build if a class
+in that list is missing from the help text.
 
 **Example**
 

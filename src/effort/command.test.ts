@@ -87,7 +87,11 @@ describe("nen effort --help -- the vocabulary it prints is the vocabulary it has
     // The five ARE senkei's taxonomy and the verb's own name for itself says
     // so; what the text may not do is let "five-class" stand as the whole
     // output vocabulary, which is how `undecidable` went unmentioned.
-    expect(effortCommand.usage).toContain("SEVEN VALUES ARE PRINTABLE");
+    // DERIVED, not a literal (Copilot, PR #186): a hard-coded "SEVEN" is a
+    // second place the count lives, and the test asserting the same literal
+    // would have kept them agreeing with each other while both went stale.
+    expect(effortCommand.usage).toContain(`${EFFORT_CLASSES.length} VALUES ARE PRINTABLE`);
+    expect(effortCommand.usage).toContain(`the taxonomy has ${TAXONOMY_CLASSES.length} of them`);
     for (const name of TAXONOMY_CLASSES) expect(effortCommand.usage).toContain(name);
   });
 });

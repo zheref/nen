@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
-import { classifyEffort, TAXONOMY_CLASSES, type EffortInput } from "./classify.js";
+import { classifyEffort, EFFORT_CLASSES, TAXONOMY_CLASSES, type EffortInput } from "./classify.js";
 
 const USAGE = `nen effort classify -- senkei §3's five-class taxonomy, mechanical half.
 
@@ -14,10 +14,10 @@ The input file is a JSON array of:
    "modeLabelPresent":bool,"hasPr":bool,"prOpen":bool,"prIsDelivery":bool,
    "integrationBranchAlive":bool,"reviewerVerdictMissing":bool}
 
-SEVEN VALUES ARE PRINTABLE, and the taxonomy has five of them:
+${EFFORT_CLASSES.length} VALUES ARE PRINTABLE, and the taxonomy has ${TAXONOMY_CLASSES.length} of them:
   ${TAXONOMY_CLASSES.join(", ")}.
-The other two are answers ABOUT the taxonomy rather than members of it, and a
-caller switching on the class must handle both:
+The other ${EFFORT_CLASSES.length - TAXONOMY_CLASSES.length} are answers ABOUT the taxonomy rather than members of it,
+and a caller switching on the class must handle every one:
 
   state-machine-violation  two stage labels at once -- flagged, never resolved
                            by guessing which is authoritative.
@@ -25,12 +25,12 @@ caller switching on the class must handle both:
                            integration branch: nothing here places the object
                            anywhere in the taxonomy. Reported, never guessed.
 
-'stalled''s live-signal half (a reviewer job that died mid-run, a builder that
-burned its cap) is read from --input's optional reviewerVerdictMissing rather
-than fetched here; the mechanical rule (released, no branch, no PR) still
-reaches 'stalled' without it.
+The live-signal half of 'stalled' (a reviewer job that died mid-run, a builder
+that burned its cap) is read from --input's optional reviewerVerdictMissing
+rather than fetched here; the mechanical rule (released, no branch, no PR)
+still reaches 'stalled' without it.
 
-Exit 0 whatever the classification, including both of the two above: a
+Exit 0 whatever the classification, including every one above: a
 classification is this verb's ANSWER, and an answer of "these labels contradict
 each other" or "nothing places this" is as much an answer as any other.`;
 
