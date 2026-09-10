@@ -50,6 +50,66 @@ export interface CoverageSource {
   readonly path: string;
 }
 
+/**
+ * `--touched --base <ref>`'s own account of what it did, or null without it.
+ *
+ * `files` IS EVERYTHING `git diff --name-only <base>...HEAD` NAMED, whether or
+ * not a row matched it -- `matched` and `unmatched` partition that same list,
+ * never a different one, so `matched.length + unmatched.length ===
+ * files.length` always holds. A file this repository's coverage tool never
+ * measures at all (a config file, a fixture, a doc) is `unmatched`, and that is
+ * a finding rather than a bug: it is precisely the set a reviewer of a
+ * `--touched` run would otherwise have to work out by hand.
+ */
+export interface TouchedReport {
+  readonly base: string;
+  readonly files: readonly string[];
+  readonly matched: readonly string[];
+  readonly unmatched: readonly string[];
+}
+
+/**
+ * `nen/workflow.json`'s coverage ladder, restated here rather than imported.
+ *
+ * RESTATED FOR THE SAME REASON `COVERAGE_CONTRACT` IS: ../coverage/ladder.ts
+ * imports `thresholdMet` from THIS file, and importing ladder.ts back would be
+ * a cycle. The two shapes are structural rather than pinned by a test, because
+ * this one carries two fields (`source`, `present`) ladder.ts's own
+ * `CoverageLadder` does not: ../coverage.ts is the one place that reads both
+ * and is where a drift between them would first fail to typecheck.
+ */
+export interface CoverageLadderReport {
+  readonly minimum: number;
+  readonly recommended: number;
+  readonly ideal: number;
+  /**
+   * The path nen read it from, or WOULD have read it from -- always the
+   * repo-relative `nen/workflow.json`, never the absolute path the loader
+   * hands back.
+   *
+   * REPO-RELATIVE BECAUSE THIS DOCUMENT LEAVES THE MACHINE. `relativiseTargets`
+   * in ../coverage.ts exists so that a `--json` document pasted into an issue
+   * does not carry somebody's home directory in its row names; a `source` of
+   * `/Users/<username>/work/<repo>/nen/workflow.json` would put it straight
+   * back, one key further down.
+   */
+  readonly source: string;
+  /**
+   * Whether that file exists, or these three numbers are the DEFAULTS.
+   *
+   * THE NUMBERS ALONE CANNOT ANSWER IT, AND THE DIFFERENCE IS WORTH A KEY. An
+   * absent `nen/workflow.json` is not "no ladder": ../../schema/workflow.ts's
+   * loader answers `present: false` carrying 80 / 85 / 90, because a policy
+   * default invents nobody's vocabulary and the alternative is banding nothing
+   * at all for every repository that has not written the file yet. But a
+   * repository that DECLARED 80 and one that was ASSUMED to want 80 are
+   * different facts, and a reader deciding whether to argue with a band needs
+   * the second one stated rather than guessed at from three numbers that
+   * happen to equal the defaults.
+   */
+  readonly present: boolean;
+}
+
 /** KEY ORDER IS THE CONTRACT, and ../coverage.test.ts pins it. */
 export interface CoverageReport {
   readonly contract: string;
@@ -70,6 +130,21 @@ export interface CoverageReport {
    * is a verdict about the number: see this file's header.
    */
   readonly exitCode: number;
+  /** null without `--touched`. APPENDED rather than inserted, so every reader who indexed the first eight keys by position is unaffected. */
+  readonly touched: TouchedReport | null;
+  /**
+   * The coverage ladder in force, or null when this run has none.
+   *
+   * NULL IS ABOUT THE INVOCATION, NEVER ABOUT THE REPOSITORY. It is non-null
+   * under `--touched` with `--threshold` ABSENT, and null otherwise --
+   * ../coverage/ladder.ts's own header says why the scope is `--touched` and
+   * not a plain run, and why an explicit `--threshold` overrides the file
+   * rather than being reconciled against it. Whether the repository actually
+   * declared the rungs is `ladder.present`, not `ladder === null`: a repository
+   * with no `nen/workflow.json` still gets the published 80 / 85 / 90 and still
+   * bands every touched row.
+   */
+  readonly ladder: CoverageLadderReport | null;
 }
 
 export interface AssembleRequest {
@@ -80,6 +155,8 @@ export interface AssembleRequest {
   readonly threshold: number | null;
   readonly report: CoverageSource | null;
   readonly exitCode: number;
+  readonly touched: TouchedReport | null;
+  readonly ladder: CoverageLadderReport | null;
 }
 
 /**
@@ -118,6 +195,8 @@ export function assembleCoverage(request: AssembleRequest): CoverageReport {
         : { value: request.threshold, met: thresholdMet(request.total, request.threshold) },
     report: request.report,
     exitCode: request.exitCode,
+    touched: request.touched,
+    ladder: request.ladder,
   };
 }
 
@@ -164,17 +243,34 @@ function widthOf(values: readonly string[], floor: number): number {
  */
 function targetTable(targets: readonly CoverageTarget[]): readonly string[] {
   const anyBranches = targets.some((entry): boolean => entry.branches !== undefined);
+  // `met` AND `band` ARE COLUMNS ONLY WHEN AT LEAST ONE ROW CARRIES ONE --
+  // which is exactly `--touched` given a `--threshold` (`met`) or given a
+  // `nen/workflow.json` ladder and NO `--threshold` (`band`), per ../shape.ts's
+  // own rule for both keys. The two never co-occur on one run in practice
+  // (../coverage/ladder.ts is read only when `--threshold` was NOT given), but
+  // nothing here assumes that -- a plain `nen shu coverage` run's table is
+  // simply byte-identical to what it always printed, either way.
+  const anyMet = targets.some((entry): boolean => entry.met !== undefined);
+  const anyBand = targets.some((entry): boolean => entry.band !== undefined);
   const lines = targets.map((entry): string => formatCounts(entry.lines));
   const branches = targets.map((entry): string =>
     entry.branches === undefined ? "--" : formatCounts(entry.branches),
   );
+  const met = targets.map((entry): string =>
+    entry.met === undefined ? "" : entry.met === null ? "--" : entry.met ? "met" : "NOT met",
+  );
+  const band = targets.map((entry): string => (entry.band === undefined ? "" : (entry.band ?? "--")));
   const lineWidth = widthOf([...lines, "lines"], 0);
   const branchWidth = widthOf([...branches, "branches"], 0);
-  const header = `  ${"lines".padEnd(lineWidth)}  ${anyBranches ? `${"branches".padEnd(branchWidth)}  ` : ""}target`;
+  const metWidth = widthOf([...met, "met"], 0);
+  const bandWidth = widthOf([...band, "band"], 0);
+  const header = `  ${"lines".padEnd(lineWidth)}  ${anyBranches ? `${"branches".padEnd(branchWidth)}  ` : ""}${anyMet ? `${"met".padEnd(metWidth)}  ` : ""}${anyBand ? `${"band".padEnd(bandWidth)}  ` : ""}target`;
   const rows = targets.map((entry, index): string => {
     const line = lines[index] ?? "";
     const branch = branches[index] ?? "";
-    return `  ${line.padEnd(lineWidth)}  ${anyBranches ? `${branch.padEnd(branchWidth)}  ` : ""}${entry.name}`;
+    const metColumn = met[index] ?? "";
+    const bandColumn = band[index] ?? "";
+    return `  ${line.padEnd(lineWidth)}  ${anyBranches ? `${branch.padEnd(branchWidth)}  ` : ""}${anyMet ? `${metColumn.padEnd(metWidth)}  ` : ""}${anyBand ? `${bandColumn.padEnd(bandWidth)}  ` : ""}${entry.name}`;
   });
   return [header, ...rows];
 }
@@ -190,8 +286,22 @@ function targetTable(targets: readonly CoverageTarget[]): readonly string[] {
  * thing for a machine reader to branch on when `exitCode` and `report` already
  * tell it what it needs. A HUMAN gets the sentence; ../coverage.ts prints the
  * long form of it on stderr immediately after.
+ *
+ * `touchedGrain` IS THE OTHER THING THE DOCUMENT DOES NOT CARRY, on purpose:
+ * ../coverage.ts's brief scopes `--json`'s `touched` key to exactly `{ base,
+ * files, matched, unmatched }`, and "these rows are packages, not files" is a
+ * fact about the FORMAT (`report.report.format`) that a machine reader already
+ * has -- ../coverage/touched.ts's `grainOf` derives it from the same field.
+ * Only the human sentence needs the derived word, so only the human sentence
+ * takes it as a parameter, the same way `why` already does. `null` prints no
+ * such note -- the plain non-`--touched` path, and any path where the grain is
+ * "file" (identity is not worth narrating).
  */
-export function renderCoverage(report: CoverageReport, why: string | null = null): readonly string[] {
+export function renderCoverage(
+  report: CoverageReport,
+  why: string | null = null,
+  touchedGrain: "file" | "package" | null = null,
+): readonly string[] {
   const lines: string[] = [];
   lines.push(
     labelled(
@@ -226,6 +336,37 @@ export function renderCoverage(report: CoverageReport, why: string | null = null
         `${report.threshold.value}% -- ${verdict}. This is REPORTED and never enforced: nen exits ${report.exitCode} here, and the threshold moved that by nothing.`,
       ),
     );
+  } else if (report.ladder !== null) {
+    // NO --threshold, AND A LADDER: this is the ONLY case that prints one, and
+    // never both -- see ../coverage/ladder.ts's own header for why it is read
+    // only when --threshold was not given.
+    const l = report.ladder;
+    // "DEFAULTS" IS SAID OUT LOUD, not left to be inferred from the numbers.
+    // 80 / 85 / 90 read identically whether a repository chose them or nen
+    // supplied them, and the sentence that tells a reader which one they are
+    // looking at is also the sentence that tells them where to change it.
+    const where = l.present
+      ? l.source
+      : `${l.source} is absent -- these are nen's defaults`;
+    lines.push(
+      labelled(
+        "ladder",
+        `${where} -- minimum ${l.minimum}% / recommended ${l.recommended}% / ideal ${l.ideal}%. REPORTED per row as 'band', and never enforced: nen exits ${report.exitCode} here, whatever the bands say.`,
+      ),
+    );
+  }
+  if (report.touched !== null) {
+    const t = report.touched;
+    const grainNote = touchedGrain === "package" ? " -- rows matched BY PACKAGE, not by file" : "";
+    lines.push(
+      labelled(
+        "touched",
+        `base ${t.base}: ${t.files.length} file${t.files.length === 1 ? "" : "s"} (${t.matched.length} matched, ${t.unmatched.length} unmatched)${grainNote}`,
+      ),
+    );
+    if (t.unmatched.length > 0) {
+      lines.push(`  unmatched: ${t.unmatched.join(", ")}`);
+    }
   }
   return lines;
 }

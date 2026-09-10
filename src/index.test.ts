@@ -194,7 +194,7 @@ describe("nen schema check", () => {
     // A fully migrated repository says so in the machine-readable output as
     // well as on screen: every row answered from `nen/`, nothing deprecated,
     // nothing shadowed, no comparison left unmade. That is the shape a
-    // consumer's CI asserts on to know the v0.4.0 removal will not break it.
+    // consumer's CI asserts on to know the v0.5.0 removal will not break it.
     expect(checks.every((c): boolean => c["location"] === "nen")).toBe(true);
     expect(checks.every((c): boolean => c["note"] === null && c["shadowed"] === false)).toBe(true);
     expect(checks.every((c): boolean => c["shadow"] === "none")).toBe(true);
@@ -238,12 +238,12 @@ describe("nen schema check", () => {
 
   it("prints the LEGACY location a file was actually read from, plus the migration line", async () => {
     const result = await capture(["schema", "check", "--repo", LEGACY_REPO]);
-    // The un-migrated repository still PASSES for the whole v0.3 line.
+    // The un-migrated repository still PASSES through the v0.4 line.
     expect(result.code).toBe(0);
     const text = result.out.join("\n");
     expect(text).toMatch(/warn\s+schemas\/labels\.json\s+13 labels/);
     expect(text).toContain("^ legacy location. Move it to 'nen/labels.json'");
-    expect(text).toContain("removed in v0.4.0");
+    expect(text).toContain("removed in v0.5.0");
     expect(text).not.toContain("nen/labels.json  13 labels");
   });
 
