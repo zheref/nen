@@ -355,10 +355,10 @@ exercises all three platforms on every change for exactly this reason.
 
 ## The verb surface
 
-`nen --help` lists every command family (35); each
+`nen --help` lists every command family (36); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-84 verbs outside the binary — each one's purpose, arguments, exit codes and
+86 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -380,6 +380,8 @@ they compose into. The families group roughly as:
 - **This repository's own dev loop** — `dev` (`test`, `lint`, `replay`)
 - **Skill-grammar parsing** — `parse`
 - **Supply** — `bootstrap`, `wake`, `stop`
+- **Reports** — `report` (`data`, `render`): the facts an effort's report is
+  made of, and the fill that turns them into one
 
 Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a

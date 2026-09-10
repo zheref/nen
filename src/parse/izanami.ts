@@ -1065,6 +1065,21 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       scenario: RO("reads a repo's recorded scenario"),
     },
   },
+  // TWO VERBS, TWO POLICIES, AND THE SPLIT IS THE WHOLE POINT OF THE PAIR.
+  // `data` gathers facts -- git reads plus files the declaration or the caller
+  // named -- and has no write path at all, in any flag combination, so its
+  // verdict is verb identity alone and no argument spelling can flip it (a
+  // `--tiers` value carrying a quoted Windows path stays a read, as it must).
+  // `render` WRITES `--out` on every ordinary invocation, so it is
+  // dry-run-gated like every other writes-by-default verb here: only the
+  // explicit `--dry-run` form is certified, and an unfaithful line falls back
+  // to `mutating`, which is the safe direction for a verb that writes.
+  report: {
+    subcommands: {
+      data: RO("assembles one report document from git reads and files already on disk -- it has no write path in any form"),
+      render: DRY("fills a template and WRITES --out, unless --dry-run is given, which prints the token list and writes nothing"),
+    },
+  },
   run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
   // BOTH ROWS MOVED FROM `MUT` TO `DRY` WHEN THE FLAG ARRIVED, and the move is
   // an argument rather than a convenience. `label apply` stays `MUT` despite

@@ -1,0 +1,16 @@
+<!-- TEST FIXTURE -- the smallest template that exercises the WHOLE language
+     `nen report render` has: scalars in a header, a table over an each block
+     with its index, an if block around a section that is legitimately absent
+     (`coverage` is null on a repository that has not run one), a dotted path
+     reaching into that section, and one raw cell whose value IS markup.
+     Shaped after the effort report this family exists to fill. This comment
+     deliberately spells no tag of its own: a template's comments are template
+     text, and a tag inside one is a tag. Not shipped; see
+     ../../shu/fixtures/README.md for the fixture convention. -->
+<h1>{{repo}} -- {{branch}}</h1>
+<p>against {{base}}, generated {{generatedAt}}</p>
+<table>
+{{#each commits}}<tr><td>{{@index}}</td><td>{{sha}}</td><td>{{subject}}</td></tr>
+{{/each}}</table>
+{{#if coverage}}<section id="coverage">{{coverage.total.lines.percent}}% of lines on '{{coverage.lane}}'</section>
+{{/if}}<footer>{{{launch}}}</footer>
