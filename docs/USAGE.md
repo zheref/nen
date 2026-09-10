@@ -6406,8 +6406,8 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--ref <tag>` | yes | The exact tag to fetch and pin to. | No default, no `latest`; omitted, this exits its own usage code (2). |
-| `--source <owner/name>` | no | GitHub repository to fetch release assets from. | Defaults to `zheref/nen` inside the script; NOT `--repo` -- a wholly different meaning (a path vs. an `owner/name`) is deliberately given two different flag names across both the shell and the CLI. |
-| `--cache-dir <dir>` | no | Cache root for verified binaries. | Defaults to `${XDG_CACHE_HOME:-$HOME/.cache}/nen`. |
+| `--source <owner/name>` | no | GitHub repository to fetch release assets from. | Defaults to `zheref/nen` inside the script; NOT `--repo` -- a wholly different meaning (a path vs. an `owner/name`) is deliberately given two different flag names across both the shell and the CLI. Both halves must be a real name: neither may be empty, `.` or `..`, so `a/..` is a usage error (2) at the flag rather than a 404 from the network. |
+| `--cache-dir <dir>` | no | Cache root for verified binaries. | Defaults to `${XDG_CACHE_HOME:-$HOME/.cache}/nen`. A verified binary is cached at `<root>/<source>/<ref>/<artifact>`, each key flattened to exactly one path segment -- so a fork or a mirror at the same tag as the upstream gets its own slot instead of sharing one. |
 | `--script <path>` | no | An explicit path to `bootstrap/nen.sh`, for a binary invoked outside any checkout. | Falls back to `$NEN_BOOTSTRAP_SH`, then `<repo>/bootstrap/nen.sh`. |
 | `--repo <path>` | no | The checkout `bootstrap/nen.sh` is found under, when `--script` is not given. | Defaults to the cwd. |
 
@@ -6419,7 +6419,7 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 nen bootstrap --ref v0.6.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/v0.6.0/nen-linux-x64
+/home/me/.cache/nen/zheref_nen/v0.6.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 

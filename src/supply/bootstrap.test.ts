@@ -226,31 +226,49 @@ describe.skipIf(!BASH)("bootstrap/nen.sh -- verification", () => {
   });
 });
 
-describe.skipIf(!BASH)("bootstrap/nen.sh -- cache_path sanitizes the ref", () => {
-  it("keeps an ordinary tag intact", () => {
-    expect(sh(`cache_path '/c' 'v0.1.0' 'nen-linux-x64'`).stdout).toBe(
-      "/c/v0.1.0/nen-linux-x64",
+describe.skipIf(!BASH)("bootstrap/nen.sh -- cache_path keys and sanitizes", () => {
+  it("keeps an ordinary source and tag intact", () => {
+    expect(sh(`cache_path '/c' 'zheref/nen' 'v0.1.0' 'nen-linux-x64'`).stdout).toBe(
+      "/c/zheref_nen/v0.1.0/nen-linux-x64",
     );
   });
 
   it("flattens a branch-shaped ref rather than nesting the cache", () => {
-    expect(sh(`cache_path '/c' 'bootstrap/1-scaffold' 'a'`).stdout).toBe(
-      "/c/bootstrap_1-scaffold/a",
+    expect(sh(`cache_path '/c' 'o/n' 'bootstrap/1-scaffold' 'a'`).stdout).toBe(
+      "/c/o_n/bootstrap_1-scaffold/a",
     );
   });
 
-  it("collapses traversal, including the multi-pass case", () => {
+  it("gives two SOURCES at the same ref two different slots", () => {
+    // zheref/nen#6 item 3: keyed on ref alone, a fork or a mirror collided with
+    // the upstream in one slot. The checksum gate turned that into a refusal
+    // rather than a wrong binary, which is why it was an annoyance and not an
+    // incident -- but a permanent cache miss with a confusing message is still
+    // the wrong answer about bytes that were fine.
+    const upstream = sh(`cache_path '/c' 'zheref/nen' 'v0.1.0' 'a'`).stdout;
+    const fork = sh(`cache_path '/c' 'someone/nen' 'v0.1.0' 'a'`).stdout;
+    expect(upstream).not.toBe(fork);
+  });
+
+  it("collapses traversal in BOTH keys, including the multi-pass case", () => {
     // Dots survive the character filter because tags need them, so `..` is
     // collapsed separately -- and in a LOOP, because one pass over `....` leaves
-    // a fresh `..` behind.
+    // a fresh `..` behind. The source key runs through the same sanitiser, so
+    // the property is asserted on it too rather than assumed from the ref.
     //
     // The assertion is on the PROPERTY, not on an exact string: what must hold
-    // is that the ref contributes exactly one path segment and no traversal,
+    // is that each key contributes exactly one path segment and no traversal,
     // whatever the substitutions happen to spell.
-    for (const ref of ["../../etc", "....", "..", "a/../../b", "....//.."]) {
-      const out = sh(`cache_path '/c' '${ref}' 'a'`).stdout;
+    const hostile = ["../../etc", "....", "..", "a/../../b", "....//.."];
+    for (const ref of hostile) {
+      const out = sh(`cache_path '/c' 'o/n' '${ref}' 'a'`).stdout;
       expect(out, ref).not.toContain("..");
-      expect(out, ref).toMatch(/^\/c\/[A-Za-z0-9._-]+\/a$/);
+      expect(out, ref).toMatch(/^\/c\/o_n\/[A-Za-z0-9._-]+\/a$/);
+    }
+    for (const source of hostile) {
+      const out = sh(`cache_path '/c' '${source}' 'v0.1.0' 'a'`).stdout;
+      expect(out, source).not.toContain("..");
+      expect(out, source).toMatch(/^\/c\/[A-Za-z0-9._-]+\/v0\.1\.0\/a$/);
     }
   });
 });
@@ -285,6 +303,18 @@ describe.skipIf(!BASH)("bootstrap/nen.sh -- main's argument handling", () => {
     // slipped in here would reach the network and come back as a bewildering
     // 404.
     for (const source of ["../bankai-core", "/abs/path", "bare", "a/b/c"]) {
+      const result = run(`--ref v0.1.0 --source ${source}`);
+      expect(result.status, source).toBe(BootstrapExit.USAGE);
+      expect(result.stderr, source).toMatch(/owner\/name/);
+    }
+  });
+
+  it("refuses a --source whose SECOND half is a traversal segment", () => {
+    // zheref/nen#6 item 4: the leading-dot arm only ever saw the first
+    // character, so `a/..` passed the shape check and was harmless only because
+    // cache_path's sanitiser neutralised it two hundred lines later. A shape
+    // check whose correctness rests on a downstream layer is not a shape check.
+    for (const source of ["a/..", "a/.", "../b", "./b", "a/"]) {
       const result = run(`--ref v0.1.0 --source ${source}`);
       expect(result.status, source).toBe(BootstrapExit.USAGE);
       expect(result.stderr, source).toMatch(/owner\/name/);
@@ -491,8 +521,11 @@ describe.skipIf(!BASH)("bootstrap/nen.sh -- end to end, transport stubbed", () =
     // Separators are normalized on BOTH sides: the script composes the cache
     // path with `/` while the `--cache-dir` it was handed carries the host's
     // own. Which of the two a path is spelled with is not part of the contract;
-    // that it names the artifact under the REF, and that the file is there, is.
-    expect(posixPath(first.stdout)).toBe(posixPath(join(rel.cache, "v9.9.9", rel.artifact)));
+    // that it names the artifact under the SOURCE and the REF, and that the file
+    // is there, is. `example/nen` flattens to one segment (zheref/nen#6 item 3).
+    expect(posixPath(first.stdout)).toBe(
+      posixPath(join(rel.cache, "example_nen", "v9.9.9", rel.artifact)),
+    );
     expect(existsSync(first.stdout)).toBe(true);
 
     // Second run: a cache HIT, gated on the checksum rather than on the file
