@@ -71,6 +71,7 @@
 // and exit 0.
 
 import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import type { Io } from "../index.js";
@@ -421,20 +422,25 @@ function nobodyHoldsTrunk(trunk: string): string {
 /**
  * Do these two paths name the same directory?
  *
- * A STRING COMPARISON IS NOT ENOUGH, and macOS is where it shows: `--repo` is
- * resolved by ../repo/root.ts with `path.resolve`, which normalises and never
- * follows a symlink, while git prints each worktree's REAL path -- so a
- * checkout under `/var/folders/...` (a symlink to `/private/var/folders/...` on
- * every Mac) would compare unequal to itself and the plan would announce a
- * trunk "held elsewhere" that is held right here. Both sides are resolved, and
- * a path that cannot be resolved (it no longer exists, or is not readable)
- * falls back to the comparison already made rather than throwing: the plan is
- * a plan, and a stale worktree entry must not take the verb down with it.
+ * A STRING COMPARISON IS NOT ENOUGH, TWICE OVER. `--repo` is resolved by
+ * ../repo/root.ts with `path.resolve`, which normalises and never follows a
+ * symlink, while git prints each worktree's REAL path with FORWARD slashes on
+ * every platform. So a checkout under `/var/folders/...` (a symlink to
+ * `/private/var/folders/...` on every Mac) and one at `C:/x` against
+ * `C:\x` would each compare unequal to itself, and the plan would announce a
+ * trunk "held elsewhere" that is held right here. `path.resolve` settles the
+ * separators (it is the platform's own normalisation, so a backslash stays a
+ * legal filename character on POSIX) and `realpathSync` settles the symlinks.
+ * A path that cannot be resolved -- a stale worktree entry whose directory is
+ * gone -- falls back to the comparison already made rather than throwing: a
+ * plan must not be taken down by an entry git itself has not pruned.
  */
 function samePath(left: string, right: string): boolean {
-  if (left === right) return true;
+  const here = resolve(left);
+  const there = resolve(right);
+  if (here === there) return true;
   try {
-    return realpathSync(left) === realpathSync(right);
+    return realpathSync(here) === realpathSync(there);
   } catch {
     return false;
   }
