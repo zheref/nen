@@ -62,7 +62,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { prReady, type PrReadyInput } from "../verbs/pr_ready.js";
 
-interface Targets {
+export interface Targets {
   readonly openPrRepos: readonly string[];
   readonly oracleRepo: string;
   /**
@@ -85,7 +85,7 @@ interface Targets {
   readonly knownReasonDivergence: string;
 }
 
-interface Candidate {
+export interface Candidate {
   readonly repo: string;
   readonly number: number;
   /** Why this PR is in the set, for the report -- "open" or "closed (seeded)". */
@@ -285,7 +285,7 @@ function listOpenPrs(repo: string): readonly number[] {
   return parsed.map((entry): number => entry.number);
 }
 
-function buildCandidates(targets: Targets, limit: number | null): Candidate[] {
+export function buildCandidates(targets: Targets, limit: number | null): Candidate[] {
   const candidates: Candidate[] = [];
   for (const repo of targets.openPrRepos) {
     for (const number of listOpenPrs(repo)) {
@@ -293,6 +293,16 @@ function buildCandidates(targets: Targets, limit: number | null): Candidate[] {
     }
   }
   for (const [repo, numbers] of Object.entries(targets.closedOraclePrs)) {
+    // A `$`-PREFIXED KEY IS METADATA, NOT DATA (zheref/nen#80). ../schema/
+    // source.ts states the convention and names the obligation it creates:
+    // "the next loader that key-walks a data map inherits this same
+    // obligation". This is that map -- the last one in shipped code that had
+    // not applied it. ./targets.json documented the hazard in prose instead
+    // ("a stray string-valued key would be walked as a repo name"), and prose
+    // beside a walk is a note about a defect rather than a guard against it:
+    // a `$comment` placed inside this object would become a repository the
+    // shadow window tried to fetch pull requests from.
+    if (repo.startsWith("$")) continue;
     for (const number of numbers) {
       candidates.push({ repo, number, origin: "closed (seeded, issue #2's Scope)" });
     }

@@ -28,6 +28,16 @@
 // the rest as real entries; the next loader that key-walks a data map inherits
 // this same obligation, not just `../repos.ts`'s two call sites
 // (`product_codes`, and the per-caller pin fields on a consumer entry).
+// The obligation is on the WALK, not on a list of files: a loader that
+// key-walks a data map applies the skip, and one that names the fields it
+// reads never needs it. Deliberately not enumerated here -- an enumeration is a
+// second place the answer lives and goes stale the moment somebody adds a
+// walk (Copilot, PR #193). The most recent to inherit it was
+// `../shadow/run.ts`'s `closedOraclePrs` (zheref/nen#80), which had documented
+// the hazard in its data file's prose instead: a note beside a walk records a
+// defect, it does not prevent one. `grep -rn 'startsWith("$")' src` is the
+// honest answer to "where", and it is a grep rather than a paragraph because
+// only one of those can be right by construction.
 
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
