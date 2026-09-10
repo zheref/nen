@@ -359,16 +359,16 @@ exercises all three platforms on every change for exactly this reason.
 
 ## The verb surface
 
-`nen --help` lists every command family (36); each
+`nen --help` lists every command family (37); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-88 verbs outside the binary — each one's purpose, arguments, exit codes and
+93 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
 - **Readiness & pull requests** — `pr` (ready, staleness, body-check, fetch,
-  next-blocker, cascade-main, retarget, request-reviews), `gate`, `split`,
-  `wc`, `stage`
+  next-blocker, cascade-main, retarget, request-reviews, edit-body), `gate`,
+  `split`, `wc`, `stage`
 - **Backlog & boards** — `backlog`, `board`, `epic`, `effort`, `loop`,
   `warmup` (a *registry* stale-pin sweep — not `shu warmup`, below, which warms
   a working copy), `watch`
@@ -389,6 +389,9 @@ they compose into. The families group roughly as:
 - **Supply** — `bootstrap`, `wake`, `stop`
 - **Reports** — `report` (`data`, `render`): the facts an effort's report is
   made of, and the fill that turns them into one
+- **Surfaces** — `surface` (`mirror generate`, `mirror check`): one skills
+  directory rendered into another agent surface's own layout, and the drift
+  check that says whether the committed copy is still an image of it
 
 Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a

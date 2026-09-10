@@ -19,7 +19,7 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { SchemaError } from "../schema/errors.js";
-import { loadWorkflow, trailerRefusal, WORKFLOW_FILE } from "../schema/workflow.js";
+import { attributionRefusalMessages, loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import {
   COMMIT_TYPES,
   formatCommitMessage,
@@ -78,6 +78,13 @@ pointer: nen will not shape a message under a policy it could not read.`;
  * it can see in one pass (../cli/command.ts's `splitIntegerList` states the
  * argument), and a caller fixing one refused trailer at a time is exactly the
  * round trip that costs a session.
+ *
+ * THE WORDING ITSELF LIVES IN ../schema/workflow.ts's attributionRefusalMessages
+ * NOW, shared with `nen wc squash` -- the other caller that shapes a whole
+ * commit message under this same policy -- so the two verbs cannot drift into
+ * two different sentences for the same refusal. This function's own job is
+ * unchanged: decide WHETHER to look (no trailers, no read at all) and load
+ * the policy the caller's --repo points at.
  */
 function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): readonly string[] {
   // NO WORK AT ALL WHEN THERE ARE NO TRAILERS, and that is not an optimisation:
@@ -87,27 +94,10 @@ function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): 
   if (trailers.length === 0) return [];
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const loaded = loadWorkflow(root);
-  if (!loaded.present) return [];
-  const allowed = loaded.workflow.commits.allowedAttributionTrailers;
-  const refusals: string[] = [];
-  for (const trailer of trailers) {
-    const refused = trailerRefusal(loaded.workflow.commits, trailer.key);
-    if (refused === null) continue;
-    // TWO WHOLE SENTENCES, NOT ONE WITH A HOLE IN IT. An empty allow-list and a
-    // populated one are different facts about the repository and read as
-    // different sentences; splicing a clause into a shared frame produced
-    // "lists no allowed attribution trailer at all, and 'X' is not among them"
-    // -- among WHAT -- which is the one line of this refusal a reader has to
-    // parse twice.
-    refusals.push(
-      allowed.length === 0
-        ? `trailer key '${trailer.key}' is an attribution trailer this repository refuses. '${loaded.path}' admits none at all: its commits.allowedAttributionTrailers is empty. Drop the trailer, or add '${refused}' to that list`
-        : `trailer key '${trailer.key}' is an attribution trailer this repository refuses. '${loaded.path}' admits ${allowed
-            .map((key): string => `'${key}'`)
-            .join(", ")} under commits.allowedAttributionTrailers, and '${refused}' is not one of them. Drop the trailer, or add its key to that list`,
-    );
-  }
-  return refusals;
+  return attributionRefusalMessages(
+    loaded,
+    trailers.map((trailer): string => trailer.key),
+  );
 }
 
 export const commitCommand: Command = {
