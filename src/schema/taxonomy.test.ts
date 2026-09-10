@@ -265,7 +265,8 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     const check = report.checks[0];
     expect(check?.ok).toBe(true);
     expect(check?.legacy).toBe(true);
-    expect(check?.note).toContain("git rm schemas/labels.json");
+    expect(check?.note).toContain("git rm -r schemas/labels.json");
+    expect(check?.note).toContain("rm -r schemas/labels.json if it was never committed");
     expect(check?.note).toContain("schemas/labels.json");
     expect(check?.note).toContain("nen/labels.json");
     expect(check?.note).toContain("v0.5.0");

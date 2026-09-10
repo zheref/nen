@@ -265,7 +265,8 @@ describe("nen schema check", () => {
     const text = result.out.join("\n");
     expect(text).toMatch(/warn\s+nen\/labels\.json\s+13 labels/);
     expect(text).toContain("^ a legacy 'schemas/labels.json' copy is still there");
-    expect(text).toContain("git rm schemas/labels.json");
+    expect(text).toContain("git rm -r schemas/labels.json");
+    expect(text).toContain("rm -r schemas/labels.json if it was never committed");
     expect(text).toContain("removed in v0.5.0");
     expect(result.err).toEqual([]);
 

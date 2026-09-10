@@ -136,8 +136,19 @@ export interface CheckReport {
 // step still cares whether the bytes agree, and still asks
 // ../schema/source.ts's `inspectShadow` directly for that -- a different
 // question, asked to decide a different action.)
+//
+// `git rm -r`, NOT A BARE `git rm`, AND WITH A SECOND OPTION NAMED. Detecting
+// `legacy` is a `lstat`, not a `readdir` or a `git status` -- ../schema/
+// source.ts's `isPresent` answers "is something there", not "is it a
+// committed file" (this repository's own `run()` tests build a leftover that
+// is a DIRECTORY). `git rm` alone refuses a directory outright ("not removing
+// … recursively without -r"); `-r` is a no-op on a plain file and the one
+// spelling that removes either. It can still fail on a copy nobody ever
+// staged -- `git rm` only knows tracked paths -- so the sentence names the
+// filesystem `rm -r` too, for the leftover this repository's own history
+// never saw.
 function leftoverNote(canonical: string, legacy: string): string {
-  return `a legacy '${legacy}' copy is still there, beside '${canonical}'. Delete it (git rm ${legacy}) -- the schemas/ fallback was removed in v0.5.0.`;
+  return `a legacy '${legacy}' copy is still there, beside '${canonical}'. Delete it (git rm -r ${legacy}, or rm -r ${legacy} if it was never committed) -- the schemas/ fallback was removed in v0.5.0.`;
 }
 
 function run(

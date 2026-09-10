@@ -2165,7 +2165,7 @@ nen schema check --repo /tmp/site
 ```text
 repository: /tmp/site
   warn  nen/labels.json  13 labels
-        ^ a legacy 'schemas/labels.json' copy is still there, beside 'nen/labels.json'. Delete it (git rm schemas/labels.json) -- the schemas/ fallback was removed in v0.5.0.
+        ^ a legacy 'schemas/labels.json' copy is still there, beside 'nen/labels.json'. Delete it (git rm -r schemas/labels.json, or rm -r schemas/labels.json if it was never committed) -- the schemas/ fallback was removed in v0.5.0.
   ok    nen/repos.json  3 consumers, 6 product codes, latest v0.11.2
   ok    nen/colors.yml  3 categories, 13 values
   ok    nen/gates.json  5 reviewer identities
