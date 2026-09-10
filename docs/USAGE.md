@@ -322,7 +322,7 @@ a program.
   "launch": { "default": null, "fallback": null },
   "reports": { "dir": "Reports", "retain": "final-only", "template": "rikugan", "captures": "Reports/captures" },
   "notifications": { "rungs": ["push", "os", "sound"], "sound": "Glass", "turn": "rung1" },
-  "commits": { "allowedAttributionTrailers": [], "forbiddenTrailers": [] },
+  "commits": { "allowedAttributionTrailers": [], "forbiddenTrailers": [], "runTrailer": null },
   "monitor": { "maxCycles": 20, "pollSeconds": 300 },
   "models": { "rule": "…", "<surface>": { "<tier>": "<alias>" }, "roles": { "reviewer": "deep" } }
 }
@@ -331,10 +331,12 @@ a program.
 That block is the default set, written out: it is exactly what an absent file
 means, and exactly what [`scaffold init`](#nen-scaffold-init) writes (with
 `iteration.lane` set to the lane it scaffolded, `commits.allowedAttributionTrailers`
-set to the two trailer keys the invocation named, and a starting `models`
-matrix). **Three fields have no default at all** — `models`, `launch.default`
-and `iteration.lane` — because each would be nen inventing a name rather than a
-number; they come back empty or `null`.
+set to the one trailer key `--agent-trailer` resolved to — its own default
+or a caller override — `commits.runTrailer` set to `--run-trailer`'s key when
+one was named, and a starting `models` matrix). **Four fields have no default
+at all** — `models`, `launch.default`, `iteration.lane` and `commits.runTrailer`
+— because each would be nen inventing a name rather than a number; they come
+back empty or `null`.
 
 | Key | What it decides | Read by |
 |---|---|---|
@@ -348,6 +350,7 @@ number; they come back empty or `null`.
 | `notifications.rungs` / `sound` | which escalation rungs a host hook fires | host hooks |
 | `notifications.turn` | how loud an ORDINARY (no-gate) turn is: `"rung1"` (default) rings only the first rung `rungs` lists, `"all"` rings every rung `rungs` lists on every turn. Never widens what `rungs` grants | host hooks |
 | `commits.allowedAttributionTrailers` / `forbiddenTrailers` | which attribution trailers a commit may carry | [`commit format`](#nen-commit-format), the generated `commit-msg` hook |
+| `commits.runTrailer` | the trailer key an AUTOMATED commit must ALSO carry, alongside the one attribution trailer the hook requires. Absent (`null`) by default — a run identifier is optional, never itself an attribution trailer, so it is never folded into `allowedAttributionTrailers` | the generated `commit-msg` hook's automated half |
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
 
@@ -390,6 +393,30 @@ repository running both planes lists both:
 one running only one plane lists only that key; one following neither
 convention lists neither, and both keys are refused exactly like any other
 unlisted attribution trailer.
+
+**`nen scaffold init`'s own `--agent-trailer` now defaults to `Akatsuki-Agent`
+when a caller states none**, since this ruling ratified it as the family's own
+CI-plane key — a fresh policy this verb writes into absence therefore admits
+`Akatsuki-Agent` unless `--agent-trailer <key>` names a different one. That is
+a **CLI default**, not a schema one: `nen/workflow.json`'s own
+`commits.allowedAttributionTrailers` still starts empty for any *other* route
+to the file (a hand-written one, or one from before this default existed), and
+[`schema check`](#nen-schema-check) still reports an absent file as a full
+policy admitting nothing. A repository that wants `Hatsu-Agent` too adds it by
+hand — `scaffold init` never invents the local-plane key, only the CI-plane
+one it now defaults to.
+
+**The generated `commit-msg` hook's automated half is DERIVED from this file,
+not merely checked against it.** `nen scaffold init` reads whether an
+*existing* `nen/workflow.json` admits the key `--agent-trailer` resolved to
+before writing the hook: when it does, the hook requires that trailer (plus
+`commits.runTrailer`, when the policy states one) on every automated commit;
+when it does **not** — an existing policy whose `allowedAttributionTrailers`
+never grew the key an invocation is about to require — the hook's automated
+half refuses **every** automated commit outright, naming the missing policy,
+rather than checking for a trailer no commit could ever honestly carry. Add
+the key to `commits.allowedAttributionTrailers` and re-run `scaffold init` to
+regenerate a hook that checks for it instead.
 
 **Two values leave the file and become part of a script**, so both are held to a
 shape at load: `branch.base` (a git branch name a shell reads only once) and
@@ -3397,15 +3424,17 @@ It still never generates scenario-specific project *code* — a framework's own 
 
 Eleven steps, each reporting `created` / `appended` / `skipped` / `would-create` / `would-append` / `refused` with the reason. In order: resolve the stack **and the policy** (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; install the trunk-guarding pre-commit hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; write [`nen/workflow.json`](#nenworkflowjson)'s policy into absence; add the stack's CI workflow; append `.nen/` and the policy's `reports.dir` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
 
-**Both git hooks are made out of `nen/workflow.json`, which is why the policy is resolved first.** The commit-msg hook bakes in, *as data*, every attribution trailer the policy does not admit — so it needs no `nen` on `PATH` at the moment of commit — and the pre-commit hook bakes in `branch.base` and refuses a commit made on that branch. A policy file that is **already there wins and is never overwritten**: this run is generated *from* it, and overwriting it would install guards enforcing the rules that had just been deleted. A policy that is there and **malformed** refuses the whole run at exit **2**, before the first write, naming the pointer — nen will not scaffold around a file it could not read. The policy this run writes admits exactly the two trailer keys `--agent-trailer` and `--run-trailer` named, so a repository that also uses one of the other [attribution trailers](#nenworkflowjson) adds it to `commits.allowedAttributionTrailers` and re-runs.
+**Both git hooks are made out of `nen/workflow.json`, which is why the policy is resolved first.** The commit-msg hook bakes in, *as data*, every attribution trailer the policy does not admit — so it needs no `nen` on `PATH` at the moment of commit — and the pre-commit hook bakes in `branch.base` and refuses a commit made on that branch. A policy file that is **already there wins and is never overwritten**: this run is generated *from* it, and overwriting it would install guards enforcing the rules that had just been deleted. A policy that is there and **malformed** refuses the whole run at exit **2**, before the first write, naming the pointer — nen will not scaffold around a file it could not read. The policy this run writes admits exactly the one trailer key `--agent-trailer` resolved to, and records `--run-trailer` (when given) under the **separate** `commits.runTrailer` key rather than the allow-list — a run identifier is never itself an attribution claim — so a repository that also uses one of the other [attribution trailers](#nenworkflowjson) adds it to `commits.allowedAttributionTrailers` and re-runs.
 
-`--agent-trailer`/`--run-trailer`/`--marker-env` are caller data (which trailer pair and environment variable mark an automated commit is a convention of the target repository, not a literal this binary ships) and are validated as legal git-trailer-key / shell-identifier shapes, since each is interpolated into the generated hook script.
+**The commit-msg hook's automated half is itself DERIVED from the resolved policy (zheref/nen#167), not a fixed pair baked in regardless of it.** It requires exactly the one attribution trailer `--agent-trailer` resolved to, plus `commits.runTrailer` too when that key is stated — never a hard-coded pair. When an **existing** `nen/workflow.json`'s `commits.allowedAttributionTrailers` does **not** admit the key `--agent-trailer` resolved to, the generated hook's automated half refuses **every** automated commit outright, naming the missing policy: there is no message such a repository could ever write that would satisfy a check for a trailer it does not admit, so the hook does not pretend to check for one. Regenerating a hook from an **unchanged** policy is byte-stable.
+
+`--agent-trailer`/`--run-trailer`/`--marker-env` are caller data (which trailer key(s) and environment variable mark an automated commit is a convention of the target repository, not a literal this binary ships) and are validated as legal git-trailer-key / shell-identifier shapes, since each is interpolated into the generated hook script. **Only `--marker-env` is required.** `--agent-trailer` is optional and defaults to this project family's own CI-plane provenance trailer ([Two provenance trailers](#two-provenance-trailers)) when omitted; `--run-trailer` is optional with no default, and when given is the key `commits.runTrailer` takes.
 
 **Usage**
 
 ```text
-nen scaffold init --repo <path>
-                  --agent-trailer <key> --run-trailer <key> --marker-env <VAR>
+nen scaffold init --repo <path> --marker-env <VAR>
+                  [--agent-trailer <key>] [--run-trailer <key>]
                   [--directories src,tests,docs]
                   (--stack <id> | --accept-detected)
                   [--hook-path .git/hooks/commit-msg] [--force]
@@ -3421,9 +3450,9 @@ nen scaffold init --repo <path>
 | `--stack <id>` | one of the two | The stack this repository builds, stated. | Validated by shape first (`[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]`, because it is spliced into a lookup and a file) and membership second; either refusal is exit 2 and lists the known ids. The proposal is `detect`'s, **narrowed** to this stack's lanes; a stack no marker answered still gets one lane at the repository root, with an **empty verb map** — nen writes a command row only for a verb it cross-checked against this tree. |
 | `--accept-detected` | one of the two | Accept `shu detect`'s proposal whole. | The caller confirming a printed proposal, not nen deciding. An **ambiguous tree is not an error**: several lanes means `defaultLane: null` and `--lane` required, a withheld row means a seat a maintainer answers, and both are written exactly as [`detect --write`](#nen-shu-detect) writes them, with detect's own notes printed. Passing it *with* `--stack` is exit 2: the two can disagree. |
 | `--directories src,tests,docs` | no | Comma list of directories to create if absent. | |
-| `--agent-trailer <key>` | yes | The git trailer key marking the acting agent. | Must match `[A-Za-z0-9][A-Za-z0-9-]*`; refused otherwise. `Hatsu-Agent`/`Akatsuki-Agent` are two conventional examples this project's family uses — see [Two provenance trailers](#two-provenance-trailers). |
-| `--run-trailer <key>` | yes | The git trailer key marking the run. | Same shape rule. |
-| `--marker-env <VAR>` | yes | The environment variable the hook reads to recognise an automated commit. | Must match `[A-Za-z_][A-Za-z0-9_]*`. |
+| `--agent-trailer <key>` | no | The git trailer key marking the acting agent — the one the automated half REQUIRES. | Must match `[A-Za-z0-9][A-Za-z0-9-]*`; refused otherwise. Omitted, defaults to this project family's own CI-plane provenance trailer — see [Two provenance trailers](#two-provenance-trailers) — never a nen-wide assumption baked into the renderer itself (zheref/nen#167). |
+| `--run-trailer <key>` | no | The git trailer key marking the run — an OPTIONAL second requirement. | Same shape rule. Omitted (the default), the automated half requires only `--agent-trailer`'s key; given, it is written to `commits.runTrailer` and the automated half requires it too. |
+| `--marker-env <VAR>` | **yes** | The environment variable the hook reads to recognise an automated commit. | Must match `[A-Za-z_][A-Za-z0-9_]*`. The one flag of the three still unconditionally required: omitted, `init` refuses at exit 2 naming it and what the other two default to / are for (zheref/nen#138). |
 | `--hook-path <path>` | no | Where the commit-msg hook is installed, and the DIRECTORY the `pre-commit` hook goes in beside it. | Defaults to `.git/hooks/commit-msg`; `--hook-path .husky/commit-msg` puts the trunk guard at `.husky/pre-commit`. There is deliberately no second flag — two flags would be two ways to write the two guards to two unrelated places, which is a repository with one installed and the other somewhere nobody looks. **Contained**: a value resolving outside `--repo` (`../outside/evil-hook`, or an absolute path elsewhere) is exit 2 naming the flag and where it landed, decided before the first write — the same rule [`shu`](#family-shu) applies to a path a declaration states. The hook is written `0755`, because `git` silently skips a `commit-msg` hook that is not executable. |
 | `--force` | no | Overwrite a DIFFERENT existing hook at `--hook-path`, or at the `pre-commit` path beside it. | Without it, a foreign hook at either path is refused (exit 1), not silently replaced; the existing file is backed up to `<path>.bak` first when `--force` is given. A hook with identical generated content is left alone either way. **It covers the two hooks only** — there is deliberately no override for a conflicting CI file, declaration, policy or migration. |
 | `--canon-values-path <path>` | no | Where to write the canon-values template. | Only written if nothing is already there. Contained the same way `--hook-path` is. |
@@ -3458,7 +3487,7 @@ way). Every other step still reports `skipped`.
 
 Under `--json`, stdout is exactly one document and the prose the shape has no field for — `detect`'s open questions, the toolchain table and its advice — is relayed to **stderr** rather than dropped, the way the [`shu`](#family-shu) verbs relay a child's output.
 
-Exit **2** for a usage refusal decided before any write (no stack, both stack flags, an unknown stack, a malformed trailer or marker, a missing `--repo`, a `--hook-path`/`--canon-values-path` outside the repository, a `--nen-ref` that is not a tag or is below the minimum, `--dry-run --install-tools`); exit **1** when a write was `refused` (a foreign hook, an existing declaration, a differing CI file, a conflicting migration, a symlinked legacy source, a symlinked target directory, an errno from the filesystem) — matching v0.2.0's hook behaviour; exit **0** otherwise. **`--dry-run` is a read-only form that can still return 1**: a preview over a tree that already carries a conflicting hook, declaration or workflow reports those refusals and exits 1, because "this run would refuse" is the answer the preview exists to give. It is still read-only — nothing is written and nothing is spawned. **The closing check never moves the exit code**: scaffolding succeeded, and whether this host can build the thing is a separate question with its own verb and its own code. A `scaffold init` that failed because an IDE is absent would be permanently red on every machine that is not already set up, CI runners that legitimately never build that stack included — run [`nen shu tools`](#nen-shu-tools) and read *its* exit code for the host verdict.
+Exit **2** for a usage refusal decided before any write (no stack, both stack flags, an unknown stack, a malformed trailer or marker, a missing `--marker-env` (naming it and what `--agent-trailer`/`--run-trailer` default to or are for), a missing `--repo`, a `--hook-path`/`--canon-values-path` outside the repository, a `--nen-ref` that is not a tag or is below the minimum, `--dry-run --install-tools`); exit **1** when a write was `refused` (a foreign hook, an existing declaration, a differing CI file, a conflicting migration, a symlinked legacy source, a symlinked target directory, an errno from the filesystem) — matching v0.2.0's hook behaviour; exit **0** otherwise. **`--dry-run` is a read-only form that can still return 1**: a preview over a tree that already carries a conflicting hook, declaration or workflow reports those refusals and exits 1, because "this run would refuse" is the answer the preview exists to give. It is still read-only — nothing is written and nothing is spawned. **The closing check never moves the exit code**: scaffolding succeeded, and whether this host can build the thing is a separate question with its own verb and its own code. A `scaffold init` that failed because an IDE is absent would be permanently red on every machine that is not already set up, CI runners that legitimately never build that stack included — run [`nen shu tools`](#nen-shu-tools) and read *its* exit code for the host verdict.
 
 **Example**
 
@@ -3488,7 +3517,7 @@ tools:         (none declared)
 
 A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI workflow, `.gitignore` (ignoring `.nen/` and `Reports/`), the commit-msg hook when a trailer convention is stated, the trunk-guarding `pre-commit` hook **always**, [`nen/workflow.json`](#nenworkflowjson)'s policy, and `nen/contract.json` — **proposed by `shu detect` off the marker this verb just wrote**, so "scaffolded a project" and "declared a stack" stop being two chores with two chances to disagree.
 
-**The trunk guard is unconditional; the commit-msg hook is not**, and the difference is what each one needs. The commit-msg hook enforces a trailer convention nen does not have and will not invent, so it is written only when `--agent-trailer`/`--run-trailer`/`--marker-env` state one; the `pre-commit` hook refuses a commit on `branch.base`, and every repository has a trunk. A fresh tree is also the one place that guard is free — nothing has been committed to it yet. Both are generated from the policy this verb writes, and `iteration.lane` in that policy is the lane the declaration ends up declaring, so the two files cannot name different lanes.
+**The trunk guard is unconditional; the commit-msg hook is not**, and the difference is what each one needs. The commit-msg hook enforces a trailer convention that is turned on by `--marker-env` — the flag that decides whether a hook is wanted at all — so it is written only when `--marker-env` states one, `--agent-trailer` defaulting to this project family's own CI-plane provenance trailer ([Two provenance trailers](#two-provenance-trailers)) and `--run-trailer` staying optional; the `pre-commit` hook refuses a commit on `branch.base`, and every repository has a trunk. A fresh tree is also the one place that guard is free — nothing has been committed to it yet. Both are generated from the policy this verb writes, and `iteration.lane` in that policy is the lane the declaration ends up declaring, so the two files cannot name different lanes.
 
 **Every post-step is PRINTED and none is run.** No repository is initialised, no dependency is installed, no native project is generated, and no network call is made — including the toolchain check, which `init` runs and this verb only names. Writing into a fresh directory and writing to the host are two different consents.
 
@@ -3496,7 +3525,7 @@ A **fresh** tree: the stack template's files with `{{name}}` substituted, the CI
 
 ```text
 nen scaffold new --stack <id> --name <project> --dir <path>
-                 [--agent-trailer <key> --run-trailer <key> --marker-env <VAR>]
+                 [--marker-env <VAR> [--agent-trailer <key>] [--run-trailer <key>]]
                  [--nen-ref vX.Y.Z] [--dry-run] [--json]
 ```
 
@@ -3509,7 +3538,9 @@ nen scaffold new --stack <id> --name <project> --dir <path>
 | `--stack <id>` | yes | The stack to write. Never inferred — there is no tree to infer from. | Exit 2 for an unknown id, for a stack the catalogue proposes no template for (`compose-desktop`, `dotnet-winui`), and for one with no fresh-tree form (`gradle-android`, `xcode-ios`) — each naming the `scaffold init` invocation to run after creating the project with its own generator. |
 | `--name <project>` | yes | Written into this tree's own manifest. | Must match `[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]`: it is spliced into JSON bodies, and a name that has to be escaped first was never one. |
 | `--dir <path>` | yes | The directory to write into. | Must not exist, or must be empty. **No merge and no `--force`** — a directory with something in it is one somebody is using, and the failure a merge produces is a half-scaffolded tree whose declaration describes files that were skipped. Exit 2. A **one-slash relative** value (`parity/nextjs`) reads as an `owner/name` slug and is exit 2 naming the `./parity/nextjs` spelling — the same ambiguity [`--repo`](#--repo-path-is-a-path) refuses rather than guesses. Every other relative value is `./`-prefixed in the printed post-steps, seven of which pass it to `--repo`. |
-| `--agent-trailer` / `--run-trailer` / `--marker-env` | no | The trailer convention the commit-msg hook enforces. | All three or none. Omitted, the hook is `skipped` and the post-steps name the `scaffold init` line that installs it — nen ships no trailer convention and will not invent one for every project this verb ever writes. The hook is written `0755`, as `init` writes it. |
+| `--marker-env <VAR>` | no | The environment variable the hook reads to recognise an automated commit. **Decides whether the hook is wanted at all.** | Must match `[A-Za-z_][A-Za-z0-9_]*`. Omitted (with neither of the other two stated), the hook is `skipped` and the post-steps name the `scaffold init` line that installs it — nen ships no marker variable and invents none. Given, the hook is written `0755`, as `init` writes it. Naming `--agent-trailer`/`--run-trailer` without it is exit 2: half a convention is a caller mistake, not something silently dropped. |
+| `--agent-trailer <key>` | no | The git trailer key marking the acting agent. | Must match `[A-Za-z0-9][A-Za-z0-9-]*`. Omitted, defaults to this project family's own CI-plane provenance trailer ([Two provenance trailers](#two-provenance-trailers)) — the same default `init` applies. |
+| `--run-trailer <key>` | no | The git trailer key marking the run — an OPTIONAL second requirement. | Same shape rule. Written to `commits.runTrailer` when given; the automated half then requires it too, alongside `--agent-trailer`'s key. |
 | `--nen-ref vX.Y.Z` | no | The nen release the generated workflow pins. | Same rule and same refusals as [`init`](#nen-scaffold-init)'s. A fresh tree has no declaration to read a pin out of, so the answer is the greater of this binary's version and the declared minimum. |
 | `--dry-run` | no | Print the tree it would write, and write nothing. | The declaration is *described* rather than shown: there is no tree yet to read a marker out of, and deriving the block by a second route is how two routes to one document drift. |
 
@@ -3526,19 +3557,21 @@ would-create: .gitignore -- the 'full' template
 would-create: next.config.ts -- the 'full' template
 would-create: package.json -- the 'full' template
 would-create: .github/workflows/nen-shu.yml -- the 'full' template's workflow for nextjs
-skipped: .git/hooks/commit-msg -- no trailer convention was stated (--agent-trailer, --run-trailer, --marker-env), and nen ships none. The post-steps name the invocation that installs it.
+skipped: .git/hooks/commit-msg -- no --marker-env was stated, so there is nothing to mark a commit as automated: nen ships no marker variable and invents none. The post-steps name the invocation that installs it (--agent-trailer defaults to 'Akatsuki-Agent' when omitted; --run-trailer is optional).
+would-create: .git/hooks/pre-commit -- the trunk guard for 'main'
 would-create: nen/contract.json -- proposed by 'nen shu detect' off the marker written above -- the same block 'nen shu detect --write' writes, seats and all
+would-create: nen/workflow.json -- the delivery policy the generated hooks were made from -- every key carries nen's own default
 a dry run writes nothing, so the declaration is described rather than shown: it is exactly what 'nen shu detect --repo ./kro-site' prints once the tree exists.
 post-steps (nen does NOT run these):
   1. cd ./kro-site && git init && git add -A && git commit -m "chore: scaffold"
   2. name the package manager in package.json's "packageManager" field. nen never picks one, so until it is there every declared row that needs it stays a withheld seat
   3. add the framework and its dependencies to package.json, then install them
-  4. nen scaffold init --repo ./kro-site --stack nextjs --agent-trailer <key> --run-trailer <key> --marker-env <VAR>
+  4. nen scaffold init --repo ./kro-site --stack nextjs --marker-env <VAR> [--agent-trailer <key>] [--run-trailer <key>]
   5. nen shu detect --repo ./kro-site            # re-propose the rows it withheld, once the manifest answers
   6. nen shu tools --repo ./kro-site            # checks the host; --install acts
   7. nen shu build --repo ./kro-site --dry-run  # confirm the declaration
 ```
-(run for real)
+(run for real, `dist/nen-darwin-arm64 scaffold new --stack nextjs --name kro-site --dir ./kro-site --dry-run`)
 
 **What the generated workflow does.** `.github/workflows/nen-shu.yml` declares `permissions: contents: read`, fetches nen's bootstrap at a pinned ref, runs `nen shu tools --repo .`, then `build`, `test` and `lint` — **`--dry-run` first, then for real** — treating exit 4 (this lane declares no such verb) as a fact rather than a failure.
 
