@@ -165,16 +165,47 @@ export class TemplateError extends Error {
   }
 }
 
-/** The two values a caller states; everything else is copied verbatim. */
+/**
+ * `--agent-trailer`'s own default, when a caller states none.
+ *
+ * DATA, NOT A LITERAL IN SHIPPED CODE (zheref/nen#167). This project
+ * family's own CI-plane provenance trailer (the maintainer's 2026-09-10
+ * ruling, zheref/nen#164, docs/USAGE.md's "Two provenance trailers") could
+ * not be a hard-coded string in ./command.ts without being exactly the
+ * persona/system-name violation ../taxonomy-purity.test.ts's §3 sweep exists
+ * to catch -- so it lives beside the rest of this pack's own defaults, in
+ * `templates/workflow.json`'s `$defaultAgentTrailer`, and is read at the one
+ * place a caller who wants a different key already overrides it
+ * (--agent-trailer <key>).
+ */
+export function defaultAgentTrailer(): string {
+  const path = `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`;
+  const pack = workflowPack as { $defaultAgentTrailer?: unknown };
+  const value = pack.$defaultAgentTrailer;
+  if (typeof value !== "string" || value === "") {
+    throw new TemplateError(path, "$defaultAgentTrailer", "must be a non-empty string");
+  }
+  return value;
+}
+
+/** The three values a caller states; everything else is copied verbatim. */
 export interface WorkflowDefaults {
   /** The lane being scaffolded, or null when this run declared more than one. */
   readonly lane: string | null;
   /** Attribution trailer keys this repository ADMITS. The caller's own. */
   readonly allowedAttributionTrailers: readonly string[];
+  /**
+   * The run-identifier trailer key this invocation named (`--run-trailer`),
+   * or `null` when it named none. NEVER FOLDED INTO
+   * `allowedAttributionTrailers`: a run identifier says which RUN produced a
+   * commit, not who or what did, so it is never an attribution trailer and
+   * gets its own field, `commits.runTrailer`.
+   */
+  readonly runTrailer: string | null;
 }
 
 /**
- * The default `nen/workflow.json`, with the caller's two values overlaid.
+ * The default `nen/workflow.json`, with the caller's three values overlaid.
  *
  * WHY THE DOCUMENT IS DATA AND THIS FUNCTION IS THE ONLY READER. Every byte
  * this verb writes into somebody else's repository should be readable in one
@@ -183,12 +214,13 @@ export interface WorkflowDefaults {
  * policy document is the one nen writes with no stack in it at all, so it sits
  * beside the index rather than inside a template directory.
  *
- * EXACTLY TWO VALUES ARE OVERLAID, AND BOTH ARE THE CALLER'S. The lane is the
- * one this run declared; the allowed attribution trailers are the trailer keys
- * the invocation named (`--agent-trailer`, `--run-trailer`). Everything else --
- * the ladder, the branch template, the model matrix -- is the pack's, verbatim.
- * A third overlay would be nen deciding a policy on a repository's behalf,
- * which is what the file exists to stop.
+ * EXACTLY THREE VALUES ARE OVERLAID, AND ALL THREE ARE THE CALLER'S. The lane
+ * is the one this run declared; the allowed attribution trailers are the
+ * `--agent-trailer` key the invocation resolved to (its own default, or a
+ * caller override); the run trailer is `--run-trailer`, when named. Everything
+ * else -- the ladder, the branch template, the model matrix -- is the pack's,
+ * verbatim. A fourth overlay would be nen deciding a policy on a repository's
+ * behalf, which is what the file exists to stop.
  *
  * IT RETURNS A FRESH OBJECT EVERY CALL. The imported document is module state
  * shared by every invocation in this process (`nen scaffold init` runs
@@ -206,7 +238,7 @@ export function defaultWorkflowDocument(defaults: WorkflowDefaults): Record<stri
       "must be the default policy object",
     );
   }
-  // A STRUCTURED CLONE, not a shallow spread: the two overlays below reach into
+  // A STRUCTURED CLONE, not a shallow spread: the overlays below reach into
   // nested blocks, and a shallow copy would write them through to the import.
   const copy = JSON.parse(JSON.stringify(document)) as Record<string, unknown>;
   const overlay = (block: string, key: string, value: unknown): void => {
@@ -215,13 +247,14 @@ export function defaultWorkflowDocument(defaults: WorkflowDefaults): Record<stri
       throw new TemplateError(
         `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`,
         `document.${block}`,
-        "must be an object -- it is one of the two blocks a caller's own values are written into",
+        "must be an object -- it is one of the blocks a caller's own values are written into",
       );
     }
     (target as Record<string, unknown>)[key] = value;
   };
   overlay("iteration", "lane", defaults.lane);
   overlay("commits", "allowedAttributionTrailers", [...defaults.allowedAttributionTrailers]);
+  overlay("commits", "runTrailer", defaults.runTrailer);
   return copy;
 }
 

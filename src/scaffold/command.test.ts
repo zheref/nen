@@ -50,9 +50,29 @@ describe("nen scaffold init -- CLI wiring", () => {
     expect(result.out.join("\n")).toMatch(/hook: installed/);
   });
 
-  it("requires --agent-trailer, --run-trailer and --marker-env", async () => {
+  it("requires --marker-env, naming it and what --agent-trailer/--run-trailer default to (#138)", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-scaffold-verb-"));
-    expect((await capture(["scaffold", "init"], root)).code).toBe(2);
+    const result = await capture(["scaffold", "init"], root);
+    expect(result.code).toBe(2);
+    const message = result.err.join("\n");
+    expect(message).toMatch(/requires --marker-env <VAR>/);
+    expect(message).toMatch(/Missing: --marker-env/);
+    expect(message).toMatch(/Akatsuki-Agent/);
+  });
+
+  it("proceeds with just --marker-env: --agent-trailer defaults to Akatsuki-Agent", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-scaffold-verb-"));
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--marker-env", "X_CI"],
+      root,
+    );
+    expect(result.code).toBe(0);
+    expect(readFileSync(join(root, ".git", "hooks", "commit-msg"), "utf8")).toContain("Akatsuki-Agent");
+    const policy = JSON.parse(readFileSync(join(root, "nen", "workflow.json"), "utf8")) as {
+      commits: { allowedAttributionTrailers: readonly string[]; runTrailer: string | null };
+    };
+    expect(policy.commits.allowedAttributionTrailers).toEqual(["Akatsuki-Agent"]);
+    expect(policy.commits.runTrailer).toBeNull();
   });
 
   it("refuses an unknown subcommand", async () => {
@@ -107,5 +127,66 @@ describe("nen scaffold init -- CLI wiring", () => {
       root,
     );
     expect(result.code).toBe(2);
+  });
+
+  // zheref/nen#167: the run identifier is optional -- naming it writes
+  // commits.runTrailer and the hook's automated half then requires it too.
+  it("writes --run-trailer under commits.runTrailer, and the hook then requires it too", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-scaffold-verb-"));
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--agent-trailer", "X-Agent", "--run-trailer", "X-Run", "--marker-env", "X_CI"],
+      root,
+    );
+    expect(result.code).toBe(0);
+    const policy = JSON.parse(readFileSync(join(root, "nen", "workflow.json"), "utf8")) as {
+      commits: { allowedAttributionTrailers: readonly string[]; runTrailer: string | null };
+    };
+    expect(policy.commits.allowedAttributionTrailers).toEqual(["X-Agent"]);
+    expect(policy.commits.runTrailer).toBe("X-Run");
+    const hook = readFileSync(join(root, ".git", "hooks", "commit-msg"), "utf8");
+    expect(hook).toContain("^X-Agent: .+");
+    expect(hook).toContain("^X-Run: .+");
+  });
+
+  // zheref/nen#167: regenerating a hook from an UNCHANGED policy is byte-stable.
+  it("is byte-stable: a second run over the same policy reports 'unchanged', not 'installed'", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-scaffold-verb-"));
+    const argv = [
+      "scaffold",
+      "init",
+      "--stack",
+      "nextjs",
+      "--agent-trailer",
+      "X-Agent",
+      "--marker-env",
+      "X_CI",
+    ];
+    const first = await capture(argv, root);
+    expect(first.code).toBe(0);
+    const bytes = readFileSync(join(root, ".git", "hooks", "commit-msg"), "utf8");
+    const second = await capture(argv, root);
+    expect(second.code).toBe(0);
+    expect(second.out.join("\n")).toMatch(/hook: unchanged/);
+    expect(readFileSync(join(root, ".git", "hooks", "commit-msg"), "utf8")).toBe(bytes);
+  });
+
+  // zheref/nen#167: a policy that does not admit the resolved --agent-trailer
+  // key generates a hook whose automated half refuses every automated commit.
+  it("generates a hook that refuses every automated commit when the EXISTING policy admits no attribution trailer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-scaffold-verb-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(
+      join(root, "nen", "workflow.json"),
+      JSON.stringify({ commits: { allowedAttributionTrailers: [] } }),
+    );
+    const result = await capture(
+      ["scaffold", "init", "--stack", "nextjs", "--agent-trailer", "Akatsuki-Agent", "--marker-env", "X_CI"],
+      root,
+    );
+    expect(result.code).toBe(0);
+    const hook = readFileSync(join(root, ".git", "hooks", "commit-msg"), "utf8");
+    expect(hook).toContain("does not admit 'Akatsuki-Agent'");
+    expect(hook).toContain("commits.allowedAttributionTrailers");
+    expect(hook).not.toContain("grep -qE '^Akatsuki-Agent: .+'");
   });
 });

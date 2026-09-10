@@ -36,7 +36,7 @@ import { renderToolsReport, type ToolsReport } from "../shu/tools.js";
 import { PROGRAM } from "../version.js";
 import { scaffoldInit, type ScaffoldInitResult, type ToolsOutcome } from "./init.js";
 import { scaffoldNew, type ScaffoldNewResult } from "./new.js";
-import { freshTreeSupport, resolveStackId } from "./templates.js";
+import { defaultAgentTrailer, freshTreeSupport, resolveStackId } from "./templates.js";
 
 // A trailer key is interpolated into the hook both as an ERE inside a
 // single-quoted shell string and inside a double-quoted echo string (see
@@ -80,8 +80,8 @@ function usageText(): string {
   return `nen scaffold -- stand a repository up: the taxonomy layer, the stack layer, and the CI file.
 
 usage:
-  nen scaffold init --repo <path>
-                    --agent-trailer <key> --run-trailer <key> --marker-env <VAR>
+  nen scaffold init --repo <path> --marker-env <VAR>
+                    [--agent-trailer <key>] [--run-trailer <key>]
                     [--directories src,tests,docs]
                     (--stack <id> | --accept-detected)
                     [--hook-path .git/hooks/commit-msg] [--force]
@@ -89,7 +89,7 @@ usage:
                     [--nen-ref vX.Y.Z] [--install-tools] [--dry-run] [--json]
 
   nen scaffold new --stack <id> --name <project> --dir <path>
-                   [--agent-trailer <key> --run-trailer <key> --marker-env <VAR>]
+                   [--marker-env <VAR> [--agent-trailer <key>] [--run-trailer <key>]]
                    [--nen-ref vX.Y.Z] [--dry-run] [--json]
 
 'init' works on an EXISTING repository. It creates every --directories entry
@@ -132,13 +132,23 @@ release exists for a ref. A --nen-ref below that minimum is refused by name.
 'init' prefers this repository's own nen/contract.json dependency.pinnedRef
 when it has one and that pin is not below the minimum.
 
---agent-trailer/--run-trailer/--marker-env are caller data: which trailer pair
-and which environment variable mark an automated commit is this system's own
-convention, never a literal shipped here. Each must be a legal git trailer key
-/ shell identifier (--agent-trailer, --run-trailer: [A-Za-z0-9][A-Za-z0-9-]*;
---marker-env: [A-Za-z_][A-Za-z0-9_]*) -- refused otherwise, since either is
-interpolated into the generated hook script. They are required on 'init' and
-optional on 'new', where omitting them makes the hook a printed post-step.
+--agent-trailer/--run-trailer/--marker-env are caller data: which trailer
+key(s) and which environment variable mark an automated commit is this
+system's own convention, never a literal shipped here (--marker-env has no
+default: no environment-variable name is anybody's ratified convention).
+Each must be a legal git trailer key / shell identifier (--agent-trailer,
+--run-trailer: [A-Za-z0-9][A-Za-z0-9-]*; --marker-env: [A-Za-z_][A-Za-z0-9_]*)
+-- refused otherwise, since each is interpolated into the generated hook
+script. --marker-env is REQUIRED on 'init', and is the flag 'new' treats as
+"install the hook" -- omitted on 'new' (with neither of the other two
+stated), the hook becomes a printed post-step. --agent-trailer is OPTIONAL:
+omitted, it defaults to '${defaultAgentTrailer()}', this project family's own
+CI-plane provenance trailer (docs/USAGE.md's "Two provenance trailers", the
+maintainer's 2026-09-10 ruling, zheref/nen#164) -- state a different key to
+use a different one. --run-trailer is OPTIONAL with no default; when given,
+the written policy's commits.runTrailer takes it, and the generated hook's
+automated half then requires a run identifier too, alongside the one
+attribution trailer --agent-trailer resolved to (zheref/nen#167).
 
 --hook-path defaults to .git/hooks/commit-msg, and names the DIRECTORY both
 generated hooks go in: the trunk guard is written as 'pre-commit' beside it,
@@ -156,10 +166,19 @@ the moment of commit; the pre-commit guard bakes in branch.base and refuses a
 commit made on it. A policy file that is already there WINS and is never
 overwritten (the hooks are generated from it); one that is there and MALFORMED
 refuses the whole run at exit 2, before the first write, naming the pointer.
-The written default admits exactly the two trailer keys --agent-trailer and
---run-trailer named, so a repository that also uses one of the other
-attribution trailers adds it to commits.allowedAttributionTrailers and re-runs.
-'.gitignore' upkeep appends the policy's reports.dir beside '.nen/'.
+The written default admits exactly the one trailer key --agent-trailer
+resolved to, and records --run-trailer (when given) under the SEPARATE
+commits.runTrailer key rather than the allow-list, since a run identifier is
+not itself an attribution claim; a repository that also uses another
+attribution trailer of its own (its local plane's, say) adds it to
+commits.allowedAttributionTrailers and re-runs. THE COMMIT-MSG GUARD'S
+AUTOMATED HALF IS ITSELF DERIVED FROM THAT POLICY: when an EXISTING
+nen/workflow.json does not admit the key --agent-trailer resolved to, 'init'
+generates a hook whose automated half refuses every automated commit outright,
+naming the missing policy -- there is no message a repository that has not
+admitted the key could ever write that would satisfy a check for it, so the
+hook does not pretend to check. '.gitignore' upkeep appends the policy's
+reports.dir beside '.nen/'.
 
 --dry-run prints every write, every migration and every post-step, and
 performs none. It spawns NOTHING, probes included: the toolchain check is
@@ -294,27 +313,40 @@ function renderNew(result: ScaffoldNewResult): readonly string[] {
   return lines;
 }
 
-/** The trailer convention, validated. Required on `init`, optional on `new`. */
+/**
+ * The trailer convention, validated.
+ *
+ * `--marker-env` IS THE ONE FLAG THAT DECIDES WHETHER A HOOK IS WANTED AT
+ * ALL, now that the other two are no longer both mandatory (zheref/nen#167).
+ * `--agent-trailer` defaults to ./templates.ts's `defaultAgentTrailer()` when
+ * omitted, and `--run-trailer` is always optional with no default -- neither
+ * states "install a hook" on its own, so only the marker variable that turns
+ * the automated half on does. `init` requires it; `new` treats it as the
+ * signal that turns the other two from ignored to acted-on, and refuses a
+ * caller who named either of them without it -- half a convention is a
+ * caller mistake, not something to silently drop.
+ */
 function readHookSpec(
   context: CommandContext,
   required: boolean,
-): { agentTrailer: string; runTrailer: string; markerEnvVar: string } | undefined {
-  const agentTrailer = context.args.values["agent-trailer"];
-  const runTrailer = context.args.values["run-trailer"];
+): { agentTrailer: string; runTrailer: string | null; markerEnvVar: string } | undefined {
+  const agentTrailerFlag = context.args.values["agent-trailer"];
+  const runTrailerFlag = context.args.values["run-trailer"];
   const markerEnv = context.args.values["marker-env"];
-  const given = [agentTrailer, runTrailer, markerEnv].filter((value): boolean => value !== undefined);
-  if (given.length === 0 && !required) return undefined;
-  if (agentTrailer === undefined || runTrailer === undefined || markerEnv === undefined) {
+  if (markerEnv === undefined) {
+    if (!required && agentTrailerFlag === undefined && runTrailerFlag === undefined) return undefined;
     throw new VerbUsageError(
       required
-        ? "scaffold init takes --agent-trailer, --run-trailer and --marker-env."
-        : "--agent-trailer, --run-trailer and --marker-env are one convention and are given together or not at all. Omit all three and the hook becomes a printed post-step.",
+        ? `scaffold init requires --marker-env <VAR>: the generated commit-msg hook reads it to recognise an automated commit. --agent-trailer <key> is optional -- omitted, it defaults to '${defaultAgentTrailer()}', this project family's own CI-plane provenance trailer (docs/USAGE.md's "Two provenance trailers") -- and --run-trailer <key> is optional with no default: when this repository's nen/workflow.json does not exist yet, this run writes commits.runTrailer from it and the generated hook then also requires a run identifier; when nen/workflow.json already exists, that file's own commits.runTrailer wins and this flag is ignored (a printed note says so) -- edit the file directly to change it. Missing: --marker-env.`
+        : "--marker-env <VAR> is required alongside --agent-trailer/--run-trailer: without it nothing marks a commit as automated, so neither flag has anything to act on. Omit all three and the hook becomes a printed post-step instead.",
     );
   }
+  const agentTrailer = agentTrailerFlag ?? defaultAgentTrailer();
+  const runTrailer = runTrailerFlag ?? null;
   if (!TRAILER_KEY.test(agentTrailer)) {
     throw new VerbUsageError(`--agent-trailer '${agentTrailer}' is not a legal trailer key ([A-Za-z0-9][A-Za-z0-9-]*).`);
   }
-  if (!TRAILER_KEY.test(runTrailer)) {
+  if (runTrailer !== null && !TRAILER_KEY.test(runTrailer)) {
     throw new VerbUsageError(`--run-trailer '${runTrailer}' is not a legal trailer key ([A-Za-z0-9][A-Za-z0-9-]*).`);
   }
   if (!MARKER_ENV_VAR.test(markerEnv)) {
@@ -326,7 +358,7 @@ function readHookSpec(
 function runInit(context: CommandContext): number {
   const hook = readHookSpec(context, true);
   if (hook === undefined) {
-    throw new VerbUsageError("scaffold init takes --agent-trailer, --run-trailer and --marker-env.");
+    throw new VerbUsageError("scaffold init requires --marker-env <VAR>.");
   }
   // Usage lists --repo unbracketed: omitting it is refused by name at exit 2
   // -- a scaffold that defaulted to the cwd would write directories and a

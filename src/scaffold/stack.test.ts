@@ -824,7 +824,9 @@ describe("nen scaffold new", () => {
     // than a trailer pair and every repository has a trunk.
     expect(existsSync(join(without, ".git", "hooks", "commit-msg"))).toBe(false);
     expect(existsSync(join(without, ".git", "hooks", "pre-commit"))).toBe(true);
-    expect(result.out.join("\n")).toMatch(/scaffold init --repo .* --agent-trailer <key>/);
+    expect(result.out.join("\n")).toMatch(/scaffold init --repo .* --marker-env <VAR>/);
+    expect(result.out.join("\n")).toContain("--agent-trailer <key>");
+    expect(result.out.join("\n")).toContain("--run-trailer <key>");
   });
 
   it("refuses a --name that would have to be escaped into a manifest", async () => {

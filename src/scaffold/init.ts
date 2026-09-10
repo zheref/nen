@@ -43,6 +43,7 @@ import {
   loadWorkflow,
   parseWorkflow,
   refusedTrailerKeys,
+  trailerAdmitted,
   type Workflow,
 } from "../schema/workflow.js";
 import { detect, type DetectReport } from "../shu/detect.js";
@@ -564,12 +565,15 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
   // the repository exactly as it was, which is this step's whole rule.
   const workflowDocument = defaultWorkflowDocument({
     lane: declaredLane(proposed.document),
-    // THE CALLER'S OWN TWO KEYS, and the only attribution trailers a freshly
-    // scaffolded repository admits until somebody edits the file.
-    // `--agent-trailer` and `--run-trailer` are what THIS invocation says mark
-    // an automated commit; writing anything else into the allow-list would be
-    // nen shipping a convention, which ./hook.ts's header refuses to do.
-    allowedAttributionTrailers: [options.hook.agentTrailer, options.hook.runTrailer],
+    // THE CALLER'S OWN KEY, and the only attribution trailer a freshly
+    // scaffolded repository admits until somebody edits the file. What
+    // `--agent-trailer` resolved to (this invocation's own value, or its
+    // default) is what marks an automated commit; writing anything else into
+    // the allow-list would be nen shipping a convention, which ./hook.ts's
+    // header refuses to do. `--run-trailer` is a SEPARATE, OPTIONAL key -- it
+    // is never itself an attribution trailer, so it never joins this list.
+    allowedAttributionTrailers: [options.hook.agentTrailer],
+    runTrailer: options.hook.runTrailer,
   });
   const workflowBody = `${JSON.stringify(workflowDocument, null, 2)}\n`;
   // Parsed OUTSIDE the try below, deliberately: the default document is nen's
@@ -581,15 +585,46 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
     workflowDocument,
   );
   let policy: Workflow;
+  // WHETHER AN EXISTING FILE WAS THE SOURCE, kept alongside `policy` itself:
+  // the notice below (an existing policy's `commits.runTrailer` winning over
+  // `--run-trailer`) only makes sense when there WAS an existing file to win
+  // -- against `defaultPolicy`, the two can never disagree, since that
+  // document is built from `options.hook.runTrailer` in the first place (the
+  // `allowedAttributionTrailers`/`runTrailer` overlay a few lines above).
+  let policyWasExisting = false;
   try {
     const loaded = loadWorkflow(root);
     policy = loaded.present ? loaded.workflow : defaultPolicy;
+    policyWasExisting = loaded.present;
   } catch (error) {
     if (!(error instanceof SchemaError)) throw error;
     throw new VerbUsageError(
       `this repository's ${WORKFLOW_FILE} could not be read: ${error.message}. Both generated hooks are made out of that policy -- which attribution trailers a commit may carry, and which branch is the trunk -- so nen will not scaffold around a file it cannot read, and has changed nothing. Fix the file ('${PROGRAM} schema check --repo ${root}' prints the whole verdict), then re-run.`,
     );
   }
+  // THE HOOK'S runTrailer COMES FROM THE POLICY THAT GOVERNS IT, not from
+  // whatever `--run-trailer` this particular invocation happened to carry.
+  // `options.hook.agentTrailer`/`markerEnvVar` stay caller data -- there is no
+  // policy key for either, `trailerAdmitted` below is exactly the check that
+  // reconciles `agentTrailer` against an existing policy, and the marker
+  // variable is this invocation's own, never a repository's -- but
+  // `commits.runTrailer` IS a policy key, and an EXISTING policy already wins
+  // over this invocation everywhere else in this function (the trunk name,
+  // the refused-trailer list, whether `agentTrailer` is admitted at all). A
+  // hook that required whatever `--run-trailer` this run happened to name,
+  // regardless of what the repository's own file states, could demand a
+  // trailer on every automated commit that the repository's own policy never
+  // asked for -- or silently drop one the policy DOES require, when this run
+  // named none. Against `defaultPolicy` (no existing file) the two are the
+  // same value by construction, so this changes nothing there.
+  if (policyWasExisting && options.hook.runTrailer !== null && options.hook.runTrailer !== policy.commits.runTrailer) {
+    notes.push(
+      policy.commits.runTrailer === null
+        ? `--run-trailer '${options.hook.runTrailer}' is not required: this repository's ${WORKFLOW_FILE} already exists and states no commits.runTrailer, and an existing policy wins over this invocation's flags. Add "commits": { "runTrailer": "${options.hook.runTrailer}" } to that file (then re-run) to require it.`
+        : `--run-trailer '${options.hook.runTrailer}' is ignored: this repository's ${WORKFLOW_FILE} already states commits.runTrailer '${policy.commits.runTrailer}', and an existing policy wins over this invocation's flags. The generated hook requires '${policy.commits.runTrailer}', not '${options.hook.runTrailer}'.`,
+    );
+  }
+  const hookSpec: HookSpec = { ...options.hook, runTrailer: policy.commits.runTrailer };
 
   // ── 2. directories, the hooks and the canon-values template ────────────────
   //
@@ -674,12 +709,24 @@ export function scaffoldInit(options: ScaffoldInitOptions): ScaffoldInitResult {
 
   const commitMsg = installHook(
     hookPath,
-    // THE REFUSED LIST IS RESOLVED ONCE, HERE, AND BAKED INTO THE SCRIPT. The
-    // hook then needs no nen on PATH at the moment of commit, and cannot drift
-    // from the policy between runs -- and `nen commit format` answers the same
+    // THE REFUSED LIST, AND WHETHER THE REQUIRED KEY IS ADMITTED, ARE BOTH
+    // RESOLVED ONCE, HERE, AND BAKED INTO THE SCRIPT. The hook then needs no
+    // nen on PATH at the moment of commit, and cannot drift from the policy
+    // between runs -- and `nen commit format` answers the refused-list
     // question from the same function, so the CLI cannot admit a trailer the
-    // hook then rejects.
-    renderCommitMsgHook(options.hook, refusedTrailerKeys(policy.commits)),
+    // hook then rejects. A policy that does not admit `--agent-trailer`'s own
+    // resolved key (the repository's own `nen/workflow.json`, read above,
+    // WINS over what this invocation asked for) generates a hook whose
+    // automated half refuses every automated commit, naming the missing
+    // policy, rather than one that checks for a trailer nobody could add
+    // without it also being refused. `hookSpec` carries the SAME reconciliation
+    // for `runTrailer`, computed above: an existing policy's `commits.runTrailer`
+    // wins over `--run-trailer` too.
+    renderCommitMsgHook(
+      hookSpec,
+      refusedTrailerKeys(policy.commits),
+      trailerAdmitted(policy.commits, options.hook.agentTrailer),
+    ),
     "commit-msg",
   );
   const hookOutcome = commitMsg.outcome;

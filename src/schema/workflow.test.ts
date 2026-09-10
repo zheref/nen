@@ -17,6 +17,7 @@ import {
   loadWorkflow,
   parseWorkflow,
   refusedTrailerKeys,
+  trailerAdmitted,
   trailerRefusal,
 } from "./workflow.js";
 
@@ -326,13 +327,19 @@ describe("commits -- the trailer policy", () => {
   });
 });
 
-describe("refusedTrailerKeys / trailerRefusal", () => {
+describe("refusedTrailerKeys / trailerRefusal / trailerAdmitted", () => {
   const policy = (
     allowedAttributionTrailers: readonly string[],
     forbiddenTrailers: readonly string[] = [],
-  ): { allowedAttributionTrailers: readonly string[]; forbiddenTrailers: readonly string[]; raw: Readonly<Record<string, unknown>> } => ({
+  ): {
+    allowedAttributionTrailers: readonly string[];
+    forbiddenTrailers: readonly string[];
+    runTrailer: string | null;
+    raw: Readonly<Record<string, unknown>>;
+  } => ({
     allowedAttributionTrailers,
     forbiddenTrailers,
+    runTrailer: null,
     raw: {},
   });
 
@@ -362,6 +369,64 @@ describe("refusedTrailerKeys / trailerRefusal", () => {
     expect(trailerRefusal(policy([]), "  Claude-Session  ")).toBe("Claude-Session");
     expect(trailerRefusal(policy([]), "Closes")).toBeNull();
     expect(trailerRefusal(policy(["Co-Authored-By"]), "CO-AUTHORED-BY")).toBeNull();
+  });
+
+  // zheref/nen#167: a key nen has never heard of (a caller's own vocabulary,
+  // like 'Akatsuki-Agent') is neither refused NOR admitted unless the policy's
+  // own allow-list says so -- ./scaffold/hook.ts's generated hook needs to
+  // tell the two apart.
+  it("trailerAdmitted: a caller's own key is admitted only when the allow-list lists it, case-insensitively", () => {
+    expect(trailerAdmitted(policy(["Akatsuki-Agent"]), "Akatsuki-Agent")).toBe(true);
+    expect(trailerAdmitted(policy(["Akatsuki-Agent"]), "akatsuki-agent")).toBe(true);
+    expect(trailerAdmitted(policy([]), "Akatsuki-Agent")).toBe(false);
+    expect(trailerAdmitted(policy(["Hatsu-Agent"]), "Akatsuki-Agent")).toBe(false);
+  });
+
+  it("trailerAdmitted and trailerRefusal can both say 'no' about the same unrecognised key", () => {
+    // 'Akatsuki-Agent' is not one of ATTRIBUTION_TRAILERS, so an empty policy
+    // refuses nothing about it -- and admits nothing about it either.
+    expect(trailerRefusal(policy([]), "Akatsuki-Agent")).toBeNull();
+    expect(trailerAdmitted(policy([]), "Akatsuki-Agent")).toBe(false);
+  });
+});
+
+describe("commits.runTrailer", () => {
+  it("is null when the key is absent", () => {
+    expect(loadWorkflow(tempRoot()).workflow.commits.runTrailer).toBeNull();
+    expect(loadWorkflow(repoWith({ commits: { allowedAttributionTrailers: ["X-Agent"] } })).workflow.commits.runTrailer).toBeNull();
+  });
+
+  it("reads a stated key, held to the same trailer-key shape every other one is", () => {
+    const { workflow } = loadWorkflow(repoWith({ commits: { runTrailer: "X-Run" } }));
+    expect(workflow.commits.runTrailer).toBe("X-Run");
+  });
+
+  it.each(["X-Run: value", "X Run", "-X", "X.Run"])(
+    "refuses '%s', which is not a key a hook can match on",
+    (key) => {
+      expect(refusal({ commits: { runTrailer: key } }).pointer).toBe("commits.runTrailer");
+    },
+  );
+
+  // A runTrailer this same policy also REFUSES is a requirement no commit
+  // could ever satisfy: required by the automated half, and refused on every
+  // commit by the check above it.
+  it("refuses a runTrailer this policy also REFUSES (attribution-shaped, and not admitted)", () => {
+    const error = refusal({ commits: { runTrailer: "Co-Authored-By" } });
+    expect(error.pointer).toBe("commits.runTrailer");
+    expect(error.message).toContain("REFUSES");
+  });
+
+  it("refuses a runTrailer explicitly listed under forbiddenTrailers", () => {
+    const error = refusal({ commits: { runTrailer: "X-Run", forbiddenTrailers: ["X-Run"] } });
+    expect(error.pointer).toBe("commits.runTrailer");
+  });
+
+  it("admits a runTrailer that is ALSO in allowedAttributionTrailers -- no contradiction there", () => {
+    const { workflow } = loadWorkflow(
+      repoWith({ commits: { allowedAttributionTrailers: ["X-Run"], runTrailer: "X-Run" } }),
+    );
+    expect(workflow.commits.runTrailer).toBe("X-Run");
   });
 });
 

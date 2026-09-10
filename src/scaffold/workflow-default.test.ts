@@ -24,8 +24,15 @@ import { TEMPLATE_DIRECTORY, WORKFLOW_TEMPLATE_FILE, defaultWorkflowDocument } f
 
 const WHERE = `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`;
 
-function parsed(lane: string | null = null, trailers: readonly string[] = []): Workflow {
-  return parseWorkflow(WHERE, defaultWorkflowDocument({ lane, allowedAttributionTrailers: trailers }));
+function parsed(
+  lane: string | null = null,
+  trailers: readonly string[] = [],
+  runTrailer: string | null = null,
+): Workflow {
+  return parseWorkflow(
+    WHERE,
+    defaultWorkflowDocument({ lane, allowedAttributionTrailers: trailers, runTrailer }),
+  );
 }
 
 describe("the bundled default policy document", () => {
@@ -46,6 +53,7 @@ describe("the bundled default policy document", () => {
     }
     expect(packed.iteration.checks).toEqual(built.iteration.checks);
     expect(packed.commits.forbiddenTrailers).toEqual(built.commits.forbiddenTrailers);
+    expect(packed.commits.runTrailer).toEqual(built.commits.runTrailer);
   });
 
   it("carries a model matrix the loader has no default for, and reads every leaf", () => {
@@ -60,35 +68,51 @@ describe("the bundled default policy document", () => {
     expect(defaultWorkflow().models.surfaces).toEqual({});
   });
 
-  it("writes the caller's lane and trailer keys, and nothing else of theirs", () => {
+  it("writes the caller's lane and agent-trailer key, and nothing else of theirs", () => {
     const document = defaultWorkflowDocument({
       lane: "web",
-      allowedAttributionTrailers: ["X-Agent", "X-Run"],
+      allowedAttributionTrailers: ["X-Agent"],
+      runTrailer: null,
     });
     const policy = parseWorkflow(WHERE, document);
     expect(policy.iteration.lane).toBe("web");
-    expect(policy.commits.allowedAttributionTrailers).toEqual(["X-Agent", "X-Run"]);
-    // The two overlays are the ONLY difference from the pack's own bytes.
+    expect(policy.commits.allowedAttributionTrailers).toEqual(["X-Agent"]);
+    expect(policy.commits.runTrailer).toBeNull();
+    // The three overlays are the ONLY difference from the pack's own bytes.
     expect(policy.branch.template).toBe(defaultWorkflow().branch.template);
     expect(policy.coverage.minimum).toBe(defaultWorkflow().coverage.minimum);
   });
 
+  // zheref/nen#167: the run trailer is a SEPARATE key -- never folded into
+  // allowedAttributionTrailers, because a run identifier is not an
+  // attribution claim.
+  it("writes the caller's run-trailer key under commits.runTrailer, never under allowedAttributionTrailers", () => {
+    const document = defaultWorkflowDocument({
+      lane: "web",
+      allowedAttributionTrailers: ["X-Agent"],
+      runTrailer: "X-Run",
+    });
+    const policy = parseWorkflow(WHERE, document);
+    expect(policy.commits.allowedAttributionTrailers).toEqual(["X-Agent"]);
+    expect(policy.commits.runTrailer).toBe("X-Run");
+  });
+
   it("returns a FRESH document on every call, so one run's lane cannot leak into the next", () => {
-    const first = defaultWorkflowDocument({ lane: "web", allowedAttributionTrailers: ["A"] });
-    const second = defaultWorkflowDocument({ lane: null, allowedAttributionTrailers: [] });
+    const first = defaultWorkflowDocument({ lane: "web", allowedAttributionTrailers: ["A"], runTrailer: null });
+    const second = defaultWorkflowDocument({ lane: null, allowedAttributionTrailers: [], runTrailer: null });
     expect((first["iteration"] as Record<string, unknown>)["lane"]).toBe("web");
     expect((second["iteration"] as Record<string, unknown>)["lane"]).toBeNull();
     // Mutating one must not reach the module-level import the other reads.
     (first["coverage"] as Record<string, unknown>)["minimum"] = 1;
     expect(
-      (defaultWorkflowDocument({ lane: null, allowedAttributionTrailers: [] })[
+      (defaultWorkflowDocument({ lane: null, allowedAttributionTrailers: [], runTrailer: null })[
         "coverage"
       ] as Record<string, unknown>)["minimum"],
     ).toBe(defaultWorkflow().coverage.minimum);
   });
 
   it("is a document a human can read: it says what the file is and that keys are optional", () => {
-    const document = defaultWorkflowDocument({ lane: null, allowedAttributionTrailers: [] });
+    const document = defaultWorkflowDocument({ lane: null, allowedAttributionTrailers: [], runTrailer: null });
     expect(typeof document["$comment"]).toBe("string");
     expect(String(document["$comment"])).toContain("nen/contract.json");
     expect(document["$schema"]).toBe("nen.workflow/v0.1");

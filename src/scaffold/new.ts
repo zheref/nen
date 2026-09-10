@@ -31,6 +31,7 @@ import {
   WORKFLOW_FILE,
   parseWorkflow,
   refusedTrailerKeys,
+  trailerAdmitted,
   type Workflow,
 } from "../schema/workflow.js";
 import { detect } from "../shu/detect.js";
@@ -40,6 +41,7 @@ import { PRE_COMMIT_HOOK, bootstrapRef, type ScaffoldWrite, type WriteAction } f
 import {
   TEMPLATE_DIRECTORY,
   WORKFLOW_TEMPLATE_FILE,
+  defaultAgentTrailer,
   defaultWorkflowDocument,
   substitute,
   templateForStack,
@@ -232,21 +234,33 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
   // has answered which lane the marker this verb just wrote declares; neither
   // hook reads that field, which is why they can be written first.
   const allowedAttributionTrailers =
-    options.hook === undefined ? [] : [options.hook.agentTrailer, options.hook.runTrailer];
+    options.hook === undefined ? [] : [options.hook.agentTrailer];
+  const runTrailer = options.hook === undefined ? null : options.hook.runTrailer;
   const policy: Workflow = parseWorkflow(
     `${TEMPLATE_DIRECTORY}/${WORKFLOW_TEMPLATE_FILE}`,
-    defaultWorkflowDocument({ lane: null, allowedAttributionTrailers }),
+    defaultWorkflowDocument({ lane: null, allowedAttributionTrailers, runTrailer }),
   );
 
-  // The commit-msg hook, ONLY when the caller stated the convention it
-  // enforces. Which two trailer keys mark an automated commit, and which
+  // The commit-msg hook, ONLY when the caller stated a marker environment
+  // variable. Which trailer key(s) mark an automated commit, and which
   // environment variable marks the run, are the target system's own vocabulary
-  // -- nen ships none, and inventing a pair here would bake one system's
-  // convention into every project this verb ever writes.
+  // -- nen ships no marker variable of its own and never invents one, though
+  // ./command.ts's own `--agent-trailer` default (the family's own CI-plane
+  // convention, once it states one) is free to be the trailer key here.
   const hookPath = ".git/hooks/commit-msg";
   const postSteps: string[] = [`cd ${dir} && git init && git add -A && git commit -m "chore: scaffold"`];
   if (options.hook !== undefined) {
-    const body = renderCommitMsgHook(options.hook, refusedTrailerKeys(policy.commits));
+    // A FRESH POLICY ALWAYS ADMITS ITS OWN `--agent-trailer`: the block above
+    // built `policy` FROM `options.hook.agentTrailer`, so this is never the
+    // "refuses every automated commit" branch on a fresh tree -- that can only
+    // happen against an EXISTING policy, which `scaffold new` never reads (there
+    // is no tree yet). Computed rather than assumed, so the two verbs share one
+    // rule instead of one assuming what the other proves.
+    const body = renderCommitMsgHook(
+      options.hook,
+      refusedTrailerKeys(policy.commits),
+      trailerAdmitted(policy.commits, options.hook.agentTrailer),
+    );
     // THROUGH ./hook.ts's WRITER, exactly as `scaffold init` does. A hook
     // written 0644 is one `git` skips in silence on every commit, and this verb
     // shipped one for as long as it had a writer of its own.
@@ -257,7 +271,7 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
     writes.push({
       path: hookPath,
       action: "skipped",
-      why: "no trailer convention was stated (--agent-trailer, --run-trailer, --marker-env), and nen ships none. The post-steps name the invocation that installs it.",
+      why: `no --marker-env was stated, so there is nothing to mark a commit as automated: nen ships no marker variable and invents none. The post-steps name the invocation that installs it (--agent-trailer defaults to '${defaultAgentTrailer()}' when omitted; --run-trailer is optional).`,
     });
   }
 
@@ -275,7 +289,7 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
   postSteps.push(...template.postSteps);
   if (options.hook === undefined) {
     postSteps.push(
-      `${PROGRAM} scaffold init --repo ${dir} --stack ${options.stack} --agent-trailer <key> --run-trailer <key> --marker-env <VAR>`,
+      `${PROGRAM} scaffold init --repo ${dir} --stack ${options.stack} --marker-env <VAR> [--agent-trailer <key>] [--run-trailer <key>]`,
     );
   }
   postSteps.push(
@@ -300,7 +314,7 @@ export function scaffoldNew(options: ScaffoldNewOptions): ScaffoldNewResult {
   const putWorkflow = (lane: string | null): void => {
     putText(
       WORKFLOW_FILE,
-      `${JSON.stringify(defaultWorkflowDocument({ lane, allowedAttributionTrailers }), null, 2)}\n`,
+      `${JSON.stringify(defaultWorkflowDocument({ lane, allowedAttributionTrailers, runTrailer }), null, 2)}\n`,
       "the delivery policy the generated hooks were made from -- every key carries nen's own default",
     );
   };
