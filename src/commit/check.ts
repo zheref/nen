@@ -17,17 +17,18 @@
 // about the repository.
 //
 // READ-ONLY, AND HERE IS THE HONEST FULL STATEMENT OF IT. Computing the tree
-// hash runs `git add -A` into a SCRATCH INDEX and `git write-tree` (see
-// ../repo/tree.ts): the repository's own index is neither read nor written, no
+// hash runs `git add -A`, `git rm --cached` for `.nen/` and `git write-tree`
+// into a SCRATCH INDEX (see ../repo/tree.ts): the repository's own index is
+// neither read nor written, no
 // ref moves, no tracked file changes, and the scratch file is removed. What it
 // does leave behind is unreferenced git objects for file contents, which
 // `git status` also creates and `gc` collects. Nothing a later reader can
 // observe as a change, which is what ../parse/izanami.ts's read-only row means.
 
-import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
+import { emit, requireRepoFlag, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { workingTreeHash } from "../repo/tree.js";
-import { PROOF_CONTRACT, proofRelativePath, readProof, type BuildProof } from "../shu/proof.js";
+import { proofRelativePath, readProof, type BuildProof } from "../shu/proof.js";
 
 /** `nen.commit.check/v0.1` -- KEY ORDER IS THE CONTRACT; ./check.test.ts pins it. */
 export const CHECK_CONTRACT = "nen.commit.check/v0.1";
@@ -130,11 +131,18 @@ export function runCheck(context: CommandContext): number {
       "--require-proof <lane> is required: 'commit check' answers about ONE lane's build proof, and nen never picks a lane for you. It is the lane you built -- a key of this repository's own project.verbs.",
     );
   }
-  // `--repo` IS REQUIRED HERE. This verb answers about the tree in a particular
-  // working copy, and "wherever this process happens to be" is not a working
-  // copy anybody named -- `shu warmup`'s rule (zheref/nen#28), applied to the
-  // one other verb whose answer is entirely about which directory it ran in.
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // `--repo` IS REQUIRED HERE, and this verb is the only read-only one in the
+  // CLI that requires it. Its whole answer is about which working copy it stood
+  // in: "the tree is the one that was proved" said of the wrong directory is a
+  // green verdict about somebody else's files, and the caller cannot tell from
+  // the output that it happened. `shu warmup`'s rule (zheref/nen#28) applied
+  // for the same reason at a different blast radius.
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(
+      context,
+      "It names the working copy this answers about. There is no default: a proof verdict is only ever true of one directory, and defaulting to whichever one this process happens to be standing in would report a green tree that is not the one you meant.",
+    ),
+  });
   const { proof, wrong } = narrow(readProof(root, lane));
   const treeHash = workingTreeHash(context.seams, root);
   const why = difference(lane, proof, wrong, treeHash);
@@ -153,6 +161,3 @@ export function runCheck(context: CommandContext): number {
   if (why !== null) context.io.err(`nen commit check: ${why}`);
   return report.exitCode;
 }
-
-/** Named here so the usage text and the verb cannot state different contracts. */
-export const PROOF_CONTRACT_NAME = PROOF_CONTRACT;

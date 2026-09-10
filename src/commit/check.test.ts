@@ -167,6 +167,27 @@ describe("nen commit check --require-proof", () => {
     expect(run.err.join("\n")).toContain("--require-proof <lane> is required");
   });
 
+  it("refuses a missing --repo rather than answering about whatever directory this is", async () => {
+    // THE ONLY READ-ONLY VERB IN THIS CLI THAT REQUIRES IT, and this is the
+    // reason: a green verdict said of the wrong working copy is indistinguishable
+    // in the output from a green verdict said of yours.
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+    const seams = new ScriptedSeams([], { platform: "linux" });
+    const code = await runFamily(
+      commitCommand,
+      ["commit", "check", "--require-proof", "web"],
+      null,
+      false,
+      io,
+      seams,
+    );
+    expect(code).toBe(2);
+    expect(err.join("\n")).toContain("--repo <path> is required");
+    expect(seams.calls).toEqual([]);
+  });
+
   it("refuses a lane that would escape the tree", async () => {
     const run = await check(["check", "--require-proof", "../../../etc/passwd"]);
     expect(run.code).toBe(2);
