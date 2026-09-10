@@ -1,0 +1,10 @@
+{
+  "testResults": [
+    {
+      "name": "/home/placeholder/checkout/src/cart.test.ts",
+      "assertionResults": [
+        { "status": "passed", "duration": 12 }
+      ]
+    }
+  ]
+}

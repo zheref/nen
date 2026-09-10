@@ -1,0 +1,117 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the TEST-REPORT verb's repository. It declares no 'test-report' verb anywhere, on purpose: that verb runs project.verbs.<lane>.test and reads THAT row's artifacts, because a repository which has said how its tests run has said enough. Ten lanes, one per answer the verb has to have. Separate from shu-repo because that one is the EXECUTOR's fixture and declares no test artifacts -- folding the two together would delete the 'declares none' case. Not shipped; see ../../README.md.",
+
+  "project": {
+    "lanes": {
+      "web": { "stack": "nextjs", "cwd": "." },
+      "core": { "stack": "nextjs", "cwd": "." },
+      "native": { "stack": "xcode-ios", "cwd": "." },
+      "droid": { "stack": "gradle-android", "cwd": "." },
+      "mixed": { "stack": "nextjs", "cwd": "." },
+      "gone": { "stack": "nextjs", "cwd": "." },
+      "stray": { "stack": "gradle-android", "cwd": "." },
+      "noxml": { "stack": "gradle-android", "cwd": "." },
+      "untested": { "stack": "nextjs", "cwd": "." },
+      "blocked": { "stack": "nextjs", "cwd": "." }
+    },
+    "defaultLane": "web",
+
+    "preconditions": {
+      "blocked": [
+        {
+          "kind": "path",
+          "value": "reports/not-built",
+          "why": "An unsatisfiable precondition, so the executor refuses at 2 having started nothing -- while a real report sits on disk at this lane's declared artifact. Nen must report NOTHING parsed there: the file is certainly not this invocation's."
+        }
+      ]
+    },
+
+    "verbs": {
+      "web": {
+        "test": {
+          "exe": "pnpm",
+          "argv": ["--filter", "@placeholder/core", "test", "--reporter=json", "--outputFile=reports/test-results.json"],
+          "artifacts": ["reports/test-results.json"],
+          "why": "The lane the parse is proved on end to end. `artifacts` names the file the runner writes; nen parses the FIRST entry whose format it recognises and never searches for one."
+        }
+      },
+      "core": {
+        "test": {
+          "exe": "pnpm",
+          "argv": ["--filter", "@placeholder/app", "test"],
+          "why": "DECLARES NO ARTIFACTS. The run succeeds and nen has nothing to parse: the refusal names the field to declare and lists the formats it reads."
+        }
+      },
+      "native": {
+        "test": {
+          "steps": [
+            { "exe": "placeholder-build-tool", "argv": ["test", "-resultBundlePath", "reports/Placeholder.xcresult"] },
+            { "exe": "placeholder-result-tool", "argv": ["get", "test-results", "summary", "--path", "reports/Placeholder.xcresult", "--format", "json", "--output-path", "reports/test-summary.json"] }
+          ],
+          "artifacts": ["reports/test-summary.json"],
+          "why": "THE TWO-STEP SHAPE THIS FAMILY MEANS BY 'declared': the result bundle is a directory in a proprietary layout, and the only supported way to read one is the vendor's own extraction tool -- so the DECLARATION runs it as a second step and names the JSON it writes. nen never spawns an extraction of its own; it reads the file this repository said it would produce."
+        }
+      },
+      "droid": {
+        "test": {
+          "exe": "placeholder-wrapper",
+          "argv": ["test"],
+          "artifacts": ["reports/results"],
+          "why": "A DIRECTORY ARTIFACT: this runner writes one XML file per suite, so the declaration names the directory it writes them into. nen reads every *.xml under it, in sorted order, and merges them into one report -- there is no shell here and no glob is expanded."
+        }
+      },
+      "mixed": {
+        "test": {
+          "exe": "npm",
+          "argv": ["run", "test:all"],
+          "artifacts": ["reports/notes.md", "reports/bin/app", "reports/results/CartTest.xml"],
+          "why": "THE ORDINARY SHAPE, plus the trap. A test verb writes several things and only one is a machine-readable report: `notes.md` is passed over because nen recognises no format for it, and `bin/app` is passed over because an artifact whose NAME states a format nen reads is chosen before one that merely has no extension. Choosing in one pass would parse the binary and refuse a lane that declared exactly what it was asked for."
+        }
+      },
+      "gone": {
+        "test": {
+          "exe": "npm",
+          "argv": ["run", "test"],
+          "artifacts": ["reports/gone/results.xml"],
+          "why": "A declared report that is not on disk after a successful run: exit 1 naming the path, because the runner wrote it somewhere else or wrote nothing."
+        }
+      },
+      "stray": {
+        "test": {
+          "exe": "placeholder-wrapper",
+          "argv": ["test", "--stray"],
+          "artifacts": ["reports/stray"],
+          "why": "A directory artifact holding an XML file that is not a test report. Every *.xml under a directory artifact is read, so one nen does not recognise refuses the whole read by name rather than being skipped past -- reading half a tree and reporting a total for it is the failure this verb must not have."
+        }
+      },
+      "noxml": {
+        "test": {
+          "exe": "placeholder-wrapper",
+          "argv": ["test", "--none"],
+          "artifacts": ["reports/noxml"],
+          "why": "A directory artifact with no *.xml anywhere under it: exit 1 saying so, because a directory nen reads as a tree of XML and finds none in is a declaration pointing above (or beside) the directory the runner writes into."
+        }
+      },
+      "blocked": {
+        "test": {
+          "exe": "npm",
+          "argv": ["run", "test"],
+          "artifacts": ["reports/test-results.json"],
+          "why": "THE TRAP THIS VERB IS ARRANGED AROUND. Its precondition can never be satisfied, so no step runs -- and its declared artifact is a real, parseable report (the `web` lane's). A run that started nothing must parse nothing, whatever is on disk."
+        }
+      },
+      "untested": {
+        "build": {
+          "exe": "npm",
+          "argv": ["run", "build"],
+          "why": "A lane with a build and NO test. 'nen shu test-report' answers exit 4 in the declaration's own terms, in every form -- including --from-artifacts, because the artifact list is a property of the invocation this lane does not have."
+        }
+      }
+    },
+
+    "profiles": {},
+    "targets": {},
+    "hosts": { "*": ["darwin", "linux", "win32"] }
+  }
+}

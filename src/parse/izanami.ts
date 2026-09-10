@@ -770,9 +770,11 @@ const MUTATING_PATTERNS: readonly RegExp[] = [
 //                           "read-only").
 //   * "mutating"         -- every form writes somewhere (GitHub, the working
 //                           copy, a ledger file). No flag makes it a read.
-//   * "dry-run-gated"    -- WRITES BY DEFAULT; the explicit --dry-run form is
-//                           the only provably-read one, so read-only requires
-//                           the --dry-run token present.
+//   * "dry-run-gated"    -- WRITES BY DEFAULT; a named read gate is what
+//                           certifies a form of it, so read-only requires one
+//                           of those tokens present. `--dry-run` is always a
+//                           gate; `alsoRead` names any others, and one row
+//                           carries one (see that field).
 //   * "write-flag-gated" -- READS BY DEFAULT; any of the named flags makes it
 //                           write, so read-only requires them all absent.
 //
@@ -853,7 +855,20 @@ export type NenVerbPolicy =
   | { readonly kind: "read-only"; readonly why: string }
   | { readonly kind: "read-only-forwarding"; readonly why: string }
   | { readonly kind: "mutating"; readonly why: string }
-  | { readonly kind: "dry-run-gated"; readonly why: string }
+  /**
+   * WRITES BY DEFAULT; a named read gate is what certifies a form of it.
+   *
+   * `--dry-run` IS ALWAYS ONE OF THE GATES and `alsoRead` names any others. It
+   * is empty on twelve of the thirteen rows that carry this kind, and it is not
+   * a way to widen the certified set cheaply: a flag belongs there only when
+   * the form it selects starts NO PROCESS AT ALL -- a property of nen, pinned
+   * from both sides by that verb's own suite -- rather than one that merely
+   * looks harmless. `nen shu test-report --from-artifacts` is the one: it reads
+   * a file the declaration names and never reaches ../shu/run.ts. A flag whose
+   * safety depended on somebody else's argv would belong in `writeFlags` on a
+   * different kind, or nowhere.
+   */
+  | { readonly kind: "dry-run-gated"; readonly alsoRead?: readonly string[]; readonly why: string }
   | { readonly kind: "write-flag-gated"; readonly writeFlags: readonly string[]; readonly why: string }
   /**
    * ONLY THE EXPLICIT DRY RUN IS A READ; the bare form is `unknown` and a write
@@ -899,6 +914,12 @@ const RO = (why: string): NenVerbPolicy => ({ kind: "read-only", why });
 const RO_FWD = (why: string): NenVerbPolicy => ({ kind: "read-only-forwarding", why });
 const MUT = (why: string): NenVerbPolicy => ({ kind: "mutating", why });
 const DRY = (why: string): NenVerbPolicy => ({ kind: "dry-run-gated", why });
+/** The same, plus the flags whose form also starts nothing. See `alsoRead`. */
+const DRY_OR = (alsoRead: readonly string[], why: string): NenVerbPolicy => ({
+  kind: "dry-run-gated",
+  alsoRead,
+  why,
+});
 const GATED = (writeFlags: readonly string[], why: string): NenVerbPolicy => ({
   kind: "write-flag-gated",
   writeFlags,
@@ -1065,6 +1086,21 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       scenario: RO("reads a repo's recorded scenario"),
     },
   },
+  // TWO VERBS, TWO POLICIES, AND THE SPLIT IS THE WHOLE POINT OF THE PAIR.
+  // `data` gathers facts -- git reads plus files the declaration or the caller
+  // named -- and has no write path at all, in any flag combination, so its
+  // verdict is verb identity alone and no argument spelling can flip it (a
+  // `--tiers` value carrying a quoted Windows path stays a read, as it must).
+  // `render` WRITES `--out` on every ordinary invocation, so it is
+  // dry-run-gated like every other writes-by-default verb here: only the
+  // explicit `--dry-run` form is certified, and an unfaithful line falls back
+  // to `mutating`, which is the safe direction for a verb that writes.
+  report: {
+    subcommands: {
+      data: RO("assembles one report document from git reads and files already on disk -- it has no write path in any form"),
+      render: DRY("fills a template and WRITES --out, unless --dry-run is given, which prints the token list and writes nothing"),
+    },
+  },
   run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
   // BOTH ROWS MOVED FROM `MUT` TO `DRY` WHEN THE FLAG ARRIVED, and the move is
   // an argument rather than a convenience. `label apply` stays `MUT` despite
@@ -1186,12 +1222,38 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given"),
       run: DRY("starts a long-running production process on this terminal unless --dry-run is given"),
       coverage: DRY("spawns the lane's declared coverage command unless --dry-run is given -- a coverage run writes its report tree by definition"),
+      // THE ONE ROW IN THIS TABLE WITH A SECOND READ GATE, and it is a
+      // property of nen rather than of anybody's declaration: `--from-artifacts`
+      // resolves the lane's `test` invocation, reads the results file that
+      // invocation NAMES, and never reaches ../shu/run.ts at all -- which
+      // ../shu/test-report.test.ts pins against a scripted seam that records
+      // zero calls. Every other form spawns the declared `test` argv, so the
+      // bare line is `mutating` for the same reason every executing row here is.
+      "test-report": DRY_OR(
+        ["--from-artifacts"],
+        "spawns the lane's declared TEST command and then parses what it wrote, unless --dry-run is given -- and a declared test task may write (a golden-image recorder, a coverage tree), so the bare form is never certified",
+      ),
       warmup: MUT("brings a working copy to a known state: it discards, fetches, force-moves a trunk ref and checks out a branch. No form of it is a pure read -- the dry run spawns nothing, but a warm-up is not a thing anyone WATCHES, so certifying one form read-only buys a caller nothing and costs the fail-closed answer"),
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },
   stage: { subcommands: { triage: RO("reads 'git status --porcelain'; stages nothing") } },
-  stop: { subcommands: { "*": RO("renders the gate-stop banner; fires nothing itself") } },
+  // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
+  // table are still a pure render -- this verb fires no notification and never
+  // could (../stop/command.ts's header states why) -- but `--mark` writes
+  // `.nen/last-stop.json`, which is a file on disk and therefore not something
+  // a read-only loop may do on every iteration. The bare form stays read-only
+  // for the reason `nen wake fire` and `nen shu deploy` are: absent the flag,
+  // this verb provably writes nothing, which is a property of nen rather than a
+  // claim about somebody else's file.
+  stop: {
+    subcommands: {
+      "*": GATED(
+        ["--mark"],
+        "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads",
+      ),
+    },
+  },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },
   wake: {
     subcommands: {
@@ -1602,16 +1664,29 @@ function evaluateNenPolicy(
       // support"` and `--title x\ --dry-run` each donate a `--dry-run` token
       // to the scan that no shell ever produces). An unprovable gate on a
       // writes-by-default verb is no gate: mutating.
-      if (!tokens.includes("--dry-run")) {
+      // THE GATES ARE `--dry-run` AND, ON ONE ROW, A SECOND FLAG BESIDE IT --
+      // see `alsoRead` above for what earns a place there. The exact-token
+      // rule is unchanged for both: a spelling this scan misses falls back to
+      // `mutating`, which is this policy's own safe direction.
+      const gate = ["--dry-run", ...(policy.alsoRead ?? [])].find((flag): boolean =>
+        tokens.includes(flag),
+      );
+      if (gate === undefined) {
         return { classification: "mutating", reason: `${label} -- ${policy.why}` };
       }
       if (!lineFaithful) {
         return {
           classification: "mutating",
-          reason: `${label} -- ${UNFAITHFUL}; the --dry-run cannot be proven to be an argument of its own rather than part of an adjacent value, and an unprovable gate on a writes-by-default verb is no gate`,
+          reason: `${label} -- ${UNFAITHFUL}; the ${gate} cannot be proven to be an argument of its own rather than part of an adjacent value, and an unprovable gate on a writes-by-default verb is no gate`,
         };
       }
-      return { classification: "read-only", reason: `${label} --dry-run -- the explicit dry-run form reports without writing` };
+      return {
+        classification: "read-only",
+        reason:
+          gate === "--dry-run"
+            ? `${label} --dry-run -- the explicit dry-run form reports without writing`
+            : `${label} ${gate} -- that form starts no process at all, which is a property of nen rather than a claim about the declaration's argv`,
+      };
     }
     case "dry-run-only": {
       // THE WRITE FLAG FIRES FIRST, UNCONDITIONALLY -- the same order, and the

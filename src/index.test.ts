@@ -185,6 +185,7 @@ describe("nen schema check", () => {
       "nen/colors.yml",
       "nen/gates.json",
       "nen/contract.json",
+      "nen/workflow.json",
     ]);
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);
     for (const check of checks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
@@ -209,9 +210,13 @@ describe("nen schema check", () => {
     expect(legacy.code).toBe(0);
     const legacyChecks = (JSON.parse(legacy.out.join("\n")) as { checks: Record<string, unknown>[] })
       .checks;
-    const contract = legacyChecks.at(-1);
-    expect(contract?.["file"]).toBe("nen/contract.json");
+    // BY NAME, NOT BY POSITION: a sixth row landed behind the contract's, and a
+    // test that reads "the last one" is a test that silently starts asserting
+    // about a different row the next time one is appended.
+    const contract = legacyChecks.find((check): boolean => check["file"] === "nen/contract.json");
     expect(contract?.["detail"]).toBe("absent (optional)");
+    const workflow = legacyChecks.find((check): boolean => check["file"] === "nen/workflow.json");
+    expect(workflow?.["detail"]).toBe("absent (defaults apply)");
     for (const check of legacyChecks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
 
     // …and a row that failed outright, from a repository carrying nothing.
@@ -671,5 +676,40 @@ describe("exitCodeFor -- the composition that decides whether the handler is rea
     // escaped throw from third-party code can be.
     expect(await exitCodeFor(Promise.reject("a bare string"), (line): void => void lines.push(line))).toBe(1);
     expect(lines).toEqual(["nen: a bare string"]);
+  });
+});
+
+describe("nen schema check -- the policy row's own refusal sentence", () => {
+  it("does NOT claim nen has no copy to fall back on, because for this file it has", async () => {
+    // Every other sentence this verb prints rests on "nen has no built-in
+    // copy", which is true of a taxonomy and false of the policy: that file's
+    // every parameter has a default, and the point is that nen is DELIBERATELY
+    // not applying one over a policy it could not parse.
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-policy-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    writeFileSync(
+      join(root, "nen", "workflow.json"),
+      '{"coverage":{"minimum":95,"recommended":85,"ideal":90}}',
+    );
+    const result = await capture(["schema", "check", "--repo", root]);
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/FAIL {2}nen\/workflow\.json/);
+    expect(result.out.join("\n")).toContain("does not ascend");
+    expect(result.err.join("\n")).toContain("Every parameter in that file HAS a default");
+    expect(result.err.join("\n")).not.toContain("no built-in copy to fall back on");
+  });
+
+  it("still says 'no built-in copy' when a TAXONOMY file is the one that failed", async () => {
+    const result = await capture([
+      "schema",
+      "check",
+      "--repo",
+      mkdtempSync(join(tmpdir(), "nen-cli-policy-")),
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("no built-in copy to fall back on");
   });
 });

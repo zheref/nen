@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="placeholder" tests="5" failures="1" errors="0" skipped="1" time="0.075">
+  <testsuite name="placeholder.CartTest" tests="3" failures="1" skipped="0" time="0.045">
+    <testcase classname="placeholder.CartTest" name="addsOneItem" time="0.012"/>
+    <testcase classname="placeholder.CartTest" name="addsTwoItems" time="0.021"/>
+    <testcase classname="placeholder.CartTest" name="refusesANegativeQuantity" time="0.012">
+      <failure message="expected -1 to be rejected" type="AssertionError">at placeholder.CartTest.refusesANegativeQuantity(CartTest.java:41)</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="placeholder.TotalsTest" tests="2" failures="0" skipped="1" time="0.030">
+    <testcase classname="placeholder.TotalsTest" name="sumsAnEmptyCart" time="0.030"/>
+    <testcase classname="placeholder.TotalsTest" name="appliesADiscount">
+      <skipped message="pending the discount table"/>
+    </testcase>
+  </testsuite>
+</testsuites>

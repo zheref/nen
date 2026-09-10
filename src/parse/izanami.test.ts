@@ -787,6 +787,9 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     // matters -- every spelling of --install the real parser accepts is
     // refused, even sitting next to the gate.
     "shu tools": "nen shu tools --dry-run",
+    // A `"*"` ROW, so the key carries the wildcard the table keys it by and the
+    // base is the family alone -- `nen stop` takes no subcommand at all.
+    "stop *": "nen stop",
     "wake fire": "nen wake fire --repo-slug o/r --ref XX-PR-#1 --label wake",
     "wake verify": "nen wake verify --repo-slug o/r --now 2026-01-01T00:00:00Z --author-pattern x",
   };

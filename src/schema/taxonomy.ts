@@ -26,6 +26,7 @@ import { loadGateIdentities, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
+import { describeWorkflow, loadWorkflow, WORKFLOW_FILE } from "./workflow.js";
 import {
   COLORS_FILE,
   CONTRACT_FILE,
@@ -249,6 +250,25 @@ function contractCheck(root: string): SchemaCheck {
   return { ...check, ok: true, detail: "absent (optional)" };
 }
 
+// The policy row. ITS ABSENCE IS `ok` FOR A DIFFERENT REASON FROM THE CONTRACT
+// ROW'S, and the detail says which: an absent contract means there is nothing
+// here to read, while an absent policy means every parameter takes the default
+// ../schema/workflow.ts states. So the sentence is "defaults apply" rather than
+// "optional" -- a caller reading this row is being told the loop still has a
+// coverage ladder, a branch template and a trunk, not that it has none.
+//
+// THE ABSENT CASE IS DECIDED BY THE LOADER, NOT BY A MARKER. `loadWorkflow`
+// already distinguishes "not there" (defaults) from "there and unreadable"
+// (throws), so this row asks it rather than re-deriving the same fact from an
+// error message -- and a present-but-malformed policy still travels `run`'s
+// ordinary failure path and FAILS the row by pointer.
+function workflowCheck(root: string): SchemaCheck {
+  return run(WORKFLOW_FILE, root, false, (): string => {
+    const loaded = loadWorkflow(root);
+    return loaded.present ? describeWorkflow(loaded.workflow) : "absent (defaults apply)";
+  });
+}
+
 // Load every schema file and report each one's verdict, never stopping at the
 // first failure. Reporting one problem at a time is how a repository adopting
 // nen makes four round trips to learn four things it could have been told at
@@ -284,6 +304,11 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // is NOT tolerated is a contract that is present and wrong, which fails
     // exactly like a present-and-wrong gates.json.
     contractCheck(root),
+    // `nen/workflow.json` LAST, and optional in the third of the three senses
+    // this report distinguishes: gates.json's absence WARNS, contract.json's
+    // absence is nothing to read, and this file's absence is a full policy made
+    // of defaults. Present and malformed fails, like both of them.
+    workflowCheck(root),
   ];
   return {
     root,
