@@ -74,6 +74,21 @@ describe("parseDedupeFixture -- extracts the DECISION, never the shell's exact s
     const raw = { env: { NUMBER: "1", TITLE: "x" }, subprocess: [{ stdout: "no-tab-here\n" }], recorded: { stdout: "" } };
     expect(() => parseDedupeFixture(raw, "bad-fixture")).toThrow(/malformed TSV/);
   });
+
+  it("skips a row with no number, as the recorded shell's own guard does", () => {
+    // zheref/nen#12 item 3. A LEADING TAB shifts every field left, so the
+    // shell's `IFS=$'\t' read num title` gets an empty `num` and its
+    // `[ -n "$num" ]` guard drops the row. This reader used to take
+    // `Number("")`, get 0, and keep a candidate the recording never had -- and
+    // issue zero wins every lowest-number comparison it is entered into.
+    const raw = {
+      env: { NUMBER: "300", TITLE: "Gap X" },
+      subprocess: [{ stdout: "\t150\tGap X\n300\tGap X\n" }],
+      recorded: { stdout: "#300 is canonical (no older open duplicate) — no-op.\n" },
+    };
+    const fixture = parseDedupeFixture(raw, "leading-tab");
+    expect(fixture.candidates).toEqual([{ number: 300, title: "Gap X" }]);
+  });
 });
 
 describe("replayDedupeFixture -- compares nen's findCanonical against the extracted verdict", () => {
