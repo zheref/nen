@@ -90,6 +90,31 @@ function isPinBullet(bullet: string): boolean {
   return lead !== null && PIN_BULLET.test((lead[1] ?? "").trim());
 }
 
+/**
+ * The floor the pin bullet's own lead-in NAMES, as `MAJOR.MINOR`, or null.
+ *
+ * WHY THE LEAD-IN AND NOT THE WHOLE BULLET. The bullet's body legitimately
+ * names other floors -- the one being left behind, the one still refused -- and
+ * reading a number out of prose that discusses several would pick whichever
+ * came last by accident. The lead-in is the sentence USAGE prescribes, and both
+ * spellings it prescribes END on the floor that now applies:
+ * `**Repin: \`"0.6"\` → \`"0.7"\`, …**` and
+ * `**No repin: the compatibility floor stays \`0.7\`.**`
+ *
+ * SO IT READS THE LAST TWO-COMPONENT VERSION IN THE LEAD-IN'S BACKTICKED SPANS.
+ * A three-component tag (`v0.7.0`) is not a floor and is SKIPPED rather than
+ * truncated to one: `parseMinimum` refuses a third component by name, and a
+ * floor inferred from a tag would be a comparison nobody wrote.
+ */
+function floorNamedBy(bullet: string): string | null {
+  const lead = /^\*\*(.+?)\*\*/s.exec(bullet.trim());
+  if (lead === null) return null;
+  const named = [...(lead[1] ?? "").matchAll(/`([^`]+)`/g)]
+    .map((match): string => (match[1] ?? "").replace(/["']/g, "").trim())
+    .filter((value): boolean => /^\d+\.\d+$/.test(value));
+  return named.at(-1) ?? null;
+}
+
 function topmostRelease(changelog: string): ReleasedSection {
   const lines = changelog.split("\n");
   let version: string | null = null;
@@ -174,14 +199,66 @@ describe("COMPATIBLE_MINOR_FLOOR", () => {
     expect(isPinBullet("Repin: this one has no lead-in")).toBe(false);
   });
 
-  it("reads v0.7.0's section as breaking, which is why the floor is seeded there", () => {
-    // The seed, stated as a fact about the file rather than as a constant this
-    // test would also have to be edited to change: v0.7.0 moved exit codes and
-    // the base every relative own-path flag resolves against, so its notes are
-    // breaking and the floor it ships is its own minor. Nothing pinned before
-    // this release changes behaviour because of the widening.
-    expect(release.breaking.filter((bullet): boolean => !isPinBullet(bullet)).length)
-      .toBeGreaterThan(0);
-    expect(release.breaking.some(isPinBullet)).toBe(true);
+  it("reads the floor a pin bullet names out of BOTH spellings USAGE prescribes", () => {
+    // The extraction, pinned on the two lead-ins the release step writes, so
+    // the assertion below is testing the changelog rather than this regex. The
+    // `Repin:` spelling names four values and only two of them are floors: the
+    // `v0.6.0`/`v0.7.0` tags are skipped, and the LAST floor -- the one now in
+    // force -- is what comes back.
+    expect(floorNamedBy('**Repin: `"0.6"` → `"0.7"`, and `v0.6.0` → `v0.7.0`.** …')).toBe("0.7");
+    expect(floorNamedBy("**No repin: the compatibility floor stays `0.7`.** …")).toBe("0.7");
+    // A lead-in that names no floor at all is null rather than a guess.
+    expect(floorNamedBy("**No repin: nothing moved.** …")).toBeNull();
+    expect(floorNamedBy("no bold lead-in here `0.7`")).toBeNull();
+  });
+
+  it("holds the pin bullet's OWN WORDS to the constant the build ships", () => {
+    // The case below proves a marker was WRITTEN; this one proves it is TRUE,
+    // and without it the pair has a hole a release cut can fall into. The
+    // outcome branch above bounds the floor only from ABOVE
+    // (`floorMinor <= release.minor`) when a release declares no substantive
+    // note -- so a v0.8.0 cut could set COMPATIBLE_MINOR_FLOOR to `0.8`, ship a
+    // bullet reading "No repin: the compatibility floor stays `0.7`", and pass:
+    // 8 <= 8. The consequence is not a stale floor, it is a LIE in the one
+    // document a consumer acts on. They read the bullet, leave `minimum: "0.7"`
+    // alone on its word, and meet exit 5 from a binary that says the pin is
+    // below its floor.
+    //
+    // (Raised by Copilot's review of #201, which found exactly this gap.)
+    for (const pin of release.breaking.filter(isPinBullet)) {
+      expect(
+        floorNamedBy(pin),
+        `v${release.version}'s pin bullet must name the floor this build ships (${COMPATIBLE_MINOR_FLOOR}): ${pin.slice(0, 96)}`,
+      ).toBe(COMPATIBLE_MINOR_FLOOR);
+    }
+  });
+
+  it("requires the cut to write exactly one pin bullet, whichever way the floor went", () => {
+    // WHAT THIS ASSERTION USED TO BE, AND WHY IT COULD NOT SURVIVE v0.8.0.
+    // Through the v0.7.0 line it read "v0.7.0's section is breaking, which is
+    // why the floor is seeded there" -- a true statement about the topmost
+    // section for exactly as long as v0.7.0 WAS the topmost section. The v0.8.0
+    // cut put a non-breaking release above it, and neither repair was
+    // available: re-pointing it at v0.7.0 BY NAME breaks this file's own rule
+    // (it reads the topmost released section AND NO OTHER, because older
+    // sections are history already shipped in binaries it cannot reach), while
+    // re-asserting `substantive > 0` on whatever is topmost would assert that
+    // every release from here on is a breaking one -- the exact claim
+    // COMPATIBLE_MINOR_FLOOR exists to stop making.
+    //
+    // WHAT GENERALISES IS THE OTHER HALF, and it is a rule docs/USAGE.md's
+    // release section states outright: the pin bullet is written EITHER WAY --
+    // `Repin:` when the floor moved, `No repin:` when it stayed -- so a reader
+    // is never left to infer the outcome from a section that says nothing. The
+    // test above decides whether the floor is RIGHT; this one decides whether
+    // the cut SAID SO, which is a distinct failure the other cannot see: a
+    // release that moves the floor correctly and omits the repin sentence
+    // hands every consumer an exit 5 with no instruction in the changelog.
+    // Exactly one, because two pin bullets are two answers to a question with
+    // one.
+    expect(
+      release.breaking.filter(isPinBullet),
+      `v${release.version} must carry exactly one pin bullet, with a bold lead-in beginning "Repin:" or "No repin:"`,
+    ).toHaveLength(1);
   });
 });
