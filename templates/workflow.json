@@ -39,6 +39,7 @@
       "turn": "rung1"
     },
     "commits": {
+      "$comment": "Hatsu-Agent (a local-plane agent, working on a human's own credentials) and Akatsuki-Agent (an autonomous CI-plane agent) are the two conventional provenance-trailer keys this project's family uses -- never an AI-authorship claim. nen ships neither as a default: this list stays empty until a repository states which of the two (or both) it admits, e.g. [\"Hatsu-Agent\", \"Akatsuki-Agent\"].",
       "allowedAttributionTrailers": [],
       "forbiddenTrailers": []
     },

@@ -4,6 +4,10 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Changed
+
+- **docs**, **schema** — `Hatsu-Agent` and `Akatsuki-Agent` are documented as the two conventional provenance-trailer keys this project's family uses to record which plane (local vs. autonomous CI) made a commit — never an AI-authorship claim, and neither shipped as a default. `docs/USAGE.md` gains a "Two provenance trailers" subsection under [`nen/workflow.json`](docs/USAGE.md#nenworkflowjson), linked from `nen scaffold init`'s `--agent-trailer` notes; `templates/workflow.json`'s `commits` block gains a `$comment` naming both (the written default's `allowedAttributionTrailers` stays empty — nen ships no convention). nen's own `nen/workflow.json` now admits both: `commits.allowedAttributionTrailers` is `["Hatsu-Agent", "Akatsuki-Agent"]`, with a `$comment` stating the maintainer's ruling that `Akatsuki-Agent` is recorded only by an Akatsuki roster (CI-plane) agent and `Hatsu-Agent` only by Hatsu's local roster ([#TBD](https://github.com/zheref/nen/pull/TBD))
+
 ## v0.5.0 — 2026-09-10
 
 ### Fixed

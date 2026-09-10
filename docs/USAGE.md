@@ -371,6 +371,26 @@ project's own agent trailer — is untouched. Matching **ignores case**, because
 every tool that reads the finished commit does, and a guard one capital defeats
 is not a guard.
 
+##### Two provenance trailers
+
+`Hatsu-Agent` and `Akatsuki-Agent` are two conventional attribution-trailer
+keys used across this project's family to record *which plane* made a commit
+— never an AI-authorship claim. `Hatsu-Agent` marks a commit made by a
+**local** plane: an agent working in a human's own working copy, on that
+human's own credentials. `Akatsuki-Agent` marks one made by an **autonomous
+CI** plane, running unattended. nen ships **neither** as a default — like
+every attribution-shaped key, each is admitted only when a repository's own
+`nen/workflow.json` lists it in `commits.allowedAttributionTrailers`. A
+repository running both planes lists both:
+
+```json
+"commits": { "allowedAttributionTrailers": ["Hatsu-Agent", "Akatsuki-Agent"] }
+```
+
+one running only one plane lists only that key; one following neither
+convention lists neither, and both keys are refused exactly like any other
+unlisted attribution trailer.
+
 **Two values leave the file and become part of a script**, so both are held to a
 shape at load: `branch.base` (a git branch name a shell reads only once) and
 every trailer key (`[A-Za-z0-9][A-Za-z0-9-]*`, a git trailer key's own charset).
@@ -3401,7 +3421,7 @@ nen scaffold init --repo <path>
 | `--stack <id>` | one of the two | The stack this repository builds, stated. | Validated by shape first (`[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]`, because it is spliced into a lookup and a file) and membership second; either refusal is exit 2 and lists the known ids. The proposal is `detect`'s, **narrowed** to this stack's lanes; a stack no marker answered still gets one lane at the repository root, with an **empty verb map** — nen writes a command row only for a verb it cross-checked against this tree. |
 | `--accept-detected` | one of the two | Accept `shu detect`'s proposal whole. | The caller confirming a printed proposal, not nen deciding. An **ambiguous tree is not an error**: several lanes means `defaultLane: null` and `--lane` required, a withheld row means a seat a maintainer answers, and both are written exactly as [`detect --write`](#nen-shu-detect) writes them, with detect's own notes printed. Passing it *with* `--stack` is exit 2: the two can disagree. |
 | `--directories src,tests,docs` | no | Comma list of directories to create if absent. | |
-| `--agent-trailer <key>` | yes | The git trailer key marking the acting agent. | Must match `[A-Za-z0-9][A-Za-z0-9-]*`; refused otherwise. |
+| `--agent-trailer <key>` | yes | The git trailer key marking the acting agent. | Must match `[A-Za-z0-9][A-Za-z0-9-]*`; refused otherwise. `Hatsu-Agent`/`Akatsuki-Agent` are two conventional examples this project's family uses — see [Two provenance trailers](#two-provenance-trailers). |
 | `--run-trailer <key>` | yes | The git trailer key marking the run. | Same shape rule. |
 | `--marker-env <VAR>` | yes | The environment variable the hook reads to recognise an automated commit. | Must match `[A-Za-z_][A-Za-z0-9_]*`. |
 | `--hook-path <path>` | no | Where the commit-msg hook is installed, and the DIRECTORY the `pre-commit` hook goes in beside it. | Defaults to `.git/hooks/commit-msg`; `--hook-path .husky/commit-msg` puts the trunk guard at `.husky/pre-commit`. There is deliberately no second flag — two flags would be two ways to write the two guards to two unrelated places, which is a repository with one installed and the other somewhere nobody looks. **Contained**: a value resolving outside `--repo` (`../outside/evil-hook`, or an absolute path elsewhere) is exit 2 naming the flag and where it landed, decided before the first write — the same rule [`shu`](#family-shu) applies to a path a declaration states. The hook is written `0755`, because `git` silently skips a `commit-msg` hook that is not executable. |
