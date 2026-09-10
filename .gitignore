@@ -39,3 +39,7 @@ Reports/
 # here one day the way it already does in hatsu, and this line must not
 # pre-emptively ignore it.
 .claude/worktrees/
+
+# `bun build --compile` drops a `.<hash>.bun-build` scratch file in the repository
+# root while it links the binary. It is build residue, never source.
+.*.bun-build

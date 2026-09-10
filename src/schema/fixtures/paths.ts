@@ -22,7 +22,7 @@ export const ALT_REPO = join(FIXTURES, "alt-repo");
  * The un-migrated layout: the same four files as `bankai-repo`, still under
  * `schemas/` and absent from `nen/`. It exists so the fallback is proved
  * against a repository root rather than a temp directory, and it is deleted in
- * v0.4.0 together with the legacy map in ../source.ts.
+ * v0.5.0 together with the legacy map in ../source.ts.
  */
 export const LEGACY_REPO = join(FIXTURES, "legacy-repo");
 

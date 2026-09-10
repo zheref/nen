@@ -126,7 +126,7 @@ describe("resolveSchemaFile", () => {
 
   it("reads the un-migrated fixture repository entirely through the fallback", () => {
     // The `legacy-repo` fixture is the only thing in this tree keeping the old
-    // layout alive; when the map goes in v0.4.0, this test goes with it.
+    // layout alive; when the map goes in v0.5.0, this test goes with it.
     for (const file of [LABELS_FILE, "nen/repos.json", COLORS_FILE, GATES_FILE]) {
       const resolved = resolveSchemaFile(LEGACY_REPO, file);
       expect(resolved.location, file).toBe("schemas");
@@ -304,7 +304,7 @@ describe("readSchemaFile", () => {
       // told to create a file they already have.
       expect(message).toContain("'nen/labels.json'");
       expect(message).toContain("'schemas/labels.json'");
-      expect(message).toContain("v0.4.0");
+      expect(message).toContain("v0.5.0");
       // and it stays actionable
       expect(message).toMatch(/--repo/);
       expect(message).toMatch(/no built-in copy/);
