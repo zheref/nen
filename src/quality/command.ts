@@ -1,6 +1,8 @@
 // src/quality/command.ts -- `nen quality tooling|perf-compare|method-check`.
 
 import { readFileSync } from "node:fs";
+import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { parseToolingTable, resolveTooling } from "./tooling.js";
 import { comparePerf, PerfCompareError } from "./perf.js";
@@ -23,7 +25,13 @@ usage:
   nen quality method-check --input <path.json>
       Validates a QA-15 method block: device/OS stated, Release config with no
       debugger, sample size >=5 with the first discarded, median and p90
-      reported, thermal and network conditions stated. Exits 1 on any gap.`;
+      reported, thermal and network conditions stated. Exits 1 on any gap.
+
+  --repo <path>    The checkout that --table and --input resolve against.
+                   Defaults to the current directory, so a call made from
+                   anywhere else needs it: since zheref/nen#100 every path
+                   flag on this verb resolves against this root, never
+                   against the process's own directory.`;
 
 export const qualityCommand: Command = {
   name: "quality",
@@ -47,9 +55,14 @@ function tooling(context: CommandContext): number {
   if (tablePath === undefined || scenario === undefined) {
     throw new VerbUsageError("quality tooling takes --table <path.json> and --scenario <name>.");
   }
+  // RESOLVED OUTSIDE THE TRY (Copilot, PR #197). A malformed `--repo` throws a
+  // RepoRootError, which ../index.ts maps to the usage exit 2 it is -- but only
+  // if it is allowed to propagate. Inside the read's own catch it became exit 1
+  // under a "could not read" message about a file nobody had a path to yet.
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   let table;
   try {
-    table = parseToolingTable(readFileSync(tablePath, "utf8"));
+    table = parseToolingTable(readFileSync(resolveAgainstRepo(root, tablePath), "utf8"));
   } catch (error) {
     context.io.err(`nen: could not read --table '${tablePath}': ${String(error)}`);
     return 1;
@@ -105,9 +118,12 @@ function perfCompare(context: CommandContext): number {
 function methodCheck(context: CommandContext): number {
   const path = context.args.values["input"];
   if (path === undefined) throw new VerbUsageError("quality method-check takes --input <path.json>.");
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   let block: MethodBlock;
   try {
-    block = JSON.parse(readFileSync(path, "utf8").replace(/\r\n/g, "\n")) as MethodBlock;
+    block = JSON.parse(
+      readFileSync(resolveAgainstRepo(root, path), "utf8").replace(/\r\n/g, "\n"),
+    ) as MethodBlock;
   } catch (error) {
     context.io.err(`nen: could not read --input '${path}': ${String(error)}`);
     return 1;

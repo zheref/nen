@@ -755,13 +755,21 @@ describe("nen issue comment -- the general comment primitive", () => {
   // with two files of the same relative name in two different directories, so
   // a future refactor that resolved against --repo instead would read the
   // WRONG one and this test would see the decoy's text.
-  it("resolves a RELATIVE --body-file against process.cwd(), never against --repo", async () => {
+  // zheref/nen#100 REVERSED THIS, deliberately. `--body-file` used to resolve
+  // against the process's directory while `--gates`, `--changelog`, `--ledger`
+  // and every taxonomy file resolved against `--repo` -- two bases on one
+  // surface. Nothing was inconsistent within an invocation run from the
+  // repository root, which is why it survived; it appears the moment a caller
+  // runs from somewhere else, and then this verb reads THIS tree's file while
+  // every other flag on the line reads the named tree's. The decoy below is
+  // what that costs when both files exist.
+  it("resolves a RELATIVE --body-file against --repo, not the process's directory", async () => {
     const cwdDir = mkdtempSync(join(tmpdir(), "nen-issue-cwd-"));
     const repoDir = mkdtempSync(join(tmpdir(), "nen-issue-repo-"));
-    writeFileSync(join(cwdDir, "rel.md"), "the cwd file's own words\n", "utf8");
-    // A decoy at the SAME relative name under --repo: if resolution ever
-    // switched its base to --repo, this is the file that would be read.
-    writeFileSync(join(repoDir, "rel.md"), "the decoy under --repo\n", "utf8");
+    // The decoy is now the one in the PROCESS's directory: a file at the same
+    // relative name that must NOT be read.
+    writeFileSync(join(cwdDir, "rel.md"), "the decoy the process happens to stand beside\n", "utf8");
+    writeFileSync(join(repoDir, "rel.md"), "the file under --repo\n", "utf8");
     const previous = process.cwd();
     try {
       process.chdir(cwdDir);
@@ -771,8 +779,22 @@ describe("nen issue comment -- the general comment primitive", () => {
         { repoFlag: repoDir, json: true },
       );
       expect(result.code).toBe(0);
-      const parsed = JSON.parse(result.out.join("\n")) as { body: string };
-      expect(parsed.body).toBe("the cwd file's own words\n");
+      const parsed = JSON.parse(result.out.join("\n")) as { body: string; argv: string[] };
+      expect(parsed.body).toBe("the file under --repo\n");
+      // AND THE PATH HANDED TO `gh` IS THE SAME ONE (Copilot, PR #197). The
+      // dry-run document carries the argv, so this asserts that the resolved
+      // absolute path travels onward rather than the typed relative string --
+      // previewing one file while posting another would re-open the split this
+      // whole change closes.
+      //
+      // ASSERTED ON THE PARSED ARRAY, never on the rendered text. A Windows
+      // path carries backslashes and JSON escapes every one of them, so
+      // searching the document's TEXT for `C:\Users\...` fails on exactly one
+      // of the three CI lanes -- the platform-conditional assertion this
+      // repository's own test headers keep warning about, and it went red on
+      // windows-latest before this line was written this way.
+      expect(parsed.argv).toContain(join(repoDir, "rel.md"));
+      expect(parsed.argv).not.toContain("rel.md");
     } finally {
       process.chdir(previous);
     }

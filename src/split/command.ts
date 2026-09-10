@@ -1,6 +1,8 @@
 // src/split/command.ts -- `nen split verify`: the jujisho completeness proof.
 
 import { readFileSync } from "node:fs";
+import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { verifySplit } from "./verify.js";
 
@@ -23,7 +25,13 @@ stack, never duplicated. A hunk whose header lands in exactly one branch but
 whose BODY was altered along the way is reported ALTERED, separately from a
 clean match. --original naming no hunks at all is refused outright -- an
 empty diff is not a proof of completeness. Exits 1 on any missing, duplicated,
-altered or extra hunk.`;
+altered or extra hunk.
+
+  --repo <path>    The checkout that --original and --branches resolve
+                   against. Defaults to the current directory, so a call
+                   made from anywhere else needs it: since zheref/nen#100
+                   every path flag on this verb resolves against this
+                   root, never against the process's own directory.`;
 
 export const splitCommand: Command = {
   name: "split",
@@ -46,9 +54,15 @@ export const splitCommand: Command = {
       throw new VerbUsageError("--branches named no paths.");
     }
 
+    // Resolved against --repo's root, one base for every path flag
+    // (zheref/nen#100), and resolved BEFORE the try so a malformed --repo stays
+    // the usage error it is rather than becoming "could not read --original".
+    // A diff is read RAW: its hunk headers count bytes, so normalising line
+    // endings here would make the comparison disagree with the file.
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     let original: string;
     try {
-      original = readFileSync(originalPath, "utf8");
+      original = readFileSync(resolveAgainstRepo(root, originalPath), "utf8");
     } catch (error) {
       context.io.err(`nen: could not read --original '${originalPath}': ${String(error)}`);
       return 1;
@@ -56,7 +70,7 @@ export const splitCommand: Command = {
     const branches: string[] = [];
     for (const path of branchPaths) {
       try {
-        branches.push(readFileSync(path, "utf8"));
+        branches.push(readFileSync(resolveAgainstRepo(root, path), "utf8"));
       } catch (error) {
         context.io.err(`nen: could not read branch diff '${path}': ${String(error)}`);
         return 1;

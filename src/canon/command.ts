@@ -2,6 +2,8 @@
 // generate|check`, sync_canon.py's port.
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { commaList } from "../cli/comma.js";
@@ -187,10 +189,17 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
     throw new VerbUsageError(`unknown 'canon mirror' subcommand '${mirrorSub ?? "(none)"}'. Try 'generate' or 'check'.`);
   }
   const inputs = readCanonValuesInputs(context);
+  // Resolved against --repo's root, one base for every path flag
+  // (zheref/nen#100). Every one of this verb's five path flags resolves the
+  // same way -- and
+  // they must, because generate reads --rules-dir and writes --out-dir while
+  // check reads --mirror-dir and compares: two of them landing in different
+  // trees is a diff against the wrong mirror, reported as drift.
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
 
   let valuesText: string;
   try {
-    valuesText = readFileSync(inputs.canonValuesPath, "utf8");
+    valuesText = readFileSync(resolveAgainstRepo(root, inputs.canonValuesPath), "utf8");
   } catch (error) {
     context.io.err(`nen: could not read --canon-values '${inputs.canonValuesPath}': ${String(error)}`);
     return 1;
@@ -208,12 +217,19 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
     const header: HeaderTemplate = { template, pattern: /(?:)/ };
     let generated;
     try {
-      generated = generateMirror(inputs.rulesDir, values, inputs.ref, scenario, header, inputs.notMirrored);
+      generated = generateMirror(
+        resolveAgainstRepo(root, inputs.rulesDir),
+        values,
+        inputs.ref,
+        scenario,
+        header,
+        inputs.notMirrored,
+      );
     } catch (error) {
       context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
       return 2;
     }
-    const result = writeMirror(outDir, generated, inputs.notMirrored);
+    const result = writeMirror(resolveAgainstRepo(root, outDir), generated, inputs.notMirrored);
     if (context.json) {
       context.io.out(JSON.stringify(result, null, 2));
       return 0;
@@ -235,14 +251,22 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
   const header: HeaderTemplate = { template: templateRaw, pattern: new RegExp(patternRaw) };
   let report;
   try {
-    report = checkMirror(inputs.rulesDir, values, mirrorDir, inputs.ref, scenario, header, inputs.notMirrored);
+    report = checkMirror(
+      resolveAgainstRepo(root, inputs.rulesDir),
+      values,
+      resolveAgainstRepo(root, mirrorDir),
+      inputs.ref,
+      scenario,
+      header,
+      inputs.notMirrored,
+    );
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 2;
   }
   const markdownOut = context.args.values["markdown-out"];
   if (markdownOut !== undefined) {
-    writeFileSync(markdownOut, renderReportMarkdown(report), "utf8");
+    writeFileSync(resolveAgainstRepo(root, markdownOut), renderReportMarkdown(report), "utf8");
   }
   if (context.json) {
     context.io.out(JSON.stringify(report, null, 2));

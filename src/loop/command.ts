@@ -16,6 +16,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./slots.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
@@ -123,9 +124,16 @@ export const loopCommand: Command = {
       throw new VerbUsageError("--ci-cap and --local-cap take integers.");
     }
 
+  // RESOLVED OUTSIDE THE TRY (Copilot, PR #197). A malformed `--repo` throws a
+  // RepoRootError, which ../index.ts maps to the usage exit 2 it is -- but only
+  // if it is allowed to propagate. Inside the read's own catch it became exit 1
+  // under a "could not read --efforts" message about a file nobody had a path to
+  // yet, which is the wrong code and the wrong sentence at once.
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     let parsed;
     try {
-      parsed = parseEfforts(readFileSync(path, "utf8").replace(/\r\n/g, "\n"));
+      const full = resolveAgainstRepo(root, path);
+      parsed = parseEfforts(readFileSync(full, "utf8").replace(/\r\n/g, "\n"));
     } catch (error) {
       context.io.err(`nen: could not read --efforts '${path}': ${String(error)}`);
       return 1;

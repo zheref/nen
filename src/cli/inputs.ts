@@ -70,6 +70,35 @@ const CHANGED_SET_RATIONALE =
  * perform), the read here is left exactly as it is on disk, so both sides
  * already agree without either one moving.
  */
+/**
+ * A caller-supplied relative path, resolved against `--repo`'s root.
+ *
+ * ONE BASE FOR EVERY PATH FLAG (zheref/nen#100). There used to be two. Most
+ * flags resolved against the repository root -- `--rows-from`, `--gates`,
+ * `--changelog`, `--ledger`, `--template`, and every taxonomy file a verb opens
+ * for itself -- while a closed set of "own-path" flags was handed to
+ * `readFileSync`/`writeFileSync` unresolved and therefore resolved against the
+ * PROCESS's directory, ignoring `--repo` entirely.
+ *
+ * Nothing was inconsistent within one invocation, which is exactly why it
+ * survived: run from the repository root, the two bases are the same path and
+ * the split is invisible. It appears the moment a caller runs from somewhere
+ * else -- a worktree, a wrapper script, a CI step with its own working
+ * directory -- and then `--repo ../other --body-file notes.md` reads THIS
+ * tree's `notes.md` while every other flag on the same line reads the other
+ * tree's. An ENOENT is the lucky version of that; the unlucky one is a
+ * same-named file that exists in both.
+ *
+ * THE ROOT WINS, which is the decision zheref/nen#86 already made for `--gates`
+ * and its reasoning generalises without change: every other path a verb reads
+ * is anchored there, and the failure the exception produces is silent and
+ * wrong, which is the worst pair available. An ABSOLUTE value is always used
+ * as-is, on both sides of the old split and still.
+ */
+export function resolveAgainstRepo(root: string, path: string): string {
+  return isAbsolute(path) ? path : resolvePath(root, path);
+}
+
 export function readTextFile(
   path: string,
   cwd: string,

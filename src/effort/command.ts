@@ -1,6 +1,8 @@
 // src/effort/command.ts -- `nen effort classify`.
 
 import { readFileSync } from "node:fs";
+import { resolveRepoRoot } from "../repo/root.js";
+import { resolveAgainstRepo } from "../cli/inputs.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { classifyEffort, EFFORT_CLASSES, TAXONOMY_CLASSES, type EffortInput } from "./classify.js";
 
@@ -32,7 +34,13 @@ still reaches 'stalled' without it.
 
 Exit 0 whatever the classification, including every one above: a
 classification is this verb's ANSWER, and an answer of "these labels contradict
-each other" or "nothing places this" is as much an answer as any other.`;
+each other" or "nothing places this" is as much an answer as any other.
+
+  --repo <path>    The checkout that --input resolves against. Defaults to
+                   the current directory, so a call made from anywhere
+                   else needs it: since zheref/nen#100 every path flag on
+                   this verb resolves against this root, never against the
+                   process's own directory.`;
 
 export const effortCommand: Command = {
   name: "effort",
@@ -44,9 +52,16 @@ export const effortCommand: Command = {
     const path = context.args.values["input"];
     if (path === undefined) throw new VerbUsageError("--input <path.json> is required.");
 
+  // RESOLVED OUTSIDE THE TRY (Copilot, PR #197). A malformed `--repo` throws a
+  // RepoRootError, which ../index.ts maps to the usage exit 2 it is -- but only
+  // if it is allowed to propagate. Inside the read's own catch it became exit 1
+  // under a "could not read --input" message about a file nobody had a path to
+  // yet, which is the wrong code and the wrong sentence at once.
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
     let inputs: EffortInput[];
     try {
-      const parsed: unknown = JSON.parse(readFileSync(path, "utf8").replace(/\r\n/g, "\n"));
+      const full = resolveAgainstRepo(root, path);
+      const parsed: unknown = JSON.parse(readFileSync(full, "utf8").replace(/\r\n/g, "\n"));
       if (!Array.isArray(parsed)) throw new Error("expected a JSON array");
       inputs = parsed as EffortInput[];
     } catch (error) {
