@@ -19,6 +19,7 @@ import {
   directoryShaped,
   FORMATS,
   formatNamedBy,
+  fsRefusal,
   readTestReport,
   recognisedByName,
   supportedFormats,
@@ -208,6 +209,18 @@ describe("the assertionResults JSON", () => {
     expect(parsed.counts.total).toBe(0);
   });
 
+  it("claims a DAMAGED document, so the refusal names the pointer", () => {
+    // The sniff is the `testResults` key and not the shape beneath it. A file
+    // entry with no rows would otherwise fall through to "not a test report in
+    // any format nen reads" -- true, and useless about a document that is
+    // plainly meant to be this one.
+    expect(detectFormat("reports/r.json", text("assertion-results-no-rows.json"))?.id).toBe(
+      "assertion-results",
+    );
+    const message = refusal((): unknown => read("assertion-results-no-rows.json"));
+    expect(message).toContain("testResults[0].assertionResults is absent");
+  });
+
   it("refuses a row with no name at all", () => {
     const message = refusal((): unknown => read("assertion-results-nameless.json"));
     expect(message).toContain("testResults[0].assertionResults[0].fullName");
@@ -285,6 +298,27 @@ describe("the read itself", () => {
     );
     expect(message).toContain("wildcard");
     expect(message).toContain("no shell anywhere in this program");
+  });
+
+  it("refuses a filesystem answer it cannot act on, in its own class", () => {
+    // `throwIfNoEntry: false` suppresses ENOENT and nothing else. A path whose
+    // parent is a FILE is the portable way to make `statSync` throw, and the
+    // point of the assertion is the CLASS: everything this module throws must be
+    // a TestReportError, or ../test-report.ts's catch is bypassed and a fact
+    // about somebody's checkout reaches the top of the process as a stack trace.
+    const message = refusal((): unknown =>
+      readTestReport(join(testReport("junit-suites.xml"), "inside"), "reports/results.xml"),
+    );
+    expect(message).toContain("reports/results.xml");
+  });
+
+  it("names the artifact, not the errno's own path, when a read fails", () => {
+    // The wrapper the three fs calls share, on an error no test can provoke
+    // portably (a permission this account has not got, a mount that went away).
+    const message = fsRefusal({ code: "EACCES" }, "reports/results", "listed").message;
+    expect(message).toBe(
+      "reports/results could not be listed (EACCES). nen reads the report a declaration NAMES; a path it cannot open is a fact about this checkout rather than a report it can parse.",
+    );
   });
 
   it("refuses a file in no format it reads, listing what it does read", () => {

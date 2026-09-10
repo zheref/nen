@@ -123,7 +123,18 @@ export interface ParsedReport {
  * refusal naming a temporary directory teaches nobody anything.
  */
 export function readTestReport(absolute: string, display: string): ParsedReport {
-  const stats = statSync(absolute, { throwIfNoEntry: false });
+  // `throwIfNoEntry: false` SUPPRESSES ONLY ENOENT. Every other filesystem
+  // answer -- a permission this account has not got, a path whose parent is a
+  // file, a mount that went away -- still throws, and a raw Node error escaping
+  // here would leave ../test-report.ts's catch (which knows one class) and crash
+  // the process instead of refusing at 1. Every fs call in this file goes
+  // through `fsRefusal` for that reason.
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(absolute, { throwIfNoEntry: false });
+  } catch (error) {
+    throw fsRefusal(error, display, "looked at");
+  }
   if (stats === undefined) {
     throw new TestReportError(
       `no test report at ${display}. The declaration names it under the lane's 'test' verb 'artifacts' and it is not there: either the runner writes its report somewhere else -- correct the path -- or no run has produced one.${globNote(display)}`,
@@ -161,7 +172,16 @@ function readFile(absolute: string, display: string): ParsedReport {
  * report.
  */
 function readDirectory(absolute: string, display: string): ParsedReport {
-  const files = xmlFilesUnder(absolute);
+  let files: readonly Found[];
+  try {
+    files = xmlFilesUnder(absolute);
+  } catch (error) {
+    // The walk reads directories nen was never told the names of -- a
+    // subdirectory of a declared artifact -- so this is where an unreadable one
+    // becomes a refusal that names the artifact the CALLER declared rather than
+    // a stack trace naming a path they never wrote.
+    throw fsRefusal(error, display, "listed");
+  }
   if (files.length === 0) {
     throw new TestReportError(
       `${display} is a directory with no *.xml file anywhere under it. nen reads a directory artifact as a tree of ${JUNIT.label} -- which is what a runner that writes one file per suite produces -- so either the run wrote nothing, or this names a directory above (or beside) the one it writes into.`,
@@ -222,11 +242,29 @@ function readText(absolute: string, display: string): string {
   try {
     return readFileSync(absolute, "utf8");
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    throw new TestReportError(
-      `${display} could not be read (${code ?? (error instanceof Error ? error.message : String(error))}).`,
-    );
+    throw fsRefusal(error, display, "read");
   }
+}
+
+/**
+ * A filesystem answer nen cannot act on, as a refusal that names the path.
+ *
+ * ONE HELPER FOR ALL THREE CALLS, and its whole job is the class: everything
+ * this module throws must be a `TestReportError`, because that is the one class
+ * ../test-report.ts catches and turns into an exit-1 refusal. A raw
+ * `ENOTDIR`/`EACCES` escaping from `statSync`, `readdirSync` or `readFileSync`
+ * would leave that catch and reach the top of the process as a stack trace --
+ * for something that is a fact about this checkout (a permission, a mount, a
+ * link) rather than a defect in nen.
+ *
+ * IT QUOTES THE CODE AND NOT THE MESSAGE where there is one: `EACCES` is the
+ * same word on every platform, while the sentence around it is not.
+ */
+export function fsRefusal(error: unknown, display: string, doing: string): TestReportError {
+  const code = (error as NodeJS.ErrnoException).code;
+  return new TestReportError(
+    `${display} could not be ${doing} (${code ?? (error instanceof Error ? error.message : String(error))}). nen reads the report a declaration NAMES; a path it cannot open is a fact about this checkout rather than a report it can parse.`,
+  );
 }
 
 /**

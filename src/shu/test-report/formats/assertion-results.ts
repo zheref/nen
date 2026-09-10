@@ -115,15 +115,17 @@ export const ASSERTION_RESULTS: TestReportFormat = {
     if (!trimmed.startsWith("{")) return false;
     try {
       const record = asRecord(JSON.parse(text));
-      const files = record === null ? undefined : record["testResults"];
-      // AN EMPTY `testResults` STILL CLAIMS THE FILE. A run that matched no
-      // test file writes `{"testResults": []}`, and a sniff that wanted a row
-      // in it would send that document to the "no format nen reads" refusal
-      // instead of reporting the zero it honestly contains.
-      return (
-        Array.isArray(files) &&
-        files.every((entry): boolean => Array.isArray(asRecord(entry)?.["assertionResults"]))
-      );
+      // THE KEY IS THE WHOLE SNIFF, and deliberately not the shape beneath it.
+      // An empty `testResults` still claims the file -- a run that matched no
+      // test file writes `{"testResults": []}` -- and so does a DAMAGED one,
+      // whose rows are missing or mistyped. A sniff that checked each row would
+      // send both to the generic "not a test report in any format nen reads",
+      // which is a true sentence that tells a maintainer nothing: the document
+      // is plainly meant to be this format, and `parse` below can say exactly
+      // which pointer is wrong. Accuracy is not lost by it -- no other format
+      // here carries a `testResults` key, and the sibling JSON format's sniff
+      // is a `totalTestCount` number, so the two stay disjoint.
+      return record !== null && Array.isArray(record["testResults"]);
     } catch {
       return false;
     }
