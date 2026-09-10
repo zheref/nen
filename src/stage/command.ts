@@ -20,13 +20,17 @@ usage:
               flagged, never silently staged.
 
 Detects, never decides: secret shapes (.env, *.pem, *.key, credentials*),
-git-ignored files, binaries, out-of-scope paths and unmentioned deletions.
-Exits 1 when anything is flagged -- 'a flagged file is never committed
-without an explicit yes', and that yes is never this verb's to give.`;
+binaries, out-of-scope paths and unmentioned deletions -- these are FLAGGED,
+and 'a flagged file is never committed without an explicit yes', a yes this
+verb never gives. A git-ignored path is a FACT rather than a question -- it
+cannot be staged without -f, so there is nothing to ask -- and is reported
+separately as a count in text (the paths themselves are never printed in
+text; read them from --json). Exits 1 only when something is flagged; an
+all-ignored tree is exit 0.`;
 
 export const stageCommand: Command = {
   name: "stage",
-  summary: "Flag secrets, ignored files, binaries and unmentioned deletions before staging.",
+  summary: "Flag secrets, binaries and unmentioned deletions before staging; report ignored paths separately.",
   usage: USAGE,
   flags: { values: ["scope", "mentions"], booleans: [] },
   run(context: CommandContext): number {
@@ -58,6 +62,11 @@ export const stageCommand: Command = {
     }
     context.io.out(`clean: ${triage.clean.length} file(s)`);
     for (const path of triage.clean) context.io.out(`  ${path}`);
+    // A count only -- this verb carries no --verbose flag, so the paths
+    // themselves are never listed in text (zheref/nen#169). Printed
+    // unconditionally, even at zero, matching the 'clean' line above: both
+    // are informational, never a call to answer yes or no to.
+    context.io.out(`ignored: ${triage.ignored.length} file(s), not listed`);
     if (triage.flagged.length > 0) {
       context.io.out(`flagged: ${triage.flagged.length} file(s) -- never staged without an explicit yes`);
       for (const file of triage.flagged) context.io.out(`  ${file.path}  [${file.reasons.join(", ")}]`);
