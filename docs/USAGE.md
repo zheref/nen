@@ -1562,7 +1562,10 @@ personal settings, and flagging every file in them would bury the rows that need
 a decision under the ones that do not. `large` is measured at the CLI seam and
 handed to the pure module, and a path the verb could not measure — a deletion, a
 broken symlink — is **never** flagged `large`, because "not measured" must not
-render as "measured and small". Both travel alongside every other reason a file
+render as "measured and small". **An ignored path is not measured either**: it
+can never reach `flagged`, never affects the exit code and is never listed in
+text, so statting a `node_modules/` tree would buy one unread `--json` field for
+thousands of synchronous stats on every invocation. Both travel alongside every other reason a file
 matched: `.env.local` comes back `[secret-shape, local-config]`.
 
 **Output and exit codes** — human lines: `clean: <n> file(s)` then each

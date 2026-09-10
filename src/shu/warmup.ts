@@ -314,7 +314,15 @@ export function renderWarmup(report: WarmupReport): readonly string[] {
  * noise on the one list a developer has to read carefully. `out-of-scope`
  * needs declared scope prefixes and there are none. What survives is the half
  * that matters when work is about to be destroyed: a filename shaped like a
- * secret, and a binary.
+ * secret, a binary, and -- since zheref/nen#57 -- a LOCAL-CONFIG filename,
+ * which belongs on this list for precisely this verb's reason: a
+ * `settings.local.json` is unrecoverable personal settings that exist nowhere
+ * else, and a developer about to lose it should be told, not spared the line.
+ *
+ * `large` never appears here, and by construction rather than by exclusion:
+ * this caller hands `triageStage` no sizes, and an unmeasured path is never
+ * flagged large. The rule that "not measured" must not read as "measured and
+ * small" is what makes that safe to rely on.
  */
 const IRRELEVANT_HERE: ReadonlySet<FlagReason> = new Set<FlagReason>([
   "unmentioned-deletion",

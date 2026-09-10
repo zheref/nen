@@ -82,6 +82,14 @@ export const stageCommand: Command = {
     // detector treats an absent size as "not measured" rather than as small.
     const sizes = new Map<string, number>();
     for (const entry of entries) {
+      // AN IGNORED PATH IS NOT MEASURED (Copilot, PR #189). It can never reach
+      // `flagged`, never affects the exit code and is never listed in text --
+      // and `--ignored -uall` on a repository with a `node_modules/` tree is
+      // thousands of entries, so statting them buys one unreadable `--json`
+      // field for a synchronous stat storm on every invocation. The `ignored`
+      // bucket is a bucket of FACTS about paths a plain `git add` cannot stage;
+      // how big such a file is was never one of the facts it carried.
+      if (entry.ignored) continue;
       if (entry.indexStatus === "D" || entry.worktreeStatus === "D") continue;
       try {
         const stats = statSync(join(root, ...entry.path.split("/")));

@@ -4,6 +4,9 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { stageCommand } from "./command.js";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 async function capture(
   argv: readonly string[],
@@ -23,6 +26,26 @@ async function capture(
   };
   const seams: Seams = new ScriptedSeams(script);
   const code = await runFamily(stageCommand, argv, repoFlag, false, io, seams);
+  return { code, out, err };
+}
+
+/** The same harness with `--json` on, for a case that reads the document. */
+async function captureJson(
+  argv: readonly string[],
+  script: readonly ScriptedCall[],
+  repoFlag: string,
+): Promise<{ code: number; out: string[]; err: string[] }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: Io = {
+    out: (line): void => {
+      out.push(line);
+    },
+    err: (line): void => {
+      err.push(line);
+    },
+  };
+  const code = await runFamily(stageCommand, argv, repoFlag, true, io, new ScriptedSeams(script));
   return { code, out, err };
 }
 
@@ -129,5 +152,37 @@ describe("nen stage triage -- the ignored bucket (zheref/nen#169)", () => {
     };
     expect(parsed.flagged).toEqual([]);
     expect(parsed.ignored).toEqual([{ path: "node_modules/y/.env", reasons: ["ignored", "secret-shape"] }]);
+  });
+});
+
+// Copilot, PR #189: the size measurement used to stat every `git status` entry,
+// ignored ones included -- thousands of synchronous stats on a repository with
+// a `node_modules/` tree, buying one `--json` field nothing reads.
+describe("nen stage triage -- an ignored path is never measured", () => {
+  it("stats no ignored path, and still reports it in the ignored bucket", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-stage-"));
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "huge.js"), "x".repeat(2_000_000), "utf8");
+    writeFileSync(join(root, "src.txt"), "ok\n", "utf8");
+    const result = await captureJson(
+      ["stage", "triage"],
+      [
+        {
+          match: "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall",
+          result: { stdout: "!! node_modules/huge.js\0?? src.txt\0" },
+        },
+      ],
+      root,
+    );
+    expect(result.code).toBe(0);
+    const triage = JSON.parse(result.out.join("\n")) as {
+      ignored: { path: string; reasons: string[] }[];
+      clean: string[];
+    };
+    // Present as a FACT, with the reason it always carried -- and with no
+    // `large`, because its size was never asked for. A 2 MB file is well over
+    // the default threshold, so this asserts the skip and not merely the size.
+    expect(triage.ignored).toEqual([{ path: "node_modules/huge.js", reasons: ["ignored"] }]);
+    expect(triage.clean).toEqual(["src.txt"]);
   });
 });
