@@ -573,6 +573,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       headSha: "deadbeef",
       reviewers: ["sasuke", "tenma"],
       approvers: ["sasuke", "tenma"],
+      approvalPolicy: "required",
       roundPolicy: "bounded",
       excludeRun: null,
       deliveryPr: false,

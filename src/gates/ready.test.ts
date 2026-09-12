@@ -17,7 +17,7 @@ import {
   minutesSince,
   type ConjunctId,
 } from "./ready.js";
-import { loadGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 // The same fixture identities ./predicates.test.ts runs the ported bats cases
@@ -78,6 +78,7 @@ describe("evaluateReady -- the ready path", () => {
     expect(evaluation.context).toEqual({
       reviewers: ["sasuke", "tenma", "copilot"],
       approvers: ["sasuke", "tenma"],
+      approvalPolicy: "required",
       policy: "bounded",
       headSha: HEAD,
       deliveryPr: false,
@@ -86,6 +87,98 @@ describe("evaluateReady -- the ready path", () => {
       // verdict needs as much as the opposite one (zheref/nen#18).
       dependabotCarveOut: false,
     });
+  });
+});
+
+describe("evaluateReady -- explicit review-round-only approval policy", () => {
+  const roundsOnly = parseGateIdentities("/fake/nen/gates.json", {
+    version: 1,
+    reviewers: [{ name: "copilot", login_pattern: { pattern: "^copilot$", ignoreCase: true } }],
+    approval_policy: "review-round-only",
+    default_approvers: [],
+    base_reviewers: ["copilot"],
+    delivery: {
+      author_pattern: { pattern: "^maintainer$", ignoreCase: true },
+      head_ref_prefixes: ["codex/"],
+    },
+    dependabot_carve_out: {
+      author_pattern: { pattern: "^dependency-bot$", ignoreCase: true },
+      satisfied_by_context: ["review shim"],
+    },
+  });
+  const commentedRound = {
+    ...readyState(),
+    reviews: [{ author: "copilot", state: "COMMENTED", commit_id: HEAD, submitted_at: NOW }],
+  };
+
+  it("reports honestly that no separate APPROVED review is required", () => {
+    const evaluation = evaluateReady(roundsOnly, commentedRound, OPTIONS);
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.context.approvers).toEqual([]);
+    expect(evaluation.context.approvalPolicy).toBe("review-round-only");
+    expect(evaluation.conjuncts.find((row) => row.id === "approvals-at-head")?.note).toContain(
+      "human merge authority remains separate",
+    );
+  });
+
+  it("keeps the policy disclosure when a dependency carve-out also supplies review evidence", () => {
+    const evaluation = evaluateReady(
+      roundsOnly,
+      {
+        ...commentedRound,
+        author: "dependency-bot",
+        checks: [greenCheck(), greenCheck("review shim")],
+      },
+      OPTIONS,
+    );
+    const note = evaluation.conjuncts.find((row) => row.id === "approvals-at-head")?.note;
+    expect(note).toContain("dependabot_carve_out");
+    expect(note).toContain("human merge authority remains separate");
+  });
+
+  it("still refuses a missing current-head round and an unresolved thread", () => {
+    expect(evaluateReady(roundsOnly, { ...commentedRound, reviews: [] }, OPTIONS).firstFailing).toBe(
+      "rounds-owed",
+    );
+    expect(
+      evaluateReady(roundsOnly, { ...commentedRound, unresolved_threads: 1 }, OPTIONS).firstFailing,
+    ).toBe("unresolved-threads");
+  });
+
+  it("does not silently ignore a conditional approver that joins the effective set", () => {
+    const withConditionalApprover = parseGateIdentities("/fake/nen/gates.json", {
+      version: 1,
+      reviewers: [
+        { name: "copilot", login_pattern: { pattern: "^copilot$", ignoreCase: true } },
+        {
+          name: "audit",
+          login_pattern: { pattern: "^audit$", ignoreCase: true },
+          approves_when_posted_at_head: true,
+          round_check_pattern: { pattern: "^audit / review$", ignoreCase: true },
+        },
+      ],
+      approval_policy: "review-round-only",
+      default_approvers: [],
+      base_reviewers: ["copilot", "audit"],
+      delivery: {
+        author_pattern: { pattern: "^maintainer$", ignoreCase: true },
+        head_ref_prefixes: ["codex/"],
+      },
+    });
+    const evaluation = evaluateReady(
+      withConditionalApprover,
+      {
+        ...commentedRound,
+        checks: [greenCheck(), greenCheck("audit / review")],
+        reviews: [
+          ...commentedRound.reviews,
+          { author: "audit", state: "COMMENTED", commit_id: HEAD, submitted_at: NOW },
+        ],
+      },
+      OPTIONS,
+    );
+    expect(evaluation.firstFailing).toBe("approvals-at-head");
+    expect(evaluation.conjuncts.find((row) => row.id === "approvals-at-head")?.note).toBeNull();
   });
 });
 

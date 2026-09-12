@@ -288,6 +288,7 @@ export interface ReadyMeta {
   readonly headSha: string | null;
   readonly reviewers: readonly string[];
   readonly approvers: readonly string[];
+  readonly approvalPolicy: "required" | "review-round-only";
   readonly roundPolicy: RoundPolicy;
   readonly excludeRun: string | null;
   readonly deliveryPr: boolean | null;
@@ -522,6 +523,7 @@ export function identitiesFromFlags(
     // silent PROVIDED the caller above never hands this an empty array to mean
     // "unspecified" -- see the doc comment above.
     defaultApprovers: approvers,
+    approvalPolicy: "required",
     baseReviewers: reviewers,
     delivery: { authorPattern: /(?!)/, headRefPrefixes: [], labels: [] },
     // NO CARVE-OUT ON THE FLAGS PATH, and that is the conservative reading
@@ -972,6 +974,7 @@ export async function prReady(
       headSha: evaluation.context.headSha === "" ? null : evaluation.context.headSha,
       reviewers: evaluation.context.reviewers,
       approvers: evaluation.context.approvers,
+      approvalPolicy: evaluation.context.approvalPolicy,
       roundPolicy: evaluation.context.policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
       deliveryPr: evaluation.context.deliveryPr,
@@ -1033,6 +1036,7 @@ function unevaluatedReport(
       // exactly what the decided path avoids by reading `evaluation.context`.
       reviewers: identities.identities.baseReviewers,
       approvers: identities.identities.defaultApprovers,
+      approvalPolicy: identities.identities.approvalPolicy,
       roundPolicy: policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
       deliveryPr: null,
