@@ -366,6 +366,19 @@ plus `git` and `gh` on `PATH`. There is no `make`, no `bats`/`pytest`, no
 runtime Python, and no `jq`/`yq` anywhere Nen's own tooling runs — CI
 exercises all three platforms on every change for exactly this reason.
 
+### CI runner boundary
+
+CI starts from pushes to branches in `zheref/nen`, so a same-repository pull
+request is checked at its native head SHA without accepting a pull-request
+event from a fork. Every job is also hard-bound to the canonical repository.
+Fork workflow runs must never be approved under the repository's
+`all_external_contributors` approval policy.
+
+The Linux parity lane may use GitHub-hosted Ubuntu until a real self-hosted
+Linux pool exists. macOS, Windows, release, and portable compile jobs select
+the standard self-hosted OS and architecture labels. If one of those pools is
+offline or saturated, its job queues; there is no hosted fallback.
+
 ## The verb surface
 
 `nen --help` lists every command family (37); each

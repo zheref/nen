@@ -71,10 +71,10 @@ concurrency:
 
 jobs:
   publish:
-    # A fresh hosted VM, deliberately. For bytes that consumers will EXECUTE,
-    # "built on a clean machine from a checked-out tag" is worth more than any
-    # minutes a long-lived self-hosted machine would save.
-    runs-on: ubuntu-latest
+    # This event exists only in the canonical repository, and the hard binding
+    # also prevents a fork copy from allocating a runner if it enables Actions.
+    if: github.repository == 'zheref/nen'
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     permissions:
       # The one elevation. See the block above the `permissions:` floor.
@@ -114,6 +114,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
           # Shallow is fine and deliberate: nothing here reads history.
           fetch-depth: 1
+          persist-credentials: false
 
       # THE PINNED INSTALLER, NOT setup-bun, and this is the ONE place the two
       # workflows deliberately differ. ci.yml uses `oven-sh/setup-bun` because a
@@ -167,7 +168,7 @@ jobs:
       # it is generated HERE, from the bytes actually about to be uploaded,
       # rather than carried in the repository.
       #
-      # `sha256sum` over an explicit, sorted, literal file list: NOT a glob. A
+      # `shasum -a 256` over an explicit, sorted, literal file list: NOT a glob. A
       # glob would silently produce a shorter manifest if a target were missing,
       # which is the exact "silently ships two of three" failure the next step
       # exists to catch — and a manifest derived from whatever happens to be on
@@ -182,7 +183,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum \
+          shasum -a 256 \
             'nen-darwin-arm64' \
             'nen-linux-x64' \
             'nen-windows-x64.exe' \
@@ -196,15 +197,15 @@ jobs:
       # each of which IS the verdict — no `if`, nothing to get subtly wrong, and
       # `set -e` turns either one's non-zero exit into a red job.
       #
-      # (1) INTEGRITY + PRESENCE. `sha256sum -c --strict` fails if SHA256SUMS is
-      #     absent or empty, if any line in it is malformed (`--strict`), or if
+      # (1) INTEGRITY + PRESENCE. `shasum -a 256 -c` fails if SHA256SUMS is
+      #     absent or empty, or if
       #     any file it names is missing, truncated or corrupt. One command
       #     covers the whole "are the bytes on disk the bytes the manifest
       #     claims" question, and it is the same check a consumer performs
       #     through bootstrap/nen.sh — so a release that passes here cannot fail
       #     there for a reason this workflow could have caught.
       #
-      # (2) COMPLETENESS. `sha256sum -c` is satisfied by a manifest listing ONE
+      # (2) COMPLETENESS. `shasum -a 256 -c` is satisfied by a manifest listing ONE
       #     file, so integrity alone cannot detect a short set. The expected
       #     three names are therefore RESTATED here as literals rather than
       #     derived from package.json's `build:*` scripts: a check that reads its
@@ -220,7 +221,7 @@ jobs:
         run: |
           set -euo pipefail
           ls -l
-          sha256sum -c --strict SHA256SUMS
+          shasum -a 256 -c SHA256SUMS
           diff -u \
             <(printf '%s\n' 'nen-darwin-arm64' 'nen-linux-x64' 'nen-windows-x64.exe') \
             <(awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS)
