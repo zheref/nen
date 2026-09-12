@@ -101,6 +101,10 @@ describe("evaluateReady -- explicit review-round-only approval policy", () => {
       author_pattern: { pattern: "^maintainer$", ignoreCase: true },
       head_ref_prefixes: ["codex/"],
     },
+    dependabot_carve_out: {
+      author_pattern: { pattern: "^dependency-bot$", ignoreCase: true },
+      satisfied_by_context: ["review shim"],
+    },
   });
   const commentedRound = {
     ...readyState(),
@@ -115,6 +119,21 @@ describe("evaluateReady -- explicit review-round-only approval policy", () => {
     expect(evaluation.conjuncts.find((row) => row.id === "approvals-at-head")?.note).toContain(
       "human merge authority remains separate",
     );
+  });
+
+  it("keeps the policy disclosure when a dependency carve-out also supplies review evidence", () => {
+    const evaluation = evaluateReady(
+      roundsOnly,
+      {
+        ...commentedRound,
+        author: "dependency-bot",
+        checks: [greenCheck(), greenCheck("review shim")],
+      },
+      OPTIONS,
+    );
+    const note = evaluation.conjuncts.find((row) => row.id === "approvals-at-head")?.note;
+    expect(note).toContain("dependabot_carve_out");
+    expect(note).toContain("human merge authority remains separate");
   });
 
   it("still refuses a missing current-head round and an unresolved thread", () => {

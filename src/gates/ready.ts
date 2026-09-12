@@ -452,9 +452,9 @@ export const CAVEATS: readonly Caveat[] = [
     id: "addressed-is-approximated",
     clause: "CON-32(c)",
     text:
-      "\"Addressed\" is APPROXIMATED by the configured review-round policy and zero-unresolved row. The gate cannot read " +
-      "whether a thread's substance was actually answered, only that the thread was resolved and " +
-      "the configured round completed. Replying remains the author's obligation.",
+      "\"Addressed\" is APPROXIMATED by a current-head review round, an APPROVE when " +
+      "approval_policy is 'required', and zero unresolved threads. The gate cannot read whether " +
+      "a thread's substance was actually answered. Replying remains the author's obligation.",
   },
   {
     id: "which-checks-reported",
@@ -871,7 +871,7 @@ export function evaluateReady(
     const notes: Partial<Record<ConjunctId, string>> = {
       "round-stalled": note,
       "rounds-owed": note,
-      "approvals-at-head": note,
+      "approvals-at-head": approvalNote === undefined ? note : `${note}; ${approvalNote}`,
     };
     const carved: EvaluationContext = { ...context, dependabotCarveOut: true };
     // CON-32(d) STILL RUNS, on the same reading as below: an empty value is 1,

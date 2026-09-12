@@ -123,6 +123,13 @@ describe("parseGateIdentities -- validation", () => {
       parseGateIdentities(at, { ...minimal, approval_policy: "unknown", default_approvers: [] }),
     ).toThrow(/approval_policy/);
     expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        approval_policy: "review-round-only",
+        default_approvers: undefined,
+      }),
+    ).toThrow(/is required/);
+    expect(() =>
       parseGateIdentities(at, { ...minimal, approval_policy: "review-round-only" }),
     ).toThrow(/must be empty/);
   });
