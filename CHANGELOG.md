@@ -6,9 +6,13 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## v0.9.0 — 2026-09-12
 
+### Changed
+
+- **release** — reconciles v0.9.0 version metadata, bootstrap examples and release notes ([#208](https://github.com/zheref/nen/pull/208)). The tag and GitHub Release are separate post-merge steps.
+
 ### Added
 
-- **shu** — launch devices may declare reusable JSON record/field extraction or text fields under `device.extract`, so nested Apple device records resolve once and Android serial/state rows can be consumed directly without a consumer normalization script ([#204](https://github.com/zheref/nen/issues/204), [#206](https://github.com/zheref/nen/pull/206)). Exact matching, readiness, and duplicate refusal remain in the shared resolver; malformed declared JSON is refused before the build. Existing declarations keep their legacy discovery behavior. Consumers adopting this feature can now pin v0.9.0 and retire equivalent normalization scripts after their own declaration migration.
+- **shu** — launch devices may declare reusable JSON record/field extraction or text fields under `device.extract`, so nested Apple device records resolve once and Android serial/state rows can be consumed directly without a consumer normalization script ([#204](https://github.com/zheref/nen/issues/204), [#206](https://github.com/zheref/nen/pull/206)). Exact matching, readiness, and duplicate refusal remain in the shared resolver; malformed declared JSON is refused before the build. Existing declarations keep their legacy discovery behavior. Consumers adopting this feature can pin v0.9.0 once its release assets are published, and retire equivalent normalization scripts only after their declaration migration and successful target-compatible build, install and launch.
 
 ### Fixed
 
