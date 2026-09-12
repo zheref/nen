@@ -71,8 +71,8 @@ concurrency:
 
 jobs:
   publish:
-    # This event exists only in the canonical repository, and the hard binding
-    # also prevents a fork copy from allocating a runner if it enables Actions.
+    # The hard binding prevents a fork copy from allocating a runner when tag,
+    # release, or manual events fire there after Actions has been enabled.
     if: github.repository == 'zheref/nen'
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45

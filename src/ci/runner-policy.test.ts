@@ -41,6 +41,13 @@ function violations(workflows: Record<string, string>): string[] {
     } else {
       for (const event of Object.keys(triggers as Row)) {
         if (!ALLOWED_EVENTS.has(event)) found.push(`${name}: forbidden event ${event}`);
+        const configuration = (triggers as Row)[event];
+        if (
+          configuration !== null &&
+          (typeof configuration !== "object" || Array.isArray(configuration))
+        ) {
+          found.push(`${name}: ${event} configuration must be null or a map`);
+        }
       }
     }
 
@@ -102,11 +109,19 @@ describe("GitHub Actions runner policy", () => {
     ]);
   });
 
-  it("keeps checkout credentials off self-hosted machines", () => {
+  it("keeps credentials off every actual checkout step", () => {
     for (const [name, source] of Object.entries(sources)) {
-      const checkoutCount = source.match(/uses: actions\/checkout@/g)?.length ?? 0;
-      const noCredentialCount = source.match(/persist-credentials: false/g)?.length ?? 0;
-      expect(noCredentialCount, name).toBe(checkoutCount);
+      const workflow = parse(source) as Row;
+      for (const [jobName, value] of Object.entries(workflow.jobs as Row)) {
+        const steps = (value as Row).steps;
+        expect(Array.isArray(steps), `${name}:${jobName}`).toBe(true);
+        for (const step of steps as Row[]) {
+          if (typeof step.uses !== "string" || !step.uses.startsWith("actions/checkout@")) continue;
+          expect((step.with as Row | undefined)?.["persist-credentials"], `${name}:${jobName}`).toBe(
+            false,
+          );
+        }
+      }
     }
   });
 
@@ -117,8 +132,10 @@ describe("GitHub Actions runner policy", () => {
     ["fork-triggerable event", "on:\n  pull_request:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ubuntu-latest\n"],
     ["indirect event", "on:\n  workflow_run:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ubuntu-latest\n"],
     ["string trigger", "on: push\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ubuntu-latest\n"],
+    ["malformed event configuration", "on:\n  push: bad\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ubuntu-latest\n"],
     ["dynamic runner", "on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ${{ inputs.runner }}\n"],
     ["extra matrix axis", "on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ${{ fromJSON(matrix.runner) }}\n    strategy:\n      matrix:\n        runner: ['\"macos-14\"']\n        include:\n          - runner: '\"ubuntu-latest\"'\n"],
+    ["duplicate workflow key", "on:\n  push:\n  push:\njobs: {}\n"],
     ["malformed YAML", "on: [\n"],
   ])("fails closed for %s", (_case, source) => {
     expect(violations({ "regression.yml": source })).not.toEqual([]);

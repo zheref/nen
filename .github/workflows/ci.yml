@@ -1,5 +1,5 @@
-# ci — typecheck, lint and the whole vitest harness, on every pull request and
-# every branch push in the canonical repository (zheref/nen#1). Same-repository
+# ci — typecheck, lint and the whole vitest harness, on every branch push in
+# the canonical repository (zheref/nen#1). Same-repository
 # PR heads are therefore proved at their native SHA without accepting any PR
 # event from a fork.
 #
