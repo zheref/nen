@@ -20,7 +20,7 @@
 // THE DRIFT IS GUARDED, NOT TRUSTED. version.test.ts reads package.json from the
 // repo root and asserts the two agree, so the duplication costs one test and can
 // never ship out of step. Bump BOTH in the same commit.
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 
 // THE LOWEST `dependency.minimum` PIN THIS BUILD SATISFIES -- `MAJOR.MINOR`,
 // spelled the way a declaration spells the pin it is compared against.
