@@ -4,6 +4,20 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+## v0.10.0 — 2026-09-12
+
+### Changed
+
+- **release** — reconciles v0.10.0 version metadata, bootstrap examples, and the review-policy release note. The tag and GitHub Release remain separate post-merge steps.
+
+### Added
+
+- **gates** — repositories may explicitly declare `approval_policy: "review-round-only"` when automated reviewers complete current-head review rounds without emitting GitHub `APPROVED` reviews, while preserving current-head, pending-round, stalled-round, green-check, and unresolved-thread enforcement ([#209](https://github.com/zheref/nen/issues/209), [#210](https://github.com/zheref/nen/pull/210)). The policy permits an explicitly empty `default_approvers`; omitted policy retains the existing approval requirement, accidental empty approvers remain invalid, and contradictory non-empty approvers are refused.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** Existing consumers remain compatible with this build. A repository adopting `approval_policy: "review-round-only"` must raise its capability minimum to `"0.10"` and pin `v0.10.0`, because older binaries reject the new policy field.
+
 ## v0.9.0 — 2026-09-12
 
 ### Changed
