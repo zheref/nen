@@ -431,10 +431,29 @@ export interface LaunchDevice {
   readonly kind: string | null;
   /** The declared probe whose output carries the id, or null. */
   readonly resolve: { readonly exe: string; readonly argv: readonly string[] } | null;
+  /** A declared record boundary and fields for the probe's output. */
+  readonly extract: DeviceExtraction | null;
   /** Which of the probe's own states count as ready, or null for "any". */
   readonly readyWhen: DeviceReadiness | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
+
+export type DeviceExtraction =
+  | {
+      readonly format: "json";
+      readonly records: string;
+      readonly name: readonly string[];
+      readonly identifier: readonly string[];
+      readonly readiness: readonly string[];
+      readonly raw: Readonly<Record<string, unknown>>;
+    }
+  | {
+      readonly format: "text";
+      readonly name: number;
+      readonly identifier: number;
+      readonly readiness: number | null;
+      readonly raw: Readonly<Record<string, unknown>>;
+    };
 
 /**
  * WHICH OF A PROBE'S OWN STATES COUNT AS READY -- the one fact a name match
@@ -463,10 +482,13 @@ export interface LaunchDevice {
  *     larger toolchains print puts the name in one sub-object and the state in
  *     its sibling.
  *
- * EXACTLY ONE OF THE TWO, and `in` is required beside it: a rule naming both
+ * EXACTLY ONE OF THE TWO for legacy discovery, and `in` is required beside it: a rule naming both
  * positions would have nen choose which to read from a document it has not seen
  * yet, and a rule naming neither, or accepting nothing, is a key with no effect
- * dressed as a safety check. All four refusals are at LOAD, by pointer.
+ * dressed as a safety check. When `device.extract.readiness` names the position,
+ * both selectors are absent and this object carries only `in`; either selector
+ * beside extraction is refused so two authorities cannot disagree. All shape
+ * refusals are at LOAD, by pointer.
  *
  * THE VALUES ARE COMPARED AS STRINGS, verbatim -- no case fold, no trimming
  * beyond the whitespace split -- for `device.name`'s reason: the state words are
@@ -1281,10 +1303,11 @@ const LAUNCH_KEYS: readonly string[] = [
 ];
 
 /** The four keys `project.launch.<name>.device` is made of. */
-const DEVICE_KEYS: readonly string[] = ["name", "kind", "resolve", "readyWhen"];
+const DEVICE_KEYS: readonly string[] = ["name", "kind", "resolve", "extract", "readyWhen"];
 
 /** The three keys a `readyWhen` rule is made of. Two positions and a set. */
 const READY_KEYS: readonly string[] = ["field", "path", "in"];
+const EXTRACT_KEYS: readonly string[] = ["format", "records", "name", "identifier", "readiness"];
 
 /**
  * True when one insertion, deletion or substitution turns `a` into `b`.
@@ -1609,7 +1632,12 @@ function parseStep(
  * could not read with somebody's phone in their hand, at the one moment they
  * are least able to go and read a schema.
  */
-function parseReadyWhen(path: string, pointer: string, value: unknown): DeviceReadiness | null {
+function parseReadyWhen(
+  path: string,
+  pointer: string,
+  value: unknown,
+  extractionSuppliesReadiness = false,
+): DeviceReadiness | null {
   if (value === undefined || value === null) return null;
   const raw = requireRecord(path, pointer, value);
   refuseNearMissKey(
@@ -1622,7 +1650,14 @@ function parseReadyWhen(path: string, pointer: string, value: unknown): DeviceRe
   );
   const hasField = raw["field"] !== undefined && raw["field"] !== null;
   const hasPath = raw["path"] !== undefined && raw["path"] !== null;
-  if (hasField === hasPath) {
+  if (extractionSuppliesReadiness && (hasField || hasPath)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      "declares 'field' or 'path' beside device.extract.readiness. The extraction declaration owns where the state is read; readyWhen owns only which values are accepted. Remove the selector and keep 'in'",
+    );
+  }
+  if (!extractionSuppliesReadiness && hasField === hasPath) {
     throw new SchemaError(
       path,
       pointer,
@@ -1655,12 +1690,89 @@ function parseReadyWhen(path: string, pointer: string, value: unknown): DeviceRe
   };
 }
 
+function stringPaths(path: string, pointer: string, value: unknown): readonly string[] {
+  const values = requireArray(path, pointer, value).map((entry, index): string =>
+    requireString(path, `${pointer}[${index}]`, entry),
+  );
+  if (values.length === 0) throw new SchemaError(path, pointer, "must name at least one field path");
+  return values;
+}
+
+function textField(path: string, pointer: string, value: unknown): number {
+  const raw = requireRecord(path, pointer, value);
+  return requirePositiveInteger(
+    path,
+    `${pointer}.field`,
+    raw["field"],
+    "fields, counting the row's first token as 1",
+    "A field position",
+  );
+}
+
+function parseDeviceExtraction(path: string, pointer: string, value: unknown): DeviceExtraction | null {
+  if (value === undefined || value === null) return null;
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(path, pointer, raw, EXTRACT_KEYS, "A device extraction");
+  const format = requireString(path, `${pointer}.format`, raw["format"]);
+  if (format === "json") {
+    return {
+      format,
+      records: requireString(path, `${pointer}.records`, raw["records"]),
+      name: stringPaths(path, `${pointer}.name`, raw["name"]),
+      identifier: stringPaths(path, `${pointer}.identifier`, raw["identifier"]),
+      readiness:
+        raw["readiness"] === undefined ? [] : stringPaths(path, `${pointer}.readiness`, raw["readiness"]),
+      raw,
+    };
+  }
+  if (format === "text") {
+    if (raw["records"] !== undefined) {
+      throw new SchemaError(
+        path,
+        `${pointer}.records`,
+        "is only valid for format 'json'; text uses one non-empty line per record",
+      );
+    }
+    return {
+      format,
+      name: textField(path, `${pointer}.name`, raw["name"]),
+      identifier: textField(path, `${pointer}.identifier`, raw["identifier"]),
+      readiness:
+        raw["readiness"] === undefined ? null : textField(path, `${pointer}.readiness`, raw["readiness"]),
+      raw,
+    };
+  }
+  throw new SchemaError(path, `${pointer}.format`, `is '${format}', expected one of: json, text`);
+}
+
 /** `project.launch.<name>.device`, or null when the target names no device. */
 function parseLaunchDevice(path: string, pointer: string, value: unknown): LaunchDevice | null {
   if (value === undefined || value === null) return null;
   const raw = requireRecord(path, pointer, value);
   refuseNearMissKey(path, pointer, raw, DEVICE_KEYS, "A device");
-  const readyWhen = parseReadyWhen(path, `${pointer}.readyWhen`, raw["readyWhen"]);
+  const extract = parseDeviceExtraction(path, `${pointer}.extract`, raw["extract"]);
+  const extractionSuppliesReadiness =
+    extract !== null &&
+    extract.readiness !== null &&
+    (typeof extract.readiness === "number" || extract.readiness.length > 0);
+  if (
+    extract !== null &&
+    raw["readyWhen"] !== undefined &&
+    raw["readyWhen"] !== null &&
+    !extractionSuppliesReadiness
+  ) {
+    throw new SchemaError(
+      path,
+      `${pointer}.readyWhen`,
+      "is declared beside device.extract, but extract declares no 'readiness' field. Declared extraction owns every field location; add extract.readiness, or drop readyWhen",
+    );
+  }
+  const readyWhen = parseReadyWhen(
+    path,
+    `${pointer}.readyWhen`,
+    raw["readyWhen"],
+    extract !== null,
+  );
   if (readyWhen !== null && (raw["resolve"] === undefined || raw["resolve"] === null)) {
     // A KEY WITH NOTHING TO READ IS REFUSED, exactly as a launch target's
     // `artifact` with no `{artifact}` token is. `readyWhen` is a rule about a
@@ -1671,6 +1783,13 @@ function parseLaunchDevice(path: string, pointer: string, value: unknown): Launc
       path,
       `${pointer}.readyWhen`,
       "is declared on a device with no 'resolve' probe. A readiness rule reads a state out of the PROBE'S output, and a device with no probe is resolved from its own name with nothing spawned -- so this rule would never be read, while reading in the file exactly like a check that is protecting the launch. Give the device a 'resolve' probe whose output carries the state, or drop 'readyWhen'",
+    );
+  }
+  if (extract !== null && (raw["resolve"] === undefined || raw["resolve"] === null)) {
+    throw new SchemaError(
+      path,
+      `${pointer}.extract`,
+      "is declared on a device with no 'resolve' probe, so there is no output to extract. Give the device a probe or drop 'extract'",
     );
   }
   return {
@@ -1684,6 +1803,7 @@ function parseLaunchDevice(path: string, pointer: string, value: unknown): Launc
       raw["resolve"] === undefined || raw["resolve"] === null
         ? null
         : parseStep(path, `${pointer}.resolve`, raw["resolve"]),
+    extract,
     readyWhen,
     raw,
   };

@@ -29,6 +29,7 @@ import { VerbUsageError } from "../cli/command.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import {
   LAUNCH_VERBS,
+  type DeviceExtraction,
   type DeviceReadiness,
   type Invocation,
   type ProjectBlock,
@@ -237,6 +238,8 @@ export interface ResolvedDevice {
   readonly kind: string | null;
   /** The id the probe reported, or null when nothing was probed. */
   readonly id: string | null;
+  /** The declaration used to extract records and fields, or null for legacy discovery. */
+  readonly extract?: DeviceExtraction;
   /**
    * Which of the probe's own states count as ready, or null for "any".
    *
@@ -1230,6 +1233,7 @@ export function resolveLaunch(
               name: target.device.name,
               kind: target.device.kind,
               id: null,
+              ...(target.device.extract === null ? {} : { extract: target.device.extract }),
               readyWhen: target.device.readyWhen,
             },
       // NEITHER CARRIES A `stdoutTo`, AND THE LOADER DOES NOT LET THEM: a

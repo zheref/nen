@@ -1,0 +1,18 @@
+{
+  "$comment": "Issue-routing registry for the two tool repositories, verified from their origins and GitHub on 2026-09-12. This does not assert consumer adoption or release pins.",
+  "consumers": [],
+  "maintained_tools": [
+    {
+      "repo": "zheref/hatsu",
+      "role": "Hatsu workflow and skill prose"
+    },
+    {
+      "repo": "zheref/nen",
+      "role": "Shared deterministic machinery"
+    }
+  ],
+  "product_codes": {
+    "HA": "zheref/hatsu",
+    "NN": "zheref/nen"
+  }
+}

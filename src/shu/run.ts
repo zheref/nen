@@ -54,7 +54,7 @@ import {
   type StreamedChunk,
   type WatchVerdict,
 } from "../seam/exec.js";
-import type { DeviceReadiness, StallGuard } from "../schema/contract.js";
+import type { DeviceExtraction, DeviceReadiness, StallGuard } from "../schema/contract.js";
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
@@ -453,7 +453,13 @@ function describePrecondition(entry: AssertedPrecondition, width: number): strin
  * mysterious: a reader who is told nen looked at "field 2 of the device's own
  * row" against output they can see is JSON has the whole diagnosis.
  */
-function readWhere(rule: DeviceReadiness): string {
+function readWhere(rule: DeviceReadiness, extraction: DeviceExtraction | null = null): string {
+  if (extraction?.format === "json") {
+    return `the first value at ${extraction.readiness.map((path): string => `'${path}'`).join(", then ")} in each record under '${extraction.records}'`;
+  }
+  if (extraction?.format === "text" && extraction.readiness !== null) {
+    return `field ${extraction.readiness} of each declared text record (counting from 1)`;
+  }
   // ASKED OF `path` RATHER THAN OF `field`, so the arm that reads a value is
   // the arm that proved it non-null. The loader admits exactly one of the two
   // (../schema/contract.ts's `parseReadyWhen`), so this is a fact rather than a
@@ -472,7 +478,8 @@ function readWhere(rule: DeviceReadiness): string {
  * can see is a list of lines reads nothing, and nen saying which shape it was
  * looking for is the whole diagnosis of a rule that never fires.
  */
-function readShape(rule: DeviceReadiness): string {
+function readShape(rule: DeviceReadiness, extraction: DeviceExtraction | null = null): string {
+  if (extraction !== null) return extraction.format === "json" ? "JSON" : "LINES";
   return rule.path === null ? "LINES" : "JSON";
 }
 
@@ -488,10 +495,11 @@ function readShape(rule: DeviceReadiness): string {
 function readinessNote(target: ResolvedLaunch): readonly string[] {
   const rule = target.device?.readyWhen ?? null;
   if (rule === null) return [];
+  const extraction = target.device?.extract ?? null;
   return [
     labelled(
       "readiness",
-      `${readWhere(rule)} must be one of: ${rule.in.join(", ")}  (project.launch.${target.name}.device.readyWhen)`,
+      `${readWhere(rule, extraction)} must be one of: ${rule.in.join(", ")}  (project.launch.${target.name}.device.readyWhen)`,
     ),
   ];
 }
@@ -1841,7 +1849,13 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
   const device = launch.device;
   /* c8 ignore next */
   if (device === null) throw new ShuRefusal(EXIT_TOOL_NOT_INSTALLED, "no device declared.");
-  const lookup = findDevice(device.name, stdout, device.readyWhen);
+  const lookup = findDevice(device.name, stdout, device.readyWhen, device.extract ?? null);
+  if (lookup.malformed !== undefined) {
+    throw new ShuRefusal(
+      EXIT_TOOL_NOT_INSTALLED,
+      `the device probe output is malformed for project.launch.${launch.name}.device.extract: ${lookup.malformed}. Nothing was launched; fix the declared record/field paths or the probe output.`,
+    );
+  }
   if (!lookup.found) {
     throw new ShuRefusal(
       EXIT_TOOL_NOT_INSTALLED,
@@ -1853,6 +1867,12 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
     );
   }
   if (lookup.ambiguous.length > 0) {
+    if (lookup.duplicateRecords === true) {
+      throw new ShuRefusal(
+        EXIT_TOOL_NOT_INSTALLED,
+        `the exact name '${device.name}' matches ${lookup.ambiguous.length} records selected by project.launch.${launch.name}.device.extract, and nen will not collapse records at a boundary the repository declared: ${lookup.ambiguous.map((entry): string => `'${entry}'`).join(", ")}. Make the probe emit one record per device, or correct the declared record boundary.`,
+      );
+    }
     // NEN PICKS NEITHER, and this is the case a plain-text match cannot tell
     // apart on its own: `Handset` is carried by the `Handset Pro` row exactly
     // as it is by the `Handset` row, and taking the first would put the build
@@ -1878,9 +1898,9 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
       EXIT_TOOL_NOT_INSTALLED,
       `the device '${device.name}' is ${
         lookup.readiness === null
-          ? `on the probe's list and nen read no single state for it: project.launch.${launch.name}.device.readyWhen looks at ${readWhere(rule)}, and nothing there carried a value nen could read as one -- either the position is empty, or two rows carrying this name disagree about it and nen reports neither`
+          ? `on the probe's list and nen read no single state for it: project.launch.${launch.name}.device.readyWhen looks at ${readWhere(rule, device.extract ?? null)}, and nothing there carried a value nen could read as one -- either the position is empty, or two rows carrying this name disagree about it and nen reports neither`
           : `on the probe's list and its state is '${lookup.readiness}', which is not one project.launch.${launch.name}.device.readyWhen accepts`
-      }. Accepted: ${rule.in.map((state): string => `'${state}'`).join(", ")} -- read from ${readWhere(rule)}, which is how nen reads a probe that prints ${readShape(rule)}. A device that is PRESENT is not a device that is READY: every step this launch would run next addresses it by id, and nen will not report the probe green and let each of them fail one at a time. ${
+      }. Accepted: ${rule.in.map((state): string => `'${state}'`).join(", ")} -- read from ${readWhere(rule, device.extract ?? null)}, which is how nen reads a probe that prints ${readShape(rule, device.extract ?? null)}. A device that is PRESENT is not a device that is READY: every step this launch would run next addresses it by id, and nen will not report the probe green and let each of them fail one at a time. ${
         // NO "IT SAW NOTHING" ARM HERE, unlike the absence refusal above: this
         // one is reached only when the probe DID name the device, so there is
         // always at least this device's own row to list.
@@ -1891,9 +1911,15 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
     );
   }
   if (lookup.id === null) {
+    const identifierRule =
+      device.extract?.format === "json"
+        ? `nen reads the first scalar value at the declared identifier paths, in order: ${device.extract.identifier.map((path): string => `'${path}'`).join(", ")}`
+        : device.extract?.format === "text"
+          ? `nen reads field ${device.extract.identifier} of the matching declared text record (counting from 1)`
+          : "nen reads an id from one of identifier, id, udid or serial in JSON output, or -- in plain output -- from the first token on the device's own line that is at least six characters of letters, digits, '.', '_', ':' or '-' and carries a digit";
     throw new ShuRefusal(
       EXIT_TOOL_NOT_INSTALLED,
-      `the probe named the device '${device.name}' and gave nen no id for it. nen reads an id from one of identifier, id, udid or serial in JSON output, or -- in plain output -- from the first token on the device's own line that is at least six characters of letters, digits, '.', '_', ':' or '-' and carries a digit. Declare a probe whose output carries one of those, or write the id this target needs literally into its after-steps.`,
+      `the probe named the device '${device.name}' and gave nen no id for it. ${identifierRule}. Declare a probe whose output carries a value there, correct project.launch.${launch.name}.device${device.extract === undefined ? ".resolve" : ".extract.identifier"}, or write the id this target needs literally into its after-steps.`,
     );
   }
   return lookup.id;

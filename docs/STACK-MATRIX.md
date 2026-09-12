@@ -257,6 +257,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Notes
 
+- Expo's selected native platform reuses that platform's device declaration: the xcode-ios JSON extractor for an iOS target and the gradle-android text extractor for an Android target. Expo contributes no third discovery schema and nen chooses neither platform.
 - PRECONDITIONS ASSERTED, NEVER PERFORMED: `pod install` for the iOS lane; a JDK plus the Android SDK AND `node` on PATH for the Gradle lane; and a booted simulator. The repository's own helper hardcodes booting an `iPhone 16 Pro` (food-diary/start-ios.sh:5, :12) -- nen asserts a simulator exists and never boots one.
 - The native lanes' toolchains are the xcode-ios and gradle-android profiles' rows, not copies of them. Duplicating those entries here would create two places to fix the same fact.
 
@@ -398,6 +399,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Notes
 
+- An Android launch target may declare an `adb devices` text extractor with name field 1, identifier field 1 and readiness field 2, targeting the serial exactly and accepting state `device`. The header and daemon notices are nonmatching rows; nen still executes only the consumer-declared probe.
 - `{gw}` is the ONE host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.
 - A CONFLICT THIS PACK RECORDS AND REFUSES TO RESOLVE. Two canonical sources disagree about this stack's unit-test task, and only one of them can be right: bankai-core's compose handbook binds its lint/test placeholder to `./gradlew :app:testDebugUnitTest`, while KroAndroid's own CI forbids exactly that task in the sentence quoted in the `test` row's `why` (build-test.yml:51-58). The pack states the task that is OBSERVED RUNNING, cited to the line that runs it, and states the disagreement HERE rather than encoding both -- a reference that carried the forbidden task in any row, even a commented one, is a reference that will eventually be pasted. Resolve it upstream in whichever source is wrong; nen reports it and changes neither.
 - TWO ROWS HERE ARE CONDITIONAL ON A PLUGIN, AND THE MARKERS CANNOT SEE IT. `test` and `ui-test` both run `verifyPaparazziDebug`, which is the Paparazzi plugin's own task; the markers that identify this stack confirm a wrapper, a settings file and the Android APPLICATION plugin, and none of the three says anything about Paparazzi. So both rows are gated by this profile's `crossChecks` and are proposed only where a MODULE THE LANE'S SETTINGS FILE INCLUDES applies that plugin -- in any of the four spellings a build script uses, comments stripped, the id read as the ARGUMENT OF AN APPLICATION rather than as a substring, with an `alias(...)` followed through the catalogue its own accessor names in the lane's `gradle/` directory. Where the plugin is absent, or where nen cannot see through a convention plugin, a `buildSrc/`, a `build-logic/` or a root that configures its modules from the top, the row is a SEAT carrying the reason AND the row this repository should write instead. This is the same rule the rest of the pack follows and the one this stack was breaking: a task the project does not contain is a warning, never a proposal.
@@ -513,6 +515,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 ### Notes
 
+- Physical-device launch declarations can consume devicectl JSON directly with device.extract: records `result.devices`; name fallbacks `properties.state.name`, `deviceProperties.name`; identifier fallbacks `identifier`, `hardwareProperties.udid`; readiness fallbacks `properties.connection.state`, `connectionProperties.tunnelState`. The executable and argv remain the consumer's declaration.
 - PRECONDITIONS THIS STACK ASSERTS AND NEVER PERFORMS (all from KroApple): a per-runner simulator created and booted by UDID (tests.yml:99-160, including the explicit prohibition on `xcrun simctl shutdown all` at :81-98); a gitignored `Kro/Config.xcconfig` written from secrets (:174-179); `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES` (:186-188, and the whole of ci_scripts/ci_post_clone.sh:2); and, for food-diary, `pod install` plus an Expo prebuild.
 - None of those preconditions becomes a `tools --install` action. They are assertions; `shu tools` installs host toolchains only.
 

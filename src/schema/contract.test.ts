@@ -1201,6 +1201,41 @@ describe("project.launch", () => {
     expect(error.message).toContain("no 'resolve' probe");
   });
 
+  it("parses declared JSON extraction and gives readiness selection one authority", () => {
+    const project = parseContract("/repo/nen/contract.json", "nen", {
+      project: {
+        ...PROJECT,
+        launch: { box: { verb: "dev", device: {
+          ...PROBED,
+          extract: {
+            format: "json", records: "result.devices",
+            name: ["properties.state.name", "deviceProperties.name"],
+            identifier: ["identifier"], readiness: ["properties.connection.state"],
+          },
+          readyWhen: { in: ["connected"] },
+        } } },
+      },
+    }).project;
+    expect(project?.launch["box"]?.device?.extract).toMatchObject({
+      format: "json", records: "result.devices", identifier: ["identifier"],
+    });
+    const conflict = refusal({ project: { ...PROJECT, launch: { box: { verb: "dev", device: {
+      ...PROBED,
+      extract: { format: "text", name: { field: 1 }, identifier: { field: 1 }, readiness: { field: 2 } },
+      readyWhen: { field: 2, in: ["device"] },
+    } } } } });
+    expect(conflict.pointer).toBe("project.launch.box.device.readyWhen");
+    expect(conflict.message).toContain("extraction declaration owns where the state is read");
+
+    const missingExtractionField = refusal({ project: { ...PROJECT, launch: { box: { verb: "dev", device: {
+      ...PROBED,
+      extract: { format: "json", records: "devices", name: ["name"], identifier: ["id"] },
+      readyWhen: { path: "state", in: ["ready"] },
+    } } } } });
+    expect(missingExtractionField.pointer).toBe("project.launch.box.device.readyWhen");
+    expect(missingExtractionField.message).toContain("extract declares no 'readiness' field");
+  });
+
   it("refuses a key one spelling away from one the rule reads", () => {
     for (const [key, meant] of [
       ["fields", "field"],
