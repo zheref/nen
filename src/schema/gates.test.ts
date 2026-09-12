@@ -92,6 +92,7 @@ describe("parseGateIdentities -- validation", () => {
     expect(identities.reviewers.length).toBe(1);
     expect(identities.version).toBe(1);
     expect(identities.defaultApprovers).toEqual(["a"]);
+    expect(identities.approvalPolicy).toBe("required");
     expect(identities.baseReviewers).toEqual(["a"]);
   });
 
@@ -108,6 +109,19 @@ describe("parseGateIdentities -- validation", () => {
     expect(() => parseGateIdentities(at, { ...minimal, default_approvers: [] })).toThrow(
       /is empty/,
     );
+  });
+
+  it("allows an explicitly empty approver set only with review-round-only policy", () => {
+    const identities = parseGateIdentities(at, {
+      ...minimal,
+      approval_policy: "review-round-only",
+      default_approvers: [],
+    });
+    expect(identities.approvalPolicy).toBe("review-round-only");
+    expect(identities.defaultApprovers).toEqual([]);
+    expect(() =>
+      parseGateIdentities(at, { ...minimal, approval_policy: "unknown", default_approvers: [] }),
+    ).toThrow(/approval_policy/);
   });
 
   it("reads CON-30's dependabot_carve_out when the file declares one", () => {

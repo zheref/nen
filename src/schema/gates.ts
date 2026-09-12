@@ -204,6 +204,8 @@ export interface GateIdentities {
   readonly reviewers: readonly ReviewerIdentity[];
   /** The approval set when a caller names none. */
   readonly defaultApprovers: readonly string[];
+  /** Whether a separate APPROVED review is required after reviewer rounds clear. */
+  readonly approvalPolicy: "required" | "review-round-only";
   /** The reviewers configured on EVERY pull request, before enrolment. */
   readonly baseReviewers: readonly string[];
   readonly delivery: DeliveryIdentity;
@@ -370,7 +372,8 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   // approve under a login nobody intended, and a base reviewer with no identity
   // owes a round no check can ever satisfy -- a gate with no path out.
   //
-  // AND AN OMITTED OR EMPTY LIST IS REFUSED TOO. This is a merge-blocking
+  // AN OMITTED LIST IS ALWAYS REFUSED, AND AN EMPTY LIST IS REFUSED UNLESS THE
+  // file explicitly selects review-round-only policy. This is a merge-blocking
   // correction, not tidiness: `default_approvers` fed
   // `reviewsAllApprovedAtHead`'s default, and that predicate is VACUOUSLY TRUE
   // over an empty approver set -- deliberately, because it reproduces jq's `all`
@@ -379,13 +382,24 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   // `nen/gates.json` which simply forgets the key leaves CON-32(b)'s APPROVE
   // LIMB OPEN, and the gate reports ready with nobody having approved anything.
   //
-  // The vacuous reading stays -- a caller that passes an explicitly empty list
-  // has said what it means. What is refused is the FILE being silent, because
+  // The vacuous reading stays only behind that explicit policy. What is refused
+  // by default is the FILE being silent or accidentally empty, because
   // "no approvers configured" and "the author forgot a key" are indistinguishable
   // from here and only one of them is safe. Same reasoning, same shape, as the
   // delivery-block refusal below: a gate that cannot be failed is worse than no
   // gate, because it looks configured.
-  const readNames = (key: string, why: string): string[] => {
+  const rawApprovalPolicy = root["approval_policy"];
+  const approvalPolicy =
+    rawApprovalPolicy === undefined || rawApprovalPolicy === null ? "required" : rawApprovalPolicy;
+  if (approvalPolicy !== "required" && approvalPolicy !== "review-round-only") {
+    throw new SchemaError(
+      path,
+      "approval_policy",
+      `expected 'required' or 'review-round-only', got ${describeValue(rawApprovalPolicy)}`,
+    );
+  }
+
+  const readNames = (key: string, why: string, allowEmpty = false): string[] => {
     const raw = root[key];
     if (raw === undefined || raw === null) {
       throw new SchemaError(
@@ -405,7 +419,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
       }
       return name;
     });
-    if (names.length === 0) {
+    if (names.length === 0 && !allowEmpty) {
       throw new SchemaError(
         path,
         key,
@@ -418,6 +432,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   const defaultApprovers = readNames(
     "default_approvers",
     "An empty approval set makes the approve limb of the readiness gate VACUOUSLY TRUE, so a pull request would read ready with nobody having approved it.",
+    approvalPolicy === "review-round-only",
   );
   const baseReviewers = readNames(
     "base_reviewers",
@@ -506,6 +521,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     version: GATES_SCHEMA_VERSION,
     reviewers,
     defaultApprovers,
+    approvalPolicy,
     baseReviewers,
     delivery,
     dependabotCarveOut,

@@ -705,6 +705,13 @@ the target repo's `nen/gates.json`, or `--reviewers a,b,c` — there is no
 built-in default set, and with none of the three the verb refuses rather than
 guessing.
 
+`nen/gates.json` may explicitly set `"approval_policy": "review-round-only"` together with
+`"default_approvers": []` when automated readiness requires every configured reviewer round at the
+current head but deliberately requires no separate `APPROVED` review. The approval conjunct then
+passes with a note stating that policy and that human merge authority remains separate. Missing or
+pending rounds and unresolved threads still refuse. Omitting `approval_policy` keeps the default
+`"required"` behavior, under which an absent or empty `default_approvers` remains a schema error.
+
 **Usage**
 
 ```text

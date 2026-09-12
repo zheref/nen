@@ -452,9 +452,9 @@ export const CAVEATS: readonly Caveat[] = [
     id: "addressed-is-approximated",
     clause: "CON-32(c)",
     text:
-      "\"Addressed\" is APPROXIMATED by the approve and zero-unresolved rows. The gate cannot read " +
+      "\"Addressed\" is APPROXIMATED by the configured review-round policy and zero-unresolved row. The gate cannot read " +
       "whether a thread's substance was actually answered, only that the thread was resolved and " +
-      "the round approved. Replying remains the author's obligation.",
+      "the configured round completed. Replying remains the author's obligation.",
   },
   {
     id: "which-checks-reported",
@@ -502,6 +502,7 @@ export interface EvaluationContext {
   readonly reviewers: readonly string[];
   /** The approver set actually applied, in the shell's own list handling. */
   readonly approvers: readonly string[];
+  readonly approvalPolicy: "required" | "review-round-only";
   readonly policy: RoundPolicy;
   readonly headSha: string;
   /** CON-40's carve-out, computed ONCE and threaded into both CON-32(b) limbs. */
@@ -732,15 +733,22 @@ export function evaluateReady(
   const context: EvaluationContext = {
     reviewers,
     approvers,
+    approvalPolicy: identities.approvalPolicy,
     policy,
     headSha: head,
     deliveryPr: delivery,
     dependabotCarveOut: false,
   };
+  const approvalNote =
+    identities.approvalPolicy === "review-round-only"
+      ? "satisfied by approval_policy 'review-round-only': configured reviewer rounds are still required at the current head, but no separate APPROVED review is required; human merge authority remains separate"
+      : undefined;
+  const approvalNotes: Partial<Record<ConjunctId, string>> =
+    approvalNote === undefined ? {} : { "approvals-at-head": approvalNote };
   const fail = (at: ConjunctId, line: string): ReadyEvaluation => ({
     ready: false,
     line,
-    conjuncts: table(at, line),
+    conjuncts: table(at, line, approvalNotes),
     firstFailing: at,
     context,
   });
@@ -956,6 +964,7 @@ export function evaluateReady(
   // therefore demand exactly the approvals the caller excluded; here "omitted"
   // and "empty" are different values and the guard is the empty array itself.
   if (
+    identities.approvalPolicy === "required" &&
     approversCsv !== "" &&
     !reviewsAllApprovedAtHead(identities, parsedReviews.value, head, approvers, delivery)
   ) {
@@ -1003,7 +1012,7 @@ export function evaluateReady(
   return {
     ready: true,
     line: "ready",
-    conjuncts: table(null, null),
+    conjuncts: table(null, null, approvalNotes),
     firstFailing: null,
     context,
   };
