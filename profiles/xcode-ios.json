@@ -163,6 +163,7 @@
     "source": "this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209)"
   },
   "notes": [
+    "Physical-device launch declarations can consume devicectl JSON directly with device.extract: records `result.devices`; name fallbacks `properties.state.name`, `deviceProperties.name`; identifier fallbacks `identifier`, `hardwareProperties.udid`; readiness fallbacks `properties.connection.state`, `connectionProperties.tunnelState`. The executable and argv remain the consumer's declaration.",
     "PRECONDITIONS THIS STACK ASSERTS AND NEVER PERFORMS (all from KroApple): a per-runner simulator created and booted by UDID (tests.yml:99-160, including the explicit prohibition on `xcrun simctl shutdown all` at :81-98); a gitignored `Kro/Config.xcconfig` written from secrets (:174-179); `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES` (:186-188, and the whole of ci_scripts/ci_post_clone.sh:2); and, for food-diary, `pod install` plus an Expo prebuild.",
     "None of those preconditions becomes a `tools --install` action. They are assertions; `shu tools` installs host toolchains only."
   ]

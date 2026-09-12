@@ -134,6 +134,7 @@
     "source": "this profile's own `coverage` row (food-diary/package.json:14-49)"
   },
   "notes": [
+    "Expo's selected native platform reuses that platform's device declaration: the xcode-ios JSON extractor for an iOS target and the gradle-android text extractor for an Android target. Expo contributes no third discovery schema and nen chooses neither platform.",
     "PRECONDITIONS ASSERTED, NEVER PERFORMED: `pod install` for the iOS lane; a JDK plus the Android SDK AND `node` on PATH for the Gradle lane; and a booted simulator. The repository's own helper hardcodes booting an `iPhone 16 Pro` (food-diary/start-ios.sh:5, :12) -- nen asserts a simulator exists and never boots one.",
     "The native lanes' toolchains are the xcode-ios and gradle-android profiles' rows, not copies of them. Duplicating those entries here would create two places to fix the same fact."
   ]

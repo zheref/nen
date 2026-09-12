@@ -11,7 +11,7 @@
 // use everywhere else.
 
 import { describe, expect, it } from "vitest";
-import type { DeviceReadiness } from "../schema/contract.js";
+import type { DeviceExtraction, DeviceReadiness } from "../schema/contract.js";
 import {
   ARTIFACT_TOKEN,
   DEVICE_ID_TOKEN,
@@ -127,6 +127,92 @@ describe("findDevice, over JSON output", () => {
     const out = JSON.stringify([{ name: curly, udid: "U-1" }]);
     expect(findDevice(curly, out)).toMatchObject({ found: true, id: "U-1" });
     expect(findDevice(straight, out).found).toBe(false);
+  });
+});
+
+describe("findDevice, with declared record extraction", () => {
+  const apple: DeviceExtraction = {
+    format: "json",
+    records: "result.devices",
+    name: ["properties.state.name", "deviceProperties.name"],
+    identifier: ["identifier", "hardwareProperties.udid"],
+    readiness: ["properties.connection.state", "connectionProperties.tunnelState"],
+    raw: {},
+  };
+
+  it("treats repeated nested names and identifier aliases as one declared record", () => {
+    const output = JSON.stringify({ result: { devices: [{
+      identifier: "logical-device-id",
+      deviceProperties: { name: "Owner’s iPhone" },
+      hardwareProperties: { udid: "hardware-id" },
+      properties: { state: { name: "Owner’s iPhone" }, connection: { state: "connected" } },
+    }] } });
+    expect(findDevice("Owner’s iPhone", output, null, apple)).toMatchObject({
+      found: true,
+      id: "logical-device-id",
+      ambiguous: [],
+      readiness: "connected",
+    });
+  });
+
+  it("still refuses two distinct records with the same exact name", () => {
+    const output = JSON.stringify({ result: { devices: ["first", "second"].map((identifier) => ({
+      identifier, deviceProperties: { name: "Same Phone" },
+    })) } });
+    expect(findDevice("Same Phone", output, null, apple)).toMatchObject({
+      duplicateRecords: true,
+      ambiguous: ["matching record 1: identifier 'first'", "matching record 2: identifier 'second'"],
+    });
+  });
+
+  it("refuses duplicate matching records even when one id is absent or both ids agree", () => {
+    const records = (devices: unknown[]): string => JSON.stringify({ result: { devices } });
+    expect(findDevice("Phone", records([
+      { identifier: "same", deviceProperties: { name: "Phone" } },
+      { deviceProperties: { name: "Phone" } },
+    ]), null, apple)).toMatchObject({ duplicateRecords: true, id: null });
+    expect(findDevice("Phone", records([
+      { identifier: "same", deviceProperties: { name: "Phone" } },
+      { identifier: "same", deviceProperties: { name: "Phone" } },
+    ]), null, apple)).toMatchObject({ duplicateRecords: true, id: null });
+  });
+
+  it("reports malformed JSON and a missing record array explicitly", () => {
+    expect(findDevice("Phone", "{broken", null, apple).malformed).toContain("could not parse");
+    expect(findDevice("Phone", JSON.stringify({ result: {} }), null, apple).malformed).toContain(
+      "does not lead to an array",
+    );
+  });
+
+  it("reports the index of a declared JSON record with no usable name", () => {
+    const lookup = findDevice(
+      "Phone",
+      JSON.stringify({ result: { devices: [{ identifier: "A", deviceProperties: { name: "Phone" } }, { identifier: "B" }] } }),
+      null,
+      apple,
+    );
+    expect(lookup.malformed).toContain("record 2");
+    expect(lookup.malformed).toContain("has no scalar name");
+  });
+
+  it("extracts Android text fields exactly and ignores adb headings", () => {
+    const android: DeviceExtraction = {
+      format: "text", name: 1, identifier: 1, readiness: 2, raw: {},
+    };
+    const output = [
+      "* daemon started successfully *",
+      "List of devices attached",
+      "emulator-5554 device product:sdk_phone_x86",
+      "R58M123456 offline usb:1-2",
+    ].join("\n");
+    expect(findDevice("R58M123456", output, null, android)).toMatchObject({
+      found: true, id: "R58M123456", readiness: "offline", ambiguous: [],
+    });
+    expect(findDevice("R58M12345", output, null, android).found).toBe(false);
+    expect(findDevice("R58M123456", `${output}\nR58M123456 device`, null, android)).toMatchObject({
+      duplicateRecords: true,
+      id: null,
+    });
   });
 });
 

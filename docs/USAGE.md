@@ -5048,6 +5048,43 @@ Given, the verb becomes three things, in this order:
    **`device.name` is matched EXACTLY, as a string, and nen performs no Unicode normalisation.** macOS names a paired phone with its own typographic apostrophe — `’` (U+2019 RIGHT SINGLE QUOTATION MARK, the character autocorrect writes for a possessive), never the straight `'` (U+0027 APOSTROPHE) a keyboard's apostrophe key types — and a device probe reproduces the name the OS gave it, curly quote included. A `project.launch` declaration written with the straight quote (`"name": "Sergio's iPhone"`) will not match a probe row that says `Sergio’s iPhone`, exactly as a case fold or a prefix does not match either: the two are different strings at the code-point level, and this family compares strings, never sightlines. Declare the name with the SAME character the probe prints — copy it out of the probe's own `--dry-run` output (or `saw` in `--json`) rather than retyping it, since retyping is precisely how the two apostrophes get swapped.
 
    **A device that is PRESENT is not a device that is READY, and `device.readyWhen` is where a declaration says which is which.** The row that carries the name also carries a *state* — attached is not paired, paired is not unlocked, present is not finished booting — and matching the name alone answers only the first of those. Without the key nen read the first and reported it as the second: the probe resolved an id, exit 0, and every command after it failed one at a time against a device that was never going to answer. Declare `{ "field": <n>, "in": […] }` against a probe that prints **lines** (`field` counts whitespace-separated tokens on the device's own row, the row's **first token being field 1**) or `{ "path": "<key>", "in": […] }` against one that prints **JSON** (a dotted key on the object whose `name` matched, or on an enclosing object up to two levels out — the same walk the id already makes). A row whose state is not in the set is **exit 5 naming the device, the state seen and the states accepted**, listing what the probe offered, and it answers **before** the missing-id refusal — a device whose state is the reason it is unusable routinely prints a row with no id on it, and "the probe gave nen no id" is then the true sentence that helps least. Absent, nothing changes: every declaration written before the key existed behaves exactly as it did.
+
+   **`device.extract` declares the record boundary when a probe has a richer schema.** For JSON, `records` is the dotted path to the device array and `name`, `identifier`, and optional `readiness` are ordered fallback paths read *inside each record*. This prevents two nested copies of one device name, or logical and hardware identifier aliases, from becoming two devices. For text, each non-empty line is one record and each field is a 1-based whitespace position. Matching stays exact, and more than one matching declared record always refuses — even when the identifiers agree or one is missing — because Nen does not collapse records across a boundary the repository declared. A declared JSON extractor refuses malformed JSON, a missing/non-array record path, non-object records, and any record with no scalar value at its declared name paths; it never turns those shapes into a successful empty inventory. `extract.readiness` owns where state is read, while `readyWhen.in` owns which states are accepted. With extraction enabled, any `readyWhen` requires `extract.readiness`, and declaring the legacy `readyWhen.field` or `.path` selector is a schema error.
+
+   Apple JSON example (the executable and argv remain consumer declarations):
+
+   ```json
+   {
+     "name": "Owner’s iPhone",
+     "resolve": { "exe": "xcrun", "argv": ["devicectl", "list", "devices", "--json-output", "-"] },
+     "extract": {
+       "format": "json",
+       "records": "result.devices",
+       "name": ["properties.state.name", "deviceProperties.name"],
+       "identifier": ["identifier", "hardwareProperties.udid"],
+       "readiness": ["properties.connection.state", "connectionProperties.tunnelState"]
+     },
+     "readyWhen": { "in": ["connected"] }
+   }
+   ```
+
+   Android text example for `adb devices` uses the serial as both exact target name and identifier; headings and daemon notices do not match field 1:
+
+   ```json
+   {
+     "name": "R58M123456",
+     "resolve": { "exe": "adb", "argv": ["devices"] },
+     "extract": {
+       "format": "text",
+       "name": { "field": 1 },
+       "identifier": { "field": 1 },
+       "readiness": { "field": 2 }
+     },
+     "readyWhen": { "in": ["device"] }
+   }
+   ```
+
+   Expo does not gain a third device schema: its iOS launch target uses the Apple extractor and its Android target uses the Android extractor, alongside the repository's own `expo run:ios` / `expo run:android` declarations.
 2. **the lane's own verb**, interactively as ever, with the target's `args` appended (refused on a multi-step row — which step reaches the device is a guess). **Which lane** is `project.launch.<name>.lane` when the target names one — read before the invocation is rendered at all, so the override reaches the verb rather than being second-guessed by the lane it replaced — and otherwise the lane the invocation already resolved: a device build and the build a developer iterates in are two declared rows, and the target is where the file says which of them this launch is. An explicit `--lane` that contradicts it is exit 2 naming both, never a silent winner;
 3. **the target's `after` steps**, captured, in order, with `{device.id}` and `{artifact}` substituted — `{artifact}` being the **first** entry of the verb's own `artifacts`, or `project.launch.<name>.artifact` where the target names one. That override exists because the first artifact is the thing the lane *built* and the installer wants the thing it *signed*, which is a later entry; it is refused outside the tree, refused empty, and refused when no after-step names `{artifact}` at all. Naming `{artifact}` on a verb that declares none *and* a target that overrides nothing, or `{device.id}` on a target with no device, is exit 2 *before anything spawns*: a token nothing can fill must never reach a command line as itself. Either token written into `args` is exit 2 for the other half of the same sentence — `args` is appended to the verb's own argv, which substitution never touches. They run only if the verb exited 0, and **a verb that never exits never reaches them** — that is what the declaration asked for, and nen backgrounds nothing.
 
@@ -5057,7 +5094,7 @@ All three run in the lane's `cwd` and are given the verb's own declared `env`: a
 
 **Which refusal answers first, when `--target` is given.** A target belongs to **one** of the two long-running verbs, and that is a fact about the declaration — true on every lane and every host — while a lane's `unsupported` seat is a fact about one row. So the target's own verb is checked **before the lane is even read**: `nen shu run --target <a target declared for dev>` is exit **2** naming the fix (`run 'dev --target <name>'`), never the lane's exit 4. It used to be the other way round, and on any lane where the other verb is seated or simply undeclared the caller got a dead end — *"'run' is unsupported on lane 'device'"*, true, and pointing at a row they never wanted — while nen already held the sentence that ends the problem one check further down. Everything else keeps the order it had: a lane's seat still answers **4** when the target's verb *does* match (there the seat is the whole answer), a target with **no command line at all** still answers 4 in the repository's own words, and a `--target` this block does not declare is still exit 2 listing the ones it does.
 
-`--dry-run` prints all three as `would run:` lines with the tokens **unfilled**, plus one `substitutes:` line saying what each stands for, and spawns nothing at all — the probe included, which is what keeps this form read-only in [izanami's table](#nen-parse-izanami). `--json` still needs `--dry-run`, and the document's `target` is then `{ name, verb, lane, args, artifact, artifactAs, device: { name, kind, id, readyWhen }, probe, after }`, with `id` null exactly because nothing was probed.
+`--dry-run` prints all three as `would run:` lines with the tokens **unfilled**, plus one `substitutes:` line saying what each stands for, and spawns nothing at all — the probe included, which is what keeps this form read-only in [izanami's table](#nen-parse-izanami). `--json` still needs `--dry-run`, and the document's `target` is then `{ name, verb, lane, args, artifact, artifactAs, device: { name, kind, id, extract?, readyWhen }, probe, after }`, with `id` null exactly because nothing was probed. `extract` is present only when declared, preserving the existing report shape for older declarations.
 
 ```text
 $ nen shu dev --repo <repo> --target handset --dry-run
@@ -7967,3 +8004,13 @@ repository's own files — a `package.json`'s `packageManager`, `name` and
 such as a `.sln` or a `.csproj` — and **withholds** every row still carrying a
 token, with the reason; a token that survived to a spawn is refused rather than
 run.
+
+
+### Nen's own phase verification lanes
+
+The `device-records` lane runs the focused launch/schema/executor tests through
+`nen shu test --repo . --lane device-records`, without coverage. The default `nen` lane's full
+`test` collects JUnit and LCOV during the aka regression phase. Its `coverage` row only checks that
+the saved LCOV exists and lets Nen parse it during mukai; it never reruns the suite. Verify the
+capture's source-tree and configuration provenance before measurement; mere artifact existence
+is not freshness. This wiring implements the phase boundary requested by Hatsu #48 for Nen #204.

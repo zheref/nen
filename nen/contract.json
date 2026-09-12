@@ -4,7 +4,8 @@
 
   "project": {
     "lanes": {
-      "nen": { "stack": "bun-cli", "cwd": "." }
+      "nen": { "stack": "bun-cli", "cwd": "." },
+      "device-records": { "stack": "bun-cli", "cwd": "." }
     },
     "defaultLane": "nen",
 
@@ -26,9 +27,10 @@
           "why": "There is no compile step for a `bun run` binary; `tsc --noEmit` is the closest fact this repository has to a build -- the same check `bun run typecheck` runs in CI."
         },
         "test": {
-          "exe": "bun",
-          "argv": ["run", "test"],
-          "why": "`vitest run`, the one test harness (vitest.config.ts's own header)."
+          "exe": "bunx",
+          "argv": ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=lcov", "--reporter=default", "--reporter=junit", "--outputFile.junit=.nen/regression.junit.xml"],
+          "artifacts": [".nen/regression.junit.xml", "coverage/lcov.info"],
+          "why": "Aka owns this full regression. Collect instrumented LCOV counts and JUnit results in the same run; touched-file measurement/gating is deferred to mukai. Focused authoring/checkpoint tests use the explicit scoped lane without coverage."
         },
         "lint": {
           "exe": "bun",
@@ -36,17 +38,10 @@
           "why": "`eslint .`."
         },
         "coverage": {
-          "exe": "bunx",
-          "argv": [
-            "vitest",
-            "run",
-            "--coverage",
-            "--coverage.provider=v8",
-            "--coverage.reporter=text",
-            "--coverage.reporter=lcov"
-          ],
+          "exe": "bun",
+          "argv": ["--eval", "const file = Bun.file('coverage/lcov.info'); if (!(await file.exists()) || file.size === 0) throw new Error('Missing or empty aka coverage capture');"],
           "artifacts": ["coverage/lcov.info"],
-          "why": "v8 coverage over the same suite `test` runs, with an `lcov` reporter added so `nen shu coverage` has a format it reads; `text` is kept so a human running this by hand still sees the per-file table on stdout."
+          "why": "Mukai only verifies the aka-captured LCOV artifact is nonempty, then Nen parses it. This row runs no tests and deletes no result. Hatsu verifies source-tree/configuration provenance before calling it; a stale or missing capture returns to aka regression."
         },
         "dev": {
           "exe": "bun",
@@ -63,6 +58,13 @@
         "run": { "unsupported": "nen has no production/staging serve mode distinct from `dev` -- it is a one-shot binary invocation, not a long-running server." },
         "release": { "unsupported": "publishing is `nen tag cut` plus a GitHub Release the maintainer creates by hand; there is no single local publish step nen can declare for itself." },
         "deploy": { "unsupported": "nen ships as release binaries fetched by `bootstrap/nen.sh`, not as a deploy to a named destination." }
+      },
+      "device-records": {
+        "test": {
+          "exe": "bunx",
+          "argv": ["vitest", "run", "src/shu/launch.test.ts", "src/schema/contract.test.ts", "src/shu/run.test.ts", "src/shu/purity.test.ts"],
+          "why": "The focused authored lane for reusable device-record extraction: pure resolution, schema, launch integration and the executor's toolchain-independence guard."
+        }
       }
     },
 

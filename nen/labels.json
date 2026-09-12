@@ -1,0 +1,70 @@
+{
+  "$comment": "Existing GitHub labels for zheref/nen, verified 2026-09-12. Filing validation only; no stage, routing, or gate labels are invented. Update this declaration with the owning label policy when labels change.",
+  "labels": [
+    {
+      "color": "f143ab",
+      "description": "Barrier affecting people with disabilities",
+      "name": "accessibility"
+    },
+    {
+      "color": "d73a4a",
+      "description": "Something isn't working",
+      "name": "bug"
+    },
+    {
+      "color": "0075ca",
+      "description": "Improvements or additions to documentation",
+      "name": "documentation"
+    },
+    {
+      "color": "cfd3d7",
+      "description": "This issue or pull request already exists",
+      "name": "duplicate"
+    },
+    {
+      "color": "a2eeef",
+      "description": "New feature or request",
+      "name": "enhancement"
+    },
+    {
+      "color": "7057ff",
+      "description": "Good for newcomers",
+      "name": "good first issue"
+    },
+    {
+      "color": "008672",
+      "description": "Extra attention is needed",
+      "name": "help wanted"
+    },
+    {
+      "color": "e4e669",
+      "description": "This doesn't seem right",
+      "name": "invalid"
+    },
+    {
+      "color": "d876e3",
+      "description": "Further information is requested",
+      "name": "question"
+    },
+    {
+      "color": "ffffff",
+      "description": "This will not be worked on",
+      "name": "wontfix"
+    },
+    {
+      "color": "d73a4a",
+      "description": "Blocks correctness or silently produces wrong results; fix in the next patch",
+      "name": "priority: p1 (next patch)"
+    },
+    {
+      "color": "d93f0b",
+      "description": "Loud failure with a workaround; fix in the next minor release",
+      "name": "priority: p2 (next minor)"
+    },
+    {
+      "color": "fbca04",
+      "description": "Cosmetic, doc, or enhancement; backlog",
+      "name": "priority: p3 (backlog)"
+    }
+  ]
+}

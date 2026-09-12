@@ -2008,6 +2008,57 @@ describe("a real launch: probe, hand over, then the after-steps", () => {
     expect(result.out.join("\n")).toContain("id U-0001");
   });
 
+  it("refuses malformed declared JSON extraction before the build", async () => {
+    const project = launchable({
+      phone: {
+        verb: "dev",
+        device: {
+          name: "Owner’s iPhone",
+          resolve: { exe: "placeholder-device-tool", argv: ["list", "--json"] },
+          extract: {
+            format: "json",
+            records: "result.devices",
+            name: ["deviceProperties.name"],
+            identifier: ["identifier"],
+          },
+        },
+        after: [{ exe: "placeholder-installer", argv: ["install", "{device.id}"] }],
+      },
+    });
+    const result = await withDeclaration(project, ["dev", "--target", "phone"], {
+      script: [{ match: "placeholder-device-tool list --json", result: { code: 0, stdout: "{broken" } }],
+    });
+    expect(result.code).toBe(5);
+    expect(result.err.join("\n")).toContain("device probe output is malformed");
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --json"]);
+  });
+
+  it("refuses duplicate declared records without suggesting a longer name", async () => {
+    const project = launchable({
+      phone: {
+        verb: "dev",
+        device: {
+          name: "Phone",
+          resolve: { exe: "placeholder-device-tool", argv: ["list", "--json"] },
+          extract: { format: "json", records: "devices", name: ["name"], identifier: ["id"] },
+        },
+        after: [{ exe: "placeholder-installer", argv: ["install", "{device.id}"] }],
+      },
+    });
+    const result = await withDeclaration(project, ["dev", "--target", "phone"], {
+      script: [{
+        match: "placeholder-device-tool list --json",
+        result: { code: 0, stdout: JSON.stringify({ devices: [{ name: "Phone", id: "A" }, { name: "Phone" }] }) },
+      }],
+    });
+    expect(result.code).toBe(5);
+    const error = result.err.join("\n");
+    expect(error).toContain("will not collapse records");
+    expect(error).toContain("no identifier");
+    expect(error).not.toContain("Write the fuller name");
+    expect(spawned(result.seams)).toEqual(["placeholder-device-tool list --json"]);
+  });
+
   it("spawns no probe for a simulated device: its name IS its id", async () => {
     const result = await capture(["dev", "--target", "sim"], {
       script: [

@@ -10,6 +10,9 @@
 // and one question to ask of either: which id belongs to the device the
 // declaration named. The probe itself is `project.launch.<name>.device.resolve`,
 // an ordinary `{exe, argv}` the repository states and nen spawns unchanged.
+// A device may additionally declare `extract`: JSON names its record-array
+// boundary and ordered fields, while text names explicit columns. With no such
+// declaration this module keeps the original inference for compatibility.
 //
 // WHY THE MATCH IS ON A NAME AND NOTHING ELSE. A declaration says
 // `"name": "<the name the developer sees in their own device list>"`, and that
@@ -30,7 +33,7 @@
 // where the state seen is held against the states accepted.
 
 import { posix } from "node:path";
-import type { DeviceReadiness } from "../schema/contract.js";
+import type { DeviceExtraction, DeviceReadiness } from "../schema/contract.js";
 
 /** The token an `after` step writes where the resolved device id belongs. */
 export const DEVICE_ID_TOKEN = "{device.id}";
@@ -153,6 +156,10 @@ export function artifactAsSeenFrom(cwdRelative: string, artifact: string): strin
  * output the reader can see on their own screen.
  */
 export interface DeviceLookup {
+  /** Why a declared extraction could not read the probe output. */
+  readonly malformed?: string;
+  /** Declared records, rather than inferred names/lines, caused the ambiguity. */
+  readonly duplicateRecords?: boolean;
   /** The probe's output named this device. */
   readonly found: boolean;
   /** Its id, or null when the output named it and carried no id. */
@@ -186,6 +193,98 @@ export interface DeviceLookup {
   /** What the probe offered instead: every device NAME, or its own LINES. */
   readonly saw: readonly string[];
   readonly sawKind: "names" | "lines";
+}
+
+function scalarAtPath(node: Record<string, unknown>, path: string): string | null {
+  return atPath(node, path);
+}
+
+function firstAtPaths(node: Record<string, unknown>, paths: readonly string[]): string | null {
+  for (const path of paths) {
+    const value = scalarAtPath(node, path);
+    if (value !== null && value !== "") return value;
+  }
+  return null;
+}
+
+function declaredJson(
+  name: string,
+  text: string,
+  extraction: Extract<DeviceExtraction, { format: "json" }>,
+): DeviceLookup {
+  let document: unknown;
+  try {
+    document = JSON.parse(text) as unknown;
+  } catch (error) {
+    return { found: false, id: null, ambiguous: [], readiness: null, saw: [], sawKind: "names", malformed: `expected JSON but could not parse it: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  let records: unknown = document;
+  for (const segment of extraction.records.split(".")) {
+    if (!isRecord(records)) {
+      return { found: false, id: null, ambiguous: [], readiness: null, saw: [], sawKind: "names", malformed: `record path '${extraction.records}' does not lead to an array` };
+    }
+    records = records[segment];
+  }
+  if (!Array.isArray(records)) {
+    return { found: false, id: null, ambiguous: [], readiness: null, saw: [], sawKind: "names", malformed: `record path '${extraction.records}' does not lead to an array` };
+  }
+  if (records.some((record): boolean => !isRecord(record))) {
+    return { found: false, id: null, ambiguous: [], readiness: null, saw: [], sawKind: "names", malformed: `record path '${extraction.records}' contains a value that is not an object` };
+  }
+  const rows = (records as Record<string, unknown>[]).map((record) => ({
+    name: firstAtPaths(record, extraction.name),
+    id: firstAtPaths(record, extraction.identifier),
+    readiness: firstAtPaths(record, extraction.readiness),
+  }));
+  const nameless = rows.findIndex((row): boolean => row.name === null);
+  if (nameless !== -1) {
+    return {
+      found: false,
+      id: null,
+      ambiguous: [],
+      readiness: null,
+      saw: [],
+      sawKind: "names",
+      malformed: `record ${nameless + 1} under '${extraction.records}' has no scalar name at ${extraction.name.map((path): string => `'${path}'`).join(", then ")}`,
+    };
+  }
+  const saw = [...new Set(rows.flatMap((row): readonly string[] => row.name === null ? [] : [row.name]))].sort();
+  const matching = rows.filter((row): boolean => row.name === name);
+  if (matching.length === 0) return { found: false, id: null, ambiguous: [], readiness: null, saw, sawKind: "names" };
+  if (matching.length > 1) {
+    return {
+      found: true,
+      id: null,
+      ambiguous: matching.map((row, index): string =>
+        `matching record ${index + 1}: ${row.id === null ? "no identifier" : `identifier '${row.id}'`}`,
+      ),
+      readiness: null,
+      saw,
+      sawKind: "names",
+      duplicateRecords: true,
+    };
+  }
+  const only = matching[0];
+  return { found: true, id: only?.id ?? null, ambiguous: [], readiness: only?.readiness ?? null, saw, sawKind: "names" };
+}
+
+function declaredText(
+  name: string,
+  text: string,
+  extraction: Extract<DeviceExtraction, { format: "text" }>,
+): DeviceLookup {
+  const lines = linesOf(text);
+  const rows = lines.map((line) => {
+    const fields = line.split(/\s+/).filter((field): boolean => field !== "");
+    return { line, name: fields[extraction.name - 1] ?? null, id: fields[extraction.identifier - 1] ?? null, readiness: extraction.readiness === null ? null : fields[extraction.readiness - 1] ?? null };
+  });
+  const matching = rows.filter((row): boolean => row.name === name);
+  if (matching.length === 0) return { found: false, id: null, ambiguous: [], readiness: null, saw: lines, sawKind: "lines" };
+  if (matching.length > 1) {
+    return { found: true, id: null, ambiguous: matching.map((row) => row.line), readiness: null, saw: lines, sawKind: "lines", duplicateRecords: true };
+  }
+  const only = matching[0];
+  return { found: true, id: only?.id ?? null, ambiguous: [], readiness: only?.readiness ?? null, saw: lines, sawKind: "lines" };
 }
 
 /**
@@ -475,8 +574,11 @@ export function findDevice(
   name: string,
   stdout: string,
   ready: DeviceReadiness | null = null,
+  extraction: DeviceExtraction | null = null,
 ): DeviceLookup {
   const text = stdout.replace(/\r\n/g, "\n");
+  if (extraction?.format === "json") return declaredJson(name, text, extraction);
+  if (extraction?.format === "text") return declaredText(name, text, extraction);
   let document: unknown;
   try {
     document = JSON.parse(text) as unknown;
