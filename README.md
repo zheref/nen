@@ -119,10 +119,14 @@ nen="$(bash nen-bootstrap.sh --ref v0.9.0)" && "$nen" --version
 nen bootstrap --ref v0.9.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
-Once a release is published for `v0.9.0`, the first prints `0.9.0`. Until then
-both refuse at exit 6 — the tag exists but no release does, so there is no
-`SHA256SUMS` to verify a binary against, and assets exist only once a release
-is published, as [Install](#install) says. `--ref v0.1.0` resolves today.
+Once the `v0.9.0` release and its assets are published, the first prints
+`0.9.0`. Before the tag exists, a fresh install's `curl` command in
+[Install](#install) cannot fetch `bootstrap/nen.sh` from that ref and fails
+before the bootstrap runs; that download failure is not bootstrap exit 6.
+After the tag exists, the script can be downloaded, but without the release's
+`SHA256SUMS` the bootstrap refuses at exit 6. An already-downloaded bootstrap
+can likewise report exit 6 for an unavailable manifest even before the tag
+exists. A tag alone does not make a verified binary available.
 
 ### Set up a repository
 
