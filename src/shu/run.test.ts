@@ -1975,6 +1975,29 @@ describe("a launch dry run prints all three thirds and spawns nothing", () => {
     ]);
   });
 
+  it("carries a declared extractor in the --dry-run --json device report", async () => {
+    const extraction = {
+      format: "json",
+      records: "result.devices",
+      name: ["deviceProperties.name"],
+      identifier: ["identifier"],
+    } as const;
+    const project = launchable({
+      phone: {
+        verb: "dev",
+        device: {
+          name: "Owner’s iPhone",
+          resolve: { exe: "placeholder-device-tool", argv: ["list", "--json"] },
+          extract: extraction,
+        },
+      },
+    });
+    const result = await withDeclaration(project, ["dev", "--target", "phone", "--dry-run", "--json"]);
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { target: { device: { extract?: unknown } } };
+    expect(report.target.device.extract).toMatchObject(extraction);
+  });
+
   it("still refuses --json without --dry-run: the child owns stdout", async () => {
     const result = await capture(["dev", "--target", "sim", "--json"]);
     expect(result.code).toBe(2);
@@ -2101,6 +2124,36 @@ describe("a real launch: probe, hand over, then the after-steps", () => {
     });
     expect(result.code).toBe(5);
     expect(result.err.join("\n")).toContain("gave nen no id for it");
+  });
+
+  it("names the declared identifier paths when extracted JSON has no id", async () => {
+    const project = launchable({
+      phone: {
+        verb: "dev",
+        device: {
+          name: "Phone",
+          resolve: { exe: "placeholder-device-tool", argv: ["list", "--json"] },
+          extract: {
+            format: "json",
+            records: "devices",
+            name: ["display.name"],
+            identifier: ["address.logical", "address.hardware"],
+          },
+        },
+        after: [{ exe: "placeholder-installer", argv: ["install", "{device.id}"] }],
+      },
+    });
+    const result = await withDeclaration(project, ["dev", "--target", "phone"], {
+      script: [{
+        match: "placeholder-device-tool list --json",
+        result: { code: 0, stdout: JSON.stringify({ devices: [{ display: { name: "Phone" } }] }) },
+      }],
+    });
+    expect(result.code).toBe(5);
+    const error = result.err.join("\n");
+    expect(error).toContain("'address.logical', 'address.hardware'");
+    expect(error).toContain("device.extract.identifier");
+    expect(error).not.toContain("udid or serial");
   });
 
   it("refuses at 5 when the probe itself could not be started", async () => {

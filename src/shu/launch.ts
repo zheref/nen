@@ -557,11 +557,16 @@ function agreedReading(values: readonly (string | null)[]): string | null {
 /**
  * Find one device's id in whatever its declared probe printed.
  *
- * JSON FIRST, TEXT SECOND, AND THE PROBE DECIDES WHICH -- not the declaration
- * and not a flag. Output that parses as JSON is read as JSON; everything else
- * is read as lines. There is no `format` key for a repository to get wrong, and
- * a probe that changes its own output shape between releases changes nothing
- * here.
+ * WITH DECLARED EXTRACTION, THE DECLARATION DECIDES THE SHAPE. `format: json`
+ * parses JSON and reads only the declared record array and fields; malformed
+ * JSON or records are explicit refusals. `format: text` reads one non-empty
+ * line per record and only the declared fields. The declared record boundary is
+ * authoritative, so two matching records always remain ambiguous.
+ *
+ * WITHOUT EXTRACTION, JSON FIRST, TEXT SECOND, AND THE PROBE DECIDES WHICH.
+ * Output that parses as a JSON object or array uses the legacy bounded search;
+ * everything else uses the legacy line heuristic. That keeps every declaration
+ * written before `extract` compatible.
  *
  * `ready` IS OPTIONAL AND CHANGES NOTHING WHEN ABSENT. It decides only what
  * `DeviceLookup.readiness` carries; the id, the ambiguity and the "what the

@@ -599,11 +599,13 @@ flags:
                    -- the destination, what it appended to the argv, and the
                    variable NAMES it requires. Never a value of one. On 'dev'
                    and 'run' with --target it is
-                   { name, verb, lane, args, artifact, device, probe, after },
+                   { name, verb, lane, args, artifact, artifactAs, device,
+                     probe, after },
                    where 'lane' and 'artifact' are the target's own overrides
                    and are BOTH null on a target declaring neither, 'device'
-                   is { name, kind, id } and 'id' is null exactly when nothing
-                   was probed (every dry run), and 'after' carries the steps
+                   is { name, kind, id, extract?, readyWhen }; 'extract' is
+                   present only when declared, and 'id' is null exactly when
+                   nothing was probed (every dry run). 'after' carries the steps
                    as they would spawn -- tokens unfilled on a dry run,
                    substituted on a real one. The two shapes are told apart by
                    their own fields ('requiresEnv' against 'device'), with

@@ -1911,9 +1911,15 @@ function resolvedId(launch: ResolvedLaunch, stdout: string): string {
     );
   }
   if (lookup.id === null) {
+    const identifierRule =
+      device.extract?.format === "json"
+        ? `nen reads the first scalar value at the declared identifier paths, in order: ${device.extract.identifier.map((path): string => `'${path}'`).join(", ")}`
+        : device.extract?.format === "text"
+          ? `nen reads field ${device.extract.identifier} of the matching declared text record (counting from 1)`
+          : "nen reads an id from one of identifier, id, udid or serial in JSON output, or -- in plain output -- from the first token on the device's own line that is at least six characters of letters, digits, '.', '_', ':' or '-' and carries a digit";
     throw new ShuRefusal(
       EXIT_TOOL_NOT_INSTALLED,
-      `the probe named the device '${device.name}' and gave nen no id for it. nen reads an id from one of identifier, id, udid or serial in JSON output, or -- in plain output -- from the first token on the device's own line that is at least six characters of letters, digits, '.', '_', ':' or '-' and carries a digit. Declare a probe whose output carries one of those, or write the id this target needs literally into its after-steps.`,
+      `the probe named the device '${device.name}' and gave nen no id for it. ${identifierRule}. Declare a probe whose output carries a value there, correct project.launch.${launch.name}.device${device.extract === undefined ? ".resolve" : ".extract.identifier"}, or write the id this target needs literally into its after-steps.`,
     );
   }
   return lookup.id;
