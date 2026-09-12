@@ -8,7 +8,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Changed
 
-- **release** — reconciles v0.10.0 version metadata, bootstrap examples, and the review-policy release note. The tag and GitHub Release remain separate post-merge steps.
+- **release** — reconciles v0.10.0 version metadata, bootstrap examples, and the review-policy release note ([#211](https://github.com/zheref/nen/pull/211)). The tag and GitHub Release remain separate post-merge steps.
 
 ### Added
 
