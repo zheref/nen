@@ -37,15 +37,15 @@ on any integrity gap (unfetchable manifest, missing entry, digest mismatch)
 rather than falling back to an unverified download:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.9.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.9.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.10.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.10.0
 ```
 
 It prints the path to a verified, executable binary on stdout and nothing
 else, so it composes directly:
 
 ```
-nen="$(bash nen-bootstrap.sh --ref v0.9.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.10.0)"
 "$nen" --version
 ```
 
@@ -115,12 +115,12 @@ shell profile, or a CI job's setup step — and reuse the path; `nen bootstrap`
 is the in-CLI form of the same fetch, for re-pinning from an existing checkout:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.9.0)" && "$nen" --version
-nen bootstrap --ref v0.9.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.10.0)" && "$nen" --version
+nen bootstrap --ref v0.10.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
-Once the `v0.9.0` release and its assets are published, the first prints
-`0.9.0`. Before the tag exists, a fresh install's `curl` command in
+Once the `v0.10.0` release and its assets are published, the first prints
+`0.10.0`. Before the tag exists, a fresh install's `curl` command in
 [Install](#install) cannot fetch `bootstrap/nen.sh` from that ref and fails
 before the bootstrap runs; that download failure is not bootstrap exit 6.
 After the tag exists, the script can be downloaded, but without the release's
