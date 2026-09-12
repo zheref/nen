@@ -4,13 +4,23 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+## v0.9.0 — 2026-09-12
+
+### Changed
+
+- **release** — reconciles v0.9.0 version metadata, bootstrap examples and release notes ([#208](https://github.com/zheref/nen/pull/208)). The tag and GitHub Release are separate post-merge steps.
+
 ### Added
 
-- **shu** — launch devices may declare reusable JSON record/field extraction or text fields under `device.extract`, so nested Apple device records resolve once and Android serial/state rows can be consumed directly without a consumer normalization script (closes #204). Exact matching, readiness, and duplicate refusal remain in the shared resolver; malformed declared JSON is refused before the build. Existing declarations keep their legacy discovery behavior. Consumer migration remains pending until this change ships in a compatible release: only then should KroApple update its Nen pin and declaration and retire `ci_scripts/nen_apple_devices.py` plus `ci_scripts/test_nen_apple_devices.py`; no unreleased version or speculative pin is named here.
+- **shu** — launch devices may declare reusable JSON record/field extraction or text fields under `device.extract`, so nested Apple device records resolve once and Android serial/state rows can be consumed directly without a consumer normalization script ([#204](https://github.com/zheref/nen/issues/204), [#206](https://github.com/zheref/nen/pull/206)). Exact matching, readiness, and duplicate refusal remain in the shared resolver; malformed declared JSON is refused before the build. Existing declarations keep their legacy discovery behavior. Consumers adopting this feature can pin v0.9.0 once its release assets are published, and retire equivalent normalization scripts only after their declaration migration and successful target-compatible build, install and launch.
 
 ### Fixed
 
 - **docs** — `docs/USAGE.md`'s `nen shu tools` worked examples under "the `nen` row and its floor" (added by [#200](https://github.com/zheref/nen/pull/200)) still showed a v0.7.0 binary's output after the v0.8.0 cut landed on top of them unchanged — `compat floor:  0.7  (the lowest dependency.minimum nen 0.7.0 satisfies)` and `nen 0.7.0` rows — left out of #201 because that PR was the release cut itself, not the place to re-run doc transcripts against the *next* released binary (closes [#202](https://github.com/zheref/nen/issues/202), [#203](https://github.com/zheref/nen/pull/203)). Both transcripts, and the `compat floor:` line the same commit inserted into the earlier `--repo ./web-app` example, are re-run live against a v0.8.0 binary. The "pin at the floor" transcript now demonstrates the widening itself: v0.8.0 kept the compatibility floor at `0.7` (no breaking consumer notes), so the same `minimum: "0.7"` declaration's admitted ceiling moves from `<0.8.0` to `<0.9.0` with no repin owed.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** Existing declarations pinned with `minimum: "0.7"` remain compatible with this build. A consumer that adopts the new `device.extract` contract must raise its minimum to `"0.9"` and pin `v0.9.0`, because that declaration requires the capability introduced in this release; that is feature adoption rather than a compatibility obligation for consumers that keep legacy discovery.
 
 ## v0.8.0 — 2026-09-10
 
