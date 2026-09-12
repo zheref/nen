@@ -122,6 +122,9 @@ describe("parseGateIdentities -- validation", () => {
     expect(() =>
       parseGateIdentities(at, { ...minimal, approval_policy: "unknown", default_approvers: [] }),
     ).toThrow(/approval_policy/);
+    expect(() =>
+      parseGateIdentities(at, { ...minimal, approval_policy: "review-round-only" }),
+    ).toThrow(/must be empty/);
   });
 
   it("reads CON-30's dependabot_carve_out when the file declares one", () => {

@@ -125,6 +125,42 @@ describe("evaluateReady -- explicit review-round-only approval policy", () => {
       evaluateReady(roundsOnly, { ...commentedRound, unresolved_threads: 1 }, OPTIONS).firstFailing,
     ).toBe("unresolved-threads");
   });
+
+  it("does not silently ignore a conditional approver that joins the effective set", () => {
+    const withConditionalApprover = parseGateIdentities("/fake/nen/gates.json", {
+      version: 1,
+      reviewers: [
+        { name: "copilot", login_pattern: { pattern: "^copilot$", ignoreCase: true } },
+        {
+          name: "audit",
+          login_pattern: { pattern: "^audit$", ignoreCase: true },
+          approves_when_posted_at_head: true,
+          round_check_pattern: { pattern: "^audit / review$", ignoreCase: true },
+        },
+      ],
+      approval_policy: "review-round-only",
+      default_approvers: [],
+      base_reviewers: ["copilot", "audit"],
+      delivery: {
+        author_pattern: { pattern: "^maintainer$", ignoreCase: true },
+        head_ref_prefixes: ["codex/"],
+      },
+    });
+    const evaluation = evaluateReady(
+      withConditionalApprover,
+      {
+        ...commentedRound,
+        checks: [greenCheck(), greenCheck("audit / review")],
+        reviews: [
+          ...commentedRound.reviews,
+          { author: "audit", state: "COMMENTED", commit_id: HEAD, submitted_at: NOW },
+        ],
+      },
+      OPTIONS,
+    );
+    expect(evaluation.firstFailing).toBe("approvals-at-head");
+    expect(evaluation.conjuncts.find((row) => row.id === "approvals-at-head")?.note).toBeNull();
+  });
 });
 
 describe("evaluateReady -- CON-30's dependency-author carve-out (zheref/nen#18)", () => {

@@ -434,6 +434,13 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     "An empty approval set makes the approve limb of the readiness gate VACUOUSLY TRUE, so a pull request would read ready with nobody having approved it.",
     approvalPolicy === "review-round-only",
   );
+  if (approvalPolicy === "review-round-only" && defaultApprovers.length !== 0) {
+    throw new SchemaError(
+      path,
+      "default_approvers",
+      "must be empty when approval_policy is 'review-round-only'. Naming approvers while declaring that no separate approval is required is contradictory.",
+    );
+  }
   const baseReviewers = readNames(
     "base_reviewers",
     "An empty base set means no reviewer is configured on any pull request unless a check enrols one, so nothing owes a round by default.",

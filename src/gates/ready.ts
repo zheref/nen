@@ -740,7 +740,7 @@ export function evaluateReady(
     dependabotCarveOut: false,
   };
   const approvalNote =
-    identities.approvalPolicy === "review-round-only"
+    identities.approvalPolicy === "review-round-only" && approversCsv === ""
       ? "satisfied by approval_policy 'review-round-only': configured reviewer rounds are still required at the current head, but no separate APPROVED review is required; human merge authority remains separate"
       : undefined;
   const approvalNotes: Partial<Record<ConjunctId, string>> =
@@ -964,7 +964,6 @@ export function evaluateReady(
   // therefore demand exactly the approvals the caller excluded; here "omitted"
   // and "empty" are different values and the guard is the empty array itself.
   if (
-    identities.approvalPolicy === "required" &&
     approversCsv !== "" &&
     !reviewsAllApprovedAtHead(identities, parsedReviews.value, head, approvers, delivery)
   ) {
