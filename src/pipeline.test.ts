@@ -82,7 +82,7 @@ describe("the published filename contract", () => {
   it("is spelled identically by the release pipeline's manifest and upload", () => {
     const source = read(RELEASE);
     for (const artifact of ARTIFACTS) {
-      // Three times each: the sha256sum list, the completeness `printf`, and the
+      // Three times each: the shasum list, the completeness `printf`, and the
       // upload. Fewer than three means one of them lost a target.
       const occurrences = source.split(`'${artifact}'`).length - 1;
       expect(occurrences, artifact).toBeGreaterThanOrEqual(3);
@@ -160,8 +160,8 @@ describe("the release pipeline never authors a release decision", () => {
     // A glob would silently produce a shorter manifest if a target were
     // missing -- and a manifest derived from whatever is on disk cannot catch
     // that, because it would agree with itself.
-    expect(source).not.toMatch(/sha256sum\s+(-\S+\s+)*\*/);
-    expect(source).toMatch(/sha256sum -c --strict SHA256SUMS/);
+    expect(source).not.toMatch(/shasum\s+(-\S+\s+)*\*/);
+    expect(source).toMatch(/shasum -a 256 -c SHA256SUMS/);
     expect(source).toMatch(/diff -u/);
   });
 
@@ -210,14 +210,14 @@ describe("ci keeps the jobs the release lane depends on having been proved", () 
     }
   });
 
-  it("still runs the compiled binary and compares its --version to package.json", () => {
-    expect(source).toMatch(/\.\/dist\/nen-linux-x64 --version/);
+  it("still runs the native compiled binary and compares its --version to package.json", () => {
+    expect(source).toMatch(/\.\/dist\/nen-darwin-arm64 --version/);
     expect(source).toMatch(/\[ "\$\{printed\}" = "\$\{expected\}" \]/);
   });
 
   it("still asserts the shell suite did not skip on the POSIX lanes", () => {
     expect(source).toMatch(/Assert the shell suite actually ran/);
-    expect(source).toMatch(/if: matrix\.os != 'windows-latest'/);
+    expect(source).toMatch(/if: matrix\.os != 'Windows'/);
     expect(source).toMatch(/must never skip here/);
   });
 
@@ -255,10 +255,10 @@ describe("ci runs the same three commands a developer runs", () => {
     }
   });
 
-  it("runs on pull requests and on pushes to main", () => {
+  it("runs on every canonical-repository branch push", () => {
     const on = ci["on"] as Record<string, YamlValue>;
-    expect(Object.keys(on).sort()).toEqual(["pull_request", "push"]);
-    expect((on["push"] as Record<string, YamlValue>)["branches"]).toEqual(["main"]);
+    expect(Object.keys(on)).toEqual(["push"]);
+    expect((on["push"] as Record<string, YamlValue>)["branches"]).toEqual(["**"]);
   });
 
   it("covers all THREE D19 host families, macOS included", () => {
@@ -271,7 +271,13 @@ describe("ci runs the same three commands a developer runs", () => {
     const check = jobs["check"] as Record<string, YamlValue>;
     const strategy = check["strategy"] as Record<string, YamlValue>;
     const matrix = strategy["matrix"] as Record<string, YamlValue>;
-    expect(matrix["os"]).toEqual(["ubuntu-latest", "macos-latest", "windows-latest"]);
+    const include = matrix["include"] as Array<Record<string, YamlValue>>;
+    expect(include.map((entry) => entry["os"])).toEqual(["ubuntu", "macOS", "Windows"]);
+    expect(include.map((entry) => entry["runner"])).toEqual([
+      '"ubuntu-latest"',
+      '["self-hosted","macOS","ARM64"]',
+      '["self-hosted","Windows","X64"]',
+    ]);
     // fail-fast off, so one platform's failure does not hide another's.
     expect(strategy["fail-fast"]).toBe(false);
   });
