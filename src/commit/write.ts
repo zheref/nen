@@ -24,7 +24,7 @@
 // a test can name it, under the dot-prefixed directory so it is never
 // committed by accident.
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { messageFileRefusals, parseCommitMessageFile } from "../wc/messagefile.js";
@@ -153,6 +153,13 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
     }
   } finally {
     if (existsSync(messagePath)) rmSync(messagePath, { force: true });
+    // And the directory it sat in, when the message was its only occupant: a
+    // `.nen/commit/` left behind is a directory nobody asked for (N15).
+    try {
+      rmdirSync(dirname(messagePath));
+    } catch {
+      /* not empty, or already gone -- either way not this verb's to force */
+    }
   }
   const head = seams.run(GIT, ["rev-parse", "HEAD"], { cwd: root });
   if (head.code !== 0) throw new Error(`committed, but could not read the new commit's sha ('git rev-parse HEAD' failed: ${gitError(head.stderr, head.code)}).`);

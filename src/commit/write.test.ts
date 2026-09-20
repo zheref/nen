@@ -146,6 +146,7 @@ describe("nen commit write -- the write", () => {
       "  Closes: #4",
     ]);
     expect(existsSync(join(root, ".nen", "commit", "message.txt"))).toBe(false);
+    expect(existsSync(join(root, ".nen", "commit"))).toBe(false);
     expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet"]);
   });
 
@@ -164,6 +165,7 @@ describe("nen commit write -- the write", () => {
     });
     expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet", `git commit -F ${COMMIT_MESSAGE_PATH}`, "git rev-parse HEAD"]);
     expect(existsSync(join(root, ".nen", "commit", "message.txt"))).toBe(false);
+    expect(existsSync(join(root, ".nen", "commit"))).toBe(false);
     const text = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
     expect(text.out).toEqual(["committed newsha00: feat(x): add a thing"]);
   });
@@ -188,6 +190,7 @@ describe("nen commit write -- the write", () => {
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/hook refused/);
     expect(existsSync(join(root, ".nen", "commit", "message.txt"))).toBe(false);
+    expect(existsSync(join(root, ".nen", "commit"))).toBe(false);
   });
 
   it("refuses the flags the other subcommands own, and 'format' still takes its comma-joined --trailer", async () => {
