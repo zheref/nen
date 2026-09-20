@@ -298,6 +298,10 @@ export interface GenerateReport {
   readonly hooks: "written" | "not supported" | "none";
   readonly rules: { readonly path: string; readonly chars: number; readonly limit: number | null } | "not supported" | "none";
   readonly permissions: "written" | "not supported" | "none";
+  /** Rows transcribed verbatim from the source's `surfaces.<surface>` block, after the shared ones. */
+  readonly permissionSurfaceRows: number;
+  /** True when the permission pack carries a `writable_roots = []` an installer has to fill (codex). */
+  readonly writableRootsPlaceholder: boolean;
   readonly manifest: "written" | "not supported" | "none";
   /** Everything else worth a line: unmapped hook events, an appendix past the read limit, a long rules file. */
   readonly notes: readonly string[];
@@ -550,14 +554,19 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
   }
 
   let permissions: GenerateReport["permissions"] = "none";
+  let permissionSurfaceRows = 0;
+  let writableRootsPlaceholder = false;
   if (options.permissions !== undefined && options.permissions !== null) {
     if (row.permissions === null) permissions = "not supported";
     else {
       permissions = "written";
-      files.push({
-        path: row.permissions.file,
-        content: renderPermissions(row.permissions, options.permissions, markerText(row.surface, stamp)),
-      });
+      const rendered = renderPermissions(row.permissions, options.permissions, markerText(row.surface, stamp), row.surface);
+      files.push({ path: row.permissions.file, content: rendered.content });
+      permissionSurfaceRows = rendered.surfaceRows;
+      writableRootsPlaceholder = rendered.writableRootsPlaceholder;
+      if (writableRootsPlaceholder) {
+        notes.push(`${row.permissions.file} carries writable_roots = [] for the installer to fill (writableRootsPlaceholder)`);
+      }
     }
   }
 
@@ -595,6 +604,8 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     hooks,
     rules,
     permissions,
+    permissionSurfaceRows,
+    writableRootsPlaceholder,
     manifest,
     notes,
   };

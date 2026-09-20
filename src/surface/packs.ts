@@ -360,12 +360,26 @@ export interface PermissionRule {
   readonly args: string;
 }
 
+/** Rows a surface gets VERBATIM, after the shared ones, from `surfaces.<name>` in the source (Feitan S5). */
+export interface SurfacePermissionRows {
+  readonly allow: readonly string[];
+  readonly deny: readonly string[];
+}
+
 export interface PermissionsSource {
   readonly allow: readonly PermissionRule[];
   readonly deny: readonly PermissionRule[];
+  /** `surfaces.<name>`: rows in that surface's own spelling, transcribed as written, for that surface only. */
+  readonly surfaces: Readonly<Record<string, SurfacePermissionRows>>;
 }
 
-/** `{ "allow": [ { "exe", "args" } ], "deny": [ ... ] }`; every other key is ignored. */
+/**
+ * `{ "allow": [ { "exe", "args" } ], "deny": [ ... ], "surfaces": { "<name>":
+ * { "allow": [ "<row>" ], "deny": [ "<row>" ] } } }`; every other key is
+ * ignored. A `(` or `)` in an exe or args is refused by pointer: every pack
+ * shape wraps the row in the surface's own `Tool(...)` parentheses, and a
+ * row that closes them early is a row that says something else (S8).
+ */
 export function readPermissions(path: string): PermissionsSource {
   const root = readJsonFile("permissions", path);
   if (!isRecord(root)) throw new SurfacePackError(`--permissions '${path}': the document is not an object.`);
@@ -384,68 +398,136 @@ export function readPermissions(path: string): PermissionsSource {
       if (typeof args !== "string") {
         throw new SurfacePackError(`--permissions '${path}': ${pointer}.args is not a string.`);
       }
+      for (const [field, value] of [["exe", exe], ["args", args]] as const) {
+        if (/[()]/.test(value)) {
+          throw new SurfacePackError(
+            `--permissions '${path}': ${pointer}.${field} carries a parenthesis (${JSON.stringify(value)}); every pack wraps the row in the surface's own Tool(...) and a parenthesis inside it would close that early. Remove it.`,
+          );
+        }
+      }
       return { exe, args };
     });
   };
-  return { allow: list("allow"), deny: list("deny") };
+  const surfaces: Record<string, SurfacePermissionRows> = {};
+  const surfacesRaw = root["surfaces"];
+  if (surfacesRaw !== undefined) {
+    if (!isRecord(surfacesRaw)) throw new SurfacePackError(`--permissions '${path}': surfaces is not an object.`);
+    for (const [surface, blockRaw] of Object.entries(surfacesRaw)) {
+      if (surface.startsWith("$")) continue;
+      const pointer = `surfaces.${surface}`;
+      if (!isRecord(blockRaw)) throw new SurfacePackError(`--permissions '${path}': ${pointer} is not an object.`);
+      const rows = (key: "allow" | "deny"): readonly string[] => {
+        const raw = blockRaw[key];
+        if (raw === undefined) return [];
+        if (!Array.isArray(raw)) throw new SurfacePackError(`--permissions '${path}': ${pointer}.${key} is not an array.`);
+        return raw.map((row, index): string => {
+          if (typeof row !== "string" || row.trim() === "") {
+            throw new SurfacePackError(`--permissions '${path}': ${pointer}.${key}[${index}] is not a non-empty string.`);
+          }
+          return row;
+        });
+      };
+      surfaces[surface] = { allow: rows("allow"), deny: rows("deny") };
+    }
+  }
+  return { allow: list("allow"), deny: list("deny"), surfaces };
 }
 
-const pattern = (tool: string, rule: PermissionRule): string =>
-  `${tool}(${rule.args === "" ? rule.exe : `${rule.exe} ${rule.args}`})`;
+/** Claude Code's `Bash(exe args)`: one space-joined command line inside the parentheses. */
+const bashPattern = (rule: PermissionRule): string => `Bash(${rule.args === "" ? rule.exe : `${rule.exe} ${rule.args}`})`;
+
+/**
+ * Cursor's documented grammar (Feitan S9): `Shell(commandBase)` where the
+ * base is the first token, with an optional `:args` for finer control --
+ * `Shell(git)`, `Shell(curl:*)`. Never `Shell(exe args)`, which the page does
+ * not admit. https://cursor.com/docs/cli/reference/permissions (2026-09-20).
+ */
+const shellPattern = (rule: PermissionRule): string => `Shell(${rule.args === "" ? rule.exe : `${rule.exe}:${rule.args}`})`;
 
 const NOT_ROOT_SCOPED =
   "Patterns, not roots: this surface has no root-scoping syntax. Scope = this file lives in this checkout and applies to sessions opened here; an allowed command pointed at another checkout is not refused by it.";
 
+/** The one line an installer reads before filling `writable_roots` (Feitan S10). */
+export const WRITABLE_ROOTS_NOTE =
+  "# filled at install time by the consumer's placer: the working tree, each linked worktree, the git common dir (git rev-parse --show-toplevel / --git-common-dir, git worktree list)";
+
 type PermissionsRule = NonNullable<SurfaceRow["permissions"]>;
 
-/** The pack in the row's shape, as file content. */
-export function renderPermissions(rule: PermissionsRule, source: PermissionsSource, marker: string): string {
+export interface RenderedPermissions {
+  readonly content: string;
+  /** Rows transcribed verbatim from `surfaces.<surface>`, after the shared ones. */
+  readonly surfaceRows: number;
+  /** True when the pack carries a `writable_roots = []` the installer has to fill. */
+  readonly writableRootsPlaceholder: boolean;
+}
+
+/** The pack in the row's shape, as file content, with the surface's own rows appended for `surface` alone. */
+export function renderPermissions(rule: PermissionsRule, source: PermissionsSource, marker: string, surface: string): RenderedPermissions {
+  const own = source.surfaces[surface] ?? { allow: [], deny: [] };
+  const surfaceRows = own.allow.length + own.deny.length;
   switch (rule.shape) {
     case "claude-settings":
-      return `${JSON.stringify(
-        {
-          $generated: marker,
-          $comment: NOT_ROOT_SCOPED,
-          permissions: {
-            allow: source.allow.map((entry): string => pattern("Bash", entry)),
-            deny: source.deny.map((entry): string => pattern("Bash", entry)),
+      return {
+        content: `${JSON.stringify(
+          {
+            $generated: marker,
+            $comment: NOT_ROOT_SCOPED,
+            permissions: {
+              allow: [...source.allow.map(bashPattern), ...own.allow],
+              deny: [...source.deny.map(bashPattern), ...own.deny],
+            },
           },
-        },
-        null,
-        2,
-      )}\n`;
+          null,
+          2,
+        )}\n`,
+        surfaceRows,
+        writableRootsPlaceholder: false,
+      };
     case "cursor-cli-json":
-      return `${JSON.stringify(
-        {
-          $generated: marker,
-          $comment: NOT_ROOT_SCOPED,
-          permissions: {
-            allow: [...source.allow.map((entry): string => pattern("Shell", entry)), "Read(./**)", "Write(./**)"],
-            deny: source.deny.map((entry): string => pattern("Shell", entry)),
+      return {
+        content: `${JSON.stringify(
+          {
+            $generated: marker,
+            $comment: NOT_ROOT_SCOPED,
+            permissions: {
+              allow: [...source.allow.map(shellPattern), ...own.allow],
+              deny: [...source.deny.map(shellPattern), ...own.deny],
+            },
           },
-        },
-        null,
-        2,
-      )}\n`;
+          null,
+          2,
+        )}\n`,
+        surfaceRows,
+        writableRootsPlaceholder: false,
+      };
     case "codex-toml":
       // The allow/deny rows have no Codex spelling: its boundary is the
       // sandbox, not a command pattern, so the pack states the sandbox and the
-      // roots are left for the consumer to fill (they are the consumer's
-      // checkout paths, which this verb does not know).
-      return [
-        `# ${marker}`,
-        "# LOADS ONLY FOR A PROJECT THE USER MARKED TRUSTED (projects.<path>.trust_level).",
-        "# approval_policy 'on-failure' prompts only when a command the sandbox refused",
-        "# needs to run outside it; inside the writable roots nothing prompts.",
-        'approval_policy = "on-failure"',
-        'sandbox_mode = "workspace-write"',
-        "",
-        "[sandbox_workspace_write]",
-        "# The working tree, every linked worktree, and the git common directory.",
-        'writable_roots = ["<the working tree>", "<each linked worktree>", "<the git common dir>"]',
-        "network_access = true",
-        "",
-      ].join("\n");
+      // roots are left EMPTY for the installer to fill -- never a placeholder
+      // string a consumer could copy verbatim beside a live setting (S10).
+      if (surfaceRows > 0) {
+        throw new SurfacePackError(
+          `--permissions: surfaces.${surface} carries ${surfaceRows} row(s), and this surface's pack has no allow/deny rows to append them to (its boundary is the sandbox). Remove the block.`,
+        );
+      }
+      return {
+        content: [
+          `# ${marker}`,
+          "# LOADS ONLY FOR A PROJECT THE USER MARKED TRUSTED (projects.<path>.trust_level).",
+          "# approval_policy 'on-failure' prompts only when a command the sandbox refused",
+          "# needs to run outside it; inside the writable roots nothing prompts.",
+          'approval_policy = "on-failure"',
+          'sandbox_mode = "workspace-write"',
+          "",
+          "[sandbox_workspace_write]",
+          WRITABLE_ROOTS_NOTE,
+          "writable_roots = []",
+          "network_access = true",
+          "",
+        ].join("\n"),
+        surfaceRows: 0,
+        writableRootsPlaceholder: true,
+      };
   }
 }
 

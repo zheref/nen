@@ -28,6 +28,8 @@ import {
   SurfacePackError,
   tomlMultiline,
   tomlString,
+  WRITABLE_ROOTS_NOTE,
+  type PermissionsSource,
 } from "./packs.js";
 import { findSurface, type SurfaceRow } from "./rules.js";
 
@@ -194,39 +196,75 @@ describe("plugin manifest", () => {
 
 describe("permissions", () => {
   const source = readPermissions(join(PACKS, "permissions.json"));
+  const render = (surface: string, src = source): ReturnType<typeof renderPermissions> =>
+    renderPermissions(must(row(surface).permissions), src, MARKER, surface);
 
   it("reads allow and deny, and refuses a malformed row by pointer", () => {
     expect(source.allow).toHaveLength(3);
     expect(source.deny[1]).toEqual({ exe: "sudo", args: "*" });
+    expect(source.surfaces).toEqual({});
     expect(() => readPermissions(tempFile("p.json", '{"allow":[{"exe":""}]}'))).toThrow(/allow\[0\]\.exe/);
     expect(() => readPermissions(tempFile("p.json", '{"deny":{}}'))).toThrow(/deny is not an array/);
-    expect(readPermissions(tempFile("p.json", "{}"))).toEqual({ allow: [], deny: [] });
+    expect(readPermissions(tempFile("p.json", "{}"))).toEqual({ allow: [], deny: [], surfaces: {} });
+  });
+
+  it("refuses a parenthesis in an exe or args by pointer: it would close the surface's Tool(...) early (S8)", () => {
+    expect(() => readPermissions(tempFile("p.json", '{"allow":[{"exe":"git","args":"log) Bash(rm -rf"}]}'))).toThrow(/allow\[0\]\.args carries a parenthesis/);
+    expect(() => readPermissions(tempFile("p.json", '{"deny":[{"exe":"a(","args":""}]}'))).toThrow(/deny\[0\]\.exe carries a parenthesis/);
+  });
+
+  it("reads a per-surface block of verbatim rows, and refuses a malformed one by pointer (S5)", () => {
+    const src = readPermissions(tempFile("p.json", '{"allow":[{"exe":"nen","args":"*"}],"surfaces":{"cursor":{"allow":["Read(./**)","Write(./**)"],"deny":["Shell(rm:-rf *)"]},"$comment":"x"}}'));
+    expect(src.surfaces).toEqual({ cursor: { allow: ["Read(./**)", "Write(./**)"], deny: ["Shell(rm:-rf *)"] } });
+    expect(() => readPermissions(tempFile("p.json", '{"surfaces":[]}'))).toThrow(/surfaces is not an object/);
+    expect(() => readPermissions(tempFile("p.json", '{"surfaces":{"cursor":{"allow":[""]}}}'))).toThrow(/surfaces\.cursor\.allow\[0\] is not a non-empty string/);
+    expect(() => readPermissions(tempFile("p.json", '{"surfaces":{"cursor":{"deny":"x"}}}'))).toThrow(/surfaces\.cursor\.deny is not an array/);
   });
 
   it("renders Claude Code's settings shape as Bash(exe args) patterns", () => {
-    const doc = JSON.parse(renderPermissions(must(row("claude-code").permissions), source, MARKER)) as {
-      $generated: string;
-      permissions: { allow: string[]; deny: string[] };
-    };
+    const rendered = render("claude-code");
+    const doc = JSON.parse(rendered.content) as { $generated: string; permissions: { allow: string[]; deny: string[] } };
     expect(doc.$generated).toBe(MARKER);
     expect(doc.permissions.allow).toEqual(["Bash(nen *)", "Bash(git fetch *)", "Bash(git write-tree)"]);
     expect(doc.permissions.deny).toEqual(["Bash(git push --force *)", "Bash(sudo *)"]);
+    expect(rendered.surfaceRows).toBe(0);
+    expect(rendered.writableRootsPlaceholder).toBe(false);
   });
 
-  it("renders Cursor's cli.json shape as Shell(...) patterns plus the workspace read/write grants", () => {
-    const doc = JSON.parse(renderPermissions(must(row("cursor").permissions), source, MARKER)) as {
-      permissions: { allow: string[]; deny: string[] };
+  it("renders Cursor's cli.json in its documented Shell(exe:args) grammar, with nothing the source did not declare (S9, S5)", () => {
+    const rendered = render("cursor");
+    const doc = JSON.parse(rendered.content) as { permissions: { allow: string[]; deny: string[] } };
+    expect(doc.permissions.allow).toEqual(["Shell(nen:*)", "Shell(git:fetch *)", "Shell(git:write-tree)"]);
+    expect(doc.permissions.deny).toEqual(["Shell(git:push --force *)", "Shell(sudo:*)"]);
+    expect(rendered.surfaceRows).toBe(0);
+  });
+
+  it("appends a surface's own rows verbatim after the shared ones, for that surface only", () => {
+    const src: PermissionsSource = {
+      ...source,
+      surfaces: { cursor: { allow: ["Read(./**)", "Write(./**)"], deny: ["Shell(rm:-rf *)"] }, "claude-code": { allow: ["WebFetch"], deny: [] } },
     };
+    const cursor = render("cursor", src);
+    const doc = JSON.parse(cursor.content) as { permissions: { allow: string[]; deny: string[] } };
     expect(doc.permissions.allow.slice(-2)).toEqual(["Read(./**)", "Write(./**)"]);
-    expect(doc.permissions.allow[0]).toBe("Shell(nen *)");
-    expect(doc.permissions.deny).toEqual(["Shell(git push --force *)", "Shell(sudo *)"]);
+    expect(doc.permissions.allow).not.toContain("WebFetch");
+    expect(doc.permissions.deny.at(-1)).toBe("Shell(rm:-rf *)");
+    expect(cursor.surfaceRows).toBe(3);
+    const claude = JSON.parse(render("claude-code", src).content) as { permissions: { allow: string[] } };
+    expect(claude.permissions.allow.at(-1)).toBe("WebFetch");
+    expect(claude.permissions.allow).not.toContain("Read(./**)");
+    // Codex has no rows to append to: a block for it is refused rather than dropped.
+    expect(() => render("codex", { ...source, surfaces: { codex: { allow: ["x"], deny: [] } } })).toThrow(/surfaces\.codex carries 1 row/);
   });
 
-  it("renders Codex's config.toml with the marker on line 1 and the sandbox stated", () => {
-    const text = renderPermissions(must(row("codex").permissions), source, MARKER);
+  it("renders Codex's config.toml with the marker on line 1, the sandbox stated, and writable_roots EMPTY for the installer (S10)", () => {
+    const rendered = render("codex");
+    const text = rendered.content;
     expect(text.split("\n")[0]).toBe(`# ${MARKER}`);
     expect(text).toContain('sandbox_mode = "workspace-write"');
-    expect(text).toContain("[sandbox_workspace_write]");
+    expect(text).toContain(`[sandbox_workspace_write]\n${WRITABLE_ROOTS_NOTE}\nwritable_roots = []\nnetwork_access = true\n`);
+    expect(text).not.toContain("<the working tree>");
+    expect(rendered.writableRootsPlaceholder).toBe(true);
   });
 });
 

@@ -538,12 +538,27 @@ describe("--permissions", () => {
     expect(cursor.code).toBe(0);
     expect(json(cursor)["permissions"]).toBe("written");
     const doc = JSON.parse(readFileSync(join(out, "cli.json"), "utf8")) as { permissions: { allow: string[] } };
-    expect(doc.permissions.allow[0]).toBe("Shell(nen *)");
+    expect(doc.permissions.allow[0]).toBe("Shell(nen:*)");
+    expect(doc.permissions.allow).not.toContain("Read(./**)");
+    expect(json(cursor)["permissionSurfaceRows"]).toBe(0);
+    expect(json(cursor)["writableRootsPlaceholder"]).toBe(false);
+    // A surfaces.cursor block is transcribed after the shared rows, for cursor only, and counted.
+    const withBlock = tempDir();
+    writeFileSync(join(withBlock, "permissions.json"), '{"allow":[{"exe":"nen","args":"*"}],"surfaces":{"cursor":{"allow":["Read(./**)","Write(./**)"]},"claude-code":{"allow":["WebFetch"]}}}');
+    const blockOut = tempDir();
+    const block = await capture(generateArgv("cursor", blockOut, ["--permissions", join(withBlock, "permissions.json")]));
+    expect(block.code).toBe(0);
+    expect(block.out).toContain("permissions: written (+2 surface rows)");
+    const blockDoc = JSON.parse(readFileSync(join(blockOut, "cli.json"), "utf8")) as { permissions: { allow: string[] } };
+    expect(blockDoc.permissions.allow).toEqual(["Shell(nen:*)", "Read(./**)", "Write(./**)"]);
 
     const codexOut = tempDir();
     const codex = await capture([...generateArgv("codex", codexOut, ["--permissions", join(PACKS, "permissions.json")]), "--json"]);
     expect(json(codex)["written"]).toContain("config.toml");
     expect(readFileSync(join(codexOut, "config.toml"), "utf8")).toContain('approval_policy = "on-failure"');
+    expect(readFileSync(join(codexOut, "config.toml"), "utf8")).toContain("writable_roots = []");
+    expect(json(codex)["writableRootsPlaceholder"]).toBe(true);
+    expect(json(codex)["notes"]).toContain("config.toml carries writable_roots = [] for the installer to fill (writableRootsPlaceholder)");
 
     const agOut = tempDir();
     const antigravity = await capture([...generateArgv("antigravity", agOut, ["--permissions", join(PACKS, "permissions.json")]), "--json"]);

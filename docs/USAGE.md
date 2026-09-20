@@ -8154,7 +8154,7 @@ fields; [#227](https://github.com/zheref/nen/issues/227)) and the verbatim one:
 | model map (`--models`) | not on the appendix; `config.toml.fragment` carries `[agents] default_subagent_model = <models.codex.fast>`, and the TOML personas carry `model` | `model: <tier>` → `models.cursor.<tier>`; `inherit` carried | `model: <tier>` → `models.antigravity.<tier>`; `inherit` carried; an alias outside `inherit`/`flash`/`pro` is emitted and named | none |
 | rules (`--rules`) | none — `AGENTS.md` is the prose surface, read up to 32 KiB (`project_doc_max_bytes`); an appendix past it is named in the report | `rules/<stem>.mdc` → `.cursor/rules/`, with `description: <stem>` / `alwaysApply: true` frontmatter; no character limit, the page advises under 500 lines | `rules/<stem>.md` → `.agents/rules/`, **12,000-character limit**, over it refused ([docs](https://antigravity.google/docs/rules-workflows)) | none |
 | description budget | **186** chars | **30** chars | none | none here (the documented 1,536 is a capabilities fact) |
-| permissions (`--permissions`) | `config.toml` → `.codex/config.toml` (approval policy, sandbox, writable-root placeholders) | `cli.json` → `.cursor/cli.json` (`Shell(exe args)` allow/deny plus `Read(./**)`, `Write(./**)`) | **none** — no allowlist file exists, and `commandExecutionPolicy: auto` would approve arbitrary commands, so nothing is written and the report says `not supported` | `settings.local.json` (`Bash(exe args)` allow/deny), for the consumer to merge |
+| permissions (`--permissions`) | `config.toml` → `.codex/config.toml` (approval policy, sandbox, `writable_roots = []` for the installer to fill) | `cli.json` → `.cursor/cli.json` (`Shell(exe:args)` / `Shell(exe)` allow/deny — the documented grammar — plus whatever `surfaces.cursor` in the source declares, verbatim) | **none** — no allowlist file exists, and `commandExecutionPolicy: auto` would approve arbitrary commands, so nothing is written and the report says `not supported` | `settings.local.json` (`Bash(exe args)` allow/deny), for the consumer to merge |
 
 The two description budgets are **measured, not documented** — the length at
 which each surface's picker cut a description off, measured 2026-09-19 in the
@@ -8261,7 +8261,7 @@ nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --
 | `--models <workflow.json>` | no | a `nen/workflow.json` (or any JSON carrying its `models` block) whose `models.<surface>` maps tiers (`frontier`, `deep`, `fast`, `economy`, …) to the surface's own aliases | on a surface whose row maps models, a persona's `model: <tier>` is rewritten to `models.<surface>.<tier>` **from that file**; `model: inherit` is carried as `inherit` where the surface documents it (Cursor, Antigravity) and dropped elsewhere with a `droppedInherit[]` line; a tier the file does not declare is refused at exit 2 by pointer (`models.<surface>.<tier>`), as is a file with no `models.<surface>` at all. An alias outside the surface's documented set (Antigravity documents `inherit`, `flash`, `pro`) is emitted verbatim — it is the repository's own word — and named in `undocumentedAliases[]`. **Codex** additionally gets `config.toml.fragment` carrying `[agents]` / `default_subagent_model = "<models.codex.fast>"` — a fragment the consumer merges; `config.toml` itself is never a destination for it — and one `agents/<stem>.toml` per persona for `.codex/agents/` |
 | `--source-surface <name>` | no | the surface the **source** personas were written for; default `claude-code` | a canonical persona file is read directly by one surface, so its `model:` carries *that* surface's alias (`opus`), never a tier — rewriting the source to tiers would break the surface that reads it unmirrored. With `--models`, a persona's value is resolved in two steps: first as a tier of `models.<surface>` (written as-is), else as an alias under `models.<source-surface>` read back to **the one tier** it sits under (`opus` → `deep`), then tier → `models.<surface>.<tier>` (`deep` → `pro` on Antigravity). An alias under two tiers of the source row, a value that is neither, or a source row the file lacks when a persona needs it are each refused at exit 2 by pointer. The value is a key of the caller's own `models` matrix and nothing else — a workflow that spells the row `claude` passes `--source-surface claude` |
 | `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity), the marker first and the source verbatim under it — its invocation mentions are **not** rewritten. Over the surface's documented character limit (Antigravity: 12,000) it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
-| `--permissions <file.json>` | no | a permissions source: `{ "allow": [ { "exe", "args" } ], "deny": [ … ] }`; every other key is ignored | emitted as the row's pack: `settings.local.json` with `Bash(exe args)` patterns (claude-code), `cli.json` with `Shell(exe args)` patterns plus `Read(./**)` and `Write(./**)` (cursor), `config.toml` stating the approval policy and workspace-write sandbox with writable-root placeholders the consumer fills (codex). Antigravity has no allowlist file, so nothing is written and the report says `permissions: not supported`. A malformed row is refused by pointer |
+| `--permissions <file.json>` | no | a permissions source: `{ "allow": [ { "exe", "args" } ], "deny": [ … ], "surfaces": { "<surface>": { "allow": [ "<row>" ], "deny": [ "<row>" ] } } }`; every other key is ignored | emitted as the row's pack: `settings.local.json` with `Bash(exe args)` patterns (claude-code); `cli.json` with `Shell(exe:args)` — or `Shell(exe)` when `args` is empty — patterns, Cursor's documented grammar (`Shell(commandBase)` with an optional `:args`; never `Shell(exe args)`) (cursor); `config.toml` stating the approval policy and workspace-write sandbox with **`writable_roots = []`** under a comment naming what fills it — the working tree, each linked worktree, the git common dir — never a placeholder string a consumer could copy beside a live `network_access = true`; the report says `writableRootsPlaceholder: true` and adds a `note:` so an installer knows to fill it (codex). **Nothing the source did not declare is written**: the `Read(./**)` / `Write(./**)` grants Cursor needs come from a `surfaces.cursor.allow` block in the source, transcribed verbatim after the shared rows *for that surface only* and counted in the report as `permissions: written (+N surface rows)` (`permissionSurfaceRows` under `--json`); a block for a surface whose pack has no rows (codex) is refused. Antigravity has no allowlist file, so nothing is written and the report says `permissions: not supported`. A malformed row is refused by pointer, as is a `(` or `)` in an `exe` or `args` — every pack wraps the row in the surface's own `Tool(...)`, and a parenthesis inside it would close that early |
 | `--stamp <version>` | no | `MAJOR.MINOR.PATCH` of the source (a `-pre`/`+build` tail is accepted and ignored) | written into every marker as `, stamp: <version>`; anything not version-shaped is refused at exit 2 |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
 | `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values`, `--mirror-dir` and `--markdown-out` resolve against this root, not the process's directory; an absolute value is used as-is. |
@@ -8295,7 +8295,8 @@ supported` when the row has no such file, else what was written), then any
 caveat goes to **stderr**, so `--json` stays one document. `--json`:
 `{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
 dryRun, written, unchanged, deleted, stamp, skippedAgents, truncated,
-droppedInherit, undocumentedAliases, hooks, rules, permissions, manifest, notes }` — the
+droppedInherit, undocumentedAliases, hooks, rules, permissions, manifest, notes,
+permissionSurfaceRows, writableRootsPlaceholder }` — the
 keys after `deleted` are v0.13.0's, appended at the end of the key order;
 `rules` is `"none"`, `"not supported"` or `{ path, chars, limit }`. Exit 0 on
 any completed run; exit 2 on a missing or unknown flag, an `--out` inside
@@ -8362,14 +8363,19 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "rules": { "path": "rules/rules.md", "chars": 4210, "limit": 12000 },
   "permissions": "not supported",
   "manifest": "none",
-  "notes": []
+  "notes": [],
+  "permissionSurfaceRows": 0,
+  "writableRootsPlaceholder": false
 }
 ```
 The same command with `--surface codex` writes `AGENTS.md`, one
-`agents/<stem>.toml` per persona, `config.toml` (the pack) and
-`config.toml.fragment` (the `[agents]` default), and reports `rules: not
-supported`; with `--surface cursor` it writes `agents/<stem>.md` with
-`model: inherit` carried, `hooks.json`, `cli.json` and `rules/rules.mdc`.
+`agents/<stem>.toml` per persona, `config.toml` (the pack, its
+`writable_roots = []` left for the installer and `writableRootsPlaceholder:
+true` in the report) and `config.toml.fragment` (the `[agents]` default), and
+reports `rules: not supported`; with `--surface cursor` it writes
+`agents/<stem>.md` with `model: inherit` carried, `hooks.json`, `cli.json`
+(`Shell(exe:args)` rows plus whatever `surfaces.cursor` declares) and
+`rules/rules.mdc`.
 
 ### `nen surface capabilities`
 

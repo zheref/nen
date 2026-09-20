@@ -166,9 +166,16 @@ ${SURFACE_LIST}
                               frontmatter; over the surface's documented
                               character limit it is REFUSED, never truncated.
   --permissions <file.json>   A permissions source ({ allow: [{exe, args}],
-                              deny: [...] }), emitted as the surface's own
-                              pack; a surface with no allowlist file reports
-                              'permissions: not supported'.
+                              deny: [...], surfaces: { <name>: { allow, deny
+                              } } }), emitted as the surface's own pack --
+                              Bash(exe args) for claude-code, Shell(exe:args)
+                              for cursor, a config.toml with writable_roots =
+                              [] for codex (the installer fills it; the report
+                              says writableRootsPlaceholder). A surfaces.<name>
+                              block is transcribed verbatim after the shared
+                              rows for that surface only. A surface with no
+                              allowlist file reports 'permissions: not
+                              supported'; a '(' or ')' in a row is refused.
   --stamp <version>           MAJOR.MINOR.PATCH of the source, written into the
                               marker. 'check --stamp' then reports a file
                               carrying no stamp or another one as STALE.
@@ -389,6 +396,8 @@ function runGenerate(context: CommandContext): number {
       permissions: report.permissions,
       manifest: report.manifest,
       notes: report.notes,
+      permissionSurfaceRows: report.permissionSurfaceRows,
+      writableRootsPlaceholder: report.writableRootsPlaceholder,
     },
     [
       `surface: ${inputs.row.surface} (${inputs.row.skillsPath})`,
@@ -411,7 +420,7 @@ function runGenerate(context: CommandContext): number {
         : [`model alias outside the surface's documented set (${(inputs.row.modelAliases ?? []).join("|")}): ${report.undocumentedAliases.join(", ")}`]),
       `hooks: ${report.hooks}`,
       `rules: ${rulesLine}`,
-      `permissions: ${report.permissions}`,
+      `permissions: ${report.permissions}${report.permissionSurfaceRows > 0 ? ` (+${report.permissionSurfaceRows} surface rows)` : ""}`,
       `manifest: ${report.manifest}`,
       ...report.notes.map((note): string => `note: ${note}`),
     ],
