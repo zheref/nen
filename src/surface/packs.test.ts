@@ -96,7 +96,7 @@ describe("hooks", () => {
     expect(Object.keys(doc.hooks)).toEqual(["Stop", "PreToolUse", "PreInvocation"]);
     expect(doc.hooks["PreToolUse"]?.[0]).toEqual({
       matcher: "run_command",
-      hooks: [{ type: "command", command: "${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh", timeout: 10 }],
+      hooks: [{ type: "command", command: "${CLAUDE_PLUGIN_ROOT}/hooks/guard.hook", timeout: 10 }],
     });
     // A command with no timeout carries none, rather than an invented default.
     expect(doc.hooks["PreInvocation"]?.[0]).toEqual({ hooks: [{ type: "command", command: "sh -c 'echo warm'" }] });
@@ -109,12 +109,12 @@ describe("hooks", () => {
     };
     expect(doc.version).toBe(1);
     expect(Object.keys(doc.hooks)).toEqual(["stop", "beforeShellExecution", "sessionStart"]);
-    expect(doc.hooks["beforeShellExecution"]).toEqual([{ command: "${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh" }]);
+    expect(doc.hooks["beforeShellExecution"]).toEqual([{ command: "${CLAUDE_PLUGIN_ROOT}/hooks/guard.hook" }]);
   });
 
   it("reads the scripts a command names from beside the manifest, and marks them under the shebang", () => {
     const scripts = readHookScripts(manifest);
-    expect(scripts.map((script): string => script.name)).toEqual(["bell.sh", "guard.sh"]);
+    expect(scripts.map((script): string => script.name)).toEqual(["bell.hook", "guard.hook"]);
     expect(renderHookScript(scripts[0] ?? { name: "", text: "" }, MARKER)).toBe(`#!/bin/sh\n# ${MARKER}\n# rings the bell\necho bell\n`);
     expect(renderHookScript({ name: "x", text: "echo x\n" }, MARKER)).toBe(`# ${MARKER}\necho x\n`);
     expect(() => readHookScripts({ ...manifest, dir: join(PACKS, "nowhere") })).toThrow(/is not a file/);
@@ -126,7 +126,7 @@ describe("hooks", () => {
     expect(rebaseCommand("echo $HOME", "/opt/p")).toBe(`sh -c 'exec "echo $HOME" "$@"' --`);
     expect(() => rebaseCommand("echo 'a' $B", "/opt/p")).toThrow(/single quote/);
     const rebased = JSON.parse(renderHooks(must(row("cursor").hooks), manifest, MARKER, "/opt/p")) as { hooks: Record<string, { command: string }[]> };
-    expect(rebased.hooks["stop"]).toEqual([{ command: "/opt/p/hooks/bell.sh" }]);
+    expect(rebased.hooks["stop"]).toEqual([{ command: "/opt/p/hooks/bell.hook" }]);
   });
 
   it("renders the verbatim row's manifest byte for byte", () => {

@@ -2,10 +2,10 @@
   "description": "A Claude-Code-shaped manifest: two events with a command each, one with a matcher.",
   "hooks": {
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bell.sh", "timeout": 15 } ] }
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bell.hook", "timeout": 15 } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh", "timeout": 10 } ] }
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/guard.hook", "timeout": 10 } ] }
     ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "sh -c 'echo warm'" } ] }
