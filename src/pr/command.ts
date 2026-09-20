@@ -913,6 +913,33 @@ function threads(context: CommandContext): number {
       `'pr threads' needs an action: ${THREAD_ACTIONS.join(", ")}. Try 'nen pr threads list --target <owner/name> --pr <n>'.`,
     );
   }
+  // THE FAMILY GUARD STOPS AT THE FAMILY, AND THE ACTION NEEDS ITS OWN
+  // (Copilot, #221). `--thread`, `--body-file` and `--dry-run` all belong to
+  // 'threads', so the family-level refusals above let them through -- and then
+  // `list` ignored `--thread`, and `resolve` ignored `--body-file`. A caller
+  // got a successful listing or a real resolution while an instruction they
+  // typed had no effect, which is the exact thing this family already refuses
+  // one level up: the ignored thing is the instruction you gave.
+  const ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
+    list: { values: [], booleans: [] },
+    reply: { values: ["thread", "body-file"], booleans: ["dry-run"] },
+    resolve: { values: ["thread"], booleans: ["dry-run"] },
+  };
+  const mine = ACTION_FLAGS[action] as { values: readonly string[]; booleans: readonly string[] };
+  const foreign = [
+    ...["thread", "body-file"].filter(
+      (flag): boolean => context.args.values[flag] !== undefined && !mine.values.includes(flag),
+    ),
+    ...["dry-run"].filter(
+      (flag): boolean => context.args.booleans.has(flag) && !mine.booleans.includes(flag),
+    ),
+  ];
+  if (foreign.length > 0) {
+    throw new VerbUsageError(
+      `--${foreign.join(", --")} ${foreign.length === 1 ? "is" : "are"} not read by 'pr threads ${action}'. A flag accepted and ignored is worse than one refused: the ignored thing is the instruction you gave, and this verb would otherwise have answered 0 while doing something other than what you asked.`,
+    );
+  }
+
   const target = requireTarget(context);
   const prNumber = requirePr(context);
   const dryRun = context.args.booleans.has("dry-run");

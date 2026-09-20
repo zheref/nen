@@ -301,6 +301,49 @@ describe("nen pr threads resolve", () => {
   });
 });
 
+describe("the ACTION's own flag guards (Copilot #221)", () => {
+  // The family guard admits --thread/--body-file/--dry-run because they belong
+  // to 'threads'; each ACTION then has to refuse the ones it does not read, or
+  // a caller gets a successful listing while an instruction they typed had no
+  // effect.
+  const cases: ReadonlyArray<readonly [string, readonly string[], string]> = [
+    ["list", ["--thread", "T1"], "--thread"],
+    ["list", ["--body-file", "x.md"], "--body-file"],
+    ["list", ["--dry-run"], "--dry-run"],
+    ["resolve", ["--thread", "T1", "--body-file", "x.md"], "--body-file"],
+  ];
+
+  for (const [action, extra, flag] of cases) {
+    it(`refuses ${flag} on 'threads ${action}', rather than ignoring it`, async () => {
+      const captured = await capture(
+        ["pr", "threads", action, "--target", "zheref/nen", "--pr", "217", ...extra],
+        [],
+      );
+      expect(captured.code).toBe(2);
+      expect(captured.err.join("\n")).toMatch(
+        new RegExp(`\\${flag} is not read by 'pr threads ${action}'`),
+      );
+      // Refused BEFORE any call: nothing is scripted, and an unscripted call
+      // would have thrown.
+      expect(captured.seams.calls).toEqual([]);
+    });
+  }
+
+  it("still accepts every flag the action DOES read", async () => {
+    const file = bodyFile("hi");
+    const reply = await capture(
+      ["pr", "threads", "reply", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--body-file", file, "--dry-run"],
+      [listCall(pageBody([node("T2", false)], false))],
+    );
+    expect(reply.code, reply.err.join("\n")).toBe(0);
+    const resolve = await capture(
+      ["pr", "threads", "resolve", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--dry-run"],
+      [listCall(pageBody([node("T2", false)], false))],
+    );
+    expect(resolve.code, resolve.err.join("\n")).toBe(0);
+  });
+});
+
 describe("the family's flag guards", () => {
   it("refuses --thread on a subcommand that does not read it", async () => {
     const captured = await capture(["pr", "fetch", "--target", "zheref/nen", "--pr", "217", "--thread", "T1"], []);

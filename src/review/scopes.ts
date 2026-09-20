@@ -73,7 +73,13 @@ export function readChangedPaths(seams: Seams, root: string, base: string): read
       }). Refusing to report an empty diff, which would read as a branch that raises no reviewer at all.`,
     );
   }
-  return rawLines(result.stdout).map((line): string => line.trim()).filter((line): boolean => line !== "");
+  // NO `.trim()` (Copilot, #221). `rawLines` preserves a path's exact bytes on
+  // purpose, and git can and does carry a leading or trailing space in one --
+  // trimming it here classified the trimmed spelling instead, so a scope's
+  // pattern could claim a path that is not in the diff, or miss the one that
+  // is, and `unclaimed` would name a path nobody could open. The only thing
+  // filtered is the empty string, which is what a trailing newline produces.
+  return rawLines(result.stdout).filter((line): boolean => line !== "");
 }
 
 /**

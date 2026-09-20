@@ -397,20 +397,49 @@ export function parseVerdictLine(text: string): { readonly verdict: string; read
   return null;
 }
 
-/** `gh api --method GET repos/<slug>/commits/<sha>/check-runs`. */
-export function checkRunsArgv(target: Target, sha: string): readonly string[] {
-  return ["api", "--method", "GET", `repos/${target.slug}/commits/${sha}/check-runs`];
+/**
+ * `gh api --method GET repos/<slug>/commits/<sha>/check-runs?per_page=100&page=N`.
+ *
+ * PAGINATED, AND `latestOf` IS WHY (Copilot, #221). The first cut read the
+ * endpoint's DEFAULT page and then asked `latestOf` for the newest `readiness`
+ * attempt in it -- so on a commit with more check runs than one page, a newer
+ * readiness run simply was not in the set, and an OLDER verdict was published
+ * as though it were current. That is the same false-green shape ../pr/fetch.ts's
+ * header records one layer along, reached through recency instead of through
+ * truncation.
+ */
+export function checkRunsArgv(target: Target, sha: string, page = 1): readonly string[] {
+  return [
+    "api",
+    "--method",
+    "GET",
+    `repos/${target.slug}/commits/${sha}/check-runs?per_page=${CHECK_RUNS_PAGE_SIZE}&page=${page}`,
+  ];
 }
 
-/** A conclusion that is never `ready`, whatever the run's own text says. */
-const NEVER_READY: ReadonlySet<string> = new Set([
-  "FAILURE",
-  "CANCELLED",
-  "TIMED_OUT",
-  "ACTION_REQUIRED",
-  "STARTUP_FAILURE",
-  "STALE",
-]);
+/** GitHub's own clamp on one page of check runs. A page size, never a cap. */
+const CHECK_RUNS_PAGE_SIZE = 100;
+
+/** A runaway backstop, matching ../pr/fetch.ts's own: 50 pages of 100. */
+const MAX_CHECK_RUN_PAGES = 50;
+
+/**
+ * The ONE conclusion whose verdict line is read, as an allowlist.
+ *
+ * IT WAS A DENYLIST, AND A DENYLIST LEAKS (Copilot, #221). `NEVER_READY` held
+ * the six terminal failures -- and an absent, null, empty or simply unfamiliar
+ * `conclusion` stringified to `""`, which is in no denylist, so a malformed
+ * completed run whose summary said `ready` was trusted as `source: "check"`.
+ * That is the exact false-ready path the three checks around it exist to close,
+ * reintroduced by the shape of the test rather than by its contents.
+ *
+ * `SUCCESS` ALONE, NOT `NEUTRAL`. A neutral conclusion is a job that declined
+ * to decide -- which is a fine thing for a linter to report and not a thing a
+ * READINESS job may say while its output claims a verdict. The narrow set is
+ * the safe one to be wrong about: every other value falls through to nen's own
+ * gate, which is a real answer, rather than to a verdict nobody computed.
+ */
+const READY_CONCLUSIONS: ReadonlySet<string> = new Set(["SUCCESS"]);
 
 /**
  * The head's own `readiness` check run, or null when it carries none.
@@ -453,15 +482,8 @@ export function readinessFromCheck(
   sha: string,
   warn: (line: string) => void,
 ): ObjectReadiness | null {
-  const result = seams.run(GH, [...checkRunsArgv(target, sha)]);
-  if (result.spawnFailed || result.code !== 0) return null;
-  let runs: readonly RawCheckRun[];
-  try {
-    const parsed = JSON.parse(result.stdout) as { check_runs?: unknown };
-    runs = Array.isArray(parsed.check_runs) ? (parsed.check_runs as RawCheckRun[]) : [];
-  } catch {
-    return null;
-  }
+  const runs = readCheckRuns(seams, target, sha, warn);
+  if (runs === null) return null;
   const named = runs.filter((entry): boolean => String(entry.name ?? "") === READINESS_CHECK);
   if (named.length === 0) return null;
   const run = latestOf(named);
@@ -475,9 +497,9 @@ export function readinessFromCheck(
     return null;
   }
   const conclusion = String(run.conclusion ?? "").toUpperCase();
-  if (NEVER_READY.has(conclusion)) {
+  if (!READY_CONCLUSIONS.has(conclusion)) {
     warn(
-      `objects: ${where} that concluded ${conclusion} -- the job that decides readiness did not finish deciding, so its output is not read as a verdict; falling through to nen's own gate.`,
+      `objects: ${where} whose conclusion is '${conclusion || "(none)"}', not SUCCESS -- only a run that succeeded may publish a readiness verdict, so its output is not read as one; falling through to nen's own gate.`,
     );
     return null;
   }
@@ -493,6 +515,50 @@ export function readinessFromCheck(
     return null;
   }
   return { verdict: line.verdict, reason: line.reason, source: "check" };
+}
+
+/**
+ * Every check run on this commit, walked to completion, or null.
+ *
+ * FAILS CLOSED INTO `null`, WHICH HERE MEANS "FALL THROUGH TO THE GATE". A
+ * partial set is exactly as untrustworthy as none for a question decided by
+ * RECENCY -- the newest run is the one most likely to be on the page nobody
+ * fetched -- so a page that cannot be read, cannot be parsed, or runs past the
+ * backstop abandons the check-run route entirely rather than answering from
+ * what it happened to get. That is a weaker failure than ../pr/threads.ts's
+ * walk throwing, and deliberately so: there IS a second authority here (nen's
+ * own gate), and falling through to a real verdict beats refusing the report.
+ *
+ * `total_count` IS NOT TRUSTED AS THE TERMINATOR. A short page is the end of
+ * the walk; a full page means ask again. A count the server computed before
+ * the caller's last page is one more thing that can be wrong in the direction
+ * that truncates.
+ */
+function readCheckRuns(
+  seams: Seams,
+  target: Target,
+  sha: string,
+  warn: (line: string) => void,
+): readonly RawCheckRun[] | null {
+  const all: RawCheckRun[] = [];
+  for (let page = 1; page <= MAX_CHECK_RUN_PAGES; page += 1) {
+    const result = seams.run(GH, [...checkRunsArgv(target, sha, page)]);
+    if (result.spawnFailed || result.code !== 0) return null;
+    let batch: readonly RawCheckRun[];
+    try {
+      const parsed = JSON.parse(result.stdout) as { check_runs?: unknown };
+      if (!Array.isArray(parsed.check_runs)) return null;
+      batch = parsed.check_runs as RawCheckRun[];
+    } catch {
+      return null;
+    }
+    all.push(...batch);
+    if (batch.length < CHECK_RUNS_PAGE_SIZE) return all;
+  }
+  warn(
+    `objects: ${target.slug}@${sha.slice(0, 8)} has more than ${MAX_CHECK_RUN_PAGES * CHECK_RUNS_PAGE_SIZE} check runs, which is past this walk's backstop -- the newest '${READINESS_CHECK}' run may not be in the set that was read, so no verdict is taken from it; falling through to nen's own gate.`,
+  );
+  return null;
 }
 
 /**
@@ -560,32 +626,42 @@ export async function readinessFromGate(
 
 // ── the live path ───────────────────────────────────────────────────────────
 
-interface RawGhIssue {
-  readonly number: number;
-  readonly title: string;
-  readonly labels: readonly { readonly name: string }[];
-  readonly state: string;
-  readonly html_url: string;
-  readonly body: string | null;
-  readonly pull_request?: unknown;
-}
-
 /** `gh api --method GET repos/<slug>/issues/<n>`. */
 export function issueArgv(target: Target, number: number): readonly string[] {
   return ["api", "--method", "GET", `repos/${target.slug}/issues/${number}`];
 }
 
-function issueRow(raw: RawGhIssue, linked: readonly number[]): IssueObject {
+/**
+ * ONE ISSUE'S ROW, on the SAME field-by-field contract `prRow` follows
+ * (Copilot, #221).
+ *
+ * IT USED TO BE A CAST AND A HOPE. `raw.labels.map(...)` THREW on a `labels`
+ * that was not a list -- taking the whole verb down over a display field -- and
+ * a non-string label name was published into the register as whatever it was,
+ * under a key the contract says is a list of strings. Neither is an acceptable
+ * way for an issue to arrive, and both were invisible to the reader.
+ *
+ * IT DEGRADES RATHER THAN REFUSING, AND THAT IS THE SAME RULE, NOT AN
+ * EXCEPTION TO IT. This module's rule is that an OBJECT that could not be READ
+ * AT ALL is a refusal (the `gh` call failing, above, still is) and a FIELD that
+ * will not read degrades and is named. An issue that answered with a malformed
+ * `labels` is an object that WAS read -- the caller's question was answered --
+ * so it keeps its row and says what was wrong with it, exactly as a pull
+ * request does.
+ */
+function issueRow(raw: Record<string, unknown>, number: number, linked: readonly number[]): IssueObject {
+  const notes: string[] = [];
+  const note = (line: string): void => void notes.push(line);
   return {
     kind: "issue",
-    number: raw.number,
-    title: raw.title,
-    url: raw.html_url,
-    state: String(raw.state ?? "").toUpperCase(),
-    labels: (raw.labels ?? []).map((label): string => label.name),
+    number: degradedNumber(raw, "number", number, note),
+    title: degradedString(raw, "title", note),
+    url: degradedString(raw, "html_url", note),
+    state: degradedString(raw, "state", note).toUpperCase(),
+    labels: readLabels(raw["labels"], note),
     linked: [...linked].sort((a, b): number => a - b),
     readiness: null,
-    notes: [],
+    notes,
   };
 }
 
@@ -607,14 +683,22 @@ export async function assembleObjects(
   const target = options.target;
   if (target === null) return [];
 
-  const issues = new Map<number, RawGhIssue>();
+  const issues = new Map<number, Record<string, unknown>>();
   const prNumbers = new Set<number>(options.prs);
 
   if (options.backlog) {
-    const open = fetchPaginated<RawGhIssue>(seams, `repos/${target.slug}/issues?state=open`, null);
+    const open = fetchPaginated<Record<string, unknown>>(seams, `repos/${target.slug}/issues?state=open`, null);
     for (const raw of open.items) {
-      if (raw.pull_request === undefined) issues.set(raw.number, raw);
-      else prNumbers.add(raw.number);
+      // A ROW WITH NO USABLE NUMBER IS NOT AN OBJECT, and it is the one field
+      // there is no degrading around: it is the identity everything else in
+      // the register is keyed by. Named on stderr and left out.
+      const number = typeof raw["number"] === "number" ? raw["number"] : null;
+      if (number === null) {
+        warn(`objects: a row in ${target.slug}'s open-object page carried no numeric 'number' and could not be identified; it is not in the register.`);
+        continue;
+      }
+      if (raw["pull_request"] === undefined) issues.set(number, raw);
+      else prNumbers.add(number);
     }
     if (open.truncated) {
       throw new ObjectsError(
@@ -631,7 +715,7 @@ export async function assembleObjects(
       );
     }
     try {
-      issues.set(number, JSON.parse(result.stdout) as RawGhIssue);
+      issues.set(number, JSON.parse(result.stdout) as Record<string, unknown>);
     } catch (error) {
       throw new ObjectsError(
         `could not read ${target.slug}#${number}, which --issues named (gh did not answer JSON: ${String(error)}). Refusing to publish a register that silently leaves out an object you asked for.`,
@@ -652,7 +736,16 @@ export async function assembleObjects(
 
   const issueRows = [...issues.keys()]
     .sort((a, b): number => a - b)
-    .map((number): IssueObject => issueRow(issues.get(number) as RawGhIssue, linkedByIssue.get(number) ?? []));
+    .map((number): IssueObject =>
+      issueRow(issues.get(number) as Record<string, unknown>, number, linkedByIssue.get(number) ?? []),
+    );
+  // THE ROW'S NOTES REACH STDERR TOO. `prRow` warns as it degrades because it
+  // holds the warn callback; `issueRow` is pure, so its notes are relayed here
+  // -- the operator watching the run and the reader of the published register
+  // must see the same degradations either way.
+  for (const row of issueRows) {
+    for (const entry of row.notes) warn(`objects: ${target.slug}#${row.number}: ${entry}`);
+  }
   return [...issueRows, ...prs];
 }
 
@@ -712,13 +805,16 @@ async function prRow(
     );
   }
 
-  const head = typeof view["headRefOid"] === "string" ? view["headRefOid"] : "";
+  // EVERY COERCION IS ANNOUNCED (Copilot, #221). A fallback that silently
+  // replaced a malformed field with "" left a row that looks complete and is
+  // not -- which is the exact failure `notes[]` was added to close, escaping
+  // through the fields the first cut coerced inline.
+  const head = degradedString(view, "headRefOid", note);
   if (head === "") note("the head SHA could not be read, so readiness could not be established");
-
   const checks = countRollup(view["statusCheckRollup"], note);
   const threads = readThreadCounts(seams, target, number, note);
-  const title = typeof view["title"] === "string" ? view["title"] : "";
-  const body = typeof view["body"] === "string" ? view["body"] : "";
+  const title = degradedString(view, "title", note);
+  const body = degradedString(view, "body", note);
 
   const readiness =
     head === ""
@@ -728,42 +824,82 @@ async function prRow(
 
   return {
     kind: "pr",
-    number: typeof view["number"] === "number" ? view["number"] : number,
+    number: degradedNumber(view, "number", number, note),
     title,
-    url: typeof view["url"] === "string" ? view["url"] : "",
-    state: typeof view["state"] === "string" ? view["state"] : "",
-    labels: readLabels(view["labels"]),
+    url: degradedString(view, "url", note),
+    state: degradedString(view, "state", note),
+    labels: readLabels(view["labels"], note),
     head,
     // VERBATIM, whatever it says. GitHub's own composite is CLEAN/DIRTY/
     // BLOCKED/BEHIND/UNSTABLE/UNKNOWN today and may gain a word tomorrow; a row
     // that refused an unfamiliar one would be a register that breaks on a
     // GitHub release, and this field is printed, never branched on.
-    mergeStateStatus: typeof view["mergeStateStatus"] === "string" ? view["mergeStateStatus"] : "UNKNOWN",
+    mergeStateStatus:
+      typeof view["mergeStateStatus"] === "string"
+        ? view["mergeStateStatus"]
+        : (note(`'mergeStateStatus' was not a string (${describe(view["mergeStateStatus"])}); reported as UNKNOWN`), "UNKNOWN"),
     checks,
     threads,
-    reviewRequests: readReviewRequests(view["reviewRequests"]),
+    reviewRequests: readReviewRequests(view["reviewRequests"], note),
     linked: [...referencedIssueNumbers(`${title}\n${body}`)].sort((a, b): number => a - b),
     readiness,
     notes,
   };
 }
 
-/** `labels` as names, skipping anything that is not one, rather than refusing. */
-function readLabels(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return [];
-  return value
+/** A string field, or the empty string WITH the degradation named. */
+function degradedString(view: Record<string, unknown>, key: string, note: (line: string) => void): string {
+  const value = view[key];
+  if (typeof value === "string") return value;
+  // An ABSENT field is not a degradation on every payload -- `body` is
+  // legitimately null on a pull request with none -- so `null`/`undefined`
+  // pass quietly and only a value of the WRONG TYPE is announced.
+  if (value === undefined || value === null) return "";
+  note(`'${key}' was not a string (${describe(value)}); reported as empty`);
+  return "";
+}
+
+/** A number field, or the caller's own number WITH the degradation named. */
+function degradedNumber(
+  view: Record<string, unknown>,
+  key: string,
+  fallback: number,
+  note: (line: string) => void,
+): number {
+  const value = view[key];
+  if (typeof value === "number") return value;
+  note(`'${key}' was not a number (${describe(value)}); reported as ${fallback}, the number this invocation named`);
+  return fallback;
+}
+
+/** `labels` as names, naming what it had to drop. */
+function readLabels(value: unknown, note: (line: string) => void): readonly string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    note(`'labels' was not a list (${describe(value)}); reported as none`);
+    return [];
+  }
+  const names = value
     .map((entry): string =>
       typeof entry === "object" && entry !== null && typeof (entry as { name?: unknown }).name === "string"
         ? ((entry as { name: string }).name)
         : "",
     )
     .filter((name): boolean => name !== "");
+  if (names.length !== value.length) {
+    note(`${value.length - names.length} of ${value.length} 'labels' entr(y/ies) carried no string name and were left out`);
+  }
+  return names;
 }
 
-/** `reviewRequests` as logins or team names -- `(.login // .name // "")`, leniently. */
-function readReviewRequests(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return [];
-  return value
+/** `reviewRequests` as logins or team names -- `(.login // .name)`, leniently. */
+function readReviewRequests(value: unknown, note: (line: string) => void): readonly string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    note(`'reviewRequests' was not a list (${describe(value)}); reported as none`);
+    return [];
+  }
+  const names = value
     .map((entry): string => {
       if (typeof entry !== "object" || entry === null) return "";
       const record = entry as { login?: unknown; name?: unknown };
@@ -771,6 +907,10 @@ function readReviewRequests(value: unknown): readonly string[] {
       return typeof record.name === "string" ? record.name : "";
     })
     .filter((name): boolean => name !== "");
+  if (names.length !== value.length) {
+    note(`${value.length - names.length} of ${value.length} 'reviewRequests' entr(y/ies) named neither a login nor a team and were left out`);
+  }
+  return names;
 }
 
 /**

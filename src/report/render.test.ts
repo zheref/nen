@@ -329,9 +329,13 @@ function variantRepo(data: unknown, template: string = VARIANT_TEMPLATE): string
     join(root, "nen", "workflow.json"),
     JSON.stringify({
       reports: {
+        // The variants declare `page`, which is what `--template page.html`
+        // fills: a variant's declared template and the template actually being
+        // filled must agree (Copilot, #221), and `assertVariantTemplate` is
+        // exercised on its own below.
         sections: {
-          turn: { template: "rikugan", blocks: ["masthead", "desk"] },
-          final: { template: "spiritual-message", blocks: ["masthead", "register", "spend"] },
+          turn: { template: "page", blocks: ["masthead", "desk"] },
+          final: { template: "page", blocks: ["masthead", "register", "spend"] },
         },
       },
     }),
@@ -508,5 +512,99 @@ describe("nen report render --graph", () => {
     );
     expect(captured.code).toBe(2);
     expect(existsSync(join(root, "out.html"))).toBe(false);
+  });
+});
+
+// ── the variant's own template, and a variant that is not a name ───────────
+//
+// Copilot #221, threads …ctd (the declared template was validated and then
+// ignored) and …ctz (a non-string `variant` sailed through the agreement
+// check). Both produce the same class of outcome: a page that looks finished
+// and is the wrong page.
+
+describe("--variant is checked against --template (Copilot #221)", () => {
+  /** A repository whose two variants name two DIFFERENT templates. */
+  function twoTemplates(): string {
+    const root = stagedRepo(DATA);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(
+      join(root, "nen", "workflow.json"),
+      JSON.stringify({
+        reports: {
+          sections: {
+            turn: { template: "rikugan", blocks: ["masthead", "desk"] },
+            final: { template: "spiritual-message", blocks: ["masthead", "spend"] },
+          },
+        },
+      }),
+      "utf8",
+    );
+    writeFileSync(join(root, "rikugan.html"), VARIANT_TEMPLATE, "utf8");
+    writeFileSync(join(root, "spiritual-message.html"), VARIANT_TEMPLATE, "utf8");
+    return root;
+  }
+
+  it("refuses the variant's blocks in another variant's template, naming both", async () => {
+    const root = twoTemplates();
+    const captured = await capture(
+      ["report", "render", "--template", "spiritual-message.html", "--data", "data.json", "--out", "out.html", "--variant", "turn"],
+      root,
+    );
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(
+      /--variant 'turn' declares template 'rikugan', and --template 'spiritual-message\.html' is 'spiritual-message'/,
+    );
+    expect(existsSync(join(root, "out.html"))).toBe(false);
+  });
+
+  it("accepts the declared template however the caller spells its PATH", async () => {
+    const root = twoTemplates();
+    mkdirSync(join(root, "templates"), { recursive: true });
+    writeFileSync(join(root, "templates", "rikugan.html"), VARIANT_TEMPLATE, "utf8");
+    // `reports.template` names a slug, never a path -- so where the caller
+    // keeps their templates is not nen's business.
+    for (const spelling of ["rikugan.html", "./rikugan.html", join("templates", "rikugan.html")]) {
+      const captured = await capture(
+        ["report", "render", "--template", spelling, "--data", "data.json", "--out", "out.html", "--variant", "turn"],
+        root,
+      );
+      expect(captured.code, `${spelling}: ${captured.err.join("\n")}`).toBe(0);
+    }
+  });
+
+  it("checks nothing without --variant, which declares no template to check against", async () => {
+    const root = twoTemplates();
+    const captured = await capture(
+      ["report", "render", "--template", "spiritual-message.html", "--data", "data.json", "--out", "out.html"],
+      root,
+    );
+    // It fails on the unknown `sections.desk` token, not on a template
+    // mismatch: with no variant there is no policy to disagree with.
+    expect(captured.err.join("\n")).toMatch(/names 'sections\.desk'/);
+  });
+});
+
+describe("a --data `variant` that is not a name (Copilot #221)", () => {
+  it("refuses a present non-string variant rather than ignoring it", async () => {
+    for (const stated of [123, true, ["turn"], { name: "turn" }]) {
+      const root = variantRepo({ ...DATA, variant: stated });
+      const captured = await capture(
+        ["report", "render", "--template", "page.html", "--data", "data.json", "--out", "out.html", "--variant", "turn"],
+        root,
+      );
+      expect(captured.code, `${JSON.stringify(stated)} was accepted`).toBe(2);
+      expect(captured.err.join("\n")).toMatch(/states a 'variant' that is not a variant name/);
+    }
+  });
+
+  it("still treats an absent or null variant as 'this assembler does not write the key'", async () => {
+    for (const data of [DATA, { ...DATA, variant: null }]) {
+      const root = variantRepo(data);
+      const captured = await capture(
+        ["report", "render", "--template", "page.html", "--data", "data.json", "--out", "out.html", "--variant", "turn"],
+        root,
+      );
+      expect(captured.code, captured.err.join("\n")).toBe(0);
+    }
   });
 });

@@ -1402,7 +1402,7 @@ nen pr threads resolve --target <owner/name> --pr <n> --thread <id> [--dry-run] 
 |---|---|---|---|
 | `--target <owner/name>` | **yes** | the GitHub side | `--repo` names a checkout on disk and never addresses the API |
 | `--pr <n>` | **yes** | the pull request | a positive whole number |
-| `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form |
+| `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form. Each action refuses the flags it does not read — `--thread` on `list`, `--body-file` on `list`/`resolve`, `--dry-run` on `list` — rather than accepting and ignoring them |
 | `--body-file <path>` | `reply` | the reply's bytes, read raw | a reply typed on a command line is a reply nobody reviewed; an empty or whitespace-only file is refused. A relative path resolves against `--repo`, not the process cwd |
 | `--dry-run` | no | print the exact `gh api graphql` argv and write nothing | the thread is still looked up, so exits 3 and 4 still fire |
 | `--json` | no | the document | see below |
@@ -7469,8 +7469,8 @@ nen report data … --objects-from <file>
 | `--lane <name>` | no | which declared lane's coverage report and build proof to read | defaults to the declaration's own `defaultLane`; with neither, both fields are `null`. A value that would escape the tree through `.nen/proof/<lane>.json` is refused at exit 2 |
 | `--tiers <file>` | no | a JSON object mapping a tier name to its paths | `{ "<tier>": ["<path prefix or glob>", …] }`. The file's **key order is the precedence** — the first tier whose patterns match a path wins. A pattern with no `*`/`?` is a path **prefix** matched on segment boundaries (`src/report` claims `src/report/data.ts`, never `src/reporting.ts`); one with them is a narrow glob (`*` stops at `/`, `**` crosses it, `?` is one character). Without the flag every file's `tier` is `null` |
 | `--target <owner/name>` | for the live register | the GitHub side of the register | `--repo` names a checkout on disk and never addresses the API. Required as soon as any of the three below is given |
-| `--prs <n,...>` | no | pull requests to read, by number | a comma-separated list of positive whole numbers; a non-numeric entry is refused at exit 2 naming it |
-| `--issues <n,...>` | no | issues to read, by number | same grammar |
+| `--prs <n,...>` | no | pull requests to read, by number | a comma-separated list of **positive** whole numbers; a non-numeric entry, or a `0`, is refused at exit 2 naming it, before any call — GitHub numbers issues and pull requests from 1 |
+| `--issues <n,...>` | no | issues to read, by number | same grammar, same refusal |
 | `--backlog` | no (boolean) | every **open** issue and pull request of `--target` | paginated to completion; a fetch that hits the defensive page ceiling says so on stderr rather than presenting a partial register as whole |
 | `--objects-from <file>` | no | the register, read from a file instead of GitHub | a JSON array of rows already in the published `objects` shape. **Validated at the read seam and refused BY ROW INDEX at exit 2.** Never mixed with the four flags above: a register whose rows came from two authorities says nothing about which row came from which |
 | `--json` | no | the document itself | — |
@@ -7660,11 +7660,13 @@ nen report mermaid --graph <file> [--repo <path>]
 ```
 
 **Output and exit codes** — the mermaid text on stdout, and nothing else. There
-is no machine-readable document here and the flag for one is ignored: the text
-IS the output, so wrapping it would make every caller unwrap it before pasting
-it where it was printed for. Exit 0 on a valid document; exit 2 on a missing
-`--graph`, a document that does not name the contract, a malformed node or
-edge, a repeated id, or an edge endpoint that names no declared node.
+is no machine-readable document here, and `--json` is **refused by name at exit
+2** rather than accepted and ignored: the text IS the output, so wrapping it
+would make every caller unwrap it before pasting it where it was printed for,
+and a flag accepted and ignored is worse than one refused. Redirect stdout if
+you want the text in a file. Exit 0 on a valid document; exit 2 on `--json`, a
+missing `--graph`, a document that does not name the contract, a malformed node
+or edge, a repeated id, or an edge endpoint that names no declared node.
 
 **Example**
 
