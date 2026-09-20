@@ -56,7 +56,7 @@
 import { plainBlock, plainLine } from "../cli/plain.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
-import { fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
+import { endOfOptionsRefusal, fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
 import { findPublishedCommit, parseFolded, SquashStateError } from "./squash.js";
 
 export const CATCH_UP_CONTRACT = "nen.wc.catch-up/v0.1";
@@ -351,7 +351,11 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
   }
   const fetchArgs = fetchArgv(REMOTE, base);
   const fetch = runGit(seams, cwd, fetchArgs);
-  if (fetch.code !== 0) throw new SquashStateError(`could not fetch ${remoteBase} ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
+  if (fetch.code !== 0) {
+    const tooOld = endOfOptionsRefusal(seams, cwd, fetchArgs, fetch);
+    if (tooOld !== null) return { kind: "refused", reason: tooOld };
+    throw new SquashStateError(`could not fetch ${remoteBase} ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
+  }
   lines.push(`fetched ${remoteBase}`);
 
   const before = mustHead(seams, cwd, `fetched ${remoteBase}`);

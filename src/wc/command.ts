@@ -27,7 +27,7 @@ const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 const USAGE = `nen wc classify -- where the current working copy sits, tensho's own table.
 nen wc squash -- fold every commit on this branch since --onto into ONE.
 nen wc catch-up -- bring this branch up to date with its base; stop on a conflict.
-nen wc publish -- push this branch to origin; never a force, never the trunk.
+nen wc publish -- push this branch to its upstream's remote; never a force, never the trunk.
 
 classify:
   nen wc classify --repo <path> [--base main]
@@ -131,23 +131,31 @@ behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
 resumed, aborted, dryRun }.
 
 publish:
-  nen wc publish --repo <path> [--set-upstream] [--dry-run] [--json]
+  nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run]
+                 [--json]
 
-  --set-upstream    push with -u, so the branch tracks origin/<branch>.
+  --set-upstream    push with -u, so the branch tracks <remote>/<branch>.
+  --remote <name>   where a branch with NO upstream goes (default origin);
+                    refused when the branch already tracks another remote.
   --dry-run         print the push line; push nothing.
 
-Pushes the CURRENT branch to origin ('git push [-u] origin --
+Pushes the CURRENT branch to the remote its upstream names -- a branch
+tracking fork/feature goes to fork, and the fast-forward check below is
+made against fork's ref, the one the push moves -- or to origin (or
+--remote) when it tracks nothing yet: 'git push [-u] <remote> --
 refs/heads/<branch>:refs/heads/<branch>', the refspec in full so no branch
-NAME can change what the push does) and nothing else. Refused at exit 2: a
+NAME can change what the push does. Refused at exit 2: a
 detached HEAD; the trunk (${WORKFLOW_FILE}'s branch.base, and main/master
 regardless, compared with a leading '+' and 'refs/heads/' taken off); a
 branch name 'git check-ref-format --branch' rejects, or one shaped like a
 refspec or a force even where git accepts it ('+main' is a branch git will
 hold and a force push once it sits in an argv); any argument that looks like
-a refspec or a force (a positional, '+', ':', --force). When the upstream
-exists and the local branch is not a fast-forward of it the push would need
-a force, and this verb never forces: needsForce: true, nothing pushed, exit
-1.
+a refspec or a force (a positional, '+', ':', --force); a --remote this
+repository does not have. A git that rejects '--end-of-options' on the
+fetch (older than 2.24) is refused at exit 2 naming its version -- the
+guard is never dropped. When the upstream exists and the local branch is
+not a fast-forward of it the push would need a force, and this verb never
+forces: needsForce: true, nothing pushed, exit 1.
 
 --json's contract is '${PUBLISH_CONTRACT}': { contract, branch, remote,
 upstreamBefore, ahead, needsForce, pushed, dryRun }.`;
@@ -296,7 +304,7 @@ function doPublish(context: CommandContext): number {
   const suspicious = extra.find((token): boolean => looksLikeRefspecOrForce(token)) ?? extra[0];
   if (suspicious !== undefined) {
     throw new VerbUsageError(
-      `'${suspicious}' looks like a refspec or a force option, and 'wc publish' takes neither: it pushes the CURRENT branch to origin by name and never rewrites what is there. Drop it.`,
+      `'${suspicious}' looks like a refspec or a force option, and 'wc publish' takes neither: it pushes the CURRENT branch by name, to the remote its upstream names, and never rewrites what is there. Drop it.`,
     );
   }
   let base: string;
@@ -311,6 +319,7 @@ function doPublish(context: CommandContext): number {
     base,
     setUpstream: context.args.booleans.has("set-upstream"),
     dryRun: context.args.booleans.has("dry-run"),
+    remote: context.args.values["remote"] ?? null,
   });
   if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
   emit(context.io, context.json, outcome.report, outcome.lines);
@@ -322,9 +331,14 @@ export const wcCommand: Command = {
   subcommands: ["classify", "squash", "catch-up", "publish"],
   summary: "Classify the working copy, squash it onto its base, catch it up with its base, or publish it.",
   usage: USAGE,
-  flags: { values: ["base", "onto", "message-file", "strategy"], booleans: ["dry-run", "abort", "set-upstream"] },
+  flags: { values: ["base", "onto", "message-file", "strategy", "remote"], booleans: ["dry-run", "abort", "set-upstream"] },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish"]);
+    // `--remote` IS PUBLISH'S ALONE; accepted and ignored elsewhere it would be
+    // an instruction silently dropped (../commit/command.ts's rule).
+    if (subcommand !== "publish" && context.args.values["remote"] !== undefined) {
+      throw new VerbUsageError(`--remote is not read by 'wc ${subcommand}'; only 'wc publish' takes it. A flag accepted and ignored is worse than one refused.`);
+    }
     if (subcommand === "squash") return squash(context);
     if (subcommand === "catch-up") return doCatchUp(context);
     if (subcommand === "publish") return doPublish(context);

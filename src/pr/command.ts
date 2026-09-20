@@ -257,8 +257,10 @@ open:
   --dry-run            print the 'gh pr create' argv; still asks git and
                        GitHub every question below, creates nothing.
   REFUSED AT EXIT 2: a detached HEAD with no --head; a head with no upstream;
-  a head whose local sha is not what 'git ls-remote origin refs/heads/<head>'
-  answers -- push first. EXIT 1, nothing opened: a pull request is already
+  a head whose local sha is not what 'git ls-remote <remote> refs/heads/<b>'
+  answers, where <remote>/<b> is what '<head>@{upstream}' names (origin only
+  when that is the upstream's remote; a head tracking fork/<b> is asked of
+  fork) -- push first. EXIT 1, nothing opened: a pull request is already
   open for that head ('gh pr list --head'), reported with its number and url.
   --json: '{ contract: "${OPEN_CONTRACT}", number, url, head, base, draft,
   dryRun, existing }' -- number and url null on a dry run; existing true on
