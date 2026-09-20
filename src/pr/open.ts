@@ -98,17 +98,25 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
   if (upstream.code !== 0) {
     return { kind: "refused", reason: `'${head}' has no upstream -- it has never been published, so there is nothing on GitHub to open a pull request from. Push it first ('nen wc publish --set-upstream').` };
   }
+  // THE REMOTE IS THE UPSTREAM'S, never a hard-coded `origin` (Nobunaga N7):
+  // `<remote>/<branch>` is split the way ../wc/publish.ts splits it, and it is
+  // THAT remote which is asked what it holds.
+  const upstreamName = upstream.stdout.trim();
+  const slash = upstreamName.indexOf("/");
+  if (slash === -1) throw new Error(`the upstream of '${head}' is '${upstreamName}', which does not look like '<remote>/<branch>' -- refusing to guess which remote to ask.`);
+  const remoteName = upstreamName.slice(0, slash);
+  const tracked = upstreamName.slice(slash + 1);
   const local = seams.run(GIT, ["rev-parse", head], { cwd });
   if (local.code !== 0) throw new Error(`could not resolve '${head}' ('git rev-parse ${head}' failed: ${gitError(local.stderr, local.code)}).`);
   const localSha = local.stdout.trim();
-  const remote = seams.run(GIT, ["ls-remote", "origin", `refs/heads/${head}`], { cwd });
-  if (remote.code !== 0) throw new Error(`could not ask origin what it holds at '${head}' ('git ls-remote origin refs/heads/${head}' failed: ${gitError(remote.stderr, remote.code)}).`);
+  const remote = seams.run(GIT, ["ls-remote", remoteName, `refs/heads/${tracked}`], { cwd });
+  if (remote.code !== 0) throw new Error(`could not ask ${remoteName} what it holds at '${tracked}' ('git ls-remote ${remoteName} refs/heads/${tracked}' failed: ${gitError(remote.stderr, remote.code)}).`);
   const remoteSha = outputLines(remote.stdout)[0]?.split(/\s+/)[0] ?? null;
   if (remoteSha === null) {
-    return { kind: "refused", reason: `origin holds nothing at 'refs/heads/${head}': the branch tracks an upstream but the remote does not have it. Push it first ('nen wc publish').` };
+    return { kind: "refused", reason: `${remoteName} holds nothing at 'refs/heads/${tracked}': '${head}' tracks '${upstreamName}' but the remote does not have it. Push it first ('nen wc publish').` };
   }
   if (remoteSha !== localSha) {
-    return { kind: "refused", reason: `the local head of '${head}' (${localSha}) is not what origin holds (${remoteSha}). A pull request opened now would not show the commits you have here; push first ('nen wc publish'), or catch up if the remote moved.` };
+    return { kind: "refused", reason: `the local head of '${head}' (${localSha}) is not what ${remoteName} holds at '${tracked}' (${remoteSha}). A pull request opened now would not show the commits you have here; push first ('nen wc publish'), or catch up if the remote moved.` };
   }
 
   // 3. ONE PULL REQUEST PER HEAD.

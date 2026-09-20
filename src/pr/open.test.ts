@@ -90,6 +90,16 @@ describe("nen pr open -- refusals before anything is created", () => {
 
   it("refuses when origin holds nothing at the head, or a different sha, at exit 2", async () => {
     const { root } = repo();
+    // The remote asked is the UPSTREAM's, never a hard-coded origin (N7).
+    const fork = await capture(root, [], [
+      ON_WORK,
+      { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "fork/feature/work\n" } },
+      LOCAL,
+      { match: "git ls-remote fork refs/heads/feature/work", result: { stdout: "" } },
+    ]);
+    expect(fork.code).toBe(2);
+    expect(fork.err.join("\n")).toMatch(/fork holds nothing at 'refs\/heads\/feature\/work'/);
+    expect(calls(fork.seams).some((call): boolean => call.includes("ls-remote origin"))).toBe(false);
     const nothing = await capture(root, [], [ON_WORK, TRACKED, LOCAL, { match: "git ls-remote origin refs/heads/feature/work", result: { stdout: "" } }]);
     expect(nothing.code).toBe(2);
     expect(nothing.err.join("\n")).toMatch(/origin holds nothing at 'refs\/heads\/feature\/work'/);
