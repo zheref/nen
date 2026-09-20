@@ -978,7 +978,7 @@ function parseMonitor(path: string, value: unknown): MonitorPolicy {
  * string, because a leaf is an alias a caller pastes into a subagent's model
  * field, and an object there is a caller reading `[object Object]`.
  */
-function parseModels(path: string, value: unknown): ModelsPolicy {
+export function parseModels(path: string, value: unknown): ModelsPolicy {
   if (value === undefined || value === null) {
     return { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: {} };
   }

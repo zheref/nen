@@ -15,18 +15,25 @@ import { dirname, join } from "node:path";
 import { splitDocument } from "./frontmatter.js";
 import {
   checkSurfaceMirror,
+  descriptionText,
+  firstSentence,
   generateSurfaceMirror,
+  generateSurfaceMirrorReport,
   markerFor,
+  markerText,
   mirrorReportOk,
   readMarker,
   readSourceAgents,
+  readSourceAgentsReport,
   readSourceSkills,
   rewriteInvocations,
   SurfaceMirrorError,
   universeFiles,
+  withoutStamp,
   writeSurfaceMirror,
   type GeneratedFile,
 } from "./mirror.js";
+import { readHooksManifest, readPermissions, readRules } from "./packs.js";
 import { findSurface, type SurfaceRow } from "./rules.js";
 
 const FIXTURES = join(process.cwd(), "src", "surface", "fixtures");
@@ -119,7 +126,7 @@ describe("the generated marker", () => {
   });
 
   it("reads its surface back out, and reports null for a file that carries none", () => {
-    expect(readMarker(at(generate("codex"), "beta/SKILL.md"))).toBe("codex");
+    expect(readMarker(at(generate("codex"), "beta/SKILL.md"))).toEqual({ surface: "codex", stamp: null });
     expect(readMarker("---\nname: x\n---\n\nhand written\n")).toBeNull();
     expect(readMarker("plain prose")).toBeNull();
     // A marker-shaped line further DOWN is not the marker (../canon/mirror.ts's
@@ -136,7 +143,9 @@ describe("frontmatter is reduced to what the surface documents", () => {
 
   it("keeps the richer surface's own documented keys, and drops the rest", () => {
     const front = splitDocument(at(generate("cursor"), "alpha/SKILL.md")).entries.map((entry): string => entry.key);
-    expect(front).toEqual(["name", "description", "metadata"]);
+    // `summary` follows `description` because alpha's description is over
+    // the row's measured budget (zheref/nen#227); beta's one-liner is not.
+    expect(front).toEqual(["name", "description", "summary", "metadata"]);
     expect(front).not.toContain("allowed-tools");
     expect(front).not.toContain("license");
     expect(front).not.toContain("model");
@@ -533,7 +542,7 @@ describe("checking -- the four drift classes", () => {
     });
     const out = tempDir();
     writeSurfaceMirror(out, files, row("codex"));
-    expect(readMarker(readFileSync(join(out, "windows", "SKILL.md"), "utf8"))).toBe("codex");
+    expect(readMarker(readFileSync(join(out, "windows", "SKILL.md"), "utf8"))?.surface).toBe("codex");
     expect(mirrorReportOk(checkSurfaceMirror(out, files, row("codex")))).toBe(true);
   });
 
@@ -541,5 +550,110 @@ describe("checking -- the four drift classes", () => {
     const out = join(tempDir(), "not", "there", "yet");
     writeSurfaceMirror(out, generate("codex"), row("codex"));
     expect(readdirSync(dirname(join(out, "alpha", "SKILL.md")))).toEqual(["SKILL.md"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// zheref/nen#227: the stamped marker, the summary key, the shared include
+// ---------------------------------------------------------------------------
+
+describe("the stamped marker", () => {
+  it("reads both forms back, and masks the stamp for a comparison that did not ask", () => {
+    expect(readMarker(`${markerFor("codex", "0.43.0")}\n`)).toEqual({ surface: "codex", stamp: "0.43.0" });
+    expect(readMarker(`# ${markerText("codex", "1.2.3")}\n[agents]\n`)).toEqual({ surface: "codex", stamp: "1.2.3" });
+    expect(readMarker(`{"$generated": ${JSON.stringify(markerText("cursor"))}, "version": 1}`)).toEqual({ surface: "cursor", stamp: null });
+    expect(readMarker('{"version": 1}')).toBeNull();
+    expect(readMarker("{ not json")).toBeNull();
+    expect(withoutStamp(`a\n${markerFor("codex", "0.43.0")}\nb`)).toBe(`a\n${markerFor("codex")}\nb`);
+  });
+
+  it("classes a file by its stamp only when check is given one", () => {
+    const stamped = generateSurfaceMirror({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: PREFIX, stamp: "0.42.0" });
+    const out = tempDir();
+    writeSurfaceMirror(out, stamped, row("codex"));
+    const unstamped = generate("codex", false);
+    expect(mirrorReportOk(checkSurfaceMirror(out, unstamped, row("codex")))).toBe(true);
+    expect(checkSurfaceMirror(out, stamped, row("codex"), "0.42.0").ok).toHaveLength(2);
+    const older = checkSurfaceMirror(out, stamped, row("codex"), "0.43.0");
+    expect(older.stale).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
+    expect(older.handEdited).toEqual([]);
+  });
+});
+
+describe("the description budget", () => {
+  it("adds a summary of the first sentence, trimmed to the budget, and keeps the description whole", () => {
+    const front = splitDocument(at(generate("cursor"), "alpha/SKILL.md")).entries;
+    const summary = front.find((entry): boolean => entry.key === "summary");
+    expect(summary?.lines).toEqual(["summary: Warm a working copy and cut"]);
+    expect(front.find((entry): boolean => entry.key === "description")?.lines).toHaveLength(2);
+    // Codex's budget is wider than either fixture description: no summary.
+    const codex = splitDocument(at(generate("codex"), "alpha/SKILL.md")).entries;
+    expect(codex.find((entry): boolean => entry.key === "summary")).toBeUndefined();
+    const wide = generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null });
+    expect(wide.truncated).toEqual([]);
+  });
+
+  it("takes the first sentence, or the whole text when there is no sentence end", () => {
+    expect(firstSentence("One. Two.", 100)).toBe("One.");
+    expect(firstSentence("Is it? Yes", 100)).toBe("Is it?");
+    expect(firstSentence("no terminal punctuation here", 100)).toBe("no terminal punctuation here");
+    expect(firstSentence("a-very-long-single-token", 5)).toBe("a-ver");
+    expect(descriptionText(splitDocument("---\ndescription: a\n  b\n---\n").entries)).toBe("a b");
+  });
+
+  it("leaves a summary the source already carries alone, and lists nothing", () => {
+    const source = tempDir();
+    mkdirSync(join(source, "own"));
+    writeFileSync(join(source, "own", "SKILL.md"), `---\nname: own\ndescription: ${"long ".repeat(20)}\nsummary: mine\n---\nbody\n`);
+    const report = generateSurfaceMirrorReport({ row: row("cursor"), skills: readSourceSkills(source), agents: [], invocationPrefix: null });
+    expect(report.truncated).toEqual([]);
+    expect(at(report.files, "own/SKILL.md")).toContain("summary: mine");
+  });
+});
+
+describe("the shared include", () => {
+  it("is skipped and named, never mirrored as a persona (zheref/nen#223)", () => {
+    const read = readSourceAgentsReport(AGENTS);
+    expect(read.skipped).toEqual(["_shared.md"]);
+    expect(read.agents.map((agent): string => agent.stem)).toEqual(["scout"]);
+    expect(generate("cursor").map((file): string => file.path)).not.toContain("agents/_shared.md");
+  });
+
+  it("is outside the universe on every row, so an installed copy carrying it is not extra", () => {
+    const { out } = materialize("cursor");
+    writeFileSync(join(out, "agents", "_shared.md"), `${markerFor("cursor")}\nnot a persona\n`);
+    expect(universeFiles(out, row("cursor"))).not.toContain("agents/_shared.md");
+  });
+});
+
+describe("the report's not-supported paths", () => {
+  it("say so for a row with no hooks, rules or permissions, and write nothing for them", () => {
+    const bare: SurfaceRow = { ...row("cursor"), hooks: null, rules: null, permissions: null };
+    const report = generateSurfaceMirrorReport({
+      row: bare,
+      skills: readSourceSkills(SKILLS),
+      agents: [],
+      invocationPrefix: null,
+      hooks: readHooksManifest(join(FIXTURES, "packs", "hooks.json")),
+      rules: readRules(join(FIXTURES, "packs", "rules.md")),
+      permissions: readPermissions(join(FIXTURES, "packs", "permissions.json")),
+    });
+    expect(report.hooks).toBe("not supported");
+    expect(report.rules).toBe("not supported");
+    expect(report.permissions).toBe("not supported");
+    expect(report.files.map((file): string => file.path)).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
+  });
+
+  it("names an appendix past the surface's documented read limit", () => {
+    const agents = tempDir();
+    writeFileSync(join(agents, "big.md"), `---\nname: big\n---\n${"prose ".repeat(6_000)}\n`);
+    const report = generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: readSourceAgents(agents), invocationPrefix: null });
+    expect(report.notes[0]).toMatch(/AGENTS\.md is \d+ bytes, past the 32768-byte read limit/);
+  });
+
+  it("refuses a models fragment whose tier the map lacks", () => {
+    expect(() =>
+      generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, models: { frontier: "x" } }),
+    ).toThrow(/no 'models\.codex\.fast'/);
   });
 });

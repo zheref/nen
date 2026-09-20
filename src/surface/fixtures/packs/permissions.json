@@ -1,0 +1,12 @@
+{
+  "contract": "demo.permissions/v0.1",
+  "allow": [
+    { "exe": "nen", "args": "*", "why": "every deterministic step" },
+    { "exe": "git", "args": "fetch *", "why": "" },
+    { "exe": "git", "args": "write-tree", "why": "" }
+  ],
+  "deny": [
+    { "exe": "git", "args": "push --force *", "why": "published history is never rewritten" },
+    { "exe": "sudo", "args": "*", "why": "never with elevation" }
+  ]
+}

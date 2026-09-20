@@ -1,0 +1,9 @@
+{
+  "models": {
+    "rule": "frontier for a lead, fast for a reviewer",
+    "codex": { "frontier": "gpt-5", "deep": "gpt-5", "fast": "gpt-5-mini", "economy": "gpt-5-nano" },
+    "cursor": { "frontier": "claude-4-sonnet", "deep": "claude-4-opus", "fast": "gpt-4.1", "economy": "auto" },
+    "antigravity": { "frontier": "pro", "deep": "pro", "fast": "flash", "economy": "flash_lite" },
+    "roles": { "reviewer": "deep" }
+  }
+}
