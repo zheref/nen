@@ -4,6 +4,7 @@ import type { Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { CAPABILITIES } from "./capabilities.js";
 import { surfaceCommand } from "./command.js";
+import { SURFACES } from "./rules.js";
 
 const SEAMS: Seams = {
   run: (): never => {
@@ -45,6 +46,30 @@ describe("nen surface capabilities (zheref/nen#216)", () => {
     for (const row of CAPABILITIES) expect(row.source).toMatch(/^https:\/\//);
     expect(CAPABILITIES.find((r): boolean => r.surface === "cursor")?.hooks.stop).toBe("stop");
     expect(CAPABILITIES.map((r): string => r.surface)).toEqual(["claude-code", "codex", "cursor", "antigravity"]);
+  });
+
+  it("carries the five facts the mirror rows enforce, and agrees with them (zheref/nen#227)", async () => {
+    const result = await capture(["surface", "capabilities", "--surface", "antigravity"], true);
+    const doc = JSON.parse(result.out.join("\n")) as {
+      hookEvents: string[]; rulesFile: string | null; rulesLimit: number | null; descriptionBudget: number | null; permissionsShape: string | null;
+    };
+    expect(doc.hookEvents).toEqual(["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"]);
+    expect(doc.rulesFile).toBe(".agents/rules/<name>.md");
+    expect(doc.rulesLimit).toBe(12_000);
+    expect(doc.permissionsShape).toBeNull();
+    for (const row of SURFACES) {
+      const facts = CAPABILITIES.find((c): boolean => c.surface === row.surface);
+      expect(facts, `no capabilities row for ${row.surface}`).toBeDefined();
+      if (facts === undefined) continue;
+      expect(facts.permissionsShape).toBe(row.permissions?.shape ?? null);
+      expect(facts.rulesLimit).toBe(row.rules?.limit ?? null);
+      if (row.hooks !== null) expect(facts.hookEvents).toEqual(row.hooks.known);
+      if (row.descriptionBudget !== null) expect(facts.descriptionBudget).toBe(row.descriptionBudget);
+    }
+    const text = await capture(["surface", "capabilities", "--surface", "cursor"]);
+    expect(text.out).toContain("  rules file:       .cursor/rules/<name>.mdc");
+    expect(text.out).toContain("  description budget: 30 chars (measured 2026-09-19, not documented (hardening audit))");
+    expect(text.out).toContain("  hook events:      sessionStart, sessionEnd, preToolUse, postToolUse, beforeShellExecution, afterShellExecution, afterFileEdit, stop");
   });
 
   it("lists every surface with no --surface, and refuses an unknown one at 2", async () => {
