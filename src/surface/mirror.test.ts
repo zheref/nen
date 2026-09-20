@@ -578,6 +578,20 @@ describe("the stamped marker", () => {
     expect(older.stale).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
     expect(older.handEdited).toEqual([]);
   });
+
+  it("reports a stamp that is not a version as stale, naming the file, rather than exiting 2 (N14)", () => {
+    const stamped = generateSurfaceMirror({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: PREFIX, stamp: "0.43.0" });
+    const out = tempDir();
+    writeSurfaceMirror(out, stamped, row("codex"));
+    const path = join(out, "alpha", "SKILL.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace(markerFor("codex", "0.43.0"), markerFor("codex", "garbage")));
+    expect(() => checkSurfaceMirror(out, stamped, row("codex"), "0.43.0")).not.toThrow();
+    const report = checkSurfaceMirror(out, stamped, row("codex"), "0.43.0");
+    expect(report.stale).toEqual(["alpha/SKILL.md"]);
+    expect(report.ok).toEqual(["beta/SKILL.md"]);
+    // Without --stamp the stamp is masked and it is not drift at all.
+    expect(mirrorReportOk(checkSurfaceMirror(out, generate("codex", false), row("codex")))).toBe(true);
+  });
 });
 
 describe("the description budget", () => {
