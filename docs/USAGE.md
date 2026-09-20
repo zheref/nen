@@ -8199,7 +8199,8 @@ convention every consumer of those files already ignores.
 **What is mirrored, and what is not.** Only `<name>/SKILL.md` — a skill
 directory's `scripts/`, `references/` and assets are left where they are, and a
 mirror directory may hold them beside the generated file without either verb
-touching them. Under `--agents`, a **`_`-prefixed file is a shared include**
+touching them. A hook script named by a `--hooks` command is read from beside the manifest **as its own bytes**: one that is a symbolic link is refused at exit 2 by name rather than followed to whatever it points at. A destination under `--out` that is a symbolic link is refused the same way, before the first byte is written — a write there would land wherever the link points. A script's declared mode (0755) is applied on every generate, unchanged bytes included, and reported under `written[]` when only the mode moved.
+Under `--agents`, a **`_`-prefixed file is a shared include**
 a persona pulls in, not a persona ([#223](https://github.com/zheref/nen/issues/223)):
 it is skipped and named in the report, never mirrored as a subagent nobody
 defined. The **filename universe** these two verbs consider their own has
@@ -8409,7 +8410,7 @@ Regenerates from the SAME inputs `generate` uses and diffs the result against
 | `missing` | the source has it; `--out` has not |
 | `extra` | `--out` has it, in the mirror's filename universe, and no source produces it |
 | `stale` | it carries a marker, but for a **different surface** — really generated, really out of date |
-| `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright |
+| `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright — or the bytes match but a file that declares a mode (a `hooks/` script, 0755) sits under another one: a hook at 0644 is one the surface cannot run |
 | `stale` (with `--stamp`) | the marker is for this surface but carries **no stamp, or a stamp other than `--stamp`** — an older one is the case that matters (a mirror generated from an older source than the one now asked about); a newer one is not this source's either. A file with no stamp is stale **only when `--stamp` is given**; without it the stamp is masked on both sides and never a drift class. Ordering: a missing marker is `hand-edited`, another surface's is `stale`, then the stamp, then the bytes |
 
 `stale` is where [`canon mirror check`](#nen-canon-mirror-check)'s `--ref` sits

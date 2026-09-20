@@ -18,7 +18,7 @@
 // these files already ignores (`$schema`, `$comment`), so the key is read by
 // nen and by nobody else. ./mirror.ts's `readMarker` reads all three.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { parseModels } from "../schema/workflow.js";
 import { shellSingleQuote } from "../shu/render.js";
@@ -194,7 +194,21 @@ export function readHookScripts(manifest: HooksManifest): readonly HookScript[] 
   }
   return [...names].sort().map((name): HookScript => {
     const path = join(manifest.dir, name);
-    if (!existsSync(path) || !statSync(path).isFile()) {
+    // lstat, not stat (Feitan S4): a symlink beside the manifest would be
+    // FOLLOWED into any readable file on the host and copied out as a
+    // tracked 0755 script. The script has to BE the file.
+    let found: ReturnType<typeof lstatSync> | null;
+    try {
+      found = lstatSync(path);
+    } catch {
+      found = null;
+    }
+    if (found !== null && found.isSymbolicLink()) {
+      throw new SurfacePackError(
+        `--hooks names '${SOURCE_ROOT_VARIABLE}/hooks/${name}' in a command, and '${path}' is a symbolic link. A hook script travels with the manifest as its own bytes; a link would copy whatever it points at out of the manifest's directory. Replace it with the file.`,
+      );
+    }
+    if (found === null || !found.isFile()) {
       throw new SurfacePackError(
         `--hooks names '${SOURCE_ROOT_VARIABLE}/hooks/${name}' in a command, and '${path}' is not a file. The scripts travel with the manifest, so a script it names has to sit beside it.`,
       );

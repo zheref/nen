@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { splitDocument } from "./frontmatter.js";
@@ -119,6 +119,18 @@ describe("hooks", () => {
     expect(renderHookScript(scripts[0] ?? { name: "", text: "" }, MARKER)).toBe(`#!/bin/sh\n# ${MARKER}\n# rings the bell\necho bell\n`);
     expect(renderHookScript({ name: "x", text: "echo x\n" }, MARKER)).toBe(`# ${MARKER}\necho x\n`);
     expect(() => readHookScripts({ ...manifest, dir: join(PACKS, "nowhere") })).toThrow(/is not a file/);
+  });
+
+  it("refuses a script that is a symbolic link, by name, rather than following it out of the manifest's directory (S4)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-packs-link-"));
+    writeFileSync(join(dir, "guard.hook"), "#!/bin/sh\nexit 0\n");
+    symlinkSync(join(PACKS, "bell.hook"), join(dir, "bell.hook"));
+    expect(() => readHookScripts({ ...manifest, dir })).toThrow(/'.*bell\.hook' is a symbolic link/);
+    // A dangling link is a link too, not "not a file".
+    const dangling = mkdtempSync(join(tmpdir(), "nen-packs-link-"));
+    writeFileSync(join(dangling, "guard.hook"), "x\n");
+    symlinkSync(join(dangling, "gone"), join(dangling, "bell.hook"));
+    expect(() => readHookScripts({ ...manifest, dir: dangling })).toThrow(/is a symbolic link/);
   });
 
   it("rebases the root variable, quoting the root INSIDE the command and wrapping only what still expands", () => {

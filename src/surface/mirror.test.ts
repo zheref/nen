@@ -9,7 +9,7 @@
 // handle is exercised by a real file rather than by a string in a test.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { splitDocument } from "./frontmatter.js";
@@ -623,6 +623,42 @@ describe("the shared include", () => {
     const { out } = materialize("cursor");
     writeFileSync(join(out, "agents", "_shared.md"), `${markerFor("cursor")}\nnot a persona\n`);
     expect(universeFiles(out, row("cursor"))).not.toContain("agents/_shared.md");
+  });
+});
+
+describe("hook scripts: symlinks and modes (S4, N6)", () => {
+  const withHooks = (): readonly GeneratedFile[] =>
+    generateSurfaceMirror({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: readHooksManifest(join(FIXTURES, "packs", "hooks.json")) });
+
+  it("refuses a destination that is a symbolic link before writing anything", () => {
+    const out = tempDir();
+    const elsewhere = join(tempDir(), "victim");
+    writeFileSync(elsewhere, "not mine\n");
+    mkdirSync(join(out, "hooks"));
+    symlinkSync(elsewhere, join(out, "hooks", "bell.hook"));
+    expect(() => writeSurfaceMirror(out, withHooks(), row("antigravity"))).toThrow(/refusing to write through a symbolic link.*hooks\/bell\.hook/);
+    expect(readFileSync(elsewhere, "utf8")).toBe("not mine\n");
+    expect(existsSync(join(out, "alpha", "SKILL.md"))).toBe(false);
+  });
+
+  it("re-applies a declared mode on unchanged bytes, and check calls a wrong mode hand-edited", () => {
+    const out = tempDir();
+    const files = withHooks();
+    writeSurfaceMirror(out, files, row("antigravity"));
+    const script = join(out, "hooks", "bell.hook");
+    expect(statSync(script).mode & 0o777).toBe(0o755);
+    chmodSync(script, 0o644);
+    const drifted = checkSurfaceMirror(out, files, row("antigravity"));
+    expect(drifted.handEdited).toEqual(["hooks/bell.hook"]);
+    // A regenerate repairs the mode without rewriting the bytes, and reports the file written.
+    const repaired = writeSurfaceMirror(out, files, row("antigravity"));
+    expect(repaired.written).toEqual(["hooks/bell.hook"]);
+    expect(statSync(script).mode & 0o777).toBe(0o755);
+    expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
+    // --dry-run reports it and touches nothing.
+    chmodSync(script, 0o644);
+    expect(writeSurfaceMirror(out, files, row("antigravity"), true).written).toEqual(["hooks/bell.hook"]);
+    expect(statSync(script).mode & 0o777).toBe(0o644);
   });
 });
 

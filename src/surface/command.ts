@@ -184,7 +184,8 @@ ${SURFACE_LIST}
 all. A file is MISSING (generated, not in --out), EXTRA (in --out's mirror
 universe, with no source), STALE (marked, but for a different surface -- or,
 with --stamp, for no stamp or a different one), HAND_EDITED (marked for this
-surface, bytes differ from a fresh generation) or OK. Only '<name>/SKILL.md',
+surface, bytes differ from a fresh generation -- or a hook script's mode is
+not the 755 it was written with) or OK. Only '<name>/SKILL.md',
 the row's own persona files and the row's hook, rules, permission and fragment
 files are in that universe; anything else --out holds is neither checked nor
 deleted.

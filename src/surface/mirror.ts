@@ -49,7 +49,7 @@
 // self-healing the mirror exists for. The same guard is why `config.toml` is
 // never a destination: the model default lands in a marked FRAGMENT beside it.
 
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hasValue, inlineValue, renderFrontmatter, splitDocument, type FrontmatterEntry } from "./frontmatter.js";
 import {
@@ -692,6 +692,20 @@ export function universeFiles(outDir: string, row: SurfaceRow): readonly string[
 // Writing
 // ---------------------------------------------------------------------------
 
+/** True when `path` is a symbolic link (dangling or not); false when nothing is there. */
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The permission bits of `path`. */
+function modeOf(path: string): number {
+  return statSync(path).mode & 0o777;
+}
+
 export interface WriteResult {
   readonly written: readonly string[];
   readonly unchanged: readonly string[];
@@ -720,10 +734,23 @@ export function writeSurfaceMirror(
     );
   }
   const guarded: string[] = [];
+  const linked: string[] = [];
   for (const file of generated) {
     const path = join(outDir, ...file.path.split("/"));
-    if (!existsSync(path)) continue;
+    if (!existsSync(path) && !isSymlink(path)) continue;
+    // A destination that is a symlink is refused before anything is written
+    // (Feitan S4): writeFileSync follows it, and the file it would overwrite
+    // is wherever the link points -- not a file this verb generated.
+    if (isSymlink(path)) {
+      linked.push(file.path);
+      continue;
+    }
     if (readMarker(readFileSync(path, "utf8")) === null) guarded.push(file.path);
+  }
+  if (linked.length > 0) {
+    throw new SurfaceMirrorError(
+      `refusing to write through ${linked.length === 1 ? "a symbolic link" : "symbolic links"} in '${outDir}': ${linked.join(", ")}. A write there lands wherever the link points, which is not a file this verb generated. Replace the link with a file, or move it aside.`,
+    );
   }
   if (guarded.length > 0) {
     throw new SurfaceMirrorError(
@@ -736,6 +763,14 @@ export function writeSurfaceMirror(
   for (const file of generated) {
     const path = join(outDir, ...file.path.split("/"));
     if (existsSync(path) && readFileSync(path, "utf8") === file.content) {
+      // Unchanged BYTES; the mode is still applied when the file declares one
+      // (Nobunaga N6), because a script somebody chmod'ed to 0644 is a hook
+      // the surface cannot run, and `check` calls that hand-edited.
+      if (file.mode !== undefined && modeOf(path) !== file.mode) {
+        if (!dryRun) chmodSync(path, file.mode);
+        written.push(file.path);
+        continue;
+      }
       unchanged.push(file.path);
       continue;
     }
@@ -813,6 +848,9 @@ export function checkSurfaceMirror(
     else if (marker.surface !== row.surface) stale.push(file.path);
     else if (stamp !== null && (marker.stamp === null || compareVersions(marker.stamp, stamp) !== 0)) stale.push(file.path);
     else if (withoutStamp(existing) !== withoutStamp(file.content)) handEdited.push(file.path);
+    // The same bytes under a different mode is a hand edit too (N6): a hook
+    // script at 0644 is one the surface cannot run.
+    else if (file.mode !== undefined && modeOf(path) !== file.mode) handEdited.push(file.path);
     else ok.push(file.path);
   }
 
