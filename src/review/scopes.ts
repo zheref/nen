@@ -28,6 +28,7 @@
 // header for why there is exactly one matcher.
 
 import { VerbUsageError } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { matchesPattern } from "../report/patterns.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
@@ -127,12 +128,20 @@ export function assembleScopes(
 /** The compact human rendering. `--json` carries the document itself. */
 export function renderScopes(report: ScopesReport): readonly string[] {
   const lines = [
-    `base '${report.base}': ${report.files} changed file(s)`,
+    `base '${plainLine(report.base)}': ${report.files} changed file(s)`,
     `raised: ${report.scopes.length === 0 ? "no scope" : `${report.scopes.length} scope(s)`}`,
   ];
+  // A PERSONA, A TIER AND A PATH ARE ALL SOMEBODY ELSE'S TEXT (Copilot, #221
+  // round 3): the first two come out of a repository's own workflow.json and
+  // the third out of a git diff, and a terminal executes a control character
+  // rather than printing it. `--json` above carries the bytes unchanged, for
+  // the consumer that needs the real value. Same seam, same rule as
+  // ../report/objects.ts's and ../pr/threads.ts's renderings.
   for (const scope of report.scopes) {
-    lines.push(`  ${scope.scope}  ${scope.persona} (${scope.tier}, budget ${scope.budget})  ${scope.paths.length} path(s)`);
-    for (const path of scope.paths) lines.push(`      ${path}`);
+    lines.push(
+      `  ${plainLine(scope.scope)}  ${plainLine(scope.persona)} (${plainLine(scope.tier)}, budget ${scope.budget})  ${scope.paths.length} path(s)`,
+    );
+    for (const path of scope.paths) lines.push(`      ${plainLine(path)}`);
   }
   // AN EMPTY DIFF IS NOT A CLEAN TABLE (Nobunaga N10). "every changed path is
   // claimed" about zero paths is a sentence that reads as a finding and is
@@ -140,11 +149,11 @@ export function renderScopes(report: ScopesReport): readonly string[] {
   // nor found wanting. The two states get two sentences.
   lines.push(
     report.files === 0
-      ? `nothing classified: '${report.base}...HEAD' carries no changed path, so no scope was raised and no gap in the table was tested`
+      ? `nothing classified: '${plainLine(report.base)}...HEAD' carries no changed path, so no scope was raised and no gap in the table was tested`
       : report.unclaimed.length === 0
         ? "unclaimed: none -- every changed path is claimed by a declared scope"
         : `unclaimed: ${report.unclaimed.length} path(s) no scope claims -- a hole in the table reads exactly like a clean diff, so it is reported rather than swallowed`,
   );
-  for (const path of report.unclaimed) lines.push(`  ${path}`);
+  for (const path of report.unclaimed) lines.push(`  ${plainLine(path)}`);
   return lines;
 }

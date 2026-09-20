@@ -135,6 +135,32 @@ describe("nen review scopes", () => {
     expect(text).not.toContain("every changed path is claimed");
   });
 
+  it("strips control characters from the persona, tier and paths it prints (Copilot #221 round 3)", async () => {
+    // A persona and a tier come out of the repository's own workflow.json and
+    // a path out of a git diff; a terminal executes an escape rather than
+    // printing it. `--json` keeps the bytes.
+    const hostile = `${String.fromCharCode(27)}[2Kerased`;
+    const root = repoWith({
+      scopes: { code: { persona: hostile, tier: `deep${hostile}`, budget: 1, paths: ["**"] } },
+    });
+    const human = await capture(
+      ["review", "scopes", "--base", "origin/main", "--repo", root],
+      script(`src/${hostile}.ts`),
+    );
+    expect(human.code, human.err.join("\n")).toBe(0);
+    const text = human.out.join("\n");
+    expect(text).not.toContain(String.fromCharCode(27));
+    expect(text).toContain("erased");
+
+    const json = await capture(
+      ["review", "scopes", "--base", "origin/main", "--repo", root, "--json"],
+      script(`src/${hostile}.ts`),
+    );
+    const document = JSON.parse(json.out.join("\n")) as { scopes: { persona: string; paths: string[] }[] };
+    expect(document.scopes[0]?.persona).toBe(hostile);
+    expect(document.scopes[0]?.paths[0]).toBe(`src/${hostile}.ts`);
+  });
+
   it("exits 1, NAMED, when the repository declares no review block", async () => {
     const root = repoWith(undefined);
     const captured = await capture(["review", "scopes", "--base", "origin/main", "--repo", root], script());

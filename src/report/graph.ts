@@ -68,7 +68,7 @@ const SLUG = /^[a-z][a-z0-9-]*$/;
  * newline would publish a label the author did not write. So the refusal names
  * the row and the character, at exit 2, and the author decides.
  */
-const FORBIDDEN_IN_TEXT = /[\n\r\u2028\u2029|]/;
+const FORBIDDEN_IN_TEXT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029|]/;
 
 /** Which forbidden character a free-text field carries, named for the refusal. */
 function forbiddenCharacter(text: string): string | null {
@@ -78,7 +78,14 @@ function forbiddenCharacter(text: string): string | null {
   if (found === "\n") return "a newline";
   if (found === "\r") return "a carriage return";
   if (found === "|") return "a '|'";
-  return found === "\u2028" ? "a U+2028 line separator" : "a U+2029 paragraph separator";
+  if (found === "\u2028") return "a U+2028 line separator";
+  if (found === "\u2029") return "a U+2029 paragraph separator";
+  // EVERY OTHER C0/C1 CONTROL (Copilot, #221 round 3). The first cut listed
+  // the two line terminators and the pipe -- the characters that break
+  // MERMAID -- and left the rest of the control range through, so an ESC in a
+  // label travelled into a rendered page and into any terminal that printed
+  // the document. A caption is prose; a control character in it is not.
+  return `the control character U+${found.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
 /** The sentence every free-text refusal ends with, written once. */

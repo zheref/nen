@@ -17,6 +17,8 @@ import { prCommand } from "./command.js";
 import { listArgv, listPageArgv, looksLikeAuthFailure, printableArgv, replyArgv, resolveArgv } from "./threads.js";
 
 const TARGET = parseTarget("zheref/nen");
+/** A REAL 40-hex head: the summary line refuses to abbreviate anything else. */
+const HEAD_SHA = "1f4bb2c0a1b2c3d4e5f60718293a4b5c6d7e8f90";
 const NOW = new Date("2026-09-20T12:00:00.000Z");
 
 function node(id: string, isResolved: boolean, path = "src/report/data.ts", line: number | null = 212): unknown {
@@ -41,7 +43,7 @@ function pageBody(nodes: readonly unknown[], hasNextPage: unknown, endCursor: st
   return JSON.stringify({
     data: {
       repository: {
-        pullRequest: { headRefOid: "1f4bb2c0deadbeef", reviewThreads: { nodes, pageInfo: { hasNextPage, endCursor } } },
+        pullRequest: { headRefOid: HEAD_SHA, reviewThreads: { nodes, pageInfo: { hasNextPage, endCursor } } },
       },
     },
   });
@@ -137,7 +139,7 @@ describe("nen pr threads list", () => {
       threads: { id: string; line: number | null; author: string; firstComment: string }[];
     };
     expect(document.contract).toBe("nen.pr.threads/v0.1");
-    expect(document.head).toBe("1f4bb2c0deadbeef");
+    expect(document.head).toBe(HEAD_SHA);
     expect(document.thread).toBeNull();
     expect(document.threads.map((thread): string => thread.id)).toEqual(["T1", "T2"]);
     expect(document.threads[1]?.line).toBeNull();
@@ -351,14 +353,14 @@ describe("--pr is read strictly on every threads action (Copilot #221 round 2)",
   // so all three actions take the digits-only reader `edit-body` already had.
   for (const action of ["list", "reply", "resolve"]) {
     it(`refuses a coercible --pr on 'threads ${action}', naming the verb and the value`, async () => {
-      for (const raw of ["1e3", "0x0c", "217.0", " 217", "+217", "217abc", "0"]) {
+      for (const raw of ["1e3", "0x0c", "217.0", " 217", "+217", "217abc", "0", "9".repeat(400)]) {
         const captured = await capture(
           ["pr", "threads", action, "--target", "zheref/nen", "--pr", raw],
           [],
         );
         expect(captured.code, `--pr '${raw}' was accepted by ${action}`).toBe(2);
         expect(captured.err.join("\n")).toMatch(
-          new RegExp(`threads ${action} takes --pr <n>: a positive whole number, digits only -- got '${raw.replace(/[+\-.]/g, "\\$&")}'`),
+          new RegExp(`threads ${action} takes --pr <n>: a positive whole number of at most 9 digits, digits only -- got '${raw.replace(/[+\-.]/g, "\\$&")}'`),
         );
         // Refused before any call: nothing is scripted, and an unscripted
         // call would have thrown.
@@ -366,6 +368,39 @@ describe("--pr is read strictly on every threads action (Copilot #221 round 2)",
       }
     });
   }
+
+  it("refuses an unbounded digit string, which parseInt turns into Infinity (Copilot #221 round 3)", async () => {
+    // `/^\d+$/` admits any length, and a long enough run of digits parses to
+    // Infinity -- which is `> 0`, so it passed, went into an argv as the
+    // literal "Infinity", and addressed nothing.
+    for (const raw of ["9".repeat(310), "1".repeat(10), String(Number.MAX_SAFE_INTEGER) + "0"]) {
+      const captured = await capture(
+        ["pr", "threads", "list", "--target", "zheref/nen", "--pr", raw],
+        [],
+      );
+      expect(captured.code, `--pr with ${raw.length} digits was accepted`).toBe(2);
+      expect(captured.err.join("\n")).toMatch(/at most 9 digits/);
+      expect(captured.seams.calls).toEqual([]);
+    }
+  });
+
+  it("still accepts the largest number a repository could plausibly reach", async () => {
+    const captured = await capture(
+      ["pr", "threads", "list", "--target", "zheref/nen", "--pr", "999999999"],
+      [
+        {
+          match: `gh ${listArgv(TARGET, 999999999).join(" ")}`,
+          result: {
+            code: 0,
+            stdout: JSON.stringify({
+              data: { repository: { pullRequest: { headRefOid: HEAD_SHA, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } },
+            }),
+          },
+        },
+      ],
+    );
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+  });
 
   it("leaves a flag-shaped value to the argv parser, which refuses it first at the same exit", async () => {
     // `--pr -217` never reaches this reader: ../cli/args.ts refuses a value
@@ -539,5 +574,125 @@ describe("the human rendering strips control characters (Feitan F4)", () => {
     ]);
     const threads = (JSON.parse(captured.out.join("\n")) as { threads: { path: string }[] }).threads;
     expect(threads[0]?.path).toBe(hostile);
+  });
+});
+
+// ── round 3: a mutation is not a success until the payload says so ─────────
+
+describe("the mutation payload is read, not just its `errors` (Copilot #221 round 3)", () => {
+  const replyArgs = [
+    "pr", "threads", "reply", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--body-file",
+  ];
+  const resolveArgs = ["pr", "threads", "resolve", "--target", "zheref/nen", "--pr", "217", "--thread", "T2"];
+
+  function replyAnswer(payload: unknown): ScriptedCall {
+    return {
+      match: `gh ${replyArgv("T2", "hi").join(" ")}`,
+      result: { code: 0, stdout: JSON.stringify({ data: { addPullRequestReviewThreadReply: payload } }) },
+    };
+  }
+
+  function resolveAnswer(payload: unknown): ScriptedCall {
+    return {
+      match: `gh ${resolveArgv("T2").join(" ")}`,
+      result: { code: 0, stdout: JSON.stringify({ data: { resolveReviewThread: payload } }) },
+    };
+  }
+
+  it("reports a reply only when the payload names the comment it created", async () => {
+    const file = bodyFile("hi");
+    const ok = await capture([...replyArgs, file, "--json"], [
+      listCall(pageBody([node("T2", false)], false)),
+      replyAnswer({ comment: { id: "C1", url: "u" } }),
+    ]);
+    expect(ok.code, ok.err.join("\n")).toBe(0);
+    expect(JSON.parse(ok.out.join("\n"))).toMatchObject({ replied: true });
+  });
+
+  it("refuses to report a reply the payload cannot confirm (exit 1)", async () => {
+    const file = bodyFile("hi");
+    // A 200, no `errors`, and nothing created: the shape that used to report
+    // `replied: true` for a reply that does not exist.
+    for (const payload of [null, {}, { comment: null }, { comment: {} }, { comment: { id: "" } }]) {
+      const captured = await capture([...replyArgs, file], [
+        listCall(pageBody([node("T2", false)], false)),
+        replyAnswer(payload),
+      ]);
+      expect(captured.code, `payload ${JSON.stringify(payload)} was reported as replied`).toBe(1);
+      expect(captured.err.join("\n")).toMatch(/cannot be confirmed to have posted|answered no 'addPullRequestReviewThreadReply' payload/);
+    }
+  });
+
+  it("reports a resolve only when the thread comes back resolved AND is the right thread", async () => {
+    const ok = await capture([...resolveArgs, "--json"], [
+      listCall(pageBody([node("T2", false)], false)),
+      resolveAnswer({ thread: { id: "T2", isResolved: true } }),
+    ]);
+    expect(ok.code, ok.err.join("\n")).toBe(0);
+    expect(JSON.parse(ok.out.join("\n"))).toMatchObject({ resolved: true });
+  });
+
+  it("refuses a resolve whose payload says the thread is still unresolved (exit 1)", async () => {
+    const captured = await capture(resolveArgs, [
+      listCall(pageBody([node("T2", false)], false)),
+      resolveAnswer({ thread: { id: "T2", isResolved: false } }),
+    ]);
+    expect(captured.code).toBe(1);
+    expect(captured.err.join("\n")).toMatch(/came back isResolved:false/);
+  });
+
+  it("refuses a resolve that answered for a DIFFERENT thread (exit 1)", async () => {
+    const captured = await capture(resolveArgs, [
+      listCall(pageBody([node("T2", false)], false)),
+      resolveAnswer({ thread: { id: "SOMETHING_ELSE", isResolved: true } }),
+    ]);
+    expect(captured.code).toBe(1);
+    expect(captured.err.join("\n")).toMatch(/answered for thread 'SOMETHING_ELSE', which is not the thread 'T2'/);
+  });
+
+  it("refuses a resolve with a null or missing payload (exit 1)", async () => {
+    for (const payload of [null, {}, { thread: null }]) {
+      const captured = await capture(resolveArgs, [
+        listCall(pageBody([node("T2", false)], false)),
+        resolveAnswer(payload),
+      ]);
+      expect(captured.code, `payload ${JSON.stringify(payload)} was reported as resolved`).toBe(1);
+    }
+  });
+});
+
+describe("the summary line's head SHA (Copilot #221 round 3)", () => {
+  it("abbreviates a real 40-hex SHA and nothing else", async () => {
+    const real = await capture(BASE, [listCall(pageBody([node("T1", true)], false))]);
+    expect(real.out[0]).toContain("@ 1f4bb2c0:");
+  });
+
+  it("says 'unknown head' rather than abbreviating something that is not a SHA", async () => {
+    // Eight characters of something else is indistinguishable from a real
+    // short SHA, which is worse than saying nothing -- a reader copies it.
+    for (const head of ["", "not-a-sha", "1f4bb2c0", `1f4bb2c0${String.fromCharCode(27)}[2K`]) {
+      const captured = await capture(BASE, [
+        {
+          match: `gh ${listArgv(TARGET, 217).join(" ")}`,
+          result: {
+            code: 0,
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    headRefOid: head,
+                    reviewThreads: { nodes: [node("T1", true)], pageInfo: { hasNextPage: false, endCursor: null } },
+                  },
+                },
+              },
+            }),
+          },
+        },
+      ]);
+      expect(captured.code, captured.err.join("\n")).toBe(0);
+      expect(captured.out[0], `'${head}' was printed as a SHA`).toContain("@ unknown head:");
+      // And no control character reaches the terminal on the way.
+      expect(captured.out.join("\n")).not.toContain(String.fromCharCode(27));
+    }
   });
 });
