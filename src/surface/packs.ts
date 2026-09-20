@@ -217,12 +217,47 @@ export function readHookScripts(manifest: HooksManifest): readonly HookScript[] 
   });
 }
 
-/** A hook script with the marker as a `# ` comment on line 2, after its shebang (line 1 when it has none). */
-export function renderHookScript(script: HookScript, marker: string): string {
+/**
+ * Interpreters whose comment syntax is `#`, by the last path segment of the
+ * shebang (`env` looked through), with a trailing version (`python3`,
+ * `ruby3.3`) allowed. A regex rather than a list of names: this is a table of
+ * comment syntaxes, and nothing here is ever spawned (D16).
+ */
+const HASH_COMMENT_INTERPRETER = /^(?:sh|bash|zsh|dash|ksh|python|perl|ruby)[\d.]*$/;
+
+/**
+ * True when a script's shebang implies `#` comments -- or when it has no
+ * shebang, which the surface runs through a shell. `#!/usr/bin/env node`
+ * does not: a `# marker` line there is a syntax error, not a comment.
+ */
+export function shebangTakesHashComments(text: string): boolean {
+  const first = text.split("\n")[0] ?? "";
+  if (!first.startsWith("#!")) return true;
+  const words = first.slice(2).trim().split(/\s+/);
+  const exe = (words[0] ?? "").split("/").pop() ?? "";
+  const interpreter = exe === "env" ? (words.find((word, index): boolean => index > 0 && !word.startsWith("-")) ?? "").split("/").pop() ?? "" : exe;
+  return HASH_COMMENT_INTERPRETER.test(interpreter);
+}
+
+export interface RenderedHookScript {
+  readonly content: string;
+  /** True when no marker was inserted because the interpreter does not read `#` comments (N12); the manifest carries it. */
+  readonly markerless: boolean;
+}
+
+/**
+ * A hook script with the marker as a `# ` comment on line 2, after its
+ * shebang (line 1 when it has none) -- only when the shebang implies `#`
+ * comments. Otherwise the text is carried as it is and `markerless` says so:
+ * the manifest beside it carries the marker, and a comment in a syntax nen
+ * did not read the interpreter's page for would be a guess.
+ */
+export function renderHookScript(script: HookScript, marker: string): RenderedHookScript {
+  if (!shebangTakesHashComments(script.text)) return { content: script.text, markerless: true };
   const lines = script.text.split("\n");
   const shebang = (lines[0] ?? "").startsWith("#!");
   const at = shebang ? 1 : 0;
-  return [...lines.slice(0, at), `# ${marker}`, ...lines.slice(at)].join("\n");
+  return { content: [...lines.slice(0, at), `# ${marker}`, ...lines.slice(at)].join("\n"), markerless: false };
 }
 
 /**

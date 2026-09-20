@@ -147,7 +147,9 @@ ${SURFACE_LIST}
                               scripts a command names
                               as <root>/hooks/<file> are copied beside the
                               manifest to <out>/hooks/<file> (mode 755, marker
-                              on line 2) on every non-verbatim row.
+                              on line 2 where the shebang implies '#'
+                              comments; otherwise no marker, noted) on every
+                              non-verbatim row.
   --manifest <plugin.json>    A Claude plugin manifest; a row that documents a
                               plugin manifest of its own (antigravity:
                               plugin.json with name, version, description)

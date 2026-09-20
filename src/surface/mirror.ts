@@ -261,6 +261,14 @@ export interface GeneratedFile {
   readonly content: string;
   /** A file mode to set on write (a hook script's 0o755), or absent for the default. */
   readonly mode?: number;
+  /**
+   * True for a hook script whose interpreter does not read `#` comments, so
+   * it carries no marker (N12): the manifest that names it does. Such a file
+   * is compared by bytes in `check`, is outside the orphan universe, and is
+   * not clobber-guarded -- the manifest beside it is, and the path is one
+   * the manifest names as a script the plugin ships.
+   */
+  readonly markerless?: true;
 }
 
 export interface GenerateOptions {
@@ -553,11 +561,12 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
       // root has to resolve `<root>/hooks/<file>` to a file it ships.
       if (row.hooks.scriptsDir !== null) {
         for (const script of readHookScripts(options.hooks)) {
-          files.push({
-            path: `${row.hooks.scriptsDir}/${script.name}`,
-            content: renderHookScript(script, marker),
-            mode: 0o755,
-          });
+          const rendered = renderHookScript(script, marker);
+          const path = `${row.hooks.scriptsDir}/${script.name}`;
+          files.push({ path, content: rendered.content, mode: 0o755, ...(rendered.markerless ? { markerless: true } : {}) });
+          if (rendered.markerless) {
+            notes.push(`${path} carries no marker: its interpreter does not read # comments, and the manifest beside it carries the marker`);
+          }
         }
       }
       if (options.hooks.unmapped.length > 0) {
@@ -787,6 +796,7 @@ export function writeSurfaceMirror(
       linked.push(file.path);
       continue;
     }
+    if (file.markerless === true) continue;
     if (readMarker(readFileSync(path, "utf8")) === null) guarded.push(file.path);
   }
   if (linked.length > 0) {
@@ -881,7 +891,7 @@ export function checkSurfaceMirror(
       continue;
     }
     const existing = readFileSync(path, "utf8");
-    if (row.verbatim) {
+    if (row.verbatim || file.markerless === true) {
       (existing === file.content ? ok : handEdited).push(file.path);
       continue;
     }

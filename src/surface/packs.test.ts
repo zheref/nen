@@ -118,9 +118,19 @@ describe("hooks", () => {
   it("reads the scripts a command names from beside the manifest, and marks them under the shebang", () => {
     const scripts = readHookScripts(manifest);
     expect(scripts.map((script): string => script.name)).toEqual(["bell.hook", "guard.hook"]);
-    expect(renderHookScript(scripts[0] ?? { name: "", text: "" }, MARKER)).toBe(`#!/bin/sh\n# ${MARKER}\n# rings the bell\necho bell\n`);
-    expect(renderHookScript({ name: "x", text: "echo x\n" }, MARKER)).toBe(`# ${MARKER}\necho x\n`);
+    expect(renderHookScript(scripts[0] ?? { name: "", text: "" }, MARKER)).toEqual({ content: `#!/bin/sh\n# ${MARKER}\n# rings the bell\necho bell\n`, markerless: false });
+    expect(renderHookScript({ name: "x", text: "echo x\n" }, MARKER)).toEqual({ content: `# ${MARKER}\necho x\n`, markerless: false });
     expect(() => readHookScripts({ ...manifest, dir: join(PACKS, "nowhere") })).toThrow(/is not a file/);
+  });
+
+  it("inserts the # marker only where the shebang implies # comments, and says so otherwise (N12)", () => {
+    for (const shebang of ["#!/bin/sh", "#!/usr/bin/env bash", "#!/usr/bin/env -S python3 -u", "#!/usr/bin/perl", "#!/usr/bin/env ruby", "#!/bin/zsh"]) {
+      expect(renderHookScript({ name: "x", text: `${shebang}\nbody\n` }, MARKER), shebang).toEqual({ content: `${shebang}\n# ${MARKER}\nbody\n`, markerless: false });
+    }
+    for (const shebang of ["#!/usr/bin/env node", "#!/usr/bin/env -S deno run", "#!/usr/local/bin/bun", "#!/usr/bin/osascript"]) {
+      // Carried byte for byte: a `# marker` line under these is a syntax error, not a comment. The manifest carries the marker.
+      expect(renderHookScript({ name: "x", text: `${shebang}\nbody\n` }, MARKER), shebang).toEqual({ content: `${shebang}\nbody\n`, markerless: true });
+    }
   });
 
   it("refuses a script that is a symbolic link, by name, rather than following it out of the manifest's directory (S4)", () => {

@@ -687,6 +687,33 @@ describe("hook scripts: symlinks and modes (S4, N6)", () => {
   });
 });
 
+describe("a markerless hook script (N12)", () => {
+  const nodeHooks = (): ReturnType<typeof readHooksManifest> => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "hooks.json"), '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/bell.js"}]}]}}');
+    writeFileSync(join(dir, "bell.js"), "#!/usr/bin/env node\nconsole.log('bell');\n");
+    return readHooksManifest(join(dir, "hooks.json"));
+  };
+  const files = (): ReturnType<typeof generateSurfaceMirrorReport> =>
+    generateSurfaceMirrorReport({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: nodeHooks() });
+
+  it("is carried byte for byte, noted in the report, written and re-written without a marker guard, and checked by bytes", () => {
+    const report = files();
+    const script = report.files.find((file): boolean => file.path === "hooks/bell.js");
+    expect(script).toMatchObject({ content: "#!/usr/bin/env node\nconsole.log('bell');\n", mode: 0o755, markerless: true });
+    expect(report.notes).toContain("hooks/bell.js carries no marker: its interpreter does not read # comments, and the manifest beside it carries the marker");
+    const out = tempDir();
+    writeSurfaceMirror(out, report.files, row("antigravity"));
+    expect(mirrorReportOk(checkSurfaceMirror(out, report.files, row("antigravity")))).toBe(true);
+    // A second generate over it is not a clobber refusal: the manifest beside it is the guarded file.
+    expect(writeSurfaceMirror(out, report.files, row("antigravity")).unchanged).toContain("hooks/bell.js");
+    writeFileSync(join(out, "hooks", "bell.js"), "#!/usr/bin/env node\nconsole.log('changed');\n");
+    expect(checkSurfaceMirror(out, report.files, row("antigravity")).handEdited).toEqual(["hooks/bell.js"]);
+    // Outside the orphan universe: with the manifest gone it is neither extra nor deleted.
+    expect(universeFiles(out, row("antigravity"))).not.toContain("hooks/bell.js");
+  });
+});
+
 describe("the report's not-supported paths", () => {
   it("say so for a row with no hooks, rules or permissions, and write nothing for them", () => {
     const bare: SurfaceRow = { ...row("cursor"), hooks: null, rules: null, permissions: null };
