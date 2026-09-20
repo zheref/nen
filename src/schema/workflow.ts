@@ -381,14 +381,14 @@ export function defaultWorkflow(): Workflow {
       // follow. A variant nen invented would name blocks nobody's template has,
       // and `report render --variant` would then refuse a variant this binary
       // made up. An absent block is "none declared", which is a true sentence.
-      sections: {},
+      sections: emptyRecord<ReportSection>(),
       raw: empty,
     },
     notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
     commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
-    models: { rule: null, surfaces: {}, roles: {}, raw: empty },
-    review: { scopes: {}, raw: empty },
+    models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
+    review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
     raw: empty,
   };
 }
@@ -666,6 +666,54 @@ function parseReports(path: string, value: unknown): ReportsPolicy {
 export const POLICY_SLUG = /^[a-z][a-z0-9-]*$/;
 
 /**
+ * The three names that are a slug, and are still not a key (Copilot, #221).
+ *
+ * A NAME THIS FILE ACCEPTS BECOMES A KEY OF A RECORD, and JavaScript has three
+ * of those that are not ordinary keys: assigning `__proto__` on a plain object
+ * invokes the prototype SETTER instead of creating an own property, so the
+ * variant or scope vanishes from `Object.keys` and from every reader -- a row
+ * this schema said was valid, silently absent everywhere downstream.
+ * `constructor` and `prototype` are here with it because they are the same
+ * class of surprise for a reader of the resulting object, even where they
+ * happen to assign.
+ *
+ * THE ACCUMULATORS ARE NULL-PROTOTYPE TOO, and the belt and the braces are
+ * both deliberate: this refusal is what a MAINTAINER sees (a name refused by
+ * pointer, at load, with a reason), and `emptyRecord()` is what makes the
+ * failure impossible rather than merely reported -- including for any future
+ * key space that forgets to ask.
+ */
+const RESERVED_KEYS: readonly string[] = ["__proto__", "constructor", "prototype"];
+
+/**
+ * A record no prototype key can reach into.
+ *
+ * `Object.create(null)` rather than `{}`: see `RESERVED_KEYS`. Every map this
+ * loader builds from names the REPOSITORY chose goes through here.
+ */
+function emptyRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/** A name that is a slug AND is a key, or a refusal by pointer naming why. */
+function requirePolicyName(path: string, pointer: string, name: string, what: string): void {
+  if (RESERVED_KEYS.includes(name)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${name}' is not a name this policy can carry. It is a slug, but it is also a JavaScript prototype key: stored as ${what}, '__proto__' invokes the prototype setter instead of creating an entry, so the ${what} would be accepted here and then be missing from every reader of this file. Choose any other name`,
+    );
+  }
+  if (!POLICY_SLUG.test(name)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${name}' is not a name this policy can carry. ${what} is named on the command line and is held to a slug: a lowercase letter, then lowercase letters, digits and single hyphens`,
+    );
+  }
+}
+
+/**
  * A BLOCK name, which is deliberately NOT the slug above.
  *
  * A block becomes a `sections.<block>` TOKEN in the template this variant
@@ -702,23 +750,24 @@ export const BLOCK_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
  * then produce a page whose emptiness reads as "this effort did nothing".
  */
 function parseSections(path: string, value: unknown): Readonly<Record<string, ReportSection>> {
-  if (value === undefined || value === null) return {};
+  if (value === undefined || value === null) return emptyRecord<ReportSection>();
   const raw = requireRecord(path, "reports.sections", value);
-  const sections: Record<string, ReportSection> = {};
+  const sections = emptyRecord<ReportSection>();
   for (const [name, entry] of Object.entries(raw)) {
     if (name.startsWith("$")) continue;
     const pointer = `reports.sections.${name}`;
-    if (!POLICY_SLUG.test(name)) {
-      throw new SchemaError(
-        path,
-        pointer,
-        `'${name}' is not a variant name. A variant is named on the command line ('nen report render --variant ${name}') and is held to a slug: a lowercase letter, then lowercase letters, digits and single hyphens`,
-      );
-    }
+    requirePolicyName(path, pointer, name, "a report variant");
     const variant = requireRecord(path, pointer, entry);
     const blocksRaw = requireArray(path, `${pointer}.blocks`, variant["blocks"]);
     const blocks = blocksRaw.map((block_, index): string => {
       const block = requireString(path, `${pointer}.blocks[${index}]`, block_);
+      if (RESERVED_KEYS.includes(block)) {
+        throw new SchemaError(
+          path,
+          `${pointer}.blocks[${index}]`,
+          `'${block}' is not a block name. It becomes a key of the 'sections' map '${"nen report render --variant"}' injects, and a JavaScript prototype key assigned there invokes the prototype setter instead of creating a flag -- so the block would be declared here and missing from the template that asked for it. Choose any other name`,
+        );
+      }
       if (!BLOCK_NAME.test(block)) {
         throw new SchemaError(
           path,
@@ -775,19 +824,13 @@ function parseSections(path: string, value: unknown): Readonly<Record<string, Re
 function parseReview(path: string, value: unknown): ReviewPolicy {
   const raw = block(path, "review", value, REVIEW_KEYS, "A review policy's one key is");
   const scopesRaw = raw["scopes"];
-  if (scopesRaw === undefined || scopesRaw === null) return { scopes: {}, raw };
+  if (scopesRaw === undefined || scopesRaw === null) return { scopes: emptyRecord<ReviewScope>(), raw };
   const record = requireRecord(path, "review.scopes", scopesRaw);
-  const scopes: Record<string, ReviewScope> = {};
+  const scopes = emptyRecord<ReviewScope>();
   for (const [name, entry] of Object.entries(record)) {
     if (name.startsWith("$")) continue;
     const pointer = `review.scopes.${name}`;
-    if (!POLICY_SLUG.test(name)) {
-      throw new SchemaError(
-        path,
-        pointer,
-        `'${name}' is not a scope name. A scope is reported by name on the command line ('nen review scopes') and is held to a slug: a lowercase letter, then lowercase letters, digits and single hyphens`,
-      );
-    }
+    requirePolicyName(path, pointer, name, "a review scope");
     const scope = requireRecord(path, pointer, entry);
     const persona = requireString(path, `${pointer}.persona`, scope["persona"]);
     if (persona.trim() === "") {
@@ -937,15 +980,15 @@ function parseMonitor(path: string, value: unknown): MonitorPolicy {
  */
 function parseModels(path: string, value: unknown): ModelsPolicy {
   if (value === undefined || value === null) {
-    return { rule: null, surfaces: {}, roles: {}, raw: {} };
+    return { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: {} };
   }
   const raw = requireRecord(path, "models", value);
-  const surfaces: Record<string, Readonly<Record<string, string>>> = {};
+  const surfaces = emptyRecord<Readonly<Record<string, string>>>();
   for (const [name, entry] of Object.entries(raw)) {
     if (name.startsWith("$") || name === "rule" || name === "roles") continue;
     const pointer = `models.${name}`;
     const perSurface = requireRecord(path, pointer, entry);
-    const tiers: Record<string, string> = {};
+    const tiers = emptyRecord<string>();
     for (const [tier, alias] of Object.entries(perSurface)) {
       if (tier.startsWith("$")) continue;
       tiers[tier] = requireString(path, `${pointer}.${tier}`, alias);
@@ -953,7 +996,7 @@ function parseModels(path: string, value: unknown): ModelsPolicy {
     surfaces[name] = tiers;
   }
   const rolesRaw = raw["roles"];
-  const roles: Record<string, string> = {};
+  const roles = emptyRecord<string>();
   if (rolesRaw !== undefined && rolesRaw !== null) {
     for (const [role, tier] of Object.entries(requireRecord(path, "models.roles", rolesRaw))) {
       if (role.startsWith("$")) continue;

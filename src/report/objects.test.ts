@@ -518,10 +518,18 @@ describe("readiness, and which authority answered it", () => {
     expect(captured.err.join("\n")).toMatch(/is 'in_progress', not 'completed'/);
   });
 
-  it("refuses a run that CONCLUDED FAILURE however its output is worded (F1)", async () => {
-    const captured = await withRuns([readinessRun({ conclusion: "FAILURE", output: { summary: "ready" } })]);
-    expect(readinessOf(captured)).toBeNull();
-    expect(captured.err.join("\n")).toMatch(/concluded FAILURE/);
+  it("accepts a verdict ONLY from a run that concluded SUCCESS (F1, Copilot #221)", async () => {
+    // An ALLOWLIST, not a denylist: the first cut listed the terminal
+    // failures, and an absent/null/empty/unfamiliar conclusion stringified to
+    // "" -- in no denylist -- so a malformed run saying `ready` was trusted.
+    for (const conclusion of ["FAILURE", "CANCELLED", "NEUTRAL", "", null, undefined, "SOMETHING_NEW"]) {
+      const captured = await withRuns([readinessRun({ conclusion, output: { summary: "ready" } })]);
+      expect(readinessOf(captured), `conclusion ${String(conclusion)} published a verdict`).toBeNull();
+      expect(captured.err.join("\n")).toMatch(/not SUCCESS -- only a run that succeeded may publish a readiness verdict/);
+    }
+    // And SUCCESS still does.
+    const good = await withRuns([readinessRun({ conclusion: "SUCCESS", output: { summary: "ready" } })]);
+    expect(readinessOf(good)).toEqual({ verdict: "ready", reason: "ready", source: "check" });
   });
 
   it("never reads output.TITLE as a verdict -- 'Ready to merge' is not a verdict (F1)", async () => {
@@ -764,5 +772,213 @@ describe("the read seam's remaining refusals", () => {
   it("refuses a row that is not an object at all, naming its index", () => {
     expect(() => parseObjects([PR_ROW, null], "o.json")).toThrow(/row 1 is null, not an object/);
     expect(() => parseObjects([["pr", 87]], "o.json")).toThrow(/row 0 is a list of 2, not an object/);
+  });
+});
+
+// ── Copilot #221: the register's remaining holes ──────────────────────────
+
+describe("--prs / --issues take POSITIVE numbers (thread …ctb)", () => {
+  it("refuses 0 at the boundary, before any call", async () => {
+    for (const flag of ["--prs", "--issues"]) {
+      const captured = await capture([
+        "report",
+        "data",
+        "--repo",
+        COVERAGE_REPO,
+        "--base",
+        "main",
+        "--target",
+        "zheref/nen",
+        flag,
+        "0",
+      ]);
+      expect(captured.code, `${flag} 0 was accepted`).toBe(2);
+      expect(captured.err.join("\n")).toMatch(/which is not an object: GitHub numbers issues and pull requests from 1/);
+      // Nothing was read: no gh call is scripted, and an unscripted one throws.
+      expect(captured.seams.calls.every((call): boolean => call.command === "git")).toBe(true);
+    }
+  });
+
+  it("names every offending entry in a list, not just the first", async () => {
+    const captured = await capture([
+      "report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--target", "zheref/nen", "--prs", "0,87,0",
+    ]);
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/numbers that are not an object/);
+  });
+});
+
+describe("the check-runs read is paginated (thread …ctf)", () => {
+  function page(runs: readonly unknown[], pageNumber: number): ScriptedCall {
+    return {
+      match: `gh ${checkRunsArgv(TARGET, HEAD_SHA, pageNumber).join(" ")}`,
+      result: { code: 0, stdout: JSON.stringify({ check_runs: runs }) },
+    };
+  }
+
+  /** 100 filler runs, so the first page comes back FULL and the walk goes on. */
+  const FULL_PAGE = Array.from({ length: 100 }, (_, index): unknown => ({
+    name: `filler-${index}`,
+    status: "completed",
+    conclusion: "SUCCESS",
+    started_at: "2026-09-20T08:00:00Z",
+  }));
+
+  it("finds a newer readiness run that is not on the first page", async () => {
+    // The defect: page one carries an OLD readiness run, page two the current
+    // one -- and reading one page published the stale verdict as though it
+    // were the head's own.
+    const captured = await live(LIVE_PR, [
+      viewCall(),
+      page([...FULL_PAGE.slice(0, 99), readinessRun({ started_at: "2026-09-20T09:00:00Z", output: { summary: "ready" } })], 1),
+      page([readinessRun({ started_at: "2026-09-20T11:00:00Z", output: { summary: "not-ready: a thread is unresolved" } })], 2),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    expect(row["readiness"]).toEqual({
+      verdict: "not-ready",
+      reason: "not-ready: a thread is unresolved",
+      source: "check",
+    });
+  });
+
+  it("stops at the first SHORT page, without asking for one more", async () => {
+    // A second page is not scripted, so requesting one would throw.
+    const captured = await live(LIVE_PR, [viewCall(), page([readinessRun()], 1), threadsCall(THREAD_NODES)]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+  });
+
+  it("FAILS CLOSED to the gate when a later page cannot be read", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall(),
+      page(FULL_PAGE, 1),
+      { match: `gh ${checkRunsArgv(TARGET, HEAD_SHA, 2).join(" ")}`, result: { code: 1, stderr: "HTTP 502\n" } },
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    // A partial set is as untrustworthy as none for a question decided by
+    // recency, so the check-run route is abandoned rather than answered from.
+    expect(row["readiness"]).toBeNull();
+  });
+});
+
+describe("every degraded field is named (threads …ctk and …ctq)", () => {
+  it("names each coerced PR field in notes[] and on stderr", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall({
+        title: 42,
+        url: { href: "x" },
+        state: ["OPEN"],
+        mergeStateStatus: 7,
+        labels: "not-a-list",
+        reviewRequests: [{ login: "ok" }, { neither: true }],
+      }),
+      checkRunsCall([readinessRun()]),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    const notes = (row["notes"] as string[]).join("\n");
+    for (const field of ["title", "url", "state", "mergeStateStatus", "labels", "reviewRequests"]) {
+      expect(notes, `'${field}' was coerced without saying so`).toContain(`'${field}'`);
+    }
+    // And the operator watching the run sees the same lines.
+    expect(captured.err.join("\n")).toMatch(/'title' was not a string/);
+    // A row with missing GitHub data no longer looks complete.
+    expect(row["title"]).toBe("");
+    expect(row["reviewRequests"]).toEqual(["ok"]);
+  });
+
+  it("requires the object NUMBER to be a positive whole number (Copilot #221 round 2)", async () => {
+    // `typeof value === "number"` admitted 0, -1, 1.5, NaN and Infinity --
+    // none of which GitHub numbers an object with, and every one of which
+    // would become this row's identity: the key `linked[]` points at and the
+    // key a reader looks it up by. The CLI boundary refuses exactly this
+    // shape on `--prs`; so does the payload now.
+    for (const number of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "217"]) {
+      const captured = await live(LIVE_PR, [
+        viewCall({ number }),
+        checkRunsCall([readinessRun()]),
+        threadsCall(THREAD_NODES),
+      ]);
+      expect(captured.code, captured.err.join("\n")).toBe(0);
+      const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+      // It falls back to the number the invocation named...
+      expect(row["number"], `number ${String(number)} was published as the row's identity`).toBe(217);
+      // ...and says so, in the row and on stderr.
+      expect((row["notes"] as string[]).join("\n")).toMatch(/'number' was not a positive whole number/);
+      expect(captured.err.join("\n")).toMatch(/'number' was not a positive whole number/);
+    }
+  });
+
+  it("stays quiet about a field that is legitimately absent", async () => {
+    // A pull request with no body carries `body: null`, which is not a
+    // degradation -- only a value of the WRONG TYPE is announced.
+    const captured = await live(LIVE_PR, [viewCall({ body: null }), checkRunsCall([readinessRun()]), threadsCall(THREAD_NODES)]);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    expect(row["notes"]).toEqual([]);
+  });
+
+  it("gives an ISSUE row the same field-by-field contract as a pull request", async () => {
+    // It used to be a cast: a `labels` that was not a list THREW on `.map`,
+    // taking the whole verb down over a display field.
+    const captured = await live(
+      ["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--target", "zheref/nen", "--issues", "215", "--json"],
+      [
+        {
+          match: `gh ${issueArgv(TARGET, 215).join(" ")}`,
+          result: {
+            code: 0,
+            stdout: JSON.stringify({
+              number: "215",
+              title: null,
+              html_url: 9,
+              state: { open: true },
+              labels: [{ name: "ok" }, { name: 7 }, "nonsense"],
+            }),
+          },
+        },
+      ],
+    );
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    // The row SURVIVES, keyed by the number the caller named...
+    expect(row["number"]).toBe(215);
+    // ...a non-string label name is dropped rather than published as a
+    // non-string under a key the contract says is a list of strings...
+    expect(row["labels"]).toEqual(["ok"]);
+    // ...and every coercion is named, in the row and on stderr.
+    const notes = (row["notes"] as string[]).join("\n");
+    expect(notes).toContain("'number'");
+    expect(notes).toContain("'html_url'");
+    expect(notes).toContain("'state'");
+    expect(notes).toMatch(/2 of 3 'labels'/);
+    expect(captured.err.join("\n")).toMatch(/zheref\/nen#215: 'html_url' was not a string/);
+  });
+
+  it("leaves a backlog row with no numeric number out, naming it on stderr", async () => {
+    const captured = await live(
+      ["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--target", "zheref/nen", "--backlog", "--json"],
+      [
+        {
+          match: "gh api --method GET repos/zheref/nen/issues?state=open&per_page=100&page=1",
+          result: {
+            code: 0,
+            stdout: JSON.stringify([
+              { number: 215, title: "ok", labels: [], state: "open", html_url: "u" },
+              { title: "no number at all", labels: [], state: "open", html_url: "u" },
+            ]),
+          },
+        },
+      ],
+    );
+    expect(captured.code).toBe(0);
+    const objects = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects;
+    // The number is the identity every other field is keyed by, and it is the
+    // one field there is no degrading around.
+    expect(objects.map((row): number => row.number)).toEqual([215]);
+    expect(captured.err.join("\n")).toMatch(/carried no numeric 'number' and could not be identified/);
   });
 });

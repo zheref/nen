@@ -236,6 +236,27 @@ function readTiers(context: CommandContext, root: string): TierTable | null {
  * file and whose other rows came from GitHub -- with nothing in the document
  * saying which was which. One source per run.
  */
+/**
+ * `--prs`/`--issues`, as POSITIVE whole numbers.
+ *
+ * `splitIntegerList` ADMITS ZERO, and zero is not an object (Copilot, #221):
+ * GitHub numbers issues and pull requests from 1, the offline read seam already
+ * refuses a row whose `number` is not positive, and `--prs 0` was reaching the
+ * API to ask about a thing that cannot exist. Refused at the boundary, at exit
+ * 2, before any call -- the same place and the same code every other malformed
+ * flag in this family is refused at.
+ */
+function positiveNumbers(entries: readonly string[], flag: string): readonly number[] {
+  const numbers = splitIntegerList(entries, flag);
+  const zeroes = numbers.filter((number): boolean => number <= 0);
+  if (zeroes.length > 0) {
+    throw new VerbUsageError(
+      `--${flag} names ${zeroes.length === 1 ? "the number 0, which is not" : "numbers that are not"} an object: GitHub numbers issues and pull requests from 1. Nothing was read.`,
+    );
+  }
+  return numbers;
+}
+
 function readObjectOptions(
   context: CommandContext,
   root: string,
@@ -288,8 +309,8 @@ function readObjectOptions(
   }
   return {
     target,
-    prs: prsRaw === undefined ? [] : splitIntegerList(commaList(prsRaw), "prs"),
-    issues: issuesRaw === undefined ? [] : splitIntegerList(commaList(issuesRaw), "issues"),
+    prs: prsRaw === undefined ? [] : positiveNumbers(commaList(prsRaw), "prs"),
+    issues: issuesRaw === undefined ? [] : positiveNumbers(commaList(issuesRaw), "issues"),
     backlog,
     from: null,
     repoRoot: root,
@@ -362,6 +383,32 @@ function resolveVariant(
 }
 
 /**
+ * `--variant`'s declared template against the `--template` actually being filled.
+ *
+ * THE POLICY SAYS WHICH TEMPLATE A VARIANT IS FOR, AND IT WAS BEING VALIDATED
+ * AND THEN IGNORED (Copilot, #221). `--variant turn --template
+ * spiritual-message.html` succeeded and injected the turn blocks into the
+ * template the policy reserves for another variant -- producing a page that
+ * looks finished and is wrong, which is the one outcome this whole family
+ * refuses everywhere else (a blank cell reads as a fact; so does a filled one
+ * in the wrong page).
+ *
+ * THE COMPARISON IS ON THE BASENAME WITHOUT ITS EXTENSION, because that is what
+ * `reports.template` has always named: a slug identifying one of this
+ * repository's own templates, never a path (../schema/workflow.ts holds it to
+ * exactly that shape). So `templates/rikugan.html`, `./rikugan.html` and
+ * `rikugan` all satisfy a variant declaring `rikugan`, and nothing about where
+ * the caller keeps their templates is nen's business.
+ */
+function assertVariantTemplate(variantName: string, declared: string, template: string): void {
+  const basename = (template.split(/[\\/]/).at(-1) ?? template).replace(/\.[^.]*$/, "");
+  if (basename === declared) return;
+  throw new VerbUsageError(
+    `--variant '${variantName}' declares template '${declared}', and --template '${template}' is '${basename}'. The variant's own policy says which template its blocks are written for, so filling a different one produces a report that looks finished and shows the wrong page. Point --template at '${declared}', or render the variant that names '${basename}'.`,
+  );
+}
+
+/**
  * The two keys a variant injects.
  *
  * `sections` CARRIES A FLAG FOR EVERY BLOCK THE FILE DECLARES ANYWHERE -- `true`
@@ -383,7 +430,14 @@ function sectionInjection(
   declared: Readonly<Record<string, ReportSection>>,
 ): Readonly<Record<string, unknown>> {
   const mine = new Set(section.blocks);
-  const sections: Record<string, boolean> = {};
+  // A NULL-PROTOTYPE MAP (Copilot, #221). `sections.<block>` is keyed by a name
+  // the REPOSITORY chose, and `__proto__` assigned on a plain object invokes
+  // the prototype setter instead of creating an own flag -- so a block the
+  // policy declared would be missing from the very map that exists to say it
+  // was declared, and ./template.ts's `Object.hasOwn` would refuse the render.
+  // ../schema/workflow.ts refuses that name at load as well; this is what makes
+  // it impossible rather than merely reported.
+  const sections: Record<string, boolean> = Object.create(null) as Record<string, boolean>;
   for (const variant of Object.values(declared)) {
     for (const block of variant.blocks) sections[block] = mine.has(block);
   }
@@ -438,8 +492,10 @@ function runRender(context: CommandContext): number {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const variant = resolveVariant(context, root);
   const graph = readGraph(context, root);
+  const template = required(context, "template", "It names the file whose tokens are filled.");
+  if (variant !== null) assertVariantTemplate(variant.name, variant.section.template, template);
   const result = renderReport(root, {
-    template: required(context, "template", "It names the file whose tokens are filled."),
+    template,
     data: required(context, "data", "It names the JSON document every token is answered from."),
     out: required(context, "out", "It names where the filled report is written, inside --repo."),
     dryRun: context.args.booleans.has("dry-run"),

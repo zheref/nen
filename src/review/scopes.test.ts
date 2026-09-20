@@ -143,6 +143,41 @@ describe("nen review scopes", () => {
     expect(captured.err.join("\n")).toMatch(/"persona"/);
   });
 
+  it("treats `\"review\": null` as ABSENT, the way the loader does (Copilot #221)", async () => {
+    // The loader reads `undefined` and `null` identically -- both mean "this
+    // repository states no such block" -- so a check that tested only
+    // `undefined` let a null through to an empty policy and an exit 0.
+    const root = repoWith(null);
+    const captured = await capture(["review", "scopes", "--base", "origin/main", "--repo", root], script());
+    expect(captured.code).toBe(1);
+    expect(captured.err.join("\n")).toMatch(/declares no 'review' block/);
+  });
+
+  it("classifies a path EXACTLY as git spelled it, spaces and all (Copilot #221)", async () => {
+    // `rawLines` preserves a path's bytes on purpose; trimming here classified
+    // the trimmed spelling instead, so a pattern could claim a path that is
+    // not in the diff -- or `unclaimed` could name one nobody can open.
+    const root = repoWith({
+      scopes: { spaced: { persona: "n", tier: "deep", budget: 1, paths: ["docs/a file.md"] } },
+    });
+    const diff = ["docs/a file.md", " docs/leading.md", "docs/trailing.md "].join("\n");
+    const captured = await capture(
+      ["review", "scopes", "--base", "origin/main", "--repo", root, "--json"],
+      script(diff),
+    );
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const document = JSON.parse(captured.out.join("\n")) as {
+      files: number;
+      scopes: { paths: string[] }[];
+      unclaimed: string[];
+    };
+    expect(document.files).toBe(3);
+    // The unspaced path is claimed; the two carrying spaces are NOT the same
+    // paths and are reported unclaimed, with their spaces intact.
+    expect(document.scopes[0]?.paths).toEqual(["docs/a file.md"]);
+    expect(document.unclaimed).toEqual([" docs/leading.md", "docs/trailing.md "]);
+  });
+
   it("exits 2 on an unresolvable --base, with nothing read", async () => {
     const root = repoWith({ scopes: SCOPES });
     const captured = await capture(["review", "scopes", "--base", "nope", "--repo", root], [

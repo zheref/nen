@@ -301,6 +301,97 @@ describe("nen pr threads resolve", () => {
   });
 });
 
+describe("the ACTION's own flag guards (Copilot #221)", () => {
+  // The family guard admits --thread/--body-file/--dry-run because they belong
+  // to 'threads'; each ACTION then has to refuse the ones it does not read, or
+  // a caller gets a successful listing while an instruction they typed had no
+  // effect.
+  const cases: ReadonlyArray<readonly [string, readonly string[], string]> = [
+    ["list", ["--thread", "T1"], "--thread"],
+    ["list", ["--body-file", "x.md"], "--body-file"],
+    ["list", ["--dry-run"], "--dry-run"],
+    ["resolve", ["--thread", "T1", "--body-file", "x.md"], "--body-file"],
+  ];
+
+  for (const [action, extra, flag] of cases) {
+    it(`refuses ${flag} on 'threads ${action}', rather than ignoring it`, async () => {
+      const captured = await capture(
+        ["pr", "threads", action, "--target", "zheref/nen", "--pr", "217", ...extra],
+        [],
+      );
+      expect(captured.code).toBe(2);
+      expect(captured.err.join("\n")).toMatch(
+        new RegExp(`\\${flag} is not read by 'pr threads ${action}'`),
+      );
+      // Refused BEFORE any call: nothing is scripted, and an unscripted call
+      // would have thrown.
+      expect(captured.seams.calls).toEqual([]);
+    });
+  }
+
+  it("still accepts every flag the action DOES read", async () => {
+    const file = bodyFile("hi");
+    const reply = await capture(
+      ["pr", "threads", "reply", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--body-file", file, "--dry-run"],
+      [listCall(pageBody([node("T2", false)], false))],
+    );
+    expect(reply.code, reply.err.join("\n")).toBe(0);
+    const resolve = await capture(
+      ["pr", "threads", "resolve", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--dry-run"],
+      [listCall(pageBody([node("T2", false)], false))],
+    );
+    expect(resolve.code, resolve.err.join("\n")).toBe(0);
+  });
+});
+
+describe("--pr is read strictly on every threads action (Copilot #221 round 2)", () => {
+  // `requirePr`'s `Number(raw)` reads `1e3` as 1000 and `0x0c` as 12. On a
+  // verb that WRITES -- a reply is a public comment under the caller's
+  // identity -- a typo addressing a different pull request is not survivable,
+  // so all three actions take the digits-only reader `edit-body` already had.
+  for (const action of ["list", "reply", "resolve"]) {
+    it(`refuses a coercible --pr on 'threads ${action}', naming the verb and the value`, async () => {
+      for (const raw of ["1e3", "0x0c", "217.0", " 217", "+217", "217abc", "0"]) {
+        const captured = await capture(
+          ["pr", "threads", action, "--target", "zheref/nen", "--pr", raw],
+          [],
+        );
+        expect(captured.code, `--pr '${raw}' was accepted by ${action}`).toBe(2);
+        expect(captured.err.join("\n")).toMatch(
+          new RegExp(`threads ${action} takes --pr <n>: a positive whole number, digits only -- got '${raw.replace(/[+\-.]/g, "\\$&")}'`),
+        );
+        // Refused before any call: nothing is scripted, and an unscripted
+        // call would have thrown.
+        expect(captured.seams.calls).toEqual([]);
+      }
+    });
+  }
+
+  it("leaves a flag-shaped value to the argv parser, which refuses it first at the same exit", async () => {
+    // `--pr -217` never reaches this reader: ../cli/args.ts refuses a value
+    // that looks like a flag. Same exit 2, a different (and better) sentence.
+    const captured = await capture(["pr", "threads", "list", "--target", "zheref/nen", "--pr", "-217"], []);
+    expect(captured.code).toBe(2);
+  });
+
+  it("still accepts an ordinary number, and still names the flag when it is absent", async () => {
+    const ok = await capture(BASE, [listCall(pageBody([node("T1", true)], false))]);
+    expect(ok.code, ok.err.join("\n")).toBe(0);
+    const absent = await capture(["pr", "threads", "list", "--target", "zheref/nen"], []);
+    expect(absent.code).toBe(2);
+    expect(absent.err.join("\n")).toMatch(/threads list takes --pr <n>\./);
+  });
+
+  it("leaves `edit-body`'s own refusal naming edit-body, not another verb", async () => {
+    const captured = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "1e3", "--body-file", bodyFile("x")],
+      [],
+    );
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/edit-body takes --pr <n>/);
+  });
+});
+
 describe("the family's flag guards", () => {
   it("refuses --thread on a subcommand that does not read it", async () => {
     const captured = await capture(["pr", "fetch", "--target", "zheref/nen", "--pr", "217", "--thread", "T1"], []);

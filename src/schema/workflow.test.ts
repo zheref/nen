@@ -596,3 +596,68 @@ describe("a workflow's ELEVEN blocks", () => {
     expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's eleven blocks are/);
   });
 });
+
+// ── prototype keys (Copilot #221, threads …ctM and …ctV) ───────────────────
+//
+// A name that is a perfectly good slug and is still not a KEY. Assigning
+// `__proto__` on a plain object invokes the prototype setter rather than
+// creating an own property, so a variant or a scope this schema called valid
+// would be missing from `Object.keys` and from every reader downstream.
+
+describe("a name that is a slug and is not a key", () => {
+  for (const reserved of ["__proto__", "constructor", "prototype"]) {
+    it(`refuses '${reserved}' as a report VARIANT name, by pointer`, () => {
+      expect(() =>
+        parseWorkflow("<doc>", {
+          reports: { sections: { [reserved]: { template: "rikugan", blocks: ["desk"] } } },
+        }),
+      ).toThrow(/is also a JavaScript prototype key/);
+    });
+
+    it(`refuses '${reserved}' as a review SCOPE name, by pointer`, () => {
+      expect(() =>
+        parseWorkflow("<doc>", {
+          review: { scopes: { [reserved]: { persona: "n", tier: "deep", budget: 1, paths: ["**"] } } },
+        }),
+      ).toThrow(/is also a JavaScript prototype key/);
+    });
+
+    it(`refuses '${reserved}' as a BLOCK name, naming the injected map`, () => {
+      expect(() =>
+        parseWorkflow("<doc>", {
+          reports: { sections: { turn: { template: "rikugan", blocks: [reserved] } } },
+        }),
+      ).toThrow(/prototype key assigned there invokes the prototype setter/);
+    });
+  }
+
+  it("builds every name-keyed map with a null prototype, so no future key can reach through", () => {
+    const workflow = parseWorkflow("<doc>", {
+      reports: { sections: { turn: { template: "rikugan", blocks: ["desk"] } } },
+      review: { scopes: { code: { persona: "n", tier: "deep", budget: 1, paths: ["**"] } } },
+      models: { claude: { deep: "opus" }, roles: { reviewer: "deep" } },
+    });
+    for (const [what, map] of [
+      ["reports.sections", workflow.reports.sections],
+      ["review.scopes", workflow.review.scopes],
+      ["models.surfaces", workflow.models.surfaces],
+      ["models.roles", workflow.models.roles],
+      ["models.<surface>", workflow.models.surfaces["claude"] as object],
+    ] as const) {
+      expect(Object.getPrototypeOf(map), `${what} is an ordinary object`).toBeNull();
+    }
+    // And the defaults are the same shape, so an absent file behaves like a
+    // present one rather than like a different kind of object.
+    expect(Object.getPrototypeOf(defaultWorkflow().reports.sections)).toBeNull();
+    expect(Object.getPrototypeOf(defaultWorkflow().review.scopes)).toBeNull();
+  });
+
+  it("still admits every ordinary name, so the guard is about keys and not about words", () => {
+    const workflow = parseWorkflow("<doc>", {
+      reports: { sections: { "turn-fast": { template: "rikugan", blocks: ["lastTurn", "toString"] } } },
+    });
+    // `toString` is a prototype METHOD but not a prototype KEY: assigning it
+    // creates an own property, so it is a name a repository may use.
+    expect(workflow.reports.sections["turn-fast"]?.blocks).toEqual(["lastTurn", "toString"]);
+  });
+});

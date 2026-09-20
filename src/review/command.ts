@@ -87,7 +87,13 @@ function runScopes(context: CommandContext): number {
     /* c8 ignore next -- the loader raises nothing else */
     throw error;
   }
-  if (loaded.raw["review"] === undefined) {
+  // `null` IS ABSENT, NOT PRESENT-AND-EMPTY (Copilot, #221). ../schema/
+  // workflow.ts's own `block()` reads `undefined` and `null` identically --
+  // both mean "this repository states no such block" -- so testing only
+  // `undefined` here let `"review": null` through to an empty policy and an
+  // exit 0, where the documented answer is exit 1 naming the missing block.
+  // One file, one reading of what an absent block is.
+  if (loaded.raw["review"] === undefined || loaded.raw["review"] === null) {
     context.io.err(
       `${loaded.path} declares no 'review' block, so there is nothing to classify this diff by. A review policy is '"review": { "scopes": { "<scope>": { "persona": "<name>", "tier": "<models tier>", "budget": <n>, "paths": ["<prefix or glob>", …] } } }' -- the paths are the same grammar 'nen report data --tiers' reads. Nothing was read beyond the policy file.`,
     );

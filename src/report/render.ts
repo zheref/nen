@@ -160,9 +160,16 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
   // writes the key, and an absent field is not a disagreement.
   if (options.variant != null && typeof read === "object" && read !== null && !Array.isArray(read)) {
     const stated = (read as Record<string, unknown>)["variant"];
-    if (typeof stated === "string" && stated !== options.variant) {
+    // A PRESENT-BUT-NON-STRING `variant` IS A DISAGREEMENT TOO (Copilot, #221).
+    // The first cut tested `typeof stated === "string"`, so `{ "variant": 123 }`
+    // sailed through the agreement check -- a document that does NOT state the
+    // selected variant, read as one that does. `undefined`/`null` still mean
+    // "this assembler does not write the key", which is not a disagreement.
+    if (stated !== undefined && stated !== null && stated !== options.variant) {
       throw new VerbUsageError(
-        `--variant '${options.variant}' disagrees with --data '${options.data}', which states variant '${stated}'. The data document was assembled for one report and is being rendered as another; nen will not pick, because both readings produce a page that looks finished.`,
+        typeof stated === "string"
+          ? `--variant '${options.variant}' disagrees with --data '${options.data}', which states variant '${stated}'. The data document was assembled for one report and is being rendered as another; nen will not pick, because both readings produce a page that looks finished.`
+          : `--data '${options.data}' states a 'variant' that is not a variant name (${Array.isArray(stated) ? `a list of ${stated.length}` : `a ${typeof stated}`}). A document that names its variant must name it as a string, so --variant '${options.variant}' can be checked against it; a value of another type cannot agree or disagree, and silently ignoring it renders the wrong blocks into a page that looks finished.`,
       );
     }
   }
