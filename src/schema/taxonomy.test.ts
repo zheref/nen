@@ -88,6 +88,7 @@ describe("checkTaxonomy", () => {
       // the `#` is what tells a machine reader which rows are which.
       "nen/workflow.json#reports.sections",
       "nen/workflow.json#review.scopes",
+      "nen/workflow.json#profile",
       "nen/decisions.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
@@ -109,6 +110,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json",
       "nen/workflow.json#reports.sections",
       "nen/workflow.json#review.scopes",
+      "nen/workflow.json#profile",
       "nen/colors.yml",
       "nen/decisions.json",
     ];

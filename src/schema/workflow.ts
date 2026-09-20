@@ -291,6 +291,25 @@ export interface ModelsPolicy {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * `profile` -- which RUN PROFILE a turn runs under, and which it may be asked
+ * for (zheref/nen#227).
+ *
+ * THE NAMES ARE CLOSED HERE AND THEIR MEANING IS NOT. `fast`, `standard` and
+ * `thorough` are the three profiles the ecosystem's turn loop knows; what each
+ * one skips or adds is the consumer's (Hatsu's `ren`) and nen validates only
+ * that a repository names ones that exist and defaults to one it allows. A
+ * fourth name would be a profile no loop implements, refused by pointer
+ * rather than preserved for a reader that never comes.
+ */
+export interface ProfilePolicy {
+  /** The profile a bare turn runs under. Always one of `allowed`. */
+  readonly default: string;
+  /** The profiles a caller may ask for, in the file's own order. */
+  readonly allowed: readonly string[];
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface Workflow {
   readonly schema: string | null;
   readonly branch: BranchPolicy;
@@ -304,6 +323,7 @@ export interface Workflow {
   readonly monitor: MonitorPolicy;
   readonly models: ModelsPolicy;
   readonly review: ReviewPolicy;
+  readonly profile: ProfilePolicy;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -347,6 +367,9 @@ export const TURN_VALUES = ["rung1", "all"] as const;
 export const DEFAULT_TURN: (typeof TURN_VALUES)[number] = "rung1";
 export const DEFAULT_MAX_CYCLES = 20;
 export const DEFAULT_POLL_SECONDS = 300;
+/** The three run profiles, in the order a reader ranks them. CLOSED: see ProfilePolicy. */
+export const PROFILE_NAMES: readonly string[] = ["fast", "standard", "thorough"];
+export const DEFAULT_PROFILE = "standard";
 
 /**
  * The policy a repository that states none runs under.
@@ -389,6 +412,7 @@ export function defaultWorkflow(): Workflow {
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
     review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
+    profile: { default: DEFAULT_PROFILE, allowed: PROFILE_NAMES, raw: empty },
     raw: empty,
   };
 }
@@ -408,6 +432,7 @@ const ROOT_KEYS: readonly string[] = [
   "monitor",
   "models",
   "review",
+  "profile",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -424,6 +449,7 @@ const COMMITS_KEYS: readonly string[] = [
   "runTrailer",
 ];
 const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds"];
+const PROFILE_KEYS: readonly string[] = ["default", "allowed"];
 
 /**
  * A key one typo away from a key nen reads, refused by the name it meant.
@@ -1011,9 +1037,45 @@ function parseModels(path: string, value: unknown): ModelsPolicy {
   };
 }
 
+/**
+ * `profile` -- a default and an allow-list, both held to the three known names.
+ *
+ * `default` MUST BE ALLOWED, and the refusal names both: a default outside
+ * the allow-list is a turn that runs under a profile the same file forbids
+ * asking for, which is a contradiction and not a configuration. Each name is
+ * validated against PROFILE_NAMES by pointer, and a duplicate in `allowed` is
+ * refused too -- it is a list somebody edited twice, not a wider allowance.
+ */
+function parseProfile(path: string, value: unknown): ProfilePolicy {
+  const raw = block(path, "profile", value, PROFILE_KEYS, "A profile policy's two keys are");
+  const known = PROFILE_NAMES.join(", ");
+  const name = (pointer: string, candidate: unknown): string => {
+    const text = requireString(path, pointer, candidate);
+    if (!PROFILE_NAMES.includes(text)) {
+      throw new SchemaError(path, pointer, `'${text}' is not a run profile nen knows. The three are ${known}; a fourth name would be a profile no turn loop implements`);
+    }
+    return text;
+  };
+  const allowed = stringsOr(path, "profile.allowed", raw["allowed"], PROFILE_NAMES).map((entry, index): string => name(`profile.allowed[${index}]`, entry));
+  if (allowed.length === 0) {
+    throw new SchemaError(path, "profile.allowed", `is empty. A repository that allows no profile allows no turn; list at least one of ${known}, or drop the key to allow all three`);
+  }
+  const seen = new Set<string>();
+  for (const [index, entry] of allowed.entries()) {
+    if (seen.has(entry)) throw new SchemaError(path, `profile.allowed[${index}]`, `repeats '${entry}'. Each profile is allowed once; a repeat is an edit made twice, not a wider allowance`);
+    seen.add(entry);
+  }
+  const fallback = allowed.includes(DEFAULT_PROFILE) ? DEFAULT_PROFILE : (allowed[0] as string);
+  const defaultProfile = raw["default"] === undefined || raw["default"] === null ? fallback : name("profile.default", raw["default"]);
+  if (!allowed.includes(defaultProfile)) {
+    throw new SchemaError(path, "profile.default", `'${defaultProfile}' is not in profile.allowed (${allowed.join(", ")}). A bare turn would run under a profile this same file forbids asking for; add it to 'allowed' or pick one that is`);
+  }
+  return { default: defaultProfile, allowed, raw };
+}
+
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's eleven blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twelve blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -1030,6 +1092,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     monitor: parseMonitor(path, raw["monitor"]),
     models: parseModels(path, raw["models"]),
     review: parseReview(path, raw["review"]),
+    profile: parseProfile(path, raw["profile"]),
     raw,
   };
 }
@@ -1108,6 +1171,11 @@ export function describeSections(workflow: Workflow): string {
   return names.length === 0
     ? "none declared"
     : `${names.length} variant(s): ${names.join(", ")}`;
+}
+
+/** The `profile` row `nen schema check` prints (zheref/nen#227). See `describeSections`. */
+export function describeProfile(workflow: Workflow): string {
+  return `default ${workflow.profile.default}; allowed ${workflow.profile.allowed.join(", ")}`;
 }
 
 /** The `review.scopes` row `nen schema check` prints. See `describeSections`. */

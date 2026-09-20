@@ -449,6 +449,7 @@ back empty or `null`.
 | `commits.runTrailer` | the trailer key an AUTOMATED commit must ALSO carry, alongside the one attribution trailer the hook requires. Absent (`null`) by default — a run identifier is optional, never itself an attribution trailer, so it is never folded into `allowedAttributionTrailers` | the generated `commit-msg` hook's automated half |
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
+| `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 
 **Unknown keys are preserved, and near-miss keys are refused *because* they
 are.** A key nen has never heard of survives a round trip untouched — the file
@@ -2943,17 +2944,20 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 nen schema check --repo <path> [--json]
 ```
 
-**Two POINTER rows from v0.12.0 (zheref/nen#220).** Two rows name a pointer
-rather than a file — `nen/workflow.json#reports.sections` and
-`nen/workflow.json#review.scopes` — and the `#` is what lets a machine reader
+**Three POINTER rows (zheref/nen#220, #227).** Three rows name a pointer
+rather than a file — `nen/workflow.json#reports.sections`,
+`nen/workflow.json#review.scopes` and, from v0.13.0,
+`nen/workflow.json#profile` — and the `#` is what lets a machine reader
 tell them from the file rows. They sit immediately under the policy row they
 read out of and answer a question it does not: whether this repository declares
 the thing [`report render --variant`](#nen-report-render) and [`review
-scopes`](#nen-review-scopes) need, which a warm-up should not have to read a
-coverage ladder to find out. Neither is ever required and neither FAILs on its
-own — a malformed block already fails the policy row by pointer, and a
-repository that declares neither is a repository that has not adopted the two
-verbs, which reads `none declared`.
+scopes`](#nen-review-scopes) need, and which run profile a bare turn runs
+under — which a warm-up should not have to read a coverage ladder to find out.
+None is ever required and none FAILs on its own — a malformed block already
+fails the policy row by pointer. A repository that declares neither of the
+first two has not adopted the two verbs, which reads `none declared`; the
+`profile` row reads the defaults when the key is absent, e.g.
+`nen/workflow.json#profile  default standard; allowed fast, standard, thorough`.
 
 **Two optional rows from v0.11.0 (zheref/nen#216).** `nen/colors.yml` is **optional**: an absent file is an
 `ok` row reading `absent (optional)` and no longer fails the aggregate -- the verbs that resolve a colour
