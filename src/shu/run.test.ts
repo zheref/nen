@@ -4051,7 +4051,7 @@ describe("a run's steps land on the open phase entry", () => {
   const CLOSED = { ...OPEN, phase: "breath", endedAt: "2026-01-01T00:00:05.000Z", durationMs: 5000, exitCode: 0 };
   type Ledger = { phases: { phase: string; steps?: { verb: string; argv: string; exitCode: number | null; durationMs: number | null; stalled: boolean }[] }[] };
 
-  it("appends {verb, argv, exitCode, durationMs, stalled} to the LAST open entry, with --effort", async () => {
+  it("with --effort, still runs every step and exits on the failing one (the ledger write itself is proved by the read-back case below)", async () => {
     let path = "";
     const result = await withDeclaration(
       oneLane({}, { steps: [{ exe: "placeholder-tool", argv: ["one"] }, { exe: "placeholder-tool", argv: ["two", "a b"] }] }),
