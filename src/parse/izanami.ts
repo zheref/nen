@@ -1367,6 +1367,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     subcommands: {
       classify: RO("classifies the working copy over git reads"),
       squash: MUT("resets the branch and commits -- git reset --soft plus git commit -F"),
+      "catch-up": MUT("fetches, then rebases or merges origin/<base> into the current branch (or continues / aborts one in progress) -- the working tree and the branch ref move"),
+      publish: MUT("pushes the current branch to origin -- a remote write, refused as a force or on the trunk"),
     },
   },
 };

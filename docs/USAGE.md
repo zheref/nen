@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 40 command
-families, 102 verbs, every flag checked against the binary this repository
+families, 104 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -595,7 +595,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 102 verbs, grouped as the README groups them. **Reads** is what a
+All 104 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -617,6 +617,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
+| [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
+| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to origin, refusing a detached HEAD, the trunk, any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches origin) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -1756,6 +1758,121 @@ squashed into 2bc2e0e68e8aa13fe7476b190dfccb3e8ac24bf8
 commits on `docs-example` folded onto `main` into one, `git log -1 --format=%B`
 afterwards reading exactly `message.txt`'s contents — `feat(wc): add
 one/two/three together`, blank line, `Closes: #99`)
+
+
+### `nen wc catch-up`
+
+Brings the current branch up to date with its base (v0.13.0,
+[#227](https://github.com/zheref/nen/issues/227)) — the git Hatsu's `ao`
+skill used to hand-roll. It fetches `origin/<base>`, decides rebase or merge,
+runs exactly one of them, and on a conflict **stops**: the tree is left
+exactly as git left it, every conflicted path is reported with our side and
+their side, and the abort line is printed. It never picks a side.
+
+**Usage**
+
+```text
+nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
+                [--abort] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | **yes** | the working tree being caught up | unbracketed; omitted is refused at exit 2 — this verb moves the branch ref |
+| `--base <ref>` | **yes** | the base branch | fetched first as `origin/<base>`; the rebase/merge target is `origin/<base>`, never a stale local ref |
+| `--strategy` | no | `rebase`, `merge` or `auto` (default) | **auto rebases when no commit of the branch is on its `@{upstream}`** and merges otherwise — the same published-commit detection [`wc squash`](#nen-wc-squash) refuses on, shared rather than copied. A rebase rewrites what somebody else may already hold |
+| `--abort` | no | back out an in-progress rebase or merge | runs the matching `git rebase --abort` / `git merge --abort`; refused at exit 2 when nothing is in progress |
+| `--dry-run` | no | print the strategy and the git line | fetches (a read), runs neither |
+| `--json` | no | machine-readable result | `nen.wc.catch-up/v0.1` — see below |
+
+**Mechanism.** A dirty tree is refused at exit 2 before the fetch. Then
+`git fetch origin <base>`, `before`/`behindBefore`/`aheadBefore` are read,
+the strategy is resolved, and — unless the branch is already up to date
+(`noOp: true`, exit 0, nothing run) — `git rebase origin/<base>` or
+`git merge --no-edit origin/<base>` runs. **On a conflict** the report's
+`conflicted[]` carries each path with `ours` (index stage 2, the branch's
+side) and `theirs` (stage 3, the base's side), each capped at 4000
+characters and `null` where that side deleted the path; the text output
+prints them indented under the path, then `to back out: git <strategy>
+--abort`. Exit 1. Nothing is resolved, aborted or pushed.
+
+**Resuming.** Re-run the **same command on the same tree** once the
+resolutions are staged — Hatsu's `ao` already says so. The verb asks git
+whether a rebase or merge is in progress (`REBASE_HEAD` / `MERGE_HEAD`,
+through the seam, so a worktree's relocated git directory changes nothing)
+and continues it: `git rebase --continue` under `GIT_EDITOR=true`, or
+`git commit --no-edit` for a merge, reporting `resumed: true`. No status
+refusal and no fetch on that path — the tree is dirty by definition. Unmerged
+paths, or a staged file `git diff --cached --check` says still carries a
+conflict marker, are reported as `conflicted[]` again at exit 1 with the
+abort line, and nothing is continued over them; a continued rebase that
+conflicts on a *later* commit reports that conflict the same way. A
+`--strategy` that disagrees with what is in progress is refused at exit 2.
+
+**`--json`** — `nen.wc.catch-up/v0.1`: `{ contract, base, strategy, before,
+after, behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
+resumed, aborted, dryRun }`. `strategy` is the one that ran (`auto` resolved);
+`after` is `null` on a dry run and on a conflict. Exit 0 on a clean catch-up,
+a resume, an abort, a dry run or `noOp`; exit 1 on a conflict (the document is
+still printed) or a git failure this verb did not expect; exit 2 on every
+refusal above.
+
+**Example**
+
+```bash
+nen wc catch-up --repo . --base main --dry-run
+```
+```text
+fetched origin/main
+strategy: rebase (auto -- nothing on 'origin/feature/x' yet)
+would run: git rebase origin/main  (2 ahead, 3 behind)
+```
+
+### `nen wc publish`
+
+Pushes the **current branch** to `origin` and nothing else (v0.13.0,
+[#227](https://github.com/zheref/nen/issues/227)) — `git push [-u] origin
+<branch>`. Everything that could rewrite somebody else's history is refused
+before the push.
+
+**Usage**
+
+```text
+nen wc publish --repo <path> [--set-upstream] [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--repo <path>` | **yes** | the working tree whose current branch is pushed |
+| `--set-upstream` | no | push with `-u`, so the branch tracks `origin/<branch>` afterwards |
+| `--dry-run` | no | print the push line; push nothing (the upstream is still fetched — a read) |
+| `--json` | no | `nen.wc.publish/v0.1` — see below |
+
+**Refused at exit 2:** a detached `HEAD` (no branch to push); the trunk —
+[`nen/workflow.json`](#nenworkflowjson)'s `branch.base`, and `main`/`master`
+whatever the policy says — because the trunk moves by merging a pull request;
+and anything that looks like a refspec or a force: a positional, a `+`, a
+`:`, and `--force`, which the strict parser already refuses as an unknown
+option. **Exit 1, nothing pushed:** the upstream exists and the local branch
+is not a fast-forward of it (fetched first, then `git merge-base
+--is-ancestor <upstream> HEAD`) — the push would need `--force`, and this
+verb never forces; the report says `needsForce: true` and the text names
+[`wc catch-up`](#nen-wc-catch-up) as the repair.
+
+**`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
+upstreamBefore, ahead, needsForce, pushed, dryRun }`. `upstreamBefore` is
+`null` and `ahead` is `null` when the branch tracked nothing before this call.
+
+**Example**
+
+```bash
+nen wc publish --repo . --set-upstream --dry-run
+```
+```text
+would run: git push -u origin feature/x  (no upstream yet)
+```
 
 <a id="family-stage"></a>
 
