@@ -303,6 +303,14 @@ const NOTHING_PENDING: readonly ScriptedCall[] = [
   { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 1 } },
 ];
 const FETCHED = { match: FETCH_MAIN, result: { code: 0 } };
+const UNMERGED = "git -c core.quotePath=false diff --name-only -z --diff-filter=U";
+const CHECK = "git -c core.quotePath=false diff --cached --check";
+const STAGES = "git ls-files -u -z";
+/** `git ls-files -u -z` for `paths`, each with every stage in `stages`. */
+const stagesOf = (entries: readonly (readonly [string, readonly number[]])[]): ScriptedCall => ({
+  match: STAGES,
+  result: { stdout: entries.flatMap(([path, stages]): string[] => stages.map((stage): string => `100644 ${"a".repeat(40)} ${stage}\t${path}\0`)).join("") },
+});
 const HEAD_BEFORE = { match: "git rev-parse HEAD", result: { stdout: "before00\n" } };
 const BEHIND = (n: number): ScriptedCall => ({ match: "git rev-list --count HEAD..origin/main", result: { stdout: `${n}\n` } });
 const AHEAD = (n: number): ScriptedCall => ({ match: "git rev-list --count origin/main..HEAD", result: { stdout: `${n}\n` } });
@@ -417,39 +425,103 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "rebase"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
       { match: "git rebase origin/main", result: { code: 1, stderr: "CONFLICT (content): Merge conflict in a.ts" } },
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "a.ts\nb.ts\n" } },
-      { match: "git diff --cached --check", result: { code: 0 } },
-      { match: "git show :2:a.ts", result: { stdout: "ours a\n" } },
-      { match: "git show :3:a.ts", result: { stdout: "theirs a\n" } },
-      { match: "git show :2:b.ts", result: { code: 128 } },
-      { match: "git show :3:b.ts", result: { stdout: "theirs b\n" } },
+      { match: UNMERGED, result: { stdout: "a.ts\0b.ts\0" } },
+      { match: CHECK, result: { code: 0 } },
+      // ON A REBASE stage 2 is origin/main and stage 3 the replayed commit (N1):
+      // `ours` is stage 3 here. b.ts has no stage 3 -- this branch deleted it.
+      stagesOf([["a.ts", [1, 2, 3]], ["b.ts", [1, 2]]]),
+      { match: "git show :2:a.ts", result: { stdout: "base a\n" } },
+      { match: "git show :3:a.ts", result: { stdout: "branch a\n" } },
+      { match: "git show :2:b.ts", result: { stdout: "base b\n" } },
     ]);
     expect(result.code).toBe(1);
     expect(result.doc["after"]).toBeNull();
     expect(result.doc["conflicted"]).toEqual([
-      { path: "a.ts", ours: "ours a\n", theirs: "theirs a\n" },
-      { path: "b.ts", ours: null, theirs: "theirs b\n" },
+      { path: "a.ts", ours: "branch a\n", theirs: "base a\n" },
+      { path: "b.ts", ours: null, theirs: "base b\n" },
     ]);
+    expect(gitCalls(result.seams)).not.toContain("git show :3:b.ts");
     expect(gitCalls(result.seams)).not.toContain("git rebase --abort");
     const text = await capture(["wc", "catch-up", "--base", "main", "--strategy", "rebase"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
       { match: "git rebase origin/main", result: { code: 1 } },
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "a.ts\n" } },
-      { match: "git diff --cached --check", result: { code: 0 } },
-      { match: "git show :2:a.ts", result: { stdout: "ours a\n" } },
-      { match: "git show :3:a.ts", result: { stdout: "theirs a\n" } },
+      { match: UNMERGED, result: { stdout: "a.ts\0" } },
+      { match: CHECK, result: { code: 0 } },
+      stagesOf([["a.ts", [2, 3]]]),
+      { match: "git show :2:a.ts", result: { stdout: "base a\n" } },
+      { match: "git show :3:a.ts", result: { stdout: "branch a\n" } },
     ]);
     expect(text.code).toBe(1);
     expect(text.out).toContain("to back out: git rebase --abort");
-    expect(text.out.join("\n")).toContain("    ours  :\n      ours a\n    theirs:\n      theirs a");
+    expect(text.out.join("\n")).toContain("    ours  :\n      branch a\n    theirs:\n      base a");
+  });
+
+  it("on a MERGE, ours is stage 2 and theirs stage 3 -- the label follows the strategy, not the stage", async () => {
+    const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
+      ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
+      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: UNMERGED, result: { stdout: "a.ts\0" } },
+      { match: CHECK, result: { code: 0 } },
+      stagesOf([["a.ts", [1, 2, 3]]]),
+      { match: "git show :2:a.ts", result: { stdout: "branch a\n" } },
+      { match: "git show :3:a.ts", result: { stdout: "base a\n" } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.doc["conflicted"]).toEqual([{ path: "a.ts", ours: "branch a\n", theirs: "base a\n" }]);
+  });
+
+  it("reads a non-ASCII path raw, treats a stage that is there but unreadable as an ERROR, and reports a binary side by size (N3, N5)", async () => {
+    const path = "docs/ünï.md";
+    const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
+      ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
+      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: UNMERGED, result: { stdout: `${path}\0` } },
+      { match: CHECK, result: { code: 0 } },
+      stagesOf([[path, [2, 3]]]),
+      { match: `git show :2:${path}`, result: { stdout: "PNG\0\0\0" } },
+      { match: `git cat-file -s :2:${path}`, result: { stdout: "4096\n" } },
+      { match: `git show :3:${path}`, result: { stdout: "text\n" } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.doc["conflicted"]).toEqual([{ path, ours: "(binary, 4096 bytes)", theirs: "text\n" }]);
+    // The stage is listed, the show fails: an error at exit 1, never "deleted".
+    const failed = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
+      ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
+      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: UNMERGED, result: { stdout: `${path}\0` } },
+      { match: CHECK, result: { code: 0 } },
+      stagesOf([[path, [2, 3]]]),
+      { match: `git show :2:${path}`, result: { code: 128, stderr: "fatal: path 'docs/ünï.md' does not exist in the index" } },
+    ]);
+    expect(failed.code).toBe(1);
+    expect(failed.err.join("\n")).toMatch(/could not read stage 2 of 'docs\/ünï\.md'.*not a deletion/);
+    expect(failed.out.join("\n")).not.toContain("deleted on this side");
+  });
+
+  it("strips control bytes from the hunks in the text rendering, keeping newlines and tabs; --json keeps the bytes", async () => {
+    const ESC = String.fromCharCode(0x1b);
+    const script = (): ScriptedCall[] => [
+      ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
+      { match: "git merge --no-edit origin/main", result: { code: 1 } },
+      { match: UNMERGED, result: { stdout: "a.ts\0" } },
+      { match: CHECK, result: { code: 0 } },
+      stagesOf([["a.ts", [2, 3]]]),
+      { match: "git show :2:a.ts", result: { stdout: `one${ESC}[2K\n\ttwo\r\n` } },
+      { match: "git show :3:a.ts", result: { stdout: "base\n" } },
+    ];
+    const text = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], script());
+    expect(text.out.join("\n")).toContain("    ours  :\n      one[2K\n      \ttwo\n    theirs:");
+    expect(text.out.join("\n")).not.toContain(ESC);
+    const json = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], script());
+    expect((json.doc["conflicted"] as { ours: string }[])[0]?.ours).toBe(`one${ESC}[2K\n\ttwo\r\n`);
   });
 
   it("a failure that leaves no conflict is exit 1 with the git error, not a decided outcome", async () => {
     const result = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
       { match: "git merge --no-edit origin/main", result: { code: 128, stderr: "fatal: refusing to merge unrelated histories" } },
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "" } },
-      { match: "git diff --cached --check", result: { code: 0 } },
+      { match: UNMERGED, result: { stdout: "" } },
+      { match: CHECK, result: { code: 0 } },
     ]);
     expect(result.code).toBe(1);
     expect(result.out).toEqual([]);
@@ -464,8 +536,8 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git rev-parse HEAD", result: { stdout: "after000\n" } },
       BEHIND(0),
       AHEAD(2),
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "" } },
-      { match: "git diff --cached --check", result: { code: 0 } },
+      { match: UNMERGED, result: { stdout: "" } },
+      { match: CHECK, result: { code: 0 } },
       { match: "git rebase --continue", result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
@@ -486,8 +558,8 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git rev-parse HEAD", result: { stdout: "after000\n" } },
       BEHIND(1),
       AHEAD(2),
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "" } },
-      { match: "git diff --cached --check", result: { code: 0 } },
+      { match: UNMERGED, result: { stdout: "" } },
+      { match: CHECK, result: { code: 0 } },
       { match: "git commit --no-edit", result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
@@ -501,10 +573,10 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       BEHIND(0),
       AHEAD(2),
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "" } },
-      { match: "git diff --cached --check", result: { code: 2, stdout: "a.ts:12: leftover conflict marker\na.ts:20: leftover conflict marker\n" } },
-      { match: "git show :2:a.ts", result: { stdout: "<<<<<<< ours\n" } },
-      { match: "git show :3:a.ts", result: { stdout: "theirs\n" } },
+      { match: UNMERGED, result: { stdout: "" } },
+      { match: CHECK, result: { code: 2, stdout: "a.ts:12: leftover conflict marker\na.ts:20: leftover conflict marker\n" } },
+      // A staged resolution has no unmerged stages left: neither side is read.
+      stagesOf([]),
     ]);
     expect(result.code).toBe(1);
     expect(result.doc).toMatchObject({ resumed: false, after: null });
@@ -519,12 +591,13 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       BEHIND(0),
       AHEAD(2),
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "" } },
-      { match: "git diff --name-only --diff-filter=U", result: { stdout: "c.ts\n" } },
-      { match: "git diff --cached --check", result: { code: 0 } },
+      { match: UNMERGED, result: { stdout: "" } },
+      { match: UNMERGED, result: { stdout: "c.ts\0" } },
+      { match: CHECK, result: { code: 0 } },
       { match: "git rebase --continue", result: { code: 1 } },
-      { match: "git show :2:c.ts", result: { stdout: "o\n" } },
-      { match: "git show :3:c.ts", result: { stdout: "t\n" } },
+      stagesOf([["c.ts", [2, 3]]]),
+      { match: "git show :2:c.ts", result: { stdout: "t\n" } },
+      { match: "git show :3:c.ts", result: { stdout: "o\n" } },
     ]);
     expect(result.code).toBe(1);
     expect(result.doc["conflicted"]).toEqual([{ path: "c.ts", ours: "o\n", theirs: "t\n" }]);

@@ -1846,11 +1846,21 @@ refs/heads/<base>:refs/remotes/origin/<base>`, `before`/`behindBefore`/`aheadBef
 the strategy is resolved, and — unless the branch is already up to date
 (`noOp: true`, exit 0, nothing run) — `git rebase origin/<base>` or
 `git merge --no-edit origin/<base>` runs. **On a conflict** the report's
-`conflicted[]` carries each path with `ours` (index stage 2, the branch's
-side) and `theirs` (stage 3, the base's side), each capped at 4000
-characters and `null` where that side deleted the path; the text output
-prints them indented under the path, then `to back out: git <strategy>
---abort`. Exit 1. Nothing is resolved, aborted or pushed.
+`conflicted[]` carries each path with `ours` — **always this branch's
+side** — and `theirs` — **always the base's** — whichever index stage holds
+it: on a merge stage 2 is this branch and stage 3 is `origin/<base>`; on a
+rebase git replays this branch's commits on top of the base, so stage 2 is
+`origin/<base>` and stage 3 the replayed commit, and the verb labels by
+strategy so a reader never has to know which. Each side is capped at 4000
+characters, is `null` where that side deleted the path (the stage is absent
+from `git ls-files -u`), and reads `(binary, N bytes)` where the blob
+carries a NUL — its size, never its bytes. Paths are read raw (`-c
+core.quotePath=false`, `-z`), so a non-ASCII or spaced path is shown by the
+same name git holds it under; a stage the index lists but `git show` cannot
+read is an **error** at exit 1, never reported as a deletion. The text
+output prints the sides indented under the path with every control byte but
+the newline and tab stripped (`--json` keeps the bytes), then `to back out:
+git <strategy> --abort`. Exit 1. Nothing is resolved, aborted or pushed.
 
 **Resuming.** Re-run the **same command on the same tree** once the
 resolutions are staged — Hatsu's `ao` already says so. The verb asks git

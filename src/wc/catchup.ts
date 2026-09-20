@@ -12,9 +12,24 @@
 // A CONFLICT IS REPORTED, NEVER RESOLVED. The tree is left exactly as git
 // left it -- the conflicted paths unmerged, the rebase or merge in progress
 // -- and the report carries every conflicted path with OUR side and THEIR
-// side (`git show :2:<path>` / `:3:<path>`, capped), plus the one line that
-// backs out. Which side is right is a judgement, and a verb that made it
-// would be making it on a JSON file's say-so.
+// side (off the index stages, capped), plus the one line that backs out.
+// Which side is right is a judgement, and a verb that made it would be
+// making it on a JSON file's say-so.
+//
+// `ours` IS ALWAYS THIS BRANCH'S SIDE AND `theirs` THE BASE'S, whichever
+// index stage holds it (Nobunaga N1). On a MERGE stage 2 is HEAD (this
+// branch) and stage 3 is `origin/<base>`; on a REBASE git replays this
+// branch's commits ON TOP of the base, so stage 2 is `origin/<base>` and
+// stage 3 is the commit being replayed -- the reverse. The report labels by
+// strategy so a reader never has to know which.
+//
+// PATHS ARE READ RAW (N3): `git diff --name-only` C-quotes a non-ASCII path
+// under `core.quotePath`, and `git show :2:"\303\274.txt"` then fails --
+// which used to read as "deleted on both sides". Every path list is asked
+// for with `-c core.quotePath=false` and `-z` where the command has it, and
+// a stage that IS there but cannot be shown is an error, never a deletion.
+// A stage carrying a NUL is reported as `(binary, N bytes)` rather than
+// copied into the report.
 //
 // RESUMING IS THE SAME COMMAND ON THE SAME TREE. Once the caller has staged
 // its resolutions, re-running `nen wc catch-up` with the same `--base` and
@@ -38,6 +53,7 @@
 // remote-tracking ref this repository already keeps and never a branch, and
 // this module never pushes.
 
+import { plainBlock, plainLine } from "../cli/plain.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 import { fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
@@ -51,9 +67,9 @@ export type RequestedStrategy = Strategy | "auto";
 /** One conflicted path, with both sides' content as the index holds them. */
 export interface CatchUpConflict {
   readonly path: string;
-  /** Stage 2 -- the current branch's side -- capped; null when that side deleted the path. */
+  /** THIS BRANCH's side (stage 2 on a merge, stage 3 on a rebase), capped; `(binary, N bytes)` for a blob carrying a NUL; null when this side deleted the path. */
   readonly ours: string | null;
-  /** Stage 3 -- the base's side -- capped; null when that side deleted the path. */
+  /** THE BASE's side (stage 3 on a merge, stage 2 on a rebase), capped; `(binary, N bytes)` for a blob carrying a NUL; null when that side deleted the path. */
   readonly theirs: string | null;
 }
 
@@ -133,29 +149,79 @@ function cap(text: string): string {
   return `${text.slice(0, HUNK_CAP)}\n…(truncated: ${text.length - HUNK_CAP} more characters)`;
 }
 
+/** What a side reads as when the blob carries a NUL: its size, never its bytes. */
+export function binarySide(bytes: number): string {
+  return `(binary, ${bytes} bytes)`;
+}
+const BINARY_SIDE = /^\(binary, \d+ bytes\)$/;
+/** True when a side is the `(binary, N bytes)` note rather than text. */
+export function isBinarySide(text: string): boolean {
+  return BINARY_SIDE.test(text);
+}
+
+/** `-c core.quotePath=false`: paths as bytes, never C-quoted, so a stage can be asked for by the same name. */
+const RAW_PATHS = ["-c", "core.quotePath=false"];
+
+/** The index stages each unmerged path has (`git ls-files -u -z`: `<mode> <sha> <stage>\t<path>`). */
+function unmergedStages(seams: Seams, cwd: string): ReadonlyMap<string, ReadonlySet<number>> {
+  const listed = runGit(seams, cwd, ["ls-files", "-u", "-z"]);
+  if (listed.code !== 0) throw new SquashStateError(`could not list the unmerged index entries ('git ls-files -u -z' failed: ${listed.error}).`);
+  const stages = new Map<string, Set<number>>();
+  for (const entry of listed.stdout.split("\0")) {
+    const match = /^\S+ \S+ ([123])\t(.+)$/s.exec(entry);
+    if (match === null || match[1] === undefined || match[2] === undefined) continue;
+    const set = stages.get(match[2]) ?? new Set<number>();
+    set.add(Number(match[1]));
+    stages.set(match[2], set);
+  }
+  return stages;
+}
+
+/** One index stage of one path: its text, the binary note, or null when the stage is not there. A stage that is there and cannot be read is an error. */
+function readStage(seams: Seams, cwd: string, path: string, stage: number, present: boolean): string | null {
+  if (!present) return null;
+  const shown = runGit(seams, cwd, ["show", `:${stage}:${path}`]);
+  if (shown.code !== 0) {
+    throw new SquashStateError(`could not read stage ${stage} of '${path}' ('git show :${stage}:${path}' failed: ${shown.error}); the index says the stage is there, so this is not a deletion.`);
+  }
+  if (!shown.stdout.includes("\0")) return cap(shown.stdout);
+  const size = runGit(seams, cwd, ["cat-file", "-s", `:${stage}:${path}`]);
+  if (size.code !== 0 || !/^\d+$/.test(size.stdout.trim())) {
+    throw new SquashStateError(`could not size stage ${stage} of '${path}' ('git cat-file -s :${stage}:${path}' failed: ${size.error}).`);
+  }
+  return binarySide(Number(size.stdout.trim()));
+}
+
 /**
  * Every conflicted path: the unmerged ones (`--diff-filter=U`) plus any path
  * `git diff --cached --check` says still carries a conflict marker -- a
  * resolution that left `<<<<<<<` in a staged file is not a resolution. Each
- * side is read off the index stages; a stage that is not there is a side
- * that deleted the path.
+ * side is read off the index stages `git ls-files -u` says are there; a
+ * stage that is not there is a side that deleted the path, and one that is
+ * there but cannot be shown is an error. `ours` is this branch's side and
+ * `theirs` the base's, by `strategy` (see the header).
  */
-export function collectConflicts(seams: Seams, cwd: string): readonly CatchUpConflict[] {
-  const unmerged = rawLines(runGit(seams, cwd, ["diff", "--name-only", "--diff-filter=U"]).stdout);
-  const check = runGit(seams, cwd, ["diff", "--cached", "--check"]);
+export function collectConflicts(seams: Seams, cwd: string, strategy: Strategy): readonly CatchUpConflict[] {
+  const unmerged = runGit(seams, cwd, [...RAW_PATHS, "diff", "--name-only", "-z", "--diff-filter=U"]).stdout
+    .split("\0")
+    .filter((path): boolean => path !== "");
+  const check = runGit(seams, cwd, [...RAW_PATHS, "diff", "--cached", "--check"]);
   const marked = check.code === 0
     ? []
     : rawLines(check.stdout)
         .map((line): string | null => /^(.+?):\d+: leftover conflict marker/.exec(line)?.[1] ?? null)
         .filter((path): path is string => path !== null);
   const paths = [...new Set([...unmerged, ...marked])];
+  if (paths.length === 0) return [];
+  const stages = unmergedStages(seams, cwd);
+  // On a rebase the replayed commit -- this branch's side -- sits in stage 3.
+  const [oursStage, theirsStage] = strategy === "rebase" ? [3, 2] : [2, 3];
   return paths.map((path): CatchUpConflict => {
-    const ours = runGit(seams, cwd, ["show", `:2:${path}`]);
-    const theirs = runGit(seams, cwd, ["show", `:3:${path}`]);
+    const present = stages.get(path) ?? new Set<number>();
     return {
       path,
-      ours: ours.code === 0 ? cap(ours.stdout) : null,
-      theirs: theirs.code === 0 ? cap(theirs.stdout) : null,
+      ours: readStage(seams, cwd, path, oursStage, present.has(oursStage)),
+      theirs: readStage(seams, cwd, path, theirsStage, present.has(theirsStage)),
     };
   });
 }
@@ -224,7 +290,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     const before = mustHead(seams, cwd, `found an in-progress ${pending}`);
     const behindBefore = mustCount(seams, cwd, `HEAD..${remoteBase}`);
     const aheadBefore = mustCount(seams, cwd, `${remoteBase}..HEAD`);
-    const stillConflicted = collectConflicts(seams, cwd);
+    const stillConflicted = collectConflicts(seams, cwd, pending);
     const report = (after: string | null, conflicted: readonly CatchUpConflict[]): CatchUpReport => ({
       contract: CATCH_UP_CONTRACT,
       base,
@@ -252,7 +318,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
       ? runGit(seams, cwd, ["rebase", "--continue"], { GIT_EDITOR: "true" })
       : runGit(seams, cwd, ["commit", "--no-edit"]);
     if (resumed.code !== 0) {
-      const conflicted = collectConflicts(seams, cwd);
+      const conflicted = collectConflicts(seams, cwd, pending);
       if (conflicted.length === 0) {
         throw new SquashStateError(`could not continue the ${pending} ('git ${pending === "rebase" ? "rebase --continue" : "commit --no-edit"}' failed: ${resumed.error}). The tree is as git left it.`);
       }
@@ -330,7 +396,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
   }
   const ran = runGit(seams, cwd, argv);
   if (ran.code !== 0) {
-    const conflicted = collectConflicts(seams, cwd);
+    const conflicted = collectConflicts(seams, cwd, strategy);
     if (conflicted.length === 0) {
       throw new SquashStateError(`'git ${argv.join(" ")}' failed without leaving a conflict nen can read: ${ran.error}. The tree is as git left it.`);
     }
@@ -343,7 +409,12 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
   return { kind: "done", lines, report: report(after, false, []) };
 }
 
-/** The conflict block the human rendering prints, one path at a time. */
+/**
+ * The conflict block the human rendering prints, one path at a time. `ours`
+ * is this branch's side whatever the strategy. The hunks are somebody's file
+ * contents headed for a terminal, so every control byte but the newline and
+ * tab is stripped (../cli/plain.ts's argument); `--json` keeps the bytes.
+ */
 export function renderConflicts(conflicted: readonly CatchUpConflict[]): readonly string[] {
   const lines: string[] = [];
   const side = (label: string, text: string | null): void => {
@@ -351,11 +422,15 @@ export function renderConflicts(conflicted: readonly CatchUpConflict[]): readonl
       lines.push(`    ${label}: (deleted on this side)`);
       return;
     }
+    if (isBinarySide(text)) {
+      lines.push(`    ${label}: ${text}`);
+      return;
+    }
     lines.push(`    ${label}:`);
-    for (const line of text.replace(/\n$/, "").split("\n")) lines.push(`      ${line}`);
+    for (const line of plainBlock(text).replace(/\n$/, "").split("\n")) lines.push(`      ${line}`);
   };
   for (const conflict of conflicted) {
-    lines.push(`  ${conflict.path}`);
+    lines.push(`  ${plainLine(conflict.path)}`);
     side("ours  ", conflict.ours);
     side("theirs", conflict.theirs);
   }

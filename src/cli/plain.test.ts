@@ -2,7 +2,7 @@
 // string somebody else typed (Feitan F4).
 
 import { describe, expect, it } from "vitest";
-import { plainLine } from "./plain.js";
+import { plainBlock, plainLine } from "./plain.js";
 
 const ESC = String.fromCharCode(0x1b);
 
@@ -32,5 +32,20 @@ describe("plainLine", () => {
     for (const text of ["plain", "acentuación", "日本語", "emoji 🎌", "a|b", "<script>", "  spaced  "]) {
       expect(plainLine(text)).toBe(text);
     }
+  });
+});
+
+describe("plainBlock", () => {
+  it("keeps the newline and the tab a block is made of, and strips every other control byte", () => {
+    expect(plainBlock(`a${ESC}[2K\tb\nc`)).toBe("a[2K\tb\nc");
+    for (let code = 0; code <= 0x9f; code += 1) {
+      if (code > 0x1f && code < 0x7f) continue;
+      const expected = code === 0x0a || code === 0x09 ? `a${String.fromCharCode(code)}b` : "ab";
+      expect(plainBlock(`a${String.fromCharCode(code)}b`), `U+${code.toString(16)}`).toBe(expected);
+    }
+  });
+
+  it("strips a carriage return: it rewrites a line in place, which is the complaint", () => {
+    expect(plainBlock("first\r\nsecond")).toBe("first\nsecond");
   });
 });

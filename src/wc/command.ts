@@ -112,8 +112,10 @@ catch-up:
 
 Refuses a dirty tree at exit 2. Already up to date is exit 0 and noOp:
 true. ON A CONFLICT nen picks no side: the tree is left exactly as git left
-it, every conflicted path is reported with OUR side and THEIR side (the
-index's stage 2 and 3, capped) and the abort line is printed, at exit 1.
+it, every conflicted path is reported with OUR side (always this branch's,
+whichever index stage holds it -- 2 on a merge, 3 on a rebase) and THEIR
+side (always the base's), capped, '(binary, N bytes)' for a blob with a
+NUL, and the abort line is printed, at exit 1.
 RESUMING is the same command on the same tree: once the resolutions are
 staged, re-run 'nen wc catch-up' with the same --base and --strategy and it
 finds the rebase or merge in progress (REBASE_HEAD / MERGE_HEAD) and
