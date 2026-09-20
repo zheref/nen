@@ -342,6 +342,81 @@ export function excludeCheckRun(
   });
 }
 
+// --- excludeCheckNames --------------------------------------------------------
+// `--exclude-check <name>` (zheref/hatsu#81): drop every rollup entry whose own
+// name/context EXACTLY matches one of the given names, before CON-32(a) is
+// evaluated.
+//
+// WHY IT EXISTS. `--exclude-run` (above) carves out an Actions RUN -- every
+// check that one run produced, by `detailsUrl`. That is the right tool for
+// CON-36 clause-3's self-check problem, but it presumes the caller knows a
+// `github.run_id` to exclude, which is only ever available from INSIDE that
+// run. Hatsu#81's shape is different: a CONSUMER of `nen pr ready` (a status
+// writer, a merge queue, a dashboard) wants to ask "is this PR ready, ignoring
+// my own readiness check's prior report" without knowing or caring which
+// Actions run last posted it -- it may not even be a run this process is
+// inside of. Excluding by the check's own NAME answers that directly: a
+// consumer whose only reporting check is its own `readiness` check run would
+// otherwise read a false READY off a completed/success entry that is, in
+// truth, this exact question being asked recursively.
+//
+// EXACT MATCH ONLY, never a pattern or a substring, and comparison is against
+// the entry's own LABEL -- `rollupEntryLabel`, a CheckRun's `.name` or a
+// StatusContext's `.context` -- the same field CON-30's `dependabotCarveOut`
+// carve-out matches contexts against. A substring match here would let a
+// neighbouring, still-blocking check's name stand in for the one the caller
+// actually meant to drop.
+//
+// AN ANONYMOUS ENTRY (`rollupEntryLabel` returning `null`) is NEVER excluded --
+// there is no name to compare, and a caller cannot name a check into exclusion
+// that carries no name at all.
+export function excludeCheckNames(
+  entries: readonly RollupEntry[],
+  names: readonly string[],
+): RollupEntry[] {
+  if (names.length === 0) return [...entries];
+  const excluded = new Set(names);
+  return entries.filter((entry): boolean => {
+    const label = rollupEntryLabel(entry);
+    return label === null || !excluded.has(label);
+  });
+}
+
+// --- unmatchedExcludeCheckNames -----------------------------------------------
+// The other half of `--exclude-check <name>` (zheref/nen#216 follow-up): which
+// of the caller's names matched NOTHING in the rollup this exclusion was
+// applied to.
+//
+// WHY IT EXISTS. `excludeCheckNames` above is silent about a name that never
+// matched -- it just filters, and a filter that removes zero entries looks
+// identical to one that removed the entry the caller meant. That silence is
+// the exact false-ready hazard the flag exists to close: a caller who typos
+// `--exclude-check my-check-nmae` believes their own readiness check is
+// excluded, reads a `ready` verdict, and has in fact excluded nothing --
+// their own check is still IN the rollup, still possibly still-running, and
+// the gate either waited on it correctly (lucky) or, if it happened to be
+// green already for an unrelated reason, told the caller `ready` for having
+// excluded a check that was never there to begin with. Either way the caller
+// never finds out the name they typed did not do what they asked.
+//
+// Matched against the SAME entry set `excludeCheckNames` filtered (i.e. after
+// `excludeCheckRun`'s self-run carve-out has already applied, so a name that
+// only ever appeared in the excluded run is correctly reported as unmatched
+// too -- there is nothing left for it to have matched). Comparison is the
+// identical EXACT-match-on-label rule; see `excludeCheckNames` above for why.
+export function unmatchedExcludeCheckNames(
+  entries: readonly RollupEntry[],
+  names: readonly string[],
+): string[] {
+  if (names.length === 0) return [];
+  const labels = new Set<string>();
+  for (const entry of entries) {
+    const label = rollupEntryLabel(entry);
+    if (label !== null) labels.add(label);
+  }
+  return names.filter((name): boolean => !labels.has(name));
+}
+
 // --- normalizeReviewers ------------------------------------------------------
 // Trim every name in a reviewer list, drop the empties, preserve order.
 //
@@ -703,12 +778,16 @@ export function unapprovedApprovers(
 //   (i)  a review request naming it is PENDING -- `reviewRequests` drains when
 //        the reviewer posts, so a pending entry is the only pre-post footprint a
 //        non-check reviewer has; or
-//   (ii) it has no round at HEAD: for sasuke/tenma/copilot a review with
-//        `commit_id == HEAD` in ANY state; for BISKY and BUGBOT a review at head
-//        OR a COMPLETED, non-SKIPPED check at head (`bisky / review`,
-//        `Cursor Bugbot` -- the rollup is at head by construction). Both post a
-//        review only when they have findings and otherwise conclude their check
-//        silently, so for them the CHECK IS THE ROUND.
+//   (ii) it has no satisfying round: under `strict`, a review with
+//        `commit_id == HEAD` in ANY state; under `bounded` (the default, since
+//        zheref/nen#214), a review at ANY head of this pull request in ANY
+//        state -- see the ANY-HEAD comment at the call site below for why. For
+//        BISKY and BUGBOT a review (at head under `strict`, at any head under
+//        `bounded`) OR a COMPLETED, non-SKIPPED check at head (`bisky /
+//        review`, `Cursor Bugbot` -- the rollup is at head by construction)
+//        satisfies it either way. Both post a review only when they have
+//        findings and otherwise conclude their check silently, so for them the
+//        CHECK IS THE ROUND.
 //
 // Sasuke and Tenma are NEVER satisfied by their check alone on the ordinary
 // path: their verdict review is the evidence, the check is only a proxy
@@ -864,11 +943,67 @@ export function pendingRounds(
     // reviewer participates, not a fact about its name.
     if (identity?.boundedPolicyExempt === true && policy === "bounded") continue;
 
-    if (
+    // BOUNDED ROUND POLICY, ANY-HEAD LIMB (zheref/nen#214). `strict` keeps the
+    // ORIGINAL rule exactly: a round only counts at the CURRENT head, so a
+    // remediation push re-opens the owed limb until the reviewer shows up
+    // again. `bounded` (the default) instead accepts a round posted at ANY
+    // earlier head of THIS pull request -- the reviewer already showed up once,
+    // and #214's observed failure is that a later head which does nothing but
+    // fix that round's own findings could never again satisfy a "round at THIS
+    // exact SHA" test, making a third round structurally required forever
+    // (Hatsu's En caps requests at two). This limb answers only "did the
+    // reviewer show up for this PR at all"; it does NOT decide whether the
+    // round's findings were addressed -- CON-32(d)'s unresolved-thread conjunct
+    // (a later, separate row in ../gates/ready.ts, unaffected by this policy)
+    // still fails the whole gate while a thread from that round stays open, and
+    // limb (i) just above still re-opens this one the moment a FRESH review
+    // request for the same reviewer is pending. Reproduced here rather than
+    // simplified into the exempt-only branch above: `bounded_policy_exempt`
+    // is a STRONGER, opt-in exemption ("never wait on this reviewer once
+    // nothing is pending") that some reviewers may still want; this is the
+    // ORDINARY reading every reviewer gets under `bounded` once a round has
+    // been posted at least once.
+    //
+    // EXCEPT a CON-40 delivery-holistic-pass reviewer ON a delivery PR: that
+    // combination has its OWN "any commit" reading two branches down --
+    // "the one holistic pass POSTED on this PR (a review at ANY commit)" --
+    // which is gated on the abstain-green review check ALSO being a
+    // definitive SUCCESS at head, precisely because that reviewer never
+    // re-reviews after `opened`. Applying this limb's bare any-head test to
+    // it FIRST would let the holistic pass alone `continue` the loop and skip
+    // that check entirely -- satisfying CON-40's round with no green abstain
+    // check at head, which is the exact gap CON-40 exists to close. So the
+    // ordinary bounded leniency here is scoped to reviewers that limb does not
+    // own.
+    // THE BOUNDED RULE, STATED PRECISELY (CON-32(b)): under `bounded` (the
+    // default) a reviewer's posted round at ANY earlier head satisfies
+    // CON-32(b) unless a review request naming that reviewer is pending;
+    // whether the new head's diff was reviewed is the CALLER's
+    // responsibility -- the driving agent requests a fresh round after every
+    // substantive push (which makes a request pending, so the gate holds
+    // until it posts), and CON-32(d) still requires every thread resolved.
+    // `strict` keeps the current-head requirement. A delivery-holistic-pass
+    // reviewer keeps the current-head reading under both policies.
+    const isDeliveryHolisticPass = deliveryPr && identity?.deliveryHolisticPass === true;
+    // A POSTED round only: a `PENDING` record is a review somebody started
+    // and never submitted, and it can carry `commitId: null` -- counting it
+    // would satisfy CON-32(b) on a PR nobody has reviewed (Copilot review on
+    // zheref/nen#217). `roundAtCurrentHead` already excludes it, since a
+    // null commitId never equals a head SHA.
+    const roundAtAnyHead = (): boolean =>
+      inputs.reviews.some(
+        (review): boolean =>
+          loginPattern.test(review.author) && review.state !== "PENDING" && review.commitId !== null,
+      );
+    const roundAtCurrentHead = (): boolean =>
       inputs.reviews.some(
         (review): boolean =>
           loginPattern.test(review.author) && review.commitId === headSha,
-      )
+      );
+    if (
+      (policy === "bounded" && !isDeliveryHolisticPass)
+        ? roundAtAnyHead()
+        : roundAtCurrentHead()
     ) {
       continue;
     }

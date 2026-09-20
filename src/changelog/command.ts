@@ -237,6 +237,7 @@ function completenessCmd(context: CommandContext): number {
 
 export const changelogCommand: Command = {
   name: "changelog",
+  subcommands: ["fragment-required", "collate", "completeness"],
   summary: "CON-33's per-PR fragment rule, release collation, and completeness.",
   usage: USAGE,
   flags: {

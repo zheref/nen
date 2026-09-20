@@ -95,6 +95,7 @@ function print(context: CommandContext, report: PlaneReport): void {
 
 export const loopCommand: Command = {
   name: "loop",
+  subcommands: ["slots", "iterate"],
   summary: "Count the concurrency budgets, and enforce izanagi's iteration cap.",
   usage: USAGE,
   flags: { values: ["efforts", "ci-cap", "local-cap", "id", "line", "release"], booleans: [] },

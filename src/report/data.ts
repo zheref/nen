@@ -35,11 +35,12 @@
 // close, arriving through a different field. The name is what a report wants to
 // print anyway.
 
-import { basename } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
 import { proofRelativePath } from "../shu/proof.js";
+import { PHASE_CONTRACT, PHASE_LEDGER_DIR } from "../phase/ledger.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
 import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
@@ -92,6 +93,17 @@ export interface ReportCoverage {
 }
 
 /** KEY ORDER IS THE CONTRACT; ./data.test.ts pins it. */
+export interface ReportPhase {
+  readonly effort: string;
+  readonly phase: string;
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+  readonly durationMs: number | null;
+  readonly exitCode: number | null;
+  readonly surface: string | null;
+  readonly model: string | null;
+}
+
 export interface ReportData {
   readonly contract: string;
   readonly repo: string;
@@ -105,6 +117,14 @@ export interface ReportData {
   readonly coverage: ReportCoverage | null;
   /** `.nen/proof/<lane>.json`, verbatim, or null. */
   readonly proof: unknown;
+  /**
+   * Every phase ENTRY from every `.nen/phases/<effort>.json` ledger `nen
+   * phase` wrote, flattened with its `effort`, in filename then entry order
+   * (zheref/nen#216). Empty when the directory is absent. A file that does not
+   * carry the ledger contract is skipped with a warning, never rendered as a
+   * timing it did not read.
+   */
+  readonly phases: readonly ReportPhase[];
   /** `.nen/last-stop.json`, verbatim, or null. */
   readonly lastStop: unknown;
 }
@@ -484,9 +504,44 @@ export function assembleData(
       options.lane === null
         ? null
         : readJsonArtifact(proofPath(root, options.lane), proofRelativePath(options.lane), warn),
+    phases: readPhaseLedgers(root, warn),
     /* c8 ignore next -- containedPath cannot reject a literal relative path */
     lastStop: lastStop === null ? null : readJsonArtifact(lastStop, ".nen/last-stop.json", warn),
   };
+}
+
+/** Every phase entry under `.nen/phases/`, flattened, filename then entry order. */
+export function readPhaseLedgers(root: string, warn: (line: string) => void): readonly ReportPhase[] {
+  const dir = join(root, ...PHASE_LEDGER_DIR.split("/"));
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
+  } catch {
+    return [];
+  }
+  const rows: ReportPhase[] = [];
+  for (const name of names) {
+    const display = `${PHASE_LEDGER_DIR}/${name}`;
+    const doc = readJsonArtifact(join(dir, name), display, warn) as { contract?: unknown; effort?: unknown; phases?: unknown } | null;
+    if (doc === null) continue;
+    if (doc.contract !== PHASE_CONTRACT || typeof doc.effort !== "string" || !Array.isArray(doc.phases)) {
+      warn(`${display}: not a '${PHASE_CONTRACT}' ledger -- skipped`);
+      continue;
+    }
+    for (const entry of doc.phases as Record<string, unknown>[]) {
+      rows.push({
+        effort: doc.effort,
+        phase: String(entry["phase"] ?? ""),
+        startedAt: String(entry["startedAt"] ?? ""),
+        endedAt: typeof entry["endedAt"] === "string" ? entry["endedAt"] : null,
+        durationMs: typeof entry["durationMs"] === "number" ? entry["durationMs"] : null,
+        exitCode: typeof entry["exitCode"] === "number" ? entry["exitCode"] : null,
+        surface: typeof entry["surface"] === "string" ? entry["surface"] : null,
+        model: typeof entry["model"] === "string" ? entry["model"] : null,
+      });
+    }
+  }
+  return rows;
 }
 
 /** The compact human summary. `--json` carries the document itself. */
@@ -507,6 +562,7 @@ export function renderData(data: ReportData): readonly string[] {
   );
   lines.push(`coverage: ${renderCoverageLine(data.coverage)}`);
   lines.push(`proof: ${data.proof === null ? "none" : "present"}`);
+  lines.push(`phases: ${data.phases.length === 0 ? "none recorded" : `${data.phases.length} entr${data.phases.length === 1 ? "y" : "ies"}`}`);
   lines.push(`last stop: ${data.lastStop === null ? "none" : "present"}`);
   return lines;
 }

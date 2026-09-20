@@ -11,13 +11,16 @@ import { classifyCommand } from "../parse/izanami.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { CommandResult } from "../seam/exec.js";
 import { watchUntil, type WatchResult } from "./until.js";
+import { loadWorkflow } from "../schema/workflow.js";
+import { resolveRepoRoot } from "../repo/root.js";
+import { PROGRAM } from "../version.js";
 
 const USAGE = `nen watch until -- izanami's loop: fetch, evaluate, report one line, pace, stop.
 
 usage:
   nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                   [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
-                  [--error-exit-threshold <n>]
+                  [--error-exit-threshold <n>] [--repo <path>]
 
   --command       the observation to repeat, e.g. "gh pr checks 42 --json state".
                   Classified against izanami's read-only table before the FIRST
@@ -33,6 +36,9 @@ usage:
                   ERROR, not a false reading -- the pattern decides truth, the
                   exit code only decides whether the command's run itself
                   succeeded.
+  --repo <path>   the checkout whose nen/workflow.json 'monitor' block sets
+                  the default pace and bound (below). Default: the current
+                  directory.
   --error-exit-threshold  WHEN --true-pattern is NOT given (exit-code-as-
                   truth mode), an exit code at or above this is an
                   OBSERVATION ERROR rather than a false reading -- codes 0/1
@@ -41,11 +47,15 @@ usage:
                   git error, an unauthenticated gh call), not "not yet".
                   Default 2. Set higher for a command whose own false/pending
                   exit codes exceed 1.
-  --interval-ms   pace between observations. Default 5000 -- CI checks move on
-                  the order of minutes; a tighter interval just spends quota.
+  --interval-ms   pace between observations. Default: the target repository's
+                  nen/workflow.json 'monitor.pollSeconds' (x1000) when that
+                  file is present, else 5000 -- CI checks move on the order of
+                  minutes; a tighter interval just spends quota.
   --max-iterations  a SAFETY bound, not izanagi's mandatory cap (izanami needs
-                  none -- it can compound no mistake). Omit for an unbounded
-                  watch; three consecutive observation ERRORS stop the run
+                  none -- it can compound no mistake). Default: the target's
+                  'monitor.maxCycles' when declared (a declared 0 means the
+                  watch never runs: exit 1 with nothing observed), else
+                  unbounded; three consecutive observation ERRORS stop the run
                   regardless.
 
 Exits 0 when the condition became true, 1 on an error streak or a bound
@@ -56,6 +66,7 @@ export const watchCommand: Command = {
   name: "watch",
   summary: "Poll a read-only command until its condition holds.",
   usage: USAGE,
+  subcommands: ["until"],
   flags: {
     values: ["command", "true-pattern", "interval-ms", "max-iterations", "cwd", "error-exit-threshold"],
     booleans: [],
@@ -84,15 +95,31 @@ export const watchCommand: Command = {
     const truePattern = context.args.values["true-pattern"];
     const regex = truePattern === undefined ? null : new RegExp(truePattern);
 
+    // THE TARGET'S OWN `monitor` POLICY IS THE DEFAULT PACE (zheref/nen#216).
+    // `nen/workflow.json` declares `monitor.pollSeconds` and `monitor.maxCycles`,
+    // and through v0.10.0 this verb parsed neither: the file said 300 s and
+    // the watch polled every 5 s. A flag still wins -- a caller who types
+    // --interval-ms meant it -- and an absent policy keeps the old 5000.
+    const monitor = readMonitor(context);
     const intervalRaw = context.args.values["interval-ms"];
-    const intervalMs = intervalRaw === undefined ? 5000 : Number(intervalRaw);
+    const intervalMs =
+      intervalRaw === undefined ? (monitor === null || monitor.pollSeconds === null ? 5000 : monitor.pollSeconds * 1000) : Number(intervalRaw);
     if (!Number.isInteger(intervalMs) || intervalMs < 0) {
       throw new VerbUsageError("--interval-ms must be a non-negative integer.");
     }
     const maxRaw = context.args.values["max-iterations"];
-    const maxIterations = maxRaw === undefined ? undefined : Number(maxRaw);
-    if (maxIterations !== undefined && (!Number.isInteger(maxIterations) || maxIterations <= 0)) {
+    const maxIterations =
+      maxRaw === undefined ? (monitor === null || monitor.maxCycles === null ? undefined : monitor.maxCycles) : Number(maxRaw);
+    if (maxRaw !== undefined && (!Number.isInteger(maxIterations) || (maxIterations as number) <= 0)) {
       throw new VerbUsageError("--max-iterations must be a positive integer.");
+    }
+    // A DECLARED ZERO IS A LOOP THAT NEVER RUNS -- workflow.ts admits it for
+    // exactly that meaning, and reading it as "absent" would make the watch
+    // UNBOUNDED, the opposite of what the file says (Copilot review on
+    // zheref/nen#217). Nothing is observed; the bound is reported reached.
+    if (maxIterations === 0) {
+      context.io.err(`${PROGRAM} watch until: nen/workflow.json declares monitor.maxCycles 0 -- the watch never runs. Type --max-iterations to watch anyway.`);
+      return 1;
     }
 
     const thresholdRaw = context.args.values["error-exit-threshold"];
@@ -132,6 +159,30 @@ export const watchCommand: Command = {
     return result.outcome === "condition-true" ? 0 : 1;
   },
 };
+
+/**
+ * The target's `monitor` block, or null when the checkout declares no policy
+ * file. A present-but-malformed policy throws, exactly as every other reader
+ * of that file lets it: a watch paced by a file it could not read is a watch
+ * paced by a guess.
+ */
+function readMonitor(context: CommandContext): { pollSeconds: number | null; maxCycles: number | null } | null {
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const loaded = loadWorkflow(root);
+  if (!loaded.present) return null;
+  // ONLY WHAT THE FILE DECLARES, KEY BY KEY. `loadWorkflow` fills an absent
+  // block with nen's own defaults (300 s, 20 cycles); a watch that read those
+  // as the repository's policy would turn a 5-second unbounded watch into a
+  // 300-second one that exits after 20 observations, in a repository that
+  // said nothing (review finding on zheref/nen#216).
+  const raw = loaded.workflow.monitor.raw;
+  const declared = (key: "pollSeconds" | "maxCycles"): number | null =>
+    typeof raw[key] === "number" ? loaded.workflow.monitor[key] : null;
+  const pollSeconds = declared("pollSeconds");
+  const maxCycles = declared("maxCycles");
+  if (pollSeconds === null && maxCycles === null) return null;
+  return { pollSeconds, maxCycles };
+}
 
 function printOutcome(context: CommandContext, result: WatchResult): void {
   switch (result.outcome) {

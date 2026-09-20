@@ -98,6 +98,7 @@ describe("nen report data", () => {
       "evidence",
       "coverage",
       "proof",
+      "phases",
       "lastStop",
     ]);
     expect(document["contract"]).toBe("nen.report.data/v0.1");

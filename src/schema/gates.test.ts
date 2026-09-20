@@ -94,6 +94,54 @@ describe("parseGateIdentities -- validation", () => {
     expect(identities.defaultApprovers).toEqual(["a"]);
     expect(identities.approvalPolicy).toBe("required");
     expect(identities.baseReviewers).toEqual(["a"]);
+    // No round_policy declared: null, so the CALLER's own default applies --
+    // not a silently substituted number (zheref/nen#214 item 2).
+    expect(identities.stallMinutes).toBeNull();
+  });
+
+  describe("round_policy.stallMinutes (zheref/nen#214 item 2)", () => {
+    it("is null when the block is absent", () => {
+      expect(parseGateIdentities(at, minimal).stallMinutes).toBeNull();
+    });
+
+    it("is null when round_policy is declared but stallMinutes is not", () => {
+      const identities = parseGateIdentities(at, { ...minimal, round_policy: {} });
+      expect(identities.stallMinutes).toBeNull();
+    });
+
+    it("reads a declared override", () => {
+      const identities = parseGateIdentities(at, {
+        ...minimal,
+        round_policy: { stallMinutes: 10 },
+      });
+      expect(identities.stallMinutes).toBe(10);
+    });
+
+    it("accepts zero -- a repository that wants an immediate stall verdict", () => {
+      const identities = parseGateIdentities(at, {
+        ...minimal,
+        round_policy: { stallMinutes: 0 },
+      });
+      expect(identities.stallMinutes).toBe(0);
+    });
+
+    it("REFUSES a negative number", () => {
+      expect(() =>
+        parseGateIdentities(at, { ...minimal, round_policy: { stallMinutes: -1 } }),
+      ).toThrow(/stallMinutes/);
+    });
+
+    it("REFUSES a non-number", () => {
+      expect(() =>
+        parseGateIdentities(at, { ...minimal, round_policy: { stallMinutes: "30" } }),
+      ).toThrow(/stallMinutes/);
+    });
+
+    it("REFUSES a round_policy that is not an object", () => {
+      expect(() => parseGateIdentities(at, { ...minimal, round_policy: "bounded" })).toThrow(
+        /round_policy/,
+      );
+    });
   });
 
   it("REFUSES an omitted or empty default_approvers -- it would OPEN the approve limb", () => {

@@ -45,6 +45,7 @@ This derives the DIFF's half only. A pull request that is not ready has no gate.
 
 export const gateCommand: Command = {
   name: "gate",
+  subcommands: ["derive"],
   summary: "Derive G2/G4 from a changed-file set and two path sets.",
   usage: USAGE,
   flags: {

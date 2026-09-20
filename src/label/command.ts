@@ -70,6 +70,7 @@ const DEFAULT_LEDGER = "label-ledger.jsonl";
 
 export const labelCommand: Command = {
   name: "label",
+  subcommands: ["apply"],
   summary: "Apply a label to an object, logged (object * label * time * run).",
   usage: USAGE,
   flags: { values: ["label", "repo-slug", "reason", "ledger"], booleans: ["run"] },

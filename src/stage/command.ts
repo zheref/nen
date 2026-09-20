@@ -46,6 +46,7 @@ all-ignored tree is exit 0.`;
 
 export const stageCommand: Command = {
   name: "stage",
+  subcommands: ["triage"],
   summary: "Flag secrets, local config, oversized files, binaries and unmentioned deletions before staging.",
   usage: USAGE,
   flags: { values: ["scope", "mentions", "large-bytes"], booleans: [] },

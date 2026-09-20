@@ -181,6 +181,7 @@ describe("nen schema check", () => {
       "nen/gates.json",
       "nen/contract.json",
       "nen/workflow.json",
+      "nen/decisions.json",
     ]);
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);
     for (const check of checks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
@@ -237,7 +238,9 @@ describe("nen schema check", () => {
     const text = result.out.join("\n");
     expect(text).toMatch(/FAIL\s+nen\/labels\.json/);
     expect(text).toMatch(/FAIL\s+nen\/repos\.json/);
-    expect(text).toMatch(/FAIL\s+nen\/colors\.yml/);
+    // colors.yml is OPTIONAL from v0.11.0 (zheref/nen#216): its absence is an
+    // ok row, but a legacy copy beside it is still named as the migration.
+    expect(text).not.toMatch(/FAIL\s+nen\/colors\.yml/);
     expect(text).toMatch(/warn\s+nen\/gates\.json/);
     expect(text).toContain("'nen/labels.json'");
     expect(text).toContain("'schemas/labels.json'");
@@ -377,11 +380,26 @@ describe("nen bootstrap", () => {
   });
 });
 
-describe("an unknown command with --help still gets the global usage (zheref/nen#14's fact-check, regression)", () => {
-  it("'nen frobnicate --help' is not mistaken for a family with its own usage", async () => {
+describe("an unknown command with --help is still an unknown command (zheref/nen#216)", () => {
+  it("'nen frobnicate --help' prints the global usage on stderr and exits 2", async () => {
+    // Through v0.10.0 this exited 0 with the usage on stdout, so a presence
+    // probe by --help passed for a verb that does not exist.
     const result = await capture(["frobnicate", "--help"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/unknown command 'frobnicate'/);
+    expect(result.err.join("\n")).toMatch(/usage: nen \[--version\]/);
+    expect(result.out).toEqual([]);
+  });
+
+  it("a family's --help on a subcommand it declares not to have exits 2", async () => {
+    const result = await capture(["watch", "frobnicate", "--help"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/unknown subcommand 'frobnicate'/);
+  });
+
+  it("a family's --help on a real subcommand still exits 0", async () => {
+    const result = await capture(["watch", "until", "--help"]);
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/usage: nen \[--version\]/);
   });
 });
 

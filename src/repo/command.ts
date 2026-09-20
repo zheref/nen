@@ -10,6 +10,7 @@ import { resolve, RepoResolutionError, type Resolution } from "./resolve.js";
 import { assertRepoRoot, resolveRepoRoot } from "./root.js";
 import { inventoryRepo } from "./inventory.js";
 import { resolveScenario } from "./scenario.js";
+import { classifyRepo, ClassifyError, renderClassification } from "./classify.js";
 
 function requireTarget(context: CommandContext): Target {
   const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
@@ -56,10 +57,27 @@ function requireRegistry(load: () => RepoRegistry): RepoRegistry {
   }
 }
 
-const USAGE = `nen repo resolve [<token>] [--repo <path>]
+const USAGE = `nen repo classify [--target <owner/name>] [--repo <path>] [--json]
+nen repo resolve [<token>] [--repo <path>]
 nen repo resolve [--from <dir>] [--repo <path>]
 nen repo inventory --target <owner/name> --epic-label <label> --integration-prefix <prefix> [--trunk main]
 nen repo scenario --repo <path> --target <owner/name>
+
+classify:
+  ONE verdict about what kind of repository this is (zheref/nen#216): role
+  (canon | consumer | unregistered, from nen/repos.json -- maintained_tools is
+  canon, consumers and pending_onboarding are consumers), kind (product |
+  process | unknown, from nen/contract.json's lane stacks), the default lane's
+  stack, the lanes, and the gate a change there stands at -- G4 for canon,
+  G2 otherwise, by the maintainer's ruling of 2026-09-18 that the gate is the
+  repository's ROLE, not the file's kind. Every fact names its source; an
+  unregistered repository is reported as such with a note, never rounded to
+  consumer. --target names the repository; omitted, the checkout's own
+  'origin' is read. Kind, stack and lanes are read from nen/contract.json
+  ONLY when --target is this checkout (its origin matches): a contract
+  describes the checkout it sits in, so another target gets role and gate
+  from the registry and kind unknown, with a note. Exit 1 when no --target
+  is given and the origin cannot be read, or the registry will not load.
 
 resolve:
   Resolve a repository TOKEN against the target repository's nen/repos.json.
@@ -121,15 +139,17 @@ function render(resolution: Resolution): string[] {
 
 export const repoCommand: Command = {
   name: "repo",
+  subcommands: ["resolve", "inventory", "scenario", "classify"],
   summary: "Resolve a repository token, inventory a consumer's backlog, or read its recorded scenario.",
   usage: USAGE,
   flags: {
     values: ["from", "target", "epic-label", "integration-prefix", "trunk"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("repo", context.args, ["resolve", "inventory", "scenario"]);
+    const subcommand = requireSubcommand("repo", context.args, ["resolve", "inventory", "scenario", "classify"]);
     if (subcommand === "inventory") return inventory(context);
     if (subcommand === "scenario") return scenario(context);
+    if (subcommand === "classify") return classify(context);
 
     const token = context.args.positionals[2] ?? null;
     // `--from` FEEDS THE NO-TOKEN FORM ONLY: it names the directory whose
@@ -222,3 +242,22 @@ function scenario(context: CommandContext): number {
 }
 
 export { RepoResolutionError };
+
+function classify(context: CommandContext): number {
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const target = context.args.values["target"] ?? null;
+  if (target !== null && !/^[^/\s]+\/[^/\s]+$/.test(target)) {
+    throw new VerbUsageError(`--target must be owner/name, got '${target}'.`);
+  }
+  try {
+    const verdict = classifyRepo({ seams: context.seams, root, target });
+    emit(context.io, context.json, verdict, renderClassification(verdict));
+    return 0;
+  } catch (error) {
+    if (error instanceof ClassifyError) {
+      context.io.err(`nen repo classify: ${error.message}`);
+      return 1;
+    }
+    throw error;
+  }
+}

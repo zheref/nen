@@ -35,6 +35,7 @@ usage:
 
 export const qualityCommand: Command = {
   name: "quality",
+  subcommands: ["tooling", "perf-compare", "method-check"],
   summary: "Scenario tooling lookup, perf-budget comparison, method-block validation.",
   usage: USAGE,
   flags: {

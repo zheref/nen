@@ -151,6 +151,7 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
 
 export const commitCommand: Command = {
   name: "commit",
+  subcommands: ["format", "check"],
   summary: "Format a Conventional Commits message; check a lane's build proof.",
   usage: USAGE,
   flags: COMMIT_FLAGS,

@@ -25,6 +25,7 @@ message when given, and defaults to the tag name otherwise.`;
 
 export const tagCommand: Command = {
   name: "tag",
+  subcommands: ["cut"],
   summary: "Cut a tag pinned at an explicit SHA; never auto-pushed.",
   usage: USAGE,
   flags: { values: ["name", "at", "message", "trunk"], booleans: ["push"] },

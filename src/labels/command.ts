@@ -39,6 +39,7 @@ usage:
 
 export const labelsCommand: Command = {
   name: "labels",
+  subcommands: ["sync", "rename"],
   summary: "Create-or-update sync, and rename-in-place migration.",
   usage: USAGE,
   flags: { values: ["target", "map"], booleans: ["dry-run"] },

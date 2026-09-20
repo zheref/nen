@@ -35,6 +35,7 @@ rank is reported as unresolved (exit 1) rather than picked from arbitrarily.
 
 export const colorCommand: Command = {
   name: "color",
+  subcommands: ["status"],
   summary: "Resolve a row's colour by the repository's own precedence.",
   usage: USAGE,
   flags: { values: ["present", "category"] },

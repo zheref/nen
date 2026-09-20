@@ -43,6 +43,7 @@ parse:
 
 export const refCommand: Command = {
   name: "ref",
+  subcommands: ["format", "parse"],
   summary: "Format or parse the <CODE>-<IS|PR>-#<N> object notation.",
   usage: USAGE,
   flags: {

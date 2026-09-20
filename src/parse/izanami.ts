@@ -1055,6 +1055,13 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   loop: { subcommands: { slots: RO("counts concurrency budgets from a report file") } },
+  phase: {
+    subcommands: {
+      begin: MUT("writes an entry to the .nen/phases/<effort>.json ledger -- a local write, but a write"),
+      end: MUT("closes an entry in the .nen/phases/<effort>.json ledger -- a local write, but a write"),
+      show: RO("prints the ledger; reads one file"),
+    },
+  },
   parse: { subcommands: { "*": RO("parses a grammar; never executes what it classified") } },
   pr: {
     subcommands: {
@@ -1117,6 +1124,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       resolve: RO("resolves a repository token against the registry"),
       inventory: RO("inventories a consumer's backlog -- gh reads only"),
       scenario: RO("reads a repo's recorded scenario"),
+      classify: RO("reads the registry, the contract and 'git remote get-url origin' -- reads only"),
     },
   },
   // TWO VERBS, TWO POLICIES, AND THE SPLIT IS THE WHOLE POINT OF THE PAIR.
@@ -1305,6 +1313,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // claim about somebody else's file.
   stop: {
     subcommands: {
+      clear: MUT("removes the .nen/last-stop.json marker -- a local delete, but a write"),
       "*": GATED(
         ["--mark"],
         "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads",
@@ -1321,6 +1330,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "mirror check": RO(
         "regenerates the mirror in memory and diffs the committed one; unlike 'canon mirror check' it has no report-writing flag at all, so there is nothing to gate",
       ),
+      capabilities: RO("prints a table this binary ships; reads nothing"),
     },
   },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },

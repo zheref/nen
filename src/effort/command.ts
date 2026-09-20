@@ -44,6 +44,7 @@ each other" or "nothing places this" is as much an answer as any other.
 
 export const effortCommand: Command = {
   name: "effort",
+  subcommands: ["classify"],
   summary: "Classify an effort against senkei's five-class taxonomy.",
   usage: USAGE,
   flags: { values: ["input"], booleans: [] },

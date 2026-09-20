@@ -10,6 +10,7 @@
 // are marked ADDED: the bats suite is a floor, not a ceiling (BC-9).
 
 import { describe, expect, it } from "vitest";
+import { rollupEntryLabel } from "../github/types.js";
 import type {
   CheckRun,
   Review,
@@ -21,6 +22,8 @@ import {
   cancelledLatestReport,
   checksAllGreen,
   defaultReviewers,
+  excludeCheckNames,
+  unmatchedExcludeCheckNames,
   excludeCheckRun,
   isDeliveryPr,
   latestChecks,
@@ -507,6 +510,119 @@ describe("excludeCheckRun (CON-36 self-run carve-out, bankai-core#708)", () => {
     expect(input.length).toBeGreaterThan(0);
     expect(excluded).toEqual([]);
     expect(checksAllGreen(excluded)).toBe(false);
+  });
+});
+
+// --- excludeCheckNames --------------------------------------------------------
+
+describe("excludeCheckNames (zheref/hatsu#81 name-based check exclusion)", () => {
+  it("an empty name list is the identity function", () => {
+    const rollup = [checkRun({ name: "kisuke / build", conclusion: "SUCCESS" })];
+    expect(excludeCheckNames(rollup, [])).toEqual(rollup);
+  });
+
+  it("drops a CheckRun by EXACT name match", () => {
+    const kept = excludeCheckNames(
+      [
+        checkRun({ name: "readiness", conclusion: "SUCCESS" }),
+        checkRun({ name: "kisuke / build", conclusion: "SUCCESS" }),
+      ],
+      ["readiness"],
+    );
+
+    expect(kept.map((entry): string | null => rollupEntryLabel(entry))).toEqual([
+      "kisuke / build",
+    ]);
+  });
+
+  it("drops a legacy StatusContext by its .context, the same field dependabotCarveOutSatisfied matches", () => {
+    const kept = excludeCheckNames(
+      [statusContext({ context: "readiness", state: "SUCCESS" })],
+      ["readiness"],
+    );
+
+    expect(kept).toEqual([]);
+  });
+
+  it("a SUBSTRING does not match -- exact only, never a pattern that could drop a still-blocking neighbour", () => {
+    const rollup = [checkRun({ name: "readiness / summary", conclusion: "SUCCESS" })];
+    expect(excludeCheckNames(rollup, ["readiness"])).toEqual(rollup);
+  });
+
+  it("multiple names are all applied", () => {
+    const kept = excludeCheckNames(
+      [
+        checkRun({ name: "readiness", conclusion: "SUCCESS" }),
+        checkRun({ name: "status-summary", conclusion: "FAILURE" }),
+        checkRun({ name: "kisuke / build", conclusion: "SUCCESS" }),
+      ],
+      ["readiness", "status-summary"],
+    );
+
+    expect(kept.map((entry): string | null => rollupEntryLabel(entry))).toEqual([
+      "kisuke / build",
+    ]);
+  });
+
+  it("an ANONYMOUS entry (no name at all) is never excluded -- there is nothing to compare against", () => {
+    const rollup = [checkRun({ name: null, conclusion: "SUCCESS" })];
+    expect(excludeCheckNames(rollup, ["readiness"])).toEqual(rollup);
+  });
+
+  it("the Hatsu#81 shape: excluding the consumer's own readiness check empties a rollup that held only it", () => {
+    const kept = excludeCheckNames(
+      [checkRun({ name: "readiness", conclusion: "SUCCESS", status: "COMPLETED" })],
+      ["readiness"],
+    );
+
+    expect(kept).toEqual([]);
+    expect(checksAllGreen(kept)).toBe(false);
+  });
+});
+
+// --- unmatchedExcludeCheckNames -----------------------------------------------
+
+describe("unmatchedExcludeCheckNames (zheref/nen#216 follow-up: the silent-no-op hazard)", () => {
+  it("an empty name list yields no warnings", () => {
+    const rollup = [checkRun({ name: "kisuke / build", conclusion: "SUCCESS" })];
+    expect(unmatchedExcludeCheckNames(rollup, [])).toEqual([]);
+  });
+
+  it("a name that matches an entry is not reported as unmatched", () => {
+    const rollup = [checkRun({ name: "readiness", conclusion: "SUCCESS" })];
+    expect(unmatchedExcludeCheckNames(rollup, ["readiness"])).toEqual([]);
+  });
+
+  it("a typo'd name that matches nothing is reported, by itself", () => {
+    const rollup = [checkRun({ name: "readiness", conclusion: "SUCCESS" })];
+    expect(unmatchedExcludeCheckNames(rollup, ["readinesss"])).toEqual(["readinesss"]);
+  });
+
+  it("of several names, only the ones that matched nothing are reported", () => {
+    const rollup = [
+      checkRun({ name: "readiness", conclusion: "SUCCESS" }),
+      checkRun({ name: "kisuke / build", conclusion: "SUCCESS" }),
+    ];
+    expect(
+      unmatchedExcludeCheckNames(rollup, ["readiness", "does-not-exist", "kisuke / build"]),
+    ).toEqual(["does-not-exist"]);
+  });
+
+  it("matching is EXACT, same as excludeCheckNames -- a substring is still unmatched", () => {
+    const rollup = [checkRun({ name: "readiness / summary", conclusion: "SUCCESS" })];
+    expect(unmatchedExcludeCheckNames(rollup, ["readiness"])).toEqual(["readiness"]);
+  });
+
+  it("an empty rollup reports every name as unmatched", () => {
+    expect(unmatchedExcludeCheckNames([], ["readiness", "status-summary"])).toEqual([
+      "readiness",
+      "status-summary",
+    ]);
+  });
+
+  it("an ANONYMOUS entry (no name at all) can never match -- it has nothing to compare against", () => {
+    const rollup = [checkRun({ name: null, conclusion: "SUCCESS" })];
+    expect(unmatchedExcludeCheckNames(rollup, ["readiness"])).toEqual(["readiness"]);
   });
 });
 
@@ -1251,6 +1367,87 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     expect(owed).toEqual([{ reviewer: "sasuke", reason: "no-round-at-head" }]);
   });
 
+  describe("BOUNDED ANY-HEAD limb (zheref/nen#214)", () => {
+    it("under STRICT a round on a SUPERSEDED commit still owes -- unchanged old behaviour", () => {
+      const owed = pendingRounds(BANKAI,
+        rounds({ reviews: [review({ author: "sasuke-bankai[bot]", commitId: "oldsha" })] }),
+        "headsha",
+        ["sasuke"],
+        "strict",
+      );
+
+      expect(owed).toEqual([{ reviewer: "sasuke", reason: "no-round-at-head" }]);
+    });
+
+    it("under BOUNDED a round posted at an EARLIER head satisfies the owed limb -- the fix-and-push shape #214 reports", () => {
+      // Sasuke posted its round at the PR's FIRST head; the current head only
+      // carries a remediation commit and nothing re-reviewed it. Under bounded
+      // that no longer re-opens CON-32(b)'s owed limb -- whether the round's
+      // findings were actually addressed is CON-32(d)'s job, a separate
+      // conjunct in ../gates/ready.ts, not this predicate's.
+      const owed = pendingRounds(BANKAI,
+        rounds({ reviews: [review({ author: "sasuke-bankai[bot]", commitId: "oldsha" })] }),
+        "headsha",
+        ["sasuke"],
+        "bounded",
+      );
+
+      expect(owed).toEqual([]);
+    });
+
+    it("under BOUNDED a PENDING (unsubmitted) record with no commit is NOT a posted round -- the limb still owes it", () => {
+      // A review somebody started and never submitted carries state PENDING
+      // and commitId null; counting it would satisfy CON-32(b) on a PR nobody
+      // reviewed (Copilot review on zheref/nen#217).
+      const owed = pendingRounds(BANKAI,
+        rounds({ reviews: [review({ author: "sasuke-bankai[bot]", state: "PENDING", commitId: null })] }),
+        "headsha",
+        ["sasuke"],
+        "bounded",
+      );
+
+      expect(owedNames(owed)).toEqual(["sasuke"]);
+    });
+
+    it("under BOUNDED a round is still owed when NONE was ever posted, at any head", () => {
+      const owed = pendingRounds(BANKAI, rounds(), "headsha", ["sasuke"], "bounded");
+
+      expect(owed).toEqual([{ reviewer: "sasuke", reason: "no-round-at-head" }]);
+    });
+
+    it("under BOUNDED a FRESH pending review request re-opens the owed limb even though an earlier round was posted", () => {
+      // Limb (i) -- the pending-request test -- runs BEFORE the any-head
+      // leniency and still wins: a new request is the one footprint that says
+      // the round IS being re-asked for.
+      const owed = pendingRounds(BANKAI,
+        rounds({
+          reviews: [review({ author: "sasuke-bankai[bot]", commitId: "oldsha" })],
+          reviewRequests: [request("sasuke-bankai[bot]")],
+        }),
+        "headsha",
+        ["sasuke"],
+        "bounded",
+      );
+
+      expect(owed).toEqual([{ reviewer: "sasuke", reason: "review-requested-not-yet-posted" }]);
+    });
+
+    it("under BOUNDED a COMMENTED round at an earlier head still counts -- the owed limb asks only whether the reviewer showed up", () => {
+      const owed = pendingRounds(BANKAI,
+        rounds({
+          reviews: [
+            review({ author: "sasuke-bankai[bot]", state: "COMMENTED", commitId: "r1sha" }),
+          ],
+        }),
+        "headsha",
+        ["sasuke"],
+        "bounded",
+      );
+
+      expect(owed).toEqual([]);
+    });
+  });
+
   it("ADDED: a legacy StatusContext named like a reviewer check cannot satisfy a round -- the rule reads .name alone", () => {
     // A commit status from an external CI system is not bisky's review job
     // concluding silently, however it is named.
@@ -1283,11 +1480,18 @@ describe("pendingRounds (CON-32b owed limb)", () => {
     });
 
     it("the SAME state WITHOUT the delivery reading is still owed -- the carve-out fires on evidence, never on shape", () => {
+      // STRICT, deliberately (zheref/nen#214 changed what BOUNDED alone
+      // means): under `bounded`, a round posted at ANY head now satisfies the
+      // ordinary owed limb regardless of `deliveryPr`, so this case's own
+      // point -- that the CON-40 carve-out itself needs BOTH `deliveryPr` and
+      // the flag, not just the flag -- has to be read under `strict`, the one
+      // policy this predicate still applies the CURRENT-head rule under
+      // unconditionally.
       const owed = pendingRounds(BANKAI,
         deliveryInputs(),
         "headsha",
         ["sasuke", "tenma"],
-        "bounded",
+        "strict",
         false,
       );
 
@@ -1854,7 +2058,11 @@ describe("names are data -- the same predicates against a different vocabulary",
         ),
       ),
     ).toEqual([]);
-    // Off a delivery PR the ordinary at-head rule binds and both owe a round.
+    // Off a delivery PR under STRICT the ordinary at-head rule binds and both
+    // owe a round. (zheref/nen#214: under `bounded` a round at ANY head now
+    // satisfies the ordinary limb even off a delivery PR, so this half of the
+    // case -- proving the carve-out needs `deliveryPr` and not just the flag
+    // -- reads under `strict`, same as the equivalent BANKAI case above.)
     expect(
       owedNames(
         pendingRounds(
@@ -1862,7 +2070,7 @@ describe("names are data -- the same predicates against a different vocabulary",
           rounds({ checks, reviews }),
           "headsha",
           ["itachi", "kisame"],
-          "bounded",
+          "strict",
           false,
         ),
       ),

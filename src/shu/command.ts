@@ -96,7 +96,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   coverage: { values: ["lane", "threshold", "base"], booleans: ["dry-run", "touched"] },
   "test-report": { values: ["lane"], booleans: ["dry-run", "from-artifacts"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
-  warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
+  warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "carry", "tests", "dry-run"] },
   // NO --lane, AND NO --dry-run. `project.evidence` is a project-level block,
   // not a per-lane one (like `targets`), and this verb spawns nothing a dry
   // run would need to skip -- `git diff` runs unconditionally, exactly as
@@ -510,6 +510,26 @@ flags:
                    submodule. Anything still uncommitted afterwards is exit 2
                    naming it -- with the report, because by then this run has
                    destroyed something and the report is what says what.
+  --carry          'warmup' only, and never together with --discard (exit 2
+                   naming both). The third door: preserve uncommitted work
+                   (tracked AND untracked) across the warm-up instead of
+                   refusing it or throwing it away. 'git stash push
+                   --include-untracked -m "nen shu warmup --carry <branch>
+                   <instant>#<pid>"' before the fetch, then 'git stash list'
+                   to find THAT message and record its SHA -- never
+                   'refs/stash', which names whatever was pushed last by
+                   anybody -- and every later step reads it back by that SHA,
+                   NEVER 'stash@{0}'. A clean tree has nothing to carry and
+                   this is a no-op. Once the branch is cut and the declared
+                   build (and, with --tests, the declared test) has passed,
+                   'git stash apply <sha>' restores it by the object itself
+                   (no stack index can shift under it), and the entry is then
+                   dropped by a stash@{n} resolved, checked with rev-parse
+                   and confirmed by a second list around the drop -- never
+                   'git stash pop'. If the apply conflicts or fails, the
+                   stash is NOT dropped: nen prints the SHA and the exact
+                   'git stash apply <sha>' to run once it is resolved, and
+                   exits 1 -- the cut branch stays exactly where it is.
   --tests          'warmup' only. Also run the lane's declared 'test' after the
                    build, through the same executor. Off by default, because a
                    test suite is the slow half and a warm-up is the fast one.
@@ -1103,6 +1123,7 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
 
 export const shuCommand: Command = {
   name: "shu",
+  subcommands: SHU_SUBCOMMANDS,
   summary: "Stack-aware developer verbs, from the target repo's own declaration.",
   usage: USAGE,
   flags: SHU_FLAGS,
@@ -1193,6 +1214,7 @@ export const shuCommand: Command = {
             ),
             from: context.args.values["from"] ?? null,
             discard: context.args.booleans.has("discard"),
+            carry: context.args.booleans.has("carry"),
             tests: context.args.booleans.has("tests"),
             lane: context.args.values["lane"] ?? null,
             dryRun: context.args.booleans.has("dry-run"),

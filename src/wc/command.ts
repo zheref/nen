@@ -197,6 +197,7 @@ function squash(context: CommandContext): number {
 
 export const wcCommand: Command = {
   name: "wc",
+  subcommands: ["classify", "squash"],
   summary: "Classify the working copy against tensho's four-case table, or squash it onto its base.",
   usage: USAGE,
   flags: { values: ["base", "onto", "message-file"], booleans: ["dry-run"] },

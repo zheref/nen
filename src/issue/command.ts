@@ -468,6 +468,7 @@ usage:
 
 export const issueCommand: Command = {
   name: "issue",
+  subcommands: ISSUE_SUBCOMMANDS,
   summary: "Search, guard, file, attach and classify issues.",
   usage: USAGE,
   // The UNION of every subcommand's own spec (ISSUE_SUBCOMMAND_FLAGS above), never a

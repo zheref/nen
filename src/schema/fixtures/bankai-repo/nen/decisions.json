@@ -1,0 +1,32 @@
+{
+  "$comment": "Fixture decision matrix (zheref/nen#216): one row per class, ids are this fixture's own vocabulary.",
+  "contract": "nen.decisions/v0.1",
+  "rows": [
+    {
+      "id": "dirty-tree",
+      "class": "autonomous",
+      "default": "nen shu warmup --carry --branch <branch>",
+      "why": "uncommitted work rides onto the new branch; nothing is discarded"
+    },
+    {
+      "id": "mode-unknown",
+      "class": "ask-once-per-run",
+      "preferred": [
+        { "key": "A", "label": "Transmuter", "command": "nen label apply <ref> --label machinery --run", "consequence": "built under the machinery lane", "recommended": true },
+        { "key": "B", "label": "Conjurer", "command": "nen label apply <ref> --label canon --run", "consequence": "built under the canon lane" }
+      ],
+      "proposeIssue": true,
+      "surfaces": { "codex": { "picker": "request_user_input" } }
+    },
+    {
+      "id": "semantic-conflict",
+      "class": "human-gate",
+      "gate": "G5",
+      "preferred": [
+        { "key": "A", "label": "take ours", "command": "git checkout --ours -- <path>" },
+        { "key": "B", "label": "take theirs", "command": "git checkout --theirs -- <path>" }
+      ],
+      "proposeIssue": false
+    }
+  ]
+}

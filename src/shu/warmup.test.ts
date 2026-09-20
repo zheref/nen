@@ -1534,6 +1534,7 @@ describe("the --json contract", () => {
       "dryRun",
       "steps",
       "lane",
+      "carry",
       "exitCode",
     ]);
     expect(report["contract"]).toBe(WARMUP_CONTRACT);

@@ -83,6 +83,7 @@ describe("checkTaxonomy", () => {
       "nen/gates.json",
       "nen/contract.json",
       "nen/workflow.json",
+      "nen/decisions.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
     expect(report.checks[0]?.detail).toMatch(/\d+ labels/);
@@ -92,11 +93,13 @@ describe("checkTaxonomy", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-"));
     const report = checkTaxonomy({ repoFlag: root });
     expect(report.ok).toBe(false);
-    // Four, not six: the optional contract and the optional policy are the two
-    // rows whose ABSENCE is a pass rather than a finding -- and they say two
-    // different things about it, which is the point of having two sentences.
-    expect(report.checks.filter((c): boolean => !c.ok).length).toBe(4);
-    const optional = ["nen/contract.json", "nen/workflow.json"];
+    // Three, not seven: the optional contract, the optional policy, the
+    // optional colour vocabulary (v0.11.0, zheref/nen#216) and the optional
+    // decision matrix are the rows whose ABSENCE is a pass rather than a
+    // finding -- and each says a different thing about it, which is the point
+    // of having four sentences.
+    expect(report.checks.filter((c): boolean => !c.ok).length).toBe(3);
+    const optional = ["nen/contract.json", "nen/workflow.json", "nen/colors.yml", "nen/decisions.json"];
     for (const check of report.checks.filter((c): boolean => !optional.includes(c.file))) {
       expect(check.detail).toMatch(/no such file/);
       expect(check.path).toContain(root);

@@ -9,10 +9,10 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.10.0 line** (no new verb
-and no new family — gates may now declare review-round-only readiness for
-automated reviewers that do not emit GitHub approvals): 37 command
-families, 95 verbs, every flag checked against the binary this repository
+with the `nen` spelling. This document covers the **v0.11.0 line** (one new family, `phase`, and two
+new verbs, `repo classify` and `surface capabilities`; the decision matrix,
+the rich stop and the optional colour file arrive with them): 38 command
+families, 98 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -180,7 +180,7 @@ qualify today and declare one:
 `nen.scaffold.new/v0.1` · `nen.shu.<verb>/v0.1` (per executing verb) ·
 `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
 `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` ·
-`nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` ·
+`nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.decisions/v0.1` · `nen.phase.ledger/v0.1` · `nen.repo.classify/v0.1` · `nen.surface.capabilities/v0.1` ·
 `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` ·
 `nen.wc.squash/v0.1` · `nen.workflow/v0.1`
 
@@ -206,6 +206,12 @@ lines even under `--json`: only the success path is machine-shaped, because a
 caller that mis-invoked a verb needs the sentence more than it needs a schema.
 
 ### Exit codes
+
+**An unknown command or subcommand followed by `--help` exits 2 (v0.11.0, zheref/nen#216).** Through
+v0.10.0 `nen bogus --help` printed the global usage at exit 0, so a presence probe by `--help` passed for a
+verb that does not exist; now the usage prints on stderr and the code says nothing by that name is here. A
+family that declares its subcommands (`phase`, `stop`, `watch`, …) applies the same to `nen <family>
+<bogus> --help`.
 
 `0` success, `1` the verb's own refusal or failure, `2` a usage error. The rule
 `src/index.ts` states, and the reason the last two are not one code:
@@ -563,7 +569,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 95 verbs, grouped as the README groups them. **Reads** is what a
+All 98 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -594,6 +600,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file and explicit caps | local file (--efforts) | yes |
 | [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `.nen/loop/<id>.json` under --repo (reads and writes) | yes |
+| [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `.nen/phases/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
@@ -604,6 +611,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
 | [`repo`](#family-repo) | [`nen repo scenario`](#nen-repo-scenario) | reads back the scenario recorded for one --target in the registry | nen/repos.json | yes |
+| [`repo`](#family-repo) | [`nen repo classify`](#nen-repo-classify) | one verdict about a repository: role (canon / consumer / unregistered), kind (product / process / unknown), stack, lanes, and the gate a change there stands at | nen/repos.json + nen/contract.json under --repo; `git remote get-url origin` when no --target | yes |
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges | yes |
@@ -619,6 +627,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name | caller-named --template + --data files; writes --out, inside --repo, unless --dry-run | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout: the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them | caller-named --source + --agents directories; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface) / hand-edited | caller-named --source + --agents + --out; writes nothing at all; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file, agent model key -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
@@ -711,10 +720,59 @@ passes with a note stating that policy and that human merge authority remains se
 pending rounds and unresolved threads still refuse. Omitting `approval_policy` keeps the default
 `"required"` behavior, under which an absent or empty `default_approvers` remains a schema error.
 
+**`--round-policy`, and what changed in zheref/nen#214.** `bounded` (the
+default) and `strict` decide how CON-32(b)'s *owed* limb reads a reviewer's
+round:
+
+- `strict` — a round only counts when it was posted **at the current head**.
+  A remediation push that nothing re-reviews re-opens the owed limb, forever,
+  for a reviewer nothing re-requests after the final push.
+- `bounded` — a round posted **at any earlier head of the same pull request**
+  satisfies the owed limb, provided no *new* review request for that reviewer
+  is pending. This is what closes zheref/nen#214: under `review-round-only`
+  (or any policy), a Copilot round posted once and never revisited no longer
+  gets re-owed on every subsequent head, so a PR whose author pushes a
+  remediation commit after a review round can still reach `ready` without a
+  third, un-requestable round. This limb only answers "did the reviewer show
+  up for this PR at all" — it does **not** decide whether that round's
+  findings were addressed. CON-32(d)'s zero-unresolved-threads conjunct (a
+  separate row, evaluated regardless of policy) still refuses while a thread
+  from that round stays open, and a **fresh** pending review request for the
+  same reviewer still re-opens the limb immediately (the *stalled* row below
+  is unaffected by this policy and stalls on a fresh pending request precisely
+  the same way under either policy). A reviewer marked
+  `bounded_policy_exempt: true` in `nen/gates.json` keeps its own, stronger
+  exemption ("never wait on this reviewer once nothing is pending, even if it
+  never reviewed at all") — `bounded_policy_exempt` and the general `bounded`
+  any-head reading are independent knobs.
+
+**The bounded rule, stated precisely.** Under `bounded` (the default) a
+reviewer's posted round at ANY earlier head satisfies CON-32(b) unless a
+review request naming that reviewer is pending; whether the new head's diff
+was reviewed is the CALLER's responsibility — the driving agent requests a
+fresh round after every substantive push (which makes a request pending, so
+the gate holds until it posts), and CON-32(d) still requires every thread
+resolved. `strict` keeps the current-head requirement. A delivery-holistic-pass
+reviewer keeps the current-head reading under both policies.
+
+**The stall bound.** A pending review request for a `bounded_policy_exempt`
+reviewer, older than the stall bound and never posted, fails the gate loudly:
+`not-ready: <reviewer> round stalled — requested <N> min ago and never posted
+(CON-32b; re-request it, a user token is required)`. The bound defaults to 30
+minutes and can be overridden per repository with `nen/gates.json`'s
+`"round_policy": { "stallMinutes": <N> }`:
+
+```json
+"round_policy": { "stallMinutes": 15 }
+```
+
+Omitting `round_policy` (or `stallMinutes` within it) keeps the built-in
+30-minute default.
+
 **Usage**
 
 ```text
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--gates <path>] [--token-env <VAR>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>[,<name>...]] [--gates <path>] [--token-env <VAR>]
 ```
 
 **Arguments**
@@ -726,12 +784,37 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--explain` | no | print the full conjunct table plus what the gate does not decide | suppressed by `--json` (the JSON already carries the table) |
 | `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates` |
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
-| `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded` |
+| `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded`; see above |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
+| `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | comma-joined for more than one name; this CLI's flag reader refuses a *repeated* occurrence of the same flag, so `--exclude-check a,b` is the form, not `--exclude-check a --exclude-check b` |
 | `--gates <path>` | no | read reviewer identities from this file instead of `nen/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
+
+**`--exclude-check`, and why it exists (zheref/hatsu#81).** `--exclude-run`
+carves out every check one Actions *run* produced, by `detailsUrl` — the right
+tool from *inside* that run's own job, where `github.run_id` is available.
+`--exclude-check` answers a different shape: a consumer of `nen pr ready`
+whose *only* reporting check is its own prior `readiness` check run would
+otherwise read a false `ready` off that completed/success rollup entry, which
+is really this exact question being asked of itself. Matching is by the
+check's own name — `CheckRun.name` or the legacy `StatusContext.context` —
+**exact only, never a substring or a pattern**: `--exclude-check readiness`
+does not drop `readiness / summary`. If the rollup has **nothing left** after
+the named exclusion(s), the verdict is
+`not-ready: no checks reported (after excluding: <names>) (CON-32a)` —
+an absent verdict, never `ready`, the same "absence is not evidence" reading
+`--exclude-run` gives an emptied rollup. The exclusion never changes which
+reviewers owe a round or whether CON-30's dependabot carve-out fires — both
+still read the un-excluded rollup, same as `--exclude-run`. The names applied
+are reported in `--explain` and in `--json`'s `meta.excludedChecks`. A name
+that matches **no** entry in the rollup is never a silent no-op: it is
+reported as a `meta.warnings` entry (`--exclude-check '<name>' matched no
+check in the rollup`), printed under `--explain`, and the rollup is otherwise
+left intact. Because the flag is comma-joined, a check name that itself
+contains a comma cannot be expressed and every name is trimmed of
+surrounding whitespace before matching.
 
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
@@ -2133,6 +2216,38 @@ Detects stale or missing version pins across every consumer recorded in the targ
 answered them. It only reports — it never edits the registry, and "not checked" is always distinct from
 "checked and clean".
 
+
+### `nen phase`
+
+`nen phase begin|end|show` -- the per-phase timing ledger (v0.11.0, zheref/nen#216). `nen shu` already
+measures how long every step took and prints it; nothing recorded when a workflow PHASE began or ended, so
+"what is slow" was inference. This family writes that fact once, on every surface, to
+`.nen/phases/<effort>.json` (generated output, gitignored), contract `nen.phase.ledger/v0.1`.
+
+```
+nen phase begin --effort <id> --phase <name> [--surface <s>] [--model <alias>] [--note <text>]
+nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
+nen phase show  --effort <id> [--json]
+```
+
+`begin` opens an entry stamped with this invocation's clock; `end` closes the most recent OPEN entry -- the
+one named by `--phase`, or the last opened -- and records `durationMs` (`endedAt - startedAt` on the seam's
+clock, the same measure `shu` prints) and the exit code the caller reports. `nen report data` FLATTENS every
+ledger into `phases[]`, one element per entry carrying its `effort`, so a template iterates entries directly. Two open entries with one name
+are refused; `end` with nothing open is a usage error naming the effort. An effort id is the caller's (a
+branch slug, a PR number, a session id); a `/` in it becomes `-` in the filename. `nen report data` merges
+every ledger it finds as `phases[]`.
+
+**`--json`** — `begin` and `end` emit `{ path, entry: { phase, startedAt, endedAt, durationMs, exitCode,
+surface, model, note } }`; `show` emits the ledger itself, `{ contract: "nen.phase.ledger/v0.1", effort,
+phases: [ … ] }`.
+
+```
+nen phase begin --effort HA/85 --phase breath --surface codex
+nen phase end   --effort HA/85 --exit 0
+ended breath on 'HA/85' after 7500ms (exit 0) -- /…/.nen/phases/HA%2F85.json
+```
+
 ### `nen warmup`
 
 This family has a single command with no subcommand of its own — `nen warmup <anything-else>` ignores
@@ -2214,6 +2329,12 @@ nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                 [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                 [--error-exit-threshold <n>]
 ```
+
+**The target's `monitor` policy is the default pace (v0.11.0, zheref/nen#216).** When the checkout under
+`--repo` carries a `nen/workflow.json`, `monitor.pollSeconds` (×1000) is the default `--interval-ms` and
+a declared `monitor.maxCycles` is the default `--max-iterations` (a declared `0` means the watch never runs: exit 1, nothing observed); a typed flag still wins, and a
+repository with no policy file keeps the old 5000 ms and unbounded defaults. Through v0.10.0 the block
+was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 
 **Arguments**
 
@@ -2471,6 +2592,34 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 ```text
 nen schema check --repo <path> [--json]
 ```
+
+**Two optional rows from v0.11.0 (zheref/nen#216).** `nen/colors.yml` is **optional**: an absent file is an
+`ok` row reading `absent (optional)` and no longer fails the aggregate -- the verbs that resolve a colour
+(`nen color status`, the board renderers) refuse by name when asked, which is where that refusal belongs.
+Present and malformed still FAILs by pointer. `nen/decisions.json` -- the decision matrix, contract
+`nen.decisions/v0.1` -- is the seventh and last row: absent reads `absent (none declared)`, present reads
+the row counts by class, and a malformed row FAILs by pointer. Its shape:
+
+```json
+{ "contract": "nen.decisions/v0.1",
+  "rows": [
+    { "id": "dirty-tree", "class": "autonomous", "default": "nen shu warmup --carry --branch <branch>" },
+    { "id": "mode-unknown", "class": "ask-once-per-run", "proposeIssue": true,
+      "preferred": [ { "key": "A", "label": "Transmuter", "command": "…", "recommended": true },
+                     { "key": "B", "label": "Conjurer",   "command": "…" } ],
+      "surfaces": { "codex": { "picker": "request_user_input" } } },
+    { "id": "semantic-conflict", "class": "human-gate", "gate": "G5",
+      "preferred": [ { "key": "A", "label": "take ours", "command": "…" } ] }
+  ] }
+```
+
+`class` is one of `autonomous` (resolved by `default`, no question), `ask-once-per-run` (asks once, seeded by
+`preferred`) or `human-gate` (a gate canon reserves for a person, named by `gate`). An autonomous row must
+carry a default; a gate row must carry a gate and no default; an ask row must seed at least one option; at
+most one option is `recommended`; an option's `command` is never empty; an option whose label names the
+report is refused. A consumer's own file may add rows and may make an ask row autonomous; it may never
+reclassify a `human-gate` row -- that is the definition of the gate, not a knob -- and a loader merging two
+files refuses the widening by pointer.
 
 **Arguments**
 
@@ -2744,6 +2893,39 @@ Formats and parses the `<CODE>-<IS|PR>-#<N>` object notation this CLI and the sk
 to cross-reference an issue or a PR unambiguously across repositories — a bare `#386` does not say
 which repository it lives in or whether it is an issue or a PR. `format` checks its code against the
 target repository's own registry before emitting; `parse` never guesses at a malformed token.
+
+### `nen repo classify`
+
+ONE verdict about what kind of repository this is (v0.11.0, zheref/nen#216), contract
+`nen.repo.classify/v0.1`, so a reviewer or a gate reads a fact rather than carrying a list of repositories
+in its own prose.
+
+```
+nen repo classify [--target <owner/name>] [--repo <path>] [--json]
+```
+
+| Fact | Source | Values |
+|---|---|---|
+| `role` | `nen/repos.json` under `--repo`: a repository under `maintained_tools` is **canon** (its product is the process -- a merge there changes how OTHER repositories behave, and `maintained_tools` wins over a `consumers` entry for the same slug); one under `consumers` or `pending_onboarding` is a **consumer**; one the registry does not know is **unregistered**, reported as such with a note and never rounded to consumer | `canon` · `consumer` · `unregistered` |
+| `kind` | `nen/contract.json`'s lane stacks: any application stack (`xcode-ios`, `gradle-android`, `nextjs`, `expo`, `gatsby`, `compose-desktop`, `dotnet-winui`, …) makes it a **product**; tooling stacks only make it a **process** repository; no `project` block is **unknown** | `product` · `process` · `unknown` |
+| `stack`, `lanes` | the default lane's stack and every lane name | — |
+| `defaultGate` | the maintainer's ruling of 2026-09-18: the gate is the repository's ROLE, not the file's kind | `G4` for canon, `G2` for a consumer, `null` (not derived) for an unregistered repository |
+
+`--target` names the repository; omitted, the checkout's own `origin` is read (exit 1 when it cannot be).
+**`kind`, `stack` and `lanes` are derived only when the target IS this checkout** -- proved by the origin
+remote matching `--target` -- because the contract on disk describes the checkout it sits in and nobody
+else: a `--target` naming another repository gets its role and gate from the registry and `kind: unknown`
+with a note saying to run the verb from that repository's own checkout, never this checkout's lanes as if
+they were its. Every fact names its source in `sources`; `notes[]` carries the unregistered warning, the
+not-this-checkout note and the no-contract note.
+
+**`--json`** — `{ contract: "nen.repo.classify/v0.1", target, role, kind, stack, lanes, defaultGate, sources: { role,
+kind }, notes }`.
+
+```
+nen repo classify --repo src/schema/fixtures/bankai-repo --target zheref/bankai-scaffold
+zheref/bankai-scaffold: role canon · kind product · stack nextjs · gate G4
+```
 
 ### `nen ref format`
 
@@ -6276,7 +6458,7 @@ second mutation on a working copy nen has just discovered it does not understand
 **Usage**
 
 ```text
-nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard] [--tests]
+nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard | --carry] [--tests]
                [--lane <name>] [--dry-run] [--json]
 ```
 
@@ -6287,7 +6469,8 @@ nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard] [--tes
 | `--repo <path>` | **yes** | The working copy to warm. | No default, unlike every other `shu` verb: a verb that fetches into a repository, moves a branch ref and checks out a new branch must never do it to "wherever this process happens to be". |
 | `--branch <name>` | **yes** | The branch to cut from the freshly-fetched trunk. | Nen never invents one. Validated with git's own `check-ref-format --branch`, and refused at 2 if it already exists **locally or on `origin`** — never reused, reset or force-moved. A name beginning with `-` is refused before git can read it as an option. |
 | `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
-| `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). |
+| `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). **Never together with `--carry`** — exit 2, naming both. |
+| `--carry` | no | The **third door**: preserve uncommitted work (tracked **and** untracked) across the warm-up instead of refusing it or throwing it away. | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"` runs where `--discard`'s reset/clean would — after every free question and before the fetch — and `git stash list --format=%H%x09%s` right afterwards finds **that message** and reads its SHA (never `refs/stash`, which names whatever was pushed last by anybody; a message matched by zero or several entries refuses without popping). That SHA is this run's own **identity** for the entry, carried in `carry.stashed` and named in every message from here to the end. On an already-clean tree it is a no-op: no stash command runs at all. Once the branch is cut and the declared build (and, with `--tests`, the declared test) has answered — pass **or** fail — `git stash apply <sha>` restores it **by the object itself**, which no other stash push can shift; only the drop that follows needs a `stash@{n}` ref, and that ref is re-resolved with `git stash list --format=%H%x09%gd`, checked with `git rev-parse --verify` immediately before `git stash drop`, and confirmed by a second list afterwards — a drop that took a foreign entry (a push landing in between) is put back with `git stash store` and named. Nothing runs `git stash pop`, whose restore-and-drop by stack index is the race. **Never together with `--discard`** — exit 2, naming both. See [what `--carry` does and does not restore](#what---carry-restores). |
 | `--tests` | no | Also run the lane's declared `test` after the build. | Off by default — a test suite is the slow half and a warm-up is the fast one. The test is skipped when the build did not pass. |
 | `--lane <name>` | no | Which lane the build/test verification runs on. | Defaults to `project.defaultLane`. An unknown lane is refused at 2 **before a single git call** — a caller who mistyped it must not have their working copy cleaned to find out. The lane is then **resolved again** from the declaration on the branch this verb cut, which is the tree the build actually runs in. |
 | `--dry-run` | no | Print every command, in order, and **mutate nothing**. | It performs exactly **one** command and the list is closed: `git worktree list --porcelain`, the one question the plan cannot honestly guess at (see above). Not the fetch, not the status, not a probe. That row carries its real exit code and is labelled `ran:`; every other row is labelled `would run:`, and `dryRun` on the report says which form this is. Two lines still say what a real run would decide differently: that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
@@ -6318,12 +6501,14 @@ that is not a local branch, a name git will not accept, a name that is already a
 | 5 | `git check-ref-format --branch <name>` | git will not accept the name (exit 2, quoting git's own refusal) |
 | 6 | `git show-ref --verify --quiet refs/heads/<name>` | the name is already a local branch (exit 2) |
 | 6a | `git reset --hard`, then `git clean -fd`, then the status read **again** | only with `--discard`, and only when there was something to discard. The re-read refuses at 2 if anything survived — see [below](#what---discard-removes) |
+| 6b | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"`, then `git stash list --format=%H%x09%s` to find that message | only with `--carry`, and only when there was something to carry. The push failing refuses at exit 1, quoting it, **before** the fetch or any ref move; a failed SHA read after a successful push refuses the same way — see [below](#what---carry-restores) |
 | 7 | `git fetch origin` | it fails (exit 1 — a *step* failure, not a refusal) |
 | 8 | `git merge-base --is-ancestor <trunk> origin/<trunk>` | the local trunk has **diverged** (exit 2). A code *above* 1 is git failing to answer and is reported as that, never as "diverged" |
 | 9 | `git merge --ff-only origin/<trunk>` *(this checkout is on the trunk)*, `git branch --force <trunk> origin/<trunk>` *(no worktree holds it)*, or **nothing at all** *(another worktree holds it)* | it fails. Three shapes because git has three: a checked-out branch cannot be moved by `branch --force`, one that is not checked out cannot be advanced by `merge`, and one checked out in **another** worktree cannot be moved from here at all — so it is skipped, named, and step 11 cuts from the fetched ref regardless |
 | 10 | `git ls-remote --heads origin refs/heads/<name>` | the name is already on `origin` (exit 2) — **or the look-up itself failed**, which is never read as "absent". The ref is spelled in **full**: `ls-remote` matches a bare pattern against the *tail* of every ref on slash boundaries, so `--branch x` asked as a bare `x` would match an existing `refs/heads/feat/x` and refuse a name that is free |
 | 11 | `git switch -c <name> origin/<trunk>` | it fails |
 | 12 | the lane's declared `build`, then (with `--tests`) its `test` | see the exit codes below |
+| 12a | `git stash apply <sha>`, then `git stash list --format=%H%x09%gd`, `git rev-parse --verify --quiet <stash@{n}>`, `git stash drop <stash@{n}>`, `git stash list --format=%H` | only with `--carry`, and only when step 6b actually stashed something. Runs **after** step 12, whether it passed or failed — `--carry`'s promise is that the work comes back, not that it comes back only when the build does. The apply restores by the object step 6b recorded, so nothing else's stash push can shift it; the four lines after it resolve, check, drop and confirm the entry's ref. An entry already gone from the list is reported and the work is restored all the same. A conflict or a failure on the apply does **not** drop the stash: see [below](#what---carry-restores) |
 
 <a id="what---discard-removes"></a>
 
@@ -6342,6 +6527,45 @@ different claims, and only the second one is what the flag promised.
 - A nested repository or a dirty submodule therefore **survives** the discard, and the re-read refuses at
   exit 2 naming it, quoting whatever `git clean` itself said. Refused and named, rather than removed.
   At that point nothing has been fetched and no ref has moved.
+
+<a id="what---carry-restores"></a>
+
+**What `--carry` restores, and when.** It runs `git stash push --include-untracked -m "nen shu warmup
+--carry <branch> <instant>#<pid>"` where `--discard`'s reset/clean would — after every free question, before the fetch —
+then `git stash list --format=%H%x09%s` to find its own message and read the SHA of what it just pushed.
+
+- **Restored by SHA, never by a stack index.** By the time this run reaches its own restore, a fetch, a
+  fast-forward, a checkout and a build sit between the push and it; `stash@{0}` is the *top* of the stash
+  stack at whatever moment it is read, and any other stash pushed in between — a script, a hook, a habit —
+  would shift it. The SHA read right after the push (`git stash list`, matched on this run's own message)
+  is this run's own identity for the entry, and `git stash apply <sha>` restores by that object directly.
+  Only the drop needs a `stash@{n}`: `git stash list --format=%H%x09%gd` resolves it, `git rev-parse
+  --verify` checks it names the SHA immediately before `git stash drop`, and a second list afterwards
+  confirms the drop took this entry and no other — a foreign entry taken by a push landing in between is
+  put back with `git stash store` and named. `git stash pop` never runs.
+- **A clean tree is a no-op.** There is nothing to carry, so neither `git stash push` nor the
+  apply/drop sequence runs at all, and `carry.stashed` in the report is `null`.
+- **The push failing refuses at exit 1**, quoting the failed command, **before** the fetch or any ref move
+  — nothing else runs. So does a push that succeeded but whose entry could not be found afterwards: the
+  work is safe in the stash under this run's message, the refusal quotes that message and the
+  `git stash list | grep -F` line that finds it, and nothing is guessed at `stash@{0}`.
+- **Every exit from the push onward names the stash.** A fetch failure, a diverged trunk, a taken branch
+  name, a fast-forward that fails, a `switch -c` that fails — any of these between the push and the pop
+  leaves the report with `carry.restored: false` and `carry.stashed: <sha>`, and its stderr message names
+  that SHA and `git stash apply <sha>` as the way to get the work back by hand. None of them attempt the
+  pop themselves; the git half is left exactly where it stopped, same as every other mid-run failure this
+  verb reports.
+- **If the SHA is no longer on the stash list when the pop is due** — dropped, popped or cleared by
+  something else while this run was building — **nothing is popped**. The run exits 1 naming the SHA and
+  `git stash apply <sha>` (still valid: the SHA is a real object whether or not it is on the stash list).
+- **The restore runs after the declared build (and, with `--tests`, the declared test) — whether it passed
+  or failed.** `--carry`'s whole promise is that the work comes back; a failing build must not be the reason
+  it stays stranded in a stash the caller has to go find by hand.
+- **An apply that conflicts or fails does NOT drop the stash.** Nothing is resolved or discarded on the
+  caller's behalf — the same "nothing is rolled back" rule this verb keeps everywhere else, applied to the
+  step that runs last instead of first. The refusal prints the SHA and the exact `git stash apply <sha>`
+  to run by hand once the conflict is resolved, and exits 1. **The cut branch stays exactly where it is** —
+  nothing before the restore is undone.
 
 **The build and test are delegated, in this process**, to the same executor
 [`nen shu build`](#nen-shu-build) is — never a `spawnSync` of nen calling itself — so the argv that runs
@@ -6365,8 +6589,8 @@ stderr naming [`nen shu detect`](#nen-shu-detect), and **exit 0**. The git half 
 | Code | When |
 |---|---|
 | `0` | every step passed, or a dry run rendered, or there was no declaration to verify against |
-| `1` | a step **ran and failed** — a `git` that answered non-zero, or the declared build/test. The report is still emitted, because the caller now has a working copy in a state they did not ask for and that list is the only thing that says which. A `git` that could not be **started** is also 1, with no document: *install it, or put it on PATH*. **A delegated `2` is also `1`** — see below |
-| `2` | every refusal above: dirty tree without `--discard`, a merge/rebase/cherry-pick in progress, a detached `HEAD` carrying commits nothing else reaches, no `origin`, a `--from` that is not a local branch, a diverged trunk, a name git will not accept, a name that already exists, a `--discard` that ran and left the tree still not clean, an unknown `--lane`, a missing `--repo` or `--branch`. Each prints its evidence on **stderr** |
+| `1` | a step **ran and failed** — a `git` that answered non-zero, or the declared build/test. The report is still emitted, because the caller now has a working copy in a state they did not ask for and that list is the only thing that says which. A `git` that could not be **started** is also 1, with no document: *install it, or put it on PATH*. **A delegated `2` is also `1`** — see below. **`--carry`'s own steps are here too**: the stash push failing (before the fetch), the list-and-pop finding the SHA no longer on the stash list (nothing popped), or the final pop conflicting or failing (the stash is kept, not dropped) — every one of these, from the push onward, names the SHA and `git stash apply <sha>` in its message |
+| `2` | every refusal above: dirty tree without `--discard` or `--carry`, a merge/rebase/cherry-pick in progress, a detached `HEAD` carrying commits nothing else reaches, no `origin`, a `--from` that is not a local branch, a diverged trunk, a name git will not accept, a name that already exists, a `--discard` that ran and left the tree still not clean, `--discard` and `--carry` given together, an unknown `--lane`, a missing `--repo` or `--branch`. Each prints its evidence on **stderr** |
 | `3`/`4`/`5` | passed through **unchanged** from the delegated build or test — unsupported host, unsupported verb for this lane, declared program not installed |
 
 **A delegated `2` becomes `1`, and only here.** The executor's `2` means "this verb could not be performed
@@ -6391,8 +6615,18 @@ therefore each refused **with** the report; every refusal made before the fetch 
 the `--discard` re-read (step 6a), which already carried one for a destruction of its own. stdout is
 therefore always either empty or exactly one document of the published shape, and never an error object.
 
-`--json` is `{ contract, repo, trunk, remote, branch, discard, dryRun, steps, lane, exitCode }`, in that order,
-with `contract: "nen.shu.warmup/v0.1"`. Each `steps[]` row is `{ kind, argv, exitCode, durationMs, note }`,
+`--json` is `{ contract, repo, trunk, remote, branch, discard, dryRun, steps, lane, carry, exitCode }`, in
+that order, with `contract: "nen.shu.warmup/v0.1"`. `carry` is
+`{ requested, stashed, carried, restored }`: `requested` is `true` whenever `--carry` was given, whatever
+the tree turned out to hold; `stashed` is the SHA `git stash list` found for this run's own message right after the push, or
+`null` on a clean tree (nothing to carry) or without `--carry` at all; `carried` is the list of paths
+`git status` read **before** the push -- the same evidence `--discard` prints, kept here rather than
+re-derived from the stash's own diff; `restored` is `true` the moment nothing needed restoring and flips
+to `false` the instant the push lands, staying `false` through every exit from there on -- a fetch
+failure, a diverged trunk, or the final `git stash apply <sha>` conflicting or failing -- and back to
+`true` the moment that apply succeeds. The drop that follows is housekeeping: an entry already gone
+from the list, a ref that moved, or a drop that failed is reported on stderr and never un-restores. Each `steps[]` row is
+`{ kind, argv, exitCode, durationMs, note }`,
 where `kind` is `git | build | test` and `argv` is the **whole** command line, executable first — and is
 **empty** on the row of a delegated verb the executor refused before it rendered one (a lane that seats
 `test` as `unsupported`, say), so the last row of that report is not a *successful build* sitting beside an
@@ -6435,7 +6669,10 @@ would run:     pnpm turbo run build
 here. exit 0, and the only thing spawned is the `worktree list` — the one row labelled `ran:`. The
 orphan-commit count on line 2 is one of the two a real run may spell differently: it asks it only when
 line 1 comes back empty. With `--discard` the plan gains `git reset --hard`, `git clean -fd` and a second
-`git status` after line 9.)
+`git status` after line 9. With `--carry` instead, the plan gains `git stash push --include-untracked`
+and `git stash list --format=%H%x09%s` in that same spot, and `git stash apply <sha>` followed by a
+`git stash list --format=%H%x09%gd` line at the very end, after the declared build -- the apply restores
+by the object, and the list is where a real run resolves, checks and drops the entry's ref afterwards.)
 
 **Example — the trunk is checked out in another worktree** (a real run, against a throwaway repository
 with a primary checkout on `main` and an effort in a linked worktree beside it; `git branch --force main
@@ -6483,7 +6720,7 @@ nen shu warmup: the working copy at /abs/path/web-app carries 3 uncommitted path
    M README.md
   ?? .env  [secret-shape]
   ?? sub/new.txt
-Commit them, stash them, or pass --discard to throw them away -- that runs 'git reset --hard' and then 'git clean -fd', in that order, printing this same list first and re-reading the tree afterwards.
+Commit them, stash them, pass --carry to stash them across the warm-up and pop them back, or pass --discard to throw them away -- that runs 'git reset --hard' and then 'git clean -fd', in that order, printing this same list first and re-reading the tree afterwards.
 Ignored files are NEVER touched: 'git clean' is run without -x, because an ignored file is this developer's cache and not this verb's to delete.
 ```
 
@@ -6519,6 +6756,42 @@ Deal with them yourself and run this again. Nothing has been fetched and no ref 
 
 (exit 2, the report on stdout and the refusal on stderr — the one shape of exit 2 here that carries a
 document, because by then this run had already destroyed something)
+
+**Example — `--carry` on a dirty tree**
+
+```bash
+nen shu warmup --repo ./web-app --branch my-idea --carry
+```
+```text
+ran:           git stash push --include-untracked -m 'nen shu warmup --carry my-idea'  -- exit 0 in 18ms
+               carrying 2 uncommitted path(s) across this warm-up, to be restored once it is done:
+                 ?? .env  [secret-shape]
+                 ?? notes.md
+ran:           git stash list --format=%H%x09%s  -- exit 0 in 6ms
+               stashed as 7c3f9a1... -- every step from here addresses it by that SHA, never by 'stash@{0}'
+```
+```text
+[the fetch, the fast-forward, the branch cut and the declared build run exactly as they do without --carry]
+```
+```text
+ran:           git stash apply 7c3f9a1...  -- exit 0 in 12ms
+               restoring the 2 path(s) carried across this warm-up, addressed by the SHA itself -- 'git stash apply' takes a commit object, so no stack index can shift underneath it
+               the 2 carried path(s) are back
+ran:           git stash list --format=%H%x09%gd  -- exit 0 in 4ms
+               resolving the stash ref for 7c3f9a1... -- 'git stash drop' takes a stash ref (stash@{n}), never a raw SHA
+ran:           git rev-parse --verify --quiet stash@{0}  -- exit 0 in 3ms
+               checking that stash@{0} still names 7c3f9a1... immediately before the drop
+ran:           git stash drop stash@{0}  -- exit 0 in 5ms
+               dropping stash@{0}, verified a moment ago to be 7c3f9a1...
+ran:           git stash list --format=%H  -- exit 0 in 3ms
+               confirming the drop took this run's own entry and no other
+```
+
+(exit 0; `carry.restored` is `true` in `--json`. If the apply had conflicted instead, nen would print the
+SHA and the exact `git stash apply 7c3f9a1...` to run by hand, exit 1, and leave the stash exactly
+where it was -- `--branch`'s checkout stays in place either way. If the entry were no longer on the
+list by the time the drop is due -- dropped by something else in the meantime -- the work is restored
+all the same, because the apply addressed the object; nen says so and drops nothing.)
 
 ## This repository's own dev loop
 
@@ -6950,6 +7223,9 @@ The marker goes under the dot-prefixed, gitignored `.nen/` (generated output), n
 
 ```text
 nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
+         [--title <line>] [--body <text>] [--report-url <url>]
+         [--options <file.json>] [--propose-issue <file.json>]
+nen stop clear [--repo <path>]
          [--repo <path>] [efforts.md | -]
 nen stop --template
 ```
@@ -7009,6 +7285,33 @@ marked: /tmp/site/.nen/last-stop.json -- a host hook may ring rungs 2-3 off it.
   "notified": false,
   "at": "2026-09-10T05:27:13.269Z"
 }
+```
+
+**The rich stop (v0.11.0, zheref/nen#216) -- Crazy Slots.** A stop that carries any of `--title`, `--body`,
+`--report-url`, `--options <file>` or `--propose-issue <file>` renders those parts under the banner and,
+with `--mark`, writes the marker as **`nen.stop.mark/v0.2`** with the five v0.1 keys plus `title`, `body`,
+`reportUrl`, `options[]` and `proposedIssue`. A stop that carries none keeps writing v0.1 byte for byte,
+so a hook reading the old shape sees nothing change until its caller starts saying more.
+
+`--options` is a JSON array of the DECISIONS the stop asks for -- `[{ key, label, command, consequence?,
+recommended? }]` -- rendered as lettered lines with a star on the recommended one. Three rules are
+enforced rather than advised: every `command` is non-empty (an option nothing executes is a suggestion),
+exactly one option is `recommended` (a stop with no star, or two, has made no recommendation), and a
+label reading *open / read / view the report* is refused -- the report is LINKED with every stop through
+`--report-url` and is never one of the decisions. Fewer than three options is accepted and said aloud.
+
+`--propose-issue` is a JSON object `{ title, body, labels? }` drafting the process issue this stop suggests
+filing; with `--mark` it is carried in the marker and written beside it at `.nen/proposed/<at>.json`
+(`nen.stop.proposed-issue/v0.1`) for a later harvest to pick up.
+
+`nen stop show` reads the marker back and validates it -- v0.1 or v0.2 with exactly that contract's key set (an absent key is a defect, not a null), every option executable, one starred,
+none naming the report -- at exit 1 naming the first defect, so a hook or a report can rely on the shape.
+`nen stop clear` removes `.nen/last-stop.json` when it exists -- the consumption a Stop hook performs on a
+surface that has one, as a verb for the surfaces that do not. Exit 0 either way; the line says which.
+
+```
+nen stop --who Kurapika --gate G5 --title "dirty tree at breath" --body "which door?" \
+  --report-url https://claude.ai/artifact/… --options options.json --propose-issue issue.json --mark
 ```
 (run for real against a scratch repository; the absolute path is elided to `/tmp/site`)
 ## Reports
@@ -7282,6 +7585,27 @@ The `alpha` skill's source frontmatter carries `name`, `description`,
 in the description — has become `/alpha`. Under `--surface codex` the same
 source produces `name` and `description` only, `$alpha`, and one `AGENTS.md`
 holding a `## scout` section instead of `agents/scout.md`.
+
+### `nen surface capabilities`
+
+What a RUNNING SESSION on a surface can do, as data with a citation per row (v0.11.0, zheref/nen#216),
+contract `nen.surface.capabilities/v0.1` -- so a skill branches on a fact rather than on prose that was true
+the day it was written. Four surfaces: `claude-code`, `codex`, `cursor`, `antigravity` (the mirror table in
+`nen surface mirror` still carries two; this table answers a different question about all four).
+
+```
+nen surface capabilities --surface <name> [--json]
+nen surface capabilities [--json]          # every surface
+```
+
+Per row: `ask` (the multiple-choice tool), `subagent`, `hooks.{file, stop, preToolUse, sessionStart,
+decisionKey}`, `worktreeIsolation`, `sandboxExtraRoots` (a linked worktree must declare the main git
+directory as an extra writable root), `artifact`, `notify`, `permissionsFile`, `agentModelKey`, `source` and a
+`caveat`.
+
+**`--json`** — one surface: `{ contract: "nen.surface.capabilities/v0.1", surface, ask, subagent, hooks, worktreeIsolation,
+sandboxExtraRoots, artifact, notify, permissionsFile, agentModelKey, source, caveat }`; every surface: `{ contract, surfaces: [ … ] }`. An unknown surface exits 2 naming the four. Facts read 2026-09-19; when a row goes wrong, re-read
+the page in the row and change the row.
 
 ### `nen surface mirror check`
 

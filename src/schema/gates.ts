@@ -208,6 +208,17 @@ export interface GateIdentities {
   readonly approvalPolicy: "required" | "review-round-only";
   /** The reviewers configured on EVERY pull request, before enrolment. */
   readonly baseReviewers: readonly string[];
+  /**
+   * The stall bound (../gates/ready.ts's `evaluateReady` `stallMinutes`
+   * option), as an OVERRIDE of this build's fixed default. `null` when the
+   * file states none, in which case the caller's own default (nen's
+   * `STALL_MINUTES = 30`) applies -- read from `round_policy.stallMinutes`
+   * (zheref/nen#214 item 2). Repository-tunable because 30 minutes is nen's
+   * operator default, not a canon number every consumer's review cadence
+   * agrees with; a repository whose reviewers are slower or faster states its
+   * own bound rather than living with one it did not choose.
+   */
+  readonly stallMinutes: number | null;
   readonly delivery: DeliveryIdentity;
   /** CON-30's carve-out, or `null` when the file declares none. */
   readonly dependabotCarveOut: DependabotCarveOut | null;
@@ -446,6 +457,32 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     "An empty base set means no reviewer is configured on any pull request unless a check enrols one, so nothing owes a round by default.",
   );
 
+  // `round_policy.stallMinutes` -- OPTIONAL (zheref/nen#214 item 2). A
+  // repository that does not declare it gets the caller's own fixed default,
+  // which is why `null` -- not a number -- is what "the file said nothing"
+  // means here; a silently-substituted 30 would make this field
+  // indistinguishable from "the file explicitly chose nen's default".
+  const rawRoundPolicy = root["round_policy"];
+  let stallMinutes: number | null = null;
+  if (rawRoundPolicy !== undefined && rawRoundPolicy !== null) {
+    const record = requireRecord(path, "round_policy", rawRoundPolicy);
+    const rawStallMinutes = record["stallMinutes"];
+    if (rawStallMinutes !== undefined && rawStallMinutes !== null) {
+      if (
+        typeof rawStallMinutes !== "number" ||
+        !Number.isFinite(rawStallMinutes) ||
+        rawStallMinutes < 0
+      ) {
+        throw new SchemaError(
+          path,
+          "round_policy.stallMinutes",
+          `expected a non-negative number of minutes, got ${describeValue(rawStallMinutes)}`,
+        );
+      }
+      stallMinutes = rawStallMinutes;
+    }
+  }
+
   const rawDelivery = requireRecord(path, "delivery", root["delivery"]);
   const rawPrefixes = rawDelivery["head_ref_prefixes"];
   const headRefPrefixes =
@@ -530,6 +567,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     defaultApprovers,
     approvalPolicy,
     baseReviewers,
+    stallMinutes,
     delivery,
     dependabotCarveOut,
     reviewer: (name): ReviewerIdentity | undefined => byName.get(name),
