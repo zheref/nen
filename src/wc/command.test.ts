@@ -299,7 +299,7 @@ const FETCH_MAIN = "git fetch --end-of-options origin refs/heads/main:refs/remot
 /** git says neither a rebase nor a merge is in progress. */
 const NOTHING_PENDING: readonly ScriptedCall[] = [
   BASE_OK,
-  { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 1 } },
+  { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: no rebase in progress" } },
   { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 1 } },
 ];
 const FETCHED = { match: FETCH_MAIN, result: { code: 0 } };
@@ -409,7 +409,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     ]);
     expect(result.code).toBe(0);
     expect(result.doc).toMatchObject({ noOp: true, after: "before00", strategy: "rebase" });
-    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git rebase") || call.startsWith("git merge"))).toBe(false);
+    expect(gitCalls(result.seams).some((call): boolean => call === "git rebase origin/main" || call.startsWith("git merge "))).toBe(false);
   });
 
   it("--dry-run prints the line and runs neither", async () => {
@@ -531,7 +531,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("RESUMES an in-progress rebase once the resolutions are staged: rebase --continue under GIT_EDITOR=true, resumed: true", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main"], [
       BASE_OK,
-      { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0, stdout: "abc\n" } },
+      { match: "git rebase --show-current-patch", result: { code: 0, stdout: "commit abc\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "after000\n" } },
       BEHIND(0),
@@ -552,7 +552,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("RESUMES an in-progress merge with git commit --no-edit", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       BASE_OK,
-      { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 1 } },
+      { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: no rebase in progress" } },
       { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 0, stdout: "abc\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "after000\n" } },
@@ -569,7 +569,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("does NOT continue over unmerged paths or leftover conflict markers: conflicted[] again, exit 1, abort line", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main"], [
       BASE_OK,
-      { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
+      { match: "git rebase --show-current-patch", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       BEHIND(0),
       AHEAD(2),
@@ -587,7 +587,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("a continued rebase that conflicts on a LATER commit reports that conflict at exit 1", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main"], [
       BASE_OK,
-      { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
+      { match: "git rebase --show-current-patch", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       BEHIND(0),
       AHEAD(2),
@@ -607,7 +607,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("refuses a --strategy that disagrees with what is in progress, at exit 2", async () => {
     const result = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       BASE_OK,
-      { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
+      { match: "git rebase --show-current-patch", result: { code: 0 } },
     ]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/a rebase is in progress here and --strategy merge/);
@@ -616,7 +616,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
   it("--abort backs out the in-progress operation and reports aborted: true; refused when nothing is in progress", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--abort"], [
       BASE_OK,
-      { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 1 } },
+      { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: no rebase in progress" } },
       { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "before00\n" } },
@@ -626,7 +626,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(result.doc).toMatchObject({ strategy: "merge", aborted: true, resumed: false, after: "before00" });
     const dry = await capture(["wc", "catch-up", "--base", "main", "--abort", "--dry-run"], [
       BASE_OK,
-      { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
+      { match: "git rebase --show-current-patch", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
     ]);
     expect(dry.code).toBe(0);

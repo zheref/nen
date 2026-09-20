@@ -33,9 +33,9 @@
 //
 // RESUMING IS THE SAME COMMAND ON THE SAME TREE. Once the caller has staged
 // its resolutions, re-running `nen wc catch-up` with the same `--base` and
-// `--strategy` finds the rebase or merge in progress (`REBASE_HEAD` /
-// `MERGE_HEAD`, asked of git through the seam so a worktree's relocated git
-// directory changes nothing) and CONTINUES it -- `git rebase --continue`
+// `--strategy` finds the rebase or merge in progress (`git rebase
+// --show-current-patch` / `MERGE_HEAD`, asked of git through the seam so a
+// worktree's relocated git directory changes nothing) and CONTINUES it -- `git rebase --continue`
 // under `GIT_EDITOR=true`, or `git commit --no-edit` -- reporting `resumed:
 // true`. Unmerged paths or leftover conflict markers still in the index are
 // reported as `conflicted[]` again, at exit 1, with the abort line; nothing
@@ -133,9 +133,17 @@ function mustHead(seams: Seams, cwd: string, what: string): string {
   return head.stdout.trim();
 }
 
-/** Which of the two operations git says is in progress, or null. Asked of git, never of `.git/` directly. */
+/**
+ * Which of the two operations git says is in progress, or null. Asked of
+ * git, never of `.git/` directly -- and asked as `git rebase
+ * --show-current-patch`, NOT as `REBASE_HEAD`: git (2.50 measured) leaves
+ * that ref behind after a rebase completes, so a check on it would read the
+ * finished rebase this verb just continued as one still in progress, and the
+ * next run would try to continue it again. `--show-current-patch` answers
+ * from the rebase state itself: exit 0 mid-rebase, 128 otherwise.
+ */
 export function inProgress(seams: Seams, cwd: string): Strategy | null {
-  if (runGit(seams, cwd, ["rev-parse", "--verify", "--quiet", "REBASE_HEAD"]).code === 0) return "rebase";
+  if (runGit(seams, cwd, ["rebase", "--show-current-patch"]).code === 0) return "rebase";
   if (runGit(seams, cwd, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).code === 0) return "merge";
   return null;
 }
@@ -250,7 +258,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
   // ── --abort: back out whatever is in progress, and nothing else ──────────
   if (options.abort) {
     if (pending === null) {
-      return { kind: "refused", reason: "--abort was given and no rebase or merge is in progress here (neither REBASE_HEAD nor MERGE_HEAD resolves). There is nothing to back out of." };
+      return { kind: "refused", reason: "--abort was given and no rebase or merge is in progress here (git reports no rebase, and MERGE_HEAD does not resolve). There is nothing to back out of." };
     }
     const before = mustHead(seams, cwd, "found an in-progress " + pending);
     if (!dryRun) {

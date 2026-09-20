@@ -118,7 +118,8 @@ side (always the base's), capped, '(binary, N bytes)' for a blob with a
 NUL, and the abort line is printed, at exit 1.
 RESUMING is the same command on the same tree: once the resolutions are
 staged, re-run 'nen wc catch-up' with the same --base and --strategy and it
-finds the rebase or merge in progress (REBASE_HEAD / MERGE_HEAD) and
+finds the rebase or merge in progress (git rebase --show-current-patch /
+MERGE_HEAD) and
 continues it -- 'git rebase --continue' under GIT_EDITOR=true, or 'git
 commit --no-edit' -- reporting resumed: true; unmerged paths or leftover
 conflict markers still staged are reported as conflicted[] again at exit 1

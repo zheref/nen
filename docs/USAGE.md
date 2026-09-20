@@ -1864,7 +1864,7 @@ git <strategy> --abort`. Exit 1. Nothing is resolved, aborted or pushed.
 
 **Resuming.** Re-run the **same command on the same tree** once the
 resolutions are staged — Hatsu's `ao` already says so. The verb asks git
-whether a rebase or merge is in progress (`REBASE_HEAD` / `MERGE_HEAD`,
+whether a rebase or merge is in progress (`git rebase --show-current-patch` / `MERGE_HEAD`,
 through the seam, so a worktree's relocated git directory changes nothing)
 and continues it: `git rebase --continue` under `GIT_EDITOR=true`, or
 `git commit --no-edit` for a merge, reporting `resumed: true`. No status
