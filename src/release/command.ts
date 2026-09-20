@@ -160,6 +160,7 @@ const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 
 export const releaseCommand: Command = {
   name: "release",
+  subcommands: ["preflight", "resolve-target", "self-check"],
   summary: "Preflight table, target resolution, and a release PR's self-enumeration check.",
   usage: USAGE,
   flags: {

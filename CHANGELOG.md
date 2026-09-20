@@ -17,7 +17,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 ### Changed
 
 - **schema check** — `nen/colors.yml` is optional: absent is an `ok` row reading `absent (optional)`; the verbs that resolve a colour refuse by name when asked. Present and malformed still FAILs by pointer ([#216](https://github.com/zheref/nen/issues/216)).
-- **cli** — an unknown command, or a declared family's unknown subcommand, followed by `--help` exits 2 with the usage on stderr, so a presence probe by `--help` no longer passes for a verb that does not exist ([#216](https://github.com/zheref/nen/issues/216)).
+- **cli** — an unknown command, or any dispatching family's unknown subcommand, followed by `--help` exits 2 with the usage on stderr, so a presence probe by `--help` no longer passes for a verb that does not exist; every family that dispatches through `requireSubcommand` declares `subcommands`, and a test holds the declaration to the dispatch list ([#216](https://github.com/zheref/nen/issues/216)).
 - **watch until** — reads the target's `monitor.pollSeconds` as the default interval and `monitor.maxCycles` as the default bound (a declared `0` means the watch never runs, as `workflow.ts` says it does); typed flags win ([#216](https://github.com/zheref/nen/issues/216)).
 
 ### Breaking / consumer notes

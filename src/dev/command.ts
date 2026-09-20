@@ -45,6 +45,7 @@ corpus slice to replay.
 
 export const devCommand: Command = {
   name: "dev",
+  subcommands: ["test", "lint", "replay"],
   summary: "This repository's own harness: test, lint, and the corpus-slice replay.",
   usage: USAGE,
   flags: { values: ["slice-dir"], booleans: [] },

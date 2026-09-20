@@ -250,6 +250,7 @@ function diff(context: CommandContext): number {
 
 export const boardCommand: Command = {
   name: "board",
+  subcommands: ["build", "render", "diff"],
   summary: "Assemble, render, or diff the gate board.",
   usage: USAGE,
   flags: { values: ["repo-slug", "rows-from", "board-from", "before", "after"] },

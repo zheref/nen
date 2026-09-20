@@ -200,6 +200,7 @@ function runRender(context: CommandContext): number {
 
 export const reportCommand: Command = {
   name: "report",
+  subcommands: SUBCOMMANDS,
   summary: "Assemble an effort's report data, and fill a template with it.",
   usage: USAGE,
   flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS },

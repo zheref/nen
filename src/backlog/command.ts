@@ -379,6 +379,7 @@ function order(context: CommandContext): number {
 
 export const backlogCommand: Command = {
   name: "backlog",
+  subcommands: ["fetch", "order"],
   summary: "Fetch the backlog fresh, or order a pre-fetched row set.",
   usage: USAGE,
   flags: {

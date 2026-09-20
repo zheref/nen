@@ -15,6 +15,7 @@ re-vote -- this verb only ever runs the rerun.`;
 
 export const runCommand: Command = {
   name: "run",
+  subcommands: ["rerun-failed"],
   summary: "Re-run a workflow run's failed jobs.",
   usage: USAGE,
   flags: { values: ["target", "run-id"], booleans: [] },

@@ -43,8 +43,10 @@ export interface Command {
    * The subcommands this family answers, when it declares them. Read by
    * ../index.ts's `runFamily` so that `--help` on a subcommand the family does
    * not have exits 2 rather than printing the family's help at 0
-   * (zheref/nen#216). Optional: a family that leaves it out keeps the old
-   * behaviour, and its own `run()` refuses an unknown subcommand as before.
+   * (zheref/nen#216). Optional in the TYPE only for a family whose first
+   * positional is not a subcommand (`nen stop efforts.md`); EVERY family that
+   * dispatches through `requireSubcommand` declares it, and
+   * ./subcommands.test.ts holds them to it (Copilot review on zheref/nen#217).
    */
   readonly subcommands?: readonly string[];
   /**

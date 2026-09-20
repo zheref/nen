@@ -81,6 +81,7 @@ function record(context: CommandContext): number {
 
 export const fanoutCommand: Command = {
   name: "fanout",
+  subcommands: ["compute", "record"],
   summary: "Compute or record the CON-22 fan-out set for a release range.",
   usage: USAGE,
   flags: { values: ["range", "workflows-dir", "ledger"] },

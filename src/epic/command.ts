@@ -58,6 +58,7 @@ child: an all-unreadable checklist must not report itself as an empty one.
 
 export const epicCommand: Command = {
   name: "epic",
+  subcommands: ["next-wave"],
   summary: "Compute an epic's next wave from its child checklist.",
   usage: USAGE,
   flags: {

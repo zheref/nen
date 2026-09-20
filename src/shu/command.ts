@@ -1123,6 +1123,7 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
 
 export const shuCommand: Command = {
   name: "shu",
+  subcommands: SHU_SUBCOMMANDS,
   summary: "Stack-aware developer verbs, from the target repo's own declaration.",
   usage: USAGE,
   flags: SHU_FLAGS,

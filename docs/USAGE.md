@@ -2912,8 +2912,12 @@ nen repo classify [--target <owner/name>] [--repo <path>] [--json]
 | `defaultGate` | the maintainer's ruling of 2026-09-18: the gate is the repository's ROLE, not the file's kind | `G4` for canon, `G2` for a consumer, `null` (not derived) for an unregistered repository |
 
 `--target` names the repository; omitted, the checkout's own `origin` is read (exit 1 when it cannot be).
-Every fact names its source in `sources`; `notes[]` carries the unregistered warning and the no-contract
-note.
+**`kind`, `stack` and `lanes` are derived only when the target IS this checkout** -- proved by the origin
+remote matching `--target` -- because the contract on disk describes the checkout it sits in and nobody
+else: a `--target` naming another repository gets its role and gate from the registry and `kind: unknown`
+with a note saying to run the verb from that repository's own checkout, never this checkout's lanes as if
+they were its. Every fact names its source in `sources`; `notes[]` carries the unregistered warning, the
+not-this-checkout note and the no-contract note.
 
 **`--json`** — `{ contract: "nen.repo.classify/v0.1", target, role, kind, stack, lanes, defaultGate, sources: { role,
 kind }, notes }`.

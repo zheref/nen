@@ -49,6 +49,7 @@ confirm what it read.`;
 
 export const ideaCommand: Command = {
   name: "idea",
+  subcommands: ["file"],
   summary: "File an idea issue and verify it read back exactly as submitted.",
   usage: USAGE,
   flags: {

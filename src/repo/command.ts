@@ -73,8 +73,11 @@ classify:
   repository's ROLE, not the file's kind. Every fact names its source; an
   unregistered repository is reported as such with a note, never rounded to
   consumer. --target names the repository; omitted, the checkout's own
-  'origin' is read. Exit 1 when the origin cannot be read or the registry
-  will not load.
+  'origin' is read. Kind, stack and lanes are read from nen/contract.json
+  ONLY when --target is this checkout (its origin matches): a contract
+  describes the checkout it sits in, so another target gets role and gate
+  from the registry and kind unknown, with a note. Exit 1 when no --target
+  is given and the origin cannot be read, or the registry will not load.
 
 resolve:
   Resolve a repository TOKEN against the target repository's nen/repos.json.
@@ -136,6 +139,7 @@ function render(resolution: Resolution): string[] {
 
 export const repoCommand: Command = {
   name: "repo",
+  subcommands: ["resolve", "inventory", "scenario", "classify"],
   summary: "Resolve a repository token, inventory a consumer's backlog, or read its recorded scenario.",
   usage: USAGE,
   flags: {

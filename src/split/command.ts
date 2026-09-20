@@ -35,6 +35,7 @@ altered or extra hunk.
 
 export const splitCommand: Command = {
   name: "split",
+  subcommands: ["verify"],
   summary: "Prove the union of split branches' diffs equals the original.",
   usage: USAGE,
   flags: { values: ["original", "branches"], booleans: [] },

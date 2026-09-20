@@ -8,10 +8,12 @@ import type { CommandResult, Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { repoCommand } from "./command.js";
 
+const ORIGIN_BANKAI: CommandResult = { code: 0, stdout: "git@github.com:zheref/bankai-scaffold.git\n", stderr: "", spawnFailed: false };
+
 function seams(origin: CommandResult | null): Seams {
   return {
     run: (bin, args): CommandResult => {
-      if (bin === "git" && args[0] === "remote" && origin !== null) return origin;
+      if (bin === "git" && args[0] === "remote") return origin ?? { code: 128, stdout: "", stderr: "fatal: No such remote 'origin'", spawnFailed: false };
       throw new Error(`unexpected spawn: ${bin} ${args.join(" ")}`);
     },
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
@@ -37,7 +39,7 @@ async function capture(argv: readonly string[], repo: string, s: Seams, json = f
 
 describe("nen repo classify (zheref/nen#216)", () => {
   it("a maintained tool is canon at G4, even when it is also listed as a consumer", async () => {
-    const result = await capture(["repo", "classify", "--target", "zheref/bankai-scaffold"], BANKAI_REPO, seams(null), true);
+    const result = await capture(["repo", "classify", "--target", "zheref/bankai-scaffold"], BANKAI_REPO, seams(ORIGIN_BANKAI), true);
     expect(result.code).toBe(0);
     const doc = JSON.parse(result.out.join("\n")) as { role: string; defaultGate: string; kind: string; stack: string; lanes: string[]; sources: { role: string } };
     expect(doc.role).toBe("canon");
@@ -47,6 +49,21 @@ describe("nen repo classify (zheref/nen#216)", () => {
     expect(doc.kind).toBe("product");
     expect(doc.lanes).toEqual(["web", "android"]);
     expect(doc.stack).toBe("nextjs");
+  });
+
+  it("a --target that is NOT this checkout gets role and gate from the registry but NO kind: the contract on disk is not its", async () => {
+    const result = await capture(["repo", "classify", "--target", "zheref/KroApple"], BANKAI_REPO, seams(ORIGIN_BANKAI), true);
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out.join("\n")) as { role: string; kind: string; stack: string | null; lanes: string[]; notes: string[] };
+    expect(doc.role).toBe("consumer");
+    expect(doc.kind).toBe("unknown");
+    expect(doc.stack).toBeNull();
+    expect(doc.lanes).toEqual([]);
+    expect(doc.notes.join("\n")).toMatch(/not this checkout \(origin 'zheref\/bankai-scaffold'\)/);
+    // And when the origin cannot be read at all, the same refusal to guess, with the reason.
+    const blind = await capture(["repo", "classify", "--target", "zheref/bankai-scaffold"], BANKAI_REPO, seams(null), true);
+    expect(blind.code).toBe(0);
+    expect((JSON.parse(blind.out.join("\n")) as { kind: string }).kind).toBe("unknown");
   });
 
   it("a consumer is G2; an unregistered repository is G2 with a note, never rounded to consumer", async () => {
@@ -73,7 +90,9 @@ describe("nen repo classify (zheref/nen#216)", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-classify-"));
     mkdirSync(join(root, "nen"), { recursive: true });
     copyFileSync(join(BANKAI_REPO, "nen", "repos.json"), join(root, "nen", "repos.json"));
-    const result = await capture(["repo", "classify", "--target", "zheref/KroApple"], root, seams(null), true);
+    // The target IS this checkout (origin says so) and there is still no contract: the note says which.
+    const kro: CommandResult = { code: 0, stdout: "https://github.com/zheref/KroApple.git\n", stderr: "", spawnFailed: false };
+    const result = await capture(["repo", "classify", "--target", "zheref/KroApple"], root, seams(kro), true);
     const doc = JSON.parse(result.out.join("\n")) as { kind: string; notes: string[] };
     expect(doc.kind).toBe("unknown");
     expect(doc.notes.join(" ")).toMatch(/no nen\/contract\.json/);

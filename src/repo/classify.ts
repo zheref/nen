@@ -121,22 +121,48 @@ export interface ClassifyOptions {
 
 export function classifyRepo(options: ClassifyOptions): RepoClassification {
   const registry = loadRepoRegistry(options.root);
-  const target = options.target ?? readOrigin(options.seams, options.root);
+  // WHOSE CONTRACT. The registry answers for any target it lists, but the
+  // contract on disk describes THIS checkout and nobody else: reading it for
+  // a --target that is not this checkout's origin would report the canon
+  // registry's own lanes as a consumer's (Copilot review on zheref/nen#217).
+  // So the kind is derived only when the target IS the checkout, which is
+  // proved by the origin remote; otherwise it is unknown and the note says
+  // where to run the verb instead.
+  const notes: string[] = [];
+  let origin: string | null = null;
+  let originWhy: string | null = null;
+  try {
+    origin = readOrigin(options.seams, options.root);
+  } catch (error) {
+    if (options.target === null || !(error instanceof ClassifyError)) throw error;
+    originWhy = error.message;
+  }
+  const target = options.target ?? (origin as string);
   const { role, source: roleSource } = roleOf(registry, target);
 
   let contract: RepositoryContract | null = null;
   const contractPath = `${options.root}/nen/contract.json`;
-  const notes: string[] = [];
-  try {
-    contract = loadContract(options.root);
-  } catch (error) {
-    if (error instanceof SchemaError && error.message.includes("no such file.")) {
-      notes.push("no nen/contract.json: kind and stack are unknown, not defaulted");
-    } else {
-      throw error;
+  const local = origin !== null && origin === target;
+  if (local) {
+    try {
+      contract = loadContract(options.root);
+    } catch (error) {
+      if (error instanceof SchemaError && error.message.includes("no such file.")) {
+        notes.push("no nen/contract.json: kind and stack are unknown, not defaulted");
+      } else {
+        throw error;
+      }
     }
+  } else {
+    notes.push(
+      origin === null
+        ? `kind and stack not derived: this checkout's origin could not be read (${originWhy ?? "unknown"}), so '${target}' cannot be proved to be this checkout and its nen/contract.json is not read for it`
+        : `kind and stack not derived: '${target}' is not this checkout (origin '${origin}'), and a contract describes only the checkout it sits in -- run 'nen repo classify' from a checkout of '${target}' for its lanes`,
+    );
   }
-  const { kind, stack, lanes, source: kindSource } = kindOf(contract, contractPath);
+  const { kind, stack, lanes, source: kindSource } = local
+    ? kindOf(contract, contractPath)
+    : { kind: "unknown" as const, stack: null, lanes: [], source: "not this checkout: contract not read" };
 
   if (role === "unregistered") {
     notes.push(

@@ -70,6 +70,7 @@ usage:
 
 export const canonCommand: Command = {
   name: "canon",
+  subcommands: ["resolve", "mirror"],
   summary: "Resolve a repo's handbook set, or generate/check its canon-rule mirror.",
   usage: USAGE,
   flags: {

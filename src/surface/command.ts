@@ -252,6 +252,7 @@ function runCheck(context: CommandContext): number {
 
 export const surfaceCommand: Command = {
   name: "surface",
+  subcommands: ["mirror", "capabilities"],
   summary: "Mirror a skills directory into another agent surface's layout, and check it for drift.",
   usage: USAGE,
   flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS },

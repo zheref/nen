@@ -335,6 +335,7 @@ function fire(context: CommandContext): number {
 
 export const wakeCommand: Command = {
   name: "wake",
+  subcommands: ["fire", "verify"],
   summary: "Fire or verify a wake: redrive/flag a swallowed run, or edge-trigger a re-apply.",
   usage: USAGE,
   flags: {

@@ -499,6 +499,7 @@ function runNew(context: CommandContext): number {
 
 export const scaffoldCommand: Command = {
   name: "scaffold",
+  subcommands: ["init", "new"],
   summary: "Stand a repository up: taxonomy layer, declaration, CI file -- existing tree or fresh.",
   // A GETTER, so the packs are read when `--help` is printed rather than when
   // this module is imported: ../cli/registry.ts imports every family on every
