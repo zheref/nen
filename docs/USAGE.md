@@ -620,7 +620,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
-| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to origin, refusing a detached HEAD, the trunk, any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches origin) | yes |
+| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk, any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -1827,7 +1827,8 @@ runs exactly one of them, and on a conflict **stops**: the tree is left
 exactly as git left it, every conflicted path is reported with our side and
 their side, and the abort line is printed. It never picks a side.
 
-**Usage**
+**Usage** (needs **git ≥ 2.24** — the fetch is `--end-of-options`; an older
+git is refused at exit 2 naming its version, never fetched around)
 
 ```text
 nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
@@ -1901,24 +1902,37 @@ would run: git rebase origin/main  (2 ahead, 3 behind)
 
 ### `nen wc publish`
 
-Pushes the **current branch** to `origin` and nothing else (v0.13.0,
-[#227](https://github.com/zheref/nen/issues/227)) — `git push [-u] origin --
-refs/heads/<branch>:refs/heads/<branch>`, the refspec spelled in full behind
-`--` so that no branch *name* can change what the push does. Everything that
+Pushes the **current branch** to **the remote its upstream names** and nothing
+else (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push
+[-u] <remote> -- refs/heads/<branch>:refs/heads/<branch>`, the refspec
+spelled in full behind `--` so that no branch *name* can change what the push
+does. A branch tracking `fork/feature` is pushed to `fork`, and the
+fast-forward check below is made against `fork/feature` — the ref the push
+moves — never against `origin` while pushing somewhere else (Copilot review on
+[#231](https://github.com/zheref/nen/pull/231)). A branch with **no upstream**
+goes to `origin`, or to `--remote <name>` when one is given. Everything that
 could rewrite somebody else's history is refused before the push.
 
 **Usage**
 
 ```text
-nen wc publish --repo <path> [--set-upstream] [--dry-run] [--json]
+nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run] [--json]
 ```
 
 | Flag | Required | Meaning |
 |---|---|---|
 | `--repo <path>` | **yes** | the working tree whose current branch is pushed |
-| `--set-upstream` | no | push with `-u`, so the branch tracks `origin/<branch>` afterwards |
+| `--set-upstream` | no | push with `-u`, so the branch tracks `<remote>/<branch>` afterwards |
+| `--remote <name>` | no | where a branch with **no upstream** goes (default `origin`); must be a remote `git remote` lists, and is refused at exit 2 when the branch already tracks a *different* remote — the branch says where it goes; `--remote` on any other `wc` subcommand is refused rather than ignored |
 | `--dry-run` | no | print the push line; push nothing (the upstream is still fetched — a read) |
 | `--json` | no | `nen.wc.publish/v0.1` — see below |
+
+> Needs **git ≥ 2.24**: the upstream fetch is spelled `git fetch
+> --end-of-options …`, a parse-options flag every git since 2.24 (2019)
+> accepts on `fetch`. An older git that answers `unknown option` is refused at
+> exit 2 naming its version — the flag is never dropped to make the fetch go
+> through, because it is what keeps a branch name from being read as an
+> option. The same floor applies to [`wc catch-up`](#nen-wc-catch-up).
 
 **Refused at exit 2:** a detached `HEAD` (no branch to push); the trunk —
 [`nen/workflow.json`](#nenworkflowjson)'s `branch.base`, and `main`/`master`
@@ -1931,9 +1945,12 @@ a force even where git accepts it — git will hold a branch named `+main`,
 and `git push origin +main` is a force push of `main`; and anything that
 looks like a refspec or a force on the command line: a positional, a `+`, a
 `:`, and `--force`, which the strict parser already refuses as an unknown
-option. The branch the upstream tracks passes the same two checks before it
-is fetched, and the fetch is `git fetch --end-of-options <remote>
-refs/heads/<branch>:refs/remotes/<remote>/<branch>`. **Exit 1, nothing
+option; a `--remote` shaped like an option, a refspec or a path, one `git
+remote` does not list, or one that contradicts the upstream. The branch the
+upstream tracks passes the same two checks before it is fetched, and the
+fetch is `git fetch --end-of-options <remote>
+refs/heads/<branch>:refs/remotes/<remote>/<branch>`, from the upstream's own
+remote. **Exit 1, nothing
 pushed:** the upstream exists and the local branch is not a fast-forward of
 it (fetched first, then `git merge-base --is-ancestor <upstream> HEAD`) — the
 push would need `--force`, and this verb never forces; the report says
@@ -1941,8 +1958,10 @@ push would need `--force`, and this verb never forces; the report says
 the repair.
 
 **`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
-upstreamBefore, ahead, needsForce, pushed, dryRun }`. `upstreamBefore` is
-`null` and `ahead` is `null` when the branch tracked nothing before this call.
+upstreamBefore, ahead, needsForce, pushed, dryRun }`. `remote` is the one
+pushed to — the upstream's, or `origin`/`--remote` when there was none;
+`upstreamBefore` is `null` and `ahead` is `null` when the branch tracked
+nothing before this call.
 
 **Example**
 
@@ -4931,7 +4950,9 @@ directory with it when the message was its only occupant.
 trailer, and this repository's trailer policy forbids attribution trailers
 other than the ones it names — the verb would be adding a line the validator
 then refuses. Where a repository's policy *admits* it, pass it as any other
-trailer: `--trailer "Signed-off-by: Name <email>"`.
+trailer: `--trailer "Signed-off-by: Name <email>"`. Typing `--sign-off`
+anyway is refused as an unknown option at exit 2, and the refusal says
+exactly this (`nen commit --help` does too).
 
 **`--json`** — `nen.commit.write/v0.1`: `{ contract, sha, subject, trailers:
 [{ key, value }], dryRun }`. `sha` is `null` on a dry run; `trailers` is every

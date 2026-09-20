@@ -50,6 +50,15 @@ export interface Command {
    */
   readonly subcommands?: readonly string[];
   /**
+   * A sentence the parser's "unknown option" refusal carries when the unknown
+   * flag is EXACTLY one of these spellings (Copilot review on zheref/nen#231):
+   * for a flag a reader may expect from elsewhere -- `--sign-off` on `commit
+   * write` -- the refusal names the alternative instead of leaving the caller
+   * to find it in USAGE. Read by ../index.ts's `runFamily`; the flag stays
+   * unknown and the exit stays 2.
+   */
+  readonly hints?: Readonly<Record<string, string>>;
+  /**
    * A `Promise<number>` is allowed because ONE subcommand of ONE family --
    * `nen pr ready` (../verbs/pr_ready.ts) -- reads GitHub over the network and
    * there is no synchronous way to do that. Every other family stays

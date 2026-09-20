@@ -1,6 +1,15 @@
-// src/wc/publish.ts -- `nen wc publish`: push the current branch to origin,
-// and refuse every shape of push that could rewrite somebody else's history
-// (zheref/nen#227; Hatsu's `aka` skill hand-rolled this).
+// src/wc/publish.ts -- `nen wc publish`: push the current branch to the remote
+// its upstream names, and refuse every shape of push that could rewrite
+// somebody else's history (zheref/nen#227; Hatsu's `aka` skill hand-rolled
+// this).
+//
+// THE REMOTE IS THE UPSTREAM'S (Copilot review on zheref/nen#231). A branch
+// that tracks `fork/feature` is pushed to `fork`, and the fast-forward check
+// below is made against THAT remote's ref -- the one the push will move --
+// never against `origin` while pushing somewhere else. A branch with no
+// upstream yet goes to `origin`, or to `--remote <name>` when the caller
+// names one; a `--remote` that disagrees with an existing upstream is refused,
+// because the branch already says where it goes.
 //
 // FOUR REFUSALS BEFORE ANY WRITE, all at exit 2, because each is a mistake in
 // the invocation rather than a fact about the remote: a DETACHED HEAD (there
@@ -8,8 +17,8 @@
 // `main`/`master` whatever the policy says -- because nothing here ever
 // pushes the trunk directly; anything that LOOKS LIKE A REFSPEC OR A FORCE
 // (a positional, a `+`, a `:`, a `--force` -- the last is already unknown to
-// the parser); and a caller-supplied remote, because this verb pushes to
-// `origin` and nowhere else.
+// the parser); and a `--remote` this repository does not have, or one that
+// contradicts the upstream.
 //
 // THE FIFTH IS A FACT ABOUT THE REMOTE, AND EXIT 1: an upstream that exists
 // and is NOT an ancestor of the local branch is a push git would refuse
@@ -27,17 +36,30 @@
 // NORMALIZED name (`refs/heads/main`, `+main` -> `main`).
 //
 // `git fetch` IS A READ, on ./squash.ts's argument; the ONE write is the push.
+//
+// `--end-of-options` IS A PARSE-OPTIONS FLAG git has accepted on every
+// parse-options command -- `fetch` included -- since 2.24 (2019). Verified on
+// git 2.50.1: `git fetch --end-of-options origin refs/heads/x:refs/remotes/
+// origin/x` fails only on the ref lookup ("couldn't find remote ref").
+// Should an older git ever answer "unknown option", this module REFUSES at
+// exit 2 naming the git version rather than fetching without the guard
+// (`endOfOptionsRefusal`): a branch name that is an option would otherwise
+// change what the fetch does, and that is the whole reason the flag is there.
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { SquashStateError } from "./squash.js";
 
 export const PUBLISH_CONTRACT = "nen.wc.publish/v0.1";
+/** The remote a branch with no upstream goes to when the caller names none; catch-up's base always lives here. */
 export const REMOTE = "origin";
+/** `git fetch --end-of-options` landed in git 2.24; below it the guard is refused, never dropped. */
+export const MIN_GIT_FOR_END_OF_OPTIONS = "2.24";
 
 /** KEY ORDER IS THE CONTRACT; ./command.test.ts pins it. */
 export interface PublishReport {
   readonly contract: string;
   readonly branch: string;
+  /** The remote pushed to: the upstream's own, or `--remote`/`origin` when the branch has no upstream. */
   readonly remote: string;
   /** The `<remote>/<branch>` the branch tracked before this call, or null. */
   readonly upstreamBefore: string | null;
@@ -58,6 +80,8 @@ export interface PublishOptions {
   readonly base: string;
   readonly setUpstream: boolean;
   readonly dryRun: boolean;
+  /** `--remote <name>`: where a branch with NO upstream goes; null means `origin`. */
+  readonly remote?: string | null;
 }
 
 interface GitCall {
@@ -112,6 +136,29 @@ export function fetchArgv(remote: string, branch: string): string[] {
   return ["fetch", "--end-of-options", remote, `refs/heads/${branch}:refs/remotes/${remote}/${branch}`];
 }
 
+/**
+ * The exit-2 refusal for a git that rejected `--end-of-options` on the fetch,
+ * or null when the failure was something else (a missing ref, no network),
+ * which the caller reports as the fetch failure it is. The guard is NEVER
+ * dropped to make the fetch go through: the version is named and the caller
+ * upgrades git.
+ */
+export function endOfOptionsRefusal(seams: Seams, cwd: string, fetchArgs: readonly string[], fetch: GitCall): string | null {
+  if (fetch.spawnFailed || !/unknown option|unrecognized option|end-of-options/i.test(fetch.error)) return null;
+  const version = runGit(seams, cwd, ["--version"]);
+  const named = version.code === 0 ? version.stdout.trim() : "git (version unknown)";
+  return `${named} rejected '--end-of-options' on fetch ('git ${fetchArgs.join(" ")}' answered: ${fetch.error}). 'wc publish' and 'wc catch-up' need git >= ${MIN_GIT_FOR_END_OF_OPTIONS}, and the flag is never dropped to make the fetch go through: it is what keeps a branch name from being read as an option. Upgrade git. Nothing was fetched or pushed.`;
+}
+
+/** The `<remote>/<branch>` an upstream names, split at the first '/', the way ../pr/open.ts splits it. */
+export function splitUpstream(upstream: string): { readonly remote: string; readonly branch: string } {
+  const slash = upstream.indexOf("/");
+  if (slash === -1) {
+    throw new SquashStateError(`the upstream '${upstream}' does not look like '<remote>/<branch>' -- refusing to reason about a remote this module cannot name from it.`);
+  }
+  return { remote: upstream.slice(0, slash), branch: upstream.slice(slash + 1) };
+}
+
 export function publish(seams: Seams, cwd: string, options: PublishOptions): PublishOutcome {
   const branchResult = runGit(seams, cwd, ["symbolic-ref", "--short", "HEAD"]);
   if (branchResult.code !== 0) {
@@ -131,25 +178,41 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   const badName = refuseBranchName(seams, cwd, branch, "the current branch");
   if (badName !== null) return { kind: "refused", reason: badName };
 
+  const asked = options.remote ?? null;
+  if (asked !== null && (asked.trim() === "" || looksLikeRefspecOrForce(asked) || asked.includes("/"))) {
+    return { kind: "refused", reason: `--remote '${asked}' is not a remote name this verb will put in a push argv (a leading '+' or '-', a ':' or a '/'). Nothing was fetched or pushed.` };
+  }
   const upstreamResult = runGit(seams, cwd, ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`]);
   const upstreamBefore = upstreamResult.code === 0 ? upstreamResult.stdout.trim() : null;
   let ahead: number | null = null;
   let needsForce = false;
+  let remote: string;
   if (upstreamBefore !== null) {
-    const slash = upstreamBefore.indexOf("/");
-    if (slash === -1) {
-      throw new SquashStateError(`the upstream '${upstreamBefore}' does not look like '<remote>/<branch>' -- refusing to reason about a remote this module cannot name from it.`);
+    const upstream = splitUpstream(upstreamBefore);
+    remote = upstream.remote;
+    const tracked = upstream.branch;
+    if (looksLikeRefspecOrForce(remote)) {
+      return { kind: "refused", reason: `the upstream's remote '${remote}' looks like an option or a refspec (a leading '+' or '-', or a ':'), and this verb never lets a name change what a push or fetch does. Nothing was fetched or pushed.` };
     }
-    const remote = upstreamBefore.slice(0, slash);
-    const tracked = upstreamBefore.slice(slash + 1);
+    if (asked !== null && asked !== remote) {
+      return {
+        kind: "refused",
+        reason: `'${branch}' tracks '${upstreamBefore}', so it is pushed to '${remote}' -- --remote '${asked}' names a different one. This verb pushes where the branch's upstream says: drop --remote, or retrack the branch ('git branch --set-upstream-to ${asked}/${branch}') first. Nothing was fetched or pushed.`,
+      };
+    }
     const badTracked = refuseBranchName(seams, cwd, tracked, `the upstream's branch`);
     if (badTracked !== null) return { kind: "refused", reason: badTracked };
-    // FETCH FIRST: a fast-forward decided against a stale remote-tracking ref
-    // is a decision about yesterday's remote, and the push would still be
-    // refused -- or, worse, accepted by a `--force` somebody typed next.
+    // FETCH FIRST, FROM THE REMOTE THE PUSH GOES TO: a fast-forward decided
+    // against a stale remote-tracking ref is a decision about yesterday's
+    // remote, and the push would still be refused -- or, worse, accepted by a
+    // `--force` somebody typed next.
     const fetchArgs = fetchArgv(remote, tracked);
     const fetch = runGit(seams, cwd, fetchArgs);
-    if (fetch.code !== 0) throw new SquashStateError(`could not fetch the upstream '${upstreamBefore}' ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
+    if (fetch.code !== 0) {
+      const tooOld = endOfOptionsRefusal(seams, cwd, fetchArgs, fetch);
+      if (tooOld !== null) return { kind: "refused", reason: tooOld };
+      throw new SquashStateError(`could not fetch the upstream '${upstreamBefore}' ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
+    }
     const ancestor = runGit(seams, cwd, ["merge-base", "--is-ancestor", upstreamBefore, "HEAD"]);
     if (ancestor.spawnFailed || ancestor.code > 1) {
       throw new SquashStateError(`could not test whether '${upstreamBefore}' is an ancestor of HEAD ('git merge-base --is-ancestor ${upstreamBefore} HEAD' failed: ${ancestor.error}).`);
@@ -160,15 +223,27 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
       throw new SquashStateError(`could not count the commits ahead of '${upstreamBefore}' ('git rev-list --count ${upstreamBefore}..HEAD' failed: ${count.error}).`);
     }
     ahead = Number(count.stdout.trim());
+  } else {
+    remote = asked ?? REMOTE;
+    if (asked !== null) {
+      // A NAMED REMOTE MUST EXIST, asked of git: `git push nosuch` fails late
+      // and loudly, and the refusal here names the mistake instead.
+      const known = runGit(seams, cwd, ["remote"]);
+      if (known.code !== 0) throw new SquashStateError(`could not list this repository's remotes ('git remote' failed: ${known.error}).`);
+      const names = outputLines(known.stdout);
+      if (!names.includes(asked)) {
+        return { kind: "refused", reason: `this repository has no remote named '${asked}' (it has: ${names.join(", ") || "none"}). Nothing was fetched or pushed.` };
+      }
+    }
   }
 
   // THE REFSPEC IN FULL, behind `--`: `refs/heads/<b>:refs/heads/<b>` is a
   // plain update of that one ref whatever the name looks like.
-  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), REMOTE, "--", `refs/heads/${branch}:refs/heads/${branch}`];
+  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${branch}`];
   const report = (pushed: boolean): PublishReport => ({
     contract: PUBLISH_CONTRACT,
     branch,
-    remote: REMOTE,
+    remote,
     upstreamBefore,
     ahead,
     needsForce,
@@ -192,6 +267,6 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   return {
     kind: "done",
     report: report(true),
-    lines: [`pushed '${branch}' to ${REMOTE}${options.setUpstream ? " (upstream set)" : ""}${ahead === null ? "" : ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`}`],
+    lines: [`pushed '${branch}' to ${remote}${options.setUpstream ? " (upstream set)" : ""}${ahead === null ? "" : ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`}`],
   };
 }

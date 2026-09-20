@@ -114,6 +114,9 @@ attribution-trailer policy -- one validator, never a second copy of it).
                           for this lane: the proof is there, for that lane, and
                           its tree is this tree.
   --dry-run               print the message and the git line; commit nothing.
+  There is NO --sign-off: 'Signed-off-by' is an attribution-shaped trailer
+  this repository's policy forbids; where a policy admits it, pass it as
+  --trailer "Signed-off-by: Name <email>" like any other trailer.
 
 Refused, in this order: the message or a --trailer failing the shape (exit 2,
 every reason named); the proof, when required (exit 1); an empty index (exit
@@ -224,6 +227,9 @@ export const commitCommand: Command = {
   summary: "Format a Conventional Commits message; check a lane's build proof; write a validated commit.",
   usage: USAGE,
   flags: COMMIT_FLAGS,
+  hints: {
+    "--sign-off": `there is no --sign-off (zheref/nen#227 dropped it deliberately): 'Signed-off-by' is an attribution-shaped trailer this repository's ${WORKFLOW_FILE} policy forbids. Where a policy admits it, pass it as --trailer "Signed-off-by: Name <email>" like any other trailer.`,
+  },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("commit", context.args, ["format", "check", "write"]);
     refuseForeignFlags(subcommand, context);

@@ -738,3 +738,109 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
     expect((await capture(["wc", "publish"], [], null)).code).toBe(2);
   });
 });
+
+// ── nen wc publish: the remote is the upstream's (Copilot review on zheref/nen#231) ──
+
+describe("nen wc publish -- the remote pushed to is the one the upstream names", () => {
+  const TRACKING_FORK = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "fork/feature/work\n" } };
+  const FETCH_FORK = "git fetch --end-of-options fork refs/heads/feature/work:refs/remotes/fork/feature/work";
+  const PUSH_FORK = "git push fork -- refs/heads/feature/work:refs/heads/feature/work";
+
+  it("a branch tracking fork/<b> is fetched from, compared against, and pushed to fork -- origin is never touched", async () => {
+    const result = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_FORK, WORK_OK,
+      { match: FETCH_FORK, result: { code: 0 } },
+      { match: "git merge-base --is-ancestor fork/feature/work HEAD", result: { code: 0 } },
+      { match: "git rev-list --count fork/feature/work..HEAD", result: { stdout: "2\n" } },
+      { match: PUSH_FORK, result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ remote: "fork", upstreamBefore: "fork/feature/work", ahead: 2, pushed: true });
+    const calls = gitCalls(result.seams);
+    expect(calls).toContain(FETCH_FORK);
+    expect(calls).toContain(PUSH_FORK);
+    expect(calls.filter((call): boolean => call.includes("origin"))).toEqual([]);
+  });
+
+  it("needsForce is decided against the upstream's own remote, not origin", async () => {
+    const result = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_FORK, WORK_OK,
+      { match: FETCH_FORK, result: { code: 0 } },
+      { match: "git merge-base --is-ancestor fork/feature/work HEAD", result: { code: 1 } },
+      { match: "git rev-list --count fork/feature/work..HEAD", result: { stdout: "1\n" } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.doc).toMatchObject({ remote: "fork", needsForce: true, pushed: false });
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+  });
+
+  it("--remote names where a branch with NO upstream goes, after 'git remote' confirms it exists", async () => {
+    const result = await captureJson(["wc", "publish", "--set-upstream", "--remote", "fork"], [
+      ON_WORK, WORK_OK, NO_TRACKING,
+      { match: "git remote", result: { stdout: "origin\nfork\n" } },
+      { match: "git push -u fork -- refs/heads/feature/work:refs/heads/feature/work", result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ remote: "fork", upstreamBefore: null, pushed: true });
+
+    const unknown = await capture(["wc", "publish", "--remote", "nosuch"], [
+      ON_WORK, WORK_OK, NO_TRACKING,
+      { match: "git remote", result: { stdout: "origin\n" } },
+    ]);
+    expect(unknown.code).toBe(2);
+    expect(unknown.err.join("\n")).toMatch(/no remote named 'nosuch' \(it has: origin\)/);
+    expect(gitCalls(unknown.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+  });
+
+  it("--remote that contradicts an existing upstream is refused at exit 2 before any fetch", async () => {
+    const result = await capture(["wc", "publish", "--remote", "origin"], [ON_WORK, WORK_OK, TRACKING_FORK]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/tracks 'fork\/feature\/work', so it is pushed to 'fork' -- --remote 'origin' names a different one/);
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git fetch"))).toBe(false);
+    // The same --remote as the upstream's is simply agreed with.
+    const agreed = await captureJson(["wc", "publish", "--remote", "origin", "--dry-run"], [
+      ON_WORK, WORK_OK, TRACKING, WORK_OK, FETCH_WORK,
+      { match: "git merge-base --is-ancestor origin/feature/work HEAD", result: { code: 0 } },
+      { match: "git rev-list --count origin/feature/work..HEAD", result: { stdout: "0\n" } },
+    ]);
+    expect(agreed.code).toBe(0);
+    expect(agreed.doc).toMatchObject({ remote: "origin", pushed: false, dryRun: true });
+  });
+
+  it("refuses a --remote shaped like an option, a refspec or a path, and --remote on any other wc subcommand", async () => {
+    for (const bad of ["--upload-pack=/x", "+fork", "a:b", "fork/x"]) {
+      const result = await capture(["wc", "publish", `--remote=${bad}`], [ON_WORK, WORK_OK]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/is not a remote name this verb will put in a push argv/);
+    }
+    const elsewhere = await capture(["wc", "catch-up", "--base", "main", "--remote", "fork"], []);
+    expect(elsewhere.code).toBe(2);
+    expect(elsewhere.err.join("\n")).toMatch(/--remote is not read by 'wc catch-up'; only 'wc publish' takes it/);
+  });
+});
+
+describe("nen wc publish / catch-up -- a git without --end-of-options is refused, never fetched around", () => {
+  const TOO_OLD = { code: 129, stderr: "error: unknown option `end-of-options'\nusage: git fetch [<options>] [<repository> [<refspec>...]]" };
+  const VERSION = { match: "git --version", result: { stdout: "git version 2.23.0\n" } };
+
+  it("publish: exit 2 naming the git version and the floor, nothing pushed", async () => {
+    const result = await capture(["wc", "publish"], [ON_WORK, WORK_OK, TRACKING, WORK_OK, { match: FETCH_WORK.match, result: TOO_OLD }, VERSION]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/git version 2\.23\.0 rejected '--end-of-options' on fetch .* need git >= 2\.24, and the flag is never dropped/);
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push") || call.startsWith("git merge-base"))).toBe(false);
+  });
+
+  it("catch-up: the same refusal, before any rebase or merge", async () => {
+    const result = await capture(["wc", "catch-up", "--base", "main"], [BASE_OK, ...NOTHING_PENDING, CLEAN, { match: FETCH_MAIN, result: TOO_OLD }, VERSION]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/git version 2\.23\.0 rejected '--end-of-options' on fetch/);
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git rebase origin/") || call.startsWith("git merge --no-edit"))).toBe(false);
+  });
+
+  it("any other fetch failure is still reported as the fetch failure it is, at exit 1", async () => {
+    const result = await capture(["wc", "publish"], [ON_WORK, WORK_OK, TRACKING, WORK_OK, { match: FETCH_WORK.match, result: { code: 128, stderr: "fatal: couldn't find remote ref refs/heads/feature/work" } }]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not fetch the upstream 'origin\/feature\/work'.*couldn't find remote ref/);
+    expect(gitCalls(result.seams)).not.toContain("git --version");
+  });
+});

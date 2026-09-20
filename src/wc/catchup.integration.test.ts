@@ -269,6 +269,51 @@ describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
     expect(mustGit(plus, ["ls-remote", "origin"])).not.toContain("+feature");
   });
 
+  it("a branch tracking fork/<b> is pushed to fork and its fast-forward is judged against fork, while origin stays untouched (zheref/nen#231)", async () => {
+    const work = branchWith("to-fork", { "fork.txt": "fork\n" });
+    const fork = join(root, "fork.git");
+    mustGit(root, [...PINNED, "init", "--quiet", "--bare", "--initial-branch=main", fork]);
+    mustGit(work, ["remote", "add", "fork", fork]);
+    mustGit(work, [...PINNED, "push", "--quiet", "-u", "fork", "to-fork"]);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "to-fork@{upstream}"])).toBe("fork/to-fork");
+    writeFileSync(join(work, "fork.txt"), "fork more\n");
+    mustGit(work, ["add", "-A"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: more on the fork"]);
+    const result = await wc(["publish", "--repo", work]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ remote: "fork", upstreamBefore: "fork/to-fork", ahead: 1, pushed: true, needsForce: false });
+    expect(mustGit(work, ["ls-remote", "fork", "refs/heads/to-fork"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/to-fork"])).toBe("");
+    // Asking for origin while the branch tracks fork is refused, and nothing moves.
+    const contradicted = await wc(["publish", "--repo", work, "--remote", "origin"], false);
+    expect(contradicted.code).toBe(2);
+    expect(contradicted.err.join("\n")).toMatch(/tracks 'fork\/to-fork', so it is pushed to 'fork'/);
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/to-fork"])).toBe("");
+    // A fresh branch with no upstream goes where --remote says.
+    mustGit(work, ["switch", "--quiet", "-c", "to-fork-fresh"]);
+    const fresh = await wc(["publish", "--repo", work, "--set-upstream", "--remote", "fork"]);
+    expect(fresh.code).toBe(0);
+    expect(fresh.doc).toMatchObject({ remote: "fork", upstreamBefore: null, pushed: true });
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "to-fork-fresh@{upstream}"])).toBe("fork/to-fork-fresh");
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/to-fork-fresh"])).toBe("");
+  });
+
+  it("the real git accepts `git fetch --end-of-options` (2.24+): a publish with an upstream fetches through it and pushes", async () => {
+    // The whole guard rests on this: Copilot (zheref/nen#231) read the flag
+    // as one fetch rejects. On this host's git the fetch below succeeds.
+    const work = branchWith("eoo", { "eoo.txt": "1\n" });
+    mustGit(work, [...PINNED, "push", "--quiet", "-u", "origin", "eoo"]);
+    const probe = git(work, ["fetch", "--end-of-options", "origin", "refs/heads/eoo:refs/remotes/origin/eoo"]);
+    expect(probe.code).toBe(0);
+    expect(probe.stderr).not.toMatch(/unknown option/);
+    writeFileSync(join(work, "eoo.txt"), "2\n");
+    mustGit(work, ["add", "-A"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: two"]);
+    const result = await wc(["publish", "--repo", work]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ upstreamBefore: "origin/eoo", ahead: 1, pushed: true });
+  });
+
   it("reports needsForce at exit 1 and pushes nothing when the upstream moved past the local branch", async () => {
     const work = branchWith("diverged", { "d.txt": "one\n" });
     mustGit(work, [...PINNED, "push", "--quiet", "-u", "origin", "diverged"]);

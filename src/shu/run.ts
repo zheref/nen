@@ -962,7 +962,7 @@ function ledgerSink(
         stalled: step.stall?.stalled === true,
       }));
       try {
-        appendStepsToOpenPhase(repoRoot, effort, steps);
+        appendStepsToOpenPhase(repoRoot, effort, steps, { warn: context.io.err });
       } catch (error) {
         context.io.err(
           `the run's steps could not be recorded on effort '${effort}': ${error instanceof Error ? error.message : String(error)}. The run itself is unaffected.`,

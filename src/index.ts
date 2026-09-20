@@ -354,6 +354,10 @@ export async function runFamily(
   } catch (error) {
     if (error instanceof UsageError) {
       io.err(`${PROGRAM} ${family.name}: ${error.message}`);
+      // A HINT FOR A FLAG THE FAMILY KNOWS IT DOES NOT TAKE: the token as
+      // typed (a `--flag=value` spelling counts by its name), matched exactly.
+      const hinted = argv.map((token): string => token.split("=")[0] ?? token).find((name): boolean => family.hints?.[name] !== undefined);
+      if (hinted !== undefined) io.err(`${PROGRAM} ${family.name}: ${family.hints?.[hinted] ?? ""}`);
       io.err(`Run '${PROGRAM} ${family.name} --help'.`);
       return 2;
     }
