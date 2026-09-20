@@ -1004,6 +1004,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       check: RO(
         "reads a lane's build proof and hashes the working copy through git plumbing (a scratch index, never the repository's own); it writes no file, moves no ref and refuses no commit",
       ),
+      write: MUT("commits the index -- git commit -F on a validated message file; a local write, but a write"),
     },
   },
   dev: { subcommands: { test: DEV_FORWARDING_CHECKER, lint: DEV_FORWARDING_CHECKER, replay: DEV_CHECKER } },

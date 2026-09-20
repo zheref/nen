@@ -1,4 +1,5 @@
-// src/commit/command.ts -- `nen commit format` and `nen commit check`.
+// src/commit/command.ts -- `nen commit format`, `nen commit check` and --
+// zheref/nen#227 -- `nen commit write` (./write.ts).
 //
 // THE ONE THING THIS VERB READS FROM A REPOSITORY, AND WHY IT IS NOT A LITERAL.
 // ./format.ts's header is explicit that a trailer KEY is the caller's data and
@@ -17,12 +18,14 @@
 // module deciding somebody's commit convention for them.
 
 import { assertRepoRoot } from "../repo/root.js";
-import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { emit, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { SchemaError } from "../schema/errors.js";
 import { attributionRefusalMessages, loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { PROGRAM } from "../version.js";
 import { proofRelativePath } from "../shu/proof.js";
+import { readTextFile } from "../cli/inputs.js";
 import { runCheck } from "./check.js";
+import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
 import {
   COMMIT_TYPES,
   formatCommitMessage,
@@ -32,8 +35,13 @@ import {
   type Trailer,
 } from "./format.js";
 
-function parseTrailers(value: string | undefined): readonly Trailer[] {
-  if (value === undefined || value.trim() === "") return [];
+function parseTrailers(values: readonly string[] | undefined): readonly Trailer[] {
+  // `--trailer` IS A LIST FLAG NOW (zheref/nen#227, for `commit write`'s
+  // `Key: value` form); `format` keeps its comma-joined `key=value` spelling
+  // on every occurrence, so `--trailer a=1,b=2` and `--trailer a=1 --trailer
+  // b=2` are the same two trailers.
+  const value = (values ?? []).join(",");
+  if (value.trim() === "") return [];
   return value.split(",").map((entry): Trailer => {
     const index = entry.indexOf("=");
     if (index === -1) return { key: entry.trim(), value: "" };
@@ -49,6 +57,8 @@ usage:
                     [--scope <scope>] [--breaking] [--body "paragraph one"]
                     [--trailer key=value,key2=value2] [--repo <path>]
   nen commit check  --repo <path> --require-proof <lane> [--json]
+  nen commit write  --repo <path> --message-file <path> [--trailer <Key: value>]...
+                    [--require-proof <lane>] [--dry-run] [--json]
 
   --type      one of ${COMMIT_TYPES.join(", ")}
   --body      one paragraph. Repeat --body is not supported by this parser
@@ -90,7 +100,27 @@ then git rm --cached for .nen/, then git write-tree).
   exit 2  --require-proof or --repo missing, or a lane that escapes the tree
 
 It READS AND DECIDES NOTHING ELSE: no commit is refused, no file is written, no
-ref moves. Read the code and decide, as with 'shu coverage --threshold'.`;
+ref moves. Read the code and decide, as with 'shu coverage --threshold'.
+
+'write' COMMITS THE INDEX with a message file, validated whole under the SAME
+rules 'format' applies (the Conventional Commits shape, and this repository's
+attribution-trailer policy -- one validator, never a second copy of it).
+
+  --message-file <path>   the message; relative paths resolve against --repo.
+  --trailer <Key: value>  appended to the message's trailer block, in order;
+                          repeatable. 'Key: value' exactly -- a key of letters,
+                          digits and '-', a colon, one space, the value.
+  --require-proof <lane>  refuse at exit 1 unless 'commit check' would say OK
+                          for this lane: the proof is there, for that lane, and
+                          its tree is this tree.
+  --dry-run               print the message and the git line; commit nothing.
+
+Refused, in this order: the message or a --trailer failing the shape (exit 2,
+every reason named); the proof, when required (exit 1); an empty index (exit
+1, 'nothing staged'). Then 'git commit -F ${COMMIT_MESSAGE_PATH}' -- the
+composed message is written there and removed afterwards. --json's contract is
+'${WRITE_CONTRACT}': { contract, sha (null on a dry run), subject, trailers:
+[{ key, value }], dryRun }.`;
 
 /**
  * Every trailer this invocation carries that the repository's policy refuses.
@@ -130,17 +160,19 @@ function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): 
 const COMMIT_SUBCOMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   format: ["type", "scope", "subject", "body", "trailer", "breaking"],
   check: ["require-proof"],
+  write: ["message-file", "trailer", "require-proof", "dry-run"],
 };
 
 const COMMIT_FLAGS = {
-  values: ["type", "scope", "subject", "body", "trailer", "require-proof"],
-  booleans: ["breaking"],
+  values: ["type", "scope", "subject", "body", "require-proof", "message-file"],
+  lists: ["trailer"],
+  booleans: ["breaking", "dry-run"],
 };
 
 function refuseForeignFlags(subcommand: string, context: CommandContext): void {
   const mine = COMMIT_SUBCOMMAND_FLAGS[subcommand] ?? [];
-  const all = [...COMMIT_FLAGS.values, ...COMMIT_FLAGS.booleans];
-  const foreign = [...Object.keys(context.args.values), ...context.args.booleans].filter(
+  const all = [...COMMIT_FLAGS.values, ...COMMIT_FLAGS.lists, ...COMMIT_FLAGS.booleans];
+  const foreign = [...Object.keys(context.args.values), ...Object.keys(context.args.lists), ...context.args.booleans].filter(
     (flag): boolean => all.includes(flag) && !mine.includes(flag),
   );
   if (foreign.length === 0) return;
@@ -149,16 +181,54 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
   );
 }
 
+function runWrite(context: CommandContext): number {
+  // --repo unbracketed: this verb COMMITS whatever index it is pointed at
+  // (zheref/nen#28's rule).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the repository whose index is committed."),
+  });
+  const messageFilePath = requireValue(context.args, "message-file", "The file holding the commit's whole message.");
+  const messageText = readTextFile(messageFilePath, root, "It is the message this commit will carry -- 'commit write' reads no other source for it.");
+  let outcome;
+  try {
+    outcome = write(context.seams, root, {
+      messageText,
+      trailerFlags: context.args.lists["trailer"] ?? [],
+      requireProof: context.args.values["require-proof"] ?? null,
+      dryRun: context.args.booleans.has("dry-run"),
+    });
+  } catch (error) {
+    // A POLICY THAT WILL NOT LOAD IS EXIT 1, NOT 2, exactly as `format`'s own
+    // trailer-policy read: a message shaped under a policy nen could not read
+    // is a message nobody actually checked.
+    if (!(error instanceof SchemaError)) throw error;
+    context.io.err(`nen: ${error.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry, and nen will not commit under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`);
+    return 1;
+  }
+  if (outcome.kind === "usage") {
+    throw new VerbUsageError(
+      [`the message does not have the shape 'nen commit format' enforces:`, ...outcome.reasons.map((reason): string => `  - ${reason}`)].join("\n"),
+    );
+  }
+  if (outcome.kind === "refused") {
+    context.io.err(`nen commit write: ${outcome.reason}`);
+    return 1;
+  }
+  emit(context.io, context.json, outcome.report, outcome.lines);
+  return 0;
+}
+
 export const commitCommand: Command = {
   name: "commit",
-  subcommands: ["format", "check"],
-  summary: "Format a Conventional Commits message; check a lane's build proof.",
+  subcommands: ["format", "check", "write"],
+  summary: "Format a Conventional Commits message; check a lane's build proof; write a validated commit.",
   usage: USAGE,
   flags: COMMIT_FLAGS,
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("commit", context.args, ["format", "check"]);
+    const subcommand = requireSubcommand("commit", context.args, ["format", "check", "write"]);
     refuseForeignFlags(subcommand, context);
     if (subcommand === "check") return runCheck(context);
+    if (subcommand === "write") return runWrite(context);
     const type = context.args.values["type"] as CommitType | undefined;
     if (type === undefined) throw new VerbUsageError("--type is required.");
     const subject = context.args.values["subject"];
@@ -170,7 +240,7 @@ export const commitCommand: Command = {
       breaking: context.args.booleans.has("breaking"),
       subject,
       body: context.args.values["body"] === undefined ? [] : [context.args.values["body"]],
-      trailers: parseTrailers(context.args.values["trailer"]),
+      trailers: parseTrailers(context.args.lists["trailer"]),
     };
 
     // SHAPE FIRST, POLICY SECOND, AND BOTH ARE REPORTED TOGETHER when both have

@@ -131,3 +131,35 @@ describe("parseArgs", () => {
     expect(parsed.passthrough).toEqual(["--repo", "y"]);
   });
 });
+
+// ── list flags (zheref/nen#227) ─────────────────────────────────────────────
+
+describe("a declared list flag repeats, in order; an undeclared one still does not", () => {
+  const LISTED = { values: ["repo"], booleans: ["json"], lists: ["trailer"] };
+
+  it("keeps every occurrence, inline or spaced, in argv order", () => {
+    const parsed = parseArgs(["--trailer", "A: 1", "--trailer=B: 2", "--repo", "x", "--trailer", "C: 3"], LISTED);
+    expect(parsed.lists["trailer"]).toEqual(["A: 1", "B: 2", "C: 3"]);
+    expect(parsed.values["repo"]).toBe("x");
+  });
+
+  it("is absent from lists when never given, and never lands in values", () => {
+    const parsed = parseArgs(["--repo", "x"], LISTED);
+    expect(parsed.lists).toEqual({});
+    expect(parsed.values["trailer"]).toBeUndefined();
+  });
+
+  it("refuses a missing value and a value that looks like a flag, as a value flag does", () => {
+    expect(() => parseArgs(["--trailer"], LISTED)).toThrow(/--trailer requires a value/);
+    expect(() => parseArgs(["--trailer", "--json"], LISTED)).toThrow(/begins with '-'/);
+    expect(parseArgs(["--trailer=-1: x"], LISTED).lists["trailer"]).toEqual(["-1: x"]);
+  });
+
+  it("a VALUE flag typed twice is still refused -- lists is opt-in per flag", () => {
+    expect(() => parseArgs(["--repo", "a", "--repo", "b"], LISTED)).toThrow(/given more than once/);
+  });
+
+  it("names a list flag as repeatable in the unknown-option refusal", () => {
+    expect(() => parseArgs(["--bogus"], LISTED)).toThrow(/--trailer <value> \(repeatable\)/);
+  });
+});

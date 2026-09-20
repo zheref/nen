@@ -70,6 +70,7 @@ export function mergeFlags(spec: FlagSpec): FlagSpec {
   return {
     values: [...(GLOBAL_FLAGS.values ?? []), ...(spec.values ?? [])],
     booleans: [...(GLOBAL_FLAGS.booleans ?? []), ...(spec.booleans ?? [])],
+    lists: [...(GLOBAL_FLAGS.lists ?? []), ...(spec.lists ?? [])],
     aliases: { ...(GLOBAL_FLAGS.aliases ?? {}), ...(spec.aliases ?? {}) },
   };
 }

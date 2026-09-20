@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 40 command
-families, 104 verbs, every flag checked against the binary this repository
+families, 105 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -595,7 +595,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 104 verbs, grouped as the README groups them. **Reads** is what a
+All 105 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -681,6 +681,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) -- never its content | nen/workflow.json under --repo, and only when the invocation carries a --trailer: the attribution-trailer policy | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
+| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -4806,6 +4807,62 @@ proof:     .nen/proof/nen.json  tree a63bdbfee2ae9182d83cf09afe3f29718fbf02d0 at
 verdict:   NOT PROVED -- the tree has moved since the build: it proved a63bdbfee2ae9182d83cf09afe3f29718fbf02d0 at 2026-09-10T06:58:24.364Z, and this working copy is de1f5cd3bdecb39016bd9267b25423b3275d09b6. Whatever changed since is unbuilt -- run 'nen shu build --lane nen' again.
 ```
 exit 1. (both run for real, against this repository)
+
+
+### `nen commit write`
+
+Commits the index with a message file (v0.13.0,
+[#227](https://github.com/zheref/nen/issues/227)) — the `git commit` Hatsu's
+`kokusen` used to hand-roll. The message is validated **whole**, after every
+`--trailer` has been appended, under the same rules
+[`commit format`](#nen-commit-format) applies: the Conventional Commits shape
+and this repository's attribution-trailer policy, through the one validator
+[`wc squash`](#nen-wc-squash) already reads with (`src/wc/messagefile.ts`),
+never a second copy of it.
+
+**Usage**
+
+```text
+nen commit write --repo <path> --message-file <path> [--trailer <Key: value>]...
+                 [--require-proof <lane>] [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--repo <path>` | **yes** | the repository whose index is committed |
+| `--message-file <path>` | **yes** | the message; a relative path resolves against `--repo` |
+| `--trailer <Key: value>` | no, **repeatable** | appended to the message's trailer block in order — onto the file's own block when it ends in one, as a new final paragraph otherwise. Exactly `Key: value`: a key of letters, digits and `-`, a colon, one space, a value. The first flag in this CLI that repeats; `format`'s comma-joined `key=value` spelling is unchanged |
+| `--require-proof <lane>` | no | refuse unless [`commit check`](#nen-commit-check) would say OK for this lane — its own verdict, asked and acted on |
+| `--dry-run` | no | print the git line and the composed message; commit nothing, write no file |
+| `--json` | no | `nen.commit.write/v0.1` — see below |
+
+**Order of refusals.** The message or a `--trailer` failing the shape — exit
+**2**, every reason named, before any git call; the proof, when required —
+exit **1** (absent, for another lane, or the tree has moved since the
+build); an empty index — exit **1**, `nothing staged`. A malformed
+`nen/workflow.json` is exit 1 naming the pointer, as `format`'s own policy
+read. Only then `git commit -F .nen/commit/message.txt`: the composed message
+is written there (a deterministic path under the generated-output directory)
+and removed afterwards whatever git answered.
+
+**`--json`** — `nen.commit.write/v0.1`: `{ contract, sha, subject, trailers:
+[{ key, value }], dryRun }`. `sha` is `null` on a dry run; `trailers` is every
+trailer the committed message carries, the file's own first.
+
+**Example**
+
+```bash
+nen commit write --repo . --message-file message.txt --trailer "Hatsu-Agent: kurapika" --dry-run
+```
+```text
+would run: git commit -F .nen/commit/message.txt
+message:
+  feat(x): add a thing
+
+  Why it changed.
+
+  Hatsu-Agent: kurapika
+```
 
 ## Stack-aware developer verbs
 
