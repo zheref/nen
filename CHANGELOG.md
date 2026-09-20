@@ -2,11 +2,11 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
-## Unreleased
+## v0.11.0 — 2026-09-20
 
 ### Added
 
-- **decisions** — `nen/decisions.json`, the decision matrix, validated by `nen schema check` as a seventh optional row (contract `nen.decisions/v0.1`): rows classify a named condition as `autonomous` (resolved by a `default` command, no question), `ask-once-per-run` (seeded by `preferred[]` options) or `human-gate` (a gate canon reserves for a person). A consumer may add rows and narrow, never reclassify a human gate ([#216](https://github.com/zheref/nen/issues/216)).
+- **decisions** — `nen/decisions.json`, the decision matrix, validated by `nen schema check` as a seventh optional row (contract `nen.decisions/v0.1`): rows classify a named condition as `autonomous` (resolved by a `default` command, no question), `ask-once-per-run` (seeded by `preferred[]` options) or `human-gate` (a gate canon reserves for a person). A consumer may add rows and narrow, never reclassify a human gate ([#216](https://github.com/zheref/nen/issues/216), [#217](https://github.com/zheref/nen/pull/217)).
 - **stop** — `--title`, `--body`, `--report-url`, `--options <file>` and `--propose-issue <file>` render the rich stop (Crazy Slots) and, with `--mark`, write the marker as `nen.stop.mark/v0.2`; a stop carrying none keeps writing v0.1 byte for byte. Options are executable or refused, exactly one is starred, and an option naming the report is refused. A proposed issue is also written to `.nen/proposed/<at>.json`. `nen stop show` reads the marker back and validates it (v0.1 or v0.2 with exactly that contract's key set, exit 1 naming the defect); `nen stop clear` consumes it ([#216](https://github.com/zheref/nen/issues/216)).
 - **phase** — `nen phase begin|end|show`: the per-effort timing ledger at `.nen/phases/<effort>.json` (`nen.phase.ledger/v0.1`), flattened by `nen report data` into `phases[]` entries each carrying its `effort` ([#216](https://github.com/zheref/nen/issues/216)).
 - **repo** — `nen repo classify`: role (canon / consumer / unregistered from `nen/repos.json`), kind (product / process / unknown from lane stacks), stack, lanes and the default gate (G4 for canon, G2 otherwise) as one document with sources ([#216](https://github.com/zheref/nen/issues/216)).
@@ -16,6 +16,8 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Changed
 
+- **release** — v0.11.0 version metadata, bootstrap references and the dated section; the tag and the GitHub Release remain separate post-merge steps ([#218](https://github.com/zheref/nen/pull/218)).
+- **ci** — fork pull requests no longer reach the hosted or self-hosted matrix: CI runs from canonical-repository branch pushes, macOS and Windows parity select the self-hosted OS/architecture pools, and Linux parity keeps the sole `ubuntu-latest` exception until a Linux pool exists ([#213](https://github.com/zheref/nen/pull/213)).
 - **schema check** — `nen/colors.yml` is optional: absent is an `ok` row reading `absent (optional)`; the verbs that resolve a colour refuse by name when asked. Present and malformed still FAILs by pointer ([#216](https://github.com/zheref/nen/issues/216)).
 - **cli** — an unknown command, or any dispatching family's unknown subcommand, followed by `--help` exits 2 with the usage on stderr, so a presence probe by `--help` no longer passes for a verb that does not exist; every family that dispatches through `requireSubcommand` declares `subcommands`, and a test holds the declaration to the dispatch list ([#216](https://github.com/zheref/nen/issues/216)).
 - **watch until** — reads the target's `monitor.pollSeconds` as the default interval and `monitor.maxCycles` as the default bound (a declared `0` means the watch never runs, as `workflow.ts` says it does); typed flags win ([#216](https://github.com/zheref/nen/issues/216)).
