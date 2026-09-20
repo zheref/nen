@@ -269,6 +269,40 @@ describe("parseGraph refuses a free-text field that would become syntax (Feitan 
     }
   });
 
+  it("refuses every C0 and C1 CONTROL character too, not just the line terminators (Copilot #221 round 3)", () => {
+    // The first cut listed the characters that break MERMAID and left the rest
+    // of the control range through -- so an ESC in a label travelled into a
+    // rendered page and into any terminal that printed the document.
+    for (const code of [0x00, 0x07, 0x08, 0x1b, 0x1f, 0x7f, 0x85, 0x9b]) {
+      const text = `one${String.fromCharCode(code)}two`;
+      let message = "";
+      try {
+        parseGraph(graph({ nodes: [{ id: "a", label: text, kind: "module", change: "added" }], edges: [] }), "g.json");
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message, `U+${code.toString(16)} was admitted into a label`).toMatch(
+        /has a 'label' carrying (the control character U\+[0-9A-F]{4}|a newline|a carriage return)/,
+      );
+    }
+  });
+
+  it("names the code point of a control character it refuses", () => {
+    let message = "";
+    try {
+      parseGraph(graph({ caption: `a${String.fromCharCode(0x1b)}b` }), "g.json");
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("the control character U+001B");
+  });
+
+  it("still admits every ordinary caption, so the guard is about controls and not about text", () => {
+    for (const caption of ["plain prose", "acentuación", "日本語", "a <br/> break", "1 + 1 = 2"]) {
+      expect(() => parseGraph(graph({ caption }), "g.json")).not.toThrow();
+    }
+  });
+
   it("refuses each of them in the CAPTION", () => {
     for (const [, text] of cases) {
       expect(() => parseGraph(graph({ caption: text }), "g.json")).toThrow(/has a 'caption' carrying/);

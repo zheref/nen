@@ -367,6 +367,35 @@ export interface ThreadsReport {
   readonly argv: readonly string[] | null;
 }
 
+/**
+ * WHY A MUTATION'S PAYLOAD IS READ, AND NOT JUST ITS `errors` (Copilot, #221
+ * round 3).
+ *
+ * `runGraphql` already refuses an `errors` array on an HTTP 200, which is how
+ * GitHub reports a REFUSED mutation. What it cannot see is a mutation that was
+ * ACCEPTED and did nothing: a `data.addPullRequestReviewThreadReply` of `null`,
+ * a `resolveReviewThread` whose thread comes back still unresolved, a payload
+ * for a different thread. Each of those is a 200 with no `errors`, and each was
+ * being reported as `replied: true` / `resolved: true` -- the verb telling a
+ * caller it posted a reply that does not exist.
+ *
+ * SO SUCCESS IS READ OFF THE THING THAT WAS SUPPOSED TO CHANGE. A reply
+ * succeeded when the comment it created has an id; a resolve succeeded when the
+ * thread it names comes back `isResolved: true` AND is the thread that was
+ * asked about. Anything else is an API error (exit 1) naming what came back --
+ * never a cheerful zero.
+ */
+function mutationPayload(data: unknown, field: string, what: string): Record<string, unknown> {
+  const payload = (data as Record<string, unknown> | null | undefined)?.[field];
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new ThreadsError(
+      "api",
+      `${what}: the mutation was accepted and answered no '${field}' payload (${payload === null ? "null" : typeof payload}), so nothing can be confirmed to have changed. Nothing is reported as done.`,
+    );
+  }
+  return payload as Record<string, unknown>;
+}
+
 export function reply(
   seams: Seams,
   target: Target,
@@ -379,7 +408,17 @@ export function reply(
   requireThread(listing, threadId, target.slug, prNumber);
   const argv = replyArgv(threadId, body);
   if (dryRun) return { argv, replied: false };
-  runGraphql(seams, argv, `${target.slug}#${prNumber} thread reply`);
+  const what = `${target.slug}#${prNumber} thread reply`;
+  const payload = mutationPayload(runGraphql(seams, argv, what), "addPullRequestReviewThreadReply", what);
+  const comment = payload["comment"];
+  const id =
+    typeof comment === "object" && comment !== null ? (comment as { id?: unknown }).id : undefined;
+  if (typeof id !== "string" || id === "") {
+    throw new ThreadsError(
+      "api",
+      `${what}: the mutation was accepted and named no created comment, so the reply cannot be confirmed to have posted. Re-read the thread with 'nen pr threads list' before sending it again -- this verb will not report a reply it cannot see.`,
+    );
+  }
   return { argv, replied: true };
 }
 
@@ -400,7 +439,30 @@ export function resolve(
   }
   const argv = resolveArgv(threadId);
   if (dryRun) return { argv, resolved: false };
-  runGraphql(seams, argv, `${target.slug}#${prNumber} thread resolve`);
+  const what = `${target.slug}#${prNumber} thread resolve`;
+  const payload = mutationPayload(runGraphql(seams, argv, what), "resolveReviewThread", what);
+  const answered = payload["thread"];
+  if (typeof answered !== "object" || answered === null) {
+    throw new ThreadsError(
+      "api",
+      `${what}: the mutation was accepted and named no thread, so the resolution cannot be confirmed. Nothing is reported as resolved.`,
+    );
+  }
+  const record = answered as { id?: unknown; isResolved?: unknown };
+  // THE ANSWER MUST BE ABOUT THE THREAD THAT WAS ASKED ABOUT. A payload naming
+  // another id is not this thread's resolution, however true it is.
+  if (typeof record.id === "string" && record.id !== threadId) {
+    throw new ThreadsError(
+      "api",
+      `${what}: the mutation answered for thread '${record.id}', which is not the thread '${threadId}' it was sent for. Nothing is reported as resolved.`,
+    );
+  }
+  if (record.isResolved !== true) {
+    throw new ThreadsError(
+      "api",
+      `${what}: the mutation was accepted and the thread came back isResolved:${String(record.isResolved)}. A resolve that did not resolve is not a success, and this verb will not report one.`,
+    );
+  }
   return { argv, resolved: true };
 }
 
@@ -429,11 +491,25 @@ export function printableArgv(argv: readonly string[]): string {
   return renderArgv({ exe: "gh", argv: shown });
 }
 
+/**
+ * A head SHA fit to print, or the words that say there is not one.
+ *
+ * VALIDATED BEFORE IT IS TRUNCATED (Copilot, #221 round 3). The summary line
+ * took the first eight characters of whatever `headRefOid` held -- a field
+ * this module reads leniently -- so a value that was not a SHA was printed as
+ * though it were one, and a control character in it reached the terminal
+ * intact. Eight characters of something else is indistinguishable from a real
+ * short SHA, which is worse than saying nothing: a reader copies it.
+ */
+function shortHead(head: string): string {
+  return /^[0-9a-f]{40}$/i.test(head) ? head.slice(0, 8) : "unknown head";
+}
+
 /** The human lines `list` prints. */
 export function renderThreads(report: ThreadsReport): readonly string[] {
   const unresolved = report.threads.filter((thread): boolean => !thread.isResolved).length;
   const lines = [
-    `${report.target}#${report.pr} @ ${report.head.slice(0, 8)}: ${report.threads.length} review thread(s), ${unresolved} unresolved`,
+    `${plainLine(report.target)}#${report.pr} @ ${shortHead(plainLine(report.head))}: ${report.threads.length} review thread(s), ${unresolved} unresolved`,
   ];
   for (const thread of report.threads) {
     // A PATH, AN AUTHOR AND A COMMENT ARE ALL STRINGS SOMEBODY ELSE TYPED, and

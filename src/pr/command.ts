@@ -832,12 +832,21 @@ function requirePrStrict(context: CommandContext, verb: string): number {
   if (raw === undefined) {
     throw new VerbUsageError(`${verb} takes --pr <n>.`);
   }
-  if (!/^\d+$/.test(raw) || Number.parseInt(raw, 10) <= 0) {
+  // BOUNDED, AND SAFE (Copilot, #221 round 3). `/^\d+$/` admits a digit string
+  // of any length, and `Number.parseInt` turns a long enough one into
+  // `Infinity` -- which is `> 0`, so it passed. `Infinity` then went into an
+  // argv as the literal "Infinity" and addressed nothing. The length cap is
+  // the cheap half (no repository has a ten-digit pull request) and
+  // `Number.isSafeInteger` is the half that means it: above 2^53 a number is
+  // no longer the number that was typed, and an identity that is not the one
+  // you typed is the whole class of defect this reader exists to close.
+  const parsed = Number.parseInt(raw, 10);
+  if (!/^\d{1,9}$/.test(raw) || !Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new VerbUsageError(
-      `${verb} takes --pr <n>: a positive whole number, digits only -- got '${raw}'. A looser read would accept '1e3' as 1000 and '0x0c' as 12 and address the wrong pull request.`,
+      `${verb} takes --pr <n>: a positive whole number of at most 9 digits, digits only -- got '${raw}'. A looser read would accept '1e3' as 1000, '0x0c' as 12, and a long enough digit string as Infinity, and address the wrong pull request or none at all.`,
     );
   }
-  return Number.parseInt(raw, 10);
+  return parsed;
 }
 
 function editBody(context: CommandContext): number {
