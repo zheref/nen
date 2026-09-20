@@ -16,6 +16,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ### Changed
 
+- **release** — v0.11.0 version metadata, bootstrap references and the dated section; the tag and the GitHub Release remain separate post-merge steps ([#218](https://github.com/zheref/nen/pull/218)).
 - **ci** — fork pull requests no longer reach the hosted or self-hosted matrix: CI runs from canonical-repository branch pushes, macOS and Windows parity select the self-hosted OS/architecture pools, and Linux parity keeps the sole `ubuntu-latest` exception until a Linux pool exists ([#213](https://github.com/zheref/nen/pull/213)).
 - **schema check** — `nen/colors.yml` is optional: absent is an `ok` row reading `absent (optional)`; the verbs that resolve a colour refuse by name when asked. Present and malformed still FAILs by pointer ([#216](https://github.com/zheref/nen/issues/216)).
 - **cli** — an unknown command, or any dispatching family's unknown subcommand, followed by `--help` exits 2 with the usage on stderr, so a presence probe by `--help` no longer passes for a verb that does not exist; every family that dispatches through `requireSubcommand` declares `subcommands`, and a test holds the declaration to the dispatch list ([#216](https://github.com/zheref/nen/issues/216)).
