@@ -96,7 +96,11 @@ catch-up:
   nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
                   [--abort] [--dry-run] [--json]
 
-  --base <ref>      the base branch, fetched as 'origin/<ref>' first.
+  --base <ref>      the base branch: validated by 'git check-ref-format
+                    --branch' and refused at exit 2 when git rejects it or it
+                    is shaped like an option, a refspec or a force -- before
+                    any fetch, --dry-run included; then fetched with the
+                    refspec in full ('refs/heads/<ref>:refs/remotes/origin/<ref>').
   --strategy        rebase, merge, or auto (default). auto REBASES when no
                     commit of this branch is on its @{upstream} -- the same
                     detection 'wc squash' uses -- and MERGES otherwise,
@@ -129,10 +133,15 @@ publish:
   --set-upstream    push with -u, so the branch tracks origin/<branch>.
   --dry-run         print the push line; push nothing.
 
-Pushes the CURRENT branch to origin ('git push [-u] origin <branch>') and
-nothing else. Refused at exit 2: a detached HEAD; the trunk (${WORKFLOW_FILE}'s
-branch.base, and main/master regardless); any argument that looks like a
-refspec or a force (a positional, '+', ':', --force). When the upstream
+Pushes the CURRENT branch to origin ('git push [-u] origin --
+refs/heads/<branch>:refs/heads/<branch>', the refspec in full so no branch
+NAME can change what the push does) and nothing else. Refused at exit 2: a
+detached HEAD; the trunk (${WORKFLOW_FILE}'s branch.base, and main/master
+regardless, compared with a leading '+' and 'refs/heads/' taken off); a
+branch name 'git check-ref-format --branch' rejects, or one shaped like a
+refspec or a force even where git accepts it ('+main' is a branch git will
+hold and a force push once it sits in an argv); any argument that looks like
+a refspec or a force (a positional, '+', ':', --force). When the upstream
 exists and the local branch is not a fast-forward of it the push would need
 a force, and this verb never forces: needsForce: true, nothing pushed, exit
 1.

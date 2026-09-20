@@ -17,6 +17,15 @@
 // says about it. What to do -- catch up, or decide the rewrite is wanted and
 // do it by hand -- is not decided here.
 //
+// THE NAME IS VALIDATED BEFORE IT IS USED IN AN ARGV (Feitan S1). A branch git
+// will happily hold -- `+main` passes `git check-ref-format --branch` -- is a
+// FORCE once it sits in `git push origin +main`, and a trunk compare on the
+// raw name misses it. So the name goes through git's own validator, then
+// through `looksLikeRefspecOrForce`, and the push and the fetch spell their
+// refspec IN FULL behind `--` / `--end-of-options`, where no leading `+` or
+// `-` can change what the argv means. The trunk is compared against the
+// NORMALIZED name (`refs/heads/main`, `+main` -> `main`).
+//
 // `git fetch` IS A READ, on ./squash.ts's argument; the ONE write is the push.
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
@@ -76,6 +85,33 @@ export function looksLikeRefspecOrForce(token: string): boolean {
   return token.startsWith("+") || token.includes(":") || token.startsWith("-");
 }
 
+/** The branch a name means once a leading `+` and a `refs/heads/` prefix are taken off -- what the trunk is compared against. */
+export function normalizeBranchName(name: string): string {
+  return name.replace(/^\++/, "").replace(/^refs\/heads\//, "");
+}
+
+/**
+ * A branch name this verb is willing to put in a refspec: accepted by
+ * `git check-ref-format --branch` (asked of git, never re-implemented) AND
+ * free of the refspec/force shapes git's validator does not reject.
+ * Returns the refusal text, or null.
+ */
+export function refuseBranchName(seams: Seams, cwd: string, name: string, what: string): string | null {
+  const ok = runGit(seams, cwd, ["check-ref-format", "--branch", name]);
+  if (ok.code !== 0) {
+    return `${what} '${name}' is not a branch name git will accept ('git check-ref-format --branch' answered ${ok.error}). Nothing was fetched or pushed.`;
+  }
+  if (looksLikeRefspecOrForce(name)) {
+    return `${what} '${name}' looks like a refspec or a force option (a leading '+' or '-', or a ':'), and this verb never lets a name change what a push or fetch does. Nothing was fetched or pushed.`;
+  }
+  return null;
+}
+
+/** The fetch that keeps `<remote>/<branch>` current, spelled in full so no name can become an option. */
+export function fetchArgv(remote: string, branch: string): string[] {
+  return ["fetch", "--end-of-options", remote, `refs/heads/${branch}:refs/remotes/${remote}/${branch}`];
+}
+
 export function publish(seams: Seams, cwd: string, options: PublishOptions): PublishOutcome {
   const branchResult = runGit(seams, cwd, ["symbolic-ref", "--short", "HEAD"]);
   if (branchResult.code !== 0) {
@@ -85,12 +121,15 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     };
   }
   const branch = branchResult.stdout.trim();
-  if (branch === options.base || TRUNK_NAMES.includes(branch)) {
+  const named = normalizeBranchName(branch);
+  if (named === options.base || TRUNK_NAMES.includes(named)) {
     return {
       kind: "refused",
-      reason: `'${branch}' is the trunk${branch === options.base ? " (nen/workflow.json's branch.base)" : ""}, and this verb never pushes the trunk directly: the trunk moves by merging a pull request. Cut a branch for this work.`,
+      reason: `'${branch}' is the trunk${named === options.base ? " (nen/workflow.json's branch.base)" : ""}, and this verb never pushes the trunk directly: the trunk moves by merging a pull request. Cut a branch for this work.`,
     };
   }
+  const badName = refuseBranchName(seams, cwd, branch, "the current branch");
+  if (badName !== null) return { kind: "refused", reason: badName };
 
   const upstreamResult = runGit(seams, cwd, ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`]);
   const upstreamBefore = upstreamResult.code === 0 ? upstreamResult.stdout.trim() : null;
@@ -103,11 +142,14 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     }
     const remote = upstreamBefore.slice(0, slash);
     const tracked = upstreamBefore.slice(slash + 1);
+    const badTracked = refuseBranchName(seams, cwd, tracked, `the upstream's branch`);
+    if (badTracked !== null) return { kind: "refused", reason: badTracked };
     // FETCH FIRST: a fast-forward decided against a stale remote-tracking ref
     // is a decision about yesterday's remote, and the push would still be
     // refused -- or, worse, accepted by a `--force` somebody typed next.
-    const fetch = runGit(seams, cwd, ["fetch", remote, tracked]);
-    if (fetch.code !== 0) throw new SquashStateError(`could not fetch the upstream '${upstreamBefore}' ('git fetch ${remote} ${tracked}' failed: ${fetch.error}).`);
+    const fetchArgs = fetchArgv(remote, tracked);
+    const fetch = runGit(seams, cwd, fetchArgs);
+    if (fetch.code !== 0) throw new SquashStateError(`could not fetch the upstream '${upstreamBefore}' ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
     const ancestor = runGit(seams, cwd, ["merge-base", "--is-ancestor", upstreamBefore, "HEAD"]);
     if (ancestor.spawnFailed || ancestor.code > 1) {
       throw new SquashStateError(`could not test whether '${upstreamBefore}' is an ancestor of HEAD ('git merge-base --is-ancestor ${upstreamBefore} HEAD' failed: ${ancestor.error}).`);
@@ -120,7 +162,9 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     ahead = Number(count.stdout.trim());
   }
 
-  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), REMOTE, branch];
+  // THE REFSPEC IN FULL, behind `--`: `refs/heads/<b>:refs/heads/<b>` is a
+  // plain update of that one ref whatever the name looks like.
+  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), REMOTE, "--", `refs/heads/${branch}:refs/heads/${branch}`];
   const report = (pushed: boolean): PublishReport => ({
     contract: PUBLISH_CONTRACT,
     branch,

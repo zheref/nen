@@ -293,12 +293,16 @@ describe("nen wc squash -- CLI wiring", () => {
 
 // ── nen wc catch-up (zheref/nen#227) ────────────────────────────────────────
 
+/** `--base main` passed git's own validator; every catch-up script starts here. */
+const BASE_OK = { match: "git check-ref-format --branch main", result: { code: 0 } };
+const FETCH_MAIN = "git fetch --end-of-options origin refs/heads/main:refs/remotes/origin/main";
 /** git says neither a rebase nor a merge is in progress. */
 const NOTHING_PENDING: readonly ScriptedCall[] = [
+  BASE_OK,
   { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 1 } },
   { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 1 } },
 ];
-const FETCHED = { match: "git fetch origin main", result: { code: 0 } };
+const FETCHED = { match: FETCH_MAIN, result: { code: 0 } };
 const HEAD_BEFORE = { match: "git rev-parse HEAD", result: { stdout: "before00\n" } };
 const BEHIND = (n: number): ScriptedCall => ({ match: "git rev-list --count HEAD..origin/main", result: { stdout: `${n}\n` } });
 const AHEAD = (n: number): ScriptedCall => ({ match: "git rev-list --count origin/main..HEAD", result: { stdout: `${n}\n` } });
@@ -324,6 +328,21 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(bad.err.join("\n")).toMatch(/--strategy 'yolo' is not one of rebase, merge, auto/);
   });
 
+  it("refuses a --base git rejects, or one shaped like an option or a force, before ANY fetch -- under --dry-run too (Feitan S2)", async () => {
+    const option = await capture(["wc", "catch-up", "--base=--upload-pack=/x", "--dry-run"], [
+      { match: "git check-ref-format --branch --upload-pack=/x", result: { code: 129, stderr: "error: unknown option `upload-pack=/x'" } },
+    ]);
+    expect(option.code).toBe(2);
+    expect(option.err.join("\n")).toMatch(/--base '--upload-pack=\/x' is not a branch name git will accept/);
+    expect(gitCalls(option.seams)).toEqual(["git check-ref-format --branch --upload-pack=/x"]);
+    const force = await capture(["wc", "catch-up", "--base", "+main"], [
+      { match: "git check-ref-format --branch +main", result: { code: 0 } },
+    ]);
+    expect(force.code).toBe(2);
+    expect(force.err.join("\n")).toMatch(/--base '\+main' looks like a refspec or a force option/);
+    expect(gitCalls(force.seams)).toEqual(["git check-ref-format --branch +main"]);
+  });
+
   it("refuses a dirty tree at exit 2, before the fetch", async () => {
     const result = await capture(["wc", "catch-up", "--base", "main"], [
       ...NOTHING_PENDING,
@@ -331,7 +350,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     ]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/dirty.ts/);
-    expect(gitCalls(result.seams)).not.toContain("git fetch origin main");
+    expect(gitCalls(result.seams)).not.toContain(FETCH_MAIN);
   });
 
   it("auto picks REBASE when no commit is on the upstream, and runs it", async () => {
@@ -439,6 +458,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
 
   it("RESUMES an in-progress rebase once the resolutions are staged: rebase --continue under GIT_EDITOR=true, resumed: true", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main"], [
+      BASE_OK,
       { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0, stdout: "abc\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "after000\n" } },
@@ -453,12 +473,13 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     const cont = result.seams.calls.find((call): boolean => call.args.join(" ") === "rebase --continue");
     expect(cont?.env).toEqual({ GIT_EDITOR: "true" });
     // Never a fetch, never a status refusal: the tree is dirty by definition mid-resolution.
-    expect(gitCalls(result.seams)).not.toContain("git fetch origin main");
+    expect(gitCalls(result.seams)).not.toContain(FETCH_MAIN);
     expect(gitCalls(result.seams)).not.toContain("git status --porcelain=v1 -uall");
   });
 
   it("RESUMES an in-progress merge with git commit --no-edit", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
+      BASE_OK,
       { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 1 } },
       { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 0, stdout: "abc\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
@@ -475,6 +496,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
 
   it("does NOT continue over unmerged paths or leftover conflict markers: conflicted[] again, exit 1, abort line", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main"], [
+      BASE_OK,
       { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       BEHIND(0),
@@ -492,6 +514,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
 
   it("a continued rebase that conflicts on a LATER commit reports that conflict at exit 1", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main"], [
+      BASE_OK,
       { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       BEHIND(0),
@@ -510,6 +533,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
 
   it("refuses a --strategy that disagrees with what is in progress, at exit 2", async () => {
     const result = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
+      BASE_OK,
       { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
     ]);
     expect(result.code).toBe(2);
@@ -518,6 +542,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
 
   it("--abort backs out the in-progress operation and reports aborted: true; refused when nothing is in progress", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--abort"], [
+      BASE_OK,
       { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 1 } },
       { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
@@ -527,6 +552,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(result.code).toBe(0);
     expect(result.doc).toMatchObject({ strategy: "merge", aborted: true, resumed: false, after: "before00" });
     const dry = await capture(["wc", "catch-up", "--base", "main", "--abort", "--dry-run"], [
+      BASE_OK,
       { match: "git rev-parse --verify --quiet REBASE_HEAD", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
     ]);
@@ -542,14 +568,17 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
 // ── nen wc publish (zheref/nen#227) ─────────────────────────────────────────
 
 const ON_WORK = { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/work\n" } };
+const WORK_OK = { match: "git check-ref-format --branch feature/work", result: { code: 0 } };
+const PUSH_WORK = "git push origin -- refs/heads/feature/work:refs/heads/feature/work";
+const PUSH_WORK_U = "git push -u origin -- refs/heads/feature/work:refs/heads/feature/work";
 const NO_TRACKING = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { code: 128 } };
 const TRACKING = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "origin/feature/work\n" } };
-const FETCH_WORK = { match: "git fetch origin feature/work", result: { code: 0 } };
+const FETCH_WORK = { match: "git fetch --end-of-options origin refs/heads/feature/work:refs/remotes/origin/feature/work", result: { code: 0 } };
 
 describe("nen wc publish -- push the current branch to origin, never a force, never the trunk", () => {
   it("pushes with -u on --set-upstream when there is no upstream yet, reporting the nen.wc.publish/v0.1 document", async () => {
     const result = await captureJson(["wc", "publish", "--set-upstream"], [
-      ON_WORK, NO_TRACKING, { match: "git push -u origin feature/work", result: { code: 0 } },
+      ON_WORK, WORK_OK, NO_TRACKING, { match: PUSH_WORK_U, result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
     expect(Object.keys(result.doc)).toEqual(["contract", "branch", "remote", "upstreamBefore", "ahead", "needsForce", "pushed", "dryRun"]);
@@ -558,25 +587,25 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
 
   it("fetches the upstream, checks the fast-forward, counts ahead, and pushes without -u", async () => {
     const result = await captureJson(["wc", "publish"], [
-      ON_WORK, TRACKING, FETCH_WORK,
+      ON_WORK, WORK_OK, TRACKING, WORK_OK, FETCH_WORK,
       { match: "git merge-base --is-ancestor origin/feature/work HEAD", result: { code: 0 } },
       { match: "git rev-list --count origin/feature/work..HEAD", result: { stdout: "3\n" } },
-      { match: "git push origin feature/work", result: { code: 0 } },
+      { match: PUSH_WORK, result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
     expect(result.doc).toMatchObject({ upstreamBefore: "origin/feature/work", ahead: 3, needsForce: false, pushed: true });
   });
 
   it("--dry-run prints the push line and pushes nothing", async () => {
-    const result = await capture(["wc", "publish", "--set-upstream", "--dry-run"], [ON_WORK, NO_TRACKING]);
+    const result = await capture(["wc", "publish", "--set-upstream", "--dry-run"], [ON_WORK, WORK_OK, NO_TRACKING]);
     expect(result.code).toBe(0);
-    expect(result.out).toEqual(["would run: git push -u origin feature/work  (no upstream yet)"]);
+    expect(result.out).toEqual([`would run: ${PUSH_WORK_U}  (no upstream yet)`]);
     expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
   });
 
   it("reports needsForce: true at exit 1, pushing nothing, when the local branch is not a fast-forward of its upstream", async () => {
     const result = await captureJson(["wc", "publish"], [
-      ON_WORK, TRACKING, FETCH_WORK,
+      ON_WORK, WORK_OK, TRACKING, WORK_OK, FETCH_WORK,
       { match: "git merge-base --is-ancestor origin/feature/work HEAD", result: { code: 1 } },
       { match: "git rev-list --count origin/feature/work..HEAD", result: { stdout: "1\n" } },
     ]);
@@ -594,6 +623,36 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
       expect(result.code, trunk).toBe(2);
       expect(result.err.join("\n")).toMatch(/is the trunk/);
     }
+    // A branch git holds under a name that IS a force once it sits in a push
+    // argv (Feitan S1): `+main` passes check-ref-format, is the trunk once
+    // normalized, and is refused as the trunk -- before any fetch or push.
+    const plusMain = await capture(["wc", "publish"], [{ match: "git symbolic-ref --short HEAD", result: { stdout: "+main\n" } }]);
+    expect(plusMain.code).toBe(2);
+    expect(plusMain.err.join("\n")).toMatch(/'\+main' is the trunk/);
+    expect(gitCalls(plusMain.seams).some((call): boolean => call.startsWith("git push") || call.startsWith("git fetch"))).toBe(false);
+    // `+feature` is not the trunk, and is refused as a force shape after git accepted the name.
+    const plusFeature = await capture(["wc", "publish"], [
+      { match: "git symbolic-ref --short HEAD", result: { stdout: "+feature\n" } },
+      { match: "git check-ref-format --branch +feature", result: { code: 0 } },
+    ]);
+    expect(plusFeature.code).toBe(2);
+    expect(plusFeature.err.join("\n")).toMatch(/'\+feature' looks like a refspec or a force option/);
+    // A name git itself rejects is refused with git's answer.
+    const rejected = await capture(["wc", "publish"], [
+      { match: "git symbolic-ref --short HEAD", result: { stdout: "bad..name\n" } },
+      { match: "git check-ref-format --branch bad..name", result: { code: 1, stderr: "fatal: 'bad..name' is not a valid branch name" } },
+    ]);
+    expect(rejected.code).toBe(2);
+    expect(rejected.err.join("\n")).toMatch(/not a branch name git will accept/);
+    // An upstream whose branch half is force-shaped is refused before the fetch.
+    const badUpstream = await capture(["wc", "publish"], [
+      ON_WORK, WORK_OK,
+      { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "origin/+feature/work\n" } },
+      { match: "git check-ref-format --branch +feature/work", result: { code: 0 } },
+    ]);
+    expect(badUpstream.code).toBe(2);
+    expect(badUpstream.err.join("\n")).toMatch(/the upstream's branch '\+feature\/work' looks like a refspec/);
+    expect(gitCalls(badUpstream.seams).some((call): boolean => call.startsWith("git fetch"))).toBe(false);
     const refspec = await capture(["wc", "publish", "+feature/work:main"], []);
     expect(refspec.code).toBe(2);
     expect(refspec.err.join("\n")).toMatch(/looks like a refspec or a force option/);

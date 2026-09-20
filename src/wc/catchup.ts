@@ -27,12 +27,20 @@
 // is continued over them. `--abort` runs the matching abort and reports
 // `aborted: true`.
 //
+// `--base` IS VALIDATED BEFORE THE FIRST GIT CALL (Feitan S2). The argument
+// reader admits `--base=--upload-pack=/x`, and handed to `git fetch origin
+// <base>` that runs a program -- under `--dry-run` too, because the fetch is
+// "a read". So the name goes through `git check-ref-format --branch` and
+// ./publish.ts's refspec check first, and the fetch spells its refspec in
+// full behind `--end-of-options`, where nothing in the name is an option.
+//
 // `git fetch` IS A READ, on ./squash.ts's argument: it moves a
 // remote-tracking ref this repository already keeps and never a branch, and
 // this module never pushes.
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
+import { fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
 import { findPublishedCommit, parseFolded, SquashStateError } from "./squash.js";
 
 export const CATCH_UP_CONTRACT = "nen.wc.catch-up/v0.1";
@@ -167,7 +175,9 @@ export interface CatchUpOptions {
  */
 export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): CatchUpOutcome {
   const { base, dryRun } = options;
-  const remoteBase = `origin/${base}`;
+  const badBase = refuseBranchName(seams, cwd, base, "--base");
+  if (badBase !== null) return { kind: "refused", reason: badBase };
+  const remoteBase = `${REMOTE}/${base}`;
   const lines: string[] = [];
   const pending = inProgress(seams, cwd);
 
@@ -265,8 +275,9 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
       reason: `the working tree is dirty -- ${dirty.length} uncommitted or untracked path(s): ${dirty.join(", ")}. Commit or stash them first; a catch-up never replays work that was never committed.`,
     };
   }
-  const fetch = runGit(seams, cwd, ["fetch", "origin", base]);
-  if (fetch.code !== 0) throw new SquashStateError(`could not fetch origin/${base} ('git fetch origin ${base}' failed: ${fetch.error}).`);
+  const fetchArgs = fetchArgv(REMOTE, base);
+  const fetch = runGit(seams, cwd, fetchArgs);
+  if (fetch.code !== 0) throw new SquashStateError(`could not fetch ${remoteBase} ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
   lines.push(`fetched ${remoteBase}`);
 
   const before = mustHead(seams, cwd, `fetched ${remoteBase}`);

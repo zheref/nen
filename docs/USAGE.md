@@ -1834,14 +1834,15 @@ nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | **yes** | the working tree being caught up | unbracketed; omitted is refused at exit 2 — this verb moves the branch ref |
-| `--base <ref>` | **yes** | the base branch | fetched first as `origin/<base>`; the rebase/merge target is `origin/<base>`, never a stale local ref |
+| `--base <ref>` | **yes** | the base branch | validated **before the first git call** by `git check-ref-format --branch` and refused at exit 2 (with git's answer) when git rejects it, or when it is shaped like an option, a refspec or a force (a leading `-` or `+`, a `:`) — so `--base=--upload-pack=/x` never reaches a fetch, under `--dry-run` either; then fetched as `git fetch --end-of-options origin refs/heads/<base>:refs/remotes/origin/<base>`, the refspec in full so nothing in the name is an option; the rebase/merge target is `origin/<base>`, never a stale local ref |
 | `--strategy` | no | `rebase`, `merge` or `auto` (default) | **auto rebases when no commit of the branch is on its `@{upstream}`** and merges otherwise — the same published-commit detection [`wc squash`](#nen-wc-squash) refuses on, shared rather than copied. A rebase rewrites what somebody else may already hold |
 | `--abort` | no | back out an in-progress rebase or merge | runs the matching `git rebase --abort` / `git merge --abort`; refused at exit 2 when nothing is in progress |
 | `--dry-run` | no | print the strategy and the git line | fetches (a read), runs neither |
 | `--json` | no | machine-readable result | `nen.wc.catch-up/v0.1` — see below |
 
-**Mechanism.** A dirty tree is refused at exit 2 before the fetch. Then
-`git fetch origin <base>`, `before`/`behindBefore`/`aheadBefore` are read,
+**Mechanism.** `--base` is validated first (above), then a dirty tree is
+refused at exit 2 before the fetch. Then `git fetch --end-of-options origin
+refs/heads/<base>:refs/remotes/origin/<base>`, `before`/`behindBefore`/`aheadBefore` are read,
 the strategy is resolved, and — unless the branch is already up to date
 (`noOp: true`, exit 0, nothing run) — `git rebase origin/<base>` or
 `git merge --no-edit origin/<base>` runs. **On a conflict** the report's
@@ -1886,9 +1887,10 @@ would run: git rebase origin/main  (2 ahead, 3 behind)
 ### `nen wc publish`
 
 Pushes the **current branch** to `origin` and nothing else (v0.13.0,
-[#227](https://github.com/zheref/nen/issues/227)) — `git push [-u] origin
-<branch>`. Everything that could rewrite somebody else's history is refused
-before the push.
+[#227](https://github.com/zheref/nen/issues/227)) — `git push [-u] origin --
+refs/heads/<branch>:refs/heads/<branch>`, the refspec spelled in full behind
+`--` so that no branch *name* can change what the push does. Everything that
+could rewrite somebody else's history is refused before the push.
 
 **Usage**
 
@@ -1905,14 +1907,23 @@ nen wc publish --repo <path> [--set-upstream] [--dry-run] [--json]
 
 **Refused at exit 2:** a detached `HEAD` (no branch to push); the trunk —
 [`nen/workflow.json`](#nenworkflowjson)'s `branch.base`, and `main`/`master`
-whatever the policy says — because the trunk moves by merging a pull request;
-and anything that looks like a refspec or a force: a positional, a `+`, a
+whatever the policy says — because the trunk moves by merging a pull request,
+compared against the **normalized** name (a leading `+` and a `refs/heads/`
+prefix taken off, so a branch git holds as `+main` is the trunk too); a
+branch name git itself rejects (`git check-ref-format --branch`, asked
+through the seam, its answer quoted); a branch name shaped like a refspec or
+a force even where git accepts it — git will hold a branch named `+main`,
+and `git push origin +main` is a force push of `main`; and anything that
+looks like a refspec or a force on the command line: a positional, a `+`, a
 `:`, and `--force`, which the strict parser already refuses as an unknown
-option. **Exit 1, nothing pushed:** the upstream exists and the local branch
-is not a fast-forward of it (fetched first, then `git merge-base
---is-ancestor <upstream> HEAD`) — the push would need `--force`, and this
-verb never forces; the report says `needsForce: true` and the text names
-[`wc catch-up`](#nen-wc-catch-up) as the repair.
+option. The branch the upstream tracks passes the same two checks before it
+is fetched, and the fetch is `git fetch --end-of-options <remote>
+refs/heads/<branch>:refs/remotes/<remote>/<branch>`. **Exit 1, nothing
+pushed:** the upstream exists and the local branch is not a fast-forward of
+it (fetched first, then `git merge-base --is-ancestor <upstream> HEAD`) — the
+push would need `--force`, and this verb never forces; the report says
+`needsForce: true` and the text names [`wc catch-up`](#nen-wc-catch-up) as
+the repair.
 
 **`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
 upstreamBefore, ahead, needsForce, pushed, dryRun }`. `upstreamBefore` is
@@ -1924,7 +1935,7 @@ upstreamBefore, ahead, needsForce, pushed, dryRun }`. `upstreamBefore` is
 nen wc publish --repo . --set-upstream --dry-run
 ```
 ```text
-would run: git push -u origin feature/x  (no upstream yet)
+would run: git push -u origin -- refs/heads/feature/x:refs/heads/feature/x  (no upstream yet)
 ```
 
 <a id="family-stage"></a>
