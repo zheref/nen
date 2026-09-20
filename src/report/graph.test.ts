@@ -125,22 +125,6 @@ describe("parseGraph", () => {
   });
 });
 
-describe("serialiseGraph", () => {
-  it("escapes '</' so the document survives a raw <script type=\"application/json\"> block", () => {
-    const parsed = parseGraph(
-      graph({ nodes: [{ id: "a", label: "closes with </script> inside", kind: "module", change: "added" }], edges: [] }),
-      "g.json",
-    );
-    const serialised = serialiseGraph(parsed);
-    // The sequence an HTML parser ends the element on must not appear at all...
-    expect(serialised).not.toContain("</");
-    // ...and the document must still round-trip to the same label.
-    expect((JSON.parse(serialised) as { nodes: { label: string }[] }).nodes[0]?.label).toBe(
-      "closes with </script> inside",
-    );
-  });
-});
-
 describe("graphToMermaid", () => {
   it("is deterministic, in document order, with a class per change and a dotted removed edge", () => {
     const parsed = parseGraph(fixture(), "graph.json");
@@ -163,13 +147,6 @@ describe("graphToMermaid", () => {
     expect(mermaid).not.toMatch(/#[0-9A-Fa-f]{3,8}\b/);
   });
 
-  it("escapes a quote inside a label rather than ending the mermaid string early", () => {
-    const parsed = parseGraph(
-      graph({ nodes: [{ id: "a", label: 'the "quoted" one', kind: "module", change: "added" }], edges: [] }),
-      "g.json",
-    );
-    expect(graphToMermaid(parsed)).toContain('  a["the \\"quoted\\" one"]:::added');
-  });
 });
 
 describe("nen report mermaid", () => {
@@ -189,6 +166,23 @@ describe("nen report mermaid", () => {
     expect(notGraph.code).toBe(2);
   });
 
+  it("refuses --json BY NAME rather than accepting and ignoring it (N8)", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: Io = { out: (l): void => void out.push(l), err: (l): void => void err.push(l) };
+    const code = await runFamily(
+      reportCommand,
+      ["report", "mermaid", "--graph", GRAPH_FILE, "--json"],
+      process.cwd(),
+      false,
+      io,
+      REFUSING_SEAMS,
+    );
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/--json is not read by 'report mermaid'/);
+    expect(out).toEqual([]);
+  });
+
   it("refuses a flag the OTHER verbs read, rather than ignoring it", async () => {
     const captured = await capture(["report", "mermaid", "--graph", GRAPH_FILE, "--out", "x.html"]);
     expect(captured.code).toBe(2);
@@ -196,3 +190,132 @@ describe("nen report mermaid", () => {
   });
 });
 
+
+// ── the injection surfaces (Nobunaga N3, Feitan F2/F3) ─────────────────────
+//
+// `label`, `caption` and `rel` are model-written prose that becomes TWO
+// grammars: mermaid source, and JSON inside a `<script>` element. Each of the
+// cases below is a way a field nobody thought of as code stopped being text.
+
+describe("serialiseGraph escapes CHARACTERS, not sequences (Feitan F2)", () => {
+  const withLabel = (label: string): string =>
+    serialiseGraph(
+      parseGraph(graph({ nodes: [{ id: "a", label, kind: "module", change: "added" }], edges: [] }), "g.json"),
+    );
+
+  it("leaves no literal < or > at all, whatever they sit next to", () => {
+    for (const label of ["closes with </script> inside", "<!--<script", "a > b < c", "</SCRIPT >"]) {
+      const serialised = withLabel(label);
+      expect(serialised, `'${label}' left a literal angle bracket in the script body`).not.toMatch(/[<>]/);
+      // ...and it still round-trips to the exact label.
+      expect((JSON.parse(serialised) as { nodes: { label: string }[] }).nodes[0]?.label).toBe(label);
+    }
+  });
+
+  it("closes the double-escaped-state hole `</` alone left open", () => {
+    // `<!--<script` puts an HTML tokenizer into script data double-escaped
+    // state, after which the NEXT `</script>` does not close the element and
+    // the rest of the page is swallowed into this block. Escaping the two-
+    // character sequence `</` never touched it.
+    const serialised = withLabel("<!--<script");
+    expect(serialised).not.toContain("<!--");
+    expect(serialised).toContain("\\u003c");
+  });
+
+  it("escapes the two JavaScript line terminators that are legal in JSON", () => {
+    // `parseGraph` REFUSES these in a label, so this exercises the serialiser
+    // on a document built in code -- defence in depth, and the half that has
+    // to hold if a later field is ever added without a boundary rule.
+    const serialised = serialiseGraph({
+      contract: GRAPH_CONTRACT,
+      caption: `a${String.fromCharCode(0x2028)}b${String.fromCharCode(0x2029)}c`,
+      nodes: [],
+      edges: [],
+    });
+    expect(serialised).not.toContain(String.fromCharCode(0x2028));
+    expect(serialised).not.toContain(String.fromCharCode(0x2029));
+    expect((JSON.parse(serialised) as { caption: string }).caption).toHaveLength(5);
+  });
+});
+
+describe("parseGraph refuses a free-text field that would become syntax (Feitan F3)", () => {
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ["a newline", "one\ntwo"],
+    ["a carriage return", "one\rtwo"],
+    ["a '|'", "calls|click a href"],
+    ["a U+2028 line separator", `one${String.fromCharCode(0x2028)}two`],
+    ["a U+2029 paragraph separator", `one${String.fromCharCode(0x2029)}two`],
+  ];
+
+  it("refuses each of them in a node LABEL, naming the row and the character", () => {
+    for (const [named, text] of cases) {
+      let message = "";
+      try {
+        parseGraph(graph({ nodes: [{ id: "a", label: text, kind: "module", change: "added" }], edges: [] }), "g.json");
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message, `'${named}' in a label was not refused`).toContain(
+        `node 0 ('a') has a 'label' carrying ${named}`,
+      );
+    }
+  });
+
+  it("refuses each of them in an edge REL", () => {
+    for (const [, text] of cases) {
+      expect(() => parseGraph(graph({ edges: [{ from: "a", to: "b", rel: text, change: "added" }] }), "g.json")).toThrow(
+        /edge 0 has a 'rel' carrying/,
+      );
+    }
+  });
+
+  it("refuses each of them in the CAPTION", () => {
+    for (const [, text] of cases) {
+      expect(() => parseGraph(graph({ caption: text }), "g.json")).toThrow(/has a 'caption' carrying/);
+    }
+  });
+
+  it("names mermaid's own line break as the repair, rather than flattening one", () => {
+    expect(() =>
+      parseGraph(graph({ nodes: [{ id: "a", label: "one\ntwo", kind: "module", change: "added" }], edges: [] }), "g.json"),
+    ).toThrow(/Mermaid's own line break is '<br\/>'/);
+    // And `<br/>` itself is accepted: it is the author's to write.
+    expect(() =>
+      parseGraph(graph({ nodes: [{ id: "a", label: "one<br/>two", kind: "module", change: "added" }], edges: [] }), "g.json"),
+    ).not.toThrow();
+  });
+});
+
+describe("graphToMermaid escapes with mermaid's own entities (Nobunaga N3)", () => {
+  it("escapes a '|' as #124; so an edge label cannot end early", () => {
+    // `parseGraph` refuses a `|` at the boundary, so this exercises the
+    // renderer directly -- the second lock, which must hold on its own.
+    const mermaid = graphToMermaid({
+      contract: GRAPH_CONTRACT,
+      caption: "",
+      nodes: [
+        { id: "a", label: "A|B", kind: "module", change: "added" },
+        { id: "b", label: "B", kind: "module", change: "added" },
+      ],
+      edges: [{ from: "a", to: "b", rel: "calls|click", change: "added" }],
+    });
+    expect(mermaid).toContain('a["A#124;B"]');
+    expect(mermaid).toContain("a -->|calls#124;click| b");
+    // No raw pipe survives inside a label or a rel -- only the two mermaid
+    // itself writes as the edge-label delimiters.
+    expect(mermaid.split("\n").filter((line): boolean => line.includes("|"))).toEqual([
+      "  a -->|calls#124;click| b",
+    ]);
+  });
+
+  it("escapes a quote as #quot;, not as a backslash mermaid's grammar has not got", () => {
+    const mermaid = graphToMermaid(
+      parseGraph(
+        graph({ nodes: [{ id: "a", label: 'the "quoted" one', kind: "module", change: "added" }], edges: [] }),
+        "g.json",
+      ),
+    );
+    expect(mermaid).toContain('  a["the #quot;quoted#quot; one"]:::added');
+    expect(mermaid).not.toContain('\\"');
+  });
+});

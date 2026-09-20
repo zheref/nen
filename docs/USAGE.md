@@ -9,9 +9,10 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.11.0 line** (one new family, `phase`, and two
-new verbs, `repo classify` and `surface capabilities`; the decision matrix,
-the rich stop and the optional colour file arrive with them): 39 command
+with the `nen` spelling. This document covers the **v0.12.0 line** (one new family, `review`, and three
+new verbs, `review scopes`, `report mermaid` and `pr threads`; the report
+register, the report variants and the architecture-delta graph arrive with
+them): 39 command
 families, 101 verbs, every flag checked against the binary this repository
 builds.
 
@@ -196,10 +197,13 @@ keep. **The rule going forward** is the one above — a new shape gains a
 consumer — and the shape of every `--json` document, contract or not, is stated
 in its own section below and held there by `src/cli/json-shape.test.ts`.
 
-Three verbs have no `--json` because they have no result of their own to
+Four verbs have no `--json` because they have no result of their own to
 render: [`dev test`](#nen-dev-test) and [`dev lint`](#nen-dev-lint) inherit
-their subprocess's stdio, and [`bootstrap`](#nen-bootstrap) prints only the
-verified binary path. And a handful of verbs — [`issue file`](#nen-issue-file),
+their subprocess's stdio, [`bootstrap`](#nen-bootstrap) prints only the
+verified binary path, and [`report mermaid`](#nen-report-mermaid) prints the
+diagram text itself. The last of them **refuses `--json` by name** rather than
+accepting and ignoring it; the other three predate that rule and still accept
+it silently. And a handful of verbs — [`issue file`](#nen-issue-file),
 [`idea file`](#nen-idea-file), [`canon resolve`](#nen-canon-resolve),
 [`commit format`](#nen-commit-format) — print refusals as plain `nen: <reason>`
 lines even under `--json`: only the success path is machine-shaped, because a
@@ -1399,7 +1403,7 @@ nen pr threads resolve --target <owner/name> --pr <n> --thread <id> [--dry-run] 
 | `--target <owner/name>` | **yes** | the GitHub side | `--repo` names a checkout on disk and never addresses the API |
 | `--pr <n>` | **yes** | the pull request | a positive whole number |
 | `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form |
-| `--body-file <path>` | `reply` | the reply's bytes, read raw | a reply typed on a command line is a reply nobody reviewed; an empty or whitespace-only file is refused |
+| `--body-file <path>` | `reply` | the reply's bytes, read raw | a reply typed on a command line is a reply nobody reviewed; an empty or whitespace-only file is refused. A relative path resolves against `--repo`, not the process cwd |
 | `--dry-run` | no | print the exact `gh api graphql` argv and write nothing | the thread is still looked up, so exits 3 and 4 still fire |
 | `--json` | no | the document | see below |
 
@@ -1407,9 +1411,15 @@ nen pr threads resolve --target <owner/name> --pr <n> --thread <id> [--dry-run] 
 mark, id, `path:line`, author) with the first 200 characters of its opening
 comment under it. `--json` top-level keys: `contract`
 (`nen.pr.threads/v0.1`), `target`, `pr`, `head`, `thread` (the id acted on,
-`null` for `list`), `replied`, `resolved`, `dryRun`, and `threads[]` (`id`,
+`null` for `list`), `replied`, `resolved`, `dryRun`, `threads[]` (`id`,
 `isResolved`, `path`, `line` — `null` on an outdated hunk —, `author`,
-`firstComment`, `url`; empty for the two mutations).
+`firstComment`, `url`; empty for the two mutations) and `argv` (the full
+argv the mutation ran, or **would** have run under `--dry-run`; `null` for
+`list`). The human `would run:` line summarises the body as a byte count plus
+its first line and quotes every other element; the unsummarised argv is in
+`--json`. Human renderings of a path, an author or a comment have their
+control characters stripped — a terminal *executes* `ESC[2K` — while `--json`
+keeps GitHub's bytes unchanged.
 
 The exit codes are a **published contract**, and they go past 2 on purpose —
 "I resolved it" and "it was already resolved" are different facts, and a
@@ -7472,15 +7482,33 @@ four git reads, no network, no token. A pull-request row carries `kind`,
 `checks` (`total`/`green`/`red`/`pending`, counted over the **latest** run per
 check name, through the same `latestChecks` reduction [`pr
 ready`](#nen-pr-ready) uses), `threads` (`total`/`unresolved`),
-`reviewRequests[]`, `linked[]` (the issue numbers it references) and
-`readiness`. An issue row carries `kind`, `number`, `title`, `url`, `state`,
-`labels[]`, `linked[]` (the pull requests that reference it) and a `readiness`
-that is **always `null`** — CON-32 is a statement about a pull request.
+`reviewRequests[]`, `linked[]` (the issue numbers it references), `readiness`
+and `notes[]`. An issue row carries `kind`, `number`, `title`, `url`, `state`,
+`labels[]`, `linked[]` (the pull requests that reference it), a `readiness`
+that is **always `null`** — CON-32 is a statement about a pull request — and
+`notes[]`.
+
+**A FIELD degrades; an OBJECT does not go missing.** Each field of a pull
+request is read on its own: a check rollup GitHub sent with an in-flight
+`conclusion` of `""` is counted leniently (anything unreadable counted
+`pending`, never `green`), `mergeStateStatus` is carried verbatim, an
+unreadable thread walk is `0/0`, and **every degradation is named in that
+row's `notes[]` and on stderr**. What is *not* tolerated is losing an object
+you asked for: a `--prs`/`--issues` number that cannot be read at all, or a
+`--backlog` fetch that hits its pagination ceiling, is **exit 1 naming it** —
+because a short `objects[]` at exit 0 says "that is the whole register" about
+a register that is not. (Routing the register through the readiness gate's
+fail-closed parser is what used to delete a named pull request outright.)
 
 `readiness` says **which authority answered it**, in `source`: `check` when the
-head carries a check run named `readiness` and its output names a verdict line
-(`ready`, or `not-ready: <reason>`, anchored — the word is never hunted for
-inside prose); `computed` when nen's own in-process gate decided it, which is
+head carries a check run named `readiness` that clears **four** tests — it is
+the **latest** run of that name by `started_at`, its `status` is `completed`,
+its `conclusion` is not one of FAILURE/CANCELLED/TIMED_OUT/ACTION_REQUIRED/
+STARTUP_FAILURE/STALE, and its `output.summary` or `output.text` (**never**
+`output.title`) carries a line that **is** a verdict end to end (`ready`, or
+`not-ready: <reason>`). Any of them failing warns and falls through to the
+gate, because a run still deciding has not decided and a title reading "Ready
+to merge" is not a verdict; `computed` when nen's own in-process gate decided it, which is
 [`pr ready`](#nen-pr-ready) called as a function rather than a second reading of
 CON-32; and `null`, with the reason on stderr, when neither could be read — no
 token, an unevaluated gate, an unreachable API. An unevaluated gate has not said

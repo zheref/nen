@@ -23,7 +23,13 @@
 // diff. Nothing here sorts, groups or de-duplicates; the document's own order IS
 // the order, which is also the order the author chose.
 //
-// `</` IS ESCAPED IN THE SERIALISED JSON, AND THAT IS NOT DECORATION. The
+// THE FREE-TEXT FIELDS ARE HELD TO A CHARACTER SET, AND THE SERIALISER
+// ESCAPES CHARACTERS RATHER THAN SEQUENCES. `label`, `caption` and `rel` are
+// model-written prose that becomes mermaid source and JSON inside a `<script>`
+// block -- two grammars, two ways for a character nobody thought about to stop
+// being text. See `FORBIDDEN_IN_TEXT` and `serialiseGraph` for each.
+//
+// `<` AND `>` ARE ESCAPED IN THE SERIALISED JSON, AND THAT IS NOT DECORATION. The
 // template writes `graphJson` RAW, inside `<script type="application/json">`,
 // which is exactly where an HTML parser ends the element at the first `</`
 // whatever the JSON says. A node label containing `</script>` -- or any `</` at
@@ -41,6 +47,43 @@ export type GraphChange = (typeof CHANGE_VALUES)[number];
 
 /** A slug: an id, a kind. Lowercase, digits and single hyphens. */
 const SLUG = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * The characters a free-text field of this document may NEVER carry, and the
+ * one place the rule lives (Feitan F3).
+ *
+ * `label`, `caption` and `rel` are model-written prose that becomes MERMAID
+ * SOURCE, and mermaid's grammar is line-oriented: a newline inside a label
+ * ends the statement and whatever follows is read as the NEXT statement, which
+ * is how a `click` directive landed in a rendered diagram from a field nobody
+ * thought of as code. `|` is the edge-label delimiter and ends a label early
+ * the same way. U+2028 and U+2029 are line terminators to a JavaScript parser
+ * even where they are not to mermaid's, so they travel with the other two.
+ *
+ * REFUSED AT THE BOUNDARY RATHER THAN ESCAPED AWAY, and the two are not the
+ * same choice. `graphToMermaid` DOES escape `|` and `"`, because a renderer
+ * that can be broken by its own input is a bug whatever the boundary does --
+ * but a multi-line label is not a thing this document HAS: mermaid's own line
+ * break is `<br/>`, which is the author's to write, and silently flattening a
+ * newline would publish a label the author did not write. So the refusal names
+ * the row and the character, at exit 2, and the author decides.
+ */
+const FORBIDDEN_IN_TEXT = /[\n\r\u2028\u2029|]/;
+
+/** Which forbidden character a free-text field carries, named for the refusal. */
+function forbiddenCharacter(text: string): string | null {
+  const match = FORBIDDEN_IN_TEXT.exec(text);
+  if (match === null) return null;
+  const found = match[0] as string;
+  if (found === "\n") return "a newline";
+  if (found === "\r") return "a carriage return";
+  if (found === "|") return "a '|'";
+  return found === "\u2028" ? "a U+2028 line separator" : "a U+2029 paragraph separator";
+}
+
+/** The sentence every free-text refusal ends with, written once. */
+const TEXT_REFUSAL =
+  "These three fields become MERMAID SOURCE, whose grammar is line-oriented: a newline ends the statement and whatever follows is read as the next one, and '|' ends an edge label early. Mermaid's own line break is '<br/>', which is yours to write; nen will not flatten a character you typed into a label you did not";
 
 export interface GraphNode {
   readonly id: string;
@@ -109,6 +152,10 @@ export function parseGraph(document: unknown, display: string): GraphDocument {
   if (captionRaw !== undefined && captionRaw !== null && typeof captionRaw !== "string") {
     refuse(display, `has a 'caption' of ${describe(captionRaw)}, not a line of text`);
   }
+  if (typeof captionRaw === "string") {
+    const bad = forbiddenCharacter(captionRaw);
+    if (bad !== null) refuse(display, `has a 'caption' carrying ${bad}. ${TEXT_REFUSAL}`);
+  }
   const nodesRaw = raw["nodes"];
   if (!Array.isArray(nodesRaw)) refuse(display, `has 'nodes' of ${describe(nodesRaw)}, not a list`);
   const edgesRaw = raw["edges"] ?? [];
@@ -132,6 +179,10 @@ export function parseGraph(document: unknown, display: string): GraphDocument {
     const label = node["label"];
     if (typeof label !== "string" || label.trim() === "") {
       refuse(display, `${where} ('${id}') has 'label' of ${describe(label)} -- a node with no label draws as an empty box`);
+    }
+    const badLabel = forbiddenCharacter(label);
+    if (badLabel !== null) {
+      refuse(display, `${where} ('${id}') has a 'label' carrying ${badLabel}. ${TEXT_REFUSAL}`);
     }
     const kind = node["kind"];
     if (typeof kind !== "string" || !SLUG.test(kind)) {
@@ -160,6 +211,10 @@ export function parseGraph(document: unknown, display: string): GraphDocument {
     if (relRaw !== undefined && relRaw !== null && typeof relRaw !== "string") {
       refuse(display, `${where} has 'rel' of ${describe(relRaw)}, not a short string`);
     }
+    if (typeof relRaw === "string") {
+      const badRel = forbiddenCharacter(relRaw);
+      if (badRel !== null) refuse(display, `${where} has a 'rel' carrying ${badRel}. ${TEXT_REFUSAL}`);
+    }
     return {
       from: from as string,
       to: to as string,
@@ -178,15 +233,49 @@ export function parseGraph(document: unknown, display: string): GraphDocument {
 
 /**
  * The validated document as compact JSON, safe to write RAW inside a
- * `<script type="application/json">` block. See the module header for `</`.
+ * `<script type="application/json">` block.
+ *
+ * IT ESCAPES CHARACTERS, NOT SEQUENCES, AND THAT IS THE FIX (Feitan F2). The
+ * first cut escaped the two-character sequence `</`, which closes the element
+ * -- and missed the OTHER way out of a `<script>` body: HTML's script data
+ * double-escaped state. A label containing `<!--<script` puts the tokenizer
+ * into that state, after which the next `</script>` does NOT close the
+ * element, and the rest of the page is swallowed into this block (reproduced
+ * in headless Chrome). Chasing that sequence too would leave the next one, so
+ * the rule is the whole class instead: `<` and `>` can never appear literally,
+ * whatever they are next to. Both are escaped as `\u003c`/`\u003e`, which JSON
+ * and JavaScript both read back as the original character, so the document
+ * round-trips byte for byte through `JSON.parse`.
+ *
+ * U+2028 AND U+2029 GO WITH THEM, for a different reader: they are valid in a
+ * JSON string and are LINE TERMINATORS in JavaScript, so a page that ever
+ * inlines this text into a script rather than parsing it as JSON would break
+ * on a label nobody could see.
  */
 export function serialiseGraph(graph: GraphDocument): string {
-  return JSON.stringify(graph).replace(/<\//g, "<\\/");
+  return JSON.stringify(graph)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
 }
 
-/** A mermaid string literal: the quote and the backslash, and nothing else. */
+/**
+ * A mermaid string literal.
+ *
+ * MERMAID'S OWN ENTITY ESCAPES, NOT A BACKSLASH (Nobunaga N3, Feitan F3).
+ * `\"` is not a thing mermaid's label grammar has; what it does have is
+ * numeric character references, so a quote is `#quot;` and a pipe is `#124;`.
+ * The pipe is the one that actually broke something: mermaid delimits an edge
+ * label with `|`, so a `rel` containing one ended the label early and the rest
+ * of the string became statement syntax. `parseGraph` already REFUSES a `|`
+ * (and every line terminator) in a label, caption or rel, so this is the
+ * second lock rather than the only one -- an escape in a renderer and a
+ * refusal at the boundary fail in different directions, and a diagram is not
+ * the place to rely on either alone.
+ */
 function mermaidLabel(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return text.replace(/"/g, "#quot;").replace(/\|/g, "#124;");
 }
 
 /**

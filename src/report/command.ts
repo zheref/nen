@@ -68,7 +68,13 @@ data      One document describing this branch against --base: the commits, the
   verb's default local, network-free shape exactly what it always was.
 
   --target <o/n>   The GitHub side. --repo names a checkout on disk and is
-                   never used to address the API.
+                   never used to address the API. The reads here go through
+                   'gh', which uses its own stored credential -- but a
+                   readiness of source 'computed' is nen's in-process gate,
+                   which reads GitHub over its OWN transport and needs
+                   GH_TOKEN (or --token-env's variable) in the environment.
+                   Without it the gh reads still answer and readiness is null
+                   with the reason on stderr.
   --prs <n,...>    Pull requests to read, by number.
   --issues <n,...> Issues to read, by number.
   --backlog        Every OPEN issue and pull request of --target.
@@ -402,6 +408,17 @@ function readGraph(context: CommandContext, root: string): GraphDocument | null 
 }
 
 function runMermaid(context: CommandContext): number {
+  // `--json` IS REFUSED BY NAME, NOT IGNORED (Nobunaga N8). This verb's whole
+  // output is the mermaid text, so there is no document to emit -- and this
+  // family's own rule, two screens up, is that a flag accepted and ignored is
+  // worse than one refused: the ignored thing is the instruction you gave. A
+  // caller who typed it was expecting a document and would otherwise have got
+  // text that looks like success.
+  if (context.json) {
+    throw new VerbUsageError(
+      "--json is not read by 'report mermaid'. The mermaid text IS this verb's output -- there is no document to wrap it in, and wrapping it would make every caller unwrap it before pasting it where it was printed for. Drop the flag; redirect stdout if you want the text in a file.",
+    );
+  }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const graph = readGraph(context, root);
   if (graph === null) {

@@ -132,8 +132,17 @@ export function fetchPaginated<T>(
 ): PaginatedFetch<T> {
   const items: T[] = [];
   for (let page = 1; page <= MAX_PAGES; page += 1) {
+    // `--method GET`, EXPLICITLY (Feitan F5). This argv carries no `-f`/`-F`
+    // today, so gh infers GET and the call is a read either way -- which is
+    // exactly the reasoning ../pr/fetch.ts's header records as the one that
+    // produced a read verb that WROTE: the inference held until somebody added
+    // a parameter. An explicit method is a statement someone made a decision;
+    // an inferred one is a decision nobody made, and this function is now read
+    // by two verbs. ../pr/fetch.test.ts's argv sweep covers it.
     const batch = mustJson<readonly T[]>(seams, GH, [
       "api",
+      "--method",
+      "GET",
       `${pathWithQuery}&per_page=${PAGE_SIZE}&page=${page}`,
     ]);
     items.push(...batch);

@@ -46,8 +46,10 @@
 // invariant over that module's builders; these builders follow the same rule
 // for the same reason, and the mutations say POST because they ARE writes.
 
+import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
 import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { renderArgv } from "../shu/render.js";
 
 export const THREADS_CONTRACT = "nen.pr.threads/v0.1";
 
@@ -107,9 +109,11 @@ export function listArgv(target: Target, prNumber: number): readonly string[] {
     "graphql",
     "-f",
     `query=${LIST_QUERY}`,
-    "-F",
+    // See `listPageArgv` below for why the String! variables take `-f` and the
+    // one Int! takes `-F` (Feitan F6).
+    "-f",
     `owner=${target.owner}`,
-    "-F",
+    "-f",
     `name=${target.repo}`,
     "-F",
     `number=${prNumber}`,
@@ -124,13 +128,21 @@ export function listPageArgv(target: Target, prNumber: number, cursor: string): 
     "graphql",
     "-f",
     `query=${LIST_PAGE_QUERY}`,
-    "-F",
+    // `-f` FOR THE STRING VARIABLES, `-F` FOR THE NUMBER (Feitan F6). gh's
+    // `-F` is the TYPED form: it coerces a value that looks like a number, a
+    // boolean or null, and it reads a leading `@` as a FILE to slurp. `owner`,
+    // `name` and `cursor` are `String!` in the query, and a cursor is an opaque
+    // base64 token nen never inspects -- one that begins with `@` would make gh
+    // try to open a file, and one that is all digits would be sent as an Int
+    // against a String! variable and rejected by the server. `number` is the
+    // one genuine `Int!`, so it keeps `-F`.
+    "-f",
     `owner=${target.owner}`,
-    "-F",
+    "-f",
     `name=${target.repo}`,
     "-F",
     `number=${prNumber}`,
-    "-F",
+    "-f",
     `cursor=${cursor}`,
   ];
 }
@@ -341,6 +353,18 @@ export interface ThreadsReport {
   readonly dryRun: boolean;
   /** `list`'s rows; empty for the two mutations. */
   readonly threads: readonly ThreadRow[];
+  /**
+   * The exact `gh api graphql` argv the mutation ran, or WOULD have run under
+   * `--dry-run`. `null` for `list`, which runs no mutation.
+   *
+   * APPENDED AT THE END OF THE KEY ORDER (Nobunaga N9). The human rendering has
+   * always printed this line, and a `--dry-run` whose whole purpose is "show me
+   * what you would send" was answering `--json` without the one field that says
+   * it -- so a caller scripting the dry run had to parse the human output or
+   * rebuild the argv themselves, which is how two spellings of one command
+   * start to drift.
+   */
+  readonly argv: readonly string[] | null;
 }
 
 export function reply(
@@ -380,6 +404,31 @@ export function resolve(
   return { argv, resolved: true };
 }
 
+/**
+ * One mutation argv, rendered for a `would run:` / `ran:` line.
+ *
+ * THE BODY IS SUMMARISED, NOT PRINTED (Nobunaga N4). A reply body is a file
+ * somebody wrote: it is routinely multi-line, and dropping it into a single
+ * `would run:` line both breaks the line and puts un-quoted text -- `$(…)`,
+ * backticks, a newline -- where a reader is being invited to copy and paste.
+ * Two different mistakes, one fix: the body element becomes its byte count and
+ * its first line, and every OTHER element goes through ../shu/render.ts's
+ * `renderArgv`, which is the quoting this repository already uses for exactly
+ * this line ("the thing you approve is the thing that runs"). The FULL argv,
+ * unsummarised, is in `--json`'s `argv` for a caller that wants it.
+ */
+export function printableArgv(argv: readonly string[]): string {
+  const shown = argv.map((token): string => {
+    if (!token.startsWith("body=")) return token;
+    const body = token.slice("body=".length);
+    const first = body.split(/\r?\n/)[0] ?? "";
+    const bytes = Buffer.byteLength(body, "utf8");
+    const elided = first.length > 60 ? `${first.slice(0, 60)}…` : first;
+    return `body=<${bytes} byte(s); first line: ${plainLine(elided)}${body.includes("\n") ? " …" : ""}>`;
+  });
+  return renderArgv({ exe: "gh", argv: shown });
+}
+
 /** The human lines `list` prints. */
 export function renderThreads(report: ThreadsReport): readonly string[] {
   const unresolved = report.threads.filter((thread): boolean => !thread.isResolved).length;
@@ -387,10 +436,13 @@ export function renderThreads(report: ThreadsReport): readonly string[] {
     `${report.target}#${report.pr} @ ${report.head.slice(0, 8)}: ${report.threads.length} review thread(s), ${unresolved} unresolved`,
   ];
   for (const thread of report.threads) {
+    // A PATH, AN AUTHOR AND A COMMENT ARE ALL STRINGS SOMEBODY ELSE TYPED, and
+    // a terminal executes a control character rather than printing it (Feitan
+    // F4). `--json` above carries the bytes unchanged.
     lines.push(
-      `  ${thread.isResolved ? "resolved  " : "UNRESOLVED"}  ${thread.id}  ${thread.path}${thread.line === null ? "" : `:${thread.line}`}  @${thread.author}`,
+      `  ${thread.isResolved ? "resolved  " : "UNRESOLVED"}  ${plainLine(thread.id)}  ${plainLine(thread.path)}${thread.line === null ? "" : `:${thread.line}`}  @${plainLine(thread.author)}`,
     );
-    if (thread.firstComment !== "") lines.push(`      ${thread.firstComment.replace(/\s*\n\s*/g, " ")}`);
+    if (thread.firstComment !== "") lines.push(`      ${plainLine(thread.firstComment)}`);
   }
   return lines;
 }

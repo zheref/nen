@@ -123,6 +123,18 @@ describe("nen review scopes", () => {
     expect(text).toMatch(/unclaimed: 2 path\(s\) no scope claims/);
   });
 
+  it("says NOTHING WAS CLASSIFIED on an empty diff, not 'every path is claimed' (N10)", async () => {
+    // Zero changed paths is not a clean table: the table was never exercised,
+    // so it has been neither proved nor found wanting, and the old sentence
+    // read as a finding it had not made.
+    const root = repoWith({ scopes: SCOPES });
+    const captured = await capture(["review", "scopes", "--base", "origin/main", "--repo", root], script(""));
+    expect(captured.code).toBe(0);
+    const text = captured.out.join("\n");
+    expect(text).toContain("nothing classified: 'origin/main...HEAD' carries no changed path");
+    expect(text).not.toContain("every changed path is claimed");
+  });
+
   it("exits 1, NAMED, when the repository declares no review block", async () => {
     const root = repoWith(undefined);
     const captured = await capture(["review", "scopes", "--base", "origin/main", "--repo", root], script());

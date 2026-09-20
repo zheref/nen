@@ -14,7 +14,7 @@ import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { parseTarget } from "../github/target.js";
 import { prCommand } from "./command.js";
-import { listArgv, listPageArgv, looksLikeAuthFailure, replyArgv, resolveArgv } from "./threads.js";
+import { listArgv, listPageArgv, looksLikeAuthFailure, printableArgv, replyArgv, resolveArgv } from "./threads.js";
 
 const TARGET = parseTarget("zheref/nen");
 const NOW = new Date("2026-09-20T12:00:00.000Z");
@@ -59,6 +59,15 @@ interface Captured {
 }
 
 async function capture(argv: readonly string[], calls: readonly ScriptedCall[]): Promise<Captured> {
+  return captureIn(argv, calls, null);
+}
+
+/** The same, with a `--repo` root -- what `--body-file` resolves against. */
+async function captureIn(
+  argv: readonly string[],
+  calls: readonly ScriptedCall[],
+  repoFlag: string | null,
+): Promise<Captured> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -66,7 +75,7 @@ async function capture(argv: readonly string[], calls: readonly ScriptedCall[]):
     err: (line): void => void err.push(line),
   };
   const seams = new ScriptedSeams(calls, { now: (): Date => NOW, platform: "linux" });
-  const code = await runFamily(prCommand, argv, null, false, io, seams);
+  const code = await runFamily(prCommand, argv, repoFlag, false, io, seams);
   return { code, out, err, seams };
 }
 
@@ -303,5 +312,141 @@ describe("the family's flag guards", () => {
     const captured = await capture(["pr", "threads", "close", "--target", "zheref/nen", "--pr", "217"], []);
     expect(captured.code).toBe(2);
     expect(captured.err.join("\n")).toMatch(/needs an action: list, reply, resolve/);
+  });
+});
+
+// ── the hardening round (Nobunaga N4/N9, Feitan F4/F6/F7) ──────────────────
+
+describe("the GraphQL variable flags (Feitan F6)", () => {
+  it("sends the String! variables with -f and only the Int! with -F", () => {
+    // `-F` is gh's TYPED form: it coerces a digits-only value to a number and
+    // reads a leading `@` as a FILE to slurp. `owner`, `name` and `cursor`
+    // are `String!`, and a cursor is an opaque token nen never inspects.
+    for (const argv of [listArgv(TARGET, 217), listPageArgv(TARGET, 217, "@cursor")]) {
+      for (const variable of ["owner=", "name=", "cursor="]) {
+        const at = argv.findIndex((arg): boolean => arg.startsWith(variable));
+        if (at === -1) continue;
+        expect(argv[at - 1], `${variable} must be sent with -f, not gh's typed -F`).toBe("-f");
+      }
+      const numberAt = argv.findIndex((arg): boolean => arg.startsWith("number="));
+      expect(argv[numberAt - 1], "number= is the one genuine Int! and keeps -F").toBe("-F");
+    }
+  });
+
+  it("sends a reply body and a thread id with -f, so an @ or digits cannot be re-read", () => {
+    const argv = replyArgv("1234567", "@not-a-file");
+    for (const field of ["threadId=", "body="]) {
+      const at = argv.findIndex((arg): boolean => arg.startsWith(field));
+      expect(argv[at - 1]).toBe("-f");
+    }
+  });
+});
+
+describe("printableArgv (Nobunaga N4)", () => {
+  it("summarises the body instead of printing it, and keeps the line one line", () => {
+    const body = "Fixed in 2a6539c.\nSee $(whoami) and `id` for the rest.\nthird line";
+    const printed = printableArgv([...replyArgv("T1", body)]);
+    expect(printed.split("\n")).toHaveLength(1);
+    // The body's own bytes never reach the line a reader is invited to copy.
+    expect(printed).not.toContain("$(whoami)");
+    expect(printed).not.toContain("third line");
+    expect(printed).toContain("body=<");
+    expect(printed).toContain("byte(s); first line: Fixed in 2a6539c.");
+  });
+
+  it("quotes every other element the way this repository's `would run:` lines do", () => {
+    const printed = printableArgv([...replyArgv("T1", "hi")]);
+    // The mutation carries spaces, so it is quoted as ONE element: a reader
+    // who re-splits the printed line on spaces gets the same command back.
+    expect(printed).toMatch(/^gh api --method POST graphql -f 'query=mutation/);
+  });
+
+  it("strips a control character out of the first line it shows", () => {
+    const printed = printableArgv([...replyArgv("T1", `${String.fromCharCode(27)}[2Kerased`)]);
+    expect(printed).not.toContain(String.fromCharCode(27));
+    expect(printed).toContain("erased");
+  });
+});
+
+describe("the --json argv (Nobunaga N9)", () => {
+  it("carries the full, unsummarised argv on a dry run, and null for list", async () => {
+    const file = bodyFile("Fixed in 2a6539c.");
+    const dry = await capture(
+      ["pr", "threads", "reply", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--body-file", file, "--dry-run", "--json"],
+      [listCall(pageBody([node("T2", false)], false))],
+    );
+    expect(dry.code).toBe(0);
+    const document = JSON.parse(dry.out.join("\n")) as Record<string, unknown>;
+    expect(Object.keys(document)).toEqual([
+      "contract",
+      "target",
+      "pr",
+      "head",
+      "thread",
+      "replied",
+      "resolved",
+      "dryRun",
+      "threads",
+      "argv",
+    ]);
+    // The full argv, body and all -- the summary is for the human line only.
+    expect(document["argv"]).toEqual([...replyArgv("T2", "Fixed in 2a6539c.")]);
+
+    const listed = await capture([...BASE, "--json"], [listCall(pageBody([node("T1", true)], false))]);
+    expect((JSON.parse(listed.out.join("\n")) as Record<string, unknown>)["argv"]).toBeNull();
+  });
+});
+
+describe("--body-file resolves against --repo (Feitan F7)", () => {
+  it("reads the file from the repository named, not from the process cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-threads-repo-"));
+    writeFileSync(join(root, "reply.md"), "from the repo root", "utf8");
+    const captured = await captureIn(
+      ["pr", "threads", "reply", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--body-file", "reply.md", "--dry-run", "--json"],
+      [listCall(pageBody([node("T2", false)], false))],
+      root,
+    );
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    expect((JSON.parse(captured.out.join("\n")) as { argv: string[] }).argv).toContain("body=from the repo root");
+  });
+});
+
+describe("the human rendering strips control characters (Feitan F4)", () => {
+  it("never lets a path, an author or a comment move the cursor", async () => {
+    const hostile = `${String.fromCharCode(27)}[2Kerased`;
+    const captured = await capture(BASE, [
+      listCall(
+        pageBody(
+          [
+            {
+              id: "T1",
+              isResolved: false,
+              path: `src/${hostile}.ts`,
+              line: 1,
+              comments: { nodes: [{ author: { login: hostile }, body: `a finding ${hostile}`, url: "u" }] },
+            },
+          ],
+          false,
+        ),
+      ),
+    ]);
+    expect(captured.code).toBe(0);
+    const text = captured.out.join("\n");
+    expect(text).not.toContain(String.fromCharCode(27));
+    expect(text).toContain("erased");
+  });
+
+  it("keeps the real bytes under --json, for the consumer that needs the field", async () => {
+    const hostile = `${String.fromCharCode(27)}[2Kerased`;
+    const captured = await capture([...BASE, "--json"], [
+      listCall(
+        pageBody(
+          [{ id: "T1", isResolved: false, path: hostile, line: 1, comments: { nodes: [{ author: { login: "a" }, body: "b", url: "u" }] } }],
+          false,
+        ),
+      ),
+    ]);
+    const threads = (JSON.parse(captured.out.join("\n")) as { threads: { path: string }[] }).threads;
+    expect(threads[0]?.path).toBe(hostile);
   });
 });

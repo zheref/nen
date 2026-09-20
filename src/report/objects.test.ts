@@ -15,13 +15,26 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { reportCommand } from "./command.js";
-import { countChecks, parseObjects, parseVerdictLine, renderObjects, type ReportObject } from "./objects.js";
+import {
+  checkRunsArgv,
+  countChecks,
+  issueArgv,
+  parseObjects,
+  parseVerdictLine,
+  renderObjects,
+  type ReportObject,
+} from "./objects.js";
+import { viewArgv } from "../pr/fetch.js";
+import { listArgv } from "../pr/threads.js";
+import { parseTarget } from "../github/target.js";
 import type { RollupEntry } from "../github/types.js";
 
 const FIELD = "";
 const LOG_FORMAT = `%H${FIELD}%s${FIELD}%an${FIELD}%aI`;
 const NOW = new Date("2026-09-20T12:00:00.000Z");
 const COVERAGE_REPO = join(process.cwd(), "src", "schema", "fixtures", "shu-coverage-repo");
+const TARGET = parseTarget("zheref/nen");
+const HEAD_SHA = "7db8de509dfb8623125e9d523220c69d3c8dbad1";
 
 /** The four git reads `report data` makes, all answered, and nothing else. */
 function script(): ScriptedCall[] {
@@ -59,7 +72,7 @@ function objectsFile(rows: unknown): string {
   return path;
 }
 
-const PR_ROW = {
+const PR_ROW: Record<string, unknown> = {
   kind: "pr",
   number: 87,
   title: "feat(report): the register",
@@ -99,6 +112,7 @@ describe("parseObjects -- the read seam", () => {
       "labels",
       "linked",
       "readiness",
+      "notes",
     ]);
     expect(Object.keys(rows[1] as object)).toEqual([
       "kind",
@@ -114,6 +128,7 @@ describe("parseObjects -- the read seam", () => {
       "reviewRequests",
       "linked",
       "readiness",
+      "notes",
     ]);
   });
 
@@ -291,5 +306,463 @@ describe("renderObjects", () => {
     expect(lines).toContain("[ready (check)]");
     expect(lines).toContain("checks 4/4 green, 0 red, 0 pending  threads 0/7 unresolved");
     expect(lines).toContain("linked: #87");
+  });
+});
+
+// ── the LIVE path (Nobunaga N1, N2, N5; Feitan F1, F4) ─────────────────────
+//
+// Every `gh` call is scripted, and ScriptedSeams throws on one nobody wrote --
+// so the number of calls this path makes is pinned by construction, and a
+// register that reached for the network somewhere new is a red test rather
+// than a surprise on a live run.
+
+const PR_VIEW = {
+  number: 217,
+  headRefOid: "7db8de509dfb8623125e9d523220c69d3c8dbad1",
+  baseRefName: "main",
+  headRefName: "feat/x",
+  author: { login: "zheref" },
+  labels: [{ name: "nen:severity/high" }, { name: "nen:lane/cli" }],
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
+  isDraft: false,
+  body: "Closes #215 and refs #220.",
+  url: "https://github.com/zheref/nen/pull/217",
+  title: "feat(pr): review threads",
+  state: "OPEN",
+  statusCheckRollup: [
+    { __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
+    { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
+  ],
+  reviewRequests: [{ login: "copilot-pull-request-reviewer" }],
+};
+
+function viewCall(overrides: Record<string, unknown> = {}): ScriptedCall {
+  return {
+    match: `gh ${viewArgv(TARGET, 217).join(" ")}`,
+    result: { code: 0, stdout: JSON.stringify({ ...PR_VIEW, ...overrides }) },
+  };
+}
+
+function threadsCall(nodes: readonly unknown[]): ScriptedCall {
+  return {
+    match: `gh ${listArgv(TARGET, 217).join(" ")}`,
+    result: {
+      code: 0,
+      stdout: JSON.stringify({
+        data: { repository: { pullRequest: { headRefOid: "7db8de50", reviewThreads: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } },
+      }),
+    },
+  };
+}
+
+function checkRunsCall(runs: readonly unknown[]): ScriptedCall {
+  return {
+    match: `gh ${checkRunsArgv(TARGET, HEAD_SHA).join(" ")}`,
+    result: { code: 0, stdout: JSON.stringify({ check_runs: runs }) },
+  };
+}
+
+const THREAD_NODES = [
+  { id: "T1", isResolved: true, path: "a.ts", line: 1, comments: { nodes: [{ author: { login: "a" }, body: "b", url: "u" }] } },
+  { id: "T2", isResolved: false, path: "b.ts", line: 2, comments: { nodes: [{ author: { login: "a" }, body: "b", url: "u" }] } },
+];
+
+function readinessRun(over: Record<string, unknown> = {}): unknown {
+  return {
+    name: "readiness",
+    status: "completed",
+    conclusion: "SUCCESS",
+    started_at: "2026-09-20T10:00:00Z",
+    output: { title: "Readiness", summary: "ready", text: null },
+    ...over,
+  };
+}
+
+async function live(argv: readonly string[], calls: readonly ScriptedCall[]): Promise<Captured> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const io: Io = {
+    out: (line): void => void out.push(line),
+    err: (line): void => void err.push(line),
+  };
+  const seams = new ScriptedSeams([...script(), ...calls], { now: (): Date => NOW, platform: "linux" });
+  const code = await runFamily(reportCommand, argv, null, false, io, seams);
+  return { code, out, err, seams };
+}
+
+const LIVE_PR = [
+  "report",
+  "data",
+  "--repo",
+  COVERAGE_REPO,
+  "--base",
+  "main",
+  "--target",
+  "zheref/nen",
+  "--prs",
+  "217",
+  "--json",
+];
+
+describe("the live register", () => {
+  it("reads one pull request whole, with readiness from the head's own check run", async () => {
+    const captured = await live(LIVE_PR, [viewCall(), checkRunsCall([readinessRun()]), threadsCall(THREAD_NODES)]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    expect(Object.keys(row)).toEqual([
+      "kind",
+      "number",
+      "title",
+      "url",
+      "state",
+      "labels",
+      "head",
+      "mergeStateStatus",
+      "checks",
+      "threads",
+      "reviewRequests",
+      "linked",
+      "readiness",
+      "notes",
+    ]);
+    expect(row["labels"]).toEqual(["nen:severity/high", "nen:lane/cli"]);
+    expect(row["mergeStateStatus"]).toBe("CLEAN");
+    expect(row["checks"]).toEqual({ total: 2, green: 1, red: 1, pending: 0 });
+    expect(row["threads"]).toEqual({ total: 2, unresolved: 1 });
+    expect(row["reviewRequests"]).toEqual(["copilot-pull-request-reviewer"]);
+    // `linked` is back-filled from the body's closing keywords and bare refs.
+    expect(row["linked"]).toEqual([215, 220]);
+    expect(row["readiness"]).toEqual({ verdict: "ready", reason: "ready", source: "check" });
+    expect(row["notes"]).toEqual([]);
+  });
+
+  it("KEEPS THE ROW when the rollup will not validate, and names the degradation (N2)", async () => {
+    // The reproducer: an in-flight check run whose `conclusion` came back as
+    // the empty string deleted the whole pull request the caller had named,
+    // at exit 0, with an empty register.
+    const captured = await live(LIVE_PR, [
+      viewCall({
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
+          { __typename: "CheckRun", name: "flight", status: "IN_PROGRESS", conclusion: "", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
+        ],
+      }),
+      checkRunsCall([readinessRun()]),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code).toBe(0);
+    const objects = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects;
+    // THE ROW SURVIVES...
+    expect(objects).toHaveLength(1);
+    const row = objects[0] as unknown as Record<string, unknown>;
+    expect(row["number"]).toBe(217);
+    // ...its unreadable field degrades, with the unreadable entry counted
+    // pending and never green...
+    expect(row["checks"]).toEqual({ total: 2, green: 1, red: 0, pending: 1 });
+    // ...and the degradation is named in the row AND on stderr.
+    expect((row["notes"] as string[])[0]).toMatch(/check rollup did not validate/);
+    expect(captured.err.join("\n")).toMatch(/check rollup did not validate/);
+    // Everything else is untouched.
+    expect(row["readiness"]).toEqual({ verdict: "ready", reason: "ready", source: "check" });
+  });
+
+  it("degrades the thread counts to 0/0 and says they mean 'not read'", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall(),
+      checkRunsCall([readinessRun()]),
+      {
+        match: `gh ${listArgv(TARGET, 217).join(" ")}`,
+        result: { code: 1, stderr: "HTTP 502\n" },
+      },
+    ]);
+    expect(captured.code).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    expect(row["threads"]).toEqual({ total: 0, unresolved: 0 });
+    expect((row["notes"] as string[]).join(" ")).toMatch(/mean 'not read' rather than 'none'/);
+  });
+
+  it("REFUSES rather than losing an object the caller named", async () => {
+    const captured = await live(LIVE_PR, [
+      { match: `gh ${viewArgv(TARGET, 217).join(" ")}`, result: { code: 1, stderr: "HTTP 404: Not Found\n" } },
+    ]);
+    // Exit 1, not a short register at exit 0: a field may degrade, an OBJECT
+    // may not go missing.
+    expect(captured.code).toBe(1);
+    expect(captured.err.join("\n")).toMatch(/Refusing to publish a register that silently leaves out an object you asked for/);
+  });
+});
+
+describe("readiness, and which authority answered it", () => {
+  const withRuns = async (runs: readonly unknown[]): Promise<Captured> =>
+    live(LIVE_PR, [viewCall(), checkRunsCall(runs), threadsCall(THREAD_NODES)]);
+
+  const readinessOf = (captured: Captured): unknown =>
+    ((JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>)["readiness"];
+
+  it("takes the LATEST run of that name, never the first the array carries (N5)", async () => {
+    const captured = await withRuns([
+      readinessRun({ started_at: "2026-09-20T09:00:00Z", output: { summary: "ready" } }),
+      readinessRun({ started_at: "2026-09-20T11:00:00Z", output: { summary: "not-ready: one thread is unresolved" } }),
+    ]);
+    expect(readinessOf(captured)).toEqual({
+      verdict: "not-ready",
+      reason: "not-ready: one thread is unresolved",
+      source: "check",
+    });
+  });
+
+  it("refuses a run that is still IN PROGRESS, and falls through (F1)", async () => {
+    const captured = await withRuns([readinessRun({ status: "in_progress", conclusion: null })]);
+    expect(readinessOf(captured)).toBeNull();
+    expect(captured.err.join("\n")).toMatch(/is 'in_progress', not 'completed'/);
+  });
+
+  it("refuses a run that CONCLUDED FAILURE however its output is worded (F1)", async () => {
+    const captured = await withRuns([readinessRun({ conclusion: "FAILURE", output: { summary: "ready" } })]);
+    expect(readinessOf(captured)).toBeNull();
+    expect(captured.err.join("\n")).toMatch(/concluded FAILURE/);
+  });
+
+  it("never reads output.TITLE as a verdict -- 'Ready to merge' is not a verdict (F1)", async () => {
+    const captured = await withRuns([
+      readinessRun({ output: { title: "Ready to merge", summary: "See the job log.", text: null } }),
+    ]);
+    expect(readinessOf(captured)).toBeNull();
+    expect(captured.err.join("\n")).toMatch(/names no verdict line/);
+  });
+
+  it("is null WITH THE REASON when neither authority can be read", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall(),
+      { match: `gh ${checkRunsArgv(TARGET, HEAD_SHA).join(" ")}`, result: { code: 1, stderr: "HTTP 403\n" } },
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code).toBe(0);
+    // No check run readable, and the in-process gate has no token here.
+    expect(readinessOf(captured)).toBeNull();
+    expect(captured.err.join("\n")).toMatch(/objects: the readiness gate/);
+  });
+});
+
+describe("--backlog", () => {
+  const BACKLOG = ["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--target", "zheref/nen", "--backlog", "--json"];
+
+  function openPage(items: readonly unknown[]): ScriptedCall {
+    return {
+      match: "gh api --method GET repos/zheref/nen/issues?state=open&per_page=100&page=1",
+      result: { code: 0, stdout: JSON.stringify(items) },
+    };
+  }
+
+  it("splits pull_request rows from issues, and back-fills each issue's linked PRs", async () => {
+    const captured = await live(BACKLOG, [
+      openPage([
+        { number: 215, title: "pr threads", labels: [{ name: "nen:severity/high" }], state: "open", html_url: "https://github.com/zheref/nen/issues/215", body: "" },
+        { number: 220, title: "reports and reviewers", labels: [], state: "open", html_url: "https://github.com/zheref/nen/issues/220", body: "" },
+        { number: 217, title: "the PR", labels: [], state: "open", html_url: "https://github.com/zheref/nen/pull/217", body: "", pull_request: { url: "x" } },
+      ]),
+      viewCall(),
+      checkRunsCall([readinessRun()]),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const objects = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects;
+    // Issues first, ascending, then the pull requests -- a stated order, so
+    // two reads of an unchanged repository produce a register you can diff.
+    expect(objects.map((row): string => `${row.kind}#${row.number}`)).toEqual(["issue#215", "issue#220", "pr#217"]);
+    const issue = objects[0] as unknown as Record<string, unknown>;
+    expect(issue["state"]).toBe("OPEN");
+    expect(issue["labels"]).toEqual(["nen:severity/high"]);
+    // The PR's body closes #215 and refs #220, so BOTH issues carry it back.
+    expect(issue["linked"]).toEqual([217]);
+    expect((objects[1] as unknown as Record<string, unknown>)["linked"]).toEqual([217]);
+    expect(issue["readiness"]).toBeNull();
+    expect(issue["notes"]).toEqual([]);
+  });
+
+  it("reads a named issue on its own through the issues endpoint", async () => {
+    const captured = await live(
+      ["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--target", "zheref/nen", "--issues", "215", "--json"],
+      [
+        {
+          match: `gh ${issueArgv(TARGET, 215).join(" ")}`,
+          result: { code: 0, stdout: JSON.stringify({ number: 215, title: "pr threads", labels: [], state: "open", html_url: "u", body: "" }) },
+        },
+      ],
+    );
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const objects = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects;
+    expect(objects).toHaveLength(1);
+    expect(objects[0]?.kind).toBe("issue");
+  });
+
+  it("REFUSES when an issue the caller named cannot be read", async () => {
+    const captured = await live(
+      ["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--target", "zheref/nen", "--issues", "215"],
+      [{ match: `gh ${issueArgv(TARGET, 215).join(" ")}`, result: { code: 1, stderr: "HTTP 404\n" } }],
+    );
+    expect(captured.code).toBe(1);
+    expect(captured.err.join("\n")).toMatch(/--issues named/);
+  });
+});
+
+describe("the human rendering (Feitan F4)", () => {
+  it("strips control characters from GitHub-controlled text, and --json keeps them", () => {
+    const hostile = `${String.fromCharCode(27)}[2Kerased${String.fromCharCode(7)}`;
+    const rows = parseObjects(
+      [{ ...PR_ROW, title: hostile, state: `OPEN${hostile}`, notes: [`note ${hostile}`] }],
+      "o.json",
+    );
+    const rendered = renderObjects(rows).join("\n");
+    // The terminal never sees the escape...
+    expect(rendered).not.toContain(String.fromCharCode(27));
+    expect(rendered).not.toContain(String.fromCharCode(7));
+    expect(rendered).toContain("erased");
+    // ...and the document still holds the real bytes, for the consumer that
+    // is about to compare or store the field.
+    expect((rows[0] as { title: string }).title).toBe(hostile);
+  });
+});
+
+// ── the degraded readers, one branch at a time (Nobunaga N1) ───────────────
+//
+// Every reader on the live path has a fallback, and a fallback nobody has run
+// is a fallback nobody knows the shape of. These drive each one through the
+// real dispatcher rather than calling it directly, so what is pinned is what a
+// caller would see.
+
+describe("every field degrades on its own", () => {
+  it("survives a `gh pr view` payload in which almost nothing is the right type", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall({
+        number: "217",
+        headRefOid: null,
+        title: 42,
+        url: null,
+        state: undefined,
+        mergeStateStatus: null,
+        labels: "not-a-list",
+        reviewRequests: [{ name: "zheref/reviewers" }, { neither: true }, "nonsense"],
+        body: null,
+        statusCheckRollup: null,
+      }),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    // The NUMBER falls back to the one the caller asked for, which is the only
+    // value that can be trusted when the payload cannot.
+    expect(row["number"]).toBe(217);
+    expect(row["title"]).toBe("");
+    expect(row["url"]).toBe("");
+    expect(row["state"]).toBe("");
+    expect(row["mergeStateStatus"]).toBe("UNKNOWN");
+    expect(row["labels"]).toEqual([]);
+    // A team request has `name` and no `login`; the third two are neither.
+    expect(row["reviewRequests"]).toEqual(["zheref/reviewers"]);
+    expect(row["linked"]).toEqual([]);
+    // No head SHA means no readiness -- a verdict is the one thing that must
+    // not be computed from a degraded read -- and it says so.
+    expect(row["readiness"]).toBeNull();
+    expect((row["notes"] as string[]).join(" ")).toMatch(/head SHA could not be read/);
+    // And NO check-run call was made, because there was no SHA to ask about:
+    // an unscripted call here would have thrown.
+    expect(row["checks"]).toEqual({ total: 0, green: 0, red: 0, pending: 0 });
+  });
+
+  it("counts a lenient rollup by conclusion, then by legacy state, and pends what it cannot read", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall({
+        statusCheckRollup: [
+          // Unreadable `conclusion` -- the case that used to delete the row.
+          { __typename: "CheckRun", name: "flight", conclusion: "" },
+          { __typename: "CheckRun", name: "ok", conclusion: "SUCCESS" },
+          { __typename: "CheckRun", name: "skipped", conclusion: "SKIPPED" },
+          { __typename: "CheckRun", name: "bad", conclusion: "FAILURE" },
+          { __typename: "CheckRun", name: "queued", conclusion: "QUEUED" },
+          // A legacy StatusContext carries `state`, never `conclusion`.
+          { __typename: "StatusContext", context: "legacy-green", state: "SUCCESS" },
+          { __typename: "StatusContext", context: "legacy-waiting", state: "PENDING" },
+          { __typename: "StatusContext", context: "legacy-bad", state: "ERROR" },
+          // A word nen has never heard of is pending, never green.
+          { __typename: "CheckRun", name: "novel", conclusion: "SOMETHING_NEW" },
+          "not even an object",
+        ],
+      }),
+      checkRunsCall([readinessRun()]),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    // green: ok, skipped, legacy-green. red: bad, legacy-bad, novel.
+    // pending: flight, queued, legacy-waiting, the non-object.
+    expect(row["checks"]).toEqual({ total: 10, green: 3, red: 3, pending: 4 });
+  });
+
+  it("takes a check-runs answer that is not JSON, or carries no list, as no check run", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall(),
+      { match: `gh ${checkRunsArgv(TARGET, HEAD_SHA).join(" ")}`, result: { code: 0, stdout: "<html>not json" } },
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    // It falls through to the gate, which has no token here, so null with the
+    // gate's own reason -- never a verdict invented from an unreadable answer.
+    expect(row["readiness"]).toBeNull();
+  });
+
+  it("takes a check-runs answer with no `readiness` run as nothing to read", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall(),
+      checkRunsCall([{ name: "build", status: "completed", conclusion: "SUCCESS" }]),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    expect(row["readiness"]).toBeNull();
+    // No complaint about a check run that simply is not there: a repository
+    // that publishes none is the ordinary case, not a degradation.
+    expect(row["notes"]).toEqual([]);
+  });
+});
+
+describe("the read seam's remaining refusals", () => {
+  const bad = (over: Record<string, unknown>): (() => unknown) => (): unknown =>
+    parseObjects([{ ...PR_ROW, ...over }], "o.json");
+
+  it("refuses a `linked` that is not a list of whole numbers", () => {
+    expect(bad({ linked: [85, 1.5] })).toThrow(/has 'linked' that is not a list of whole numbers/);
+    expect(bad({ linked: "85" })).toThrow(/has 'linked' that is not a list of whole numbers/);
+  });
+
+  it("refuses a `readiness` that is a list, and one missing its verdict or reason", () => {
+    expect(bad({ readiness: ["ready"] })).toThrow(/which is neither null nor a verdict object/);
+    expect(bad({ readiness: { verdict: "ready", source: "check" } })).toThrow(
+      /without a string 'verdict' and 'reason'/,
+    );
+  });
+
+  it("refuses a `notes` that is there and is not a list of strings, and accepts an absent one", () => {
+    expect(bad({ notes: "one note" })).toThrow(/has 'notes' that is not a list of strings/);
+    expect(bad({ notes: [1, 2] })).toThrow(/has 'notes' that is not a list of strings/);
+    // Absent is the empty list: a row written before this field existed is a
+    // valid row.
+    const without = { ...PR_ROW };
+    delete (without as Record<string, unknown>)["notes"];
+    expect((parseObjects([without], "o.json")[0] as { notes: readonly string[] }).notes).toEqual([]);
+  });
+
+  it("refuses a `checks` that is not an object of counts, and a negative count", () => {
+    expect(bad({ checks: [4, 4, 0, 0] })).toThrow(/not an object of counts/);
+    expect(bad({ checks: { total: 4, green: -1, red: 0, pending: 0 } })).toThrow(
+      /has 'checks\.green' of a number, not a whole count/,
+    );
+  });
+
+  it("refuses a row that is not an object at all, naming its index", () => {
+    expect(() => parseObjects([PR_ROW, null], "o.json")).toThrow(/row 1 is null, not an object/);
+    expect(() => parseObjects([["pr", 87]], "o.json")).toThrow(/row 0 is a list of 2, not an object/);
   });
 });

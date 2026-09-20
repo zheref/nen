@@ -29,6 +29,24 @@
 // that refused to describe an effort because GitHub was unreachable is a report
 // you can only run online.
 //
+// AN OBJECT THE CALLER NAMED IS NEVER QUIETLY MISSING, AND THAT IS WHERE THIS
+// MODULE PARTS COMPANY WITH ./data.ts's "every absence is null". That rule is
+// about ARTIFACTS NOBODY PRODUCED -- a coverage report that was never written,
+// a proof, a recorded stop -- where `null` is the true answer and a refusal
+// would mean the verb only runs at the end. The register is the other case:
+// `--prs 87`, `--issues 85` and `--backlog` are the caller saying WHICH objects
+// the report is about, so a row that could not be read is not an absence, it is
+// an unanswered question. A short `objects[]` at exit 0 says "that is the whole
+// register" in a document whose whole job is to be the whole register, which is
+// ./data.ts's own reason for refusing a failed `git log` rather than reporting
+// a branch with no commits on it.
+//
+// SO THE LINE IS DRAWN AT THE OBJECT, NOT THE FIELD. A FIELD that will not read
+// degrades and is named in the row's `notes[]` (see `prRow`); an OBJECT that
+// cannot be read at all, or a backlog page that cannot be fetched, is a
+// refusal at exit 1 naming it. Losing a field costs a column; losing an object
+// costs the reader a thing they asked about and never learn was missing.
+//
 // THE OFFLINE PATH IS VALIDATED AT THE READ SEAM, BY INDEX. `--objects-from`
 // takes rows already in this shape -- it is how a caller who assembled the
 // register himself (or a test) feeds it in -- and an unvalidated row would put
@@ -37,20 +55,43 @@
 // the same discipline ../pr/command.ts's `validateWakes` applies to the wake
 // history for the same reason: a row nobody checked is a fact nobody checked.
 //
-// EVERY `gh api` ARGV NAMES ITS METHOD EXPLICITLY, on ../pr/fetch.ts's module
-// rule (zheref/nen#19): gh flips to POST the moment any `-f`/`-F` is supplied,
-// and a READ verb that writes is the worst defect class this CLI can have.
-// `report data` is the read verb par excellence -- ./data.ts's header says it
-// has no write path at all -- so the rule is inherited whole, not weakened.
+// EVERY `gh api` ARGV THIS MODULE BUILDS NAMES ITS METHOD EXPLICITLY, on
+// ../pr/fetch.ts's module rule (zheref/nen#19): gh flips to POST the moment any
+// `-f`/`-F` is supplied, and a READ verb that writes is the worst defect class
+// this CLI can have. `report data` is the read verb par excellence -- ./data.ts's
+// header says it has no write path at all -- so the rule is inherited whole.
+// The claim is about the builders HERE and in the modules this calls
+// (../pr/threads.ts, ../backlog/fetch.ts), each of which states it for itself;
+// ./objects.test.ts and ../pr/fetch.test.ts sweep them together, so the rule is
+// checked rather than asserted (Nobunaga N11 -- the sentence used to claim more
+// than this module could see).
 
 import { VerbUsageError } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { referencedIssueNumbers, fetchPaginated } from "../backlog/fetch.js";
 import type { Target } from "../github/target.js";
 import { rollupEntryStatus, type RollupEntry } from "../github/types.js";
+import { parseCheckRollup } from "../github/parse.js";
 import { checksAllGreen, latestChecks } from "../gates/predicates.js";
-import { fetchPullRequest } from "../pr/fetch.js";
-import { GH, type Seams } from "../seam/exec.js";
+import { viewArgv } from "../pr/fetch.js";
+import { listThreads } from "../pr/threads.js";
+import { GH, outputLines, type Seams } from "../seam/exec.js";
 import { prReady } from "../verbs/pr_ready.js";
+
+/**
+ * An OBJECT the caller named that could not be read at all.
+ *
+ * A plain `Error`, so ../index.ts's "anything else is exit 1" answers it: this
+ * is the verb failing, not the invocation being wrong -- the flags were right
+ * and GitHub did not answer. A retry can fix it, which is exactly what exit 1
+ * tells a caller and exit 2 would not.
+ */
+export class ObjectsError extends Error {
+  constructor(message: string) {
+    super(`objects: ${message}`);
+    this.name = "ObjectsError";
+  }
+}
 
 /** The check-run name a repository publishes its own readiness verdict under. */
 export const READINESS_CHECK = "readiness";
@@ -97,6 +138,19 @@ export interface PrObject {
   /** Issue numbers this pull request references. */
   readonly linked: readonly number[];
   readonly readiness: ObjectReadiness | null;
+  /**
+   * What could not be read cleanly about THIS row, named, in the order it was
+   * found. Empty when everything read.
+   *
+   * IT IS A FIELD AND NOT ONLY A WARNING (Nobunaga N2). A degraded row that
+   * said so only on stderr would be published into a report that looks
+   * complete, read by somebody who never saw the terminal -- and the whole
+   * reason the row survives a bad field is that a register must not lose an
+   * object it was asked for. Surviving quietly is the other half of the same
+   * mistake. Every line here is also written to stderr, so neither reader has
+   * to know about the other.
+   */
+  readonly notes: readonly string[];
 }
 
 export interface IssueObject {
@@ -110,6 +164,8 @@ export interface IssueObject {
   readonly linked: readonly number[];
   /** ALWAYS `null`: CON-32 is a statement about a pull request, not an issue. */
   readonly readiness: null;
+  /** See `PrObject.notes`. Empty when everything read. */
+  readonly notes: readonly string[];
 }
 
 export type ReportObject = PrObject | IssueObject;
@@ -216,6 +272,24 @@ function readReadiness(row: Record<string, unknown>, display: string, index: num
   return { verdict, reason, source };
 }
 
+/**
+ * `notes[]`, ABSENT-TOLERANT on the way in and always present on the way out.
+ *
+ * A row written before this field existed -- or by a caller who has nothing to
+ * degrade -- is a valid row, so an absent `notes` reads as the empty list
+ * rather than a refusal by index. What is NOT tolerated is a `notes` that is
+ * there and is not a list of strings: that is a row claiming to carry
+ * degradations in a shape nobody can print.
+ */
+function readNotes(row: Record<string, unknown>, display: string, index: number): readonly string[] {
+  const value = field(row, "notes");
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.some((entry): boolean => typeof entry !== "string")) {
+    refuse(display, index, `has 'notes' that is not a list of strings`);
+  }
+  return [...(value as string[])];
+}
+
 function describe(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "nothing";
@@ -272,6 +346,7 @@ export function parseObjects(document: unknown, display: string): readonly Repor
         ...common,
         linked: requireNumbers(row, "linked", display, index),
         readiness: null,
+        notes: readNotes(row, display, index),
       };
     }
     return {
@@ -284,49 +359,93 @@ export function parseObjects(document: unknown, display: string): readonly Repor
       reviewRequests: requireStrings(row, "reviewRequests", display, index),
       linked: requireNumbers(row, "linked", display, index),
       readiness: readReadiness(row, display, index),
+      notes: readNotes(row, display, index),
     };
   });
 }
 
 // ── readiness: the check run, then the gate, then null ──────────────────────
 
-/** `gh api --method GET repos/<slug>/commits/<sha>/check-runs`. */
-export function checkRunsArgv(target: Target, sha: string): readonly string[] {
-  return ["api", "--method", "GET", `repos/${target.slug}/commits/${sha}/check-runs`];
-}
-
 interface RawCheckRun {
   readonly name?: unknown;
+  readonly status?: unknown;
+  readonly conclusion?: unknown;
+  readonly started_at?: unknown;
   readonly output?: { readonly title?: unknown; readonly summary?: unknown; readonly text?: unknown };
 }
 
 /**
  * The verdict line a `readiness` check run published, parsed.
  *
- * THE FIRST LINE THAT STARTS WITH A VERDICT WORD WINS, and nothing else is read.
- * A check run's summary is prose somebody wrote; hunting for `ready` anywhere in
- * it would find the word inside "not ready yet" and inside "readiness", which is
- * the exact substring accident a gate must not be decided by. So the match is
- * anchored: `ready` alone, or `not-ready: <reason>`.
+ * THE WHOLE LINE MUST BE THE VERDICT, and nothing else is read (Feitan F1).
+ * Hunting for `ready` anywhere in a summary finds it inside "not ready yet",
+ * inside "readiness", and inside a check-run TITLE somebody wrote as "Ready to
+ * merge" -- and any one of those short-circuits the gate into publishing
+ * `ready` about a pull request nothing evaluated. So a line is a verdict only
+ * when it IS one, end to end: `ready`, or `not-ready: <reason>`. A line with
+ * anything after the bare `ready` is not a verdict, it is prose that starts
+ * with the word.
  */
 export function parseVerdictLine(text: string): { readonly verdict: string; readonly reason: string } | null {
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
-    const match = /^(not-ready|ready)\b\s*:?\s*(.*)$/i.exec(trimmed);
-    if (match === null) continue;
-    return { verdict: (match[1] as string).toLowerCase(), reason: trimmed };
+    const ready = /^ready\.?$/i.exec(trimmed);
+    if (ready !== null) return { verdict: "ready", reason: trimmed };
+    const notReady = /^not-ready\s*:\s*(\S.*)$/i.exec(trimmed);
+    if (notReady !== null) return { verdict: "not-ready", reason: trimmed };
   }
   return null;
 }
 
+/** `gh api --method GET repos/<slug>/commits/<sha>/check-runs`. */
+export function checkRunsArgv(target: Target, sha: string): readonly string[] {
+  return ["api", "--method", "GET", `repos/${target.slug}/commits/${sha}/check-runs`];
+}
+
+/** A conclusion that is never `ready`, whatever the run's own text says. */
+const NEVER_READY: ReadonlySet<string> = new Set([
+  "FAILURE",
+  "CANCELLED",
+  "TIMED_OUT",
+  "ACTION_REQUIRED",
+  "STARTUP_FAILURE",
+  "STALE",
+]);
+
 /**
  * The head's own `readiness` check run, or null when it carries none.
  *
- * A FAILED READ IS NULL, NOT A REFUSAL: the caller falls through to the gate,
- * which is a better answer than no answer, and reports its own reason if that
- * fails too. Only a check run that EXISTS and carries a parseable verdict line
- * answers here -- one that exists and says nothing readable is not a verdict
- * this module is willing to invent a reading of.
+ * FOUR THINGS MUST HOLD BEFORE THIS SHORT-CIRCUITS THE GATE, and each one is a
+ * way the first cut of this function could be talked into publishing `ready`
+ * about a pull request nothing evaluated (Feitan F1, Nobunaga N5):
+ *
+ *   1. THE LATEST RUN OF THAT NAME, not the first one the array happens to
+ *      carry. GitHub returns every attempt; a re-run that went red sits beside
+ *      the SUCCESS it replaced, and array order is not recency. The reduction
+ *      is `started_at`, descending, which is what ../gates/predicates.ts's
+ *      `latestChecks` does one layer up on the validated shape.
+ *   2. `status === "completed"`. An in-flight run has not said anything yet,
+ *      and a run still deciding must never be read as a decision -- the exact
+ *      `//`-chain lesson ../github/types.ts's header records.
+ *   3. THE CONCLUSION IS FOLDED IN. A run that FAILED, was CANCELLED or TIMED
+ *      OUT cannot publish `ready` however its output is worded: the job that
+ *      was supposed to decide did not finish deciding.
+ *   4. THE VERDICT COMES FROM `output.summary` OR `output.text`, NEVER FROM
+ *      `output.title`. A title is a display string an app writes for a human
+ *      ("Ready to merge"), and reading it as a verdict is how "Ready to merge"
+ *      becomes `ready` from an app nobody vetted.
+ *
+ * ANY OF THEM FAILING IS A WARNING AND A FALL-THROUGH TO THE GATE, never a
+ * refusal and never a verdict: nen's own gate is a better answer than a
+ * degraded one, and no answer at all is better than a wrong one.
+ *
+ * NEN STILL DOES NOT VERIFY WHO PUBLISHED THE RUN, and that is worth saying
+ * out loud rather than leaving implied. A check run named `readiness` on the
+ * head is trusted as the repository's own because only an app with write
+ * access to that repository can create one; if that assumption is ever wrong
+ * for a consumer, the repair is to stop publishing the check rather than to
+ * add an app allow-list here, which would be nen inventing somebody's CI
+ * vocabulary.
  */
 export function readinessFromCheck(
   seams: Seams,
@@ -343,19 +462,50 @@ export function readinessFromCheck(
   } catch {
     return null;
   }
-  const run = runs.find((entry): boolean => String(entry.name ?? "") === READINESS_CHECK);
-  if (run === undefined) return null;
-  const text = [run.output?.title, run.output?.summary, run.output?.text]
+  const named = runs.filter((entry): boolean => String(entry.name ?? "") === READINESS_CHECK);
+  if (named.length === 0) return null;
+  const run = latestOf(named);
+  const where = `${target.slug}@${sha.slice(0, 8)} carries a '${READINESS_CHECK}' check run`;
+
+  const status = String(run.status ?? "").toLowerCase();
+  if (status !== "completed") {
+    warn(
+      `objects: ${where} whose status is '${status || "(none)"}', not 'completed' -- a run still deciding has not decided; falling through to nen's own gate.`,
+    );
+    return null;
+  }
+  const conclusion = String(run.conclusion ?? "").toUpperCase();
+  if (NEVER_READY.has(conclusion)) {
+    warn(
+      `objects: ${where} that concluded ${conclusion} -- the job that decides readiness did not finish deciding, so its output is not read as a verdict; falling through to nen's own gate.`,
+    );
+    return null;
+  }
+  // `output.title` IS DELIBERATELY NOT IN THIS JOIN. See clause 4 above.
+  const text = [run.output?.summary, run.output?.text]
     .filter((part): part is string => typeof part === "string")
     .join("\n");
   const line = parseVerdictLine(text);
   if (line === null) {
     warn(
-      `objects: ${target.slug}@${sha.slice(0, 8)} carries a '${READINESS_CHECK}' check run whose output names no verdict line ('ready' or 'not-ready: <reason>'); falling through to nen's own gate.`,
+      `objects: ${where} whose output.summary/output.text names no verdict line (a whole line reading 'ready', or 'not-ready: <reason>'); falling through to nen's own gate.`,
     );
     return null;
   }
   return { verdict: line.verdict, reason: line.reason, source: "check" };
+}
+
+/**
+ * The latest run of one name, by `started_at`, descending.
+ *
+ * A MISSING TIMESTAMP SORTS FIRST, matching ../gates/predicates.ts's own
+ * `sort_by(.startedAt // "")` -- so a run that does not say when it started
+ * never wins recency over one that does.
+ */
+function latestOf(runs: readonly RawCheckRun[]): RawCheckRun {
+  return [...runs].sort((a, b): number =>
+    String(a.started_at ?? "").localeCompare(String(b.started_at ?? "")),
+  )[runs.length - 1] as RawCheckRun;
 }
 
 /**
@@ -435,6 +585,7 @@ function issueRow(raw: RawGhIssue, linked: readonly number[]): IssueObject {
     labels: (raw.labels ?? []).map((label): string => label.name),
     linked: [...linked].sort((a, b): number => a - b),
     readiness: null,
+    notes: [],
   };
 }
 
@@ -466,20 +617,25 @@ export async function assembleObjects(
       else prNumbers.add(raw.number);
     }
     if (open.truncated) {
-      warn(`objects: the open-object fetch for ${target.slug} hit its pagination ceiling; the register may be incomplete.`);
+      throw new ObjectsError(
+        `the open-object fetch for ${target.slug} hit its pagination ceiling before the last page. Refusing to publish a register that is short by an unknown number of rows under a flag whose whole meaning is 'every open issue and pull request'.`,
+      );
     }
   }
   for (const number of options.issues) {
     if (issues.has(number)) continue;
     const result = seams.run(GH, [...issueArgv(target, number)]);
     if (result.spawnFailed || result.code !== 0) {
-      warn(`objects: could not read ${target.slug}#${number} as an issue; it is left out of the register.`);
-      continue;
+      throw new ObjectsError(
+        `could not read ${target.slug}#${number}, which --issues named (${result.spawnFailed ? "gh could not be started" : `gh exited ${result.code}`}: ${outputLines(result.stderr).join(" ") || "no output"}). Refusing to publish a register that silently leaves out an object you asked for.`,
+      );
     }
     try {
       issues.set(number, JSON.parse(result.stdout) as RawGhIssue);
-    } catch {
-      warn(`objects: ${target.slug}#${number} did not answer with JSON; it is left out of the register.`);
+    } catch (error) {
+      throw new ObjectsError(
+        `could not read ${target.slug}#${number}, which --issues named (gh did not answer JSON: ${String(error)}). Refusing to publish a register that silently leaves out an object you asked for.`,
+      );
     }
   }
 
@@ -487,7 +643,6 @@ export async function assembleObjects(
   const linkedByIssue = new Map<number, number[]>();
   for (const number of [...prNumbers].sort((a, b): number => a - b)) {
     const row = await prRow(seams, target, number, options.repoRoot, warn);
-    if (row === null) continue;
     prs.push(row);
     for (const issueNumber of row.linked) {
       if (!issues.has(issueNumber)) continue;
@@ -501,44 +656,203 @@ export async function assembleObjects(
   return [...issueRows, ...prs];
 }
 
+/**
+ * ONE PULL REQUEST'S ROW, READ FIELD BY FIELD AND DEGRADED FIELD BY FIELD.
+ *
+ * THIS DOES NOT GO THROUGH ../pr/fetch.ts, AND THAT IS THE WHOLE POINT
+ * (Nobunaga N2). `fetchPullRequest` is the GATE's read: it routes every field
+ * through ../github/parse.ts and throws the moment one will not validate,
+ * because a readiness verdict computed from a rollup nobody could read is the
+ * worst thing this CLI can produce. That rule is right THERE and wrong HERE. A
+ * register is a DISPLAY, and routing it through a fail-closed parser meant one
+ * in-flight check run whose `conclusion` came back as `""` -- an ordinary,
+ * momentary GitHub state -- deleted the entire pull request the caller had
+ * named by number, at exit 0, with an empty `objects: []` and a warning nobody
+ * reads in a report. The register LOST AN OBJECT IT WAS ASKED FOR, which is a
+ * worse failure than any field being wrong.
+ *
+ * So every field is read on its own and degrades on its own: a rollup that will
+ * not validate is counted from what parsed, `mergeStateStatus` is carried
+ * verbatim as the string GitHub sent, an unreadable thread walk is `0/0`, and
+ * each degradation is NAMED -- in the row's own `notes[]` and on stderr. The
+ * one thing that can still lose the row is `gh pr view` itself failing, because
+ * then there is no object to describe at all.
+ *
+ * READINESS IS STILL ALLOWED TO BE NULL, and it is the one field that keeps the
+ * fail-closed reading: it is a VERDICT rather than a fact, and a verdict
+ * computed from a degraded read would be exactly the false green the gate's own
+ * parser exists to prevent. A row whose head SHA could not be read carries
+ * `readiness: null` with the reason in `notes[]`.
+ */
 async function prRow(
   seams: Seams,
   target: Target,
   number: number,
   repoRoot: string,
   warn: (line: string) => void,
-): Promise<PrObject | null> {
-  let snapshot: Awaited<ReturnType<typeof fetchPullRequest>>;
-  try {
-    snapshot = fetchPullRequest(seams, target, number);
-  } catch (error) {
-    warn(
-      `objects: could not read ${target.slug}#${number} (${error instanceof Error ? error.message : String(error)}); it is left out of the register.`,
+): Promise<PrObject> {
+  const notes: string[] = [];
+  const note = (line: string): void => {
+    notes.push(line);
+    warn(`objects: ${target.slug}#${number}: ${line}`);
+  };
+
+  const result = seams.run(GH, [...viewArgv(target, number)]);
+  if (result.spawnFailed || result.code !== 0) {
+    throw new ObjectsError(
+      `could not read ${target.slug}#${number}, which this invocation named ('gh pr view' ${result.spawnFailed ? "could not be started" : `exited ${result.code}`}: ${outputLines(result.stderr).join(" ") || "no output"}). Refusing to publish a register that silently leaves out an object you asked for -- a short list reads as the whole list.`,
     );
-    return null;
   }
-  const head = snapshot.pr.headSha;
+  let view: Record<string, unknown>;
+  try {
+    view = JSON.parse(result.stdout) as Record<string, unknown>;
+  } catch (error) {
+    throw new ObjectsError(
+      `could not read ${target.slug}#${number}, which this invocation named ('gh pr view' did not answer JSON: ${String(error)}). Refusing to publish a register that silently leaves out an object you asked for.`,
+    );
+  }
+
+  const head = typeof view["headRefOid"] === "string" ? view["headRefOid"] : "";
+  if (head === "") note("the head SHA could not be read, so readiness could not be established");
+
+  const checks = countRollup(view["statusCheckRollup"], note);
+  const threads = readThreadCounts(seams, target, number, note);
+  const title = typeof view["title"] === "string" ? view["title"] : "";
+  const body = typeof view["body"] === "string" ? view["body"] : "";
+
   const readiness =
-    readinessFromCheck(seams, target, head, warn) ??
-    (await readinessFromGate(target, number, repoRoot, warn));
+    head === ""
+      ? null
+      : (readinessFromCheck(seams, target, head, warn) ??
+        (await readinessFromGate(target, number, repoRoot, warn)));
+
   return {
     kind: "pr",
-    number: snapshot.pr.number,
-    title: snapshot.title,
-    url: snapshot.url,
-    state: snapshot.state,
-    labels: snapshot.pr.labels,
+    number: typeof view["number"] === "number" ? view["number"] : number,
+    title,
+    url: typeof view["url"] === "string" ? view["url"] : "",
+    state: typeof view["state"] === "string" ? view["state"] : "",
+    labels: readLabels(view["labels"]),
     head,
-    mergeStateStatus: snapshot.mergeStateStatus,
-    checks: countChecks(snapshot.checks),
-    threads: {
-      total: snapshot.reviewThreads.length,
-      unresolved: snapshot.reviewThreads.filter((thread): boolean => !thread.isResolved).length,
-    },
-    reviewRequests: snapshot.reviewRequests.map((request): string => request.login ?? request.name ?? ""),
-    linked: [...referencedIssueNumbers(`${snapshot.title}\n${snapshot.body}`)].sort((a, b): number => a - b),
+    // VERBATIM, whatever it says. GitHub's own composite is CLEAN/DIRTY/
+    // BLOCKED/BEHIND/UNSTABLE/UNKNOWN today and may gain a word tomorrow; a row
+    // that refused an unfamiliar one would be a register that breaks on a
+    // GitHub release, and this field is printed, never branched on.
+    mergeStateStatus: typeof view["mergeStateStatus"] === "string" ? view["mergeStateStatus"] : "UNKNOWN",
+    checks,
+    threads,
+    reviewRequests: readReviewRequests(view["reviewRequests"]),
+    linked: [...referencedIssueNumbers(`${title}\n${body}`)].sort((a, b): number => a - b),
     readiness,
+    notes,
   };
+}
+
+/** `labels` as names, skipping anything that is not one, rather than refusing. */
+function readLabels(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry): string =>
+      typeof entry === "object" && entry !== null && typeof (entry as { name?: unknown }).name === "string"
+        ? ((entry as { name: string }).name)
+        : "",
+    )
+    .filter((name): boolean => name !== "");
+}
+
+/** `reviewRequests` as logins or team names -- `(.login // .name // "")`, leniently. */
+function readReviewRequests(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry): string => {
+      if (typeof entry !== "object" || entry === null) return "";
+      const record = entry as { login?: unknown; name?: unknown };
+      if (typeof record.login === "string") return record.login;
+      return typeof record.name === "string" ? record.name : "";
+    })
+    .filter((name): boolean => name !== "");
+}
+
+/**
+ * The rollup counted, STRICTLY when it validates and LENIENTLY when it does not.
+ *
+ * THE STRICT PATH IS TRIED FIRST AND IS UNCHANGED, so a rollup GitHub sent
+ * cleanly is counted through the gate's own `latestChecks` reduction and this
+ * register agrees with `nen pr ready` about how many checks are red -- which is
+ * the property `countChecks`'s docblock is about, and it is worth keeping for
+ * the case that is not broken.
+ *
+ * THE LENIENT PATH IS A FALLBACK, NOT A REPLACEMENT. It runs only when the
+ * strict parse refused, counts every entry it can make sense of, and puts
+ * anything it cannot into `pending` -- never into `green`. That direction is
+ * not arbitrary: an entry nobody could read has not reported success, and the
+ * one bucket it must never land in is the one a reader treats as "done".
+ */
+function countRollup(value: unknown, note: (line: string) => void): ObjectChecks {
+  const parsed = parseCheckRollup(value);
+  if (parsed.ok) return countChecks(parsed.value);
+  note(
+    `the check rollup did not validate (${parsed.error.path} -- ${parsed.error.message}), so its counts are read leniently and anything unreadable is counted pending, never green`,
+  );
+  if (!Array.isArray(value)) return { total: 0, green: 0, red: 0, pending: 0 };
+  let green = 0;
+  let red = 0;
+  let pending = 0;
+  for (const entry of value) {
+    const record = (entry ?? {}) as { conclusion?: unknown; state?: unknown };
+    const status = typeof record.conclusion === "string" && record.conclusion !== ""
+      ? record.conclusion
+      : typeof record.state === "string" && record.state !== ""
+        ? record.state
+        : null;
+    if (status === null) pending += 1;
+    else if (LENIENT_GREEN.has(status)) green += 1;
+    else if (LENIENT_PENDING.has(status)) pending += 1;
+    else red += 1;
+  }
+  return { total: value.length, green, red, pending };
+}
+
+/**
+ * The green and the not-yet sets, for the LENIENT count only.
+ *
+ * They restate ../gates/predicates.ts's own two sets, and the restatement is
+ * deliberate rather than an oversight: those constants are typed against the
+ * validated union, and the whole reason this path exists is that the value did
+ * NOT validate. The gate's sets stay the authority for every verdict; these two
+ * decide only which column a display number lands in.
+ */
+const LENIENT_GREEN: ReadonlySet<string> = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+const LENIENT_PENDING: ReadonlySet<string> = new Set(["PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"]);
+
+/**
+ * The thread counts, through `nen pr threads`' own tolerant walk.
+ *
+ * ../pr/threads.ts RATHER THAN ../pr/fetch.ts, for this module's own reason: its
+ * walk reads `isResolved === true` and never `?? true`, so an unreadable
+ * resolution counts as UNRESOLVED, which is the safe direction for a number a
+ * human acts on -- and it does not refuse the whole snapshot over a field a
+ * register only prints. A walk that fails entirely is `0/0` with the reason
+ * named, because a missing count must not read as "no threads".
+ */
+function readThreadCounts(
+  seams: Seams,
+  target: Target,
+  number: number,
+  note: (line: string) => void,
+): ObjectThreads {
+  try {
+    const listing = listThreads(seams, target, number);
+    return {
+      total: listing.threads.length,
+      unresolved: listing.threads.filter((thread): boolean => !thread.isResolved).length,
+    };
+  } catch (error) {
+    note(
+      `the review threads could not be read (${error instanceof Error ? error.message : String(error)}), so the thread counts are 0/0 and mean 'not read' rather than 'none'`,
+    );
+    return { total: 0, unresolved: 0 };
+  }
 }
 
 /**
@@ -579,16 +893,26 @@ export function renderObjects(objects: readonly ReportObject[]): readonly string
   for (const object of objects) {
     const mark = object.kind === "pr" ? "PR" : "IS";
     const verdict =
-      object.readiness === null ? "" : `  [${object.readiness.verdict} (${object.readiness.source})]`;
-    lines.push(`  ${mark} #${object.number}  ${object.state}  ${object.title}${verdict}`);
+      object.readiness === null
+        ? ""
+        : `  [${plainLine(object.readiness.verdict)} (${object.readiness.source})]`;
+    // EVERY GITHUB-CONTROLLED STRING GOES THROUGH `plainLine` ON THE HUMAN
+    // SIDE (Feitan F4): a title is a string somebody typed, and a terminal
+    // executes `ESC[2K` rather than printing it. `--json` above carries the
+    // bytes unchanged, for the consumer that needs the real field.
+    lines.push(`  ${mark} #${object.number}  ${plainLine(object.state)}  ${plainLine(object.title)}${verdict}`);
     if (object.kind === "pr") {
       lines.push(
-        `      ${object.head.slice(0, 8)}  ${object.mergeStateStatus}  checks ${object.checks.green}/${object.checks.total} green, ${object.checks.red} red, ${object.checks.pending} pending  threads ${object.threads.unresolved}/${object.threads.total} unresolved`,
+        `      ${plainLine(object.head).slice(0, 8)}  ${plainLine(object.mergeStateStatus)}  checks ${object.checks.green}/${object.checks.total} green, ${object.checks.red} red, ${object.checks.pending} pending  threads ${object.threads.unresolved}/${object.threads.total} unresolved`,
       );
     }
     if (object.linked.length > 0) {
       lines.push(`      linked: ${object.linked.map((number): string => `#${number}`).join(", ")}`);
     }
+    // A DEGRADED ROW SAYS SO WHERE IT IS READ. The stderr warning is for the
+    // operator watching the run; this line is for whoever reads the rendering
+    // afterwards, who never saw it.
+    for (const entry of object.notes) lines.push(`      note: ${plainLine(entry)}`);
   }
   return lines;
 }

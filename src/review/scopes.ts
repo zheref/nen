@@ -128,10 +128,16 @@ export function renderScopes(report: ScopesReport): readonly string[] {
     lines.push(`  ${scope.scope}  ${scope.persona} (${scope.tier}, budget ${scope.budget})  ${scope.paths.length} path(s)`);
     for (const path of scope.paths) lines.push(`      ${path}`);
   }
+  // AN EMPTY DIFF IS NOT A CLEAN TABLE (Nobunaga N10). "every changed path is
+  // claimed" about zero paths is a sentence that reads as a finding and is
+  // not one -- the table was never exercised, so it has been neither proved
+  // nor found wanting. The two states get two sentences.
   lines.push(
-    report.unclaimed.length === 0
-      ? "unclaimed: none -- every changed path is claimed by a declared scope"
-      : `unclaimed: ${report.unclaimed.length} path(s) no scope claims -- a hole in the table reads exactly like a clean diff, so it is reported rather than swallowed`,
+    report.files === 0
+      ? `nothing classified: '${report.base}...HEAD' carries no changed path, so no scope was raised and no gap in the table was tested`
+      : report.unclaimed.length === 0
+        ? "unclaimed: none -- every changed path is claimed by a declared scope"
+        : `unclaimed: ${report.unclaimed.length} path(s) no scope claims -- a hole in the table reads exactly like a clean diff, so it is reported rather than swallowed`,
   );
   for (const path of report.unclaimed) lines.push(`  ${path}`);
   return lines;

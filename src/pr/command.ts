@@ -55,6 +55,7 @@ import {
   renderThreads,
   reply as replyToThread,
   resolve as resolveThread,
+  printableArgv,
   ThreadsError,
   THREADS_CONTRACT,
   type ThreadsReport,
@@ -933,9 +934,18 @@ function threads(context: CommandContext): number {
     // READ RAW AND CHECKED BEFORE ANYTHING IS SENT, exactly as `edit-body`
     // reads its own body: a --dry-run that did not read the file would not
     // have proved the one thing a caller wanted proved.
+    //
+    // RESOLVED AGAINST `--repo`, NOT THE PROCESS CWD (Feitan F7). ../cli/
+    // inputs.ts's rule is that a relative path flag resolves against the
+    // target repository's root, and every other path flag in this CLI follows
+    // it -- so `--repo ../other --body-file reply.md` must mean that
+    // repository's `reply.md`, not one that happens to sit beside the shell.
+    // Reading the wrong file here posts the wrong text under the caller's
+    // identity, which is not a mistake a dry run helps with if the dry run
+    // read the same wrong file.
     body = readTextFile(
       bodyFile,
-      process.cwd(),
+      resolveRepoRoot({ repoFlag: context.repoFlag }),
       "--body-file names the bytes this verb posts as the reply, so an unreadable one is refused rather than posting nothing.",
       true,
     );
@@ -970,12 +980,13 @@ function threads(context: CommandContext): number {
       resolved,
       dryRun,
       threads: action === "list" ? listing.threads : [],
+      argv,
     };
     const lines =
       action === "list"
         ? renderThreads(report)
         : [
-            ...(argv === null ? [] : [`${dryRun ? "would run" : "ran"}: gh ${argv.join(" ")}`]),
+            ...(argv === null ? [] : [`${dryRun ? "would run" : "ran"}: ${printableArgv(argv)}`]),
             `${target.slug}#${prNumber} thread ${threadId as string}: ${
               dryRun
                 ? "nothing written (dry run)"
