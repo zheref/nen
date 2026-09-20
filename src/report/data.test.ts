@@ -100,6 +100,13 @@ describe("nen report data", () => {
       "proof",
       "phases",
       "lastStop",
+      // APPENDED, DELIBERATELY, AT THE END (zheref/nen#220). The twelve keys
+      // above are v0.11's, in v0.11's order, so a consumer reading them reads
+      // the same document it always did; `objects` is the thirteenth and is
+      // `[]` unless one of the five register flags was given. Moving any of
+      // the twelve to make room would be the reshuffle this test exists to
+      // prevent.
+      "objects",
     ]);
     expect(document["contract"]).toBe("nen.report.data/v0.1");
     expect(document["branch"]).toBe("feat/report");
@@ -212,10 +219,10 @@ describe("nen report data refuses rather than reporting an empty answer", () => 
     expect(captured.err.join("\n")).toMatch(/--out is not read by 'report data'/);
   });
 
-  it("refuses a subcommand it has not got, naming the two it has", async () => {
+  it("refuses a subcommand it has not got, naming the three it has", async () => {
     const captured = await capture(["report", "publish"], []);
     expect(captured.code).toBe(2);
-    expect(captured.err.join("\n")).toMatch(/unknown 'report' subcommand 'publish'\. Known: data, render\./);
+    expect(captured.err.join("\n")).toMatch(/unknown 'report' subcommand 'publish'\. Known: data, render, mermaid\./);
   });
 });
 

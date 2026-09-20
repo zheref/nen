@@ -1,0 +1,18 @@
+{
+  "contract": "nen.report.graph/v0.1",
+  "caption": "The report family grew a graph and a register; the reviewers grew a family.",
+  "nodes": [
+    { "id": "report-render", "label": "nen report render", "kind": "verb", "change": "changed" },
+    { "id": "report-graph", "label": "src/report/graph.ts", "kind": "module", "change": "added" },
+    { "id": "report-objects", "label": "src/report/objects.ts", "kind": "module", "change": "added" },
+    { "id": "rikugan", "label": "templates/rikugan.html", "kind": "template", "change": "changed" },
+    { "id": "old-summary", "label": "the markdown summary", "kind": "template", "change": "removed" },
+    { "id": "pr-ready", "label": "nen pr ready", "kind": "verb", "change": "unchanged" }
+  ],
+  "edges": [
+    { "from": "report-render", "to": "report-graph", "rel": "validates with", "change": "added" },
+    { "from": "rikugan", "to": "report-render", "rel": "filled by", "change": "changed" },
+    { "from": "report-objects", "to": "pr-ready", "rel": "computes readiness through", "change": "added" },
+    { "from": "old-summary", "to": "rikugan", "change": "removed" }
+  ]
+}

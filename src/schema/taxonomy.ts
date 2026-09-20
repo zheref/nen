@@ -26,7 +26,14 @@ import { loadGateIdentities, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
-import { describeWorkflow, loadWorkflow, WORKFLOW_FILE } from "./workflow.js";
+import {
+  describeReviewScopes,
+  describeSections,
+  describeWorkflow,
+  loadWorkflow,
+  WORKFLOW_FILE,
+  type Workflow,
+} from "./workflow.js";
 import { describeDecisions, loadDecisions } from "./decisions.js";
 import {
   COLORS_FILE,
@@ -278,6 +285,50 @@ function workflowCheck(root: string): SchemaCheck {
   });
 }
 
+// The two POINTER rows (zheref/nen#220). Both live inside `nen/workflow.json`
+// and both get a row of their own, because they answer a question the policy
+// row does not: `reports.sections` is what `nen report render --variant` reads
+// and `review.scopes` is what `nen review scopes` reads, and a warm-up that
+// wants to know whether those verbs have anything to work with should not have
+// to read a coverage ladder to find out. Their `file` therefore names the
+// POINTER, not a second file -- `nen/workflow.json#reports.sections` -- so a
+// machine reader of `--json` can tell them from the file rows by the `#`.
+//
+// NEVER REQUIRED AND NEVER A FAIL OF THEIR OWN. A malformed block already
+// fails the POLICY row by pointer (the loader refuses the whole file), so
+// these two can only ever report what a successfully-loaded policy declares.
+// A repository that declares neither is a repository that has not adopted the
+// two verbs, which is an `ok` row reading `none declared`.
+function pointerCheck(root: string, pointer: string, describe: (workflow: Workflow) => string): SchemaCheck {
+  const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
+  const file = `${resolved.relative}#${pointer}`;
+  try {
+    const loaded = loadWorkflow(root);
+    return {
+      file,
+      path: resolved.path,
+      ok: true,
+      detail: loaded.present ? describe(loaded.workflow) : "none declared (no policy file)",
+      required: false,
+      legacy: false,
+      note: null,
+    };
+  } catch (error) {
+    // The policy row above already reported this by pointer; saying it twice in
+    // two voices would make one defect read as two. This row says only that it
+    // could not be read, and points at the row that says why.
+    return {
+      file,
+      path: resolved.path,
+      ok: true,
+      detail: `not read -- ${WORKFLOW_FILE} did not load; see that row${error instanceof SchemaError ? "" : ""}`,
+      required: false,
+      legacy: false,
+      note: null,
+    };
+  }
+}
+
 // Load every schema file and report each one's verdict, never stopping at the
 // first failure. Reporting one problem at a time is how a repository adopting
 // nen makes four round trips to learn four things it could have been told at
@@ -311,6 +362,10 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // absence is nothing to read, and this file's absence is a full policy made
     // of defaults. Present and malformed fails, like both of them.
     workflowCheck(root),
+    // ...and the two POINTER rows immediately under it, in the order the two
+    // verbs that read them arrived (zheref/nen#220).
+    pointerCheck(root, "reports.sections", describeSections),
+    pointerCheck(root, "review.scopes", describeReviewScopes),
     // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

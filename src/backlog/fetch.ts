@@ -14,6 +14,8 @@
 //      effort, not the object." A PR that references no open issue is its own
 //      row (an effort with no separately-filed issue is still an effort).
 
+import { GH, mustJson, type Seams } from "../seam/exec.js";
+
 export interface RawIssue {
   readonly number: number;
   readonly title: string;
@@ -97,4 +99,66 @@ export function assembleRows(issues: readonly RawIssue[], prs: readonly RawPr[])
   }
 
   return { rows, issueCount: issues.length, prCount: prs.length };
+}
+
+// ── the paginated read both callers share ───────────────────────────────────
+//
+// IT MOVED HERE FROM ../backlog/command.ts BECAUSE IT GREW A SECOND CALLER
+// (`nen report data --backlog`, ../report/objects.ts). Rule 2 above -- "no
+// silent caps" -- is a property of the READ, not of the verb that happens to
+// be printing it, and two loops following `?page=N` would be two chances to
+// disagree about when a fetch is complete. One loop, one truncation answer.
+
+/** GitHub's REST clamp on one page. A PAGE SIZE, never a cap. */
+export const PAGE_SIZE = 100;
+
+/**
+ * A defensive ceiling only, never a normal cap: it stops a malformed or looping
+ * API response from paginating forever. No real repository's open-issue or
+ * open-PR count is expected to approach it, and hitting it is reported as
+ * truncated exactly like an explicit `--limit` would be.
+ */
+export const MAX_PAGES = 200;
+
+export interface PaginatedFetch<T> {
+  readonly items: T[];
+  readonly truncated: boolean;
+}
+
+export function fetchPaginated<T>(
+  seams: Seams,
+  pathWithQuery: string,
+  limit: number | null,
+): PaginatedFetch<T> {
+  const items: T[] = [];
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    // `--method GET`, EXPLICITLY (Feitan F5). This argv carries no `-f`/`-F`
+    // today, so gh infers GET and the call is a read either way -- which is
+    // exactly the reasoning ../pr/fetch.ts's header records as the one that
+    // produced a read verb that WROTE: the inference held until somebody added
+    // a parameter. An explicit method is a statement someone made a decision;
+    // an inferred one is a decision nobody made, and this function is now read
+    // by two verbs. ../pr/fetch.test.ts's argv sweep covers it.
+    const batch = mustJson<readonly T[]>(seams, GH, [
+      "api",
+      "--method",
+      "GET",
+      `${pathWithQuery}&per_page=${PAGE_SIZE}&page=${page}`,
+    ]);
+    items.push(...batch);
+    const isLastPage = batch.length < PAGE_SIZE;
+    if (limit !== null && items.length >= limit) {
+      // Genuinely truncated only when there is something left to cut: either
+      // this page overshot the limit on its own (items.length > limit), or
+      // the page that got us to the limit was FULL, so a further page has
+      // not been ruled out. When the limit lands exactly on the true last
+      // (short) page, nothing was actually cut off.
+      const truncated = items.length > limit || !isLastPage;
+      return { items: items.slice(0, limit), truncated };
+    }
+    if (isLastPage) {
+      return { items, truncated: false };
+    }
+  }
+  return { items, truncated: true };
 }

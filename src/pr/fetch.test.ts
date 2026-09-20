@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { listArgv, listPageArgv, replyArgv, resolveArgv } from "./threads.js";
+import { checkRunsArgv, issueArgv } from "../report/objects.js";
+import { fetchPaginated } from "../backlog/fetch.js";
+import type { Seams } from "../seam/exec.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { fetchPullRequest, FetchError, reviewsArgv, reviewThreadsArgv, reviewThreadsPageArgv, viewArgv } from "./fetch.js";
@@ -239,3 +243,77 @@ describe("fetch argv builders -- no gh api call may leave its method to paramete
     }
   });
 });
+
+// ── the WHOLE-BINARY sweep (Feitan F5) ──────────────────────────────────────
+//
+// The sweep above is module-scoped, and zheref/nen#19's lesson is not: the
+// rule is about every `gh api` argv this binary builds, and it was already
+// being restated by hand in one new test file per module. Three new builders
+// (`report data`'s register, `pr threads`) and the paginated backlog read
+// arrived in v0.12.0, and only the ones whose own test file remembered to
+// check were checked -- which is how the next one goes unchecked.
+//
+// So the REGISTRY is here, beside the incident it exists for, and every
+// module contributes its builders to it. A builder missing from this list is
+// the gap this cannot see, which is why the count is asserted too: adding a
+// builder without adding it here is a change to a number somebody has to
+// justify.
+describe("every gh api argv this binary builds names its method (zheref/nen#19, Feitan F5)", () => {
+  const REGISTRY: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ["fetch.viewArgv", viewArgv(TARGET, 9)],
+    ["fetch.reviewsArgv", reviewsArgv(TARGET, 9)],
+    ["fetch.reviewThreadsArgv", reviewThreadsArgv(TARGET, 9)],
+    ["fetch.reviewThreadsPageArgv", reviewThreadsPageArgv(TARGET, 9, "cursor-1")],
+    ["threads.listArgv", listArgv(TARGET, 9)],
+    ["threads.listPageArgv", listPageArgv(TARGET, 9, "cursor-1")],
+    ["threads.replyArgv", replyArgv("T1", "a body")],
+    ["threads.resolveArgv", resolveArgv("T1")],
+    ["objects.checkRunsArgv", checkRunsArgv(TARGET, "deadbeef")],
+    ["objects.issueArgv", issueArgv(TARGET, 9)],
+    ["backlog.fetchPaginated", paginatedArgv()],
+  ];
+
+  it("covers every builder in the binary, so a new one has to be added here", () => {
+    expect(REGISTRY).toHaveLength(11);
+  });
+
+  it("names an explicit --method on every one, parameters or not", () => {
+    for (const [name, argv] of REGISTRY) {
+      if (argv[0] !== "api") continue; // `gh pr view` has no method concept.
+      const at = argv.findIndex((arg): boolean => arg === "--method" || arg === "-X");
+      expect(at, `${name} leaves its method to gh's inference -- the exact shape that turned a read into a write`).toBeGreaterThanOrEqual(0);
+      expect(argv[at + 1], `${name}'s --method names no verb`).toMatch(/^(GET|POST)$/);
+    }
+  });
+
+  it("keeps every READ a GET or a pure GraphQL query, and every POST a real mutation", () => {
+    for (const [name, argv] of REGISTRY) {
+      if (argv[0] !== "api") continue;
+      const query = argv.find((arg): boolean => arg.startsWith("query="));
+      const at = argv.findIndex((arg): boolean => arg === "--method");
+      if (query === undefined) {
+        // A REST call: reads are GET, and nothing in this binary POSTs REST.
+        expect(argv[at + 1], `${name} is a REST call and must be a GET`).toBe("GET");
+        continue;
+      }
+      // GraphQL rides POST whatever it does, so the QUERY TEXT is what says
+      // whether it writes -- and only the two named mutations may.
+      const writes = /\bmutation\b/.test(query);
+      const named = name === "threads.replyArgv" || name === "threads.resolveArgv";
+      expect(writes, `${name}: a GraphQL document that mutates must be one of the two declared mutations`).toBe(named);
+    }
+  });
+});
+
+/** The argv `fetchPaginated` builds for its first page, as the module builds it. */
+function paginatedArgv(): readonly string[] {
+  const calls: string[][] = [];
+  const seams = {
+    run: (_command: string, args: readonly string[]): { code: number; stdout: string; stderr: string; spawnFailed: boolean } => {
+      calls.push([...args]);
+      return { code: 0, stdout: "[]", stderr: "", spawnFailed: false };
+    },
+  } as unknown as Seams;
+  fetchPaginated(seams, "repos/zheref/nen/issues?state=open", null);
+  return calls[0] as readonly string[];
+}

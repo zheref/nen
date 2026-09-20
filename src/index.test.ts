@@ -181,6 +181,8 @@ describe("nen schema check", () => {
       "nen/gates.json",
       "nen/contract.json",
       "nen/workflow.json",
+      "nen/workflow.json#reports.sections",
+      "nen/workflow.json#review.scopes",
       "nen/decisions.json",
     ]);
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);

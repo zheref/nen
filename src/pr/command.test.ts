@@ -974,7 +974,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
         new ScriptedSeams([]),
       );
       expect(result.code).toBe(2);
-      expect(result.err.join("\n")).toMatch(/--pr <n>: a positive whole number, digits only/);
+      expect(result.err.join("\n")).toMatch(/--pr <n>: a positive whole number of at most 9 digits, digits only/);
     },
   );
 

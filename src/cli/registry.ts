@@ -49,6 +49,7 @@ import { refCommand } from "../ref/command.js";
 import { releaseCommand } from "../release/command.js";
 import { repoCommand } from "../repo/command.js";
 import { reportCommand } from "../report/command.js";
+import { reviewCommand } from "../review/command.js";
 import { runCommand } from "../run/command.js";
 import { scaffoldCommand } from "../scaffold/command.js";
 import { shuCommand } from "../shu/command.js";
@@ -87,6 +88,7 @@ export const COMMANDS: readonly Command[] = [
   releaseCommand,
   repoCommand,
   reportCommand,
+  reviewCommand,
   runCommand,
   scaffoldCommand,
   shuCommand,

@@ -1096,6 +1096,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // Dry-run-gated, the same shape 'issue edit-body' carries: --dry-run
       // still reads GitHub (repos/<t>/pulls/<n>, to certify the number IS a
       // pull request) but that read never writes.
+      threads: DRY("'list' reads every review thread; 'reply'/'resolve' send a GraphQL mutation, unless --dry-run is given, which prints the argv and writes nothing"),
       "edit-body": DRY("replaces a pull request's body via gh pr edit --body-file unless --dry-run is given; --dry-run still reads GitHub to certify the number is a pull request"),
     },
   },
@@ -1140,6 +1141,16 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     subcommands: {
       data: RO("assembles one report document from git reads and files already on disk -- it has no write path in any form"),
       render: DRY("fills a template and WRITES --out, unless --dry-run is given, which prints the token list and writes nothing"),
+      mermaid: RO("prints the mermaid text for a --graph document -- one file read, nothing written, no template involved"),
+    },
+  },
+  // `review scopes` classifies a branch diff against the repository's own
+  // review.scopes and reports which scopes it raises. It never requests a
+  // review, never spends a budget and never opens anything: one git read and
+  // one file read, which is read-only in the strongest sense this table has.
+  review: {
+    subcommands: {
+      scopes: RO("classifies '<base>...HEAD' against review.scopes and reports the raised scopes -- one git read, one file read, nothing written"),
     },
   },
   run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },

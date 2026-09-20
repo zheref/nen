@@ -83,6 +83,11 @@ describe("checkTaxonomy", () => {
       "nen/gates.json",
       "nen/contract.json",
       "nen/workflow.json",
+      // The two POINTER rows (zheref/nen#220) sit immediately under the policy
+      // row they read out of, and name a pointer rather than a second file --
+      // the `#` is what tells a machine reader which rows are which.
+      "nen/workflow.json#reports.sections",
+      "nen/workflow.json#review.scopes",
       "nen/decisions.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
@@ -99,7 +104,14 @@ describe("checkTaxonomy", () => {
     // finding -- and each says a different thing about it, which is the point
     // of having four sentences.
     expect(report.checks.filter((c): boolean => !c.ok).length).toBe(3);
-    const optional = ["nen/contract.json", "nen/workflow.json", "nen/colors.yml", "nen/decisions.json"];
+    const optional = [
+      "nen/contract.json",
+      "nen/workflow.json",
+      "nen/workflow.json#reports.sections",
+      "nen/workflow.json#review.scopes",
+      "nen/colors.yml",
+      "nen/decisions.json",
+    ];
     for (const check of report.checks.filter((c): boolean => !optional.includes(c.file))) {
       expect(check.detail).toMatch(/no such file/);
       expect(check.path).toContain(root);

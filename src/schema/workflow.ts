@@ -180,11 +180,60 @@ export interface LaunchPolicy {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * ONE REPORT VARIANT: which template renders it, and which blocks it carries.
+ *
+ * WHICH BLOCKS A REPORT SHOWS IS CONFIGURATION, NOT CODE (zheref/nen#220). A
+ * turn report, a landing report and a dated final report are the same page
+ * rendered with different parts switched on, and the repository that owns the
+ * template is the one that knows which parts. `nen report render --variant
+ * <name>` injects `sections.<block>` presence flags from these lists, so a
+ * template writes `{{#if sections.desk}}…{{/if}}` and the decision lives in
+ * this file beside `reports.template` rather than in a renderer nen ships.
+ */
+export interface ReportSection {
+  /** The template this variant renders with -- `reports.template`'s vocabulary. */
+  readonly template: string;
+  /** The blocks it carries, in the order the file states them. Never empty. */
+  readonly blocks: readonly string[];
+}
+
 export interface ReportsPolicy {
   readonly dir: string;
   readonly retain: string;
   readonly template: string;
   readonly captures: string;
+  /** Variant name -> its template and blocks. Empty when none are declared. */
+  readonly sections: Readonly<Record<string, ReportSection>>;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * ONE REVIEW SCOPE: who reads it, at what tier, how often, and over which paths.
+ *
+ * THE PATHS ARE ../report/patterns.ts's GRAMMAR, the same one `report data
+ * --tiers` reads -- a prefix matched on segment boundaries, or a narrow glob.
+ * One grammar, because a maintainer who writes `hooks/**` in a tier table and
+ * in a scope list is entitled to have it claim the same files in both.
+ *
+ * `tier` AND `persona` ARE THE REPOSITORY'S OWN VOCABULARY and nen validates
+ * neither against a list: a persona is a name somebody's roster gives a
+ * reviewer, and a tier is a key of `models.<surface>`, which this file has
+ * always treated as an open map. Nen holds them to being non-empty strings and
+ * nothing more -- an enumeration here would be nen inventing somebody else's
+ * roster, which is the refusal this module's own header states about `models`.
+ */
+export interface ReviewScope {
+  readonly persona: string;
+  readonly tier: string;
+  /** Reviews this scope may spend per session and repository. `0` disables it. */
+  readonly budget: number;
+  readonly paths: readonly string[];
+}
+
+export interface ReviewPolicy {
+  /** Scope name -> its row, in the file's own declaration order. */
+  readonly scopes: Readonly<Record<string, ReviewScope>>;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -254,6 +303,7 @@ export interface Workflow {
   readonly commits: CommitsPolicy;
   readonly monitor: MonitorPolicy;
   readonly models: ModelsPolicy;
+  readonly review: ReviewPolicy;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -327,12 +377,18 @@ export function defaultWorkflow(): Workflow {
       retain: DEFAULT_RETAIN,
       template: DEFAULT_REPORT_TEMPLATE,
       captures: DEFAULT_CAPTURES,
+      // NO DEFAULT VARIANT, EVER -- the same rule `models` and `launch.default`
+      // follow. A variant nen invented would name blocks nobody's template has,
+      // and `report render --variant` would then refuse a variant this binary
+      // made up. An absent block is "none declared", which is a true sentence.
+      sections: emptyRecord<ReportSection>(),
       raw: empty,
     },
     notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
     commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
-    models: { rule: null, surfaces: {}, roles: {}, raw: empty },
+    models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
+    review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
     raw: empty,
   };
 }
@@ -351,6 +407,7 @@ const ROOT_KEYS: readonly string[] = [
   "commits",
   "monitor",
   "models",
+  "review",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -358,7 +415,8 @@ const ITERATION_KEYS: readonly string[] = ["checks", "lane"];
 const TESTS_KEYS: readonly string[] = ["required", "extra"];
 const COVERAGE_KEYS: readonly string[] = ["minimum", "recommended", "ideal", "scope"];
 const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
-const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures"];
+const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures", "sections"];
+const REVIEW_KEYS: readonly string[] = ["scopes"];
 const NOTIFICATIONS_KEYS: readonly string[] = ["rungs", "sound", "turn"];
 const COMMITS_KEYS: readonly string[] = [
   "allowedAttributionTrailers",
@@ -585,7 +643,7 @@ function requireRepoPath(path: string, pointer: string, value: string): string {
 }
 
 function parseReports(path: string, value: unknown): ReportsPolicy {
-  const raw = block(path, "reports", value, REPORTS_KEYS, "A reports policy's four keys are");
+  const raw = block(path, "reports", value, REPORTS_KEYS, "A reports policy's five keys are");
   return {
     dir: requireRepoPath(
       path,
@@ -599,8 +657,216 @@ function parseReports(path: string, value: unknown): ReportsPolicy {
       "reports.captures",
       stringOr(path, "reports.captures", raw["captures"], DEFAULT_CAPTURES),
     ),
+    sections: parseSections(path, raw["sections"]),
     raw,
   };
+}
+
+/** A name a variant, a template or a scope may take: a slug, and nothing else. */
+export const POLICY_SLUG = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * The three names that are a slug, and are still not a key (Copilot, #221).
+ *
+ * A NAME THIS FILE ACCEPTS BECOMES A KEY OF A RECORD, and JavaScript has three
+ * of those that are not ordinary keys: assigning `__proto__` on a plain object
+ * invokes the prototype SETTER instead of creating an own property, so the
+ * variant or scope vanishes from `Object.keys` and from every reader -- a row
+ * this schema said was valid, silently absent everywhere downstream.
+ * `constructor` and `prototype` are here with it because they are the same
+ * class of surprise for a reader of the resulting object, even where they
+ * happen to assign.
+ *
+ * THE ACCUMULATORS ARE NULL-PROTOTYPE TOO, and the belt and the braces are
+ * both deliberate: this refusal is what a MAINTAINER sees (a name refused by
+ * pointer, at load, with a reason), and `emptyRecord()` is what makes the
+ * failure impossible rather than merely reported -- including for any future
+ * key space that forgets to ask.
+ */
+const RESERVED_KEYS: readonly string[] = ["__proto__", "constructor", "prototype"];
+
+/**
+ * A record no prototype key can reach into.
+ *
+ * `Object.create(null)` rather than `{}`: see `RESERVED_KEYS`. Every map this
+ * loader builds from names the REPOSITORY chose goes through here.
+ */
+function emptyRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/** A name that is a slug AND is a key, or a refusal by pointer naming why. */
+function requirePolicyName(path: string, pointer: string, name: string, what: string): void {
+  if (RESERVED_KEYS.includes(name)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${name}' is not a name this policy can carry. It is a slug, but it is also a JavaScript prototype key: stored as ${what}, '__proto__' invokes the prototype setter instead of creating an entry, so the ${what} would be accepted here and then be missing from every reader of this file. Choose any other name`,
+    );
+  }
+  if (!POLICY_SLUG.test(name)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${name}' is not a name this policy can carry. ${what} is named on the command line and is held to a slug: a lowercase letter, then lowercase letters, digits and single hyphens`,
+    );
+  }
+}
+
+/**
+ * A BLOCK name, which is deliberately NOT the slug above.
+ *
+ * A block becomes a `sections.<block>` TOKEN in the template this variant
+ * renders, so the shape it is held to is ../report/template.ts's own path
+ * grammar and not a stricter one: that language's paths are
+ * `[A-Za-z_][A-Za-z0-9_-]*`, which is what lets a repository name a block
+ * `lastTurn` or `prBody` -- the spellings a template author naturally writes,
+ * and the spellings hatsu's own file already uses. Holding a block to a
+ * lowercase slug here would have refused a name the renderer accepts, which is
+ * a refusal about nothing.
+ */
+export const BLOCK_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+/**
+ * `reports.sections` -- the report variants, validated for SHAPE only.
+ *
+ * THE VARIANT NAMES AND THE BLOCK NAMES ARE THE REPOSITORY'S, NOT NEN'S. A
+ * block is a region of somebody's template; nen has never seen the template and
+ * would be inventing a vocabulary by enumerating them, which is the same
+ * refusal `models` makes one screen down. So this checks that a name is a name
+ * (a slug, because it becomes a `sections.<block>` token in a template and
+ * ./template.ts's paths are slugs), that a variant states a template and at
+ * least one block, and that it does not state the same block twice.
+ *
+ * A REPEATED BLOCK IS REFUSED RATHER THAN DE-DUPLICATED. `sections.<block>` is
+ * a presence flag, so a second mention changes nothing in the render -- which is
+ * exactly why it must not be silently accepted: the author who wrote it twice
+ * meant something (a second occurrence of the block, an ordering) that this
+ * contract does not provide, and quietly collapsing it answers a question
+ * nobody asked.
+ *
+ * AN EMPTY `blocks` IS REFUSED for the same class of reason: a variant that
+ * renders no block at all is a report with nothing in it, and `--variant` would
+ * then produce a page whose emptiness reads as "this effort did nothing".
+ */
+function parseSections(path: string, value: unknown): Readonly<Record<string, ReportSection>> {
+  if (value === undefined || value === null) return emptyRecord<ReportSection>();
+  const raw = requireRecord(path, "reports.sections", value);
+  const sections = emptyRecord<ReportSection>();
+  for (const [name, entry] of Object.entries(raw)) {
+    if (name.startsWith("$")) continue;
+    const pointer = `reports.sections.${name}`;
+    requirePolicyName(path, pointer, name, "a report variant");
+    const variant = requireRecord(path, pointer, entry);
+    const blocksRaw = requireArray(path, `${pointer}.blocks`, variant["blocks"]);
+    const blocks = blocksRaw.map((block_, index): string => {
+      const block = requireString(path, `${pointer}.blocks[${index}]`, block_);
+      if (RESERVED_KEYS.includes(block)) {
+        throw new SchemaError(
+          path,
+          `${pointer}.blocks[${index}]`,
+          `'${block}' is not a block name. It becomes a key of the 'sections' map '${"nen report render --variant"}' injects, and a JavaScript prototype key assigned there invokes the prototype setter instead of creating a flag -- so the block would be declared here and missing from the template that asked for it. Choose any other name`,
+        );
+      }
+      if (!BLOCK_NAME.test(block)) {
+        throw new SchemaError(
+          path,
+          `${pointer}.blocks[${index}]`,
+          `'${block}' is not a block name. A block becomes a 'sections.<block>' token in the template this variant renders, so it is held to exactly the shape that language's paths take ([A-Za-z_][A-Za-z0-9_-]*) -- 'lastTurn' and 'prBody' are names; 'last turn' and 'pr.body' are not`,
+        );
+      }
+      return block;
+    });
+    if (blocks.length === 0) {
+      throw new SchemaError(
+        path,
+        `${pointer}.blocks`,
+        `names no blocks. A variant that switches on nothing renders a page with nothing in it, and an empty report reads as an effort that did nothing`,
+      );
+    }
+    const repeated = blocks.filter((block, index): boolean => blocks.indexOf(block) !== index);
+    if (repeated.length > 0) {
+      throw new SchemaError(
+        path,
+        `${pointer}.blocks`,
+        `names ${[...new Set(repeated)].map((block): string => `'${block}'`).join(", ")} more than once. 'sections.<block>' is a PRESENCE flag, so a second mention changes nothing in the render -- which is why it is refused rather than collapsed: whatever the second one meant, this contract does not provide it`,
+      );
+    }
+    const template = requireString(path, `${pointer}.template`, variant["template"]);
+    if (!POLICY_SLUG.test(template)) {
+      throw new SchemaError(
+        path,
+        `${pointer}.template`,
+        `'${template}' is not a template name. It is the same vocabulary 'reports.template' uses -- a slug naming one of this repository's own templates, never a path`,
+      );
+    }
+    sections[name] = { template, blocks };
+  }
+  return sections;
+}
+
+/**
+ * `review.scopes` -- who reads which paths, validated for SHAPE only.
+ *
+ * SHAPE ONLY, AND THAT IS THE WHOLE POINT. `nen review scopes` classifies a
+ * branch diff by these rows and reports which scopes it raised; it never
+ * summons anybody, never decides whether a persona exists, and never reads a
+ * budget as permission. Nen holds the row to being a row -- a persona, a tier,
+ * a whole-number budget, at least one path -- because those are the fields the
+ * verb reads, and everything beyond that is the consuming repository's own
+ * business, preserved verbatim by `raw` like every other key in this file.
+ *
+ * AT LEAST ONE PATH, because a scope that claims nothing is a reviewer who can
+ * never be raised: the row would sit in the file looking like policy and have
+ * no effect any diff could produce, which is the silent-default failure this
+ * module's near-miss rule exists to prevent one level up.
+ */
+function parseReview(path: string, value: unknown): ReviewPolicy {
+  const raw = block(path, "review", value, REVIEW_KEYS, "A review policy's one key is");
+  const scopesRaw = raw["scopes"];
+  if (scopesRaw === undefined || scopesRaw === null) return { scopes: emptyRecord<ReviewScope>(), raw };
+  const record = requireRecord(path, "review.scopes", scopesRaw);
+  const scopes = emptyRecord<ReviewScope>();
+  for (const [name, entry] of Object.entries(record)) {
+    if (name.startsWith("$")) continue;
+    const pointer = `review.scopes.${name}`;
+    requirePolicyName(path, pointer, name, "a review scope");
+    const scope = requireRecord(path, pointer, entry);
+    const persona = requireString(path, `${pointer}.persona`, scope["persona"]);
+    if (persona.trim() === "") {
+      throw new SchemaError(path, `${pointer}.persona`, `is empty. A scope with no reviewer is a review nobody owes`);
+    }
+    const tier = requireString(path, `${pointer}.tier`, scope["tier"]);
+    if (tier.trim() === "") {
+      throw new SchemaError(
+        path,
+        `${pointer}.tier`,
+        `is empty. It names a key of this file's own 'models.<surface>' matrix, which is an open map -- nen checks it is a name, never which name`,
+      );
+    }
+    const budget = numberOr(path, `${pointer}.budget`, scope["budget"], 1, 0, Number.MAX_SAFE_INTEGER);
+    const pathsRaw = requireArray(path, `${pointer}.paths`, scope["paths"]);
+    const paths = pathsRaw.map((entry_, index): string => {
+      const pattern = requireString(path, `${pointer}.paths[${index}]`, entry_);
+      if (pattern.trim() === "") {
+        throw new SchemaError(
+          path,
+          `${pointer}.paths[${index}]`,
+          `is empty. An empty pattern matches nothing at all, so it is a path list entry that can never raise this scope`,
+        );
+      }
+      return pattern;
+    });
+    if (paths.length === 0) {
+      throw new SchemaError(
+        path,
+        `${pointer}.paths`,
+        `names no paths. A scope that claims nothing can never be raised by any diff -- it would sit here looking like policy with no effect. Claim everything with '**' if that is what this scope means`,
+      );
+    }
+    scopes[name] = { persona, tier, budget, paths };
+  }
+  return { scopes, raw };
 }
 
 function parseNotifications(path: string, value: unknown): NotificationsPolicy {
@@ -714,15 +980,15 @@ function parseMonitor(path: string, value: unknown): MonitorPolicy {
  */
 function parseModels(path: string, value: unknown): ModelsPolicy {
   if (value === undefined || value === null) {
-    return { rule: null, surfaces: {}, roles: {}, raw: {} };
+    return { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: {} };
   }
   const raw = requireRecord(path, "models", value);
-  const surfaces: Record<string, Readonly<Record<string, string>>> = {};
+  const surfaces = emptyRecord<Readonly<Record<string, string>>>();
   for (const [name, entry] of Object.entries(raw)) {
     if (name.startsWith("$") || name === "rule" || name === "roles") continue;
     const pointer = `models.${name}`;
     const perSurface = requireRecord(path, pointer, entry);
-    const tiers: Record<string, string> = {};
+    const tiers = emptyRecord<string>();
     for (const [tier, alias] of Object.entries(perSurface)) {
       if (tier.startsWith("$")) continue;
       tiers[tier] = requireString(path, `${pointer}.${tier}`, alias);
@@ -730,7 +996,7 @@ function parseModels(path: string, value: unknown): ModelsPolicy {
     surfaces[name] = tiers;
   }
   const rolesRaw = raw["roles"];
-  const roles: Record<string, string> = {};
+  const roles = emptyRecord<string>();
   if (rolesRaw !== undefined && rolesRaw !== null) {
     for (const [role, tier] of Object.entries(requireRecord(path, "models.roles", rolesRaw))) {
       if (role.startsWith("$")) continue;
@@ -747,7 +1013,7 @@ function parseModels(path: string, value: unknown): ModelsPolicy {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's ten blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's eleven blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -763,6 +1029,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     commits: parseCommits(path, raw["commits"]),
     monitor: parseMonitor(path, raw["monitor"]),
     models: parseModels(path, raw["models"]),
+    review: parseReview(path, raw["review"]),
     raw,
   };
 }
@@ -824,6 +1091,33 @@ export function describeWorkflow(workflow: Workflow): string {
   return `coverage ${coverage.minimum}/${coverage.recommended}/${coverage.ideal} (${coverage.scope}), branch '${branch.template}' off '${branch.base}', checks: ${
     iteration.checks.join(", ") || "(none)"
   }`;
+}
+
+/**
+ * The `reports.sections` row `nen schema check` prints, worded once.
+ *
+ * IT IS ITS OWN ROW AND NOT A CLAUSE OF THE POLICY ROW (zheref/nen#220). The
+ * policy row answers "does this file load"; these two answer "does this
+ * repository declare the thing the verb that reads it needs" -- which is the
+ * question a warm-up asks before `report render --variant` or `review scopes`
+ * refuses at exit 1 or 2, and folding it into the one-line policy summary would
+ * hide it behind a coverage ladder.
+ */
+export function describeSections(workflow: Workflow): string {
+  const names = Object.keys(workflow.reports.sections);
+  return names.length === 0
+    ? "none declared"
+    : `${names.length} variant(s): ${names.join(", ")}`;
+}
+
+/** The `review.scopes` row `nen schema check` prints. See `describeSections`. */
+export function describeReviewScopes(workflow: Workflow): string {
+  const names = Object.keys(workflow.review.scopes);
+  return names.length === 0
+    ? "none declared"
+    : `${names.length} scope(s): ${names
+        .map((name): string => `${name} (${workflow.review.scopes[name]?.persona ?? "?"})`)
+        .join(", ")}`;
 }
 
 /**
