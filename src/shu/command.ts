@@ -80,21 +80,21 @@ import {
  */
 export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   detect: { booleans: ["write"] },
-  build: { values: ["lane"], booleans: ["dry-run"] },
-  test: { values: ["lane"], booleans: ["dry-run"] },
-  "ui-test": { values: ["lane"], booleans: ["dry-run"] },
-  lint: { values: ["lane"], booleans: ["dry-run"] },
-  archive: { values: ["lane"], booleans: ["dry-run"] },
-  release: { values: ["lane"], booleans: ["dry-run"] },
+  build: { values: ["lane", "effort"], booleans: ["dry-run"] },
+  test: { values: ["lane", "effort"], booleans: ["dry-run"] },
+  "ui-test": { values: ["lane", "effort"], booleans: ["dry-run"] },
+  lint: { values: ["lane", "effort"], booleans: ["dry-run"] },
+  archive: { values: ["lane", "effort"], booleans: ["dry-run"] },
+  release: { values: ["lane", "effort"], booleans: ["dry-run"] },
   // `--target` ON THESE TWO NAMES A DEVICE, NOT A DESTINATION: a key of
   // `project.launch` rather than of `project.targets`, and OPTIONAL rather than
   // required. `--run` stays `deploy`'s alone -- these two have always spawned
   // without it, and a gate arriving with a flag would break every script.
-  dev: { values: ["lane", "target"], booleans: ["dry-run"] },
-  run: { values: ["lane", "target"], booleans: ["dry-run"] },
-  deploy: { values: ["lane", "target"], booleans: ["dry-run", "run"] },
-  coverage: { values: ["lane", "threshold", "base"], booleans: ["dry-run", "touched"] },
-  "test-report": { values: ["lane"], booleans: ["dry-run", "from-artifacts"] },
+  dev: { values: ["lane", "target", "effort"], booleans: ["dry-run"] },
+  run: { values: ["lane", "target", "effort"], booleans: ["dry-run"] },
+  deploy: { values: ["lane", "target", "effort"], booleans: ["dry-run", "run"] },
+  coverage: { values: ["lane", "threshold", "base", "effort"], booleans: ["dry-run", "touched"] },
+  "test-report": { values: ["lane", "effort"], booleans: ["dry-run", "from-artifacts"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "carry", "tests", "dry-run"] },
   // NO --lane, AND NO --dry-run. `project.evidence` is a project-level block,
@@ -411,6 +411,14 @@ flags:
   --base <ref>     'evidence' only, and REQUIRED. The other end of
                    'git diff --name-status <base>...HEAD' -- HEAD is always
                    the checkout's own current commit, never a flag.
+  --effort <id>    On every executing verb: the 'nen phase' effort whose OPEN
+                   entry this run's steps are appended to, as
+                   {verb, argv, exitCode, durationMs, stalled} -- the same
+                   durationMs the report prints. Omitted, NEN_EFFORT in the
+                   environment is read instead; absent there too, no ledger is
+                   touched. Nothing is written when no entry is open on the
+                   effort (a run outside a phase is never a phase of its own),
+                   on --dry-run, or on an interactive pre-flight.
   --dry-run        Print every step's exact argv, cwd and env NAMES, and run
                    nothing at all. The argv printed is the argv that would be
                    spawned, from the same rendering -- the thing you approve is
@@ -1178,6 +1186,7 @@ export const shuCommand: Command = {
           touched: context.args.booleans.has("touched"),
           base: context.args.values["base"] ?? null,
           advisories: coverageAdvisories(),
+          effort: context.args.values["effort"] ?? null,
         }));
       }
 
@@ -1186,6 +1195,7 @@ export const shuCommand: Command = {
           lane: context.args.values["lane"] ?? null,
           dryRun: context.args.booleans.has("dry-run"),
           fromArtifacts: context.args.booleans.has("from-artifacts"),
+          effort: context.args.values["effort"] ?? null,
         }));
       }
 
@@ -1238,6 +1248,7 @@ export const shuCommand: Command = {
         // refused this flag on every verb but 'deploy', so reading it
         // unconditionally here cannot turn another verb's line into an action.
         run: context.args.booleans.has("run"),
+        effort: context.args.values["effort"] ?? null,
       }));
     } catch (error) {
       return shuRefusalCode(context, subcommand, error);

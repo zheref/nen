@@ -58,6 +58,7 @@ import { stageCommand } from "../stage/command.js";
 import { stopCommand } from "../stop/command.js";
 import { surfaceCommand } from "../surface/command.js";
 import { tagCommand } from "../tag/command.js";
+import { usageCommand } from "../usage/command.js";
 import { wakeCommand } from "../wake/command.js";
 import { warmupCommand } from "../warmup/command.js";
 import { watchCommand } from "../watch/command.js";
@@ -97,6 +98,7 @@ export const COMMANDS: readonly Command[] = [
   stopCommand,
   surfaceCommand,
   tagCommand,
+  usageCommand,
   wakeCommand,
   warmupCommand,
   watchCommand,

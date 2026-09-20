@@ -955,6 +955,43 @@ export function parseStall(path: string, pointer: string, value: unknown): Stall
   };
 }
 
+/** The one verb name a `stall` block is refused on at load: the tests row. */
+export const UNTIMED_VERB = "test";
+
+/**
+ * A `stall` on the `test` row is refused at load -- tests are untimed
+ * (zheref/nen#227).
+ *
+ * BY RULING, NOT BY MECHANISM: nen could watch a test run's output exactly as
+ * it watches a build's, and the reason it will not is that a quiet test suite
+ * is a suite that is thinking, and a remedy fired into it is nen deciding how
+ * long somebody else's tests may take. Refused HERE, by pointer, rather than
+ * at render time, so a declaration carrying one is told the moment the file
+ * loads and never mid-run. Both spellings are caught -- the invocation's own
+ * `stall` and one on any of its `steps[]` -- and the key is read off the raw
+ * record because `parseInvocation` has not seen it yet.
+ */
+function refuseStallOnTests(path: string, pointer: string, verb: string, value: unknown): void {
+  if (verb !== UNTIMED_VERB || typeof value !== "object" || value === null) return;
+  const raw = value as Record<string, unknown>;
+  const where: string[] = [];
+  if (raw["stall"] !== undefined && raw["stall"] !== null) where.push(`${pointer}.stall`);
+  if (Array.isArray(raw["steps"])) {
+    (raw["steps"] as unknown[]).forEach((step, index): void => {
+      if (typeof step === "object" && step !== null && (step as Record<string, unknown>)["stall"] !== undefined && (step as Record<string, unknown>)["stall"] !== null) {
+        where.push(`${pointer}.steps[${index}].stall`);
+      }
+    });
+  }
+  const first = where[0];
+  if (first === undefined) return;
+  throw new SchemaError(
+    path,
+    first,
+    `declares a stall guard on the '${UNTIMED_VERB}' row, and tests are untimed: a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. Remove the block; a stall guard belongs on a build-shaped row (build, ui-test, lint, archive, coverage, test-report)`,
+  );
+}
+
 export function parseInvocation(path: string, pointer: string, value: unknown): Invocation {
   const raw = requireRecord(path, pointer, value);
   const hasUnsupported = raw["unsupported"] !== undefined;
@@ -1050,6 +1087,7 @@ function parseVerbs(
       // UNKNOWN VERB NAMES ARE PRESERVED, NOT REJECTED. The ecosystem already
       // uses `analyze`, `publish`, `codegen`, `tokens`, `storybook`,
       // `resume:pdf`; a closed verb list here would make this file nen's.
+      refuseStallOnTests(path, `${pointer}.${verb}`, verb, invocation);
       parsed[verb] = parseInvocation(path, `${pointer}.${verb}`, invocation);
     }
     // EMPTY IS REFUSED AT BOTH LEVELS, exactly as `project.lanes` refuses it,

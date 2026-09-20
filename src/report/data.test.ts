@@ -100,12 +100,14 @@ describe("nen report data", () => {
       "proof",
       "phases",
       "lastStop",
-      // APPENDED, DELIBERATELY, AT THE END (zheref/nen#220). The twelve keys
-      // above are v0.11's, in v0.11's order, so a consumer reading them reads
-      // the same document it always did; `objects` is the thirteenth and is
-      // `[]` unless one of the five register flags was given. Moving any of
-      // the twelve to make room would be the reshuffle this test exists to
+      // APPENDED, DELIBERATELY, AT THE END (zheref/nen#220, #227). The twelve
+      // keys above are v0.11's, in v0.11's order, so a consumer reading them
+      // reads the same document it always did; `usage` is v0.13's thirteenth
+      // (the usage ledgers, `[]` when none is there) and `objects` stays LAST,
+      // `[]` unless one of the five register flags was given. Moving any
+      // earlier key to make room would be the reshuffle this test exists to
       // prevent.
+      "usage",
       "objects",
     ]);
     expect(document["contract"]).toBe("nen.report.data/v0.1");
@@ -320,6 +322,58 @@ describe("a repository that has declared nothing to nen", () => {
     expect(captured.code).toBe(0);
     expect(documentFrom(captured)["lastStop"]).toBeNull();
     expect(captured.err.join("\n")).toMatch(/is present and is not valid JSON/);
+  });
+});
+
+describe("the phase ledgers carry note and steps (zheref/nen#227)", () => {
+  it("flattens each entry with its effort, note and the shu steps recorded under it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-report-phases-"));
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    writeFileSync(
+      join(root, ".nen", "phases", "e.json"),
+      JSON.stringify({
+        contract: "nen.phase.ledger/v0.1",
+        effort: "e",
+        phases: [
+          { phase: "old", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: "kept" },
+          { phase: "rasengan", startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:09.000Z", durationMs: 9000, exitCode: 0, surface: "codex", model: "fast", note: null, steps: [{ verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1000, stalled: false }] },
+        ],
+      }),
+    );
+    const captured = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script({ log: LOG }));
+    const phases = documentFrom(captured)["phases"] as Record<string, unknown>[];
+    expect(Object.keys(phases[0] ?? {})).toEqual(["effort", "phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps"]);
+    expect(phases[0]).toMatchObject({ effort: "e", note: "kept", steps: [] });
+    expect(phases[1]?.["steps"]).toEqual([{ verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1000, stalled: false }]);
+  });
+});
+
+describe("the usage ledgers (zheref/nen#227)", () => {
+  it("flattens every .nen/usage/<effort>.json entry with its effort, and skips a file of another contract", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-report-usage-"));
+    mkdirSync(join(root, ".nen", "usage"), { recursive: true });
+    writeFileSync(
+      join(root, ".nen", "usage", "e.json"),
+      JSON.stringify({
+        contract: "nen.usage.ledger/v0.1",
+        effort: "e",
+        entries: [
+          { recordedAt: "2026-09-20T10:00:00.000Z", surface: "cursor", model: null, input: null, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: true },
+          { recordedAt: "2026-09-20T10:01:00.000Z", surface: "claude-code", model: "opus", input: 12, output: 3, cacheRead: 0, cacheWrite: 0, minutes: 1.5, source: "claude /cost", note: null, notReported: false },
+        ],
+      }),
+    );
+    writeFileSync(join(root, ".nen", "usage", "other.json"), JSON.stringify({ contract: "nope/v1", effort: "x", entries: [] }));
+    const captured = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script({ log: LOG }));
+    expect(captured.code).toBe(0);
+    const usage = documentFrom(captured)["usage"] as Record<string, unknown>[];
+    expect(usage).toHaveLength(2);
+    expect(Object.keys(usage[0] ?? {})).toEqual(["effort", "recordedAt", "surface", "model", "input", "output", "cacheRead", "cacheWrite", "minutes", "source", "note", "notReported"]);
+    expect(usage[0]?.["notReported"]).toBe(true);
+    expect(usage[1]).toMatchObject({ effort: "e", surface: "claude-code", model: "opus", input: 12, minutes: 1.5 });
+    expect(captured.err.join("\n")).toMatch(/usage\/other\.json: not a 'nen.usage.ledger\/v0.1' ledger -- skipped/);
+    const text = await capture(["report", "data", "--repo", root, "--base", "main"], script({ log: LOG }));
+    expect(text.out.join("\n")).toContain("usage: 2 entries, 1 not reported");
   });
 });
 

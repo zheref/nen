@@ -27,6 +27,7 @@
 
 import { emit, requireRepoFlag, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
+import type { Seams } from "../seam/exec.js";
 import { workingTreeHash } from "../repo/tree.js";
 import {
   PROOF_CONTRACT,
@@ -163,13 +164,41 @@ export function renderCheck(report: ProofCheckReport): readonly string[] {
   return lines;
 }
 
-export function runCheck(context: CommandContext): number {
+/**
+ * The verdict itself, with nothing printed: the one comparison `commit check`
+ * reports and `commit write --require-proof` refuses on (zheref/nen#227). ONE
+ * function, so the two verbs cannot disagree about what "proved" means.
+ */
+export function proofVerdict(seams: Seams, root: string, lane: string): ProofCheckReport {
+  const { proof, wrong } = narrow(readProof(root, lane));
+  const treeHash = workingTreeHash(seams, root);
+  const why = difference(lane, proof, wrong, treeHash);
+  return {
+    contract: CHECK_CONTRACT,
+    repo: root,
+    lane,
+    path: proofRelativePath(lane),
+    proof,
+    treeHash,
+    ok: why === null,
+    difference: why,
+    exitCode: why === null ? 0 : 1,
+  };
+}
+
+/** `--require-proof <lane>`, refused by name when absent or blank. */
+export function requireProofLane(context: CommandContext, verb: string): string {
   const lane = context.args.values["require-proof"];
   if (lane === undefined || lane.trim() === "") {
     throw new VerbUsageError(
-      "--require-proof <lane> is required: 'commit check' answers about ONE lane's build proof, and nen never picks a lane for you. It is the lane you built -- a key of this repository's own project.verbs.",
+      `--require-proof <lane> is required: '${verb}' answers about ONE lane's build proof, and nen never picks a lane for you. It is the lane you built -- a key of this repository's own project.verbs.`,
     );
   }
+  return lane;
+}
+
+export function runCheck(context: CommandContext): number {
+  const lane = requireProofLane(context, "commit check");
   // `--repo` IS REQUIRED HERE, and this verb is the only read-only one in the
   // CLI that requires it. Its whole answer is about which working copy it stood
   // in: "the tree is the one that was proved" said of the wrong directory is a
@@ -182,21 +211,8 @@ export function runCheck(context: CommandContext): number {
       "It names the working copy this answers about. There is no default: a proof verdict is only ever true of one directory, and defaulting to whichever one this process happens to be standing in would report a green tree that is not the one you meant.",
     ),
   });
-  const { proof, wrong } = narrow(readProof(root, lane));
-  const treeHash = workingTreeHash(context.seams, root);
-  const why = difference(lane, proof, wrong, treeHash);
-  const report: ProofCheckReport = {
-    contract: CHECK_CONTRACT,
-    repo: root,
-    lane,
-    path: proofRelativePath(lane),
-    proof,
-    treeHash,
-    ok: why === null,
-    difference: why,
-    exitCode: why === null ? 0 : 1,
-  };
+  const report = proofVerdict(context.seams, root, lane);
   emit(context.io, context.json, report, renderCheck(report));
-  if (why !== null) context.io.err(`nen commit check: ${why}`);
+  if (report.difference !== null) context.io.err(`nen commit check: ${report.difference}`);
   return report.exitCode;
 }

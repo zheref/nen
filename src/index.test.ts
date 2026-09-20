@@ -183,6 +183,7 @@ describe("nen schema check", () => {
       "nen/workflow.json",
       "nen/workflow.json#reports.sections",
       "nen/workflow.json#review.scopes",
+      "nen/workflow.json#profile",
       "nen/decisions.json",
     ]);
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);
