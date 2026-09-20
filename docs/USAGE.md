@@ -6504,7 +6504,7 @@ that is not a local branch, a name git will not accept, a name that is already a
 | 10 | `git ls-remote --heads origin refs/heads/<name>` | the name is already on `origin` (exit 2) — **or the look-up itself failed**, which is never read as "absent". The ref is spelled in **full**: `ls-remote` matches a bare pattern against the *tail* of every ref on slash boundaries, so `--branch x` asked as a bare `x` would match an existing `refs/heads/feat/x` and refuse a name that is free |
 | 11 | `git switch -c <name> origin/<trunk>` | it fails |
 | 12 | the lane's declared `build`, then (with `--tests`) its `test` | see the exit codes below |
-| 12a | `git stash list --format=%H%x09%gd`, then `git stash pop <the matched stash@{n}>` | only with `--carry`, and only when step 6b actually stashed something. Runs **after** step 12, whether it passed or failed — `--carry`'s promise is that the work comes back, not that it comes back only when the build does. The list step re-resolves the SHA step 6b recorded to a `stash@{n}` ref, because `pop` refuses a raw SHA; if that SHA is no longer on the list (dropped, popped or cleared by something else in the meantime) **nothing is popped** and the run exits 1 naming the SHA and `git stash apply <sha>` as recovery. A conflict or a failure on the pop itself does **not** drop the stash either: see [below](#what---carry-restores) |
+| 12a | `git stash apply <sha>`, then `git stash list --format=%H%x09%gd`, `git rev-parse --verify --quiet <stash@{n}>`, `git stash drop <stash@{n}>`, `git stash list --format=%H` | only with `--carry`, and only when step 6b actually stashed something. Runs **after** step 12, whether it passed or failed — `--carry`'s promise is that the work comes back, not that it comes back only when the build does. The apply restores by the object step 6b recorded, so nothing else's stash push can shift it; the four lines after it resolve, check, drop and confirm the entry's ref. An entry already gone from the list is reported and the work is restored all the same. A conflict or a failure on the apply does **not** drop the stash: see [below](#what---carry-restores) |
 
 <a id="what---discard-removes"></a>
 
@@ -6527,22 +6527,24 @@ different claims, and only the second one is what the flag promised.
 <a id="what---carry-restores"></a>
 
 **What `--carry` restores, and when.** It runs `git stash push --include-untracked -m "nen shu warmup
---carry <branch>"` where `--discard`'s reset/clean would — after every free question, before the fetch —
+--carry <branch> <instant>#<pid>"` where `--discard`'s reset/clean would — after every free question, before the fetch —
 then `git stash list --format=%H%x09%s` to find its own message and read the SHA of what it just pushed.
 
-- **Identified by SHA, resolved to a ref at pop time — never a blind `stash@{0}`, and never the raw SHA
-  either.** By the time this run reaches its own pop, a fetch, a fast-forward, a checkout and a build sit
-  between the push and it; `stash@{0}` is the *top* of the stash stack at whatever moment it is read, and
-  any other stash pushed in between — a script, a hook, a habit — would shift it. The SHA read right after
-  the push (`git stash list`, matched on this run's own message) is this run's own identity for the entry, but `git stash
-  pop`/`git stash drop` both **refuse a raw commit SHA** — only `git stash apply` accepts one. So
-  immediately before the pop, `git stash list --format=%H%x09%gd` is run and the line whose SHA matches is
-  found; **that** `stash@{n}` — re-resolved fresh, at that moment — is what gets popped.
-- **A clean tree is a no-op.** There is nothing to carry, so neither `git stash push` nor the list/pop
-  pair runs at all, and `carry.stashed` in the report is `null`.
+- **Restored by SHA, never by a stack index.** By the time this run reaches its own restore, a fetch, a
+  fast-forward, a checkout and a build sit between the push and it; `stash@{0}` is the *top* of the stash
+  stack at whatever moment it is read, and any other stash pushed in between — a script, a hook, a habit —
+  would shift it. The SHA read right after the push (`git stash list`, matched on this run's own message)
+  is this run's own identity for the entry, and `git stash apply <sha>` restores by that object directly.
+  Only the drop needs a `stash@{n}`: `git stash list --format=%H%x09%gd` resolves it, `git rev-parse
+  --verify` checks it names the SHA immediately before `git stash drop`, and a second list afterwards
+  confirms the drop took this entry and no other — a foreign entry taken by a push landing in between is
+  put back with `git stash store` and named. `git stash pop` never runs.
+- **A clean tree is a no-op.** There is nothing to carry, so neither `git stash push` nor the
+  apply/drop sequence runs at all, and `carry.stashed` in the report is `null`.
 - **The push failing refuses at exit 1**, quoting the failed command, **before** the fetch or any ref move
-  — nothing else runs. So does a push that succeeded but whose SHA could not be read afterwards: the work
-  is safe in the stash, but this run cannot address it, and refuses rather than guessing at `stash@{0}`.
+  — nothing else runs. So does a push that succeeded but whose entry could not be found afterwards: the
+  work is safe in the stash under this run's message, the refusal quotes that message and the
+  `git stash list | grep -F` line that finds it, and nothing is guessed at `stash@{0}`.
 - **Every exit from the push onward names the stash.** A fetch failure, a diverged trunk, a taken branch
   name, a fast-forward that fails, a `switch -c` that fails — any of these between the push and the pop
   leaves the report with `carry.restored: false` and `carry.stashed: <sha>`, and its stderr message names
@@ -6552,15 +6554,14 @@ then `git stash list --format=%H%x09%s` to find its own message and read the SHA
 - **If the SHA is no longer on the stash list when the pop is due** — dropped, popped or cleared by
   something else while this run was building — **nothing is popped**. The run exits 1 naming the SHA and
   `git stash apply <sha>` (still valid: the SHA is a real object whether or not it is on the stash list).
-- **The pop runs after the declared build (and, with `--tests`, the declared test) — whether it passed or
-  failed.** `--carry`'s whole promise is that the work comes back; a failing build must not be the reason
+- **The restore runs after the declared build (and, with `--tests`, the declared test) — whether it passed
+  or failed.** `--carry`'s whole promise is that the work comes back; a failing build must not be the reason
   it stays stranded in a stash the caller has to go find by hand.
-- **A pop that conflicts or fails does NOT drop the stash.** Nothing is resolved or discarded on the
+- **An apply that conflicts or fails does NOT drop the stash.** Nothing is resolved or discarded on the
   caller's behalf — the same "nothing is rolled back" rule this verb keeps everywhere else, applied to the
-  step that runs last instead of first. The refusal prints the matched `stash@{n}`, the SHA, and the exact
-  `git stash pop <stash@{n}>` (once the conflict is resolved) or `git stash apply <sha>` (to reapply
-  without dropping the stash) to run by hand, and exits 1. **The cut branch stays exactly where it is** —
-  nothing before the pop is undone.
+  step that runs last instead of first. The refusal prints the SHA and the exact `git stash apply <sha>`
+  to run by hand once the conflict is resolved, and exits 1. **The cut branch stays exactly where it is** —
+  nothing before the restore is undone.
 
 **The build and test are delegated, in this process**, to the same executor
 [`nen shu build`](#nen-shu-build) is — never a `spawnSync` of nen calling itself — so the argv that runs

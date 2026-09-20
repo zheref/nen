@@ -522,13 +522,14 @@ flags:
                    NEVER 'stash@{0}'. A clean tree has nothing to carry and
                    this is a no-op. Once the branch is cut and the declared
                    build (and, with --tests, the declared test) has passed,
-                   the SHA is re-resolved to its stash@{n} and 'git stash pop
-                   stash@{n}' restores it (git's pop and drop refuse a raw
-                   SHA; only apply takes one). If that pop conflicts or
-                   fails, the stash is NOT dropped: nen prints the ref, the
-                   SHA and the exact 'git stash pop stash@{n}' / 'git stash
-                   apply <sha>' to run once it is resolved, and exits 1 -- the
-                   cut branch stays exactly where it is.
+                   'git stash apply <sha>' restores it by the object itself
+                   (no stack index can shift under it), and the entry is then
+                   dropped by a stash@{n} resolved, checked with rev-parse
+                   and confirmed by a second list around the drop -- never
+                   'git stash pop'. If the apply conflicts or fails, the
+                   stash is NOT dropped: nen prints the SHA and the exact
+                   'git stash apply <sha>' to run once it is resolved, and
+                   exits 1 -- the cut branch stays exactly where it is.
   --tests          'warmup' only. Also run the lane's declared 'test' after the
                    build, through the same executor. Off by default, because a
                    test suite is the slow half and a warm-up is the fast one.
