@@ -4,7 +4,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## v0.12.0 — 2026-09-20
 
-Release unit for `v0.11.0..main` ([#221](https://github.com/zheref/nen/pull/221), [#222](https://github.com/zheref/nen/pull/222)); the compatibility floor stays `0.7`.
+Release unit for `v0.11.0..main` ([#221](https://github.com/zheref/nen/pull/221), [#222](https://github.com/zheref/nen/pull/222), [#225](https://github.com/zheref/nen/pull/225) which carried the bump to `main`, and the reconciling [#226](https://github.com/zheref/nen/pull/226)); the compatibility floor stays `0.7`.
 
 ### Added
 
