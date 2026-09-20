@@ -235,10 +235,11 @@ export interface WarmupStep {
  * porcelain this verb already parses for `--discard`'s evidence -- so a reader
  * sees what was carried without re-deriving it from a stash's own diff.
  * `restored` is `true` the moment nothing needed restoring (no `--carry`, or a
- * clean tree) and flips to `false` on exactly one event: `git stash pop`
- * conflicted or failed. It never means "the pop was attempted" -- a run that
- * never reached the pop because the build failed first still reports it
- * truthfully once the pop that follows either succeeds or does not.
+ * clean tree) and flips to `false` on exactly one event: `git stash apply`
+ * conflicted or failed. It never means "the restore was attempted" -- a run
+ * that never reached it because the build failed first still reports it
+ * truthfully once the apply that follows either succeeds or does not. The
+ * drop that follows a successful apply is housekeeping and never flips it.
  */
 export interface WarmupCarry {
   readonly requested: boolean;
@@ -314,7 +315,7 @@ export function renderWarmup(report: WarmupReport): readonly string[] {
         ? report.carry.stashed === null
           ? "yes -- nothing to carry, the working copy was already clean"
           : `yes -- ${report.carry.carried.length} path(s) stashed as ${report.carry.stashed}, restored: ${
-              report.carry.restored ? "yes" : "NO -- see the stash pop step below; the stash was NOT dropped"
+              report.carry.restored ? "yes" : "NO -- see the stash apply step below; the stash was NOT dropped"
             }`
         : "no -- a dirty working copy refuses (or, with --discard, is thrown away)",
     ),
@@ -969,12 +970,12 @@ async function planWarmup(
   }
   if (options.carry) {
     plan(
-      ["stash", "list", "--format=%H%x09%gd"],
-      "would look up the stash ref for the SHA 'git rev-parse refs/stash' would have read above -- 'git stash pop'/'drop' take a stash ref (stash@{n}), never a raw SHA, so a real run re-resolves the ref here rather than reusing the one from the push",
+      ["stash", "apply", "<the SHA 'git stash list' would have matched above>"],
+      "would restore the carried work once the declared build (and, with --tests, the declared test) above would pass -- by the SHA itself, which no other stash push can shift, never by a stack index",
     );
     plan(
-      ["stash", "pop", "<the stash@{n} 'git stash list' would have matched above>"],
-      "would restore the carried work once the declared build (and, with --tests, the declared test) above would pass. A real run addresses this by the stash@{n} it just re-resolved from the SHA it read right after the push, never by a blind 'stash@{0}' and never by the raw SHA either -- there is no push or list to read either from in a dry run, so this line names where they come from instead of guessing at one",
+      ["stash", "list", "--format=%H%x09%gd"],
+      "would look up the stash ref for that SHA -- 'git stash drop' takes a stash ref (stash@{n}), never a raw SHA -- check with 'git rev-parse --verify' that the ref still names it, drop it, and list again to confirm the drop took this run's own entry and no other",
     );
   }
 
@@ -1349,7 +1350,7 @@ async function performWarmup(
         return failedStep(
           "git stash list",
           listed,
-          "The push itself succeeded -- the uncommitted work is safe in the stash -- but the list could not be read, so this run cannot address it later and refuses rather than guessing at 'stash@{0}'. Run 'git stash list' to find it and 'git stash pop' or 'git stash apply' it back by hand.",
+          `The push itself succeeded -- the uncommitted work is safe in the stash under the message '${message}' -- but the list could not be read, so this run cannot address it later and refuses rather than guessing at 'stash@{0}'. Find it with "git stash list | grep -F '${message}'" and 'git stash apply <the SHA on that line>' it back by hand.`,
         );
       }
       const mine = outputLines(listed.stdout).filter((line): boolean => line.split("\t")[1]?.endsWith(message) === true);
@@ -1357,7 +1358,7 @@ async function performWarmup(
         return failedStep(
           "git stash list",
           { ...listed, code: 1, stderr: `${mine.length} entries carry this run's message '${message}'; expected exactly one` },
-          "The push itself succeeded -- the uncommitted work is safe in the stash -- but its entry could not be told apart, so this run refuses rather than popping a guess. Run 'git stash list' to find it and 'git stash pop' or 'git stash apply' it back by hand.",
+          `The push itself succeeded -- the uncommitted work is safe in the stash under the message '${message}' -- but its entry could not be told apart, so this run refuses rather than popping a guess. Find it with "git stash list | grep -F '${message}'" and 'git stash apply <the SHA on that line>' it back by hand.`,
         );
       }
       carryStashed = (mine[0] as string).split("\t")[0] as string;
@@ -1505,17 +1506,14 @@ async function performWarmup(
   // "restored on the happy path", it is "restored", full stop. Every one of
   // those three exits calls this before it returns.
   //
-  // NEVER A BLIND 'stash@{0}', AND NEVER 'git stash pop <sha>' EITHER. The SHA
-  // read right after the push (`carryStashed`) is this run's own identity for
-  // the entry it pushed, but git's `stash pop` and `stash drop` both refuse a
-  // raw commit object name -- only `stash apply` accepts one. `pop`/`drop`
-  // require a STASH REF (`stash@{n}`), so the ref is re-resolved right here,
-  // at pop time, by listing the stash and finding the line whose SHA is
-  // `carryStashed` -- never a cached index from the moment of the push, which
-  // by now may belong to a different entry if anything else touched the
-  // stack in between.
+  // NEVER A BLIND 'stash@{0}', AND NEVER 'git stash pop' AT ALL. The SHA read
+  // right after the push (`carryStashed`) is this run's own identity for the
+  // entry it pushed, and `git stash apply <sha>` restores by that object
+  // directly -- the one name no other stash push can shift. Only the DROP
+  // needs a stash ref (`stash@{n}`), and that ref is resolved, checked and
+  // confirmed around the drop inside the function below.
   //
-  // A CONFLICT OR A FAILURE DOES NOT DROP THE STASH. `git stash pop` on a
+  // A CONFLICT OR A FAILURE DOES NOT DROP THE STASH. `git stash apply` on a
   // conflict leaves the stash entry in place precisely so nothing is lost, and
   // this verb leaves it exactly there rather than trying to resolve or discard
   // anything on the caller's behalf -- the same "nothing is rolled back"
@@ -1524,18 +1522,41 @@ async function performWarmup(
   const popCarry = (also: string | null): boolean => {
     if (!options.carry || carryStashed === null) return true;
     const suffix = also === null ? "" : ` ${also}`;
-    const list = git.run(
-      ["stash", "list", "--format=%H%x09%gd"],
-      `resolving the stash ref for ${carryStashed} -- 'git stash pop'/'drop' take a stash ref (stash@{n}), never a raw SHA, so the ref is looked up fresh here rather than assumed`,
+    // RESTORE BY SHA, THEN DROP BY REF, EACH CHECKED. 'git stash pop stash@{n}'
+    // is one command that restores and drops by a STACK INDEX, and an index
+    // resolved a moment earlier is stale the instant anything else pushes a
+    // stash (Copilot review on zheref/nen#217, round 2). So the two halves
+    // are split: 'git stash apply <sha>' restores by the one name that cannot
+    // shift -- the object itself -- and the drop that follows is verified
+    // twice: the ref is compared to the SHA right before it, and the list is
+    // diffed right after it. A drop that took a foreign entry (a push landing
+    // between those two reads) puts that entry back with 'git stash store'
+    // and says so; the work itself was already restored by the apply.
+    const applied = git.run(
+      ["stash", "apply", carryStashed],
+      `restoring the ${carryCarried.length} path(s) carried across this warm-up, addressed by the SHA itself -- 'git stash apply' takes a commit object, so no stack index can shift underneath it`,
     );
-    if (list.code !== 0) {
+    if (applied.code !== 0) {
       carryRestored = false;
       report(1);
       context.io.err(
-        `${PROGRAM} shu warmup: could not list the stash to find the entry stashed as ${carryStashed} -- ${why(list)}. Nothing was popped. The git half is done and nothing else is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Run 'git stash list' yourself to find it and 'git stash apply ${carryStashed}' to reapply it without dropping the stash.${suffix}`,
+        `${PROGRAM} shu warmup: 'git stash apply ${carryStashed}' failed -- ${why(applied)}. The stash is NOT dropped: the carried work is still there as ${carryStashed}. The git half is done and nothing else is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Resolve it and run 'git stash apply ${carryStashed}' yourself once you have, then find its entry with 'git stash list' and drop it.${suffix}`,
       );
       return false;
     }
+    carryRestored = true;
+    git.annotate(`the ${carryCarried.length} carried path(s) are back`);
+    // The drop. Everything from here is housekeeping: the work is restored,
+    // and no outcome below un-restores it or fails the run.
+    const list = git.run(
+      ["stash", "list", "--format=%H%x09%gd"],
+      `resolving the stash ref for ${carryStashed} -- 'git stash drop' takes a stash ref (stash@{n}), never a raw SHA`,
+    );
+    if (list.code !== 0) {
+      context.io.err(`${PROGRAM} shu warmup: restored, but could not list the stash to drop the entry -- ${why(list)}. The entry ${carryStashed} is still on the list; drop it by hand once 'git stash list' shows it.`);
+      return true;
+    }
+    const before = outputLines(list.stdout).map((line): string => line.split("\t")[0] as string);
     let ref: string | null = null;
     for (const line of outputLines(list.stdout)) {
       const [sha, gd] = line.split("\t");
@@ -1545,27 +1566,31 @@ async function performWarmup(
       }
     }
     if (ref === null) {
-      carryRestored = false;
-      report(1);
-      context.io.err(
-        `${PROGRAM} shu warmup: the stash entry stashed as ${carryStashed} is no longer in 'git stash list' -- it was popped, dropped or cleared by something else while this run was warming up. Nothing was popped. The git half is done and nothing else is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Recover it by hand: 'git stash apply ${carryStashed}' still works, since the SHA is a valid object whether or not it is on the stash list.${suffix}`,
-      );
-      return false;
+      context.io.err(`${PROGRAM} shu warmup: restored from ${carryStashed}, which is no longer on 'git stash list' -- something else dropped the entry while this run was warming up. Nothing to drop; the work is back regardless, because the apply addressed the object and not the list.`);
+      return true;
     }
-    const popped = git.run(
-      ["stash", "pop", ref],
-      `restoring the ${carryCarried.length} path(s) carried across this warm-up, addressed by ${ref} -- re-resolved from ${carryStashed} just now, never a blind 'stash@{0}'`,
-    );
-    if (popped.code !== 0) {
-      carryRestored = false;
-      report(1);
-      context.io.err(
-        `${PROGRAM} shu warmup: 'git stash pop ${ref}' failed -- ${why(popped)}. The stash is NOT dropped: the carried work is still there, as ${ref} (SHA ${carryStashed}). The git half is done and nothing else is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Resolve it and run 'git stash pop ${ref}' yourself once you have, or 'git stash apply ${carryStashed}' to reapply it without dropping the stash.${suffix}`,
-      );
-      return false;
+    const check = git.run(["rev-parse", "--verify", "--quiet", ref], `checking that ${ref} still names ${carryStashed} immediately before the drop`);
+    if (check.code !== 0 || check.stdout.trim() !== carryStashed) {
+      context.io.err(`${PROGRAM} shu warmup: restored, but ${ref} no longer names ${carryStashed} (the stack moved between the list and the drop). Nothing was dropped; find the entry with 'git stash list' and drop it by hand.`);
+      return true;
     }
-    carryRestored = true;
-    git.annotate(`the ${carryCarried.length} carried path(s) are back`);
+    const dropped = git.run(["stash", "drop", ref], `dropping ${ref}, verified a moment ago to be ${carryStashed}`);
+    if (dropped.code !== 0) {
+      context.io.err(`${PROGRAM} shu warmup: restored, but 'git stash drop ${ref}' failed -- ${why(dropped)}. The entry ${carryStashed} is still on the list; drop it by hand.`);
+      return true;
+    }
+    const after = git.run(["stash", "list", "--format=%H"], `confirming the drop took this run's own entry and no other`);
+    if (after.code === 0) {
+      const remaining = new Set(outputLines(after.stdout).map((line): string => line.trim()));
+      const removed = before.filter((sha): boolean => !remaining.has(sha));
+      if (removed.length === 1 && removed[0] !== carryStashed) {
+        const foreign = removed[0] as string;
+        const restored = git.run(["stash", "store", "-m", `restored by ${PROGRAM} shu warmup: dropped by mistake while dropping ${carryStashed}`, foreign], `putting back the entry the drop took by mistake: the stack moved between the check and the drop`);
+        context.io.err(
+          `${PROGRAM} shu warmup: restored, but the drop took ${foreign} instead of ${carryStashed} -- another stash was pushed between the check and the drop. ${restored.code === 0 ? `That entry was put back with 'git stash store ${foreign}'.` : `Putting it back FAILED (${why(restored)}): run 'git stash store ${foreign}' yourself; the object is intact.`} This run's own entry ${carryStashed} is still on the list; drop it by hand.`,
+        );
+      }
+    }
     return true;
   };
 

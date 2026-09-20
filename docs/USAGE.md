@@ -6466,7 +6466,7 @@ nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard | --car
 | `--branch <name>` | **yes** | The branch to cut from the freshly-fetched trunk. | Nen never invents one. Validated with git's own `check-ref-format --branch`, and refused at 2 if it already exists **locally or on `origin`** — never reused, reset or force-moved. A name beginning with `-` is refused before git can read it as an option. |
 | `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
 | `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). **Never together with `--carry`** — exit 2, naming both. |
-| `--carry` | no | The **third door**: preserve uncommitted work (tracked **and** untracked) across the warm-up instead of refusing it or throwing it away. | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"` runs where `--discard`'s reset/clean would — after every free question and before the fetch — and `git stash list --format=%H%x09%s` right afterwards finds **that message** and reads its SHA (never `refs/stash`, which names whatever was pushed last by anybody; a message matched by zero or several entries refuses without popping). That SHA is this run's own **identity** for the entry, carried in `carry.stashed` and named in every message from here to the end. On an already-clean tree it is a no-op: no stash command runs at all. Once the branch is cut and the declared build (and, with `--tests`, the declared test) has answered — pass **or** fail — the SHA is **re-resolved to a `stash@{n}` ref** with `git stash list --format=%H%x09%gd`, and `git stash pop <that stash@{n}>` restores it: `git stash pop`/`git stash drop` both **refuse a raw SHA** — only `git stash apply` accepts one — so the ref is looked up fresh at pop time rather than assumed from the push. **Never together with `--discard`** — exit 2, naming both. See [what `--carry` does and does not restore](#what---carry-restores). |
+| `--carry` | no | The **third door**: preserve uncommitted work (tracked **and** untracked) across the warm-up instead of refusing it or throwing it away. | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"` runs where `--discard`'s reset/clean would — after every free question and before the fetch — and `git stash list --format=%H%x09%s` right afterwards finds **that message** and reads its SHA (never `refs/stash`, which names whatever was pushed last by anybody; a message matched by zero or several entries refuses without popping). That SHA is this run's own **identity** for the entry, carried in `carry.stashed` and named in every message from here to the end. On an already-clean tree it is a no-op: no stash command runs at all. Once the branch is cut and the declared build (and, with `--tests`, the declared test) has answered — pass **or** fail — `git stash apply <sha>` restores it **by the object itself**, which no other stash push can shift; only the drop that follows needs a `stash@{n}` ref, and that ref is re-resolved with `git stash list --format=%H%x09%gd`, checked with `git rev-parse --verify` immediately before `git stash drop`, and confirmed by a second list afterwards — a drop that took a foreign entry (a push landing in between) is put back with `git stash store` and named. Nothing runs `git stash pop`, whose restore-and-drop by stack index is the race. **Never together with `--discard`** — exit 2, naming both. See [what `--carry` does and does not restore](#what---carry-restores). |
 | `--tests` | no | Also run the lane's declared `test` after the build. | Off by default — a test suite is the slow half and a warm-up is the fast one. The test is skipped when the build did not pass. |
 | `--lane <name>` | no | Which lane the build/test verification runs on. | Defaults to `project.defaultLane`. An unknown lane is refused at 2 **before a single git call** — a caller who mistyped it must not have their working copy cleaned to find out. The lane is then **resolved again** from the declaration on the branch this verb cut, which is the tree the build actually runs in. |
 | `--dry-run` | no | Print every command, in order, and **mutate nothing**. | It performs exactly **one** command and the list is closed: `git worktree list --porcelain`, the one question the plan cannot honestly guess at (see above). Not the fetch, not the status, not a probe. That row carries its real exit code and is labelled `ran:`; every other row is labelled `would run:`, and `dryRun` on the report says which form this is. Two lines still say what a real run would decide differently: that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
@@ -6618,9 +6618,9 @@ the tree turned out to hold; `stashed` is the SHA `git stash list` found for thi
 `git status` read **before** the push -- the same evidence `--discard` prints, kept here rather than
 re-derived from the stash's own diff; `restored` is `true` the moment nothing needed restoring and flips
 to `false` the instant the push lands, staying `false` through every exit from there on -- a fetch
-failure, a diverged trunk, the stash going missing by the time the pop is due, or the final
-`git stash pop <stash@{n}>` conflicting or failing -- and back to `true` only once that pop actually
-succeeds. Each `steps[]` row is
+failure, a diverged trunk, or the final `git stash apply <sha>` conflicting or failing -- and back to
+`true` the moment that apply succeeds. The drop that follows is housekeeping: an entry already gone
+from the list, a ref that moved, or a drop that failed is reported on stderr and never un-restores. Each `steps[]` row is
 `{ kind, argv, exitCode, durationMs, note }`,
 where `kind` is `git | build | test` and `argv` is the **whole** command line, executable first — and is
 **empty** on the row of a delegated verb the executor refused before it rendered one (a lane that seats
@@ -6665,10 +6665,9 @@ here. exit 0, and the only thing spawned is the `worktree list` — the one row 
 orphan-commit count on line 2 is one of the two a real run may spell differently: it asks it only when
 line 1 comes back empty. With `--discard` the plan gains `git reset --hard`, `git clean -fd` and a second
 `git status` after line 9. With `--carry` instead, the plan gains `git stash push --include-untracked`
-and `git stash list --format=%H%x09%s` in that same spot, and `git stash list --format=%H%x09%gd` followed by a
-`git stash pop` line at the very end, after the declared build -- the list step is there because
-`git stash pop` refuses a raw SHA, so a real run re-resolves the ref right before popping rather than
-reusing the one the push read.)
+and `git stash list --format=%H%x09%s` in that same spot, and `git stash apply <sha>` followed by a
+`git stash list --format=%H%x09%gd` line at the very end, after the declared build -- the apply restores
+by the object, and the list is where a real run resolves, checks and drops the entry's ref afterwards.)
 
 **Example — the trunk is checked out in another worktree** (a real run, against a throwaway repository
 with a primary checkout on `main` and an effort in a linked worktree beside it; `git branch --force main
@@ -6770,18 +6769,24 @@ ran:           git stash list --format=%H%x09%s  -- exit 0 in 6ms
 [the fetch, the fast-forward, the branch cut and the declared build run exactly as they do without --carry]
 ```
 ```text
-ran:           git stash list --format=%H%x09%gd  -- exit 0 in 4ms
-               resolving the stash ref for 7c3f9a1... -- 'git stash pop'/'drop' take a stash ref (stash@{n}), never a raw SHA
-ran:           git stash pop stash@{0}  -- exit 0 in 12ms
-               restoring the 2 path(s) carried across this warm-up, addressed by stash@{0} -- re-resolved from 7c3f9a1... just now, never a blind 'stash@{0}'
+ran:           git stash apply 7c3f9a1...  -- exit 0 in 12ms
+               restoring the 2 path(s) carried across this warm-up, addressed by the SHA itself -- 'git stash apply' takes a commit object, so no stack index can shift underneath it
                the 2 carried path(s) are back
+ran:           git stash list --format=%H%x09%gd  -- exit 0 in 4ms
+               resolving the stash ref for 7c3f9a1... -- 'git stash drop' takes a stash ref (stash@{n}), never a raw SHA
+ran:           git rev-parse --verify --quiet stash@{0}  -- exit 0 in 3ms
+               checking that stash@{0} still names 7c3f9a1... immediately before the drop
+ran:           git stash drop stash@{0}  -- exit 0 in 5ms
+               dropping stash@{0}, verified a moment ago to be 7c3f9a1...
+ran:           git stash list --format=%H  -- exit 0 in 3ms
+               confirming the drop took this run's own entry and no other
 ```
 
-(exit 0; `carry.restored` is `true` in `--json`. If the pop had conflicted instead, nen would print the
-matched ref, the SHA, and the exact `git stash pop stash@{0}` / `git stash apply 7c3f9a1...` to run by
-hand, exit 1, and leave the stash exactly where it was -- `--branch`'s checkout stays in place either
-way. If the SHA were no longer on the list at all -- dropped by something else in the meantime -- nen
-pops nothing and exits 1 naming the SHA and `git stash apply 7c3f9a1...` the same way.)
+(exit 0; `carry.restored` is `true` in `--json`. If the apply had conflicted instead, nen would print the
+SHA and the exact `git stash apply 7c3f9a1...` to run by hand, exit 1, and leave the stash exactly
+where it was -- `--branch`'s checkout stays in place either way. If the entry were no longer on the
+list by the time the drop is due -- dropped by something else in the meantime -- the work is restored
+all the same, because the apply addressed the object; nen says so and drops nothing.)
 
 ## This repository's own dev loop
 

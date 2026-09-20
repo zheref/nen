@@ -78,7 +78,10 @@ const STASH_PUSH = `git stash push --include-untracked -m ${STASH_MESSAGE}`;
 /** The find-by-message step right after the push: SHA, tab, subject. */
 const STASH_SHA = "git stash list --format=%H%x09%s";
 const STASH_LIST = "git stash list --format=%H%x09%gd";
-const STASH_POP = (ref: string): string => `git stash pop ${ref}`;
+const STASH_APPLY = (sha: string): string => `git stash apply ${sha}`;
+const STASH_CHECK = (ref: string): string => `git rev-parse --verify --quiet ${ref}`;
+const STASH_DROP = (ref: string): string => `git stash drop ${ref}`;
+const STASH_LIST_AFTER = "git stash list --format=%H";
 
 const WT_NOBODY = `worktree ${SHU_REPO}\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/some-branch\n\n`;
 
@@ -111,8 +114,11 @@ function carryHappyPath(overrides: readonly ScriptedCall[] = []): readonly Scrip
     ok(SWITCH),
     ok(DECLARED_BUILD),
     ok(PROOF_TREE),
+    ok(STASH_APPLY(STASH_SHA_VALUE)),
     ok(STASH_LIST, STASH_LIST_MATCH),
-    ok(STASH_POP(STASH_REF)),
+    ok(STASH_CHECK(STASH_REF), `${STASH_SHA_VALUE}\n`),
+    ok(STASH_DROP(STASH_REF)),
+    ok(STASH_LIST_AFTER, ""),
   ];
   const overridden = new Set(overrides.map((entry): string => entry.match));
   return [...overrides, ...base.filter((entry): boolean => !overridden.has(entry.match))];
@@ -134,10 +140,13 @@ describe("--carry on a dirty tree", () => {
     // Listed, then popped by the ref that lookup matched to the SHA read
     // after the push -- never a blind 'stash@{0}' and never the raw SHA,
     // which 'git stash pop' refuses.
-    expect(argv.indexOf(STASH_LIST)).toBeLessThan(argv.indexOf(STASH_POP(STASH_REF)));
-    expect(argv).toContain(STASH_POP(STASH_REF));
-    expect(argv).not.toContain(STASH_POP(STASH_SHA_VALUE));
-    expect(argv.indexOf(DECLARED_BUILD)).toBeLessThan(argv.indexOf(STASH_LIST));
+    // Restore by SHA first (no index can shift under an object name), then
+    // list, check and drop by the re-resolved ref -- never a 'stash pop'.
+    expect(argv.indexOf(STASH_APPLY(STASH_SHA_VALUE))).toBeLessThan(argv.indexOf(STASH_LIST));
+    expect(argv.indexOf(STASH_LIST)).toBeLessThan(argv.indexOf(STASH_CHECK(STASH_REF)));
+    expect(argv.indexOf(STASH_CHECK(STASH_REF))).toBeLessThan(argv.indexOf(STASH_DROP(STASH_REF)));
+    expect(argv.some((line): boolean => line.startsWith("git stash pop"))).toBe(false);
+    expect(argv.indexOf(DECLARED_BUILD)).toBeLessThan(argv.indexOf(STASH_APPLY(STASH_SHA_VALUE)));
   });
 
   it("never runs 'git reset --hard' or 'git clean -fd' -- --carry destroys nothing", async () => {
@@ -243,16 +252,15 @@ describe("the stash push fails", () => {
 
 // ── (e) the pop conflicts or fails ───────────────────────────────────────────
 
-describe("the stash pop fails after everything else succeeded", () => {
-  it("does NOT drop the stash, prints the ref, the SHA and the exact recovery commands, and exits 1", async () => {
+describe("the stash apply fails after everything else succeeded", () => {
+  it("does NOT drop the stash, prints the SHA and the exact recovery command, and exits 1", async () => {
     const result = await capture(["warmup", "--branch", BRANCH, "--carry"], {
       script: carryHappyPath([
-        { match: STASH_POP(STASH_REF), result: { code: 1, stderr: "CONFLICT (content): merge conflict" } },
+        { match: STASH_APPLY(STASH_SHA_VALUE), result: { code: 1, stderr: "CONFLICT (content): merge conflict" } },
       ]),
     });
     expect(result.code).toBe(1);
     const said = result.err.join("\n");
-    expect(said).toMatch(new RegExp(`git stash pop ${STASH_REF.replace(/[{}]/g, "\\$&")}`));
     expect(said).toMatch(new RegExp(`git stash apply ${STASH_SHA_VALUE}`));
     expect(said).toMatch(/NOT dropped/);
     expect(said).toMatch(/CONFLICT \(content\)/);
@@ -260,9 +268,9 @@ describe("the stash pop fails after everything else succeeded", () => {
     expect(argvOf(result.seams)).toContain(SWITCH);
   });
 
-  it("reports restored: false and the stash SHA in --json when the pop fails", async () => {
+  it("reports restored: false and the stash SHA in --json when the apply fails", async () => {
     const result = await capture(["warmup", "--branch", BRANCH, "--carry", "--json"], {
-      script: carryHappyPath([{ match: STASH_POP(STASH_REF), result: { code: 1, stderr: "conflict" } }]),
+      script: carryHappyPath([{ match: STASH_APPLY(STASH_SHA_VALUE), result: { code: 1, stderr: "conflict" } }]),
     });
     expect(result.code).toBe(1);
     const report = JSON.parse(result.out.join("\n")) as {
@@ -274,32 +282,62 @@ describe("the stash pop fails after everything else succeeded", () => {
   });
 });
 
-// ── (e') the SHA is no longer on the stash list when the pop is due ────────
+// ── (e') the SHA is no longer on the stash list when the drop is due ────────
 
-describe("the carried stash was dropped by hand before the pop", () => {
-  it("pops nothing, exits 1, and names the SHA and 'git stash apply <sha>' as recovery", async () => {
+describe("the carried stash was dropped by hand before the restore", () => {
+  it("restores anyway -- the apply addresses the object, not the list -- and says nothing was left to drop", async () => {
     const result = await capture(["warmup", "--branch", BRANCH, "--carry"], {
       script: carryHappyPath([ok(STASH_LIST, "")]),
     });
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(0);
     const argv = argvOf(result.seams);
-    expect(argv).toContain(STASH_LIST);
-    expect(argv.some((line): boolean => line.startsWith("git stash pop"))).toBe(false);
-    const said = result.err.join("\n");
-    expect(said).toMatch(new RegExp(STASH_SHA_VALUE));
-    expect(said).toMatch(new RegExp(`git stash apply ${STASH_SHA_VALUE}`));
+    expect(argv).toContain(STASH_APPLY(STASH_SHA_VALUE));
+    expect(argv.some((line): boolean => line.startsWith("git stash drop") || line.startsWith("git stash pop"))).toBe(false);
+    expect(result.err.join("\n")).toMatch(/no longer on 'git stash list'/);
   });
 
-  it("reports restored: false and the stash SHA in --json", async () => {
+  it("reports restored: true in --json", async () => {
     const result = await capture(["warmup", "--branch", BRANCH, "--carry", "--json"], {
       script: carryHappyPath([ok(STASH_LIST, "")]),
     });
-    expect(result.code).toBe(1);
-    const report = JSON.parse(result.out.join("\n")) as {
-      carry: { requested: boolean; stashed: string | null; carried: readonly string[]; restored: boolean };
-    };
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { carry: { stashed: string | null; restored: boolean } };
     expect(report.carry.stashed).toBe(STASH_SHA_VALUE);
-    expect(report.carry.restored).toBe(false);
+    expect(report.carry.restored).toBe(true);
+  });
+});
+
+// ── (e-race) the stack moved between the check and the drop ────────────────
+
+describe("another stash lands between the ref check and the drop", () => {
+  it("puts the foreign entry back with 'git stash store', leaves its own on the list, and still exits 0 restored", async () => {
+    const foreign = "ffff000000000000000000000000000000000000";
+    const ref = "stash@{1}";
+    const result = await capture(["warmup", "--branch", BRANCH, "--carry"], {
+      script: carryHappyPath([
+        // Before the drop: a foreign entry on top, this run's own below it.
+        ok(STASH_LIST, `${foreign}\tstash@{0}\n${STASH_SHA_VALUE}\t${ref}\n`),
+        ok(STASH_CHECK(ref), `${STASH_SHA_VALUE}\n`),
+        ok(STASH_DROP(ref)),
+        // After the drop: this run's own SHA is STILL listed -- the drop took the foreign one.
+        ok(STASH_LIST_AFTER, `${STASH_SHA_VALUE}\n`),
+        ok(`git stash store -m restored by nen shu warmup: dropped by mistake while dropping ${STASH_SHA_VALUE} ${foreign}`),
+      ]),
+    });
+    expect(result.code).toBe(0);
+    expect(argvOf(result.seams)).toContain(`git stash store -m restored by nen shu warmup: dropped by mistake while dropping ${STASH_SHA_VALUE} ${foreign}`);
+    const said = result.err.join("\n");
+    expect(said).toMatch(new RegExp(`the drop took ${foreign} instead of ${STASH_SHA_VALUE}`));
+    expect(said).toMatch(/put back with 'git stash store/);
+  });
+
+  it("refuses the drop when the ref no longer names the SHA at the check", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH, "--carry"], {
+      script: carryHappyPath([ok(STASH_CHECK(STASH_REF), "0000000000000000000000000000000000000000\n")]),
+    });
+    expect(result.code).toBe(0);
+    expect(argvOf(result.seams).some((line): boolean => line.startsWith("git stash drop"))).toBe(false);
+    expect(result.err.join("\n")).toMatch(/no longer names/);
   });
 });
 
@@ -342,7 +380,8 @@ describe("--carry under --dry-run", () => {
     expect(printed).toMatch(/would run:\s+git stash push --include-untracked/);
     expect(printed).toMatch(/would run:\s+git stash list --format=%H%x09%s/);
     expect(printed).toMatch(/would run:\s+git stash list --format=%H%x09%gd/);
-    expect(printed).toMatch(/would run:\s+git stash pop/);
+    expect(printed).toMatch(/would run:\s+git stash apply/);
+    expect(printed).not.toMatch(/git stash pop/);
     expect(printed).not.toMatch(/ran:\s+git stash/);
     // The one command a dry run performs at all is the worktree read.
     expect(argvOf(result.seams)).toEqual([WORKTREES]);
@@ -378,6 +417,6 @@ describe("--carry with --tests", () => {
     });
     expect(result.code).toBe(0);
     const argv = argvOf(result.seams);
-    expect(argv.indexOf("pnpm exec vitest run")).toBeLessThan(argv.indexOf(STASH_POP(STASH_REF)));
+    expect(argv.indexOf("pnpm exec vitest run")).toBeLessThan(argv.indexOf(STASH_APPLY(STASH_SHA_VALUE)));
   });
 });

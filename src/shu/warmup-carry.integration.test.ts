@@ -129,12 +129,16 @@ describe.skipIf(!HAVE_GIT)("nen shu warmup --carry, against the real git", () =>
     // left behind, and nothing else is sitting in the stack either.
     expect(mustGit(work, ["stash", "list"])).toBe("");
 
-    // The report itself named a real ref, not the raw SHA -- 'git stash pop'
-    // takes a stash ref (stash@{n}), never a commit object name.
-    expect(result.out.join("\n")).toMatch(/ran: {11}git stash pop stash@\{0\}/);
+    // The restore addressed the object and the drop addressed a real ref --
+    // 'git stash drop' takes a stash ref (stash@{n}), never a commit object
+    // name, and nothing here ran 'git stash pop' at all.
+    const printed = result.out.join("\n");
+    expect(printed).toMatch(/ran: {11}git stash apply [0-9a-f]{40}/);
+    expect(printed).toMatch(/ran: {11}git stash drop stash@\{0\}/);
+    expect(printed).not.toMatch(/git stash pop/);
   });
 
-  it("exits 1, names the SHA and 'git stash apply <sha>', when the carried stash is gone by the time the pop runs", async () => {
+  it("restores anyway when the carried entry is gone from the list by the time the drop is due -- the apply addresses the object", async () => {
     // A declared build that reaches into the SAME repository and drops the
     // very stash this run just pushed -- the real-world shape of "something
     // else touched the stash while warmup was building": a script, a habit, a
@@ -178,23 +182,17 @@ describe.skipIf(!HAVE_GIT)("nen shu warmup --carry, against the real git", () =>
     writeFileSync(join(work, "scratch.md"), "untracked, about to be stranded\n");
 
     const result = await warmup(["warmup", "--repo", work, "--branch", "doomed-idea", "--carry"]);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(0);
 
-    // The branch cut still happened -- the git half is done, and nothing after
-    // the failed pop is undone.
+    // The branch cut happened, and the work is BACK: 'git stash apply <sha>'
+    // takes the commit object, which the drop did not delete.
     expect(mustGit(work, ["branch", "--show-current"])).toBe("doomed-idea");
+    expect(readFileSync(join(work, "README.md"), "utf8")).toBe("root\nedited, about to be stranded\n");
+    expect(readFileSync(join(work, "scratch.md"), "utf8")).toBe("untracked, about to be stranded\n");
 
-    // The stash really is gone: the declared build dropped it for real.
+    // The list really is empty: the declared build dropped the entry for real,
+    // and there was nothing left for this run to drop.
     expect(mustGit(work, ["stash", "list"])).toBe("");
-
-    // The report names the SHA this run recorded right after the push, and the
-    // one recovery command that still works on a raw SHA: 'stash apply'.
-    const said = result.err.join("\n");
-    const shaMatch = /stashed as ([0-9a-f]{40})/.exec(said) ?? /apply ([0-9a-f]{40})/.exec(said);
-    expect(shaMatch).not.toBeNull();
-    const sha = shaMatch?.[1] ?? "";
-    expect(sha).toMatch(/^[0-9a-f]{40}$/);
-    expect(said).toContain(`git stash apply ${sha}`);
-    expect(said).toMatch(/no longer in 'git stash list'|NOT dropped|nothing was popped/i);
+    expect(result.err.join("\n")).toMatch(/no longer on 'git stash list'/);
   });
 });
