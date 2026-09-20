@@ -425,11 +425,16 @@ export const SURFACES: readonly SurfaceRow[] = [
   },
   {
     surface: "antigravity",
-    summary: "SKILL.md under .agents/skills/<name>/, one markdown subagent file per persona",
+    summary: "SKILL.md under skills/<name>/ (a plugin's own layout), one markdown subagent file per persona",
     // ".agent/skills" is the back-compatibility spelling; the documented one is
-    // `.agents/skills`.
+    // `.agents/skills` -- the WORKSPACE location, which is the installer's
+    // target. The mirror itself is laid out as a PLUGIN (S12): the plugins
+    // page documents `plugin.json`, `hooks.json`, `skills/`, `agents/`,
+    // `rules/` at the plugin root, and a global install symlinks the whole
+    // mirror as that root, so the skills go under `skills/` like the
+    // claude-code row's.
     skillsPath: ".agents/skills/<name>/SKILL.md",
-    skillsDir: "",
+    skillsDir: "skills",
     // The page documents `description` as required and `name` as optional.
     skillKeys: ["name", "description"],
     skillRequired: ["description"],

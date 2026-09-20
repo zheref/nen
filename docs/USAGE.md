@@ -8145,7 +8145,7 @@ fields; [#227](https://github.com/zheref/nen/issues/227)) and the verbatim one:
 
 | | `codex` | `cursor` | `antigravity` | `claude-code` |
 |---|---|---|---|---|
-| skills read from | `.agents/skills/<name>/SKILL.md` ([docs](https://learn.chatgpt.com/docs/build-skills)) | `.cursor/skills/<name>/SKILL.md` ([docs](https://cursor.com/docs/context/skills)) | `.agents/skills/<name>/SKILL.md` — `.agent/` is the back-compatibility spelling ([docs](https://antigravity.google/docs/skills)) | `.claude/skills/<name>/SKILL.md`; a plugin ships `skills/` and `agents/` at its root ([docs](https://code.claude.com/docs/en/skills)) |
+| skills read from | `.agents/skills/<name>/SKILL.md` ([docs](https://learn.chatgpt.com/docs/build-skills)) | `.cursor/skills/<name>/SKILL.md` ([docs](https://cursor.com/docs/context/skills)) | `.agents/skills/<name>/SKILL.md` in a workspace — `.agent/` is the back-compatibility spelling ([docs](https://antigravity.google/docs/skills)); the **mirror is laid out as a plugin**, `<out>/skills/<name>/SKILL.md` beside `agents/`, `hooks.json`, `plugin.json` and `rules/` ([plugins](https://antigravity.google/docs/plugins)), because a global install symlinks the whole mirror as the plugin root; the workspace path is the installer's target | `.claude/skills/<name>/SKILL.md`; a plugin ships `skills/` and `agents/` at its root ([docs](https://code.claude.com/docs/en/skills)) |
 | frontmatter kept | `name`, `description` — the page documents no other key — plus nen's own `summary` (below) | `name`, `description`, `paths`, `globs`, `disable-model-invocation`, `icon`, `color`, `metadata` — the documented table, whole — plus `summary` | `name`, `description` | **every key**: the row is the identity |
 | required | `name`, `description` | `name`, `description` | `description` (the page makes `name` optional) | `name`, `description` |
 | invocation spelled | `$<name>` (*"run /skills or type $ to mention a skill"*) | `/<name>` (*"you explicitly type /skill-name in chat"*) | `/<name>` | none: nothing is rewritten |
@@ -8220,7 +8220,8 @@ clears.
 ### `nen surface mirror generate`
 
 Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
-with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
+— `<out>/skills/<name>/SKILL.md` on the two plugin-shaped rows, `antigravity`
+and `claude-code`, whose mirror is a plugin root — with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
 documents, and — with `--invocation-prefix` — every `<prefix><name>` mention
 rewritten into that surface's own spelling. Writes only files whose content
 actually changed, and deletes an orphan whose source is gone (plus the directory

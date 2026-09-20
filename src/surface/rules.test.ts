@@ -57,6 +57,11 @@ describe("the surface table", () => {
   it("keeps every surface's skills path a <name>/SKILL.md shape", () => {
     for (const row of SURFACES) expect(row.skillsPath.endsWith("<name>/SKILL.md")).toBe(true);
   });
+
+  it("lays the two plugin-shaped rows out with skills under skills/, and the two staged ones at the root", () => {
+    const dirs = Object.fromEntries(SURFACES.map((row): [string, string] => [row.surface, row.skillsDir]));
+    expect(dirs).toEqual({ codex: "", cursor: "", antigravity: "skills", "claude-code": "skills" });
+  });
 });
 
 describe("the two rows this release ships", () => {

@@ -281,11 +281,16 @@ describe("the antigravity row", () => {
     const out = tempDir();
     const result = await capture([...generateArgv("antigravity", out), "--json"]);
     expect(result.code).toBe(0);
-    expect(json(result)["written"]).toEqual(["agents/scout.md", "alpha/SKILL.md", "beta/SKILL.md"]);
+    // A plugin's own layout (S12): skills under skills/, beside agents/, hooks.json, plugin.json, rules/.
+    expect(json(result)["written"]).toEqual(["agents/scout.md", "skills/alpha/SKILL.md", "skills/beta/SKILL.md"]);
     const persona = readFileSync(join(out, "agents", "scout.md"), "utf8");
     expect(persona).toContain("tools: Read, Grep, Glob");
     expect(persona).not.toContain("color:");
-    expect(readFileSync(join(out, "alpha", "SKILL.md"), "utf8")).toContain("Run `/alpha` first");
+    expect(readFileSync(join(out, "skills", "alpha", "SKILL.md"), "utf8")).toContain("Run `/alpha` first");
+    // check's universe follows: a regenerate without a source skill deletes it under skills/.
+    const check = await capture([...checkArgv("antigravity", out), "--json"]);
+    expect(check.code).toBe(0);
+    expect(json(check)["ok"]).toEqual(["agents/scout.md", "skills/alpha/SKILL.md", "skills/beta/SKILL.md"]);
     expect(json(result)["skippedAgents"]).toEqual(["_shared.md"]);
   });
 });
