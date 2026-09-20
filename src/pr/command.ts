@@ -49,6 +49,16 @@ import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
 import { fetchPrAndKnownBots, isCollaborator, requestBotReviews, type PrAndKnownBots } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
+import {
+  EXIT_FOR,
+  listThreads,
+  renderThreads,
+  reply as replyToThread,
+  resolve as resolveThread,
+  ThreadsError,
+  THREADS_CONTRACT,
+  type ThreadsReport,
+} from "./threads.js";
 
 function requireTarget(context: CommandContext): Target {
   const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
@@ -79,6 +89,7 @@ nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots id,id] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
+nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict, the first
@@ -205,7 +216,31 @@ edit-body:
   network-free), then prints the target, the number, the byte count and
   the first and last line of the body instead of writing. --json:
   '{ contract: "nen.pr.edit-body/v0.1", target, number, bytes, written,
-  dryRun }'.`;
+  dryRun }'.
+
+threads:
+  The review-thread half of a pull request (zheref/nen#215): 'list' reads
+  every thread, PAGINATED TO COMPLETION and fail-closed exactly as 'fetch'
+  reads them, with each one's id, resolution state, path, line, first
+  comment's author and first 200 characters, and url. 'reply --thread <id>
+  --body-file <path>' posts one reply through GitHub's
+  'addPullRequestReviewThreadReply' mutation; 'resolve --thread <id>' closes
+  one through 'resolveReviewThread'.
+  --thread <id>   The GraphQL node id 'list' prints -- never a position. The
+                  third thread stops being the third one the moment anybody
+                  comments, so there is no positional form.
+  --body-file <path>  Required by 'reply'. The reply's bytes, read raw; a
+                  body typed on a command line is a body nobody reviewed.
+  --dry-run       Prints the exact 'gh api graphql' argv that WOULD run and
+                  writes nothing. The thread is still looked up (so a
+                  non-existent id is still exit 4 and an already-resolved
+                  one still exit 3), because a dry run whose refusals differ
+                  from the real run's proves nothing.
+  Exit codes, as a published contract: 0 done; 1 the API refused; 2 usage;
+  3 the thread is ALREADY RESOLVED, named, with nothing sent; 4 no such
+  thread on this pull request, named; 5 the credential could not
+  authenticate. --json: '{ contract: "nen.pr.threads/v0.1", target, pr,
+  head, thread, replied, resolved, dryRun, threads[] }'.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -334,9 +369,9 @@ function ready(context: CommandContext): Promise<number> {
 
 export const prCommand: Command = {
   name: "pr",
-  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body"],
+  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "threads"],
   summary:
-    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body.",
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, threads.",
   usage: USAGE,
   flags: {
     values: [
@@ -356,6 +391,7 @@ export const prCommand: Command = {
       "add-reviewers",
       "add-bots",
       "body-file",
+      "thread",
     ],
     booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run"],
   },
@@ -370,6 +406,7 @@ export const prCommand: Command = {
       "retarget",
       "request-reviews",
       "edit-body",
+      "threads",
     ]);
     // --no-push sits in this family's shared boolean set (above) only because
     // that set has no per-subcommand table (review finding, PR #141) -- so
@@ -389,11 +426,22 @@ export const prCommand: Command = {
     // earns the identical dry-run-gated shape rather than a bespoke one):
     // a flag left unguarded here would parse cleanly and be silently
     // ignored on every OTHER `pr` subcommand.
-    if (subcommand !== "edit-body" && subcommand !== "request-reviews" && context.args.booleans.has("dry-run")) {
-      throw new VerbUsageError("--dry-run is only read by 'pr edit-body' and 'pr request-reviews'.");
+    if (
+      subcommand !== "edit-body" &&
+      subcommand !== "request-reviews" &&
+      subcommand !== "threads" &&
+      context.args.booleans.has("dry-run")
+    ) {
+      throw new VerbUsageError("--dry-run is only read by 'pr edit-body', 'pr request-reviews' and 'pr threads'.");
     }
-    if (subcommand !== "edit-body" && context.args.values["body-file"] !== undefined) {
-      throw new VerbUsageError("--body-file is only read by 'pr edit-body'.");
+    if (subcommand !== "edit-body" && subcommand !== "threads" && context.args.values["body-file"] !== undefined) {
+      throw new VerbUsageError("--body-file is only read by 'pr edit-body' and 'pr threads reply'.");
+    }
+    // Same shape, same reason: --thread names a review thread and nothing
+    // else in this family has one, so a caller who carried it over from a
+    // 'threads' invocation is told rather than silently ignored.
+    if (subcommand !== "threads" && context.args.values["thread"] !== undefined) {
+      throw new VerbUsageError("--thread is only read by 'pr threads'.");
     }
     if (subcommand !== "request-reviews" && context.args.values["add-bots"] !== undefined) {
       throw new VerbUsageError("--add-bots is only read by 'pr request-reviews'.");
@@ -415,6 +463,8 @@ export const prCommand: Command = {
         return doRetarget(context);
       case "request-reviews":
         return doRequestReviews(context);
+      case "threads":
+        return threads(context);
       default:
         return editBody(context);
     }
@@ -839,4 +889,108 @@ function editBody(context: CommandContext): number {
   }
   context.io.out(`replaced ${target.slug}#${pr}'s body (${bytes} byte(s))`);
   return 0;
+}
+
+// ── threads (zheref/nen#215) ────────────────────────────────────────────────
+//
+// THE ACTION IS A SECOND POSITIONAL, not a third flag. `nen pr threads list`
+// reads as one verb with a mode, which is what it is; a `--resolve` boolean
+// beside a `--reply` boolean would be two flags that can both be given, and
+// this family already has one refusal per silently-ignored flag because that
+// mistake is expensive here.
+//
+// EVERY PATH LISTS FIRST, INCLUDING `--dry-run`. The listing is what turns a
+// bad `--thread` into exit 4 naming it and an already-resolved one into exit 3
+// naming it, instead of a GraphQL error a caller has to read. See
+// ./threads.ts's header for why those two are separate codes at all.
+const THREAD_ACTIONS: readonly string[] = ["list", "reply", "resolve"];
+
+function threads(context: CommandContext): number {
+  const action = context.args.positionals[2];
+  if (action === undefined || !THREAD_ACTIONS.includes(action)) {
+    throw new VerbUsageError(
+      `'pr threads' needs an action: ${THREAD_ACTIONS.join(", ")}. Try 'nen pr threads list --target <owner/name> --pr <n>'.`,
+    );
+  }
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  const dryRun = context.args.booleans.has("dry-run");
+  const threadId = context.args.values["thread"];
+  if (action !== "list" && (threadId === undefined || threadId.trim() === "")) {
+    throw new VerbUsageError(
+      `'pr threads ${action}' takes --thread <id>: the GraphQL node id 'pr threads list' prints. There is no positional form, because the third thread stops being the third one the moment anybody comments.`,
+    );
+  }
+
+  let body = "";
+  if (action === "reply") {
+    const bodyFile = context.args.values["body-file"];
+    if (bodyFile === undefined || bodyFile.trim() === "") {
+      throw new VerbUsageError(
+        "'pr threads reply' takes --body-file <path>: a reply typed on the command line is a reply nobody reviewed, and this one is posted under your identity.",
+      );
+    }
+    // READ RAW AND CHECKED BEFORE ANYTHING IS SENT, exactly as `edit-body`
+    // reads its own body: a --dry-run that did not read the file would not
+    // have proved the one thing a caller wanted proved.
+    body = readTextFile(
+      bodyFile,
+      process.cwd(),
+      "--body-file names the bytes this verb posts as the reply, so an unreadable one is refused rather than posting nothing.",
+      true,
+    );
+    if (body.trim() === "") {
+      throw new VerbUsageError(
+        `--body-file '${bodyFile}' is empty (or holds only whitespace). An empty reply is never what a caller meant, and it is never assumed.`,
+      );
+    }
+  }
+
+  try {
+    const listing = listThreads(context.seams, target, prNumber);
+    let replied = false;
+    let resolved = false;
+    let argv: readonly string[] | null = null;
+    if (action === "reply") {
+      const result = replyToThread(context.seams, target, prNumber, listing, threadId as string, body, dryRun);
+      replied = result.replied;
+      argv = result.argv;
+    } else if (action === "resolve") {
+      const result = resolveThread(context.seams, target, prNumber, listing, threadId as string, dryRun);
+      resolved = result.resolved;
+      argv = result.argv;
+    }
+    const report: ThreadsReport = {
+      contract: THREADS_CONTRACT,
+      target: target.slug,
+      pr: prNumber,
+      head: listing.head,
+      thread: action === "list" ? null : (threadId as string),
+      replied,
+      resolved,
+      dryRun,
+      threads: action === "list" ? listing.threads : [],
+    };
+    const lines =
+      action === "list"
+        ? renderThreads(report)
+        : [
+            ...(argv === null ? [] : [`${dryRun ? "would run" : "ran"}: gh ${argv.join(" ")}`]),
+            `${target.slug}#${prNumber} thread ${threadId as string}: ${
+              dryRun
+                ? "nothing written (dry run)"
+                : action === "reply"
+                  ? "replied"
+                  : "resolved"
+            }`,
+          ];
+    emit(context.io, context.json, report, lines);
+    return 0;
+  } catch (error) {
+    if (error instanceof ThreadsError) {
+      context.io.err(`nen pr threads ${action}: ${error.message}`);
+      return EXIT_FOR[error.kind];
+    }
+    throw error;
+  }
 }

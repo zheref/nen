@@ -39,6 +39,20 @@ export interface RenderOptions {
   /** `--out`, exactly as the caller typed it. */
   readonly out: string;
   readonly dryRun: boolean;
+  /**
+   * Keys merged INTO the data document before the fill -- `--variant`'s
+   * `sections`/`sectionList` and `--graph`'s four graph keys (./command.ts
+   * resolves both; this module only merges them).
+   *
+   * MERGED AT THE ROOT AND NEVER DEEP. A deep merge would let an injected key
+   * silently rewrite a field of the caller's own document, which is the one
+   * thing a verb that "fills a template with YOUR data" must not do; a root
+   * key that collides is the caller's to rename, and the collision is visible
+   * in `injected` below.
+   */
+  readonly inject?: Readonly<Record<string, unknown>>;
+  /** `--variant`'s name, carried into the report for the record. */
+  readonly variant?: string | null;
 }
 
 /**
@@ -56,6 +70,14 @@ export interface RenderReport {
   readonly tokens: readonly string[];
   /** False on `--dry-run`, which writes nothing. */
   readonly written: boolean;
+  /**
+   * `--variant`'s name, or null. KEY ORDER IS THE CONTRACT, so the two fields
+   * this release adds sit at the END: a consumer reading the first five keys
+   * of a v0.11 document reads the same five here (./render.test.ts pins it).
+   */
+  readonly variant: string | null;
+  /** The root keys `--variant`/`--graph` merged in, sorted. Empty for neither. */
+  readonly injected: readonly string[];
 }
 
 /**
@@ -121,11 +143,39 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
     "A template with no bytes fills into a report with no content, which is not a report.",
     true,
   );
-  const data = readJsonFile<unknown>(
+  const read = readJsonFile<unknown>(
     options.data,
     repoRoot,
     "The data document is what every token in the template is answered from; there is no empty default for it.",
   );
+  // THE INJECTION IS APPLIED TO A COPY, never to the file. `report render` has
+  // no write path other than `--out` (./data.ts's sibling rule), and a verb
+  // that rewrote the document it was handed would make two runs of the same
+  // command two different renders.
+  // THE DOCUMENT'S OWN `variant` MUST AGREE WITH `--variant`. A data document
+  // assembled for the landing report and rendered with `--variant turn-fast`
+  // would produce a page that looks right and shows the wrong blocks -- the
+  // exact class of silent wrong answer ./template.ts refuses an unknown token
+  // over. A document that states NONE is fine: not every caller's assembler
+  // writes the key, and an absent field is not a disagreement.
+  if (options.variant != null && typeof read === "object" && read !== null && !Array.isArray(read)) {
+    const stated = (read as Record<string, unknown>)["variant"];
+    if (typeof stated === "string" && stated !== options.variant) {
+      throw new VerbUsageError(
+        `--variant '${options.variant}' disagrees with --data '${options.data}', which states variant '${stated}'. The data document was assembled for one report and is being rendered as another; nen will not pick, because both readings produce a page that looks finished.`,
+      );
+    }
+  }
+  const injected = Object.keys(options.inject ?? {}).sort();
+  const data =
+    injected.length === 0
+      ? read
+      : { ...(typeof read === "object" && read !== null && !Array.isArray(read) ? read : {}), ...options.inject };
+  if (injected.length > 0 && (typeof read !== "object" || read === null || Array.isArray(read))) {
+    throw new VerbUsageError(
+      `--data '${options.data}' is not a JSON object, so there is nothing for --variant/--graph to inject ${injected.join(", ")} into. The data document a template is filled from is an object of tokens; a list or a scalar has no root to merge a key at.`,
+    );
+  }
 
   // A DRY RUN RENDERS TOO, AND THROWS AWAY WHAT IT RENDERED. Listing the tokens
   // and stopping would be a preview that proves only that the template parses --
@@ -166,6 +216,8 @@ export function renderReport(repoRoot: string, options: RenderOptions): RenderRe
     out: options.out,
     tokens,
     written: !options.dryRun,
+    variant: options.variant ?? null,
+    injected,
   };
   return { report, lines: renderLines(report, options) };
 }
@@ -175,6 +227,8 @@ function renderLines(report: RenderReport, options: RenderOptions): readonly str
     `template: ${report.template}`,
     `data: ${options.data}`,
     `out: ${report.out}`,
+    ...(report.variant === null ? [] : [`variant: ${report.variant}`]),
+    ...(report.injected.length === 0 ? [] : [`injected: ${report.injected.join(", ")}`]),
     `tokens: ${report.tokens.length}`,
     ...report.tokens.map((token): string => `  ${token}`),
   ];

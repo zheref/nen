@@ -11,8 +11,7 @@ import {
 import { readJsonFile, splitList } from "../cli/inputs.js";
 import { describeValue, rowLabel } from "../cli/shape.js";
 import { resolveRepoRoot } from "../repo/root.js";
-import { GH, mustJson, type Seams } from "../seam/exec.js";
-import { assembleRows, type RawIssue, type RawPr } from "./fetch.js";
+import { assembleRows, fetchPaginated, MAX_PAGES, type RawIssue, type RawPr } from "./fetch.js";
 import { orderBacklog, type OrderableRow } from "./order.js";
 
 const USAGE = `nen backlog fetch --repo-slug <owner/name> [--limit <n>]
@@ -84,43 +83,10 @@ interface RawGhIssue {
 // GitHub's REST API clamps a single page's `per_page` at 100 -- that is a
 // PAGE SIZE, not a cap, and `fetchPaginated` follows `?page=N` until a page
 // comes back short of it rather than stopping at the first one (review
-// finding).
-const PAGE_SIZE = 100;
-// A defensive ceiling only, never a normal cap: it stops a malformed/looping
-// API response from paginating forever. No real repository's open-issue or
-// open-PR count is expected to approach it, and hitting it is reported as
-// truncated exactly like an explicit --limit would be.
-const MAX_PAGES = 200;
-
-interface PaginatedFetch<T> {
-  readonly items: T[];
-  readonly truncated: boolean;
-}
-
-function fetchPaginated<T>(seams: Seams, pathWithQuery: string, limit: number | null): PaginatedFetch<T> {
-  const items: T[] = [];
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const batch = mustJson<readonly T[]>(seams, GH, [
-      "api",
-      `${pathWithQuery}&per_page=${PAGE_SIZE}&page=${page}`,
-    ]);
-    items.push(...batch);
-    const isLastPage = batch.length < PAGE_SIZE;
-    if (limit !== null && items.length >= limit) {
-      // Genuinely truncated only when there is something left to cut: either
-      // this page overshot the limit on its own (items.length > limit), or
-      // the page that got us to the limit was FULL, so a further page has
-      // not been ruled out. When the limit lands exactly on the true last
-      // (short) page, nothing was actually cut off.
-      const truncated = items.length > limit || !isLastPage;
-      return { items: items.slice(0, limit), truncated };
-    }
-    if (isLastPage) {
-      return { items, truncated: false };
-    }
-  }
-  return { items, truncated: true };
-}
+// finding). It lives in ./fetch.ts, not here, from the day `nen report data
+// --backlog` (../report/objects.ts) became its second caller: "no silent caps"
+// is a property of the READ, and two loops would be two chances to disagree
+// about when a fetch is complete.
 
 function fetch(context: CommandContext): number {
   const repo = requireValue(context.args, "repo-slug", "The owner/name to fetch fresh from.");

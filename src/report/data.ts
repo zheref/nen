@@ -46,6 +46,7 @@ import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
 import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
 import { GIT, normalizeEol, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
+import { matchesPattern } from "./patterns.js";
 
 export const DATA_CONTRACT = "nen.report.data/v0.1";
 
@@ -290,53 +291,16 @@ export function tierOf(path: string, tiers: TierTable | null): string | null {
 }
 
 /**
- * A PREFIX OR A GLOB, decided by whether the pattern has a metacharacter in it.
+ * THE PATH GRAMMAR LIVES IN ./patterns.ts NOW, AND IS RE-EXPORTED HERE.
  *
- * A pattern with no `*` or `?` is a PATH PREFIX, matched on SEGMENT BOUNDARIES:
- * `src/report` claims `src/report/data.ts` and does not claim `src/reporting.ts`
- * -- a bare `startsWith` would claim both, and a tier table that silently
- * over-claims is worse than one that misses, because the over-claim is invisible
- * in the report it produces.
- *
- * A pattern WITH one is a glob, in the narrow shell reading: `?` is one
- * character other than `/`, `*` is any run of characters other than `/`, and
- * `**` crosses separators. This is deliberately not a globbing LIBRARY -- no
- * brace expansion, no character classes, no extglob -- because a tier table is
- * a handful of directory patterns and every construct beyond these is one more
- * thing a report's tier column can be wrong about.
+ * It was this module's own until `nen review scopes` grew a second table in the
+ * same language (`review.scopes`' path lists, ../review/scopes.ts); a second
+ * implementation would be a second grammar the day either widened, and a caller
+ * who writes `hooks/**` once expects it to claim the same paths in both files.
+ * Re-exported rather than merely moved, so every caller that already spells it
+ * `from "./data.js"` goes on reading the one matcher.
  */
-export function matchesPattern(path: string, pattern: string): boolean {
-  if (pattern === "") return false;
-  if (!/[*?]/.test(pattern)) {
-    const prefix = pattern.replace(/\/+$/, "");
-    return path === prefix || path.startsWith(`${prefix}/`);
-  }
-  return globToRegExp(pattern).test(path);
-}
-
-function globToRegExp(pattern: string): RegExp {
-  let source = "";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const character = pattern[index] as string;
-    if (character === "*") {
-      if (pattern[index + 1] === "*") {
-        source += ".*";
-        index += 1;
-        // `a/**/b` must also match `a/b`: the separator after `**` is optional.
-        if (pattern[index + 1] === "/") index += 1;
-        continue;
-      }
-      source += "[^/]*";
-      continue;
-    }
-    if (character === "?") {
-      source += "[^/]";
-      continue;
-    }
-    source += character.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${source}$`);
-}
+export { matchesPattern } from "./patterns.js";
 
 // ── the artifacts under .nen/ and the declaration ───────────────────────────
 

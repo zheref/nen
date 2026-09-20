@@ -11,8 +11,8 @@ binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
 with the `nen` spelling. This document covers the **v0.11.0 line** (one new family, `phase`, and two
 new verbs, `repo classify` and `surface capabilities`; the decision matrix,
-the rich stop and the optional colour file arrive with them): 38 command
-families, 98 verbs, every flag checked against the binary this repository
+the rich stop and the optional colour file arrive with them): 39 command
+families, 101 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -394,9 +394,28 @@ a program.
   "notifications": { "rungs": ["push", "os", "sound"], "sound": "Glass", "turn": "rung1" },
   "commits": { "allowedAttributionTrailers": [], "forbiddenTrailers": [], "runTrailer": null },
   "monitor": { "maxCycles": 20, "pollSeconds": 300 },
-  "models": { "rule": "…", "<surface>": { "<tier>": "<alias>" }, "roles": { "reviewer": "deep" } }
+  "models": { "rule": "…", "<surface>": { "<tier>": "<alias>" }, "roles": { "reviewer": "deep" } },
+  "review": { "scopes": {} }
 }
 ```
+
+**Two blocks with no default at all, added in v0.12.0** (zheref/nen#220), for
+the same reason `models` has none — each would be nen inventing somebody else's
+vocabulary. `reports.sections` declares the report VARIANTS: `{ "<variant>": {
+"template": "<slug>", "blocks": ["<slug>", …] } }`, read by [`report render
+--variant`](#nen-report-render), which injects a presence flag per declared
+block so a template writes `{{#if sections.desk}}…{{/if}}`. A variant must name
+a template and at least one block, and may not name the same block twice — the
+flag is a presence map, so a second mention changes nothing in the render, which
+is exactly why it is refused rather than collapsed. `review.scopes` declares the
+REVIEWERS: `{ "<scope>": { "persona": "<name>", "tier": "<models tier>",
+"budget": <n>, "paths": ["<prefix or glob>", …] } }`, read by [`review
+scopes`](#nen-review-scopes). `persona` and `tier` are validated as *names* and
+never against a list — a persona belongs to somebody's roster and a tier is a
+key of this file's own open `models` matrix — and a scope must claim at least
+one path, because a scope that claims nothing can never be raised by any diff.
+Both blocks are absent-by-default, and both get a row of their own in [`schema
+check`](#nen-schema-check).
 
 That block is the default set, written out: it is exactly what an absent file
 means, and exactly what [`scaffold init`](#nen-scaffold-init) writes (with
@@ -416,6 +435,8 @@ back empty or `null`.
 | `tests.required` / `tests.extra` | which declared verbs a test pass runs | callers |
 | `coverage.minimum` / `recommended` / `ideal` / `scope` | the ladder. Whole percentages `0`–`100`, and they must **ascend** — three rungs whose order is the whole of their meaning | callers |
 | `launch.default` / `launch.fallback` | which `project.launch` target a bare launch uses. No default ever | callers |
+| `reports.sections` | which blocks each report VARIANT renders, and with which template. No default ever | [`report render --variant`](#nen-report-render) |
+| `review.scopes` | which reviewer, at which tier, within which budget, over which paths. No default ever | [`review scopes`](#nen-review-scopes) |
 | `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
 | `notifications.rungs` / `sound` | which escalation rungs a host hook fires | host hooks |
 | `notifications.turn` | how loud an ORDINARY (no-gate) turn is: `"rung1"` (default) rings only the first rung `rungs` lists, `"all"` rings every rung `rungs` lists on every turn. Never widens what `rungs` grants | host hooks |
@@ -569,7 +590,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 98 verbs, grouped as the README groups them. **Reads** is what a
+All 101 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -586,6 +607,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -623,8 +645,10 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
-| [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop | git (rev-parse/symbolic-ref/log/diff), nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file | yes |
-| [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name | caller-named --template + --data files; writes --out, inside --repo, unless --dry-run | yes |
+| [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about | git (rev-parse/symbolic-ref/log/diff), nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
+| [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
+| [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
+| [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout: the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them | caller-named --source + --agents directories; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface) / hand-edited | caller-named --source + --agents + --out; writes nothing at all; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file, agent model key -- as data with a citation per row | nothing; a table this binary ships | yes |
@@ -1338,6 +1362,80 @@ is an issue, ask 'nen issue edit-body' instead.
 Run 'nen pr --help'.
 ```
 exit 2
+
+### `nen pr threads`
+
+A pull request's **review threads**, which are not PR comments and not
+reviews: a thread is anchored to a file and a line, it carries a resolution
+state that exists only over GraphQL, and answering one means
+`addPullRequestReviewThreadReply` against its node id. `list` reads them all,
+`reply` posts one answer, `resolve` closes one.
+
+`list` walks `reviewThreads` **to completion and fail-closed**, exactly as
+[`pr fetch`](#nen-pr-fetch) does and for the same reason: only the literal
+`hasNextPage: false` ends the walk, and a page that neither ends it nor
+carries a usable cursor is an error rather than a stopping point. A partial
+list handed to a loop about to answer "every unresolved thread" is the same
+false-green shape one layer along.
+
+`--thread <id>` is the **GraphQL node id** `list` prints, never a position:
+the third thread stops being the third one the moment anybody comments. Both
+mutations look the thread up first, which is what makes "no such thread" and
+"already resolved" two different answers instead of one GraphQL error — and
+what lets `--dry-run` be truthful about a thread that is not there.
+
+**Usage**
+
+```text
+nen pr threads list --target <owner/name> --pr <n> [--json]
+nen pr threads reply --target <owner/name> --pr <n> --thread <id> --body-file <path> [--dry-run] [--json]
+nen pr threads resolve --target <owner/name> --pr <n> --thread <id> [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | **yes** | the GitHub side | `--repo` names a checkout on disk and never addresses the API |
+| `--pr <n>` | **yes** | the pull request | a positive whole number |
+| `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form |
+| `--body-file <path>` | `reply` | the reply's bytes, read raw | a reply typed on a command line is a reply nobody reviewed; an empty or whitespace-only file is refused |
+| `--dry-run` | no | print the exact `gh api graphql` argv and write nothing | the thread is still looked up, so exits 3 and 4 still fire |
+| `--json` | no | the document | see below |
+
+**Output and exit codes** — `list` prints one line per thread (resolution
+mark, id, `path:line`, author) with the first 200 characters of its opening
+comment under it. `--json` top-level keys: `contract`
+(`nen.pr.threads/v0.1`), `target`, `pr`, `head`, `thread` (the id acted on,
+`null` for `list`), `replied`, `resolved`, `dryRun`, and `threads[]` (`id`,
+`isResolved`, `path`, `line` — `null` on an outdated hunk —, `author`,
+`firstComment`, `url`; empty for the two mutations).
+
+The exit codes are a **published contract**, and they go past 2 on purpose —
+"I resolved it" and "it was already resolved" are different facts, and a
+driving loop that recorded the second as the first would claim credit for
+somebody else's work:
+
+| Code | Meaning |
+|---|---|
+| `0` | done: the list printed, the reply posted, the thread resolved — or `--dry-run` completed |
+| `1` | the API refused (including a GraphQL `200` carrying an `errors` array, which is how a refused mutation actually arrives) |
+| `2` | usage: a missing action, `--target`, `--pr`, `--thread` or `--body-file` |
+| `3` | the thread is **already resolved**, named, with nothing sent |
+| `4` | this pull request carries **no thread with that id**, named, with the thread count |
+| `5` | the credential could not authenticate |
+
+**Example**
+
+```bash
+nen pr threads list --target zheref/nen --pr 217
+```
+```text
+zheref/nen#217 @ 1f4bb2c0: 10 review thread(s), 0 unresolved
+  resolved    PRRT_kwDOPmRi0c5ktVBH  src/report/data.ts:212  @copilot-pull-request-reviewer
+      Consider naming the ref in this refusal.
+  …
+```
 
 <a id="family-gate"></a>
 
@@ -2592,6 +2690,18 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 ```text
 nen schema check --repo <path> [--json]
 ```
+
+**Two POINTER rows from v0.12.0 (zheref/nen#220).** Two rows name a pointer
+rather than a file — `nen/workflow.json#reports.sections` and
+`nen/workflow.json#review.scopes` — and the `#` is what lets a machine reader
+tell them from the file rows. They sit immediately under the policy row they
+read out of and answer a question it does not: whether this repository declares
+the thing [`report render --variant`](#nen-report-render) and [`review
+scopes`](#nen-review-scopes) need, which a warm-up should not have to read a
+coverage ladder to find out. Neither is ever required and neither FAILs on its
+own — a malformed block already fails the policy row by pointer, and a
+repository that declares neither is a repository that has not adopted the two
+verbs, which reads `none declared`.
 
 **Two optional rows from v0.11.0 (zheref/nen#216).** `nen/colors.yml` is **optional**: an absent file is an
 `ok` row reading `absent (optional)` and no longer fails the aggregate -- the verbs that resolve a colour
@@ -7336,6 +7446,8 @@ Every absence is `null` and no absence is a failure — a repository with no cov
 
 ```text
 nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--json]
+nen report data … [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog]
+nen report data … --objects-from <file>
 ```
 
 **Arguments**
@@ -7346,9 +7458,36 @@ nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--j
 | `--base <ref>` | **yes** | what this branch is measured against | the trunk, or the commit the effort was cut from; a ref that does not resolve is refused at exit 2 naming it, with nothing read |
 | `--lane <name>` | no | which declared lane's coverage report and build proof to read | defaults to the declaration's own `defaultLane`; with neither, both fields are `null`. A value that would escape the tree through `.nen/proof/<lane>.json` is refused at exit 2 |
 | `--tiers <file>` | no | a JSON object mapping a tier name to its paths | `{ "<tier>": ["<path prefix or glob>", …] }`. The file's **key order is the precedence** — the first tier whose patterns match a path wins. A pattern with no `*`/`?` is a path **prefix** matched on segment boundaries (`src/report` claims `src/report/data.ts`, never `src/reporting.ts`); one with them is a narrow glob (`*` stops at `/`, `**` crosses it, `?` is one character). Without the flag every file's `tier` is `null` |
+| `--target <owner/name>` | for the live register | the GitHub side of the register | `--repo` names a checkout on disk and never addresses the API. Required as soon as any of the three below is given |
+| `--prs <n,...>` | no | pull requests to read, by number | a comma-separated list of positive whole numbers; a non-numeric entry is refused at exit 2 naming it |
+| `--issues <n,...>` | no | issues to read, by number | same grammar |
+| `--backlog` | no (boolean) | every **open** issue and pull request of `--target` | paginated to completion; a fetch that hits the defensive page ceiling says so on stderr rather than presenting a partial register as whole |
+| `--objects-from <file>` | no | the register, read from a file instead of GitHub | a JSON array of rows already in the published `objects` shape. **Validated at the read seam and refused BY ROW INDEX at exit 2.** Never mixed with the four flags above: a register whose rows came from two authorities says nothing about which row came from which |
 | `--json` | no | the document itself | — |
 
-**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`). Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
+**The `objects` register** is `[]` unless one of those five flags is given,
+which keeps this verb's default shape exactly what it has always been — local,
+four git reads, no network, no token. A pull-request row carries `kind`,
+`number`, `title`, `url`, `state`, `labels[]`, `head`, `mergeStateStatus`,
+`checks` (`total`/`green`/`red`/`pending`, counted over the **latest** run per
+check name, through the same `latestChecks` reduction [`pr
+ready`](#nen-pr-ready) uses), `threads` (`total`/`unresolved`),
+`reviewRequests[]`, `linked[]` (the issue numbers it references) and
+`readiness`. An issue row carries `kind`, `number`, `title`, `url`, `state`,
+`labels[]`, `linked[]` (the pull requests that reference it) and a `readiness`
+that is **always `null`** — CON-32 is a statement about a pull request.
+
+`readiness` says **which authority answered it**, in `source`: `check` when the
+head carries a check run named `readiness` and its output names a verdict line
+(`ready`, or `not-ready: <reason>`, anchored — the word is never hunted for
+inside prose); `computed` when nen's own in-process gate decided it, which is
+[`pr ready`](#nen-pr-ready) called as a function rather than a second reading of
+CON-32; and `null`, with the reason on stderr, when neither could be read — no
+token, an unevaluated gate, an unreachable API. An unevaluated gate has not said
+"not ready"; it has said nothing, and publishing the two as one word is the
+false-red twin of a false green.
+
+**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]`, and `objects[]` — **appended at the end of the key order** in v0.12.0, so a consumer reading the twelve keys before it reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
 
 `evidence` is **an empty list in this release, and the empty list is the seam**: the rows belong to `nen shu evidence --base <ref>`, which reads `project.evidence` (globs, mechanism, a `{suite}-{scene}` template) and which does not exist yet. The field ships now so a template written against this contract does not change shape when the verb lands — `{{#each evidence}}` renders nothing today and renders rows tomorrow. This verb deliberately does **not** glob a tree for them: that answer must come from the one verb that owns `project.evidence`, or the two will disagree the first time a scene template changes.
 
@@ -7395,7 +7534,7 @@ A token the data document has not got is **refused at exit 2 naming it**, becaus
 **Usage**
 
 ```text
-nen report render --template <file> --data <file> --out <file> [--dry-run] [--repo <path>] [--json]
+nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
 ```
 
 **Arguments**
@@ -7406,10 +7545,12 @@ nen report render --template <file> --data <file> --out <file> [--dry-run] [--re
 | `--data <file>` | **yes** | the JSON document every token is answered from | typically [`report data --json`](#nen-report-data)'s output, but any JSON works |
 | `--out <file>` | **yes** | where to write | must resolve **inside** `--repo`, **with symlinks resolved** — a `Reports/` that is a link out of the tree is refused naming the link. Parent directories are created |
 | `--dry-run` | no | print every token the template names and write nothing | it still parses **and renders**, so its refusals are the real run's; a refusal on a dry run also lists the tokens, so the advice to run it is not a loop |
+| `--variant <name>` | no | a variant declared under `reports.sections` in `--repo`'s [`nen/workflow.json`](#nenworkflowjson) | injects `sections` (a presence flag per declared block) and `sectionList` (the block names in the file's own order) into the data document before the fill, **and nothing else**. An undeclared variant is refused at exit 2 naming the declared ones; a `--data` document whose own `variant` key disagrees is refused too. Without the flag nothing at all is injected — v0.11 behaviour byte for byte |
+| `--graph <file>` | no | an architecture-delta graph document | validated whole (see [`report mermaid`](#nen-report-mermaid)) and injected as `graphJson`, `graphMermaid`, `graphNodes` and `graphEdges`. All four together, always, because a template that draws the graph must be able to count on every token it names being there |
 | `--repo <path>` | no | the tree `--out` is checked against | bracketed: defaults to the current directory, which is the tree the report belongs to |
 | `--json` | no | the render report | — |
 
-**Output and exit codes** — human lines: `template:`, `data:`, `out:`, `tokens: <n>` then one indented token per line, then `wrote <out>` or `(dry run) nothing written`. `--json` keys, in this order: `contract` (`nen.report.render/v0.1`), `template`, `out` (both **as the caller typed them**, never resolved — an absolute path in a document destined for a PR body carries a home directory with it), `tokens[]` (first-appearance order, de-duplicated), `written` (`false` on `--dry-run`). Exit 0 on a fill; exit 2 on a missing flag, an `--out` outside the tree, an unreadable template, a `--data` that is not JSON, a tag this language does not have, a block left open, a token the data has not got, or a value with no text form. Nothing is written on any refusal.
+**Output and exit codes** — human lines: `template:`, `data:`, `out:`, `tokens: <n>` then one indented token per line, then `wrote <out>` or `(dry run) nothing written`. `--json` keys, in this order: `contract` (`nen.report.render/v0.1`), `template`, `out` (both **as the caller typed them**, never resolved — an absolute path in a document destined for a PR body carries a home directory with it), `tokens[]` (first-appearance order, de-duplicated), `written` (`false` on `--dry-run`), and — appended in v0.12.0 — `variant` (the name, or `null`) and `injected[]` (the root keys `--variant`/`--graph` merged in, sorted; empty for neither). The injection is a **root** merge onto a copy of the document: nothing is merged deeply and the `--data` file itself is never rewritten. Exit 0 on a fill; exit 2 on a missing flag, an `--out` outside the tree, an unreadable template, a `--data` that is not JSON, a tag this language does not have, a block left open, a token the data has not got, or a value with no text form. Nothing is written on any refusal.
 
 **Example**
 
@@ -7447,6 +7588,144 @@ wrote Reports/effort.html
 <p>93.74% of lines on 'nen'</p>
 ```
 (both run for real, `effort.html` being the six-line template above. Note the escaping: the merge commit's `'origin/main'` came out as `&#39;origin/main&#39;` from a `{{subject}}` cell, which is the default and the point. With a `coverage` of `null` the last paragraph is simply absent — the `{{#if}}` block is skipped, not blanked. The same render with `--out ../escape.html` prints `--out '../escape.html' resolves outside the repository at … 'report render' writes the report INTO the repository it is reporting on and nowhere else` at exit 2)
+
+### `nen report mermaid`
+
+Prints the **mermaid text** for a graph document and nothing else: one file is
+read, nothing is written, and no template is involved. It is the same text
+[`report render --graph`](#nen-report-render) injects as `graphMermaid`, from
+the same validation, so a caller can paste a diagram into a pull-request body
+without rendering a page for it.
+
+The document is the **architecture delta** a model writes — nen has no opinion
+about which modules a session touched and must never grow one. What nen does is
+the half a model is bad at: hold it to a shape, and **refuse an edge whose
+endpoint names a node nobody declared**, at exit 2, naming the row. A dropped
+edge would render a finished-looking diagram missing the arrow that was the
+point of drawing it.
+
+```json
+{ "contract": "nen.report.graph/v0.1",
+  "caption": "one line, model-written",
+  "nodes": [ { "id": "report-render", "label": "nen report render", "kind": "verb", "change": "changed" } ],
+  "edges": [ { "from": "rikugan", "to": "report-render", "rel": "calls", "change": "added" } ] }
+```
+
+`id` is a slug and unique (it becomes a mermaid identifier); `label` is a
+non-empty string; `kind` is a free slug — `module`, `verb`, `file`, `service`,
+`skill`, `agent`, `template`, whatever this repository's vocabulary is;
+`change` is one of `added`, `changed`, `removed`, `unchanged`, on nodes and
+edges alike; `rel` is a short free string and optional; `caption` is optional.
+
+The output is **deterministic and in document order** — nothing is sorted,
+grouped or de-duplicated — because it lands in a published report and two runs
+over an unchanged document must be byte-identical or every re-render is a diff.
+The `classDef` lines carry **stroke weights and no colour**: a colour is the
+consuming repository's, stated in its own `nen/colors.yml` or its own
+stylesheet, and the class names (`added`, `changed`, `removed`) are the whole
+contract a page styles against.
+
+**Usage**
+
+```text
+nen report mermaid --graph <file> [--repo <path>]
+```
+
+**Output and exit codes** — the mermaid text on stdout, and nothing else. There
+is no machine-readable document here and the flag for one is ignored: the text
+IS the output, so wrapping it would make every caller unwrap it before pasting
+it where it was printed for. Exit 0 on a valid document; exit 2 on a missing
+`--graph`, a document that does not name the contract, a malformed node or
+edge, a repeated id, or an edge endpoint that names no declared node.
+
+**Example**
+
+```bash
+nen report mermaid --graph src/report/fixtures/graph.json
+```
+```text
+flowchart LR
+  report-render["nen report render"]:::changed
+  report-graph["src/report/graph.ts"]:::added
+  rikugan["templates/rikugan.html"]:::changed
+  report-render -->|reads| report-graph
+  rikugan -->|filled by| report-render
+  classDef added stroke-width:2px
+  classDef changed stroke-width:2px,stroke-dasharray:0
+  classDef removed stroke-width:1px,stroke-dasharray:4 2
+```
+
+## Reviewers
+
+Which reviewers a branch raises, read off the repository's own declaration. The
+verb classifies and does **not** summon: it opens nothing, requests no review,
+spends no budget and names no gate. A verb that raised a scope *and* summoned
+its reviewer would be a verb whose dry run is a different program from its real
+one.
+
+<a id="family-review"></a>
+
+**`nen review`**
+
+One verb. `scopes` diffs `<base>...HEAD` and reports which rows of
+[`nen/workflow.json`](#nenworkflowjson)'s `review.scopes` block the changed
+paths raise, and which paths no row claims at all.
+
+### `nen review scopes`
+
+Classifies this branch's diff against `<base>...HEAD` — **three dots**, the
+merge-base set a pull request shows, so a trunk that moved on since the branch
+was cut does not raise a reviewer for somebody else's commits — by the
+repository's own `review.scopes` rows.
+
+**A path may raise several scopes**, and that is the design rather than an
+accident: one file can be both an architecture question and a security one. It
+is the opposite of [`report data --tiers`](#nen-report-data), which is
+first-match-wins, and the difference is the question each answers — a file has
+one tier and any number of readers. The path grammar is the same in both: a
+pattern with no `*`/`?` is a prefix matched on segment boundaries, one with
+them is a narrow glob (`*` stops at `/`, `**` crosses it, `?` is one
+character).
+
+**An unclaimed path is reported, never swallowed.** A repository whose table
+has a hole in it — a new directory nobody added to any `paths` list — looks
+exactly like a repository whose diff raised no scope there, and the two are
+opposite findings: one is "nothing to review here", the other is "nobody is
+looking at this".
+
+**Usage**
+
+```text
+nen review scopes --base <ref> [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--base <ref>` | **yes** | what this branch is measured against | a ref that does not resolve is refused at exit 2 naming it, with nothing read — the same refusal [`report data`](#nen-report-data) gives, through the same function |
+| `--repo <path>` | no | the checkout whose `nen/workflow.json` declares the scopes, and whose diff is read | bracketed: defaults to the current directory |
+| `--json` | no | the document | — |
+
+**Output and exit codes** — human lines: a `base` header with the changed-file
+count, then one block per raised scope (its persona, tier and budget, then its
+claimed paths), then the unclaimed list. `--json` top-level keys: `contract`
+(`nen.review.scopes/v0.1`), `base`, `files` (how many paths the diff carried),
+`scopes[]` (`scope`, `persona`, `tier`, `budget`, `paths[]` — **raised scopes
+only, in the declaration's order**, never the diff's) and `unclaimed[]`.
+
+| Code | Meaning |
+|---|---|
+| `0` | the classification, whether or not it raised a scope |
+| `1` | the repository declares **no `review` block**, named, with the pointer to write. Not a usage error: the invocation was right and there is nothing here to classify by |
+| `2` | a missing or unresolvable `--base`, or a malformed `review` block — refused by pointer by the policy loader |
+
+**Example**
+
+```bash
+nen review scopes --base origin/main --repo ../hatsu --json
+```
+
 ## Surfaces
 
 One skills directory, rendered into the layout and frontmatter another agent

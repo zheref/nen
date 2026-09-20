@@ -13,6 +13,8 @@ import {
   DEFAULT_BRANCH_TEMPLATE,
   WORKFLOW_FILE,
   defaultWorkflow,
+  describeReviewScopes,
+  describeSections,
   describeWorkflow,
   loadWorkflow,
   parseWorkflow,
@@ -450,5 +452,147 @@ describe("describeWorkflow", () => {
 describe("the file's own name is stated once", () => {
   it("is under the committed nen/, never the generated .nen/", () => {
     expect(WORKFLOW_FILE).toBe("nen/workflow.json");
+  });
+});
+
+// ── reports.sections and review.scopes (zheref/nen#220) ─────────────────────
+//
+// BOTH BLOCKS ARE VALIDATED FOR SHAPE AND NEVER FOR VOCABULARY, which is the
+// property worth pinning: a variant name, a block name, a persona and a tier
+// are the repository's own words, and a test that asserted nen knew any of
+// them would be a test demanding nen invent somebody's roster.
+
+const SECTIONS = {
+  turn: { template: "rikugan", blocks: ["masthead", "tally", "desk", "lastTurn"] },
+  final: { template: "spiritual-message", blocks: ["masthead", "register", "spend"] },
+};
+
+describe("reports.sections", () => {
+  it("is absent by default, and an absent block is 'none declared' rather than a refusal", () => {
+    expect(defaultWorkflow().reports.sections).toEqual({});
+    expect(parseWorkflow("<doc>", {}).reports.sections).toEqual({});
+    expect(describeSections(parseWorkflow("<doc>", {}))).toBe("none declared");
+  });
+
+  it("reads every declared variant, in the file's own order, and skips a $comment", () => {
+    const workflow = parseWorkflow("<doc>", { reports: { sections: { $comment: "why", ...SECTIONS } } });
+    expect(Object.keys(workflow.reports.sections)).toEqual(["turn", "final"]);
+    expect(workflow.reports.sections["final"]?.template).toBe("spiritual-message");
+    expect(workflow.reports.sections["turn"]?.blocks).toEqual(["masthead", "tally", "desk", "lastTurn"]);
+    expect(describeSections(workflow)).toBe("2 variant(s): turn, final");
+  });
+
+  it("refuses a variant with no blocks -- a report with nothing in it reads as an effort that did nothing", () => {
+    expect(() => parseWorkflow("<doc>", { reports: { sections: { turn: { template: "rikugan", blocks: [] } } } })).toThrow(
+      SchemaError,
+    );
+  });
+
+  it("refuses a REPEATED block rather than collapsing it: the flag is a presence map", () => {
+    expect(() =>
+      parseWorkflow("<doc>", { reports: { sections: { turn: { template: "rikugan", blocks: ["desk", "desk"] } } } }),
+    ).toThrow(/names 'desk' more than once/);
+  });
+
+  it("holds a BLOCK to the template language's own token shape, not to a lowercase slug", () => {
+    // `lastTurn` and `prBody` are what a template author writes, and
+    // `{{#if sections.lastTurn}}` is a token the renderer accepts -- so a
+    // stricter rule here would refuse a name that works.
+    const workflow = parseWorkflow("<doc>", {
+      reports: { sections: { landing: { template: "rikugan", blocks: ["lastTurn", "prBody"] } } },
+    });
+    expect(workflow.reports.sections["landing"]?.blocks).toEqual(["lastTurn", "prBody"]);
+  });
+
+  it("refuses a non-slug variant, a non-token block and a non-slug template by pointer", () => {
+    expect(() => parseWorkflow("<doc>", { reports: { sections: { "Turn Fast": SECTIONS.turn } } })).toThrow(
+      /reports\.sections\.Turn Fast/,
+    );
+    expect(() =>
+      parseWorkflow("<doc>", { reports: { sections: { turn: { template: "rikugan", blocks: ["last turn"] } } } }),
+    ).toThrow(/reports\.sections\.turn\.blocks\[0\]/);
+    expect(() =>
+      parseWorkflow("<doc>", { reports: { sections: { turn: { template: "Rikugan", blocks: ["desk"] } } } }),
+    ).toThrow(/reports\.sections\.turn\.template/);
+  });
+
+  it("is a key `reports` now reads, so a near-miss of it is refused like every other", () => {
+    expect(() => parseWorkflow("<doc>", { reports: { section: SECTIONS } })).toThrow(
+      /is one letter away from 'sections'/,
+    );
+  });
+});
+
+describe("review.scopes", () => {
+  const SCOPES = {
+    code: { persona: "nobunaga", tier: "deep", budget: 2, paths: ["**"] },
+    security: { persona: "feitan", tier: "deep", budget: 1, paths: ["hooks/**"] },
+  };
+
+  it("is absent by default, and an absent block is 'none declared'", () => {
+    expect(defaultWorkflow().review.scopes).toEqual({});
+    expect(describeReviewScopes(parseWorkflow("<doc>", {}))).toBe("none declared");
+  });
+
+  it("reads every scope in declaration order, with its persona, tier, budget and paths", () => {
+    const workflow = parseWorkflow("<doc>", { review: { $comment: "why", scopes: { $comment: "why", ...SCOPES } } });
+    expect(Object.keys(workflow.review.scopes)).toEqual(["code", "security"]);
+    expect(workflow.review.scopes["security"]).toEqual({
+      persona: "feitan",
+      tier: "deep",
+      budget: 1,
+      paths: ["hooks/**"],
+    });
+    expect(describeReviewScopes(workflow)).toBe("2 scope(s): code (nobunaga), security (feitan)");
+  });
+
+  it("defaults a missing budget to one, and admits a budget of zero as a real statement", () => {
+    const workflow = parseWorkflow("<doc>", {
+      review: { scopes: { code: { persona: "n", tier: "deep", paths: ["**"] }, ui: { persona: "h", tier: "fast", budget: 0, paths: ["**/*.css"] } } },
+    });
+    expect(workflow.review.scopes["code"]?.budget).toBe(1);
+    expect(workflow.review.scopes["ui"]?.budget).toBe(0);
+  });
+
+  it("refuses a scope that claims no path -- it could never be raised by any diff", () => {
+    expect(() => parseWorkflow("<doc>", { review: { scopes: { code: { persona: "n", tier: "deep", paths: [] } } } })).toThrow(
+      /review\.scopes\.code\.paths/,
+    );
+  });
+
+  it("refuses an empty persona, an empty tier and an empty pattern by pointer", () => {
+    expect(() => parseWorkflow("<doc>", { review: { scopes: { code: { persona: "  ", tier: "deep", paths: ["**"] } } } })).toThrow(
+      /review\.scopes\.code\.persona/,
+    );
+    expect(() => parseWorkflow("<doc>", { review: { scopes: { code: { persona: "n", tier: " ", paths: ["**"] } } } })).toThrow(
+      /review\.scopes\.code\.tier/,
+    );
+    expect(() => parseWorkflow("<doc>", { review: { scopes: { code: { persona: "n", tier: "deep", paths: [""] } } } })).toThrow(
+      /review\.scopes\.code\.paths\[0\]/,
+    );
+  });
+
+  it("validates a persona and a tier as NAMES and never against a list", () => {
+    // A tier nen has never heard of is fine: `models` is an open map at both
+    // levels, and an enumeration here would be nen inventing a roster.
+    const workflow = parseWorkflow("<doc>", {
+      review: { scopes: { code: { persona: "somebody-new", tier: "a-tier-nobody-shipped", budget: 1, paths: ["**"] } } },
+    });
+    expect(workflow.review.scopes["code"]?.tier).toBe("a-tier-nobody-shipped");
+  });
+
+  it("is a root block now, so a near-miss of it is refused and 'review' itself is preserved", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/is one letter away from 'review'/);
+    expect(parseWorkflow("<doc>", { review: { scopes: {} } }).raw["review"]).toEqual({ scopes: {} });
+  });
+
+  it("refuses a key `review` does not read that is one edit from one it does", () => {
+    expect(() => parseWorkflow("<doc>", { review: { scope: {} } })).toThrow(/is one letter away from 'scopes'/);
+  });
+});
+
+describe("a workflow's ELEVEN blocks", () => {
+  it("says eleven, now that review is one of them", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's eleven blocks are/);
   });
 });
