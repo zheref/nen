@@ -141,6 +141,16 @@ describe("nen usage show -- the ledger and its totals", () => {
     expect(text).toMatch(/cursor\s+in 0  out 0  cache r\/w 0\/0  0 min  \(1 entry, 1 not reported\)/);
   });
 
+  it("keys a total on the (surface, model) tuple, so 'ab'+'c' and 'a'+'bc' are two totals (N11)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-usage-"));
+    await capture(["usage", "record", "--effort", "e", "--surface", "ab", "--model", "c", "--input", "1"], root);
+    await capture(["usage", "record", "--effort", "e", "--surface", "a", "--model", "bc", "--input", "2"], root);
+    await capture(["usage", "record", "--effort", "e", "--surface", "abc", "--input", "4"], root);
+    const show = await capture(["usage", "show", "--effort", "e", "--json"], root);
+    const totals = (JSON.parse(show.out.join("\n")) as { totals: { surface: string; model: string | null; input: number }[] }).totals;
+    expect(totals.map((t): [string, string | null, number] => [t.surface, t.model, t.input])).toEqual([["ab", "c", 1], ["a", "bc", 2], ["abc", null, 4]]);
+  });
+
   it("--json is the ledger plus totals", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-usage-"));
     await capture(["usage", "record", "--effort", "e", "--surface", "codex", "--input", "5"], root);

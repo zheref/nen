@@ -154,7 +154,8 @@ export interface UsageTotal {
 export function totalsOf(ledger: UsageLedger): readonly UsageTotal[] {
   const totals = new Map<string, UsageTotal>();
   for (const entry of ledger.entries) {
-    const key = `${entry.surface}${entry.model ?? ""}`;
+    // A tuple, not a concatenation: `ab`+`c` and `a`+`bc` are two totals (Nobunaga N11).
+    const key = JSON.stringify([entry.surface, entry.model]);
     const current = totals.get(key) ?? {
       surface: entry.surface,
       model: entry.model,
