@@ -73,8 +73,10 @@ const REMOTE_REF = `git ls-remote --heads origin refs/heads/${BRANCH}`;
 const SWITCH = `git switch -c ${BRANCH} origin/main`;
 const DECLARED_BUILD = "pnpm turbo run build";
 const PROOF_TREE = "git add -A -- .";
-const STASH_PUSH = `git stash push --include-untracked -m nen shu warmup --carry ${BRANCH}`;
-const STASH_SHA = "git rev-parse refs/stash";
+const STASH_MESSAGE = `nen shu warmup --carry ${BRANCH} 2026-01-01T00:00:00.000Z#${process.pid}`;
+const STASH_PUSH = `git stash push --include-untracked -m ${STASH_MESSAGE}`;
+/** The find-by-message step right after the push: SHA, tab, subject. */
+const STASH_SHA = "git stash list --format=%H%x09%s";
 const STASH_LIST = "git stash list --format=%H%x09%gd";
 const STASH_POP = (ref: string): string => `git stash pop ${ref}`;
 
@@ -101,7 +103,7 @@ function carryHappyPath(overrides: readonly ScriptedCall[] = []): readonly Scrip
     ok(NAME_OK, `${BRANCH}\n`),
     { match: LOCAL_REF, result: { code: 1 } },
     ok(STASH_PUSH),
-    ok(STASH_SHA, `${STASH_SHA_VALUE}\n`),
+    ok(STASH_SHA, `${STASH_SHA_VALUE}\tOn some-branch: ${STASH_MESSAGE}\n`),
     ok(FETCH),
     ok(ANCESTOR),
     ok(FF_REF),
@@ -338,7 +340,7 @@ describe("--carry under --dry-run", () => {
     expect(result.code).toBe(0);
     const printed = result.out.join("\n");
     expect(printed).toMatch(/would run:\s+git stash push --include-untracked/);
-    expect(printed).toMatch(/would run:\s+git rev-parse refs\/stash/);
+    expect(printed).toMatch(/would run:\s+git stash list --format=%H%x09%s/);
     expect(printed).toMatch(/would run:\s+git stash list --format=%H%x09%gd/);
     expect(printed).toMatch(/would run:\s+git stash pop/);
     expect(printed).not.toMatch(/ran:\s+git stash/);

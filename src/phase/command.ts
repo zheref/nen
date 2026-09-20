@@ -63,7 +63,8 @@ milliseconds and the exit code the caller reports. 'show' prints the ledger.
 
   --effort <id>    The effort this phase belongs to: a branch slug, a PR
                    number, a session id. Letters, digits, '.', '_', '-' and
-                   '/' (a '/' becomes a '-' in the filename).
+                   '/' (a '/' is percent-encoded as '%2F' in the filename, so
+                   'HA/85' and 'HA-85' are two ledgers, never one).
   --phase <name>   The phase: 'breath', 'rasengan', 'kokusen', 'hanten',
                    'review', 'launch', 'report' -- the caller's vocabulary.
   --surface <s>    Which surface ran it (claude-code, codex, cursor,
@@ -79,7 +80,11 @@ effort. 'nen report data' merges every ledger it finds as 'phases[]'.`;
 const EFFORT = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 function ledgerPath(root: string, effort: string): string {
-  return join(root, ...PHASE_LEDGER_DIR.split("/"), `${effort.replaceAll("/", "-")}.json`);
+  // encodeURIComponent is INJECTIVE on the id alphabet: '/' -> '%2F' and
+  // every other admitted character is left as itself, so no two effort ids
+  // share a file. A '/' -> '-' substitution was not (Copilot review on
+  // zheref/nen#217): 'HA/85' and 'HA-85' appended to the same ledger.
+  return join(root, ...PHASE_LEDGER_DIR.split("/"), `${encodeURIComponent(effort)}.json`);
 }
 
 export function readLedger(path: string, effort: string): PhaseLedger {

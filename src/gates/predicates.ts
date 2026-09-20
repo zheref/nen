@@ -985,8 +985,16 @@ export function pendingRounds(
     // `strict` keeps the current-head requirement. A delivery-holistic-pass
     // reviewer keeps the current-head reading under both policies.
     const isDeliveryHolisticPass = deliveryPr && identity?.deliveryHolisticPass === true;
+    // A POSTED round only: a `PENDING` record is a review somebody started
+    // and never submitted, and it can carry `commitId: null` -- counting it
+    // would satisfy CON-32(b) on a PR nobody has reviewed (Copilot review on
+    // zheref/nen#217). `roundAtCurrentHead` already excludes it, since a
+    // null commitId never equals a head SHA.
     const roundAtAnyHead = (): boolean =>
-      inputs.reviews.some((review): boolean => loginPattern.test(review.author));
+      inputs.reviews.some(
+        (review): boolean =>
+          loginPattern.test(review.author) && review.state !== "PENDING" && review.commitId !== null,
+      );
     const roundAtCurrentHead = (): boolean =>
       inputs.reviews.some(
         (review): boolean =>

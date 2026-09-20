@@ -51,6 +51,15 @@ describe("nen watch until reads the target's monitor policy (zheref/nen#216)", (
     expect(result.err.join("\n")).toMatch(/--max-iterations bound \(1\)/);
   });
 
+  it("a declared monitor.maxCycles of 0 means the watch never runs: exit 1, nothing observed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-watch-monitor-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ monitor: { maxCycles: 0, pollSeconds: 300 } }));
+    const result = await capture(["watch", "until", "--command", "gh pr checks 1"], root, new QueueSeams([]));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/maxCycles 0 -- the watch never runs/);
+  });
+
   it("a typed --max-iterations wins over the file", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-watch-monitor-"));
     mkdirSync(join(root, "nen"), { recursive: true });

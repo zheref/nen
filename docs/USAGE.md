@@ -2245,7 +2245,7 @@ phases: [ … ] }`.
 ```
 nen phase begin --effort HA/85 --phase breath --surface codex
 nen phase end   --effort HA/85 --exit 0
-ended breath on 'HA/85' after 7500ms (exit 0) -- /…/.nen/phases/HA-85.json
+ended breath on 'HA/85' after 7500ms (exit 0) -- /…/.nen/phases/HA%2F85.json
 ```
 
 ### `nen warmup`
@@ -2332,7 +2332,7 @@ nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
 
 **The target's `monitor` policy is the default pace (v0.11.0, zheref/nen#216).** When the checkout under
 `--repo` carries a `nen/workflow.json`, `monitor.pollSeconds` (×1000) is the default `--interval-ms` and
-a non-zero `monitor.maxCycles` is the default `--max-iterations`; a typed flag still wins, and a
+a declared `monitor.maxCycles` is the default `--max-iterations` (a declared `0` means the watch never runs: exit 1, nothing observed); a typed flag still wins, and a
 repository with no policy file keeps the old 5000 ms and unbounded defaults. Through v0.10.0 the block
 was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 
@@ -6466,7 +6466,7 @@ nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard | --car
 | `--branch <name>` | **yes** | The branch to cut from the freshly-fetched trunk. | Nen never invents one. Validated with git's own `check-ref-format --branch`, and refused at 2 if it already exists **locally or on `origin`** — never reused, reset or force-moved. A name beginning with `-` is refused before git can read it as an option. |
 | `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
 | `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). **Never together with `--carry`** — exit 2, naming both. |
-| `--carry` | no | The **third door**: preserve uncommitted work (tracked **and** untracked) across the warm-up instead of refusing it or throwing it away. | `git stash push --include-untracked -m "nen shu warmup --carry <branch>"` runs where `--discard`'s reset/clean would — after every free question and before the fetch — and `git rev-parse refs/stash` reads the SHA right afterwards. That SHA is this run's own **identity** for the entry, carried in `carry.stashed` and named in every message from here to the end. On an already-clean tree it is a no-op: no stash command runs at all. Once the branch is cut and the declared build (and, with `--tests`, the declared test) has answered — pass **or** fail — the SHA is **re-resolved to a `stash@{n}` ref** with `git stash list --format=%H%x09%gd`, and `git stash pop <that stash@{n}>` restores it: `git stash pop`/`git stash drop` both **refuse a raw SHA** — only `git stash apply` accepts one — so the ref is looked up fresh at pop time rather than assumed from the push. **Never together with `--discard`** — exit 2, naming both. See [what `--carry` does and does not restore](#what---carry-restores). |
+| `--carry` | no | The **third door**: preserve uncommitted work (tracked **and** untracked) across the warm-up instead of refusing it or throwing it away. | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"` runs where `--discard`'s reset/clean would — after every free question and before the fetch — and `git stash list --format=%H%x09%s` right afterwards finds **that message** and reads its SHA (never `refs/stash`, which names whatever was pushed last by anybody; a message matched by zero or several entries refuses without popping). That SHA is this run's own **identity** for the entry, carried in `carry.stashed` and named in every message from here to the end. On an already-clean tree it is a no-op: no stash command runs at all. Once the branch is cut and the declared build (and, with `--tests`, the declared test) has answered — pass **or** fail — the SHA is **re-resolved to a `stash@{n}` ref** with `git stash list --format=%H%x09%gd`, and `git stash pop <that stash@{n}>` restores it: `git stash pop`/`git stash drop` both **refuse a raw SHA** — only `git stash apply` accepts one — so the ref is looked up fresh at pop time rather than assumed from the push. **Never together with `--discard`** — exit 2, naming both. See [what `--carry` does and does not restore](#what---carry-restores). |
 | `--tests` | no | Also run the lane's declared `test` after the build. | Off by default — a test suite is the slow half and a warm-up is the fast one. The test is skipped when the build did not pass. |
 | `--lane <name>` | no | Which lane the build/test verification runs on. | Defaults to `project.defaultLane`. An unknown lane is refused at 2 **before a single git call** — a caller who mistyped it must not have their working copy cleaned to find out. The lane is then **resolved again** from the declaration on the branch this verb cut, which is the tree the build actually runs in. |
 | `--dry-run` | no | Print every command, in order, and **mutate nothing**. | It performs exactly **one** command and the list is closed: `git worktree list --porcelain`, the one question the plan cannot honestly guess at (see above). Not the fetch, not the status, not a probe. That row carries its real exit code and is labelled `ran:`; every other row is labelled `would run:`, and `dryRun` on the report says which form this is. Two lines still say what a real run would decide differently: that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
@@ -6497,7 +6497,7 @@ that is not a local branch, a name git will not accept, a name that is already a
 | 5 | `git check-ref-format --branch <name>` | git will not accept the name (exit 2, quoting git's own refusal) |
 | 6 | `git show-ref --verify --quiet refs/heads/<name>` | the name is already a local branch (exit 2) |
 | 6a | `git reset --hard`, then `git clean -fd`, then the status read **again** | only with `--discard`, and only when there was something to discard. The re-read refuses at 2 if anything survived — see [below](#what---discard-removes) |
-| 6b | `git stash push --include-untracked -m "nen shu warmup --carry <branch>"`, then `git rev-parse refs/stash` | only with `--carry`, and only when there was something to carry. The push failing refuses at exit 1, quoting it, **before** the fetch or any ref move; a failed SHA read after a successful push refuses the same way — see [below](#what---carry-restores) |
+| 6b | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"`, then `git stash list --format=%H%x09%s` to find that message | only with `--carry`, and only when there was something to carry. The push failing refuses at exit 1, quoting it, **before** the fetch or any ref move; a failed SHA read after a successful push refuses the same way — see [below](#what---carry-restores) |
 | 7 | `git fetch origin` | it fails (exit 1 — a *step* failure, not a refusal) |
 | 8 | `git merge-base --is-ancestor <trunk> origin/<trunk>` | the local trunk has **diverged** (exit 2). A code *above* 1 is git failing to answer and is reported as that, never as "diverged" |
 | 9 | `git merge --ff-only origin/<trunk>` *(this checkout is on the trunk)*, `git branch --force <trunk> origin/<trunk>` *(no worktree holds it)*, or **nothing at all** *(another worktree holds it)* | it fails. Three shapes because git has three: a checked-out branch cannot be moved by `branch --force`, one that is not checked out cannot be advanced by `merge`, and one checked out in **another** worktree cannot be moved from here at all — so it is skipped, named, and step 11 cuts from the fetched ref regardless |
@@ -6528,13 +6528,13 @@ different claims, and only the second one is what the flag promised.
 
 **What `--carry` restores, and when.** It runs `git stash push --include-untracked -m "nen shu warmup
 --carry <branch>"` where `--discard`'s reset/clean would — after every free question, before the fetch —
-then `git rev-parse refs/stash` to read the SHA of what it just pushed.
+then `git stash list --format=%H%x09%s` to find its own message and read the SHA of what it just pushed.
 
 - **Identified by SHA, resolved to a ref at pop time — never a blind `stash@{0}`, and never the raw SHA
   either.** By the time this run reaches its own pop, a fetch, a fast-forward, a checkout and a build sit
   between the push and it; `stash@{0}` is the *top* of the stash stack at whatever moment it is read, and
   any other stash pushed in between — a script, a hook, a habit — would shift it. The SHA read right after
-  the push (`git rev-parse refs/stash`) is this run's own identity for the entry, but `git stash
+  the push (`git stash list`, matched on this run's own message) is this run's own identity for the entry, but `git stash
   pop`/`git stash drop` both **refuse a raw commit SHA** — only `git stash apply` accepts one. So
   immediately before the pop, `git stash list --format=%H%x09%gd` is run and the line whose SHA matches is
   found; **that** `stash@{n}` — re-resolved fresh, at that moment — is what gets popped.
@@ -6613,7 +6613,7 @@ therefore always either empty or exactly one document of the published shape, an
 `--json` is `{ contract, repo, trunk, remote, branch, discard, dryRun, steps, lane, carry, exitCode }`, in
 that order, with `contract: "nen.shu.warmup/v0.1"`. `carry` is
 `{ requested, stashed, carried, restored }`: `requested` is `true` whenever `--carry` was given, whatever
-the tree turned out to hold; `stashed` is the SHA `git rev-parse refs/stash` read right after the push, or
+the tree turned out to hold; `stashed` is the SHA `git stash list` found for this run's own message right after the push, or
 `null` on a clean tree (nothing to carry) or without `--carry` at all; `carried` is the list of paths
 `git status` read **before** the push -- the same evidence `--discard` prints, kept here rather than
 re-derived from the stash's own diff; `restored` is `true` the moment nothing needed restoring and flips
@@ -6665,7 +6665,7 @@ here. exit 0, and the only thing spawned is the `worktree list` — the one row 
 orphan-commit count on line 2 is one of the two a real run may spell differently: it asks it only when
 line 1 comes back empty. With `--discard` the plan gains `git reset --hard`, `git clean -fd` and a second
 `git status` after line 9. With `--carry` instead, the plan gains `git stash push --include-untracked`
-and `git rev-parse refs/stash` in that same spot, and `git stash list --format=%H%x09%gd` followed by a
+and `git stash list --format=%H%x09%s` in that same spot, and `git stash list --format=%H%x09%gd` followed by a
 `git stash pop` line at the very end, after the declared build -- the list step is there because
 `git stash pop` refuses a raw SHA, so a real run re-resolves the ref right before popping rather than
 reusing the one the push read.)
@@ -6763,7 +6763,7 @@ ran:           git stash push --include-untracked -m 'nen shu warmup --carry my-
                carrying 2 uncommitted path(s) across this warm-up, to be restored once it is done:
                  ?? .env  [secret-shape]
                  ?? notes.md
-ran:           git rev-parse refs/stash  -- exit 0 in 6ms
+ran:           git stash list --format=%H%x09%s  -- exit 0 in 6ms
                stashed as 7c3f9a1... -- every step from here addresses it by that SHA, never by 'stash@{0}'
 ```
 ```text
@@ -7294,7 +7294,7 @@ label reading *open / read / view the report* is refused -- the report is LINKED
 filing; with `--mark` it is carried in the marker and written beside it at `.nen/proposed/<at>.json`
 (`nen.stop.proposed-issue/v0.1`) for a later harvest to pick up.
 
-`nen stop show` reads the marker back and validates it -- v0.1 or v0.2, every option executable, one starred,
+`nen stop show` reads the marker back and validates it -- v0.1 or v0.2 with exactly that contract's key set (an absent key is a defect, not a null), every option executable, one starred,
 none naming the report -- at exit 1 naming the first defect, so a hook or a report can rely on the shape.
 `nen stop clear` removes `.nen/last-stop.json` when it exists -- the consumption a Stop hook performs on a
 surface that has one, as a verb for the surfaces that do not. Exit 0 either way; the line says which.

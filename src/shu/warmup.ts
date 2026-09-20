@@ -415,6 +415,18 @@ interface Runner {
   annotate(note: string): void;
 }
 
+/** `git stash list` format for finding this run's own entry: SHA, tab, subject. */
+const STASH_LIST_FORMAT = "%H%x09%s";
+
+/**
+ * The stash message only this run writes: the verb line, the instant and the
+ * pid. `git stash push -m` puts it at the end of the subject ("On <branch>:
+ * <message>"), which is where the push step looks for it.
+ */
+function carryMessage(context: CommandContext, branch: string): string {
+  return `${PROGRAM} shu warmup --carry ${branch} ${context.seams.now().toISOString()}#${process.pid}`;
+}
+
 function gitRunner(context: CommandContext, cwd: string): Runner {
   const steps: WarmupStep[] = [];
   return {
@@ -900,12 +912,12 @@ async function planWarmup(
     );
   } else if (options.carry) {
     plan(
-      ["stash", "push", "--include-untracked", "-m", `${PROGRAM} shu warmup --carry ${options.branch}`],
+      ["stash", "push", "--include-untracked", "-m", carryMessage(context, options.branch)],
       "the third door: would carry uncommitted work (tracked AND untracked) across the warm-up instead of refusing it or throwing it away -- only when the tree turns out dirty. A clean tree has nothing to stash and this step would not run",
     );
     plan(
-      ["rev-parse", "refs/stash"],
-      "would read the SHA of the stash the line above would push, so every step from here on -- including the pop at the end -- addresses it by that SHA rather than by 'stash@{0}'",
+      ["stash", "list", `--format=${STASH_LIST_FORMAT}`],
+      "would read the SHA of the stash the line above would push, found by the message only this run wrote -- never by 'refs/stash', which names whatever was pushed last by anybody -- so every step from here on, including the pop at the end, addresses it by that SHA rather than by 'stash@{0}'",
     );
   }
   plan(["fetch", WARMUP_REMOTE], null);
@@ -1306,7 +1318,13 @@ async function performWarmup(
     if (entries.length === 0) {
       git.annotate("--carry: nothing to carry -- the working copy was already clean");
     } else {
-      const message = `${PROGRAM} shu warmup --carry ${options.branch}`;
+      // THE MESSAGE IS THIS RUN'S OWN MARK. The instant and the pid make it
+      // unique to this process, so the entry is found by its subject below
+      // rather than by `refs/stash` -- which names whatever was pushed LAST,
+      // by anybody: a hook or a second terminal pushing between this push
+      // and a `rev-parse refs/stash` would have handed this run somebody
+      // else's SHA to pop (Copilot review on zheref/nen#217).
+      const message = carryMessage(context, options.branch);
       const pushed = git.run(
         ["stash", "push", "--include-untracked", "-m", message],
         `carrying ${entries.length} uncommitted path(s) across this warm-up, to be restored once it is done:\n${evidence.map((line): string => `  ${line}`).join("\n")}`,
@@ -1319,21 +1337,30 @@ async function performWarmup(
           "Nothing is fetched or the ref moved: the working copy still carries the uncommitted work exactly as it was -- the push never took, so there is nothing to pop back.",
         );
       }
-      // THE SHA, NOT 'stash@{0}'. A stash is a stack, and by the time this run
-      // reaches its own pop -- after a fetch, a fast-forward, a checkout and a
-      // build -- 'stash@{0}' may no longer name what this run pushed: any other
-      // stash pushed in between (by a script, a hook, a habit) shifts every
-      // index below it. The SHA is read once, right here, and addresses this
+      // THE SHA, NOT 'stash@{0}' AND NOT 'refs/stash'. A stash is a stack, and
+      // by the time this run reaches its own pop -- after a fetch, a
+      // fast-forward, a checkout and a build -- 'stash@{0}' may no longer name
+      // what this run pushed: any other stash pushed in between (by a script,
+      // a hook, a habit) shifts every index below it. The SHA is read once,
+      // right here, by the message only this run wrote, and addresses this
       // stash and only this stash for the rest of the run.
-      const stashSha = git.run(["rev-parse", "refs/stash"], null);
-      if (stashSha.code !== 0) {
+      const listed = git.run(["stash", "list", `--format=${STASH_LIST_FORMAT}`], `finding the entry the push above created, by its own message -- never by 'refs/stash', which names whatever was pushed last by anybody`);
+      if (listed.code !== 0) {
         return failedStep(
-          "git rev-parse refs/stash",
-          stashSha,
-          "The push itself succeeded -- the uncommitted work is safe in the stash -- but its SHA could not be read, so this run cannot address it later and refuses rather than guessing at 'stash@{0}'. Run 'git stash list' to find it and 'git stash pop' or 'git stash apply' it back by hand.",
+          "git stash list",
+          listed,
+          "The push itself succeeded -- the uncommitted work is safe in the stash -- but the list could not be read, so this run cannot address it later and refuses rather than guessing at 'stash@{0}'. Run 'git stash list' to find it and 'git stash pop' or 'git stash apply' it back by hand.",
         );
       }
-      carryStashed = stashSha.stdout.trim();
+      const mine = outputLines(listed.stdout).filter((line): boolean => line.split("\t")[1]?.endsWith(message) === true);
+      if (mine.length !== 1) {
+        return failedStep(
+          "git stash list",
+          { ...listed, code: 1, stderr: `${mine.length} entries carry this run's message '${message}'; expected exactly one` },
+          "The push itself succeeded -- the uncommitted work is safe in the stash -- but its entry could not be told apart, so this run refuses rather than popping a guess. Run 'git stash list' to find it and 'git stash pop' or 'git stash apply' it back by hand.",
+        );
+      }
+      carryStashed = (mine[0] as string).split("\t")[0] as string;
       carryCarried = entries.map((entry): string => entry.path);
       // NOT YET RESTORED, and the report says so from this line on: if any
       // step between here and the pop below fails -- the fetch, the

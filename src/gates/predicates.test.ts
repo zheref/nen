@@ -1395,6 +1395,20 @@ describe("pendingRounds (CON-32b owed limb)", () => {
       expect(owed).toEqual([]);
     });
 
+    it("under BOUNDED a PENDING (unsubmitted) record with no commit is NOT a posted round -- the limb still owes it", () => {
+      // A review somebody started and never submitted carries state PENDING
+      // and commitId null; counting it would satisfy CON-32(b) on a PR nobody
+      // reviewed (Copilot review on zheref/nen#217).
+      const owed = pendingRounds(BANKAI,
+        rounds({ reviews: [review({ author: "sasuke-bankai[bot]", state: "PENDING", commitId: null })] }),
+        "headsha",
+        ["sasuke"],
+        "bounded",
+      );
+
+      expect(owedNames(owed)).toEqual(["sasuke"]);
+    });
+
     it("under BOUNDED a round is still owed when NONE was ever posted, at any head", () => {
       const owed = pendingRounds(BANKAI, rounds(), "headsha", ["sasuke"], "bounded");
 

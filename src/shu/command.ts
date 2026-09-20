@@ -514,15 +514,19 @@ flags:
                    naming both). The third door: preserve uncommitted work
                    (tracked AND untracked) across the warm-up instead of
                    refusing it or throwing it away. 'git stash push
-                   --include-untracked -m "nen shu warmup --carry <branch>"'
-                   before the fetch, then 'git rev-parse refs/stash' to record
-                   the SHA that every later step -- including the pop -- reads
-                   it back by, NEVER 'stash@{0}'. A clean tree has nothing to
-                   carry and this is a no-op. Once the branch is cut and the
-                   declared build (and, with --tests, the declared test) has
-                   passed, 'git stash pop <sha>' restores it. If that pop
-                   conflicts or fails, the stash is NOT dropped: nen prints
-                   the SHA and the exact 'git stash pop <sha>' / 'git stash
+                   --include-untracked -m "nen shu warmup --carry <branch>
+                   <instant>#<pid>"' before the fetch, then 'git stash list'
+                   to find THAT message and record its SHA -- never
+                   'refs/stash', which names whatever was pushed last by
+                   anybody -- and every later step reads it back by that SHA,
+                   NEVER 'stash@{0}'. A clean tree has nothing to carry and
+                   this is a no-op. Once the branch is cut and the declared
+                   build (and, with --tests, the declared test) has passed,
+                   the SHA is re-resolved to its stash@{n} and 'git stash pop
+                   stash@{n}' restores it (git's pop and drop refuse a raw
+                   SHA; only apply takes one). If that pop conflicts or
+                   fails, the stash is NOT dropped: nen prints the ref, the
+                   SHA and the exact 'git stash pop stash@{n}' / 'git stash
                    apply <sha>' to run once it is resolved, and exits 1 -- the
                    cut branch stays exactly where it is.
   --tests          'warmup' only. Also run the lane's declared 'test' after the

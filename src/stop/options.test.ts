@@ -113,10 +113,15 @@ describe("nen stop --options / --propose-issue / --report-url -- Crazy Slots (zh
     expect(shown.code).toBe(0);
     expect(shown.out.join("\n")).toMatch(/nen\.stop\.mark\/v0\.2/);
     expect(shown.out.join("\n")).toMatch(/options: 3/);
-    writeFileSync(join(root, MARKER_FILE), JSON.stringify({ contract: STOP_MARK_CONTRACT_V2, who: "k", gate: "G9", notified: true, at: "2026-01-01T00:00:00Z" }));
+    writeFileSync(join(root, MARKER_FILE), JSON.stringify({ contract: STOP_MARK_CONTRACT, who: "k", gate: "G9", notified: true, at: "2026-01-01T00:00:00Z" }));
     const bad = await capture(["stop", "show"], root);
     expect(bad.code).toBe(1);
     expect(bad.err.join("\n")).toMatch(/gate 'G9' is not one of/);
+    // An absent key is not a null: a v0.2 marker missing 'options' is refused, and so is a key no contract names.
+    writeFileSync(join(root, MARKER_FILE), JSON.stringify({ contract: STOP_MARK_CONTRACT_V2, who: "k", gate: "G5", notified: true, at: "2026-01-01T00:00:00Z", title: null, body: null, reportUrl: null, proposedIssue: null }));
+    expect((await capture(["stop", "show"], root)).err.join("\n")).toMatch(/options is missing/);
+    writeFileSync(join(root, MARKER_FILE), JSON.stringify({ contract: STOP_MARK_CONTRACT, who: "k", gate: "G5", notified: true, at: "2026-01-01T00:00:00Z", extra: 1 }));
+    expect((await capture(["stop", "show"], root)).err.join("\n")).toMatch(/unexpected key\(s\) extra/);
     const none = await capture(["stop", "show"], repoWith({}));
     expect(none.code).toBe(0);
     expect(none.out.join("\n")).toMatch(/no marker/);

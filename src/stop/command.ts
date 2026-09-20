@@ -86,6 +86,10 @@ export const STOP_MARK_CONTRACT = "nen.stop.mark/v0.1";
  * caller starts saying more.
  */
 export const STOP_MARK_CONTRACT_V2 = "nen.stop.mark/v0.2";
+/** The v0.1 marker's keys, in written order. */
+const MARKER_KEYS_V1: readonly string[] = ["contract", "who", "gate", "notified", "at"];
+/** What v0.2 adds, in written order; every one present, null when empty. */
+const MARKER_KEYS_V2_EXTRA: readonly string[] = ["title", "body", "reportUrl", "options", "proposedIssue"];
 
 const USAGE = `nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
          [--title <line>] [--body <text>] [--report-url <url>]
@@ -415,12 +419,22 @@ export function parseMarker(document: unknown): { ok: true; marker: Record<strin
   if (contract !== STOP_MARK_CONTRACT && contract !== STOP_MARK_CONTRACT_V2) {
     return { ok: false, reason: `contract is ${JSON.stringify(contract)}; expected '${STOP_MARK_CONTRACT}' or '${STOP_MARK_CONTRACT_V2}'` };
   }
+  // THE KEY SET IS THE CONTRACT. v0.1 is exactly its five keys and v0.2 is
+  // exactly those plus its five, every one PRESENT (null where the stop
+  // carried nothing) -- an absent key is a defect, not a null, and a key
+  // neither contract names is a marker written by something else (Copilot
+  // review on zheref/nen#217).
+  const expected = contract === STOP_MARK_CONTRACT_V2 ? [...MARKER_KEYS_V1, ...MARKER_KEYS_V2_EXTRA] : MARKER_KEYS_V1;
   const str = (key: string): string | null => {
+    if (!Object.hasOwn(m, key)) throw new Error(`${key} is missing`);
     const v = m[key];
     if (v !== null && typeof v !== "string") throw new Error(`${key} must be a string or null`);
-    return (v as string | null | undefined) ?? null;
+    return v as string | null;
   };
   try {
+    for (const key of expected) if (!Object.hasOwn(m, key)) throw new Error(`${key} is missing`);
+    const extra = Object.keys(m).filter((key): boolean => !expected.includes(key));
+    if (extra.length > 0) throw new Error(`unexpected key(s) ${extra.join(", ")} for ${String(contract)}`);
     str("who");
     const gate = str("gate");
     if (gate !== null && !Object.hasOwn(GATE_NAMES, gate)) throw new Error(`gate '${gate}' is not one of ${Object.keys(GATE_NAMES).join(", ")}`);

@@ -38,7 +38,7 @@ describe("nen phase begin|end -- the per-phase timing ledger", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-phase-"));
     const begin = await capture(["phase", "begin", "--effort", "HA/85", "--phase", "breath", "--surface", "codex"], root, "2026-01-01T00:00:00Z");
     expect(begin.code).toBe(0);
-    const path = join(root, PHASE_LEDGER_DIR, "HA-85.json");
+    const path = join(root, PHASE_LEDGER_DIR, "HA%2F85.json");
     expect(existsSync(path)).toBe(true);
 
     const end = await capture(["phase", "end", "--effort", "HA/85", "--exit", "0"], root, "2026-01-01T00:00:07.500Z");
@@ -69,6 +69,16 @@ describe("nen phase begin|end -- the per-phase timing ledger", () => {
     const show = await capture(["phase", "show", "--effort", "x"], root, "2026-01-01T00:00:09Z");
     expect(show.out.join("\n")).toMatch(/2 phase entries/);
     expect(show.out.join("\n")).toMatch(/inner\s+open/);
+  });
+
+  it("'HA/85' and 'HA-85' are two ledgers, never one (the filename encoding is injective)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-phase-"));
+    await capture(["phase", "begin", "--effort", "HA/85", "--phase", "a"], root, "2026-01-01T00:00:00Z");
+    await capture(["phase", "begin", "--effort", "HA-85", "--phase", "b"], root, "2026-01-01T00:00:01Z");
+    const slash = await capture(["phase", "show", "--effort", "HA/85", "--json"], root, "2026-01-01T00:00:02Z");
+    const dash = await capture(["phase", "show", "--effort", "HA-85", "--json"], root, "2026-01-01T00:00:02Z");
+    expect((JSON.parse(slash.out.join("\n")) as { phases: { phase: string }[] }).phases.map((p): string => p.phase)).toEqual(["a"]);
+    expect((JSON.parse(dash.out.join("\n")) as { phases: { phase: string }[] }).phases.map((p): string => p.phase)).toEqual(["b"]);
   });
 
   it("refuses a bad effort id and a negative exit", async () => {

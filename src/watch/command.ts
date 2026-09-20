@@ -13,6 +13,7 @@ import type { CommandResult } from "../seam/exec.js";
 import { watchUntil, type WatchResult } from "./until.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { PROGRAM } from "../version.js";
 
 const USAGE = `nen watch until -- izanami's loop: fetch, evaluate, report one line, pace, stop.
 
@@ -52,7 +53,8 @@ usage:
                   minutes; a tighter interval just spends quota.
   --max-iterations  a SAFETY bound, not izanagi's mandatory cap (izanami needs
                   none -- it can compound no mistake). Default: the target's
-                  'monitor.maxCycles' when declared and non-zero, else
+                  'monitor.maxCycles' when declared (a declared 0 means the
+                  watch never runs: exit 1 with nothing observed), else
                   unbounded; three consecutive observation ERRORS stop the run
                   regardless.
 
@@ -107,13 +109,17 @@ export const watchCommand: Command = {
     }
     const maxRaw = context.args.values["max-iterations"];
     const maxIterations =
-      maxRaw === undefined
-        ? monitor === null || monitor.maxCycles === null || monitor.maxCycles === 0
-          ? undefined
-          : monitor.maxCycles
-        : Number(maxRaw);
-    if (maxIterations !== undefined && (!Number.isInteger(maxIterations) || maxIterations <= 0)) {
+      maxRaw === undefined ? (monitor === null || monitor.maxCycles === null ? undefined : monitor.maxCycles) : Number(maxRaw);
+    if (maxRaw !== undefined && (!Number.isInteger(maxIterations) || (maxIterations as number) <= 0)) {
       throw new VerbUsageError("--max-iterations must be a positive integer.");
+    }
+    // A DECLARED ZERO IS A LOOP THAT NEVER RUNS -- workflow.ts admits it for
+    // exactly that meaning, and reading it as "absent" would make the watch
+    // UNBOUNDED, the opposite of what the file says (Copilot review on
+    // zheref/nen#217). Nothing is observed; the bound is reported reached.
+    if (maxIterations === 0) {
+      context.io.err(`${PROGRAM} watch until: nen/workflow.json declares monitor.maxCycles 0 -- the watch never runs. Type --max-iterations to watch anyway.`);
+      return 1;
     }
 
     const thresholdRaw = context.args.values["error-exit-threshold"];
