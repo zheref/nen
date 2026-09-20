@@ -41,6 +41,7 @@ import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
 import { proofRelativePath } from "../shu/proof.js";
 import { PHASE_CONTRACT, PHASE_LEDGER_DIR } from "../phase/ledger.js";
+import { USAGE_CONTRACT, USAGE_LEDGER_DIR } from "../usage/ledger.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
 import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
@@ -128,6 +129,33 @@ export interface ReportData {
   readonly phases: readonly ReportPhase[];
   /** `.nen/last-stop.json`, verbatim, or null. */
   readonly lastStop: unknown;
+  /**
+   * Every usage ENTRY from every `.nen/usage/<effort>.json` ledger `nen usage
+   * record` wrote, flattened with its `effort`, in filename then entry order
+   * (zheref/nen#227). APPENDED AT THE END of the v0.12 key order, after
+   * `lastStop` -- ../report/command.ts appends `objects` after it -- so a
+   * consumer reading the earlier keys reads the same document it always did.
+   * Empty when the directory is absent; a file that does not carry the ledger
+   * contract is skipped with a warning, never rendered as a spend it did not
+   * read.
+   */
+  readonly usage: readonly ReportUsage[];
+}
+
+/** KEY ORDER IS THE CONTRACT; ./data.test.ts pins it. */
+export interface ReportUsage {
+  readonly effort: string;
+  readonly recordedAt: string;
+  readonly surface: string;
+  readonly model: string | null;
+  readonly input: number | null;
+  readonly output: number | null;
+  readonly cacheRead: number | null;
+  readonly cacheWrite: number | null;
+  readonly minutes: number | null;
+  readonly source: string | null;
+  readonly note: string | null;
+  readonly notReported: boolean;
 }
 
 export interface DataOptions {
@@ -471,7 +499,48 @@ export function assembleData(
     phases: readPhaseLedgers(root, warn),
     /* c8 ignore next -- containedPath cannot reject a literal relative path */
     lastStop: lastStop === null ? null : readJsonArtifact(lastStop, ".nen/last-stop.json", warn),
+    usage: readUsageLedgers(root, warn),
   };
+}
+
+/** Every usage entry under `.nen/usage/`, flattened, filename then entry order. */
+export function readUsageLedgers(root: string, warn: (line: string) => void): readonly ReportUsage[] {
+  const dir = join(root, ...USAGE_LEDGER_DIR.split("/"));
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
+  } catch {
+    return [];
+  }
+  const rows: ReportUsage[] = [];
+  const string = (value: unknown): string | null => (typeof value === "string" ? value : null);
+  const number = (value: unknown): number | null => (typeof value === "number" ? value : null);
+  for (const name of names) {
+    const display = `${USAGE_LEDGER_DIR}/${name}`;
+    const doc = readJsonArtifact(join(dir, name), display, warn) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
+    if (doc === null) continue;
+    if (doc.contract !== USAGE_CONTRACT || typeof doc.effort !== "string" || !Array.isArray(doc.entries)) {
+      warn(`${display}: not a '${USAGE_CONTRACT}' ledger -- skipped`);
+      continue;
+    }
+    for (const entry of doc.entries as Record<string, unknown>[]) {
+      rows.push({
+        effort: doc.effort,
+        recordedAt: String(entry["recordedAt"] ?? ""),
+        surface: String(entry["surface"] ?? ""),
+        model: string(entry["model"]),
+        input: number(entry["input"]),
+        output: number(entry["output"]),
+        cacheRead: number(entry["cacheRead"]),
+        cacheWrite: number(entry["cacheWrite"]),
+        minutes: number(entry["minutes"]),
+        source: string(entry["source"]),
+        note: string(entry["note"]),
+        notReported: entry["notReported"] === true,
+      });
+    }
+  }
+  return rows;
 }
 
 /** Every phase entry under `.nen/phases/`, flattened, filename then entry order. */
@@ -528,6 +597,8 @@ export function renderData(data: ReportData): readonly string[] {
   lines.push(`proof: ${data.proof === null ? "none" : "present"}`);
   lines.push(`phases: ${data.phases.length === 0 ? "none recorded" : `${data.phases.length} entr${data.phases.length === 1 ? "y" : "ies"}`}`);
   lines.push(`last stop: ${data.lastStop === null ? "none" : "present"}`);
+  const notReported = data.usage.filter((entry): boolean => entry.notReported).length;
+  lines.push(`usage: ${data.usage.length} entr${data.usage.length === 1 ? "y" : "ies"}, ${notReported} not reported`);
   return lines;
 }
 

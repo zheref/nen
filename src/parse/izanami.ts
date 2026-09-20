@@ -1357,6 +1357,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       until: RO("re-classifies its own --command against this very table before the first observation"),
     },
   },
+  usage: {
+    subcommands: {
+      record: MUT("appends an entry to the .nen/usage/<effort>.json ledger -- a local write, but a write"),
+      show: RO("prints the ledger and its totals; reads one file"),
+    },
+  },
   wc: {
     subcommands: {
       classify: RO("classifies the working copy over git reads"),

@@ -9,11 +9,12 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.12.0 line** (one new family, `review`, and three
-new verbs, `review scopes`, `report mermaid` and `pr threads`; the report
-register, the report variants and the architecture-delta graph arrive with
-them): 39 command
-families, 101 verbs, every flag checked against the binary this repository
+with the `nen` spelling. This document covers the **v0.13.0 line** (one new family, `usage`, and five
+new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
+`commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
+leaves on an open phase, the pinned stall rule and the `profile` policy key
+arrive with them): 40 command
+families, 102 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -594,7 +595,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 101 verbs, grouped as the README groups them. **Reads** is what a
+All 102 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -627,6 +628,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file and explicit caps | local file (--efforts) | yes |
 | [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `.nen/loop/<id>.json` under --repo (reads and writes) | yes |
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `.nen/phases/<effort>.json` under --repo (reads and writes); no git/gh | yes |
+| [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
@@ -2354,6 +2356,68 @@ phases: [ … ] }`.
 nen phase begin --effort HA/85 --phase breath --surface codex
 nen phase end   --effort HA/85 --exit 0
 ended breath on 'HA/85' after 7500ms (exit 0) -- /…/.nen/phases/HA%2F85.json
+```
+
+
+<a id="family-usage"></a>
+
+**`nen usage`**
+
+Records what an effort COST, beside what [`nen phase`](#nen-phase) records
+about how long it took: which surface ran, which model alias, the token
+counts the surface exposed, the wall minutes, and where the numbers came
+from. Nen reads nothing from a surface and prices nothing — the caller types
+what it obtained, and a surface that exposes nothing says so.
+
+### `nen usage`
+
+`nen usage record|show` -- the per-effort usage ledger (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)).
+One JSON file per effort under `.nen/usage/<effort>.json` (generated output, gitignored), contract
+`nen.usage.ledger/v0.1`; `record` appends ONE entry per call, stamped with the invocation's clock, and
+`show` prints the ledger and the totals per surface and model.
+
+```
+nen usage record --effort <id> --surface <s> [--model <alias>]
+                 [--input <n>] [--output <n>] [--cache-read <n>] [--cache-write <n>]
+                 [--minutes <n>] [--source <text>] [--note <text>] [--not-reported] [--repo <path>] [--json]
+nen usage show   --effort <id> [--repo <path>] [--json]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--effort <id>` | the effort — the same id `nen phase` takes (letters, digits, `.`, `_`, `-`, `/`; a `/` is percent-encoded in the filename), so one effort names both ledgers |
+| `--surface <s>` | which surface ran (`claude-code`, `codex`, `cursor`, `antigravity`), recorded verbatim |
+| `--model <alias>` | which model alias ran, recorded verbatim; `null` when absent |
+| `--input` / `--output` / `--cache-read` / `--cache-write <n>` | token counts, non-negative whole numbers; each is `null` when absent, never `0` — zero is a measurement and null is the absence of one |
+| `--minutes <n>` | wall minutes, a non-negative number |
+| `--source <text>` | where the numbers came from, in your own words: `claude /cost`, `codex session log`, `gh actions timing` |
+| `--note <text>` | one free-text line kept on the entry |
+| `--not-reported` | this surface exposed no numbers: every count is recorded `null` and `notReported` is `true`. Given together with ANY number it is refused at exit 2 — a surface either reported or it did not |
+
+An entry with no number and no `--not-reported` is refused at exit 2 (it would record nothing about
+anything), as is a bad count or an effort id outside the alphabet. A ledger file that is present and does
+not carry the contract is exit 1, never appended to. `show` on an effort with no ledger is exit 0 with zero
+entries.
+
+**`--json`** — `record` emits `{ path, entry }`; `show` emits the ledger plus its totals:
+`{ contract: "nen.usage.ledger/v0.1", effort, entries: [{ recordedAt, surface, model, input, output,
+cacheRead, cacheWrite, minutes, source, note, notReported }], totals: [{ surface, model, entries,
+notReported, input, output, cacheRead, cacheWrite, minutes }] }`. A `null` number adds nothing to a total.
+[`nen report data`](#nen-report-data) merges every ledger it finds as `usage[]`, one row per entry carrying
+its `effort`.
+
+```
+nen usage record --effort HA/85 --surface claude-code --model opus --input 1200 --output 300 --cache-read 9000 --minutes 7.5 --source "claude /cost"
+recorded claude-code/opus on 'HA/85' -- /…/.nen/usage/HA%2F85.json
+nen usage record --effort HA/85 --surface cursor --not-reported
+recorded cursor on 'HA/85' (not reported) -- /…/.nen/usage/HA%2F85.json
+nen usage show --effort HA/85
+effort: HA/85 (2 usage entries)
+  2026-09-20T10:00:00.000Z  claude-code/opus         in 1200  out 300  cache r/w 9000/-  7.5 min  (claude /cost)
+  2026-09-20T10:00:00.000Z  cursor                   not reported
+totals:
+  claude-code/opus         in 1200  out 300  cache r/w 9000/0  7.5 min  (1 entry)
+  cursor                   in 0  out 0  cache r/w 0/0  0 min  (1 entry, 1 not reported)
 ```
 
 ### `nen warmup`
@@ -7515,7 +7579,7 @@ token, an unevaluated gate, an unreachable API. An unevaluated gate has not said
 "not ready"; it has said nothing, and publishing the two as one word is the
 false-red twin of a false green.
 
-**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]`, and `objects[]` — **appended at the end of the key order** in v0.12.0, so a consumer reading the twelve keys before it reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
+**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]`, then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), and `objects[]` — **appended at the end of the key order** in v0.12.0 and kept last, so a consumer reading the twelve keys before them reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
 
 `evidence` is **an empty list in this release, and the empty list is the seam**: the rows belong to `nen shu evidence --base <ref>`, which reads `project.evidence` (globs, mechanism, a `{suite}-{scene}` template) and which does not exist yet. The field ships now so a template written against this contract does not change shape when the verb lands — `{{#each evidence}}` renders nothing today and renders rows tomorrow. This verb deliberately does **not** glob a tree for them: that answer must come from the one verb that owns `project.evidence`, or the two will disagree the first time a scene template changes.
 
