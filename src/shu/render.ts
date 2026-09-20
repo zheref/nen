@@ -1287,6 +1287,16 @@ function bareStep(
  */
 export function renderArgv(step: { readonly exe: string; readonly argv: readonly string[] }): string {
   return [step.exe, ...step.argv]
-    .map((token): string => (/[\s'"]/.test(token) ? `'${token.replace(/'/g, "'\\''")}'` : token))
+    .map((token): string => (/[\s'"]/.test(token) ? shellSingleQuote(token) : token))
     .join(" ");
+}
+
+/**
+ * `value` as ONE POSIX-shell word inside single quotes: every `'` in it becomes
+ * `'\''` (close, an escaped quote, reopen), which is the only escape a
+ * single-quoted word has. This is the rule `renderArgv` prints with and the
+ * rule ../surface/packs.ts wraps a hook command with -- one owner, two users.
+ */
+export function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

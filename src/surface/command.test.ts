@@ -331,11 +331,15 @@ describe("--hooks", () => {
     const result = await capture([...generateArgv("antigravity", out, ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", root]), "--json"]);
     expect(result.code).toBe(0);
     const doc = JSON.parse(readFileSync(join(out, "hooks.json"), "utf8")) as { hooks: Record<string, { hooks: { command: string }[] }[]> };
-    expect(doc.hooks["Stop"]?.[0]?.hooks[0]?.command).toBe(`sh -c 'exec "${root}/hooks/bell.hook" "$@"' --`);
+    expect(doc.hooks["Stop"]?.[0]?.hooks[0]?.command).toBe(`sh -c 'exec "${root}"/hooks/bell.hook' --`);
     // A command with no `$` left is not wrapped.
     expect(doc.hooks["PreInvocation"]?.[0]?.hooks[0]?.command).toBe("sh -c 'echo warm'");
     const literal = await capture([...generateArgv("cursor", tempDir(), ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", "/opt/demo"]), "--json"]);
     expect(literal.code).toBe(0);
+    // A root the wrapper cannot hold is refused at exit 2, naming the character.
+    const unsafe = await capture(generateArgv("cursor", tempDir(), ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", '/opt/"demo']));
+    expect(unsafe.code).toBe(2);
+    expect(unsafe.err.join("\n")).toMatch(/carries a double quote/);
     // check with the same flags is clean; with a different root it is hand-edited.
     expect((await capture(checkArgv("antigravity", out, ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", root]))).code).toBe(0);
     const other = await capture([...checkArgv("antigravity", out, ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", "/elsewhere"]), "--json"]);

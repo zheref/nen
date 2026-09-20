@@ -131,10 +131,14 @@ ${SURFACE_LIST}
                               events renamed to the surface's own; a surface
                               with no hooks reports 'hooks: not supported'.
   --hooks-root <expr>         What '\${CLAUDE_PLUGIN_ROOT}' in a --hooks command
-                              becomes; a rebased command still carrying a '$'
-                              is wrapped as sh -c 'exec "<command>" "$@"' --
-                              so a surface with no shell expands it. Refused
-                              on the verbatim row. The scripts a command names
+                              becomes, double-quoted inside the command when
+                              it has whitespace or expands; a command still
+                              carrying a '$' (or a quoted root) is wrapped as
+                              sh -c 'exec <command>' -- so a surface with no
+                              shell expands it. Refused on the verbatim row,
+                              and for a root or command carrying '"', a
+                              backtick, '$(', a backslash or a newline. The
+                              scripts a command names
                               as <root>/hooks/<file> are copied beside the
                               manifest to <out>/hooks/<file> (mode 755, marker
                               on line 2) on every non-verbatim row.

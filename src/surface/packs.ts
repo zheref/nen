@@ -21,6 +21,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { parseModels } from "../schema/workflow.js";
+import { shellSingleQuote } from "../shu/render.js";
 import { hasValue, inlineValue, type FrontmatterEntry } from "./frontmatter.js";
 import type { SurfaceRow } from "./rules.js";
 
@@ -211,20 +212,58 @@ export function renderHookScript(script: HookScript, marker: string): string {
 }
 
 /**
- * A command with `${CLAUDE_PLUGIN_ROOT}` replaced by `root` -- and, when the
- * result still carries a `$`, wrapped as `sh -c 'exec "<command>" "$@"' --`,
- * so a surface that does not run a hook through a shell still expands the
- * expression. A command that cannot sit inside those single quotes is refused.
+ * The characters a root expression or a hook command may not carry into the
+ * `sh -c` wrapper, each with the reason the refusal names. A `"` would close
+ * the double quotes the root is wrapped in; a backtick or `$(` would run a
+ * command inside them; a backslash is an escape whose meaning depends on the
+ * shell that reads it; a newline ends the command early.
+ */
+const UNSAFE_IN_WRAPPER: readonly (readonly [RegExp, string])[] = [
+  [/"/, 'a double quote (")'],
+  [/`/, "a backtick (`)"],
+  [/\$\(/, "a command substitution ($()"],
+  [/\\/, "a backslash (\\)"],
+  [/\n|\r/, "a newline"],
+];
+
+function refuseUnsafe(what: string, value: string): void {
+  for (const [pattern, name] of UNSAFE_IN_WRAPPER) {
+    if (pattern.test(value)) {
+      throw new SurfacePackError(
+        `--hooks-root: ${what} ${JSON.stringify(value)} carries ${name}, which the sh -c wrapper cannot hold safely. Remove it, or keep the command free of it.`,
+      );
+    }
+  }
+}
+
+/** True when `root` needs double quotes to survive a shell as ONE word: whitespace, or anything that expands. */
+function rootNeedsQuoting(root: string): boolean {
+  return /[^A-Za-z0-9_./:@%+=,-]/.test(root);
+}
+
+/**
+ * A command with `${CLAUDE_PLUGIN_ROOT}` replaced by `root` -- the root
+ * wrapped in double quotes INSIDE the command (`"<root>"/hooks/x.sh --mode
+ * $MODE`) when it carries whitespace or an expression, so that a root such
+ * as `${X:-$HOME/p}` expands to one word and a root with a space stays one
+ * word, while the command's own arguments stay separate words. When the
+ * result still carries a `$` or the root was quoted, the WHOLE command is
+ * emitted as `sh -c '<command>' --` with the single-quote rule
+ * (../shu/render.ts's `shellSingleQuote`) applied to the payload, so a
+ * surface that does not run a hook through a shell still gets one. A root
+ * or command that cannot sit inside the wrapper is refused, naming the
+ * character (Feitan S3 / Nobunaga N2).
  */
 export function rebaseCommand(command: string, root: string): string {
-  const rebased = command.split(SOURCE_ROOT_VARIABLE).join(root);
-  if (!rebased.includes("$")) return rebased;
-  if (rebased.includes("'")) {
-    throw new SurfacePackError(
-      `--hooks-root: the command ${JSON.stringify(command)} rebases to one carrying a single quote, which the sh -c wrapper cannot hold. Quote the expression differently, or keep the command free of quotes.`,
-    );
-  }
-  return `sh -c 'exec "${rebased}" "$@"' --`;
+  const quoted = rootNeedsQuoting(root);
+  const substitution = quoted ? `"${root}"` : root;
+  const references = command.includes(SOURCE_ROOT_VARIABLE);
+  const rebased = references ? command.split(SOURCE_ROOT_VARIABLE).join(substitution) : command;
+  // A command that neither expands nor received a quoted root is carried as it was.
+  if (!rebased.includes("$") && !(quoted && references)) return rebased;
+  refuseUnsafe("the root expression", root);
+  refuseUnsafe("the command", command);
+  return `sh -c ${shellSingleQuote(`exec ${rebased}`)} --`;
 }
 
 type HooksRule = NonNullable<SurfaceRow["hooks"]>;

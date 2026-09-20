@@ -3,7 +3,8 @@
 // ./fixtures/packs and the rows in ./rules.ts.
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { splitDocument } from "./frontmatter.js";
@@ -120,13 +121,47 @@ describe("hooks", () => {
     expect(() => readHookScripts({ ...manifest, dir: join(PACKS, "nowhere") })).toThrow(/is not a file/);
   });
 
-  it("rebases the root variable, wrapping only a command that still expands", () => {
+  it("rebases the root variable, quoting the root INSIDE the command and wrapping only what still expands", () => {
     expect(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", "/opt/p")).toBe("/opt/p/hooks/x.sh");
-    expect(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", "${ROOT:-$HOME/p}")).toBe(`sh -c 'exec "\${ROOT:-$HOME/p}/hooks/x.sh" "$@"' --`);
-    expect(rebaseCommand("echo $HOME", "/opt/p")).toBe(`sh -c 'exec "echo $HOME" "$@"' --`);
-    expect(() => rebaseCommand("echo 'a' $B", "/opt/p")).toThrow(/single quote/);
+    // The root is one double-quoted word; the command's own arguments stay separate words (N2).
+    expect(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", "${ROOT:-$HOME/p}")).toBe(`sh -c 'exec "\${ROOT:-$HOME/p}"/hooks/x.sh' --`);
+    expect(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh --mode $MODE", "${ROOT:-$HOME/p}")).toBe(`sh -c 'exec "\${ROOT:-$HOME/p}"/hooks/x.sh --mode $MODE' --`);
+    expect(rebaseCommand("echo $HOME", "/opt/p")).toBe(`sh -c 'exec echo $HOME' --`);
+    // A root with a space is quoted and wrapped even with no `$` anywhere.
+    expect(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", "/opt/my plugin")).toBe(`sh -c 'exec "/opt/my plugin"/hooks/x.sh' --`);
+    // A single quote is no longer a refusal: the payload carries it as '\''.
+    expect(rebaseCommand("echo 'a' $B", "/opt/p")).toBe(`sh -c 'exec echo '\\''a'\\'' $B' --`);
     const rebased = JSON.parse(renderHooks(must(row("cursor").hooks), manifest, MARKER, "/opt/p")) as { hooks: Record<string, { command: string }[]> };
     expect(rebased.hooks["stop"]).toEqual([{ command: "/opt/p/hooks/bell.hook" }]);
+  });
+
+  it("refuses, naming the character, a root or command the wrapper cannot hold (S3)", () => {
+    expect(() => rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", '/opt/"p')).toThrow(/root expression.*carries a double quote/);
+    expect(() => rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", "$(id)")).toThrow(/carries a command substitution/);
+    expect(() => rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", "`id`")).toThrow(/carries a backtick/);
+    expect(() => rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh", "/opt/p\\x")).toThrow(/carries a backslash/);
+    expect(() => rebaseCommand("echo \"$X\"", "/opt/p")).toThrow(/the command.*carries a double quote/);
+    expect(() => rebaseCommand("echo $X\necho y", "/opt/p")).toThrow(/carries a newline/);
+    // With no `$` and a plain root nothing is wrapped, so nothing is refused: the command is carried as it was.
+    expect(rebaseCommand('echo "plain"', "/opt/p")).toBe('echo "plain"');
+  });
+
+  it("emits a string that RUNS under sh -c: a real script in a temp dir, with its arguments intact", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen packs root-"));
+    mkdirSync(join(dir, "hooks"));
+    const script = join(dir, "hooks", "x.sh");
+    writeFileSync(script, '#!/bin/sh\nprintf "%s|" "$@"\n');
+    chmodSync(script, 0o755);
+    const run = (command: string, env: Record<string, string> = {}): string => {
+      const result = spawnSync("sh", ["-c", command], { encoding: "utf8", env: { ...process.env, ...env } });
+      return `${result.status}:${result.stdout}`;
+    };
+    // The root has a space: quoted inside the command, the whole thing wrapped.
+    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh --mode fast", dir))).toBe("0:--mode|fast|");
+    // The root is an expression the surface's shell has to expand.
+    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh one $TWO", "${DEMO_ROOT:-/nowhere}"), { DEMO_ROOT: dir, TWO: "two" })).toBe("0:one|two|");
+    // The single-quote rule survives the shell: a quoted argument arrives whole.
+    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh 'a b' $C", "${DEMO_ROOT}"), { DEMO_ROOT: dir, C: "c" })).toBe("0:a b|c|");
   });
 
   it("renders the verbatim row's manifest byte for byte", () => {
