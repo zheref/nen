@@ -4,6 +4,8 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## v0.12.0 — 2026-09-20
 
+Release unit for `v0.11.0..main` ([#221](https://github.com/zheref/nen/pull/221), [#222](https://github.com/zheref/nen/pull/222)); the compatibility floor stays `0.7`.
+
 ### Added
 
 - **report** — `objects[]` in `nen report data`: the issues and pull requests an effort is ABOUT, appended at the END of the document's key order and `[]` unless one of five new flags asks for it (`--target`, `--prs`, `--issues`, `--backlog`, `--objects-from`), so the verb's default stays local, network-free and token-free. A pull-request row carries `head`, `mergeStateStatus`, `checks` (counted over the LATEST run per name, through the gate's own `latestChecks` reduction), `threads`, `reviewRequests[]`, `linked[]` and `readiness`; an issue row carries `linked[]` and a `readiness` that is always `null`. `readiness.source` says WHICH authority answered: `check` when the head carries a check run named `readiness` whose output names an anchored verdict line, `computed` when nen's own in-process CON-32 gate decided it (`nen pr ready` called as a function, never a second reading of the clauses), and `null` with the reason on stderr when neither could be read — an unevaluated gate has not said "not ready", it has said nothing. `--objects-from` is the offline path and is validated at the read seam, refused BY ROW INDEX at exit 2, and never mixed with the four live flags ([#220](https://github.com/zheref/nen/issues/220)).
