@@ -4,6 +4,8 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## v0.13.0 — 2026-09-20
 
+Release unit for `v0.12.0..v0.13.0`: [#231](https://github.com/zheref/nen/pull/231) (the delivery) and the release proposal (cited when it opens).
+
 ### Added
 
 - **surface** — two new rows in the mirror table: `antigravity` (a workspace reads skills from `.agents/skills/<name>/SKILL.md`, with `description` required and `name` optional; the mirror is laid out as a **plugin root** — `skills/<name>/SKILL.md` beside `agents/`, `hooks.json`, `plugin.json`, `rules/`, as the plugins page documents and as a global install symlinks it — personas as `agents/<stem>.md` with the nine documented keys, `/<name>` spelling) and `claude-code`, the **verbatim** row whose generation is the identity — every key kept, nothing rewritten, no marker — which exists for `check --installed` and for a mirror that *is* the source; `generate` refuses it. `src/surface/mirror.ts` stays branch-free on the surface name ([#227](https://github.com/zheref/nen/issues/227)).
