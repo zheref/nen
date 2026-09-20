@@ -1480,10 +1480,15 @@ nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <
 | `--json` | no | `nen.pr.open/v0.1` — see below |
 
 **Refused at exit 2:** a detached `HEAD` with no `--head`; a head with no
-upstream (never published); a head whose local sha is not what
-`git ls-remote origin refs/heads/<head>` answers — nothing there, or an older
-sha — because a pull request opened now would not show the commits here.
-Push first ([`wc publish`](#nen-wc-publish)). **Exit 1, nothing opened:** a
+upstream (never published); a head whose local sha is not what its
+**upstream's remote** holds — `<remote>/<branch>` is split off
+`<head>@{upstream}` the way [`wc publish`](#nen-wc-publish) splits it, and
+`git ls-remote <remote> refs/heads/<branch>` is asked (never a hard-coded
+`origin`; the refusal names the remote it asked) — nothing there, or an
+older sha — because a pull request opened now would not show the commits
+here. Push first ([`wc publish`](#nen-wc-publish)). A git failure echoed
+into any of these messages has remote credentials redacted (`://user:***@`,
+`***` for a GitHub token) before it is printed. **Exit 1, nothing opened:** a
 pull request is already open for that head (`gh pr list --head <branch>
 --state open`), reported with its number and url — one head, one pull
 request. Then `gh pr create --repo --base --head --title --body-file
@@ -4919,7 +4924,14 @@ build); an empty index — exit **1**, `nothing staged`. A malformed
 `nen/workflow.json` is exit 1 naming the pointer, as `format`'s own policy
 read. Only then `git commit -F .nen/commit/message.txt`: the composed message
 is written there (a deterministic path under the generated-output directory)
-and removed afterwards whatever git answered.
+and removed afterwards whatever git answered, and the `.nen/commit/`
+directory with it when the message was its only occupant.
+
+**There is no `--sign-off`.** `Signed-off-by` is an attribution-shaped
+trailer, and this repository's trailer policy forbids attribution trailers
+other than the ones it names — the verb would be adding a line the validator
+then refuses. Where a repository's policy *admits* it, pass it as any other
+trailer: `--trailer "Signed-off-by: Name <email>"`.
 
 **`--json`** — `nen.commit.write/v0.1`: `{ contract, sha, subject, trailers:
 [{ key, value }], dryRun }`. `sha` is `null` on a dry run; `trailers` is every
