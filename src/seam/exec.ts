@@ -314,9 +314,27 @@ export function normalizeEol(text: string): string {
   return text.replace(/\r\n/g, "\n");
 }
 
-/** Split subprocess output into non-empty lines, EOL-normalized and trimmed. */
+/**
+ * Text a subprocess printed, with any credential it may have echoed replaced
+ * by `***` (Feitan S6). `git fetch`/`push`/`ls-remote` print the remote URL
+ * on failure, and a URL carrying `https://<user>:<token>@host` prints the
+ * token; `gh` can print a token it was handed. Every verb that echoes a
+ * subprocess's stderr into its own message goes through `outputLines`, so
+ * the redaction lives here and no echo site has to remember it. The three
+ * shapes: a userinfo secret in a URL (`://user:secret@` -> `://user:***@`), a
+ * GitHub token prefix (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` + 20 or more
+ * alphanumerics) and a fine-grained `github_pat_...`.
+ */
+export function redactRemoteCredentials(text: string): string {
+  return text
+    .replace(/(:\/\/[^\s/:@]+:)[^\s@/]+@/g, "$1***@")
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}/g, "***")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "***");
+}
+
+/** Split subprocess output into non-empty lines, EOL-normalized, trimmed, and with remote credentials redacted. */
 export function outputLines(text: string): string[] {
-  return normalizeEol(text)
+  return normalizeEol(redactRemoteCredentials(text))
     .split("\n")
     .map((line): string => line.trim())
     .filter((line): boolean => line !== "");
