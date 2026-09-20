@@ -808,14 +808,33 @@ function bodyBookends(body: string): { readonly first: string; readonly last: st
 // predates that discipline and is left as it is for its own four callers
 // (fetch/next-blocker/retarget/request-reviews) -- not this change's fix to
 // make.
-function requirePrStrict(context: CommandContext): number {
+/**
+ * `--pr <n>`, read STRICTLY: digits only, positive, nothing JavaScript would
+ * be willing to coerce.
+ *
+ * WHY THE FAMILY HAS TWO READERS OF ONE FLAG. `requirePr` above goes through
+ * `Number(raw)`, which happily reads `1e3` as 1000 and `0x0c` as 12 -- a
+ * caller's typo or a variable that picked up the wrong shell expansion
+ * addresses a DIFFERENT pull request, silently and successfully. That is
+ * survivable for a read (`fetch`, `next-blocker`) and is not survivable for a
+ * verb that WRITES, which is why `edit-body` grew this reader; `threads reply`
+ * and `threads resolve` write too -- a reply posted on the wrong pull request
+ * is a public comment under the caller's identity -- so they share it
+ * (Copilot, #221 round 2). `threads list` takes it as well rather than
+ * splitting the family's one flag three ways: the number a listing printed is
+ * the number a reply is about to be sent to, and they must be the same number.
+ *
+ * `verb` NAMES THE CALLER so the refusal says which verb refused, rather than
+ * every verb in the family claiming to be `edit-body`.
+ */
+function requirePrStrict(context: CommandContext, verb: string): number {
   const raw = context.args.values["pr"];
   if (raw === undefined) {
-    throw new VerbUsageError("edit-body takes --pr <n>.");
+    throw new VerbUsageError(`${verb} takes --pr <n>.`);
   }
   if (!/^\d+$/.test(raw) || Number.parseInt(raw, 10) <= 0) {
     throw new VerbUsageError(
-      `edit-body takes --pr <n>: a positive whole number, digits only -- got '${raw}'. A looser read would accept '1e3' as 1000 and '0x0c' as 12 and replace the wrong pull request's body.`,
+      `${verb} takes --pr <n>: a positive whole number, digits only -- got '${raw}'. A looser read would accept '1e3' as 1000 and '0x0c' as 12 and address the wrong pull request.`,
     );
   }
   return Number.parseInt(raw, 10);
@@ -823,7 +842,7 @@ function requirePrStrict(context: CommandContext): number {
 
 function editBody(context: CommandContext): number {
   const target = requireTarget(context);
-  const pr = requirePrStrict(context);
+  const pr = requirePrStrict(context, "edit-body");
 
   const bodyFile = context.args.values["body-file"];
   if (bodyFile === undefined) {
@@ -941,7 +960,7 @@ function threads(context: CommandContext): number {
   }
 
   const target = requireTarget(context);
-  const prNumber = requirePr(context);
+  const prNumber = requirePrStrict(context, `threads ${action}`);
   const dryRun = context.args.booleans.has("dry-run");
   const threadId = context.args.values["thread"];
   if (action !== "list" && (threadId === undefined || threadId.trim() === "")) {

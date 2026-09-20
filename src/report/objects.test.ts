@@ -891,6 +891,28 @@ describe("every degraded field is named (threads …ctk and …ctq)", () => {
     expect(row["reviewRequests"]).toEqual(["ok"]);
   });
 
+  it("requires the object NUMBER to be a positive whole number (Copilot #221 round 2)", async () => {
+    // `typeof value === "number"` admitted 0, -1, 1.5, NaN and Infinity --
+    // none of which GitHub numbers an object with, and every one of which
+    // would become this row's identity: the key `linked[]` points at and the
+    // key a reader looks it up by. The CLI boundary refuses exactly this
+    // shape on `--prs`; so does the payload now.
+    for (const number of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "217"]) {
+      const captured = await live(LIVE_PR, [
+        viewCall({ number }),
+        checkRunsCall([readinessRun()]),
+        threadsCall(THREAD_NODES),
+      ]);
+      expect(captured.code, captured.err.join("\n")).toBe(0);
+      const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+      // It falls back to the number the invocation named...
+      expect(row["number"], `number ${String(number)} was published as the row's identity`).toBe(217);
+      // ...and says so, in the row and on stderr.
+      expect((row["notes"] as string[]).join("\n")).toMatch(/'number' was not a positive whole number/);
+      expect(captured.err.join("\n")).toMatch(/'number' was not a positive whole number/);
+    }
+  });
+
   it("stays quiet about a field that is legitimately absent", async () => {
     // A pull request with no body carries `body: null`, which is not a
     // degradation -- only a value of the WRONG TYPE is announced.

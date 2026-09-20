@@ -859,7 +859,18 @@ function degradedString(view: Record<string, unknown>, key: string, note: (line:
   return "";
 }
 
-/** A number field, or the caller's own number WITH the degradation named. */
+/**
+ * An object NUMBER, or the caller's own number WITH the degradation named.
+ *
+ * `typeof value === "number"` IS NOT THE TEST (Copilot, #221 round 2). It
+ * admits `0`, `-1`, `1.5`, `NaN` and `Infinity` -- none of which is a thing
+ * GitHub numbers an issue or a pull request with, and every one of which would
+ * be published as this row's identity: the key `linked[]` points at, the key a
+ * reader looks the object up by, and the key `--prs` refuses at the boundary
+ * for exactly this reason. So the same shape the CLI boundary requires is
+ * required here, and anything else falls back to the number the invocation
+ * named -- which is the one value that can be trusted when the payload cannot.
+ */
 function degradedNumber(
   view: Record<string, unknown>,
   key: string,
@@ -867,8 +878,10 @@ function degradedNumber(
   note: (line: string) => void,
 ): number {
   const value = view[key];
-  if (typeof value === "number") return value;
-  note(`'${key}' was not a number (${describe(value)}); reported as ${fallback}, the number this invocation named`);
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  note(
+    `'${key}' was not a positive whole number (${typeof value === "number" ? String(value) : describe(value)}); reported as ${fallback}, the number this invocation named`,
+  );
   return fallback;
 }
 
