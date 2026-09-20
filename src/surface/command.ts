@@ -42,6 +42,7 @@ import {
   readHooksManifest,
   readModelMaps,
   readPermissions,
+  readPluginManifest,
   readRules,
   SurfacePackError,
 } from "./packs.js";
@@ -72,7 +73,8 @@ usage:
   nen surface capabilities [--json]                 (every surface)
   nen surface mirror generate --source <dir> --surface <name> --out <dir>
                               [--agents <dir>] [--invocation-prefix <prefix>]
-                              [--hooks <hooks.json>] [--models <workflow.json>]
+                              [--hooks <hooks.json>] [--hooks-root <expr>]
+                              [--manifest <plugin.json>] [--models <workflow.json>]
                               [--source-surface <name>]
                               [--rules <file.md>] [--permissions <permissions.json>]
                               [--stamp <version>] [--dry-run] [--json]
@@ -128,6 +130,19 @@ ${SURFACE_LIST}
                               commands). Emitted at the row's hook file with the
                               events renamed to the surface's own; a surface
                               with no hooks reports 'hooks: not supported'.
+  --hooks-root <expr>         What '\${CLAUDE_PLUGIN_ROOT}' in a --hooks command
+                              becomes; a rebased command still carrying a '$'
+                              is wrapped as sh -c 'exec "<command>" "$@"' --
+                              so a surface with no shell expands it. Refused
+                              on the verbatim row. The scripts a command names
+                              as <root>/hooks/<file> are copied beside the
+                              manifest to <out>/hooks/<file> (mode 755, marker
+                              on line 2) on every non-verbatim row.
+  --manifest <plugin.json>    A Claude plugin manifest; a row that documents a
+                              plugin manifest of its own (antigravity:
+                              plugin.json with name, version, description)
+                              gets one with those keys; the others report
+                              'manifest: not supported'.
   --models <workflow.json>    A nen/workflow.json whose 'models.<surface>' maps
                               tiers to aliases. A persona's 'model:' is read as
                               a tier, else as an alias of --source-surface's
@@ -176,7 +191,7 @@ SKILL.md, a skill missing a key the surface requires, a rules file over the
 surface's limit, a tier --models does not declare, or a destination that exists
 and carries no marker (this verb never overwrites a hand-written file).`;
 
-const INPUT_VALUES = ["source", "agents", "surface", "source-surface", "invocation-prefix", "hooks", "models", "rules", "permissions", "stamp"];
+const INPUT_VALUES = ["source", "agents", "surface", "source-surface", "invocation-prefix", "hooks", "hooks-root", "manifest", "models", "rules", "permissions", "stamp"];
 
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
   generate: { values: [...INPUT_VALUES, "out"], booleans: ["dry-run"] },
@@ -295,6 +310,21 @@ function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
   }
   const rulesPath = optionalPath(context, "rules");
   const permissionsPath = optionalPath(context, "permissions");
+  const manifestPath = optionalPath(context, "manifest");
+  const hooksRoot = context.args.values["hooks-root"] ?? null;
+  if (hooksRoot !== null) {
+    if (hooksRoot.trim() === "") {
+      throw new VerbUsageError("--hooks-root was given an empty value. Omit it to carry the commands verbatim.");
+    }
+    if (hooksPath === null) {
+      throw new VerbUsageError("--hooks-root rebases the commands of a --hooks manifest, and no --hooks was given.");
+    }
+    if (row.verbatim) {
+      throw new VerbUsageError(
+        `--hooks-root is refused on '${row.surface}': its manifest is carried byte for byte, and a rebased command would be a change to the file this row promises not to change.`,
+      );
+    }
+  }
 
   return {
     row,
@@ -311,6 +341,8 @@ function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
       invocationPrefix: context.args.values["invocation-prefix"] ?? null,
       stamp,
       hooks: hooksPath === null ? null : readHooksManifest(hooksPath),
+      hooksRoot,
+      manifest: manifestPath === null ? null : readPluginManifest(manifestPath),
       models: modelsPath === null ? null : readModelMaps(modelsPath, row.surface, sourceSurface),
       rules: rulesPath === null ? null : readRules(rulesPath),
       permissions: permissionsPath === null ? null : readPermissions(permissionsPath),
@@ -350,6 +382,7 @@ function runGenerate(context: CommandContext): number {
       hooks: report.hooks,
       rules: report.rules,
       permissions: report.permissions,
+      manifest: report.manifest,
       notes: report.notes,
     },
     [
@@ -374,6 +407,7 @@ function runGenerate(context: CommandContext): number {
       `hooks: ${report.hooks}`,
       `rules: ${rulesLine}`,
       `permissions: ${report.permissions}`,
+      `manifest: ${report.manifest}`,
       ...report.notes.map((note): string => `note: ${note}`),
     ],
   );

@@ -7842,8 +7842,9 @@ a persona pulls in, not a persona ([#223](https://github.com/zheref/nen/issues/2
 it is skipped and named in the report, never mirrored as a subagent nobody
 defined. The **filename universe** these two verbs consider their own has
 **two** conditions: a file must sit at one of the row's own locations
-(`<name>/SKILL.md`, the persona location, the row's hook, rules, permission,
-fragment and TOML-persona files) **and carry a generated marker**.
+(`<name>/SKILL.md`, the persona location, the row's hook manifest and
+`hooks/` scripts, rules, permission, plugin-manifest, fragment and TOML-persona
+files) **and carry a generated marker**.
 An unmarked file is somebody's own work wherever it sits, so it is never
 overwritten, never deleted as an orphan, and never reported as `extra` — a
 `SKILL.md` written by hand in the mirror directory is as untouchable as a
@@ -7875,7 +7876,8 @@ that is the self-healing the mirror is for.
 ```text
 nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --out <dir>
                             [--agents <dir>] [--invocation-prefix <prefix>]
-                            [--hooks <hooks.json>] [--models <nen/workflow.json>]
+                            [--hooks <hooks.json>] [--hooks-root <expr>]
+                            [--manifest <plugin.json>] [--models <nen/workflow.json>]
                             [--source-surface <name>] [--rules <file.md>]
                             [--permissions <permissions.json>]
                             [--stamp <version>] [--dry-run] [--json]
@@ -7891,6 +7893,8 @@ nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --
 | `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused. On a surface that keeps personas as **files**, a persona that would mirror to an **empty frontmatter block** — no fence in the source, or a fence holding only keys that surface does not read — is refused at exit 2: the file written would carry no frontmatter at all, and there would be nothing for the surface to route on. On a surface whose personas are **prose** (the appendix), the same file is fine, because frontmatter is not a concept there |
 | `--invocation-prefix <p>` | no | the **source's own** invocation namespace, e.g. `myplugin:` | caller data, never a literal in this binary (§3), for the same reason [`canon mirror generate`](#nen-canon-mirror-generate)'s `--header-template` is a flag. Without it nothing is rewritten; with it, mentions of skills *outside* the mirrored set are rewritten too, because a half-rewritten document is worse than an unrewritten one |
 | `--hooks <hooks.json>` | no | a **Claude-Code-shaped** hook manifest: `{ "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command", "timeout"? } ] } ], "PreToolUse": [ { "matcher", "hooks": [ … ] } ], "SessionStart": [ … ] } }` (the `hooks` wrapper may be omitted) | emitted at the row's hook file with the three events renamed to the surface's own (`Stop`→`stop`, `PreToolUse`→`beforeShellExecution`, `SessionStart`→`sessionStart` on Cursor; `SessionStart`→`PreInvocation` on Antigravity, which has no session-start event) and the same commands; a `Bash` matcher becomes the surface's own (`run_command` on Antigravity) or is dropped where the surface has none. Any other event in the manifest is left out and named in `notes[]`. A malformed group or an empty command is refused by pointer at exit 2. A row with no hooks writes nothing and reports `hooks: not supported` |
+| `--hooks-root <expr>` | no | what `${CLAUDE_PLUGIN_ROOT}` in a `--hooks` command becomes — the source manifest names its root with Claude Code's own variable, which no other surface defines | every occurrence is replaced by the expression; when the result still carries a `$` (an expression such as `${HATSU_PLUGIN_ROOT:-$HOME/.gemini/config/plugins/hatsu}`) the command is emitted wrapped as `sh -c 'exec "<command>" "$@"' --`, so a surface that does not run hooks through a shell still expands it; a plain path is carried unwrapped. Without the flag commands are carried verbatim. Refused at exit 2 without `--hooks`, with an empty value, on the verbatim `claude-code` row (its manifest is byte for byte), and for a rebased command carrying a single quote (the wrapper cannot hold one). Give `check` the same expression |
+| `--manifest <plugin.json>` | no | a Claude plugin manifest (`.claude-plugin/plugin.json`) | a row that documents a plugin manifest of its own — Antigravity's `plugin.json` (`name`, `version`, `description`; `name` and `description` required) — gets `<out>/plugin.json` carrying those keys from the source under a `$generated` marker; every other row reports `manifest: not supported` and writes nothing. A required key the source lacks is refused at exit 2 |
 | `--models <workflow.json>` | no | a `nen/workflow.json` (or any JSON carrying its `models` block) whose `models.<surface>` maps tiers (`frontier`, `deep`, `fast`, `economy`, …) to the surface's own aliases | on a surface whose row maps models, a persona's `model: <tier>` is rewritten to `models.<surface>.<tier>` **from that file**; `model: inherit` is carried as `inherit` where the surface documents it (Cursor, Antigravity) and dropped elsewhere with a `droppedInherit[]` line; a tier the file does not declare is refused at exit 2 by pointer (`models.<surface>.<tier>`), as is a file with no `models.<surface>` at all. An alias outside the surface's documented set (Antigravity documents `inherit`, `flash`, `pro`) is emitted verbatim — it is the repository's own word — and named in `undocumentedAliases[]`. **Codex** additionally gets `config.toml.fragment` carrying `[agents]` / `default_subagent_model = "<models.codex.fast>"` — a fragment the consumer merges; `config.toml` itself is never a destination for it — and one `agents/<stem>.toml` per persona for `.codex/agents/` |
 | `--source-surface <name>` | no | the surface the **source** personas were written for; default `claude-code` | a canonical persona file is read directly by one surface, so its `model:` carries *that* surface's alias (`opus`), never a tier — rewriting the source to tiers would break the surface that reads it unmirrored. With `--models`, a persona's value is resolved in two steps: first as a tier of `models.<surface>` (written as-is), else as an alias under `models.<source-surface>` read back to **the one tier** it sits under (`opus` → `deep`), then tier → `models.<surface>.<tier>` (`deep` → `pro` on Antigravity). An alias under two tiers of the source row, a value that is neither, or a source row the file lacks when a persona needs it are each refused at exit 2 by pointer. The value is a key of the caller's own `models` matrix and nothing else — a workflow that spells the row `claude` passes `--source-surface claude` |
 | `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity), the marker first and the source verbatim under it — its invocation mentions are **not** rewritten. Over the surface's documented character limit (Antigravity: 12,000) it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
@@ -7898,6 +7902,15 @@ nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --
 | `--stamp <version>` | no | `MAJOR.MINOR.PATCH` of the source (a `-pre`/`+build` tail is accepted and ignored) | written into every marker as `, stamp: <version>`; anything not version-shaped is refused at exit 2 |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
 | `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values`, `--mirror-dir` and `--markdown-out` resolve against this root, not the process's directory; an absolute value is used as-is. |
+
+**Hook scripts travel with the manifest.** On every non-verbatim row, each
+script a `--hooks` command names as `${CLAUDE_PLUGIN_ROOT}/hooks/<file>` is
+read from beside the manifest and written to `<out>/hooks/<file>`, mode 755,
+with the marker as a `# ` comment on line 2 after the shebang (line 1 when
+there is none) — so a plugin-mode install, the mirror symlinked as the plugin
+root, resolves the commands to files it ships. They are reported under
+`written[]`, they are in `check`'s universe, and a manifest naming a script
+that is not beside it is refused at exit 2.
 
 **The description budget.** Where the row states one (codex 186, cursor 30 —
 both measured, neither documented), a skill whose `description` is longer keeps
@@ -7913,12 +7926,13 @@ then `written:`, `unchanged:` and `deleted (orphaned):` (each `(none)` when
 empty), then the report lines that apply: `skipped (shared includes, not
 personas):`, `truncated (…):`, `model: inherit dropped (…):`, `model alias
 outside the surface's documented set (…):`, and always `hooks:`, `rules:` and
-`permissions:` (`none` when the flag was not given, `not supported` when the
-row has no such file, else what was written), then any `note:` lines; the row's
+`permissions:` and `manifest:` (`none` when the flag was not given, `not
+supported` when the row has no such file, else what was written), then any
+`note:` lines; the row's
 caveat goes to **stderr**, so `--json` stays one document. `--json`:
 `{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
 dryRun, written, unchanged, deleted, stamp, skippedAgents, truncated,
-droppedInherit, undocumentedAliases, hooks, rules, permissions, notes }` — the
+droppedInherit, undocumentedAliases, hooks, rules, permissions, manifest, notes }` — the
 keys after `deleted` are v0.13.0's, appended at the end of the key order;
 `rules` is `"none"`, `"not supported"` or `{ path, chars, limit }`. Exit 0 on
 any completed run; exit 2 on a missing or unknown flag, an `--out` inside
@@ -7947,6 +7961,7 @@ truncated (description over the 30-char budget; summary: added): alpha, beta
 hooks: none
 rules: none
 permissions: none
+manifest: none
 ```
 The `alpha` skill's source frontmatter carries `name`, `description`,
 `allowed-tools`, `model`, `license` and `metadata`; what lands in the mirror is
@@ -7972,7 +7987,7 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "skillsPath": ".agents/skills/<name>/SKILL.md",
   "out": "surfaces/antigravity",
   "dryRun": false,
-  "written": ["agents/kurapika.md", "…", "hooks.json", "ren/SKILL.md", "rules/rules.md"],
+  "written": ["agents/kurapika.md", "…", "hooks.json", "hooks/guard-base-branch.sh", "hooks/stop-bell.sh", "ren/SKILL.md", "rules/rules.md"],
   "unchanged": [],
   "deleted": [],
   "stamp": "0.43.0",
@@ -7983,6 +7998,7 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "hooks": "written",
   "rules": { "path": "rules/rules.md", "chars": 4210, "limit": 12000 },
   "permissions": "not supported",
+  "manifest": "none",
   "notes": []
 }
 ```

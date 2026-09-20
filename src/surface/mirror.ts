@@ -49,13 +49,16 @@
 // self-healing the mirror exists for. The same guard is why `config.toml` is
 // never a destination: the model default lands in a marked FRAGMENT beside it.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hasValue, inlineValue, renderFrontmatter, splitDocument, type FrontmatterEntry } from "./frontmatter.js";
 import {
   compareVersions,
+  readHookScripts,
   renderHooks,
+  renderHookScript,
   renderPermissions,
+  renderPluginManifest,
   renderRules,
   rewriteModel,
   tomlMultiline,
@@ -63,6 +66,7 @@ import {
   type HooksManifest,
   type ModelMaps,
   type PermissionsSource,
+  type PluginManifest,
   type RulesSource,
 } from "./packs.js";
 import { invocationFor, skillPath, type SurfaceRow } from "./rules.js";
@@ -129,6 +133,11 @@ export function readMarker(text: string): Marker | null {
   const comment = /^<!-- (.*) -->\r?$/.exec(first);
   if (comment?.[1] !== undefined) return parseMarkerText(comment[1]);
   if (first.startsWith("# ")) return parseMarkerText(first.slice(2));
+  // A script: the shebang owns line 1, so the marker is the `# ` line under it.
+  if (first.startsWith("#!")) {
+    const second = text.split("\n")[1] ?? "";
+    if (second.startsWith("# ")) return parseMarkerText(second.slice(2));
+  }
   if (text.trimStart().startsWith("{")) {
     try {
       const parsed = JSON.parse(text) as unknown;
@@ -247,6 +256,8 @@ export interface GeneratedFile {
   /** Path relative to `--out`, always `/`-separated. */
   readonly path: string;
   readonly content: string;
+  /** A file mode to set on write (a hook script's 0o755), or absent for the default. */
+  readonly mode?: number;
 }
 
 export interface GenerateOptions {
@@ -263,6 +274,10 @@ export interface GenerateOptions {
   readonly stamp?: string | null;
   /** `--hooks`, read; null when not given. */
   readonly hooks?: HooksManifest | null;
+  /** `--hooks-root`: what `${CLAUDE_PLUGIN_ROOT}` becomes in every command; null carries commands verbatim. */
+  readonly hooksRoot?: string | null;
+  /** `--manifest`, read; null when not given. */
+  readonly manifest?: PluginManifest | null;
   /** `--rules`, read; null when not given. */
   readonly rules?: RulesSource | null;
   /** `--permissions`, read; null when not given. */
@@ -283,6 +298,7 @@ export interface GenerateReport {
   readonly hooks: "written" | "not supported" | "none";
   readonly rules: { readonly path: string; readonly chars: number; readonly limit: number | null } | "not supported" | "none";
   readonly permissions: "written" | "not supported" | "none";
+  readonly manifest: "written" | "not supported" | "none";
   /** Everything else worth a line: unmapped hook events, an appendix past the read limit, a long rules file. */
   readonly notes: readonly string[];
 }
@@ -497,7 +513,19 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     if (row.hooks === null) hooks = "not supported";
     else {
       hooks = "written";
-      files.push({ path: row.hooks.file, content: renderHooks(row.hooks, options.hooks, markerText(row.surface, stamp)) });
+      const marker = markerText(row.surface, stamp);
+      files.push({ path: row.hooks.file, content: renderHooks(row.hooks, options.hooks, marker, options.hooksRoot ?? null) });
+      // The scripts travel with the manifest: a mirror installed as a plugin
+      // root has to resolve `<root>/hooks/<file>` to a file it ships.
+      if (row.hooks.scriptsDir !== null) {
+        for (const script of readHookScripts(options.hooks)) {
+          files.push({
+            path: `${row.hooks.scriptsDir}/${script.name}`,
+            content: renderHookScript(script, marker),
+            mode: 0o755,
+          });
+        }
+      }
       if (options.hooks.unmapped.length > 0) {
         notes.push(
           `--hooks carries ${options.hooks.unmapped.join(", ")}, which no row maps; only Stop, PreToolUse and SessionStart are carried`,
@@ -533,6 +561,18 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     }
   }
 
+  let manifest: GenerateReport["manifest"] = "none";
+  if (options.manifest !== undefined && options.manifest !== null) {
+    if (row.pluginManifest === null) manifest = "not supported";
+    else {
+      manifest = "written";
+      files.push({
+        path: row.pluginManifest.file,
+        content: renderPluginManifest(row.pluginManifest, options.manifest, markerText(row.surface, stamp)),
+      });
+    }
+  }
+
   if (options.models !== undefined && options.models !== null && row.subagentModelFragment !== null) {
     const fragment = row.subagentModelFragment;
     const alias = options.models.target[fragment.tier];
@@ -555,6 +595,7 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     hooks,
     rules,
     permissions,
+    manifest,
     notes,
   };
 }
@@ -635,7 +676,11 @@ export function universeFiles(outDir: string, row: SurfaceRow): readonly string[
   if (rule.kind === "files") candidates.push(...filesIn(rule.dir, rule.extension));
   else candidates.push(rule.file);
   if (row.agentToml !== null) candidates.push(...filesIn(row.agentToml.dir, ".toml"));
-  if (row.hooks !== null) candidates.push(row.hooks.file);
+  if (row.hooks !== null) {
+    candidates.push(row.hooks.file);
+    if (row.hooks.scriptsDir !== null) candidates.push(...filesIn(row.hooks.scriptsDir, ""));
+  }
+  if (row.pluginManifest !== null) candidates.push(row.pluginManifest.file);
   if (row.rules !== null) candidates.push(...filesIn(row.rules.dir, row.rules.extension));
   if (row.permissions !== null) candidates.push(row.permissions.file);
   if (row.subagentModelFragment !== null) candidates.push(row.subagentModelFragment.file);
@@ -698,6 +743,7 @@ export function writeSurfaceMirror(
     if (dryRun) continue;
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, file.content, "utf8");
+    if (file.mode !== undefined) chmodSync(path, file.mode);
   }
 
   const keep = new Set(generated.map((file): string => file.path));

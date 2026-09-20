@@ -137,6 +137,12 @@ export interface SurfaceRow {
   readonly hooks: {
     readonly file: string;
     readonly documentedPath: string;
+    /**
+     * Where the hook SCRIPTS a command references land under `--out`, so a
+     * plugin-mode install (the mirror symlinked as the plugin root) resolves
+     * them; null on the verbatim row, whose scripts are the source's own.
+     */
+    readonly scriptsDir: string | null;
     readonly events: { readonly Stop: string; readonly PreToolUse: string; readonly SessionStart: string };
     readonly known: readonly string[];
     readonly matcher: string | null;
@@ -205,6 +211,17 @@ export interface SurfaceRow {
     readonly file: string;
     readonly documentedPath: string;
     readonly shape: PermissionShape;
+    readonly source: string;
+  } | null;
+  /**
+   * The surface's plugin manifest, or null. `--manifest <plugin.json>` reads a
+   * Claude plugin manifest and emits `<out>/<file>` carrying `keys` from it;
+   * `required` are the ones the surface documents as required.
+   */
+  readonly pluginManifest: {
+    readonly file: string;
+    readonly keys: readonly string[];
+    readonly required: readonly string[];
     readonly source: string;
   } | null;
   /**
@@ -279,6 +296,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     hooks: {
       file: "hooks.json",
       documentedPath: ".codex/hooks.json",
+      scriptsDir: "hooks",
       events: { Stop: "Stop", PreToolUse: "PreToolUse", SessionStart: "SessionStart" },
       known: [
         "SessionStart",
@@ -320,6 +338,7 @@ export const SURFACES: readonly SurfaceRow[] = [
       shape: "codex-toml",
       source: "https://learn.chatgpt.com/docs/config-file/config-reference",
     },
+    pluginManifest: null,
     verbatim: false,
     source: "https://learn.chatgpt.com/docs/build-skills",
     agentSource: "https://learn.chatgpt.com/docs/agent-configuration/agents-md",
@@ -356,6 +375,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     hooks: {
       file: "hooks.json",
       documentedPath: ".cursor/hooks.json",
+      scriptsDir: "hooks",
       events: { Stop: "stop", PreToolUse: "beforeShellExecution", SessionStart: "sessionStart" },
       known: [
         "sessionStart",
@@ -396,6 +416,7 @@ export const SURFACES: readonly SurfaceRow[] = [
       shape: "cursor-cli-json",
       source: "https://cursor.com/docs/cli/reference/permissions",
     },
+    pluginManifest: null,
     verbatim: false,
     source: "https://cursor.com/docs/context/skills",
     agentSource: "https://cursor.com/docs/agent/subagents",
@@ -427,6 +448,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     hooks: {
       file: "hooks.json",
       documentedPath: ".agents/hooks.json",
+      scriptsDir: "hooks",
       // No SessionStart event exists here; PreInvocation is the closest
       // documented moment, and is what the consumer's own generator used.
       events: { Stop: "Stop", PreToolUse: "PreToolUse", SessionStart: "PreInvocation" },
@@ -457,6 +479,14 @@ export const SURFACES: readonly SurfaceRow[] = [
     // the first consumer's own review refused emitting it, and this
     // row keeps that: the pack on this surface is the hooks.
     permissions: null,
+    // "plugin.json (required; $schema, name, description)"; version is
+    // carried because a plugin without one cannot be told from its last.
+    pluginManifest: {
+      file: "plugin.json",
+      keys: ["name", "version", "description"],
+      required: ["name", "description"],
+      source: "https://antigravity.google/docs/plugins",
+    },
     verbatim: false,
     source: "https://antigravity.google/docs/skills",
     agentSource: "https://antigravity.google/docs/subagents",
@@ -484,6 +514,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     hooks: {
       file: "hooks/hooks.json",
       documentedPath: "hooks/hooks.json (plugin) or .claude/settings.json",
+      scriptsDir: null,
       events: { Stop: "Stop", PreToolUse: "PreToolUse", SessionStart: "SessionStart" },
       known: ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SubagentStop", "PreCompact", "SessionEnd"],
       matcher: "Bash",
@@ -511,6 +542,7 @@ export const SURFACES: readonly SurfaceRow[] = [
       shape: "claude-settings",
       source: "https://code.claude.com/docs/en/permissions",
     },
+    pluginManifest: null,
     verbatim: true,
     source: "https://code.claude.com/docs/en/skills",
     agentSource: "https://code.claude.com/docs/en/sub-agents",

@@ -18,8 +18,8 @@
 // these files already ignores (`$schema`, `$comment`), so the key is read by
 // nen and by nobody else. ./mirror.ts's `readMarker` reads all three.
 
-import { readFileSync } from "node:fs";
-import { basename, extname } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, extname, join } from "node:path";
 import { parseModels } from "../schema/workflow.js";
 import { hasValue, inlineValue, type FrontmatterEntry } from "./frontmatter.js";
 import type { SurfaceRow } from "./rules.js";
@@ -98,9 +98,26 @@ export interface HookGroup {
 export const HOOK_EVENTS = ["Stop", "PreToolUse", "SessionStart"] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 
+/**
+ * The variable a Claude Code plugin manifest names its own root with. It is
+ * the DEFAULT SOURCE surface's documented spelling (../surface/command.ts's
+ * DEFAULT_SOURCE_SURFACE), which no other surface defines -- the reason
+ * `--hooks-root` exists. Read from https://code.claude.com/docs/en/plugins-reference.
+ */
+export const SOURCE_ROOT_VARIABLE = "${CLAUDE_PLUGIN_ROOT}";
+const SCRIPT_REFERENCE = /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/([A-Za-z0-9._-]+)/g;
+
+export interface HookScript {
+  /** The filename under the manifest's own directory, and under `<out>/hooks/`. */
+  readonly name: string;
+  readonly text: string;
+}
+
 export interface HooksManifest {
   /** The file's own bytes, for the row whose shape is `verbatim`. */
   readonly text: string;
+  /** The directory the manifest was read from, where its scripts live. */
+  readonly dir: string;
   readonly events: Readonly<Record<HookEvent, readonly HookGroup[]>>;
   /** Events the manifest carried that no row maps, named in the report. */
   readonly unmapped: readonly string[];
@@ -155,14 +172,72 @@ export function readHooksManifest(path: string): HooksManifest {
       return { matcher: typeof matcher === "string" ? matcher : null, hooks };
     });
   }
-  return { text, events, unmapped: unmapped.sort() };
+  return { text, dir: dirname(path), events, unmapped: unmapped.sort() };
+}
+
+/**
+ * Every script a command references as `${CLAUDE_PLUGIN_ROOT}/hooks/<file>`,
+ * read from the manifest's own directory. A reference to a file that is not
+ * there is refused: a manifest that names a script the plugin does not ship
+ * is broken at the source, and copying the manifest without the script
+ * would ship the same break.
+ */
+export function readHookScripts(manifest: HooksManifest): readonly HookScript[] {
+  const names = new Set<string>();
+  for (const event of HOOK_EVENTS) {
+    for (const group of manifest.events[event]) {
+      for (const hook of group.hooks) {
+        for (const match of hook.command.matchAll(SCRIPT_REFERENCE)) if (match[1] !== undefined) names.add(match[1]);
+      }
+    }
+  }
+  return [...names].sort().map((name): HookScript => {
+    const path = join(manifest.dir, name);
+    if (!existsSync(path) || !statSync(path).isFile()) {
+      throw new SurfacePackError(
+        `--hooks names '${SOURCE_ROOT_VARIABLE}/hooks/${name}' in a command, and '${path}' is not a file. The scripts travel with the manifest, so a script it names has to sit beside it.`,
+      );
+    }
+    return { name, text: readFileSync(path, "utf8") };
+  });
+}
+
+/** A hook script with the marker as a `# ` comment on line 2, after its shebang (line 1 when it has none). */
+export function renderHookScript(script: HookScript, marker: string): string {
+  const lines = script.text.split("\n");
+  const shebang = (lines[0] ?? "").startsWith("#!");
+  const at = shebang ? 1 : 0;
+  return [...lines.slice(0, at), `# ${marker}`, ...lines.slice(at)].join("\n");
+}
+
+/**
+ * A command with `${CLAUDE_PLUGIN_ROOT}` replaced by `root` -- and, when the
+ * result still carries a `$`, wrapped as `sh -c 'exec "<command>" "$@"' --`,
+ * so a surface that does not run a hook through a shell still expands the
+ * expression. A command that cannot sit inside those single quotes is refused.
+ */
+export function rebaseCommand(command: string, root: string): string {
+  const rebased = command.split(SOURCE_ROOT_VARIABLE).join(root);
+  if (!rebased.includes("$")) return rebased;
+  if (rebased.includes("'")) {
+    throw new SurfacePackError(
+      `--hooks-root: the command ${JSON.stringify(command)} rebases to one carrying a single quote, which the sh -c wrapper cannot hold. Quote the expression differently, or keep the command free of quotes.`,
+    );
+  }
+  return `sh -c 'exec "${rebased}" "$@"' --`;
 }
 
 type HooksRule = NonNullable<SurfaceRow["hooks"]>;
 
 /** The manifest in the row's shape, as file content. */
-export function renderHooks(rule: HooksRule, manifest: HooksManifest, marker: string): string {
+export function renderHooks(
+  rule: HooksRule,
+  manifest: HooksManifest,
+  marker: string,
+  root: string | null = null,
+): string {
   if (rule.shape === "verbatim") return manifest.text;
+  const command = (hook: HookCommand): string => (root === null ? hook.command : rebaseCommand(hook.command, root));
   const rendered: Record<string, unknown> = {};
   for (const event of HOOK_EVENTS) {
     const groups = manifest.events[event];
@@ -170,7 +245,7 @@ export function renderHooks(rule: HooksRule, manifest: HooksManifest, marker: st
     const name = rule.events[event];
     if (rule.shape === "cursor-v1") {
       rendered[name] = groups.flatMap((group): readonly Record<string, unknown>[] =>
-        group.hooks.map((hook): Record<string, unknown> => ({ command: hook.command })),
+        group.hooks.map((hook): Record<string, unknown> => ({ command: command(hook) })),
       );
       continue;
     }
@@ -178,7 +253,7 @@ export function renderHooks(rule: HooksRule, manifest: HooksManifest, marker: st
       ...(group.matcher !== null && rule.matcher !== null ? { matcher: rule.matcher } : {}),
       hooks: group.hooks.map((hook): Record<string, unknown> => ({
         type: "command",
-        command: hook.command,
+        command: command(hook),
         ...(hook.timeout === null ? {} : { timeout: hook.timeout }),
       })),
     }));
@@ -187,6 +262,39 @@ export function renderHooks(rule: HooksRule, manifest: HooksManifest, marker: st
     rule.shape === "cursor-v1"
       ? { $generated: marker, version: 1, hooks: rendered }
       : { $generated: marker, hooks: rendered };
+  return `${JSON.stringify(document, null, 2)}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin manifest
+// ---------------------------------------------------------------------------
+
+export type PluginManifest = Readonly<Record<string, unknown>>;
+
+/** A Claude plugin manifest (`.claude-plugin/plugin.json`): any JSON object. */
+export function readPluginManifest(path: string): PluginManifest {
+  const root = readJsonFile("manifest", path);
+  if (!isRecord(root)) throw new SurfacePackError(`--manifest '${path}': the document is not an object.`);
+  return root;
+}
+
+type ManifestRule = NonNullable<SurfaceRow["pluginManifest"]>;
+
+/** The row's keys copied from the source manifest, under the marker; a required key the source lacks is refused. */
+export function renderPluginManifest(rule: ManifestRule, manifest: PluginManifest, marker: string): string {
+  const document: Record<string, unknown> = { $generated: marker };
+  for (const key of rule.keys) {
+    const value = manifest[key];
+    if (value === undefined) {
+      if (rule.required.includes(key)) {
+        throw new SurfacePackError(
+          `--manifest has no '${key}', which the surface documents as required in ${rule.file} (${rule.source}). Add it to the source manifest.`,
+        );
+      }
+      continue;
+    }
+    document[key] = value;
+  }
   return `${JSON.stringify(document, null, 2)}\n`;
 }
 
