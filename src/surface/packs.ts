@@ -101,9 +101,9 @@ export type HookEvent = (typeof HOOK_EVENTS)[number];
 
 /**
  * The variable a Claude Code plugin manifest names its own root with. It is
- * the DEFAULT SOURCE surface's documented spelling (../surface/command.ts's
- * DEFAULT_SOURCE_SURFACE), which no other surface defines -- the reason
- * `--hooks-root` exists. Read from https://code.claude.com/docs/en/plugins-reference.
+ * the source surface's documented spelling (the one ../surface/command.ts's
+ * DEFAULT_SOURCE_SURFACE names its models row for), which no other surface
+ * defines -- the reason `--hooks-root` exists. Read from https://code.claude.com/docs/en/plugins-reference.
  */
 export const SOURCE_ROOT_VARIABLE = "${CLAUDE_PLUGIN_ROOT}";
 const SCRIPT_REFERENCE = /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/([A-Za-z0-9._-]+)/g;
@@ -597,6 +597,8 @@ export interface ModelMaps {
   readonly sourceSurface: string;
   /** Every surface the file declares, for the refusal that names them. */
   readonly known: readonly string[];
+  /** Every declared row, tier -> alias, so a refusal can say which one WOULD have resolved a value. */
+  readonly surfaces: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 /**
@@ -626,7 +628,7 @@ export function readModelMaps(path: string, surface: string, sourceSurface: stri
       `--models '${path}' declares no 'models.${surface}' -- the tier-to-alias map this surface's personas are rewritten through. Known surfaces in the file: ${known.join(", ") || "(none)"}.`,
     );
   }
-  return { target, surface, source: policy.surfaces[sourceSurface] ?? null, sourceSurface, known };
+  return { target, surface, source: policy.surfaces[sourceSurface] ?? null, sourceSurface, known, surfaces: policy.surfaces };
 }
 
 export interface ModelRewrite {
@@ -650,8 +652,14 @@ export interface ModelRewrite {
 export function resolveTier(maps: ModelMaps, value: string, relative: string): string {
   if (maps.target[value] !== undefined) return value;
   if (maps.source === null) {
+    // Which declared row WOULD resolve it: named only when exactly one does,
+    // because two candidates is a choice, and this verb does not choose.
+    const resolving = Object.entries(maps.surfaces)
+      .filter(([, tiers]): boolean => Object.values(tiers).includes(value))
+      .map(([name]): string => name);
+    const hint = resolving.length === 1 ? ` Did you mean --source-surface ${resolving[0]}?` : "";
     throw new SurfacePackError(
-      `'${relative}' says 'model: ${value}', which is not a tier of 'models.${maps.surface}' (${Object.keys(maps.target).join(", ")}), and --models declares no 'models.${maps.sourceSurface}' to read it back through as an alias (--source-surface). Known surfaces in the file: ${maps.known.join(", ")}.`,
+      `'${relative}' says 'model: ${value}', which is not a tier of 'models.${maps.surface}' (${Object.keys(maps.target).join(", ")}), and --models declares no 'models.${maps.sourceSurface}' to read it back through as an alias (--source-surface). Known surfaces in the file: ${maps.known.join(", ")}.${hint}`,
     );
   }
   const tiers = Object.entries(maps.source)

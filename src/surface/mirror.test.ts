@@ -689,7 +689,7 @@ describe("the report's not-supported paths", () => {
 
   it("refuses a models fragment whose tier the map lacks", () => {
     expect(() =>
-      generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, models: { target: { frontier: "x" }, surface: "codex", source: null, sourceSurface: "claude-code", known: ["codex"] } }),
+      generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, models: { target: { frontier: "x" }, surface: "codex", source: null, sourceSurface: "claude", known: ["codex"], surfaces: { codex: { frontier: "x" } } } }),
     ).toThrow(/no 'models\.codex\.fast'/);
   });
 });

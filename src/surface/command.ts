@@ -57,11 +57,14 @@ export const CHECK_INSTALLED_CONTRACT = "nen.surface.mirror.check-installed/v0.1
  * The surface whose aliases the SOURCE personas carry in `model:` when the
  * caller does not say. A canonical skills tree is read directly by one
  * surface, so its personas name that surface's models; the one this binary's
- * first consumer writes for is this one. Caller data all the same -- the flag
- * overrides it, and the value is only ever a key of the caller's own
- * `models` matrix.
+ * first consumer writes for is Claude Code, and `claude` is the key every
+ * real workflow (nen's own, its first consumer's) spells that row under --
+ * `claude-code` named a row nobody declared (Nobunaga N8). Caller data all
+ * the same -- the flag overrides it, and the value is only ever a key of the
+ * caller's own `models` matrix; when the key is absent and exactly one
+ * declared row resolves a persona's alias, the refusal names it.
  */
-export const DEFAULT_SOURCE_SURFACE = "claude-code";
+export const DEFAULT_SOURCE_SURFACE = "claude";
 
 const SURFACE_LIST = SURFACES.map((row): string => `    ${row.surface.padEnd(12)} ${row.summary}`).join("\n");
 
@@ -158,9 +161,11 @@ ${SURFACE_LIST}
                               (default_subagent_model = the 'fast' alias) and
                               one agents/<name>.toml per persona.
   --source-surface <name>     The surface the SOURCE personas were written for
-                              (default claude-code): their 'model:' values are
+                              (default claude): their 'model:' values are
                               that surface's aliases, read back through
-                              'models.<name>'.
+                              'models.<name>'. When the file has no such row
+                              and exactly one declared row resolves the
+                              alias, the refusal names it.
   --rules <file.md>           A rules document, emitted at the row's rules
                               directory as '<stem><ext>' with the surface's own
                               frontmatter; over the surface's documented

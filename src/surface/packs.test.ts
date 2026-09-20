@@ -300,7 +300,7 @@ describe("rules", () => {
 
 describe("models", () => {
   const workflow = join(PACKS, "workflow.json");
-  const maps = (surface: string, sourceSurface = "claude-code"): ReturnType<typeof readModelMaps> =>
+  const maps = (surface: string, sourceSurface = "claude"): ReturnType<typeof readModelMaps> =>
     readModelMaps(workflow, surface, sourceSurface);
 
   it("reads models.<surface> and models.<source-surface>, and refuses a target the file does not declare", () => {
@@ -308,7 +308,7 @@ describe("models", () => {
     expect(maps("codex").source?.["deep"]).toBe("opus");
     expect(maps("codex", "nowhere").source).toBeNull();
     expect(maps("codex").known).toContain("antigravity");
-    expect(() => maps("gemini-cli")).toThrow(/no 'models\.gemini-cli'.*claude-code, twins, codex, cursor, antigravity/);
+    expect(() => maps("gemini-cli")).toThrow(/no 'models\.gemini-cli'.*claude, twins, codex, cursor, antigravity/);
     expect(() => readModelMaps(tempFile("w.json", '{"models":{"codex":{"fast":1}}}'), "codex", "x")).toThrow(/models\.codex\.fast/);
     expect(() => readModelMaps(tempFile("w.json", "[]"), "codex", "x")).toThrow(/not an object/);
   });
@@ -321,8 +321,17 @@ describe("models", () => {
 
   it("refuses an alias under two tiers, an unknown value, and a missing source row -- each by pointer", () => {
     expect(() => resolveTier(maps("cursor", "twins"), "big", "x.md")).toThrow(/'models\.twins' lists under 2 tiers \(frontier, deep\)/);
-    expect(() => resolveTier(maps("cursor"), "gigantic", "x.md")).toThrow(/neither a tier of 'models\.cursor'.*nor an alias under 'models\.claude-code'/);
+    expect(() => resolveTier(maps("cursor"), "gigantic", "x.md")).toThrow(/neither a tier of 'models\.cursor'.*nor an alias under 'models\.claude'/);
     expect(() => resolveTier(maps("cursor", "nowhere"), "opus", "x.md")).toThrow(/declares no 'models\.nowhere'.*--source-surface/);
+  });
+
+  it("names the one declared row that would resolve the alias when the source row is absent (N8)", () => {
+    expect(() => resolveTier(maps("cursor", "nowhere"), "opus", "x.md")).toThrow(/Did you mean --source-surface claude\?$/);
+    // Under two rows it is a choice, and the refusal names none.
+    const two = readModelMaps(tempFile("w.json", '{"models":{"cursor":{"fast":"a"},"p":{"fast":"opus"},"q":{"deep":"opus"}}}'), "cursor", "nowhere");
+    expect(() => resolveTier(two, "opus", "x.md")).not.toThrow(/Did you mean/);
+    expect(() => resolveTier(two, "opus", "x.md")).toThrow(/declares no 'models\.nowhere'/);
+    expect(() => resolveTier(maps("cursor", "nowhere"), "gigantic", "x.md")).not.toThrow(/Did you mean/);
   });
 
   const entries = (text: string): ReturnType<typeof splitDocument>["entries"] => splitDocument(text).entries;

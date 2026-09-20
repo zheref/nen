@@ -452,8 +452,8 @@ describe("--models", () => {
     expect(check.code).toBe(0);
   });
 
-  it("reads a source persona's own alias back through --source-surface, defaulting to claude-code", async () => {
-    // fixtures/agents/scout.md says `model: sonnet`: claude-code's fast tier.
+  it("reads a source persona's own alias back through --source-surface, defaulting to claude", async () => {
+    // fixtures/agents/scout.md says `model: sonnet`: claude's fast tier.
     const out = tempDir();
     const cursor = await capture([...generateArgv("cursor", out, ["--models", join(PACKS, "workflow.json")]), "--json"]);
     expect(cursor.code).toBe(0);
@@ -468,7 +468,7 @@ describe("--models", () => {
     expect(unneeded.code).toBe(0);
     const needed = await capture(generateArgv("cursor", tempDir(), ["--models", join(PACKS, "workflow.json"), "--source-surface", "nowhere"]));
     expect(needed.code).toBe(2);
-    expect(needed.err.join("\n")).toMatch(/'scout\.md' says 'model: sonnet'.*no 'models\.nowhere'/);
+    expect(needed.err.join("\n")).toMatch(/'scout\.md' says 'model: sonnet'.*no 'models\.nowhere'.*Did you mean --source-surface claude\?/);
     const empty = await capture(generateArgv("cursor", tempDir(), ["--models", join(PACKS, "workflow.json"), "--source-surface", ""]));
     expect(empty.code).toBe(2);
     expect(empty.err.join("\n")).toMatch(/--source-surface was given an empty value/);

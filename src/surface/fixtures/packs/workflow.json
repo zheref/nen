@@ -1,7 +1,7 @@
 {
   "models": {
     "rule": "frontier for a lead, fast for a reviewer",
-    "claude-code": { "frontier": "fable", "deep": "opus", "fast": "sonnet", "economy": "haiku" },
+    "claude": { "frontier": "fable", "deep": "opus", "fast": "sonnet", "economy": "haiku" },
     "twins": { "frontier": "big", "deep": "big", "fast": "small", "economy": "small" },
     "codex": { "frontier": "gpt-5", "deep": "gpt-5", "fast": "gpt-5-mini", "economy": "gpt-5-nano" },
     "cursor": { "frontier": "claude-4-sonnet", "deep": "claude-4-opus", "fast": "gpt-4.1", "economy": "auto" },
