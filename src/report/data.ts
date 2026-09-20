@@ -104,6 +104,18 @@ export interface ReportPhase {
   readonly exitCode: number | null;
   readonly surface: string | null;
   readonly model: string | null;
+  /** The entry's free-text line. Was dropped from this row until v0.13 (zheref/nen#227). */
+  readonly note: string | null;
+  /** The `nen shu` steps that ran inside the phase, verbatim from the ledger; `[]` when none. */
+  readonly steps: readonly ReportPhaseStep[];
+}
+
+export interface ReportPhaseStep {
+  readonly verb: string;
+  readonly argv: string;
+  readonly exitCode: number | null;
+  readonly durationMs: number | null;
+  readonly stalled: boolean;
 }
 
 export interface ReportData {
@@ -571,6 +583,16 @@ export function readPhaseLedgers(root: string, warn: (line: string) => void): re
         exitCode: typeof entry["exitCode"] === "number" ? entry["exitCode"] : null,
         surface: typeof entry["surface"] === "string" ? entry["surface"] : null,
         model: typeof entry["model"] === "string" ? entry["model"] : null,
+        note: typeof entry["note"] === "string" ? entry["note"] : null,
+        steps: Array.isArray(entry["steps"])
+          ? (entry["steps"] as Record<string, unknown>[]).map((step): ReportPhaseStep => ({
+              verb: String(step["verb"] ?? ""),
+              argv: String(step["argv"] ?? ""),
+              exitCode: typeof step["exitCode"] === "number" ? step["exitCode"] : null,
+              durationMs: typeof step["durationMs"] === "number" ? step["durationMs"] : null,
+              stalled: step["stalled"] === true,
+            }))
+          : [],
       });
     }
   }

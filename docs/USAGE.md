@@ -2349,13 +2349,22 @@ branch slug, a PR number, a session id); a `/` in it becomes `-` in the filename
 every ledger it finds as `phases[]`.
 
 **`--json`** — `begin` and `end` emit `{ path, entry: { phase, startedAt, endedAt, durationMs, exitCode,
-surface, model, note } }`; `show` emits the ledger itself, `{ contract: "nen.phase.ledger/v0.1", effort,
-phases: [ … ] }`.
+surface, model, note, steps } }`; `show` emits the ledger itself, `{ contract: "nen.phase.ledger/v0.1", effort,
+phases: [ … ] }`. `steps` is `[]` from `begin` (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) and
+grows by one `{ verb, argv, exitCode, durationMs, stalled }` per step a `nen shu <verb> --effort <id>` run
+executes while the entry is open — the executor never opens an entry of its own. `show` renders them
+indented under their phase. The contract stays `v0.1`: the key is additive, and an entry written before it
+existed reads as `steps: []`.
 
 ```
 nen phase begin --effort HA/85 --phase breath --surface codex
 nen phase end   --effort HA/85 --exit 0
 ended breath on 'HA/85' after 7500ms (exit 0) -- /…/.nen/phases/HA%2F85.json
+nen phase show --effort HA/85
+effort: HA/85 (2 phase entries)
+  breath            7500ms  2026-01-01T00:00:00.000Z  exit 0 · codex
+  rasengan            open  2026-01-01T00:00:08.000Z
+    build        1200ms e0  pnpm turbo run build
 ```
 
 
@@ -4715,6 +4724,32 @@ Stack-aware developer verbs. Every one of them runs what the TARGET REPOSITORY d
 present with no `project` block, is exit 2 naming the file; `nen shu detect`
 proposes one.
 
+<a id="stall-two-gate"></a>
+**Stall guard — the two-gate symptom.** A step with a declared `stall` block
+strikes only when **both** of its budgets are exceeded at the same tick:
+`elapsedMs` since the step started **and** `quietMs` since its last byte of
+output. Neither alone is a symptom. A build past its elapsed budget that is
+still printing has not stalled — its quiet window keeps resetting; a build
+that has said nothing for longer than `quietMs` but is still inside
+`elapsedMs` has not stalled either — a compile legitimately goes quiet early
+on. `nen shu <verb> --dry-run` states the rule on every guarded step as
+`stall guard: elapsed >N ms AND quiet >M ms (both): <remedy>`, so the second
+number cannot be read as a silence timeout on its own, and
+`src/shu/run.test.ts` pins all three cases against the seam's own window
+arithmetic. The `test` row carries no guard by ruling: tests are untimed, and
+a `stall` declared there is refused at load by pointer.
+
+**`--effort <id>` — a run's steps on the phase ledger** (v0.13.0,
+[#227](https://github.com/zheref/nen/issues/227)). Every executing `shu` verb
+takes `--effort <id>` (or reads `NEN_EFFORT` from the environment when the
+flag is absent) and, when the [`nen phase`](#nen-phase) ledger for that effort
+has an OPEN entry, appends every step it ran to that entry as
+`{ verb, argv, exitCode, durationMs, stalled }` — the same `durationMs` the run
+report prints, `null` when the tool never started. Nothing is written when no
+entry is open (a run outside a phase is never a phase of its own), when no
+ledger exists, on `--dry-run`, or on an interactive pre-flight; a ledger that
+cannot be written is a line on stderr and never a failed run.
+
 <a id="shu-run-report"></a>
 **The shared `--json` run report.** Every `shu` verb that EXECUTES a declared
 invocation emits one object with the same top-level keys, in this order:
@@ -4753,7 +4788,7 @@ by a server's log lines is not a document.
 | `project.lanes` | `{ "<lane>": { "stack": "<id>", "cwd": "<repo-relative>" } }`. A stack is a **per-lane** property: one repository is routinely several builds. |
 | `project.defaultLane` | Which lane `--lane` defaults to. `null` is legal and means `--lane` is required — even when there is exactly one lane, so a second lane arriving later cannot silently change what a scripted `nen shu build` builds. |
 | `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported), `artifacts` (repo-relative paths the verb produces, which nen reports and never creates) `stall` and `stdoutTo` (both below). |
-| `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `test`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. `--dry-run` prints it as an `on stall:` line under the step it guards. |
+| `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. **A `stall` on the `test` row is refused at load, by pointer, with the reason "tests are untimed"** (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)): a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. `--dry-run` prints the guard as a `stall guard: elapsed >N ms AND quiet >M ms (both)` line under the step it guards — see [the two-gate symptom](#stall-two-gate). |
 | `stdoutTo` | On an invocation, or on one entry of its `steps`: the **repo-relative file** that step's stdout is written to. There is still no shell and no redirection **operator** — nen already captures a child's stdout, and this says to write those bytes to a file rather than relay them. It is the answer for a tool that **prints** the thing nen then parses (`xccov view --report --json` is the bundled example: `nen shu coverage` reads a *file*). Refused **at load** for a path that is absolute, carries a `..` segment, or carries a glob character (`*`, `?`, `[…]`) — nen expands nothing, so a glob would create a file with that character in its name; refused **at the run**, before anything spawns, when a directory is already at the path or a symlink would land the write outside the tree. Refused outright on `dev` and `run`: those hand the terminal to the child, so nen never sees their output. The file is written whatever the tool exited (a half report is what a redirect leaves), and **not** written for a step that could not start. That step's stdout does not also go to the terminal; its **stderr** still does. `--dry-run` prints `stdout -> <path>` on the step, the report lists every such file beside `artifacts`, and `--json` carries `steps[].stdoutTo`. It works on a step that also carries a `stall` guard: that step's output arrives from the streaming seam as chunks rather than as one buffer, so the chunks are held and joined rather than relayed. |
 | `project.preconditions` | `{ "<lane>": [ { kind, value, why } ] }`. Nen **asserts** these and **never performs** them. |
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
@@ -5290,6 +5325,7 @@ nen shu build [--repo <path>] [--lane <name>] [--dry-run] [--json]
 |---|---|---|---|
 | `--lane <name>` | no | Which lane to build. | Defaults to `project.defaultLane`; exit 2 naming every declared lane when neither is given. |
 | `--dry-run` | no | Print every step and run nothing. | The argv printed **is** the argv that would be spawned — same rendering, same plan. |
+| `--effort <id>` | no | The `nen phase` effort whose OPEN entry this run's steps are appended to. | Or `NEN_EFFORT` from the environment; see [`--effort`](#stall-two-gate) above. Nothing is written when no entry is open. |
 
 **Output and exit codes** — the report, as text or `--json`. `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.build/v0.1"`.
 
@@ -5360,7 +5396,7 @@ verb:          build
 host:          darwin -- supported (the declaration constrains no platform)
 preconditions: (none declared)
 ran:           sleep 20  -- STALLED, still running (nen stopped waiting)
-on stall:      after 2000ms elapsed AND 1000ms with no output: echo 'the repository'\''s own remedy ran'  (up to 2 times; ran 2 at 2009ms, 3516ms; STALLED -- every remedy spent)
+stall guard:   elapsed >2000 ms AND quiet >1000 ms (both): echo 'the repository'\''s own remedy ran'  (up to 2 times; ran 2 at 2009ms, 3516ms; STALLED -- every remedy spent)
 …
 step 1 of 1 stalled: sleep 20 -- every one of the 2 declared remedies ran and it went quiet again. nen exits 1; the step itself was never killed and has no exit code to report.
 ```
@@ -7579,7 +7615,7 @@ token, an unevaluated gate, an unreachable API. An unevaluated gate has not said
 "not ready"; it has said nothing, and publishing the two as one word is the
 false-red twin of a false green.
 
-**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]`, then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), and `objects[]` — **appended at the end of the key order** in v0.12.0 and kept last, so a consumer reading the twelve keys before them reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
+**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]` (each entry flattened with its `effort`; since v0.13.0 also its `note` and the `steps[]` a `shu` run left under it), then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), and `objects[]` — **appended at the end of the key order** in v0.12.0 and kept last, so a consumer reading the twelve keys before them reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
 
 `evidence` is **an empty list in this release, and the empty list is the seam**: the rows belong to `nen shu evidence --base <ref>`, which reads `project.evidence` (globs, mechanism, a `{suite}-{scene}` template) and which does not exist yet. The field ships now so a template written against this contract does not change shape when the verb lands — `{{#each evidence}}` renders nothing today and renders rows tomorrow. This verb deliberately does **not** glob a tree for them: that answer must come from the one verb that owns `project.evidence`, or the two will disagree the first time a scene template changes.
 

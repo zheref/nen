@@ -1527,3 +1527,44 @@ describe("the project-level block keys whose own NAME is guarded", () => {
     expect(contract.project?.raw["evidently"]).toEqual({});
   });
 });
+
+// ── a stall guard on the tests row (zheref/nen#227) ─────────────────────────
+
+describe("a stall block on the 'test' row is refused at load: tests are untimed", () => {
+  const STALL = { elapsedMs: 1000, quietMs: 500, onStall: { exe: "placeholder-killer", argv: ["-9"] } };
+  function withTest(test: unknown): unknown {
+    return {
+      $schema: "nen.contract/v0.1",
+      project: {
+        lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+        defaultLane: "only",
+        verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] }, test } },
+      },
+    };
+  }
+
+  it("refuses the invocation's own stall, by pointer, with the reason", () => {
+    const error = refusal(withTest({ exe: "placeholder-tool", argv: ["check"], stall: STALL }));
+    expect(error.pointer).toBe("project.verbs.only.test.stall");
+    expect(error.message).toContain("tests are untimed");
+  });
+
+  it("refuses a stall on one of its steps, by that step's pointer", () => {
+    const error = refusal(withTest({ steps: [{ exe: "placeholder-tool", argv: ["a"] }, { exe: "placeholder-tool", argv: ["b"], stall: STALL }] }));
+    expect(error.pointer).toBe("project.verbs.only.test.steps[1].stall");
+  });
+
+  it("leaves a 'test' row with no stall, and a guarded build row, exactly as they were", () => {
+    expect(parse(withTest({ exe: "placeholder-tool", argv: ["check"] })).project?.verbs["only"]?.["test"]?.kind).toBe("command");
+    const contract = parse({
+      $schema: "nen.contract/v0.1",
+      project: {
+        lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+        defaultLane: "only",
+        verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"], stall: STALL } } },
+      },
+    });
+    const build = contract.project?.verbs["only"]?.["build"];
+    expect(build?.kind === "command" ? build.stall?.elapsedMs : null).toBe(1000);
+  });
+});

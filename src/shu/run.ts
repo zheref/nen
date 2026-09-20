@@ -58,6 +58,7 @@ import type { DeviceExtraction, DeviceReadiness, StallGuard } from "../schema/co
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { openDeclaration } from "./declaration.js";
+import { appendStepsToOpenPhase, EFFORT_ID, type PhaseStep } from "../phase/ledger.js";
 import {
   ASSERTABLE_KINDS,
   isLaunchTarget,
@@ -684,10 +685,14 @@ export function renderReport(report: ShuReport): readonly string[] {
     // block of its own further down.
     const stall = step.stall;
     if (stall !== null) {
+      // THE TWO-GATE SYMPTOM, SPELLED OUT: a step strikes only when BOTH the
+      // elapsed budget AND the quiet budget are exceeded, and the line says
+      // `(both)` so a reader approving a dry run cannot read the second number
+      // as a silence timeout on its own (zheref/nen#227).
       lines.push(
         labelled(
-          "on stall",
-          `after ${stall.elapsedMs}ms elapsed AND ${stall.quietMs}ms with no output: ${renderArgv(
+          "stall guard",
+          `elapsed >${stall.elapsedMs} ms AND quiet >${stall.quietMs} ms (both): ${renderArgv(
             stall.onStall,
           )}  (up to ${stall.maxStrikes} time${stall.maxStrikes === 1 ? "" : "s"}${
             stall.strikes === 0
@@ -909,6 +914,87 @@ export interface RunOptions {
    * of its own output.
    */
   readonly sink?: ReportSink;
+  /**
+   * `--effort <id>`: the phase ledger this run's steps are appended to
+   * (zheref/nen#227). Absent or null, `NEN_EFFORT` in the environment is read
+   * instead; absent there too, no ledger is touched. See `ledgerSink`.
+   */
+  readonly effort?: string | null;
+}
+
+/**
+ * The steps a run leaves on an OPEN phase entry, or nothing.
+ *
+ * NEVER A PHASE OF ITS OWN. `nen phase` records what a caller DECLARED it was
+ * doing -- breath, rasengan, kokusen -- and a `shu` run inside one of those is
+ * detail about it: every step's argv, exit code and `durationMs`, the same
+ * number the report prints, plus whether the stall guard gave up on it. So
+ * the executor appends under whichever entry is open on `--effort` (or
+ * `NEN_EFFORT`) and writes NOTHING when none is: a build run outside a phase
+ * is not turned into one, and a ledger that does not exist is not created.
+ *
+ * ONLY A RUN THAT RAN. A dry run measured nothing and an interactive
+ * pre-flight reports nulls for a process that may not stop for hours; both
+ * are `mode !== "streamed"` and leave the ledger alone. A precondition
+ * refusal is a dry-run report too, for the same reason.
+ *
+ * WRAPPED AROUND THE SINK, so the one place that decides where a report goes
+ * (`emitReport`) is also the one place the ledger hears about it -- a caller
+ * with its own sink (`coverage`) still gets the report it asked for, after the
+ * ledger has seen it. A ledger that cannot be written is a line on stderr and
+ * never a failed run, on ../report/data.ts's rule that a marker file may not
+ * fail a compile.
+ */
+function ledgerSink(
+  context: CommandContext,
+  repoRoot: string,
+  effort: string | null,
+  inner: ReportSink | undefined,
+): ReportSink | undefined {
+  if (effort === null) return inner;
+  return (report: ShuReport): void => {
+    if (report.log.mode === "streamed") {
+      const steps: PhaseStep[] = report.steps.map((step): PhaseStep => ({
+        verb: report.verb,
+        argv: renderArgv({ exe: step.exe, argv: step.argv }),
+        exitCode: step.exitCode,
+        durationMs: step.durationMs,
+        stalled: step.stall?.stalled === true,
+      }));
+      try {
+        appendStepsToOpenPhase(repoRoot, effort, steps);
+      } catch (error) {
+        context.io.err(
+          `the run's steps could not be recorded on effort '${effort}': ${error instanceof Error ? error.message : String(error)}. The run itself is unaffected.`,
+        );
+      }
+    }
+    if (inner !== undefined) {
+      inner(report);
+      return;
+    }
+    emit(context.io, context.json, report, renderReport(report));
+  };
+}
+
+/**
+ * The effort a run records under: the flag, else `NEN_EFFORT`, else none.
+ *
+ * VALIDATED HERE, not in the ledger: an id the phase family would refuse
+ * (`../x`) is a usage error on the flag that carried it, and the same rule
+ * applied to the environment keeps a stray variable from steering a write.
+ */
+function resolveEffort(context: CommandContext, options: RunOptions): string | null {
+  const fromFlag = options.effort ?? null;
+  const fromEnv = context.seams.env["NEN_EFFORT"];
+  const effort = fromFlag ?? (fromEnv === undefined || fromEnv.trim() === "" ? null : fromEnv);
+  if (effort === null) return null;
+  if (!EFFORT_ID.test(effort)) {
+    throw new VerbUsageError(
+      `${fromFlag === null ? "NEN_EFFORT" : "--effort"} '${effort}' is not a ledger id: letters, digits, '.', '_', '-' and '/' only -- the same alphabet 'nen phase' admits.`,
+    );
+  }
+  return effort;
 }
 
 /**
@@ -979,6 +1065,8 @@ export async function runVerb(
   options: RunOptions,
 ): Promise<number> {
   refuseImpossibleFlags(context, options);
+  const effort = resolveEffort(context, options);
+  const sink = ledgerSink(context, repoRoot, effort, options.sink);
   const { project } = openDeclaration(repoRoot);
   // A TARGET DECLARED FOR THE OTHER LONG-RUNNING VERB IS REFUSED BEFORE THE
   // LANE'S OWN ROW IS EVEN READ, and the order is the fix rather than a
@@ -1048,7 +1136,7 @@ export async function runVerb(
     const steps = plannedSteps(plan).map(
       (step): ShuStepReport => plannedStep(step, cwd),
     );
-    emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
+    emitReport(context, sink, assemble(plan, cwd, repoRoot, preconditions, steps, 2, 0, "dry-run"));
     const cannot = unmet.filter((entry): boolean => entry.satisfied === null);
     context.io.err(
       `${unmet.length} precondition${unmet.length === 1 ? "" : "s"} on lane '${plan.lane}' ${unmet.length === 1 ? "is" : "are"} not satisfied${
@@ -1074,7 +1162,7 @@ export async function runVerb(
     const steps = plannedSteps(plan).map(
       (step): ShuStepReport => plannedStep(step, cwd),
     );
-    emitReport(context, options.sink, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
+    emitReport(context, sink, assemble(plan, cwd, repoRoot, preconditions, steps, 0, 0, "dry-run"));
     // ON STDERR, NOT IN THE DOCUMENT, so `--json` stdout stays exactly one
     // object of the published shape -- the same place every other advisory
     // sentence in this family goes.
@@ -1101,12 +1189,12 @@ export async function runVerb(
 
   const launch = launchOf(plan);
   if (launch !== null) {
-    return runLaunch(context, plan, launch, cwd, repoRoot, preconditions, options.sink);
+    return runLaunch(context, plan, launch, cwd, repoRoot, preconditions, sink);
   }
   if (INTERACTIVE_VERBS.includes(plan.verb)) {
-    return runInteractively(context, plan, cwd, repoRoot, preconditions, options.sink);
+    return runInteractively(context, plan, cwd, repoRoot, preconditions, sink);
   }
-  return await runCaptured(context, plan, cwd, repoRoot, preconditions, options.sink);
+  return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink);
 }
 
 /**

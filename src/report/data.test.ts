@@ -325,6 +325,29 @@ describe("a repository that has declared nothing to nen", () => {
   });
 });
 
+describe("the phase ledgers carry note and steps (zheref/nen#227)", () => {
+  it("flattens each entry with its effort, note and the shu steps recorded under it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-report-phases-"));
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    writeFileSync(
+      join(root, ".nen", "phases", "e.json"),
+      JSON.stringify({
+        contract: "nen.phase.ledger/v0.1",
+        effort: "e",
+        phases: [
+          { phase: "old", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: "kept" },
+          { phase: "rasengan", startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:09.000Z", durationMs: 9000, exitCode: 0, surface: "codex", model: "fast", note: null, steps: [{ verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1000, stalled: false }] },
+        ],
+      }),
+    );
+    const captured = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script({ log: LOG }));
+    const phases = documentFrom(captured)["phases"] as Record<string, unknown>[];
+    expect(Object.keys(phases[0] ?? {})).toEqual(["effort", "phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps"]);
+    expect(phases[0]).toMatchObject({ effort: "e", note: "kept", steps: [] });
+    expect(phases[1]?.["steps"]).toEqual([{ verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1000, stalled: false }]);
+  });
+});
+
 describe("the usage ledgers (zheref/nen#227)", () => {
   it("flattens every .nen/usage/<effort>.json entry with its effort, and skips a file of another contract", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-report-usage-"));

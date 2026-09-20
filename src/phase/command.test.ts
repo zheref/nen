@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import type { Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { PHASE_CONTRACT, PHASE_LEDGER_DIR, phaseCommand } from "./command.js";
+import { appendStepsToOpenPhase } from "./ledger.js";
 
 function seamsAt(iso: string): Seams {
   return {
@@ -79,6 +80,34 @@ describe("nen phase begin|end -- the per-phase timing ledger", () => {
     const dash = await capture(["phase", "show", "--effort", "HA-85", "--json"], root, "2026-01-01T00:00:02Z");
     expect((JSON.parse(slash.out.join("\n")) as { phases: { phase: string }[] }).phases.map((p): string => p.phase)).toEqual(["a"]);
     expect((JSON.parse(dash.out.join("\n")) as { phases: { phase: string }[] }).phases.map((p): string => p.phase)).toEqual(["b"]);
+  });
+
+  it("begins with 'steps: []', and show renders recorded steps indented under their phase (zheref/nen#227)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-phase-"));
+    await capture(["phase", "begin", "--effort", "x", "--phase", "rasengan"], root, "2026-01-01T00:00:00Z");
+    const path = join(root, PHASE_LEDGER_DIR, "x.json");
+    const fresh = JSON.parse(readFileSync(path, "utf8")) as { phases: { steps: unknown[] }[] };
+    expect(fresh.phases[0]?.steps).toEqual([]);
+    expect(Object.keys(fresh.phases[0] ?? {})).toEqual(["phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps"]);
+    expect(appendStepsToOpenPhase(root, "x", [
+      { verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1200, stalled: false },
+      { verb: "lint", argv: "placeholder-tool lint", exitCode: null, durationMs: null, stalled: true },
+    ])).toBe(true);
+    const show = await capture(["phase", "show", "--effort", "x"], root, "2026-01-01T00:00:09Z");
+    expect(show.out).toEqual([
+      "effort: x (1 phase entry)",
+      "  rasengan            open  2026-01-01T00:00:00.000Z",
+      "    build        1200ms e0  placeholder-tool go",
+      "    lint           STALLED  placeholder-tool lint",
+    ]);
+    // Ending the phase keeps the steps.
+    await capture(["phase", "end", "--effort", "x", "--exit", "0"], root, "2026-01-01T00:00:10Z");
+    expect((JSON.parse(readFileSync(path, "utf8")) as { phases: { steps: unknown[] }[] }).phases[0]?.steps).toHaveLength(2);
+    // Nothing open: nothing appended, nothing written.
+    expect(appendStepsToOpenPhase(root, "x", [{ verb: "build", argv: "x", exitCode: 0, durationMs: 1, stalled: false }])).toBe(false);
+    // An entry written before the key existed renders without it.
+    writeFileSync(path, JSON.stringify({ contract: PHASE_CONTRACT, effort: "x", phases: [{ phase: "old", startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:01.000Z", durationMs: 1000, exitCode: 0, surface: null, model: null, note: null }] }));
+    expect((await capture(["phase", "show", "--effort", "x"], root, "2026-01-01T00:00:09Z")).out).toHaveLength(2);
   });
 
   it("refuses a bad effort id and a negative exit", async () => {
