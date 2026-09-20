@@ -340,8 +340,34 @@ export function renderRules(rule: RulesRule, source: RulesSource, marker: string
 // Models
 // ---------------------------------------------------------------------------
 
-/** `models.<surface>` of the workflow file: tier -> alias. */
-export function readModelMap(path: string, surface: string): Readonly<Record<string, string>> {
+export interface ModelMaps {
+  /** `models.<surface>`: tier -> the TARGET surface's alias. */
+  readonly target: Readonly<Record<string, string>>;
+  /** The target surface's name, for a pointer. */
+  readonly surface: string;
+  /**
+   * `models.<source-surface>`: tier -> the alias the SOURCE personas carry,
+   * or null when the file declares none for that surface (refused only when a
+   * persona actually needs the reverse lookup).
+   */
+  readonly source: Readonly<Record<string, string>> | null;
+  readonly sourceSurface: string;
+  /** Every surface the file declares, for the refusal that names them. */
+  readonly known: readonly string[];
+}
+
+/**
+ * `models.<surface>` and `models.<source-surface>` of the workflow file.
+ *
+ * WHY TWO MAPS. A canonical persona file is read directly by the surface it
+ * was written for, so its `model:` carries THAT surface's alias (`opus`), not
+ * a tier name -- rewriting the source to tiers would break the surface that
+ * reads it unmirrored. The mirror therefore resolves a value in two steps:
+ * alias -> tier through the source surface's row of the same matrix, then
+ * tier -> alias through the target's. A tier name written directly is
+ * accepted as-is, so a persona may say either.
+ */
+export function readModelMaps(path: string, surface: string, sourceSurface: string): ModelMaps {
   const root = readJsonFile("models", path);
   if (!isRecord(root)) throw new SurfacePackError(`--models '${path}': the document is not an object.`);
   let policy;
@@ -350,13 +376,14 @@ export function readModelMap(path: string, surface: string): Readonly<Record<str
   } catch (error) {
     throw new SurfacePackError(`--models '${path}': ${(error as Error).message}`);
   }
-  const map = policy.surfaces[surface];
-  if (map === undefined) {
+  const known = Object.keys(policy.surfaces);
+  const target = policy.surfaces[surface];
+  if (target === undefined) {
     throw new SurfacePackError(
-      `--models '${path}' declares no 'models.${surface}' -- the tier-to-alias map this surface's personas are rewritten through. Known surfaces in the file: ${Object.keys(policy.surfaces).join(", ") || "(none)"}.`,
+      `--models '${path}' declares no 'models.${surface}' -- the tier-to-alias map this surface's personas are rewritten through. Known surfaces in the file: ${known.join(", ") || "(none)"}.`,
     );
   }
-  return map;
+  return { target, surface, source: policy.surfaces[sourceSurface] ?? null, sourceSurface, known };
 }
 
 export interface ModelRewrite {
@@ -371,14 +398,41 @@ export interface ModelRewrite {
 }
 
 /**
- * A persona's `model: <tier>` through the map. `inherit` is carried where the
- * row documents it and dropped otherwise; an unknown tier is refused by
- * pointer -- the tier is the repository's own word, and a word its own
- * workflow does not define is a typo, not a model.
+ * The tier a persona's `model:` value names: the value itself when it is a
+ * tier of the target map, else the ONE tier of the source surface's map whose
+ * alias it is. Refused by pointer when it is neither, or when the alias sits
+ * under more than one tier (the source row is ambiguous, and picking one
+ * would be nen choosing a model).
+ */
+export function resolveTier(maps: ModelMaps, value: string, relative: string): string {
+  if (maps.target[value] !== undefined) return value;
+  if (maps.source === null) {
+    throw new SurfacePackError(
+      `'${relative}' says 'model: ${value}', which is not a tier of 'models.${maps.surface}' (${Object.keys(maps.target).join(", ")}), and --models declares no 'models.${maps.sourceSurface}' to read it back through as an alias (--source-surface). Known surfaces in the file: ${maps.known.join(", ")}.`,
+    );
+  }
+  const tiers = Object.entries(maps.source)
+    .filter(([, alias]): boolean => alias === value)
+    .map(([tier]): string => tier);
+  if (tiers.length === 1) return tiers[0] ?? value;
+  if (tiers.length > 1) {
+    throw new SurfacePackError(
+      `'${relative}' says 'model: ${value}', which 'models.${maps.sourceSurface}' lists under ${tiers.length} tiers (${tiers.join(", ")}); an alias has to name exactly one tier to be read back. Fix the workflow or write the tier in the persona.`,
+    );
+  }
+  throw new SurfacePackError(
+    `'${relative}' says 'model: ${value}', which is neither a tier of 'models.${maps.surface}' (${Object.keys(maps.target).join(", ")}) nor an alias under 'models.${maps.sourceSurface}' (${Object.values(maps.source).join(", ") || "(none)"}). Add it to the workflow or fix the persona; nen does not guess a model.`,
+  );
+}
+
+/**
+ * A persona's `model:` through the maps: alias or tier -> tier -> the target
+ * surface's alias. `inherit` is carried where the row documents it and
+ * dropped otherwise; anything unresolvable is refused by pointer.
  */
 export function rewriteModel(
   row: SurfaceRow,
-  map: Readonly<Record<string, string>>,
+  maps: ModelMaps,
   entries: readonly FrontmatterEntry[],
   relative: string,
 ): ModelRewrite {
@@ -386,8 +440,8 @@ export function rewriteModel(
   if (entry === undefined || !hasValue(entries, "model")) {
     return { entries, alias: null, droppedInherit: false, undocumentedAlias: null };
   }
-  const tier = inlineValue(entry);
-  if (tier === "inherit") {
+  const value = inlineValue(entry);
+  if (value === "inherit") {
     if (row.inheritModel) return { entries, alias: "inherit", droppedInherit: false, undocumentedAlias: null };
     return {
       entries: entries.filter((candidate): boolean => candidate !== entry),
@@ -396,11 +450,11 @@ export function rewriteModel(
       undocumentedAlias: null,
     };
   }
-  const alias = map[tier];
+  const tier = resolveTier(maps, value, relative);
+  const alias = maps.target[tier];
+  /* c8 ignore next 3 -- resolveTier returns only a key of the target map */
   if (alias === undefined) {
-    throw new SurfacePackError(
-      `'${relative}' says 'model: ${tier}', and --models declares no 'models.${row.surface}.${tier}'. Known tiers for this surface: ${Object.keys(map).join(", ") || "(none)"}. Add the tier to the workflow or fix the persona; nen does not guess an alias.`,
-    );
+    throw new SurfacePackError(`'${relative}': tier '${tier}' has no 'models.${row.surface}.${tier}'.`);
   }
   const rewritten = entries.map((candidate): FrontmatterEntry =>
     candidate === entry ? { key: "model", lines: [`model: ${alias}`] } : candidate,

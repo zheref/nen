@@ -40,7 +40,7 @@ import {
 import {
   isVersion,
   readHooksManifest,
-  readModelMap,
+  readModelMaps,
   readPermissions,
   readRules,
   SurfacePackError,
@@ -51,6 +51,16 @@ import { CAPABILITIES, capabilityNames, findCapabilities, renderCapabilities } f
 export const GENERATE_CONTRACT = "nen.surface.mirror.generate/v0.1";
 export const CHECK_CONTRACT = "nen.surface.mirror.check/v0.1";
 export const CHECK_INSTALLED_CONTRACT = "nen.surface.mirror.check-installed/v0.1";
+
+/**
+ * The surface whose aliases the SOURCE personas carry in `model:` when the
+ * caller does not say. A canonical skills tree is read directly by one
+ * surface, so its personas name that surface's models; the one this binary's
+ * first consumer writes for is this one. Caller data all the same -- the flag
+ * overrides it, and the value is only ever a key of the caller's own
+ * `models` matrix.
+ */
+export const DEFAULT_SOURCE_SURFACE = "claude-code";
 
 const SURFACE_LIST = SURFACES.map((row): string => `    ${row.surface.padEnd(12)} ${row.summary}`).join("\n");
 
@@ -63,6 +73,7 @@ usage:
   nen surface mirror generate --source <dir> --surface <name> --out <dir>
                               [--agents <dir>] [--invocation-prefix <prefix>]
                               [--hooks <hooks.json>] [--models <workflow.json>]
+                              [--source-surface <name>]
                               [--rules <file.md>] [--permissions <permissions.json>]
                               [--stamp <version>] [--dry-run] [--json]
   nen surface mirror check    --source <dir> --surface <name> --out <dir>
@@ -118,13 +129,19 @@ ${SURFACE_LIST}
                               events renamed to the surface's own; a surface
                               with no hooks reports 'hooks: not supported'.
   --models <workflow.json>    A nen/workflow.json whose 'models.<surface>' maps
-                              tiers to aliases. A persona's 'model: <tier>' is
-                              rewritten to the alias; 'inherit' is carried where
-                              the surface documents it and dropped (named)
-                              elsewhere; an undeclared tier is refused by
-                              pointer. Codex also gets config.toml.fragment
+                              tiers to aliases. A persona's 'model:' is read as
+                              a tier, else as an alias of --source-surface's
+                              row (read back to its one tier), and rewritten to
+                              the target alias; 'inherit' is carried where the
+                              surface documents it and dropped (named)
+                              elsewhere; anything else is refused by pointer.
+                              Codex also gets config.toml.fragment
                               (default_subagent_model = the 'fast' alias) and
                               one agents/<name>.toml per persona.
+  --source-surface <name>     The surface the SOURCE personas were written for
+                              (default claude-code): their 'model:' values are
+                              that surface's aliases, read back through
+                              'models.<name>'.
   --rules <file.md>           A rules document, emitted at the row's rules
                               directory as '<stem><ext>' with the surface's own
                               frontmatter; over the surface's documented
@@ -159,7 +176,7 @@ SKILL.md, a skill missing a key the surface requires, a rules file over the
 surface's limit, a tier --models does not declare, or a destination that exists
 and carries no marker (this verb never overwrites a hand-written file).`;
 
-const INPUT_VALUES = ["source", "agents", "surface", "invocation-prefix", "hooks", "models", "rules", "permissions", "stamp"];
+const INPUT_VALUES = ["source", "agents", "surface", "source-surface", "invocation-prefix", "hooks", "models", "rules", "permissions", "stamp"];
 
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
   generate: { values: [...INPUT_VALUES, "out"], booleans: ["dry-run"] },
@@ -272,6 +289,10 @@ function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
   const agents = agentsFlag === undefined ? { agents: [], skipped: [] } : readSourceAgentsReport(agentsFlag);
   const hooksPath = optionalPath(context, "hooks");
   const modelsPath = optionalPath(context, "models");
+  const sourceSurface = context.args.values["source-surface"] ?? DEFAULT_SOURCE_SURFACE;
+  if (sourceSurface.trim() === "") {
+    throw new VerbUsageError("--source-surface was given an empty value. Omit it for the default, or name the surface the source personas were written for.");
+  }
   const rulesPath = optionalPath(context, "rules");
   const permissionsPath = optionalPath(context, "permissions");
 
@@ -290,7 +311,7 @@ function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
       invocationPrefix: context.args.values["invocation-prefix"] ?? null,
       stamp,
       hooks: hooksPath === null ? null : readHooksManifest(hooksPath),
-      models: modelsPath === null ? null : readModelMap(modelsPath, row.surface),
+      models: modelsPath === null ? null : readModelMaps(modelsPath, row.surface, sourceSurface),
       rules: rulesPath === null ? null : readRules(rulesPath),
       permissions: permissionsPath === null ? null : readPermissions(permissionsPath),
     }),

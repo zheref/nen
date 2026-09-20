@@ -11,7 +11,8 @@ import {
   compareVersions,
   isVersion,
   readHooksManifest,
-  readModelMap,
+  readModelMaps,
+  resolveTier,
   readPermissions,
   readRules,
   renderHooks,
@@ -181,49 +182,63 @@ describe("rules", () => {
 
 describe("models", () => {
   const workflow = join(PACKS, "workflow.json");
+  const maps = (surface: string, sourceSurface = "claude-code"): ReturnType<typeof readModelMaps> =>
+    readModelMaps(workflow, surface, sourceSurface);
 
-  it("reads models.<surface> and refuses a surface the file does not declare", () => {
-    expect(readModelMap(workflow, "codex")["fast"]).toBe("gpt-5-mini");
-    expect(() => readModelMap(workflow, "gemini-cli")).toThrow(/no 'models\.gemini-cli'.*codex, cursor, antigravity/);
-    expect(() => readModelMap(tempFile("w.json", '{"models":{"codex":{"fast":1}}}'), "codex")).toThrow(/models\.codex\.fast/);
-    expect(() => readModelMap(tempFile("w.json", "[]"), "codex")).toThrow(/not an object/);
+  it("reads models.<surface> and models.<source-surface>, and refuses a target the file does not declare", () => {
+    expect(maps("codex").target["fast"]).toBe("gpt-5-mini");
+    expect(maps("codex").source?.["deep"]).toBe("opus");
+    expect(maps("codex", "nowhere").source).toBeNull();
+    expect(maps("codex").known).toContain("antigravity");
+    expect(() => maps("gemini-cli")).toThrow(/no 'models\.gemini-cli'.*claude-code, twins, codex, cursor, antigravity/);
+    expect(() => readModelMaps(tempFile("w.json", '{"models":{"codex":{"fast":1}}}'), "codex", "x")).toThrow(/models\.codex\.fast/);
+    expect(() => readModelMaps(tempFile("w.json", "[]"), "codex", "x")).toThrow(/not an object/);
+  });
+
+  it("resolves a tier name as itself, and a source alias to its one tier", () => {
+    expect(resolveTier(maps("cursor"), "deep", "x.md")).toBe("deep");
+    expect(resolveTier(maps("cursor"), "opus", "x.md")).toBe("deep");
+    expect(resolveTier(maps("cursor"), "haiku", "x.md")).toBe("economy");
+  });
+
+  it("refuses an alias under two tiers, an unknown value, and a missing source row -- each by pointer", () => {
+    expect(() => resolveTier(maps("cursor", "twins"), "big", "x.md")).toThrow(/'models\.twins' lists under 2 tiers \(frontier, deep\)/);
+    expect(() => resolveTier(maps("cursor"), "gigantic", "x.md")).toThrow(/neither a tier of 'models\.cursor'.*nor an alias under 'models\.claude-code'/);
+    expect(() => resolveTier(maps("cursor", "nowhere"), "opus", "x.md")).toThrow(/declares no 'models\.nowhere'.*--source-surface/);
   });
 
   const entries = (text: string): ReturnType<typeof splitDocument>["entries"] => splitDocument(text).entries;
 
-  it("rewrites a tier to the alias and leaves every other line alone", () => {
-    const map = readModelMap(workflow, "cursor");
-    const result = rewriteModel(row("cursor"), map, entries("---\nname: x\nmodel: deep\n---\n"), "x.md");
+  it("rewrites a tier or a source alias to the target alias and leaves every other line alone", () => {
+    const result = rewriteModel(row("cursor"), maps("cursor"), entries("---\nname: x\nmodel: deep\n---\n"), "x.md");
     expect(result.alias).toBe("claude-4-opus");
     expect(result.entries.map((entry): string => entry.lines.join("\n"))).toEqual(["name: x", "model: claude-4-opus"]);
+    expect(rewriteModel(row("cursor"), maps("cursor"), entries("---\nmodel: sonnet\n---\n"), "x.md").alias).toBe("gpt-4.1");
   });
 
   it("carries inherit where the row documents it and drops it, saying so, elsewhere", () => {
-    const map = readModelMap(workflow, "cursor");
-    const kept = rewriteModel(row("cursor"), map, entries("---\nmodel: inherit\n---\n"), "x.md");
+    const kept = rewriteModel(row("cursor"), maps("cursor"), entries("---\nmodel: inherit\n---\n"), "x.md");
     expect(kept.alias).toBe("inherit");
     expect(kept.droppedInherit).toBe(false);
-    const dropped = rewriteModel({ ...row("cursor"), inheritModel: false }, map, entries("---\nmodel: inherit\n---\n"), "x.md");
+    const dropped = rewriteModel({ ...row("cursor"), inheritModel: false }, maps("cursor"), entries("---\nmodel: inherit\n---\n"), "x.md");
     expect(dropped.alias).toBeNull();
     expect(dropped.droppedInherit).toBe(true);
     expect(dropped.entries).toEqual([]);
   });
 
-  it("refuses an undeclared tier by pointer, and names an alias outside the documented set", () => {
-    const map = readModelMap(workflow, "antigravity");
-    expect(() => rewriteModel(row("antigravity"), map, entries("---\nmodel: opus\n---\n"), "x.md")).toThrow(
-      /'x\.md' says 'model: opus'.*models\.antigravity\.opus/,
+  it("refuses an unresolvable value by pointer, and names an alias outside the documented set", () => {
+    expect(() => rewriteModel(row("antigravity"), maps("antigravity"), entries("---\nmodel: gigantic\n---\n"), "x.md")).toThrow(
+      /'x\.md' says 'model: gigantic'/,
     );
-    const economy = rewriteModel(row("antigravity"), map, entries("---\nmodel: economy\n---\n"), "x.md");
+    const economy = rewriteModel(row("antigravity"), maps("antigravity"), entries("---\nmodel: haiku\n---\n"), "x.md");
     expect(economy.alias).toBe("flash_lite");
     expect(economy.undocumentedAlias).toBe("flash_lite");
-    expect(rewriteModel(row("antigravity"), map, entries("---\nmodel: fast\n---\n"), "x.md").undocumentedAlias).toBeNull();
+    expect(rewriteModel(row("antigravity"), maps("antigravity"), entries("---\nmodel: opus\n---\n"), "x.md")).toMatchObject({ alias: "pro", undocumentedAlias: null });
   });
 
   it("leaves a persona with no model, or an empty one, untouched", () => {
-    const map = readModelMap(workflow, "cursor");
-    expect(rewriteModel(row("cursor"), map, entries("---\nname: x\n---\n"), "x.md").alias).toBeNull();
-    expect(rewriteModel(row("cursor"), map, entries("---\nmodel:\n---\n"), "x.md").alias).toBeNull();
+    expect(rewriteModel(row("cursor"), maps("cursor"), entries("---\nname: x\n---\n"), "x.md").alias).toBeNull();
+    expect(rewriteModel(row("cursor"), maps("cursor"), entries("---\nmodel:\n---\n"), "x.md").alias).toBeNull();
   });
 });
 

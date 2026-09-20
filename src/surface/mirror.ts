@@ -61,6 +61,7 @@ import {
   tomlMultiline,
   tomlString,
   type HooksManifest,
+  type ModelMaps,
   type PermissionsSource,
   type RulesSource,
 } from "./packs.js";
@@ -266,8 +267,8 @@ export interface GenerateOptions {
   readonly rules?: RulesSource | null;
   /** `--permissions`, read; null when not given. */
   readonly permissions?: PermissionsSource | null;
-  /** `models.<surface>` of `--models`, read; null when not given. */
-  readonly models?: Readonly<Record<string, string>> | null;
+  /** `models.<surface>` and `models.<source-surface>` of `--models`, read; null when not given. */
+  readonly models?: ModelMaps | null;
 }
 
 export interface GenerateReport {
@@ -534,7 +535,7 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
 
   if (options.models !== undefined && options.models !== null && row.subagentModelFragment !== null) {
     const fragment = row.subagentModelFragment;
-    const alias = options.models[fragment.tier];
+    const alias = options.models.target[fragment.tier];
     if (alias === undefined) {
       throw new SurfaceMirrorError(
         `--models declares no 'models.${row.surface}.${fragment.tier}', which ${fragment.file} names as the default subagent model (${fragment.source}). Add the tier or omit --models.`,

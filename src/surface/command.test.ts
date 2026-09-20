@@ -369,6 +369,28 @@ describe("--models", () => {
     expect(check.code).toBe(0);
   });
 
+  it("reads a source persona's own alias back through --source-surface, defaulting to claude-code", async () => {
+    // fixtures/agents/scout.md says `model: sonnet`: claude-code's fast tier.
+    const out = tempDir();
+    const cursor = await capture([...generateArgv("cursor", out, ["--models", join(PACKS, "workflow.json")]), "--json"]);
+    expect(cursor.code).toBe(0);
+    expect(readFileSync(join(out, "agents", "scout.md"), "utf8")).toContain("model: gpt-4.1");
+    const ag = tempDir();
+    const antigravity = await capture([...generateArgv("antigravity", ag, ["--models", join(PACKS, "workflow.json")]), "--json"]);
+    expect(readFileSync(join(ag, "agents", "scout.md"), "utf8")).toContain("model: flash");
+    expect(json(antigravity)["undocumentedAliases"]).toEqual([]);
+    // Naming a source surface the file lacks is refused only when a persona needs it.
+    const plain = tempDir();
+    const unneeded = await capture(modelsArgv("cursor", plain, ["--source-surface", "nowhere"]));
+    expect(unneeded.code).toBe(0);
+    const needed = await capture(generateArgv("cursor", tempDir(), ["--models", join(PACKS, "workflow.json"), "--source-surface", "nowhere"]));
+    expect(needed.code).toBe(2);
+    expect(needed.err.join("\n")).toMatch(/'scout\.md' says 'model: sonnet'.*no 'models\.nowhere'/);
+    const empty = await capture(generateArgv("cursor", tempDir(), ["--models", join(PACKS, "workflow.json"), "--source-surface", ""]));
+    expect(empty.code).toBe(2);
+    expect(empty.err.join("\n")).toMatch(/--source-surface was given an empty value/);
+  });
+
   it("refuses an undeclared tier at exit 2, by pointer", async () => {
     const out = tempDir();
     const strange = tempDir();
@@ -378,15 +400,19 @@ describe("--models", () => {
       "--models", join(PACKS, "workflow.json"),
     ]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/'odd\.md' says 'model: gigantic'.*models\.cursor\.gigantic/);
+    expect(result.err.join("\n")).toMatch(/'odd\.md' says 'model: gigantic', which is neither a tier of 'models\.cursor'/);
     expect(readdirSync(out)).toEqual([]);
   });
 
   it("refuses a workflow with no models.<surface> at exit 2", async () => {
     const out = tempDir();
-    const result = await capture(modelsArgv("claude-code", out));
+    const workflow = join(tempDir(), "workflow.json");
+    writeFileSync(workflow, '{"models":{"cursor":{"fast":"x"}}}');
+    const result = await capture([
+      "surface", "mirror", "generate", "--source", SKILLS, "--agents", MODEL_AGENTS, "--surface", "codex", "--out", out, "--models", workflow,
+    ]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/no 'models\.claude-code'/);
+    expect(result.err.join("\n")).toMatch(/no 'models\.codex'.*Known surfaces in the file: cursor/);
   });
 });
 

@@ -294,6 +294,9 @@ export const SURFACES: readonly SurfaceRow[] = [
         "Interrupt",
         "SessionEnd",
       ],
+      // The page's own example is `{ "hooks": { "PreToolUse": [ { "matcher":
+      // "Bash", "hooks": [ ... ] } ] } }` -- Claude Code's grouping under a
+      // `hooks` wrapper, matcher `Bash`. Verified against the page 2026-09-20.
       matcher: "Bash",
       decisionKey: "hookSpecificOutput.permissionDecision: deny (ask is parsed but not supported yet)",
       shape: "groups",
