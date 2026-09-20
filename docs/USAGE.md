@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 40 command
-families, 105 verbs, every flag checked against the binary this repository
+families, 106 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -595,7 +595,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 105 verbs, grouped as the README groups them. **Reads** is what a
+All 106 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -613,6 +613,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -1450,6 +1451,56 @@ zheref/nen#217 @ 1f4bb2c0: 10 review thread(s), 0 unresolved
   resolved    PRRT_kwDOPmRi0c5ktVBH  src/report/data.ts:212  @copilot-pull-request-reviewer
       Consider naming the ref in this refusal.
   …
+```
+
+
+### `nen pr open`
+
+Opens exactly **one** pull request from a head that is already on the
+remote (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — the
+`gh pr create` Hatsu's `shibari` used to hand-roll.
+
+**Usage**
+
+```text
+nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path>
+            [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--target <owner/name>` | **yes** | the GitHub repository; `--repo` names a checkout and never addresses the API |
+| `--base <ref>` | **yes** | the pull request's base branch |
+| `--title-file <path>` | **yes** | the title is the file's first non-empty line; a file with none is refused at exit 2 |
+| `--body-file <path>` | **yes** | the body, handed to `gh pr create --body-file` by path (read once first, so a missing file is refused before any question is asked) |
+| `--head <branch>` | no | the head branch; default the branch checked out under `--repo` (the current directory by default — this verb's write goes to GitHub, and the checkout is only asked which branch is out) |
+| `--draft` | no | open as a draft |
+| `--dry-run` | no | print the `gh pr create` argv; still asks git and GitHub every question below, creates nothing |
+| `--json` | no | `nen.pr.open/v0.1` — see below |
+
+**Refused at exit 2:** a detached `HEAD` with no `--head`; a head with no
+upstream (never published); a head whose local sha is not what
+`git ls-remote origin refs/heads/<head>` answers — nothing there, or an older
+sha — because a pull request opened now would not show the commits here.
+Push first ([`wc publish`](#nen-wc-publish)). **Exit 1, nothing opened:** a
+pull request is already open for that head (`gh pr list --head <branch>
+--state open`), reported with its number and url — one head, one pull
+request. Then `gh pr create --repo --base --head --title --body-file
+[--draft]`, and the number is **read out of the url gh printed**: a create
+that prints none is exit 1, never reported as opened.
+
+**`--json`** — `nen.pr.open/v0.1`: `{ contract, number, url, head, base,
+draft, dryRun, existing }`. `number` and `url` are `null` on a dry run;
+`existing` is `true` on the exit-1 case, where they name the pull request
+already there.
+
+**Example**
+
+```bash
+nen pr open --target zheref/nen --base main --title-file title.txt --body-file body.md --dry-run
+```
+```text
+would run: gh pr create --repo zheref/nen --base main --head feature/x --title "feat: the thing" --body-file /…/body.md
 ```
 
 <a id="family-gate"></a>

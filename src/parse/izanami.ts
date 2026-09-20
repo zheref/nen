@@ -1099,6 +1099,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // pull request) but that read never writes.
       threads: DRY("'list' reads every review thread; 'reply'/'resolve' send a GraphQL mutation, unless --dry-run is given, which prints the argv and writes nothing"),
       "edit-body": DRY("replaces a pull request's body via gh pr edit --body-file unless --dry-run is given; --dry-run still reads GitHub to certify the number is a pull request"),
+      open: DRY("opens ONE pull request via gh pr create unless --dry-run is given; --dry-run still asks git and GitHub whether the head is pushed and whether one is already open"),
     },
   },
   quality: {
