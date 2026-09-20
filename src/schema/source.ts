@@ -48,6 +48,8 @@ export const REPOS_FILE = "nen/repos.json";
 export const COLORS_FILE = "nen/colors.yml";
 export const GATES_FILE = "nen/gates.json";
 export const CONTRACT_FILE = "nen/contract.json";
+/** The decision matrix (zheref/nen#216). No legacy location: it is new in this line. */
+export const DECISIONS_FILE = "nen/decisions.json";
 
 /**
  * THE FALLBACK ANNOUNCED IN v0.3.0 AND REMOVED HERE, IN v0.5.0.

@@ -233,6 +233,7 @@ import {
   cancelledLatestReport,
   checksAllGreen,
   dependabotCarveOutSatisfied,
+  excludeCheckNames,
   excludeCheckRun,
   isDeliveryPr,
   latestChecks,
@@ -241,6 +242,7 @@ import {
   reviewsAllApprovedAtHead,
   reviewerReviewCheckPattern,
   unapprovedApprovers,
+  unmatchedExcludeCheckNames,
   type OwedRound,
   type RoundPolicy,
   type UnapprovedApprover,
@@ -516,6 +518,14 @@ export interface EvaluationContext {
    * own framing), which is why it is reported here and rendered by `--explain`.
    */
   readonly dependabotCarveOut: boolean;
+  /**
+   * Findings that do not change the verdict but the caller should still see
+   * under `--explain`. Currently just `--exclude-check <name>`'s unmatched
+   * names (zheref/nen#216 follow-up): see `unmatchedExcludeCheckNames` in
+   * ./predicates.ts for why a silent no-op there is the exact false-ready
+   * hazard the flag exists to close.
+   */
+  readonly warnings: readonly string[];
 }
 
 export interface EvaluateOptions {
@@ -525,6 +535,12 @@ export interface EvaluateOptions {
   readonly stallMinutes: number;
   /** `${NOW:-$(date -u ...)}`, already resolved. */
   readonly now: string;
+  /**
+   * `--exclude-check <name>` (zheref/hatsu#81), repeatable/comma-joined by the
+   * caller before it reaches here. Empty means no carve-out -- the ordinary
+   * reading. See ./predicates.ts's `excludeCheckNames` for what "match" means.
+   */
+  readonly excludeCheckNames: readonly string[];
 }
 
 /** `pending_rounds`' four `pending+=(...)` sites, rendered as the shell does. */
@@ -663,6 +679,22 @@ export function evaluateReady(
     excludeRunValue === undefined || excludeRunValue === null || excludeRunValue === false
       ? ""
       : jqRaw(excludeRunValue);
+
+  // Parsed here, ahead of `context`, so an unmatched `--exclude-check <name>`
+  // (zheref/nen#216 follow-up) can ride in `context.warnings` from the start --
+  // never a silent no-op. Reused verbatim by the CON-32(a) checks-green
+  // conjunct further down; not reparsed there.
+  const rawChecks = jqAlternative(state["checks"], []);
+  const parsedChecks = parseCheckRollup(rawChecks, "$.checks");
+  const checksExcludedByRun = parsedChecks.ok
+    ? excludeCheckRun(parsedChecks.value, excludeRun)
+    : [];
+  const excludeCheckWarnings: readonly string[] = parsedChecks.ok
+    ? unmatchedExcludeCheckNames(checksExcludedByRun, options.excludeCheckNames).map(
+        (name): string => `--exclude-check '${name}' matched no check in the rollup`,
+      )
+    : [];
+
   // PORT CHANGE (§3): the shell's `// "sasuke,tenma,copilot"` default is the
   // FILE's `base_reviewers`. Reachable only for a hand-built blob -- the
   // transport always states the set -- but a default that named three personas
@@ -738,6 +770,7 @@ export function evaluateReady(
     headSha: head,
     deliveryPr: delivery,
     dependabotCarveOut: false,
+    warnings: excludeCheckWarnings,
   };
   const approvalNote =
     identities.approvalPolicy === "review-round-only" && approversCsv === ""
@@ -764,10 +797,13 @@ export function evaluateReady(
   // runs -- the very state bankai-core#671 is about -- and that null reaching
   // `map(select(...))` aborted the whole script and emitted NO verdict, breaking
   // --verdict's always-print contract (Copilot, BC-PR-#745).
-  const rawChecks = jqAlternative(state["checks"], []);
-  const parsedChecks = parseCheckRollup(rawChecks, "$.checks");
+  //
+  // `rawChecks`/`parsedChecks`/`checksExcludedByRun` were already computed
+  // above, ahead of `context`, so `context.warnings` could carry an unmatched
+  // `--exclude-check <name>` from the start -- reused here rather than
+  // reparsed.
   if (!parsedChecks.ok) return fail("checks-green", unreadable(parsedChecks.error));
-  const checksExcluded = excludeCheckRun(parsedChecks.value, excludeRun);
+  const checksExcluded = excludeCheckNames(checksExcludedByRun, options.excludeCheckNames);
 
   if (!checksAllGreen(checksExcluded)) {
     // AN EMPTY ROLLUP IS NOT A RED ROLLUP (bankai-core#671). `checksAllGreen`
@@ -790,6 +826,21 @@ export function evaluateReady(
           `not-ready: NO checks remain after excluding run ${excludeRun} (CON-32a) — the rollup ` +
             "held only the excluded run, so the gate has no evidence to judge. This is an ABSENT " +
             "verdict, not a red one; ask again once a check outside that run reports.",
+        );
+      }
+      // `--exclude-check <name>` (zheref/hatsu#81): a rollup that reported
+      // SOMETHING, but only the name(s) the caller asked to ignore, is the same
+      // "absent evidence" finding excludeRun's branch just above answers --
+      // never `ready`, on the same reasoning: a consumer excluding its OWN
+      // readiness check's prior report must not read a false READY off a
+      // rollup that, once that name is dropped, has nothing left to judge.
+      if (options.excludeCheckNames.length > 0 && checksExcludedByRun.length > 0) {
+        return fail(
+          "checks-green",
+          "not-ready: no checks reported (after excluding: " +
+            `${options.excludeCheckNames.join(", ")}) (CON-32a) — the rollup held only the ` +
+            "excluded name(s), so the gate has no evidence to judge. This is an ABSENT verdict, " +
+            "not a red one; ask again once a check outside that exclusion reports.",
         );
       }
       // ADOPTION DIVERGENCE (3) in the file header, and the ONLY reason string

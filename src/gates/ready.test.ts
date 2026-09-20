@@ -50,7 +50,12 @@ function readyState(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
-const OPTIONS = { roundPolicyDefault: "bounded" as const, stallMinutes: 30, now: NOW };
+const OPTIONS = {
+  roundPolicyDefault: "bounded" as const,
+  stallMinutes: 30,
+  now: NOW,
+  excludeCheckNames: [] as readonly string[],
+};
 
 describe("evaluateReady -- the ready path", () => {
   it("passes all six conjuncts, in order, with no reason attached to any", () => {
@@ -86,6 +91,9 @@ describe("evaluateReady -- the ready path", () => {
       // "this pull request was not carved out" is a fact a reader of a ready
       // verdict needs as much as the opposite one (zheref/nen#18).
       dependabotCarveOut: false,
+      // No `--exclude-check <name>` was given, so there is nothing to warn
+      // about matching or not matching.
+      warnings: [],
     });
   });
 });
@@ -360,6 +368,95 @@ describe("evaluateReady -- CON-32(a), transcribed reason strings", () => {
   });
 });
 
+describe("evaluateReady -- --exclude-check (zheref/hatsu#81)", () => {
+  it("with no exclusion, an all-green rollup that includes the consumer's own check reads ready", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [greenCheck(), greenCheck("readiness")] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+  });
+
+  it("excluding the ONLY check present yields the DISTINCT 'no checks reported (after excluding: ...)' message, never `ready`", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState({ checks: [greenCheck("readiness")] }), {
+      ...OPTIONS,
+      excludeCheckNames: ["readiness"],
+    });
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("checks-green");
+    expect(evaluation.line).toMatch(/^not-ready: no checks reported \(after excluding: readiness\)/);
+    expect(evaluation.line).not.toMatch(/EMPTY rollup, not a red one/);
+  });
+
+  it("a MIXED rollup drops only the named check and judges the rest -- ready when what remains is green", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [greenCheck(), greenCheck("readiness")] }),
+      { ...OPTIONS, excludeCheckNames: ["readiness"] },
+    );
+    expect(evaluation.ready).toBe(true);
+  });
+
+  it("a MIXED rollup drops only the named check and still fails CON-32(a) on the check that remains red", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        checks: [
+          { name: "ci / build", status: "COMPLETED", conclusion: "FAILURE" },
+          greenCheck("readiness"),
+        ],
+      }),
+      { ...OPTIONS, excludeCheckNames: ["readiness"] },
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+  });
+
+  it("a comma-joined multi-name exclusion drops every named check", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [greenCheck("readiness"), greenCheck("status-summary")] }),
+      { ...OPTIONS, excludeCheckNames: ["readiness", "status-summary"] },
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.line).toMatch(
+      /^not-ready: no checks reported \(after excluding: readiness, status-summary\)/,
+    );
+  });
+
+  // The false-ready hazard `--exclude-check` exists to close: a typo'd name
+  // that matches nothing in the rollup used to be a SILENT no-op. It now
+  // surfaces as a `context.warnings` entry (rendered by `--explain` and in
+  // `--json`'s `meta.warnings` -- see ../verbs/pr_ready.ts), and the rollup it
+  // was applied to is left completely intact -- a typo excludes nothing, so
+  // the gate judges every check exactly as if the flag had never been passed.
+  it("a typo'd --exclude-check name produces a warning and leaves the rollup intact", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState(), {
+      ...OPTIONS,
+      excludeCheckNames: ["ci / biuld"],
+    });
+    expect(evaluation.context.warnings).toEqual([
+      "--exclude-check 'ci / biuld' matched no check in the rollup",
+    ]);
+    // The rollup is untouched: the one real check ("ci / build") is still
+    // judged, still green, and the gate still reaches `ready`.
+    expect(evaluation.ready).toBe(true);
+  });
+
+  it("a mix of a matching and an unmatched --exclude-check name warns only about the unmatched one", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [greenCheck(), greenCheck("readiness")] }),
+      { ...OPTIONS, excludeCheckNames: ["readiness", "does-not-exist"] },
+    );
+    expect(evaluation.context.warnings).toEqual([
+      "--exclude-check 'does-not-exist' matched no check in the rollup",
+    ]);
+    expect(evaluation.ready).toBe(true);
+  });
+});
+
 describe("evaluateReady -- CON-32(b), the round-stalled / rounds-owed split", () => {
   // copilot is `bounded_policy_exempt` in the fixture -- the PORT CHANGE that
   // replaces the original's `entry.reviewer === "copilot"` literal. A pending
@@ -399,6 +496,82 @@ describe("evaluateReady -- CON-32(b), the round-stalled / rounds-owed split", ()
     expect(evaluation.line).toBe(
       "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): tenma (no round at head)",
     );
+  });
+
+  it("respects a repository-declared round_policy.stallMinutes override, not just the caller's fixed default", () => {
+    // A stall bound of 5 minutes: a request 10 minutes old is already stalled,
+    // where the 30-minute OPTIONS default would still be waiting.
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      pendingCopilot("2025-06-01T11:50:00Z"),
+      { ...OPTIONS, stallMinutes: 5 },
+    );
+    expect(evaluation.firstFailing).toBe("round-stalled");
+    expect(evaluation.line).toBe(
+      "not-ready: copilot round stalled — requested 10 min ago and never posted (CON-32b; re-request it, a user token is required)",
+    );
+  });
+});
+
+describe("evaluateReady -- BOUNDED round policy, any-head limb (zheref/nen#214)", () => {
+  // Sasuke posted its round at an EARLIER head; the current head carries only
+  // a remediation push nothing re-reviewed. Under `bounded` (the default)
+  // that round still satisfies CON-32(b)'s owed limb -- a THIRD round must
+  // never become structurally required just because the head moved.
+  function remediatedState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return readyState({
+      reviews: [
+        approvedAtHead("sasuke", "r1sha"),
+        approvedAtHead("tenma", "r1sha"),
+      ],
+      ...overrides,
+    });
+  }
+
+  it("under STRICT a round-only-at-an-earlier-head still owes -- the OLD behaviour, unchanged", () => {
+    const evaluation = evaluateReady(IDENTITIES, remediatedState(), {
+      ...OPTIONS,
+      roundPolicyDefault: "strict",
+    });
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("rounds-owed");
+  });
+
+  it("under BOUNDED the owed limb clears on the earlier-head round; the APPROVE-at-head conjunct still fails on its own", () => {
+    // pendingRounds() clears (sasuke/tenma showed up), but
+    // reviewsAllApprovedAtHead() still requires the LATEST round to be an
+    // APPROVE AT the CURRENT head -- CON-16 -- so the gate still stops, one
+    // row later, with a DIFFERENT reason than "no round at head" at all.
+    const evaluation = evaluateReady(IDENTITIES, remediatedState(), OPTIONS);
+    expect(evaluation.firstFailing).toBe("approvals-at-head");
+    expect(evaluation.line).toContain("not every approving reviewer's latest round is an APPROVE");
+  });
+
+  it("the zheref/nen#214 shape: a NON-EXEMPT, non-approving reviewer's round at an EARLIER head, everything else at head, reads ready", () => {
+    // `bisky` is deliberately NOT `bounded_policy_exempt` in the fixture --
+    // its round is ordinarily current-head-only, exactly the shape #214 was
+    // about for a reviewer that has no such exemption at all. It has no
+    // `bisky / review` check in this rollup (so the round-check limb cannot
+    // clear it either) and never posted AT head, only at the PR's first head,
+    // so `approvesWhenPostedAtHead` never enrols it as an approver -- only
+    // Sasuke and Tenma (current at head, as any ordinary ready PR) are.
+    // #214's failure was exactly this shape reading
+    // `not-ready: ... bisky (no round at head)` forever after a remediation
+    // push; under `bounded` it now reads ready.
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        reviewers: "sasuke,tenma,bisky",
+        reviews: [
+          approvedAtHead("sasuke"),
+          approvedAtHead("tenma"),
+          { author: "bisky-bankai[bot]", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW },
+        ],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.line).toBe("ready");
   });
 });
 

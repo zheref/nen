@@ -54,7 +54,7 @@
 // a markdown parser either way. No colour, no OSC-8 hyperlink escapes in the
 // table -- they would corrupt the markdown a caller pastes elsewhere.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   emit,
@@ -78,9 +78,21 @@ export const MARKER_FILE = ".nen/last-stop.json";
 
 /** `nen.stop.mark/v0.1` -- the marker's own versioned contract string. */
 export const STOP_MARK_CONTRACT = "nen.stop.mark/v0.1";
+/**
+ * `nen.stop.mark/v0.2` -- written INSTEAD of v0.1 whenever the stop carries
+ * any of the new fields (zheref/nen#216): a title, a body, a report link, the
+ * lettered options, a proposed process issue. A stop that carries none keeps
+ * writing v0.1, so a hook reading the old shape sees nothing change until its
+ * caller starts saying more.
+ */
+export const STOP_MARK_CONTRACT_V2 = "nen.stop.mark/v0.2";
 
 const USAGE = `nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
+         [--title <line>] [--body <text>] [--report-url <url>]
+         [--options <file.json>] [--propose-issue <file.json>]
          [--repo <path>] [efforts.md | -]
+nen stop clear [--repo <path>]
+nen stop show  [--repo <path>] [--json]
 nen stop --template
 
 Render the gate-stop banner and the padded-markdown efforts table. The
@@ -97,8 +109,38 @@ one renderer.
                       shape, so a hook can tell a future change from a
                       compatible one. The ONLY form of this verb that writes.
   efforts.md | -       A markdown pipe table (header + rows); '-' reads stdin.
+  --title <line>      One line naming the stop, carried into the marker for a
+                      host notification to show.
+  --body <text>       The ask, in one or two sentences; carried the same way.
+  --report-url <url>  Where the report for this stop was published. It is
+                      LINKED with the banner and the marker; it is never one
+                      of the options -- a report is read, not decided.
+  --options <file>    A JSON array of the decisions this stop asks for:
+                      [{ key, label, command, consequence?, recommended? }].
+                      Rendered as lettered lines with a star on the
+                      recommended one; at least ONE must be recommended, every
+                      'command' must be non-empty (an option nothing executes
+                      is a suggestion), and a label that reads 'open/read the
+                      report' is refused. Fewer than three is accepted and
+                      said aloud -- the caller's canon may want three.
+  --propose-issue <f> A JSON object { title, body, labels? } drafting the
+                      process issue this stop suggests filing, carried in the
+                      marker under 'proposedIssue' and written beside it at
+                      '.nen/proposed/<at>.json' for a later harvest.
   --template          Emit a blank 5-column table to fill in; nothing is
                       waited on, so no signal line is printed.
+
+show:
+  Read '${MARKER_FILE}' back and VALIDATE it: a v0.1 marker must carry exactly
+  its five keys with the right types, a v0.2 marker the same plus title, body,
+  reportUrl, options[] (each executable, one starred, none naming the report)
+  and proposedIssue. Exit 0 and print it; exit 1 naming the first defect; a
+  missing marker is exit 0 with 'no marker'. This is the validator a hook or a
+  report can rely on: nothing else reads the marker back.
+
+clear:
+  Remove '${MARKER_FILE}' when it exists. A surface with no Stop hook consumes
+  the marker itself once the bell has rung; this is that consumption as a verb.
 
 Rungs 2-3 of the escalation ladder (an OS notification, an audible cue) are
 NOT fired by this command: nen only ever shells out to git and gh, and
@@ -141,10 +183,20 @@ export const stopCommand: Command = {
   // --live-chores-from are this branch's convention everywhere else -- so a
   // dropped, undeclared flag becomes ../cli/args.ts's own strictness: a hard
   // usage error naming it, rather than a silently accepted no-op.
-  flags: { values: ["who", "gate"], booleans: ["notified", "template", "mark"] },
+  // NO `subcommands` DECLARATION HERE, deliberately: this family's primary
+  // grammar takes a POSITIONAL file (`nen stop efforts.md`), so a declared
+  // subcommand list would make `nen stop efforts.md --help` refuse the file
+  // as an unknown subcommand (review finding on zheref/nen#216). `clear` and
+  // `show` are recognised in run() instead.
+  flags: {
+    values: ["who", "gate", "title", "body", "report-url", "options", "propose-issue"],
+    booleans: ["notified", "template", "mark"],
+  },
   run(context: CommandContext): number {
+    if (context.args.positionals[1] === "clear") return clearMarker(context);
+    if (context.args.positionals[1] === "show") return showMarker(context);
     const gate = context.args.values["gate"] ?? null;
-    if (gate !== null && !(gate in GATE_NAMES)) {
+    if (gate !== null && !Object.hasOwn(GATE_NAMES, gate)) {
       throw new VerbUsageError(
         `--gate must be one of ${Object.keys(GATE_NAMES).join(", ")}, got '${gate}'.`,
       );
@@ -186,6 +238,34 @@ export const stopCommand: Command = {
     );
     lines.push("see the table below. No banner above => nothing needs you right now.");
 
+    const title = context.args.values["title"] ?? null;
+    const body = context.args.values["body"] ?? null;
+    const reportUrl = context.args.values["report-url"] ?? null;
+    if (title !== null) lines.push(`title: ${title}`);
+    if (body !== null) lines.push(`ask: ${body}`);
+    if (reportUrl !== null) lines.push(`report: ${reportUrl}`);
+
+    const cwdForFiles = resolveRepoRoot({ repoFlag: context.repoFlag });
+    const optionsFile = context.args.values["options"] ?? null;
+    const options = optionsFile === null ? null : readOptions(optionsFile, cwdForFiles);
+    if (options !== null) {
+      lines.push("");
+      lines.push("options -- pick one (the star is the recommendation):");
+      for (const option of options) {
+        lines.push(`  ${option.recommended ? "⭐ " : "   "}${option.key} -- ${option.label}`);
+        lines.push(`       ${option.command}${option.consequence === null ? "" : `  · ${option.consequence}`}`);
+      }
+      if (options.length < 3) {
+        lines.push(`  (${options.length} option${options.length === 1 ? "" : "s"} -- fewer than the three a stop usually offers)`);
+      }
+    }
+    const issueFile = context.args.values["propose-issue"] ?? null;
+    const proposedIssue = issueFile === null ? null : readProposedIssue(issueFile, cwdForFiles);
+    if (proposedIssue !== null) {
+      lines.push("");
+      lines.push(`proposed process issue: ${proposedIssue.title}`);
+    }
+
     const src = context.args.positionals[1];
     let rows: string[][] = [];
     if (src !== undefined) {
@@ -201,15 +281,32 @@ export const stopCommand: Command = {
     // THE MARKER IS WRITTEN LAST, AFTER EVERY REFUSAL THIS VERB CAN MAKE. An
     // unreadable efforts file is a stop that did not render, and a hook ringing
     // for a banner nobody saw is worse than one that never rang.
-    const marker = mark ? writeMarker(context, { who, gate, notified }) : null;
+    const marker = mark
+      ? writeMarker(context, { who, gate, notified, title, body, reportUrl, options, proposedIssue })
+      : null;
     if (marker !== null) {
-      lines.push(`marked: ${marker.path} -- a host hook may ring rungs 2-3 off it.`);
+      lines.push(`marked: ${marker.path} (${marker.contract}) -- a host hook may ring rungs 2-3 off it.`);
+      if (marker.proposedPath !== null) lines.push(`proposed issue written: ${marker.proposedPath}`);
     }
 
-    emit(context.io, context.json, { who, gate, notified, rows, marker }, lines);
+    emit(context.io, context.json, { who, gate, notified, title, body, reportUrl, options, proposedIssue, rows, marker }, lines);
     return 0;
   },
 };
+
+export interface StopOption {
+  readonly key: string;
+  readonly label: string;
+  readonly command: string;
+  readonly consequence: string | null;
+  readonly recommended: boolean;
+}
+
+export interface ProposedIssue {
+  readonly title: string;
+  readonly body: string;
+  readonly labels: readonly string[];
+}
 
 interface StopMarker {
   /** The absolute path written. */
@@ -220,6 +317,176 @@ interface StopMarker {
   readonly notified: boolean;
   /** ISO-8601, from the invocation's own clock seam. */
   readonly at: string;
+  readonly title: string | null;
+  readonly body: string | null;
+  readonly reportUrl: string | null;
+  readonly options: readonly StopOption[] | null;
+  readonly proposedIssue: ProposedIssue | null;
+  /** Where the proposed issue was written beside the marker, or null. */
+  readonly proposedPath: string | null;
+}
+
+const REPORT_AS_OPTION = /\b(open|read|view|see)\b.*\breport\b/i;
+
+/** The options file: a JSON array, every entry executable, one star. */
+export function parseOptions(document: unknown, display: string): StopOption[] {
+  if (!Array.isArray(document) || document.length === 0) {
+    throw new VerbUsageError(`--options ${display}: expected a non-empty JSON array of { key, label, command, consequence?, recommended? }.`);
+  }
+  const options = document.map((raw, index): StopOption => {
+    const at = `--options ${display}[${index}]`;
+    if (typeof raw !== "object" || raw === null) throw new VerbUsageError(`${at}: not an object.`);
+    const entry = raw as Record<string, unknown>;
+    const key = entry["key"];
+    const label = entry["label"];
+    const command = entry["command"];
+    if (typeof key !== "string" || key.trim() === "") throw new VerbUsageError(`${at}.key: a non-empty string is required.`);
+    if (typeof label !== "string" || label.trim() === "") throw new VerbUsageError(`${at}.label: a non-empty string is required.`);
+    if (typeof command !== "string" || command.trim() === "") {
+      throw new VerbUsageError(`${at}.command: a non-empty command line is required. An option nothing executes is a suggestion, not an option.`);
+    }
+    if (REPORT_AS_OPTION.test(label)) {
+      throw new VerbUsageError(`${at}.label reads '${label}'. The report is linked with every stop (--report-url) and is never one of the decisions; drop this option.`);
+    }
+    const consequence = entry["consequence"];
+    if (consequence !== undefined && consequence !== null && typeof consequence !== "string") throw new VerbUsageError(`${at}.consequence: a string when present.`);
+    const recommended = entry["recommended"];
+    if (recommended !== undefined && typeof recommended !== "boolean") throw new VerbUsageError(`${at}.recommended: a boolean when present.`);
+    return { key, label, command, consequence: (consequence as string | undefined) ?? null, recommended: recommended === true };
+  });
+  const starred = options.filter((option): boolean => option.recommended).length;
+  if (starred !== 1) {
+    throw new VerbUsageError(`--options ${display}: exactly one option must be 'recommended' (found ${starred}). A stop with no star, or two, has not made a recommendation.`);
+  }
+  const keys = new Set(options.map((option): string => option.key));
+  if (keys.size !== options.length) throw new VerbUsageError(`--options ${display}: option keys must be distinct.`);
+  return options;
+}
+
+const OPTIONS_WHY = "A stop with no options renders no decisions; the file named here IS the ask, so an unreadable one is refused rather than rendered as a stop with nothing to pick.";
+const ISSUE_WHY = "A proposed issue with no draft is not a proposal; the file named here IS the draft, so an unreadable one is refused.";
+
+function readOptions(file: string, cwd: string): StopOption[] {
+  const text = readTextFile(file, cwd, OPTIONS_WHY);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new VerbUsageError(`--options ${file}: not JSON (${error instanceof Error ? error.message : String(error)}).`);
+  }
+  return parseOptions(parsed, file);
+}
+
+export function parseProposedIssue(document: unknown, display: string): ProposedIssue {
+  if (typeof document !== "object" || document === null || Array.isArray(document)) {
+    throw new VerbUsageError(`--propose-issue ${display}: expected a JSON object { title, body, labels? }.`);
+  }
+  const entry = document as Record<string, unknown>;
+  const title = entry["title"];
+  const body = entry["body"];
+  if (typeof title !== "string" || title.trim() === "") throw new VerbUsageError(`--propose-issue ${display}.title: a non-empty string is required.`);
+  if (typeof body !== "string" || body.trim() === "") throw new VerbUsageError(`--propose-issue ${display}.body: a non-empty string is required -- a draft with no body is not a draft.`);
+  const labels = entry["labels"] ?? [];
+  if (!Array.isArray(labels) || labels.some((label): boolean => typeof label !== "string")) {
+    throw new VerbUsageError(`--propose-issue ${display}.labels: an array of strings when present.`);
+  }
+  return { title, body, labels: labels as string[] };
+}
+
+function readProposedIssue(file: string, cwd: string): ProposedIssue {
+  const text = readTextFile(file, cwd, ISSUE_WHY);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new VerbUsageError(`--propose-issue ${file}: not JSON (${error instanceof Error ? error.message : String(error)}).`);
+  }
+  return parseProposedIssue(parsed, file);
+}
+
+/**
+ * The marker read back and validated -- v0.1 or v0.2 -- or a one-line reason
+ * it is not a marker. Exported for the report assembler and for tests.
+ */
+export function parseMarker(document: unknown): { ok: true; marker: Record<string, unknown> } | { ok: false; reason: string } {
+  if (typeof document !== "object" || document === null || Array.isArray(document)) return { ok: false, reason: "not a JSON object" };
+  const m = document as Record<string, unknown>;
+  const contract = m["contract"];
+  if (contract !== STOP_MARK_CONTRACT && contract !== STOP_MARK_CONTRACT_V2) {
+    return { ok: false, reason: `contract is ${JSON.stringify(contract)}; expected '${STOP_MARK_CONTRACT}' or '${STOP_MARK_CONTRACT_V2}'` };
+  }
+  const str = (key: string): string | null => {
+    const v = m[key];
+    if (v !== null && typeof v !== "string") throw new Error(`${key} must be a string or null`);
+    return (v as string | null | undefined) ?? null;
+  };
+  try {
+    str("who");
+    const gate = str("gate");
+    if (gate !== null && !Object.hasOwn(GATE_NAMES, gate)) throw new Error(`gate '${gate}' is not one of ${Object.keys(GATE_NAMES).join(", ")}`);
+    if (typeof m["notified"] !== "boolean") throw new Error("notified must be a boolean");
+    const at = str("at");
+    if (at === null || Number.isNaN(Date.parse(at))) throw new Error("at must be an ISO-8601 instant");
+    if (contract === STOP_MARK_CONTRACT_V2) {
+      str("title");
+      str("body");
+      str("reportUrl");
+      if (m["options"] !== null && m["options"] !== undefined) parseOptions(m["options"], "marker");
+      if (m["proposedIssue"] !== null && m["proposedIssue"] !== undefined) parseProposedIssue(m["proposedIssue"], "marker");
+    }
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+  return { ok: true, marker: m };
+}
+
+/** `nen stop show` -- the marker, validated. */
+function showMarker(context: CommandContext): number {
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const path = join(root, ...MARKER_FILE.split("/"));
+  if (!existsSync(path)) {
+    emit(context.io, context.json, { present: false, path }, [`no marker at ${path}.`]);
+    return 0;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    context.io.err(`nen stop: ${path} is not JSON (${error instanceof Error ? error.message : String(error)}).`);
+    return 1;
+  }
+  const verdict = parseMarker(parsed);
+  if (!verdict.ok) {
+    context.io.err(`nen stop: ${path} is not a valid marker: ${verdict.reason}.`);
+    return 1;
+  }
+  const m = verdict.marker;
+  const lines = [
+    `marker: ${path} (${String(m["contract"])})`,
+    `  who: ${String(m["who"] ?? "-")} · gate: ${String(m["gate"] ?? "-")} · notified: ${String(m["notified"])} · at: ${String(m["at"])}`,
+  ];
+  if (typeof m["title"] === "string") lines.push(`  title: ${m["title"]}`);
+  if (typeof m["reportUrl"] === "string") lines.push(`  report: ${m["reportUrl"]}`);
+  if (Array.isArray(m["options"])) lines.push(`  options: ${m["options"].length}`);
+  emit(context.io, context.json, { present: true, path, marker: m }, lines);
+  return 0;
+}
+
+/** `nen stop clear` -- consume the marker, on a surface with no hook to do it. */
+function clearMarker(context: CommandContext): number {
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const path = join(root, ...MARKER_FILE.split("/"));
+  if (!existsSync(path)) {
+    emit(context.io, context.json, { cleared: false, path }, [`no marker at ${path} -- nothing to clear.`]);
+    return 0;
+  }
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    throw new StopMarkError(`clear could not remove '${path}' (${(error as NodeJS.ErrnoException).code ?? String(error)}).`);
+  }
+  emit(context.io, context.json, { cleared: true, path }, [`cleared ${path}.`]);
+  return 0;
 }
 
 /**
@@ -237,17 +504,36 @@ interface StopMarker {
  */
 function writeMarker(
   context: CommandContext,
-  stop: { who: string | null; gate: string | null; notified: boolean },
+  stop: {
+    who: string | null;
+    gate: string | null;
+    notified: boolean;
+    title: string | null;
+    body: string | null;
+    reportUrl: string | null;
+    options: readonly StopOption[] | null;
+    proposedIssue: ProposedIssue | null;
+  },
 ): StopMarker {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const path = join(root, ...MARKER_FILE.split("/"));
+  const at = context.seams.now().toISOString();
+  const rich =
+    stop.title !== null || stop.body !== null || stop.reportUrl !== null || stop.options !== null || stop.proposedIssue !== null;
+  const proposedPath = stop.proposedIssue === null ? null : join(root, ".nen", "proposed", `${at.replace(/[:.]/g, "-")}.json`);
   const marker: StopMarker = {
     path,
-    contract: STOP_MARK_CONTRACT,
+    contract: rich ? STOP_MARK_CONTRACT_V2 : STOP_MARK_CONTRACT,
     who: stop.who,
     gate: stop.gate,
     notified: stop.notified,
-    at: context.seams.now().toISOString(),
+    at,
+    title: stop.title,
+    body: stop.body,
+    reportUrl: stop.reportUrl,
+    options: stop.options,
+    proposedIssue: stop.proposedIssue,
+    proposedPath,
   };
   try {
     mkdirSync(dirname(path), { recursive: true });
@@ -255,15 +541,37 @@ function writeMarker(
     // that names where it is is a file that is wrong the moment a checkout
     // moves, and the hook reading it already knows. It is BUILT here rather
     // than stripped from the marker, so a field added to StopMarker is a
-    // decision about this file rather than a leak into it.
-    const document = {
-      contract: marker.contract,
-      who: marker.who,
-      gate: marker.gate,
-      notified: marker.notified,
-      at: marker.at,
-    };
+    // decision about this file rather than a leak into it. THE v0.1 SHAPE IS
+    // WRITTEN BYTE-COMPATIBLY when nothing new was said (zheref/nen#216).
+    const document = rich
+      ? {
+          contract: marker.contract,
+          who: marker.who,
+          gate: marker.gate,
+          notified: marker.notified,
+          at: marker.at,
+          title: marker.title,
+          body: marker.body,
+          reportUrl: marker.reportUrl,
+          options: marker.options,
+          proposedIssue: marker.proposedIssue,
+        }
+      : {
+          contract: marker.contract,
+          who: marker.who,
+          gate: marker.gate,
+          notified: marker.notified,
+          at: marker.at,
+        };
     writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+    if (proposedPath !== null && stop.proposedIssue !== null) {
+      mkdirSync(dirname(proposedPath), { recursive: true });
+      writeFileSync(
+        proposedPath,
+        `${JSON.stringify({ contract: "nen.stop.proposed-issue/v0.1", at, gate: stop.gate, who: stop.who, ...stop.proposedIssue }, null, 2)}\n`,
+        "utf8",
+      );
+    }
   } catch (error) {
     throw new StopMarkError(
       `--mark could not write '${path}' (${(error as NodeJS.ErrnoException).code ?? String(error)}). The banner above rendered; the marker did not, so no host hook will ring for this stop.`,

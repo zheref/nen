@@ -133,9 +133,14 @@ them does not have to discover any of these empirically:
 const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
 
 Load and validate the target repository's nen/ files -- nen/labels.json,
-nen/repos.json, nen/colors.yml, nen/gates.json, the optional nen/contract.json
-and the optional nen/workflow.json -- and report each one's verdict: ok, or
-FAIL naming what is wrong. An absent nen/workflow.json is an ok row reading
+nen/repos.json, the optional nen/colors.yml, nen/gates.json, the optional
+nen/contract.json, the optional nen/workflow.json and the optional
+nen/decisions.json -- and report each one's verdict: ok, or FAIL naming what
+is wrong. An absent nen/colors.yml is an ok row reading 'absent (optional)'
+from v0.11.0: the verbs that resolve a colour refuse by name when asked, and
+the aggregate no longer fails a repository that never adopted the file. An
+absent nen/decisions.json is 'absent (none declared)': every stop is then
+decided by prose. An absent nen/workflow.json is an ok row reading
 'absent (defaults apply)': every parameter of that file has a default, so a
 repository that states no policy still runs under one. The legacy schemas/
 directory is never read (removed in v0.5.0): a repository carrying a file only
@@ -251,6 +256,17 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
       io.out(SCHEMA_USAGE);
       return 0;
     }
+    // AN UNKNOWN COMMAND WITH --help IS STILL AN UNKNOWN COMMAND (zheref/nen#216).
+    // Through v0.10.0 'nen bogus --help' printed the global usage at exit 0,
+    // so a presence probe by --help passed for a verb that does not exist --
+    // the one probe every consumer's warm-up reaches for first. The usage
+    // still prints (on stderr, because it was not asked for), and the exit
+    // code says what was asked about: nothing by that name is here.
+    if (requested !== undefined && requested !== "version") {
+      io.err(`${PROGRAM}: unknown command '${requested}'.`);
+      io.err(USAGE);
+      return 2;
+    }
     io.out(USAGE);
     return 0;
   }
@@ -345,6 +361,17 @@ export async function runFamily(
   }
 
   if (args.booleans.has("help")) {
+    // A FAMILY THAT DECLARES ITS SUBCOMMANDS refuses '--help' on one it does
+    // not have (zheref/nen#216): 'nen gate stop --help' used to print gate's
+    // help at exit 0, which read as "gate stop exists" to a caller probing by
+    // exit code. A family that declares none keeps the old behaviour -- its
+    // own run() is what refuses an unknown subcommand.
+    const asked = args.positionals[1];
+    if (asked !== undefined && family.subcommands !== undefined && !family.subcommands.includes(asked)) {
+      io.err(`${PROGRAM} ${family.name}: unknown subcommand '${asked}'. Try one of: ${family.subcommands.join(", ")}.`);
+      io.err(family.usage);
+      return 2;
+    }
     io.out(family.usage);
     return 0;
   }

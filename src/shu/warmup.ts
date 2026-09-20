@@ -220,6 +220,33 @@ export interface WarmupStep {
  * says which form it is here rather than leaving a reader to infer it from a
  * row that no longer means what it meant.
  */
+/**
+ * `--carry`'s own corner of the report -- the third door, beside `discard` and
+ * the plain refusal.
+ *
+ * `requested` IS THE FLAG, VERBATIM: it is `true` whenever `--carry` was given,
+ * whether or not there turned out to be anything to stash. `stashed` is the SHA
+ * `git rev-parse refs/stash` read right after the push -- never `stash@{0}`,
+ * because every step downstream addresses the stash by that SHA precisely so a
+ * refusal reached later, or an unrelated stash a shell alias pushes in between,
+ * can never make this run pop the wrong one. It is `null` on a clean tree (there
+ * was nothing to push) and on a run that never asked for `--carry` at all.
+ * `carried` is the list of paths `git status` read BEFORE the push -- the same
+ * porcelain this verb already parses for `--discard`'s evidence -- so a reader
+ * sees what was carried without re-deriving it from a stash's own diff.
+ * `restored` is `true` the moment nothing needed restoring (no `--carry`, or a
+ * clean tree) and flips to `false` on exactly one event: `git stash pop`
+ * conflicted or failed. It never means "the pop was attempted" -- a run that
+ * never reached the pop because the build failed first still reports it
+ * truthfully once the pop that follows either succeeds or does not.
+ */
+export interface WarmupCarry {
+  readonly requested: boolean;
+  readonly stashed: string | null;
+  readonly carried: readonly string[];
+  readonly restored: boolean;
+}
+
 export interface WarmupReport {
   readonly contract: string;
   readonly repo: string;
@@ -232,6 +259,7 @@ export interface WarmupReport {
   readonly steps: readonly WarmupStep[];
   /** The lane the build/test verification ran on, or null when there is no declaration. */
   readonly lane: string | null;
+  readonly carry: WarmupCarry;
   /** NEN's own exit code, never a tool's. */
   readonly exitCode: number;
 }
@@ -241,6 +269,8 @@ export interface WarmupOptions {
   /** The LOCAL trunk to fast-forward, or null for the assumed default. */
   readonly from: string | null;
   readonly discard: boolean;
+  /** The third door: stash uncommitted work across the warm-up and pop it back. */
+  readonly carry: boolean;
   readonly tests: boolean;
   readonly lane: string | null;
   readonly dryRun: boolean;
@@ -278,7 +308,20 @@ export function renderWarmup(report: WarmupReport): readonly string[] {
         : "no -- a dirty working copy refuses",
     ),
     labelled("lane", report.lane ?? "(none -- no declaration, so build/test verification was skipped)"),
+    labelled(
+      "carry",
+      report.carry.requested
+        ? report.carry.stashed === null
+          ? "yes -- nothing to carry, the working copy was already clean"
+          : `yes -- ${report.carry.carried.length} path(s) stashed as ${report.carry.stashed}, restored: ${
+              report.carry.restored ? "yes" : "NO -- see the stash pop step below; the stash was NOT dropped"
+            }`
+        : "no -- a dirty working copy refuses (or, with --discard, is thrown away)",
+    ),
   ];
+  if (report.carry.requested && report.carry.carried.length > 0) {
+    for (const path of report.carry.carried) lines.push(`${" ".repeat(LABEL_WIDTH)}${renderPath(path)}`);
+  }
   for (const step of report.steps) {
     // FOUR SHAPES, and only one of them is a failure -- ./run.ts's own rule. A
     // dry run and an unreached step print the bare argv; a step that ran prints
@@ -664,6 +707,7 @@ function assemble(
   lane: string | null,
   steps: readonly WarmupStep[],
   exitCode: number,
+  carry: WarmupCarry,
 ): WarmupReport {
   return {
     contract: WARMUP_CONTRACT,
@@ -675,8 +719,14 @@ function assemble(
     dryRun: options.dryRun,
     steps,
     lane,
+    carry,
     exitCode,
   };
+}
+
+/** `--carry`'s report corner for a dry run: nothing is ever pushed, so nothing is ever restored. */
+function dryRunCarry(options: WarmupOptions): WarmupCarry {
+  return { requested: options.carry, stashed: null, carried: [], restored: true };
 }
 
 /**
@@ -709,6 +759,18 @@ export async function runWarmup(
   // `--lane` must not have their working copy cleaned before being told so.
   guardName("--branch", options.branch);
   if (options.from !== null) guardName("--from", options.from);
+
+  // --CARRY AND --DISCARD ARE THE THIRD DOOR AND THE SECOND, both said in
+  // answer to the same dirty tree, and they cannot both be the caller's answer:
+  // one preserves the uncommitted work by stashing it across the run, the other
+  // throws it away. Refused by name, before either has read a single byte of
+  // the working copy, for the same reason a mistyped --branch is refused before
+  // the discard rather than after it.
+  if (options.carry && options.discard) {
+    throw new VerbUsageError(
+      `'${PROGRAM} shu warmup' was given both --carry and --discard. --carry preserves uncommitted work by stashing it across the warm-up and popping it back; --discard throws it away with 'git reset --hard' and 'git clean -fd'. Nen will not pick one of two contradicting instructions on the one verb that mutates git state. Drop one of them.`,
+    );
+  }
 
   // THIS READ VALIDATES `--lane` AND NOTHING ELSE. It happens against the tree
   // as it stands BEFORE the fetch, which is not the tree the verification will
@@ -836,6 +898,15 @@ async function planWarmup(
       ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "-uall"],
       "the working copy is READ AGAIN. The two commands above exiting 0 is a statement about those commands, not about this tree: neither of them removes a nested repository or a dirty submodule. Anything still listed here refuses at exit 2, naming it",
     );
+  } else if (options.carry) {
+    plan(
+      ["stash", "push", "--include-untracked", "-m", `${PROGRAM} shu warmup --carry ${options.branch}`],
+      "the third door: would carry uncommitted work (tracked AND untracked) across the warm-up instead of refusing it or throwing it away -- only when the tree turns out dirty. A clean tree has nothing to stash and this step would not run",
+    );
+    plan(
+      ["rev-parse", "refs/stash"],
+      "would read the SHA of the stash the line above would push, so every step from here on -- including the pop at the end -- addresses it by that SHA rather than by 'stash@{0}'",
+    );
   }
   plan(["fetch", WARMUP_REMOTE], null);
   plan(
@@ -884,8 +955,18 @@ async function planWarmup(
       }
     }
   }
+  if (options.carry) {
+    plan(
+      ["stash", "list", "--format=%H%x09%gd"],
+      "would look up the stash ref for the SHA 'git rev-parse refs/stash' would have read above -- 'git stash pop'/'drop' take a stash ref (stash@{n}), never a raw SHA, so a real run re-resolves the ref here rather than reusing the one from the push",
+    );
+    plan(
+      ["stash", "pop", "<the stash@{n} 'git stash list' would have matched above>"],
+      "would restore the carried work once the declared build (and, with --tests, the declared test) above would pass. A real run addresses this by the stash@{n} it just re-resolved from the SHA it read right after the push, never by a blind 'stash@{0}' and never by the raw SHA either -- there is no push or list to read either from in a dry run, so this line names where they come from instead of guessing at one",
+    );
+  }
 
-  const report = assemble(repoRoot, options, trunk, lane, steps, exitCode);
+  const report = assemble(repoRoot, options, trunk, lane, steps, exitCode, dryRunCarry(options));
   emit(context.io, context.json, report, renderWarmup(report));
   if (lane === null) context.io.err(skippedVerification(repoRoot, options.branch, true));
   return exitCode;
@@ -913,18 +994,47 @@ async function performWarmup(
   // leaves the working copy alone) and the fast-forward.
   let mutated = false;
 
+  // --CARRY'S OWN STATE, threaded through the same way `lane` is: read (or not)
+  // partway through, and closed over by `report` so every emission -- a
+  // refusal, a failed step, or the final 0 -- carries whatever this run knows
+  // at the moment it prints.
+  let carryStashed: string | null = null;
+  let carryCarried: readonly string[] = [];
+  let carryRestored = true;
+
   const report = (exitCode: number): void => {
-    const document = assemble(repoRoot, options, trunk, lane, steps, exitCode);
+    const document = assemble(repoRoot, options, trunk, lane, steps, exitCode, {
+      requested: options.carry,
+      stashed: carryStashed,
+      carried: carryCarried,
+      restored: carryRestored,
+    });
     emit(context.io, context.json, document, renderWarmup(document));
   };
+
+  // A NOTE THAT NAMES THE STASH, appended to every exit from the moment the
+  // push has landed until the pop has actually restored it. `carryStashed` is
+  // non-null exactly across that window (it starts null, is set right after
+  // the push, and `popCarry` -- the only thing that clears it back to
+  // "restored" -- runs last), so a fetch failure, a diverged trunk, a taken
+  // branch name or anything else that exits between here and the pop still
+  // tells the caller where the carried work is and how to get it back by
+  // hand, rather than leaving that to the pop's own failure message alone.
+  const carryNote = (): string =>
+    carryStashed === null || carryRestored
+      ? ""
+      : `The carried work is stashed as ${carryStashed} and NOT restored: run 'git stash apply ${carryStashed}' to reapply it without dropping the stash.`;
 
   const failedStep = (what: string, result: CommandResult, advice: string): number => {
     // THE DOCUMENT IS STILL EMITTED on a failed step: the caller now has a
     // working copy in a state they did not ask for, and the list of what did
     // run is the only thing that says which state that is.
     report(1);
+    const note = carryNote();
     context.io.err(
-      `${PROGRAM} shu warmup: ${what} failed -- ${why(result)}. Nothing is rolled back: the working copy is left exactly as this run reached it, and the report above is the list of what did run. ${advice}`,
+      `${PROGRAM} shu warmup: ${what} failed -- ${why(result)}. Nothing is rolled back: the working copy is left exactly as this run reached it, and the report above is the list of what did run. ${advice}${
+        note === "" ? "" : ` ${note}`
+      }`,
     );
     return 1;
   };
@@ -932,7 +1042,8 @@ async function performWarmup(
   /** A refusal, carrying the report exactly when this run has already changed something. */
   const refuseHere = (lines: readonly string[]): number => {
     if (mutated) report(2);
-    return refuse(context, lines);
+    const note = carryNote();
+    return refuse(context, note === "" ? lines : [...lines, note]);
   };
 
   // ── 1. the working copy, on ../wc/classify.ts's fail-closed discipline ────
@@ -1015,11 +1126,11 @@ async function performWarmup(
       : `${entries.length} uncommitted path(s)`,
   );
 
-  if (entries.length > 0 && !options.discard) {
+  if (entries.length > 0 && !options.discard && !options.carry) {
     return refuseHere([
       `the working copy at ${repoRoot} carries ${entries.length} uncommitted path(s), and warmup destroys nothing nobody asked it to.`,
       ...evidence.map((line): string => `  ${line}`),
-      `Commit them, stash them, or pass --discard to throw them away -- that runs 'git reset --hard' and then 'git clean -fd', in that order, printing this same list first and re-reading the tree afterwards.`,
+      `Commit them, stash them, pass --carry to stash them across the warm-up and pop them back, or pass --discard to throw them away -- that runs 'git reset --hard' and then 'git clean -fd', in that order, printing this same list first and re-reading the tree afterwards.`,
       `Ignored files are NEVER touched: 'git clean' is run without -x, because an ignored file is this developer's cache and not this verb's to delete.`,
     ]);
   }
@@ -1185,6 +1296,54 @@ async function performWarmup(
         `Deal with them yourself and run this again. Nothing has been fetched and no ref has moved -- the only thing this run changed is the tracked and untracked work the two commands above did destroy, which the report above lists.`,
       ]);
     }
+  } else if (options.carry) {
+    // ── 3'. --carry: the third door. Stash it now, pop it back once the branch
+    // is cut and the build (and, with --tests, the test) has proved -- see step
+    // 8, below the verification. NOTHING RUNS ON A CLEAN TREE: there is nothing
+    // to carry, and a `git stash push` on a clean tree either does nothing or
+    // (with older git) says so on stderr, which is not a sentence this verb
+    // wants to explain when it could just not run the command at all.
+    if (entries.length === 0) {
+      git.annotate("--carry: nothing to carry -- the working copy was already clean");
+    } else {
+      const message = `${PROGRAM} shu warmup --carry ${options.branch}`;
+      const pushed = git.run(
+        ["stash", "push", "--include-untracked", "-m", message],
+        `carrying ${entries.length} uncommitted path(s) across this warm-up, to be restored once it is done:\n${evidence.map((line): string => `  ${line}`).join("\n")}`,
+      );
+      mutated = true;
+      if (pushed.code !== 0) {
+        return failedStep(
+          "git stash push --include-untracked",
+          pushed,
+          "Nothing is fetched or the ref moved: the working copy still carries the uncommitted work exactly as it was -- the push never took, so there is nothing to pop back.",
+        );
+      }
+      // THE SHA, NOT 'stash@{0}'. A stash is a stack, and by the time this run
+      // reaches its own pop -- after a fetch, a fast-forward, a checkout and a
+      // build -- 'stash@{0}' may no longer name what this run pushed: any other
+      // stash pushed in between (by a script, a hook, a habit) shifts every
+      // index below it. The SHA is read once, right here, and addresses this
+      // stash and only this stash for the rest of the run.
+      const stashSha = git.run(["rev-parse", "refs/stash"], null);
+      if (stashSha.code !== 0) {
+        return failedStep(
+          "git rev-parse refs/stash",
+          stashSha,
+          "The push itself succeeded -- the uncommitted work is safe in the stash -- but its SHA could not be read, so this run cannot address it later and refuses rather than guessing at 'stash@{0}'. Run 'git stash list' to find it and 'git stash pop' or 'git stash apply' it back by hand.",
+        );
+      }
+      carryStashed = stashSha.stdout.trim();
+      carryCarried = entries.map((entry): string => entry.path);
+      // NOT YET RESTORED, and the report says so from this line on: if any
+      // step between here and the pop below fails -- the fetch, the
+      // fast-forward, the switch -- the stash is real and un-popped, and a
+      // report claiming `restored: true` while the caller's work sits in a
+      // stash they were never told about would be exactly the silent-wrong-
+      // answer this file's header argues against.
+      carryRestored = false;
+      git.annotate(`stashed as ${carryStashed} -- every step from here addresses it by that SHA, never by 'stash@{0}'`);
+    }
   }
 
   const fetched = git.run(["fetch", WARMUP_REMOTE], null);
@@ -1310,6 +1469,79 @@ async function performWarmup(
     );
   }
 
+  // ── (carry) pop it back, addressed by the SHA step 3' recorded ───────────
+  //
+  // A HELPER RATHER THAN ONE INLINE CALL, because the git half can finish in
+  // three different places from here on -- no declaration at all, a
+  // declaration whose lane cannot be resolved, or the ordinary path through
+  // the build (and, with --tests, the test) -- and --carry's promise is not
+  // "restored on the happy path", it is "restored", full stop. Every one of
+  // those three exits calls this before it returns.
+  //
+  // NEVER A BLIND 'stash@{0}', AND NEVER 'git stash pop <sha>' EITHER. The SHA
+  // read right after the push (`carryStashed`) is this run's own identity for
+  // the entry it pushed, but git's `stash pop` and `stash drop` both refuse a
+  // raw commit object name -- only `stash apply` accepts one. `pop`/`drop`
+  // require a STASH REF (`stash@{n}`), so the ref is re-resolved right here,
+  // at pop time, by listing the stash and finding the line whose SHA is
+  // `carryStashed` -- never a cached index from the moment of the push, which
+  // by now may belong to a different entry if anything else touched the
+  // stack in between.
+  //
+  // A CONFLICT OR A FAILURE DOES NOT DROP THE STASH. `git stash pop` on a
+  // conflict leaves the stash entry in place precisely so nothing is lost, and
+  // this verb leaves it exactly there rather than trying to resolve or discard
+  // anything on the caller's behalf -- the same "nothing is rolled back"
+  // argument this whole file opens with, applied to the one step that runs
+  // last instead of first.
+  const popCarry = (also: string | null): boolean => {
+    if (!options.carry || carryStashed === null) return true;
+    const suffix = also === null ? "" : ` ${also}`;
+    const list = git.run(
+      ["stash", "list", "--format=%H%x09%gd"],
+      `resolving the stash ref for ${carryStashed} -- 'git stash pop'/'drop' take a stash ref (stash@{n}), never a raw SHA, so the ref is looked up fresh here rather than assumed`,
+    );
+    if (list.code !== 0) {
+      carryRestored = false;
+      report(1);
+      context.io.err(
+        `${PROGRAM} shu warmup: could not list the stash to find the entry stashed as ${carryStashed} -- ${why(list)}. Nothing was popped. The git half is done and nothing else is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Run 'git stash list' yourself to find it and 'git stash apply ${carryStashed}' to reapply it without dropping the stash.${suffix}`,
+      );
+      return false;
+    }
+    let ref: string | null = null;
+    for (const line of outputLines(list.stdout)) {
+      const [sha, gd] = line.split("\t");
+      if (sha === carryStashed) {
+        ref = gd ?? null;
+        break;
+      }
+    }
+    if (ref === null) {
+      carryRestored = false;
+      report(1);
+      context.io.err(
+        `${PROGRAM} shu warmup: the stash entry stashed as ${carryStashed} is no longer in 'git stash list' -- it was popped, dropped or cleared by something else while this run was warming up. Nothing was popped. The git half is done and nothing else is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Recover it by hand: 'git stash apply ${carryStashed}' still works, since the SHA is a valid object whether or not it is on the stash list.${suffix}`,
+      );
+      return false;
+    }
+    const popped = git.run(
+      ["stash", "pop", ref],
+      `restoring the ${carryCarried.length} path(s) carried across this warm-up, addressed by ${ref} -- re-resolved from ${carryStashed} just now, never a blind 'stash@{0}'`,
+    );
+    if (popped.code !== 0) {
+      carryRestored = false;
+      report(1);
+      context.io.err(
+        `${PROGRAM} shu warmup: 'git stash pop ${ref}' failed -- ${why(popped)}. The stash is NOT dropped: the carried work is still there, as ${ref} (SHA ${carryStashed}). The git half is done and nothing else is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Resolve it and run 'git stash pop ${ref}' yourself once you have, or 'git stash apply ${carryStashed}' to reapply it without dropping the stash.${suffix}`,
+      );
+      return false;
+    }
+    carryRestored = true;
+    git.annotate(`the ${carryCarried.length} carried path(s) are back`);
+    return true;
+  };
+
   // ── 6. the declaration, re-read on the tree that now exists ──────────────
   //
   // THE DECLARATION THE VERIFICATION RUNS AGAINST IS THE ONE ON THIS BRANCH,
@@ -1328,6 +1560,7 @@ async function performWarmup(
       );
     }
     lane = null;
+    if (!popCarry(null)) return 1;
     report(0);
     context.io.err(skippedVerification(repoRoot, options.branch, false));
     return 0;
@@ -1338,6 +1571,8 @@ async function performWarmup(
   } catch (error) {
     if (!(error instanceof VerbUsageError)) throw error;
     lane = null;
+    const refusalLine = `${PROGRAM} shu warmup: the git half is done -- '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk} -- and the declaration on THAT branch cannot answer the lane: ${error.message} The declaration is re-read after the checkout, deliberately: it is the branch's file that says how this repository is built, and the pre-fetch tree's copy of it may be a different file. Re-run '${PROGRAM} shu build --repo ${repoRoot} --lane <one it declares>' on its own -- warmup has nothing left to do here.`;
+    if (!popCarry(refusalLine)) return 1;
     return refuseHere([
       `the git half is done -- '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk} -- and the declaration on THAT branch cannot answer the lane: ${error.message}`,
       `The declaration is re-read after the checkout, deliberately: it is the branch's file that says how this repository is built, and the pre-fetch tree's copy of it may be a different file. Re-run '${PROGRAM} shu build --repo ${repoRoot} --lane <one it declares>' on its own -- warmup has nothing left to do here.`,
@@ -1354,6 +1589,15 @@ async function performWarmup(
   }
 
   // ── 7. the verification, delegated ───────────────────────────────────────
+  //
+  // A VERIFICATION FAILURE DOES NOT SKIP THE POP, BELOW. --carry's whole
+  // promise is that the uncommitted work comes back; a build that fails first
+  // must not be the reason it stays stranded in a stash the caller has to go
+  // find by hand. So a failing verb's own exit is remembered rather than
+  // returned immediately, and step 8 still runs before this function decides
+  // what code to leave with.
+  let verificationCode = 0;
+  let verificationLine: string | null = null;
   for (const verb of verificationVerbs(options.tests)) {
     const delegated = await delegate(context, repoRoot, verb, lane, false);
     steps.push(...delegated.rows);
@@ -1361,13 +1605,24 @@ async function performWarmup(
       context.io.err(`${PROGRAM} shu warmup: the declared '${verb}' verification refused: ${delegated.refusal}`);
     }
     if (delegated.code !== 0) {
-      const code = mapDelegated(delegated.code);
-      report(code);
-      context.io.err(
-        `${PROGRAM} shu warmup: the declared '${verb}' did not pass on lane '${lane}' (the executor answered ${delegated.code}; warmup exits ${code}). The git half is done and nothing is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Fix it and re-run '${PROGRAM} shu ${verb} --repo ${repoRoot} --lane ${lane}' on its own -- warmup has nothing left to do here.`,
-      );
-      return code;
+      verificationCode = mapDelegated(delegated.code);
+      verificationLine = `${PROGRAM} shu warmup: the declared '${verb}' did not pass on lane '${lane}' (the executor answered ${delegated.code}; warmup exits ${verificationCode}). The git half is done and nothing is rolled back: '${options.branch}' is checked out, cut from a current ${WARMUP_REMOTE}/${trunk}. Fix it and re-run '${PROGRAM} shu ${verb} --repo ${repoRoot} --lane ${lane}' on its own -- warmup has nothing left to do here.`;
+      break;
     }
+  }
+
+  // ── 8. --carry: pop it back, addressed by the SHA step 3' recorded ───────
+  // See `popCarry`, above: it runs here exactly as it does on the other two
+  // exits, and a pop failure or conflict reports and returns 1 regardless of
+  // whether the verification above already found its own reason to fail.
+  if (!popCarry(verificationLine === null ? null : `The declared verification had already answered too: ${verificationLine}`)) {
+    return 1;
+  }
+
+  if (verificationLine !== null) {
+    report(verificationCode);
+    context.io.err(verificationLine);
+    return verificationCode;
   }
 
   report(0);

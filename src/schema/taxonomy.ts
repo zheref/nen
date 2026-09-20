@@ -27,8 +27,10 @@ import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
 import { describeWorkflow, loadWorkflow, WORKFLOW_FILE } from "./workflow.js";
+import { describeDecisions, loadDecisions } from "./decisions.js";
 import {
   COLORS_FILE,
+  DECISIONS_FILE,
   CONTRACT_FILE,
   GATES_FILE,
   LABELS_FILE,
@@ -245,6 +247,30 @@ function contractCheck(root: string): SchemaCheck {
 // (throws), so this row asks it rather than re-deriving the same fact from an
 // error message -- and a present-but-malformed policy still travels `run`'s
 // ordinary failure path and FAILS the row by pointer.
+// The colour row. ITS ABSENCE IS `ok` FROM v0.11.0 (zheref/nen#216): a
+// repository that declares no colour vocabulary has nothing for `nen color
+// status` and the board renderers to resolve, and each of THOSE verbs refuses
+// by name when asked -- which is the right place for that refusal. Making the
+// aggregate red on every consumer that never adopted the file taught every
+// warm-up to read "FAIL" as background noise, which is how a real FAIL goes
+// unread. Present and malformed still fails by pointer.
+function colorsCheck(root: string): SchemaCheck {
+  const check = run(COLORS_FILE, root, false, (): string => {
+    const colors = loadColorVocabulary(root);
+    const total = colors.categories.reduce((sum, category): number => sum + category.values.length, 0);
+    return `${colors.categories.length} categories, ${total} values`;
+  });
+  if (check.ok || !check.detail.includes(ABSENT_FILE_MARKER)) return check;
+  return { ...check, ok: true, detail: "absent (optional)" };
+}
+
+// The decision-matrix row (zheref/nen#216). Absent is `ok` because the loader
+// answers an empty matrix -- every stop is then decided by prose, as it was
+// before the file existed. Present and malformed fails by pointer.
+function decisionsCheck(root: string): SchemaCheck {
+  return run(DECISIONS_FILE, root, false, (): string => describeDecisions(loadDecisions(root)));
+}
+
 function workflowCheck(root: string): SchemaCheck {
   return run(WORKFLOW_FILE, root, false, (): string => {
     const loaded = loadWorkflow(root);
@@ -267,14 +293,7 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
       const repos = loadRepoRegistry(root);
       return `${repos.consumers.length} consumers, ${Object.keys(repos.productCodes).length} product codes, latest ${repos.latest ?? "(unrecorded)"}`;
     }),
-    run(COLORS_FILE, root, true, (): string => {
-      const colors = loadColorVocabulary(root);
-      const total = colors.categories.reduce(
-        (sum, category): number => sum + category.values.length,
-        0,
-      );
-      return `${colors.categories.length} categories, ${total} values`;
-    }),
+    colorsCheck(root),
     run(GATES_FILE, root, false, (): string => {
       const gates = loadGateIdentities(root);
       return `${gates.reviewers.length} reviewer identities`;
@@ -292,6 +311,9 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // absence is nothing to read, and this file's absence is a full policy made
     // of defaults. Present and malformed fails, like both of them.
     workflowCheck(root),
+    // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
+    // stop verb and by every skill that would otherwise ask.
+    decisionsCheck(root),
   ];
   return {
     root,

@@ -38,15 +38,19 @@ import {
   type SourceAgent,
 } from "./mirror.js";
 import { findSurface, SURFACES, surfaceNames, type SurfaceRow } from "./rules.js";
+import { CAPABILITIES, capabilityNames, findCapabilities, renderCapabilities } from "./capabilities.js";
 
 export const GENERATE_CONTRACT = "nen.surface.mirror.generate/v0.1";
 export const CHECK_CONTRACT = "nen.surface.mirror.check/v0.1";
 
 const SURFACE_LIST = SURFACES.map((row): string => `    ${row.surface.padEnd(8)} ${row.summary}`).join("\n");
 
-const USAGE = `nen surface -- mirror a skills directory into another agent surface's own layout.
+const USAGE = `nen surface -- mirror a skills directory into another agent surface's own layout,
+               and say what each surface can do.
 
 usage:
+  nen surface capabilities --surface <name> [--json]
+  nen surface capabilities [--json]                 (every surface)
   nen surface mirror generate --source <dir> --surface <name> --out <dir>
                               [--agents <dir>] [--invocation-prefix <prefix>]
                               [--dry-run] [--json]
@@ -54,7 +58,17 @@ usage:
                               [--agents <dir>] [--invocation-prefix <prefix>]
                               [--json]
 
-For every '<name>/SKILL.md' under --source, writes '<out>/<name>/SKILL.md': the
+capabilities: the primitives a RUNNING SESSION on a surface has -- which
+tool asks a human a multiple-choice question, which raises a subagent, which
+hook events exist and the JSON key a PreToolUse hook answers with, whether a
+subagent can be isolated in a worktree, whether a page can be published,
+whether the surface notifies on its own, where a permission allowlist lives,
+and the per-agent model key -- as data with a citation per row (zheref/nen
+#216), so a skill branches on a fact rather than on prose that was true when
+it was written. Surfaces: ${capabilityNames().join(", ")}. An unknown one
+exits 2 naming those.
+
+mirror: for every '<name>/SKILL.md' under --source, writes '<out>/<name>/SKILL.md': the
 body verbatim, the frontmatter reduced to the keys the surface documents, and --
 where the surface documents an explicit invocation spelling -- every
 '<prefix><name>' mention rewritten into it. Every generated file carries a
@@ -242,7 +256,8 @@ export const surfaceCommand: Command = {
   usage: USAGE,
   flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS },
   run(context: CommandContext): number {
-    requireSubcommand("surface", context.args, ["mirror"]);
+    const family = requireSubcommand("surface", context.args, ["mirror", "capabilities"]);
+    if (family === "capabilities") return runCapabilities(context);
     const sub = context.args.positionals[2];
     if (sub !== "generate" && sub !== "check") {
       throw new VerbUsageError(
@@ -264,3 +279,18 @@ export const surfaceCommand: Command = {
     }
   },
 };
+
+function runCapabilities(context: CommandContext): number {
+  const name = context.args.values["surface"] ?? null;
+  if (name === null) {
+    const lines = CAPABILITIES.flatMap((row): string[] => [...renderCapabilities(row), ""]);
+    emit(context.io, context.json, { contract: "nen.surface.capabilities/v0.1", surfaces: CAPABILITIES }, lines);
+    return 0;
+  }
+  const row = findCapabilities(name);
+  if (row === undefined) {
+    throw new VerbUsageError(`unknown surface '${name}'. This build knows: ${capabilityNames().join(", ")}.`);
+  }
+  emit(context.io, context.json, { contract: "nen.surface.capabilities/v0.1", ...row }, renderCapabilities(row));
+  return 0;
+}

@@ -92,7 +92,16 @@ import { PROGRAM, VERSION } from "../version.js";
  * list every verb edits by hand is a merge conflict per verb.
  */
 export const PR_READY_FLAGS = {
-  values: ["gh-repo", "reviewers", "approvers", "round-policy", "exclude-run", "gates", "token-env"],
+  values: [
+    "gh-repo",
+    "reviewers",
+    "approvers",
+    "round-policy",
+    "exclude-run",
+    "exclude-check",
+    "gates",
+    "token-env",
+  ],
   booleans: ["explain"],
 } as const;
 
@@ -291,6 +300,14 @@ export interface ReadyMeta {
   readonly approvalPolicy: "required" | "review-round-only";
   readonly roundPolicy: RoundPolicy;
   readonly excludeRun: string | null;
+  /**
+   * `--exclude-check <name>` (name-based exclusion, zheref/nen#216), the names actually applied --
+   * always the ARRAY, empty when the flag was not given, never `null`: unlike
+   * `excludeRun` (one carve-out or none), this is a set, and an empty set and
+   * "unspecified" already coincide in the CON-32(a) reading, so there is no
+   * second state worth a second sentinel for.
+   */
+  readonly excludedChecks: readonly string[];
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -525,6 +542,10 @@ export function identitiesFromFlags(
     defaultApprovers: approvers,
     approvalPolicy: "required",
     baseReviewers: reviewers,
+    // NO STALL OVERRIDE ON THE FLAGS PATH: `--reviewers a,b` names no file, so
+    // there is nothing that could declare `round_policy.stallMinutes`. The
+    // caller's own STALL_MINUTES default applies, same as it always has.
+    stallMinutes: null,
     delivery: { authorPattern: /(?!)/, headRefPrefixes: [], labels: [] },
     // NO CARVE-OUT ON THE FLAGS PATH, and that is the conservative reading
     // rather than an omission (zheref/nen#18). CON-30's carve-out clears review
@@ -763,6 +784,9 @@ export function renderExplain(report: ReadyReport): string[] {
   if (report.meta.excludeRun !== null) {
     lines.push(`  excluding the checks of Actions run ${report.meta.excludeRun} (CON-36 clause 3)`);
   }
+  if (report.meta.excludedChecks.length > 0) {
+    lines.push(`  excluding checks named: ${report.meta.excludedChecks.join(", ")} (name-based exclusion, zheref/nen#216)`);
+  }
   for (const warning of report.meta.warnings) lines.push(`  warning: ${warning}`);
   lines.push("");
   lines.push("  The gate is a CONJUNCTION, evaluated in this order, short-circuiting on the");
@@ -835,6 +859,21 @@ export async function prReady(
     io.err(`${PROGRAM}: --exclude-run must be a numeric Actions run id (got '${excludeRun}').`);
     return 2;
   }
+  // `--exclude-check <name>` (name-based exclusion, zheref/nen#216): comma-joined, the same grammar
+  // `--reviewers` uses. THIS CLI'S ARGV READER REFUSES A REPEATED VALUE FLAG
+  // OUTRIGHT (../cli/args.ts: "no repeated VALUE flags -- neither collapsing
+  // into an array nor last-one-wins: a second occurrence is a usage error"),
+  // so "repeatable" here means what it means for every other multi-value flag
+  // this verb already has: `--exclude-check a,b` in one occurrence, not
+  // `--exclude-check a --exclude-check b`. A caller that types the flag twice
+  // gets that parser's own usage error, same as `--reviewers` would.
+  //
+  // LIMITATION, DOCUMENTED RATHER THAN FIXED: `splitCsv` below trims each name
+  // and splits on ',', so a check whose own name CONTAINS a comma can never be
+  // named through this flag, and leading/trailing whitespace around a name is
+  // never significant. See docs/USAGE.md's `pr ready` section for the same
+  // sentence aimed at the caller.
+  const excludeCheckNames = splitCsv(input.values["exclude-check"] ?? "");
   const reviewersCsv = input.values["reviewers"] ?? "";
   const reviewerNames = splitCsv(reviewersCsv);
   // `--approvers` OMITTED is not the same value as `--approvers ""`, and the
@@ -870,6 +909,12 @@ export async function prReady(
     return 2;
   }
 
+  // `round_policy.stallMinutes` (zheref/nen#214 item 2): a repository-declared
+  // override of STALL_MINUTES, read off the RESOLVED identities so both the
+  // schema and the flags path apply the same rule (the flags path always
+  // yields `null`, i.e. no override).
+  const stallMinutes = identities.identities.stallMinutes ?? STALL_MINUTES;
+
   // `--approvers` is READ only on the flags identity branch (`identitiesFromFlags`,
   // above) -- when a gates file resolved instead, the file's own
   // `default_approvers` decides and the flag is silently unreachable code with
@@ -894,7 +939,9 @@ export async function prReady(
         deps.executable(),
         identities,
         policy,
+        stallMinutes,
         excludeRun,
+        excludeCheckNames,
         flagWarnings,
         "no usable token, so GitHub could not be read",
         opened.message,
@@ -926,7 +973,9 @@ export async function prReady(
         deps.executable(),
         identities,
         policy,
+        stallMinutes,
         excludeRun,
+        excludeCheckNames,
         flagWarnings,
         `GitHub could not be read (${error instanceof Error ? error.message : String(error)})`,
         "Check the token's grants (pull-requests:read AND checks:read AND actions:read), that it is not expired, and that the network reached github.com. Never read this as ready.",
@@ -945,7 +994,9 @@ export async function prReady(
         deps.executable(),
         identities,
         policy,
+        stallMinutes,
         excludeRun,
+        excludeCheckNames,
         flagWarnings,
         fetched.reason,
         fetched.remedy,
@@ -955,8 +1006,9 @@ export async function prReady(
 
   const evaluation: ReadyEvaluation = evaluateReady(identities.identities, fetched.state, {
     roundPolicyDefault: policy,
-    stallMinutes: STALL_MINUTES,
+    stallMinutes,
     now: deps.now(),
+    excludeCheckNames,
   });
 
   const report: ReadyReport = {
@@ -977,10 +1029,11 @@ export async function prReady(
       approvalPolicy: evaluation.context.approvalPolicy,
       roundPolicy: evaluation.context.policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
+      excludedChecks: excludeCheckNames,
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,
-      warnings: [...flagWarnings, ...fetched.warnings],
+      warnings: [...flagWarnings, ...fetched.warnings, ...evaluation.context.warnings],
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
     },
@@ -1001,7 +1054,9 @@ function unevaluatedReport(
   executable: string,
   identities: ResolvedIdentities,
   policy: RoundPolicy,
+  stallMinutes: number,
   excludeRun: string,
+  excludeCheckNames: readonly string[],
   warnings: readonly string[],
   reason: string,
   remedy: string,
@@ -1018,8 +1073,9 @@ function unevaluatedReport(
     // claim about evidence nobody read.
     conjuncts: evaluateReady(identities.identities, {}, {
       roundPolicyDefault: policy,
-      stallMinutes: STALL_MINUTES,
+      stallMinutes,
       now,
+      excludeCheckNames,
     }).conjuncts.map((conjunct): Conjunct => ({ ...conjunct, status: "unevaluated", reason: null })),
     caveats: CAVEATS,
     remedy,
@@ -1039,6 +1095,7 @@ function unevaluatedReport(
       approvalPolicy: identities.identities.approvalPolicy,
       roundPolicy: policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
+      excludedChecks: excludeCheckNames,
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
       // The gate never ran, so it never asked -- `false` here would read as

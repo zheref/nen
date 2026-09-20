@@ -70,7 +70,7 @@ function requirePr(context: CommandContext): number {
   return number;
 }
 
-const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--gates <path>] [--token-env <VAR>]
+const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <a,b>] [--gates <path>] [--token-env <VAR>]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> --requirements-from <path>
 nen pr fetch --target <owner/name> --pr <n>
@@ -100,6 +100,11 @@ ready:
   --round-policy <p>          strict | bounded. Default bounded.
   --exclude-run <id>          Drop one Actions run's own checks (CON-36 clause
                               3; pass it only from inside that run's own job).
+  --exclude-check <a,b>       Drop checks BY NAME from CON-32(a) (zheref/nen#216): a repository whose only reporting
+                              check is its own readiness run would otherwise
+                              read a false ready off that prior check. An
+                              EMPTY rollup after exclusion is 'not-ready: no
+                              checks reported', never ready. Comma-separated.
   --gates <path>              Read reviewer identities from this gates file
                               instead of the target repo's nen/gates.json.
                               A RELATIVE path is resolved against the --repo

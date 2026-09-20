@@ -42,6 +42,7 @@ import { labelCommand } from "../label/command.js";
 import { labelsCommand } from "../labels/command.js";
 import { loopCommand } from "../loop/command.js";
 import { parseCommand } from "../grammar/command.js";
+import { phaseCommand } from "../phase/command.js";
 import { prCommand } from "../pr/command.js";
 import { qualityCommand } from "../quality/command.js";
 import { refCommand } from "../ref/command.js";
@@ -79,6 +80,7 @@ export const COMMANDS: readonly Command[] = [
   labelsCommand,
   loopCommand,
   parseCommand,
+  phaseCommand,
   prCommand,
   qualityCommand,
   refCommand,

@@ -576,6 +576,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       approvalPolicy: "required",
       roundPolicy: "bounded",
       excludeRun: null,
+      excludedChecks: [],
       deliveryPr: false,
       identities: { source: "schema", path: "/repo/nen/gates.json" },
       dependabotCarveOut: false,
@@ -1158,6 +1159,141 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     expect(report.verdict).toBe("not-ready");
     expect(report.firstFailing).toBe("mergeable");
     expect(report.gateLine).toContain("mergeable=CONFLICTING");
+  });
+});
+
+describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
+  it("excluding the ONLY check present reads not-ready: no checks reported (after excluding: ...), never ready", async () => {
+    const onlyOwnCheck = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+        pullRequest: {
+          number: 9,
+          mergeable: "MERGEABLE",
+          isDraft: false,
+          headRefOid: "cafebabe",
+          headRefName: "feature/x",
+          baseRefName: "main",
+          author: { login: "someone" },
+          labels: [],
+          reviewRequests: [],
+        },
+        defaultBranch: "main",
+        checkRollup: [{ name: "readiness", status: "COMPLETED", conclusion: "SUCCESS" }],
+        checkRollupPageInfo: { hasNextPage: false, endCursor: null },
+        reviewRequests: [],
+        reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
+      }),
+    });
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "exclude-check": "readiness" } }),
+      io,
+      stubDeps(onlyOwnCheck),
+    );
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    expect(report.gateLine).toMatch(/^not-ready: no checks reported \(after excluding: readiness\)/);
+    expect(report.meta.excludedChecks).toEqual(["readiness"]);
+  });
+
+  it("a MIXED rollup drops only the named check and reads ready off what remains", async () => {
+    // stubSource's default rollup already carries one green 'ci / build'
+    // check; excluding an UNRELATED name must not touch it.
+    const mixed = stubSource();
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "exclude-check": "readiness" } }),
+      io,
+      stubDeps(mixed),
+    );
+    expect(code).toBe(0);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("ready");
+    expect(report.meta.excludedChecks).toEqual(["readiness"]);
+  });
+
+  it("with no --exclude-check, meta.excludedChecks is empty", async () => {
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(stubSource()));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.meta.excludedChecks).toEqual([]);
+  });
+
+  it("a comma-joined list excludes every named check, and --explain names them", async () => {
+    const onlyExcluded = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+        pullRequest: {
+          number: 9,
+          mergeable: "MERGEABLE",
+          isDraft: false,
+          headRefOid: "cafebabe",
+          headRefName: "feature/x",
+          baseRefName: "main",
+          author: { login: "someone" },
+          labels: [],
+          reviewRequests: [],
+        },
+        defaultBranch: "main",
+        checkRollup: [
+          { name: "readiness", status: "COMPLETED", conclusion: "SUCCESS" },
+          { name: "status-summary", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+        checkRollupPageInfo: { hasNextPage: false, endCursor: null },
+        reviewRequests: [],
+        reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
+      }),
+    });
+    const { io, out } = capture();
+    const code = await prReady(
+      input({
+        values: { ...input().values, "exclude-check": "readiness,status-summary" },
+        booleans: new Set(["explain"]),
+      }),
+      io,
+      stubDeps(onlyExcluded),
+    );
+    expect(code).toBe(1);
+    const text = out.join("\n");
+    expect(text).toContain("excluding checks named: readiness, status-summary");
+    expect(text).toContain("no checks reported (after excluding: readiness, status-summary)");
+  });
+
+  // The false-ready hazard the flag exists to close: a typo'd --exclude-check
+  // name used to be a SILENT no-op -- excluding nothing while the caller
+  // believed their own check was gone. It now surfaces in meta.warnings (and
+  // under --explain), and the rollup it was applied to is left intact, same
+  // as ../gates/ready.test.ts pins at the composition level.
+  it("a typo'd --exclude-check name warns under --explain and excludes nothing", async () => {
+    const { io: explainIo, out: explainOut } = capture();
+    const explainCode = await prReady(
+      input({
+        values: { ...input().values, "exclude-check": "ci / biuld" },
+        booleans: new Set(["explain"]),
+      }),
+      explainIo,
+      stubDeps(stubSource()),
+    );
+    expect(explainCode).toBe(0);
+    expect(explainOut.join("\n")).toContain(
+      "warning: --exclude-check 'ci / biuld' matched no check in the rollup",
+    );
+
+    // The same run in --json mode: the warning is in meta.warnings, and the
+    // rollup was left untouched -- the verdict is still `ready`, same as if
+    // the flag had never been passed at all.
+    const { io: jsonIo, out: jsonOut } = capture();
+    const jsonCode = await prReady(
+      input({ values: { ...input().values, "exclude-check": "ci / biuld" } }),
+      jsonIo,
+      stubDeps(stubSource()),
+    );
+    expect(jsonCode).toBe(0);
+    const report = JSON.parse(jsonOut.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("ready");
+    expect(report.meta.warnings).toContain(
+      "--exclude-check 'ci / biuld' matched no check in the rollup",
+    );
   });
 });
 

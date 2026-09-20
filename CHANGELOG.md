@@ -4,6 +4,26 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## Unreleased
 
+### Added
+
+- **decisions** — `nen/decisions.json`, the decision matrix, validated by `nen schema check` as a seventh optional row (contract `nen.decisions/v0.1`): rows classify a named condition as `autonomous` (resolved by a `default` command, no question), `ask-once-per-run` (seeded by `preferred[]` options) or `human-gate` (a gate canon reserves for a person). A consumer may add rows and narrow, never reclassify a human gate ([#216](https://github.com/zheref/nen/issues/216)).
+- **stop** — `--title`, `--body`, `--report-url`, `--options <file>` and `--propose-issue <file>` render the rich stop (Crazy Slots) and, with `--mark`, write the marker as `nen.stop.mark/v0.2`; a stop carrying none keeps writing v0.1 byte for byte. Options are executable or refused, exactly one is starred, and an option naming the report is refused. A proposed issue is also written to `.nen/proposed/<at>.json`. `nen stop show` reads the marker back and validates it (v0.1 or v0.2, exit 1 naming the defect); `nen stop clear` consumes it ([#216](https://github.com/zheref/nen/issues/216)).
+- **phase** — `nen phase begin|end|show`: the per-effort timing ledger at `.nen/phases/<effort>.json` (`nen.phase.ledger/v0.1`), flattened by `nen report data` into `phases[]` entries each carrying its `effort` ([#216](https://github.com/zheref/nen/issues/216)).
+- **repo** — `nen repo classify`: role (canon / consumer / unregistered from `nen/repos.json`), kind (product / process / unknown from lane stacks), stack, lanes and the default gate (G4 for canon, G2 otherwise) as one document with sources ([#216](https://github.com/zheref/nen/issues/216)).
+- **surface** — `nen surface capabilities --surface <name>`: the picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and agent model key each surface offers a running session, four surfaces, a citation per row ([#216](https://github.com/zheref/nen/issues/216)).
+- **shu** — `nen shu warmup --carry`: stash the uncommitted work including untracked, warm, cut the branch, and restore it, addressed by stash SHA; a pop that conflicts leaves the stash and names it ([#216](https://github.com/zheref/nen/issues/216)).
+- **pr** — `nen pr ready --exclude-check <name>` drops checks by name from CON-32(a); an empty rollup after exclusion is `not-ready`, never ready ([zheref/hatsu#81](https://github.com/zheref/hatsu/issues/81), [#216](https://github.com/zheref/nen/issues/216)).
+
+### Changed
+
+- **schema check** — `nen/colors.yml` is optional: absent is an `ok` row reading `absent (optional)`; the verbs that resolve a colour refuse by name when asked. Present and malformed still FAILs by pointer ([#216](https://github.com/zheref/nen/issues/216)).
+- **cli** — an unknown command, or a declared family's unknown subcommand, followed by `--help` exits 2 with the usage on stderr, so a presence probe by `--help` no longer passes for a verb that does not exist ([#216](https://github.com/zheref/nen/issues/216)).
+- **watch until** — reads the target's `monitor.pollSeconds` as the default interval and a non-zero `monitor.maxCycles` as the default bound; typed flags win ([#216](https://github.com/zheref/nen/issues/216)).
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** Four behaviours change in place with no new flag to notice them by, each in the direction a consumer's warm-up already wanted: `schema check` no longer fails on an absent `colors.yml`; `nen <bogus> --help` exits 2; `watch until` paces itself by a `monitor` block the repository DECLARES (an absent block keeps 5 s and no bound); and **`pr ready` under `review-round-only`'s default `bounded` policy owes a posted round only while a request is pending or no round exists at any head** ([#214](https://github.com/zheref/nen/issues/214)) — whether a later head's diff was reviewed is the driving agent's to secure by requesting a fresh round after every substantive push, which makes a request pending until it posts; `--round-policy strict` keeps the current-head requirement. A consumer whose prose depended on the old readings reads the new ones from `docs/USAGE.md`.
+
 ## v0.10.0 — 2026-09-12
 
 ### Changed

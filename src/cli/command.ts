@@ -40,6 +40,14 @@ export interface Command {
   /** Flags this family accepts, ON TOP of the global ones. */
   readonly flags: FlagSpec;
   /**
+   * The subcommands this family answers, when it declares them. Read by
+   * ../index.ts's `runFamily` so that `--help` on a subcommand the family does
+   * not have exits 2 rather than printing the family's help at 0
+   * (zheref/nen#216). Optional: a family that leaves it out keeps the old
+   * behaviour, and its own `run()` refuses an unknown subcommand as before.
+   */
+  readonly subcommands?: readonly string[];
+  /**
    * A `Promise<number>` is allowed because ONE subcommand of ONE family --
    * `nen pr ready` (../verbs/pr_ready.ts) -- reads GitHub over the network and
    * there is no synchronous way to do that. Every other family stays

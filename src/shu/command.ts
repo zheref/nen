@@ -96,7 +96,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   coverage: { values: ["lane", "threshold", "base"], booleans: ["dry-run", "touched"] },
   "test-report": { values: ["lane"], booleans: ["dry-run", "from-artifacts"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
-  warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "tests", "dry-run"] },
+  warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "carry", "tests", "dry-run"] },
   // NO --lane, AND NO --dry-run. `project.evidence` is a project-level block,
   // not a per-lane one (like `targets`), and this verb spawns nothing a dry
   // run would need to skip -- `git diff` runs unconditionally, exactly as
@@ -510,6 +510,21 @@ flags:
                    submodule. Anything still uncommitted afterwards is exit 2
                    naming it -- with the report, because by then this run has
                    destroyed something and the report is what says what.
+  --carry          'warmup' only, and never together with --discard (exit 2
+                   naming both). The third door: preserve uncommitted work
+                   (tracked AND untracked) across the warm-up instead of
+                   refusing it or throwing it away. 'git stash push
+                   --include-untracked -m "nen shu warmup --carry <branch>"'
+                   before the fetch, then 'git rev-parse refs/stash' to record
+                   the SHA that every later step -- including the pop -- reads
+                   it back by, NEVER 'stash@{0}'. A clean tree has nothing to
+                   carry and this is a no-op. Once the branch is cut and the
+                   declared build (and, with --tests, the declared test) has
+                   passed, 'git stash pop <sha>' restores it. If that pop
+                   conflicts or fails, the stash is NOT dropped: nen prints
+                   the SHA and the exact 'git stash pop <sha>' / 'git stash
+                   apply <sha>' to run once it is resolved, and exits 1 -- the
+                   cut branch stays exactly where it is.
   --tests          'warmup' only. Also run the lane's declared 'test' after the
                    build, through the same executor. Off by default, because a
                    test suite is the slow half and a warm-up is the fast one.
@@ -1193,6 +1208,7 @@ export const shuCommand: Command = {
             ),
             from: context.args.values["from"] ?? null,
             discard: context.args.booleans.has("discard"),
+            carry: context.args.booleans.has("carry"),
             tests: context.args.booleans.has("tests"),
             lane: context.args.values["lane"] ?? null,
             dryRun: context.args.booleans.has("dry-run"),
