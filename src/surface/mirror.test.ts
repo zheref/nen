@@ -612,17 +612,42 @@ describe("the description budget", () => {
 });
 
 describe("the shared include", () => {
-  it("is skipped and named, never mirrored as a persona (zheref/nen#223)", () => {
-    const read = readSourceAgentsReport(AGENTS);
-    expect(read.skipped).toEqual(["_shared.md"]);
+  const read = readSourceAgentsReport(AGENTS);
+  const withIncludes = (surface: string): readonly GeneratedFile[] =>
+    generateSurfaceMirror({ row: row(surface), skills: readSourceSkills(SKILLS), agents: read.agents, includes: read.includes, invocationPrefix: PREFIX });
+
+  it("is read as an include, never as a persona (zheref/nen#223), and nothing else is skipped", () => {
+    expect(read.includes.map((include): string => include.relative)).toEqual(["_shared.md"]);
+    expect(read.skipped).toEqual([]);
     expect(read.agents.map((agent): string => agent.stem)).toEqual(["scout"]);
+    // Without the includes handed over, nothing is emitted for it.
     expect(generate("cursor").map((file): string => file.path)).not.toContain("agents/_shared.md");
   });
 
-  it("is outside the universe on every row, so an installed copy carrying it is not extra", () => {
-    const { out } = materialize("cursor");
-    writeFileSync(join(out, "agents", "_shared.md"), `${markerFor("cursor")}\nnot a persona\n`);
-    expect(universeFiles(out, row("cursor"))).not.toContain("agents/_shared.md");
+  it("is carried beside the personas on a files row: marker, body verbatim, no persona-shaped refusal (S11)", () => {
+    const files = withIncludes("cursor");
+    const include = at(files, "agents/_shared.md");
+    // The fixture include has no frontmatter, which a PERSONA would be refused for.
+    expect(include).toBe(`${markerFor("cursor")}\n## Shared preamble\n\nThis file is pulled into every persona by reference. It is an include, not a\npersona: it has no frontmatter and names nobody.\n`);
+    const report = generateSurfaceMirrorReport({ row: row("cursor"), skills: readSourceSkills(SKILLS), agents: read.agents, includes: read.includes, invocationPrefix: null });
+    expect(report.includes).toEqual(["_shared.md"]);
+  });
+
+  it("follows the personas as a ## _<stem> section on the appendix row", () => {
+    const appendix = at(withIncludes("codex"), "AGENTS.md");
+    expect(appendix.indexOf("## scout")).toBeLessThan(appendix.indexOf("## _shared"));
+    expect(appendix).toContain("## _shared\n\n## Shared preamble\n");
+    // Never a TOML persona for it.
+    expect(withIncludes("codex").map((file): string => file.path)).not.toContain("agents/_shared.toml");
+  });
+
+  it("is inside the universe like any persona file, so a stale copy is an orphan and a fresh one is ok", () => {
+    const out = tempDir();
+    writeSurfaceMirror(out, withIncludes("cursor"), row("cursor"));
+    expect(universeFiles(out, row("cursor"))).toContain("agents/_shared.md");
+    expect(mirrorReportOk(checkSurfaceMirror(out, withIncludes("cursor"), row("cursor")))).toBe(true);
+    const without = writeSurfaceMirror(out, generate("cursor"), row("cursor"));
+    expect(without.deleted).toEqual(["agents/_shared.md"]);
   });
 });
 

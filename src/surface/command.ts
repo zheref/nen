@@ -124,7 +124,10 @@ ${SURFACE_LIST}
                               written one apiece; where it documents none, every
                               persona becomes a section of the one prose
                               document the row names. A '_'-prefixed file is a
-                              shared include, not a persona: skipped and named.
+                              shared include the personas cite by path, not a
+                              persona: carried beside them as '_<stem>.md'
+                              (or a '## _<stem>' section of the appendix),
+                              never routed on, and listed under includes[].
   --invocation-prefix <p>     The SOURCE's own invocation namespace (e.g.
                               'myplugin:'). Caller data, never a literal in this
                               binary. Without it nothing is rewritten.
@@ -266,6 +269,9 @@ interface Inputs {
   readonly report: GenerateReport;
 }
 
+/** What `--agents` holds when the flag is absent: no personas, no includes, nothing skipped. */
+const NO_AGENTS = { agents: [], includes: [], skipped: [] } as const;
+
 function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
   const sourceDir = required(
     context,
@@ -318,7 +324,7 @@ function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
       "--agents was given an empty value. Omit it entirely to mirror the skills and no personas.",
     );
   }
-  const agents = agentsFlag === undefined ? { agents: [], skipped: [] } : readSourceAgentsReport(agentsFlag);
+  const agents = agentsFlag === undefined ? NO_AGENTS : readSourceAgentsReport(agentsFlag);
   const hooksPath = optionalPath(context, "hooks");
   const modelsPath = optionalPath(context, "models");
   const sourceSurface = context.args.values["source-surface"] ?? DEFAULT_SOURCE_SURFACE;
@@ -355,6 +361,7 @@ function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
       row,
       skills: readSourceSkills(sourceDir),
       agents: agents.agents,
+      includes: agents.includes,
       invocationPrefix: context.args.values["invocation-prefix"] ?? null,
       stamp,
       hooks: hooksPath === null ? null : readHooksManifest(hooksPath),
@@ -403,6 +410,7 @@ function runGenerate(context: CommandContext): number {
       notes: report.notes,
       permissionSurfaceRows: report.permissionSurfaceRows,
       writableRootsPlaceholder: report.writableRootsPlaceholder,
+      includes: report.includes,
     },
     [
       `surface: ${inputs.row.surface} (${inputs.row.skillsPath})`,
@@ -411,9 +419,12 @@ function runGenerate(context: CommandContext): number {
       `written: ${listOr(result.written)}`,
       `unchanged: ${listOr(result.unchanged)}`,
       `deleted (orphaned): ${listOr(result.deleted)}`,
+      ...(report.includes.length === 0
+        ? []
+        : [`includes (shared, carried beside the personas, not personas): ${report.includes.join(", ")}`]),
       ...(inputs.skippedAgents.length === 0
         ? []
-        : [`skipped (shared includes, not personas): ${inputs.skippedAgents.join(", ")}`]),
+        : [`skipped (not a regular file): ${inputs.skippedAgents.join(", ")}`]),
       ...(report.truncated.length === 0
         ? []
         : [`truncated (description over the ${inputs.row.descriptionBudget ?? 0}-char budget; summary: added): ${report.truncated.join(", ")}`]),

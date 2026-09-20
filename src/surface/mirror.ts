@@ -215,23 +215,26 @@ export function readSourceSkills(sourceDir: string): readonly SourceSkill[] {
 export interface SourceAgents {
   readonly agents: readonly SourceAgent[];
   /**
-   * `_`-prefixed `*.md` files, which are shared INCLUDES a persona file pulls
-   * in rather than personas (zheref/nen#223): mirrored as personas they would
-   * become subagents nobody defined. Named so the report can say they were
-   * skipped rather than silently absent.
+   * `_`-prefixed `*.md` files: shared INCLUDES a persona pulls in by path
+   * ("read `agents/_review-preamble.md` first"), never personas (zheref/nen
+   * #223 -- mirrored as personas they became subagents nobody defined).
+   * Carried as INCLUDES (Nobunaga S11): a mirrored persona that cites a file
+   * the mirror does not hold is a persona pointing at nothing.
    */
+  readonly includes: readonly SourceAgent[];
+  /** Anything else under `--agents` that was set aside: a `*.md` that is not a regular file. */
   readonly skipped: readonly string[];
 }
 
-/** Every `*.md` directly under `agentsDir`, sorted, `_`-prefixed files set aside. An empty directory is allowed. */
+/** Every `*.md` directly under `agentsDir`, sorted, `_`-prefixed files as includes. An empty directory is allowed. */
 export function readSourceAgentsReport(agentsDir: string): SourceAgents {
   const agents: SourceAgent[] = [];
+  const includes: SourceAgent[] = [];
   const skipped: string[] = [];
   for (const entry of directoryEntries(agentsDir, "an agents directory", "agents")) {
     if (!entry.endsWith(".md")) continue;
     const file = join(agentsDir, entry);
-    if (!statSync(file).isFile()) continue;
-    if (entry.startsWith("_")) {
+    if (!statSync(file).isFile()) {
       skipped.push(entry);
       continue;
     }
@@ -239,9 +242,9 @@ export function readSourceAgentsReport(agentsDir: string): SourceAgents {
     const stem = entry.slice(0, -".md".length);
     const named = splitDocument(text).entries.find((candidate): boolean => candidate.key === "name");
     const inline = named === undefined ? "" : inlineValue(named);
-    agents.push({ stem, name: inline === "" ? stem : inline, relative: entry, text });
+    (entry.startsWith("_") ? includes : agents).push({ stem, name: inline === "" ? stem : inline, relative: entry, text });
   }
-  return { agents, skipped };
+  return { agents, includes, skipped };
 }
 
 export function readSourceAgents(agentsDir: string): readonly SourceAgent[] {
@@ -264,6 +267,8 @@ export interface GenerateOptions {
   readonly row: SurfaceRow;
   readonly skills: readonly SourceSkill[];
   readonly agents: readonly SourceAgent[];
+  /** The `_`-prefixed shared includes beside the personas (`readSourceAgentsReport().includes`), carried as includes. */
+  readonly includes?: readonly SourceAgent[];
   /**
    * The source's own invocation prefix (`--invocation-prefix`), or null. Caller
    * data: a source repository's namespace is its own name for itself, never a
@@ -305,6 +310,8 @@ export interface GenerateReport {
   readonly manifest: "written" | "not supported" | "none";
   /** Everything else worth a line: unmapped hook events, an appendix past the read limit, a long rules file. */
   readonly notes: readonly string[];
+  /** The shared includes carried beside the personas, by source filename (`_shared.md`). */
+  readonly includes: readonly string[];
 }
 
 /**
@@ -399,7 +406,8 @@ function agentFiles(options: GenerateOptions): AgentOutput {
   const droppedInherit: string[] = [];
   const undocumentedAliases: string[] = [];
   const notes: string[] = [];
-  if (options.agents.length === 0) return { files: [], droppedInherit, undocumentedAliases, notes };
+  const includes = options.includes ?? [];
+  if (options.agents.length === 0 && includes.length === 0) return { files: [], droppedInherit, undocumentedAliases, notes };
 
   /** `model:` through --models, for a persona whose entries the surface reads as frontmatter. */
   const mapped = (agent: SourceAgent, entries: readonly FrontmatterEntry[]): readonly FrontmatterEntry[] => {
@@ -444,6 +452,21 @@ function agentFiles(options: GenerateOptions): AgentOutput {
       const content = `${front}${markerFor(row.surface, stamp)}\n${document.body}`;
       return { path, content: rewriteInvocations(content, row, options.invocationPrefix) };
     });
+    // The includes, beside the personas (S11): frontmatter reduced the same
+    // way, marker after it, body verbatim -- and NO required-key check, no
+    // empty-frontmatter refusal and no model rewriting, because an include
+    // is not a persona: nothing routes on it, and a persona reads it by path.
+    for (const include of includes) {
+      const path = `${rule.dir}/${include.stem}${rule.extension}`;
+      if (row.verbatim) {
+        files.push({ path, content: include.text });
+        continue;
+      }
+      const document = splitDocument(include.text);
+      const front = renderFrontmatter(document.entries, new Set(rule.keys));
+      const content = `${front}${markerFor(row.surface, stamp)}\n${document.body}`;
+      files.push({ path, content: rewriteInvocations(content, row, options.invocationPrefix) });
+    }
     return { files, droppedInherit, undocumentedAliases, notes };
   }
 
@@ -452,10 +475,17 @@ function agentFiles(options: GenerateOptions): AgentOutput {
   // file this lands in has no frontmatter concept at all, and a stray `---`
   // fence in the middle of a prose document renders as a horizontal rule.
   const hashes = "#".repeat(rule.headingLevel);
-  const sections = options.agents.map((agent): string => {
+  const section = (agent: SourceAgent, heading: string): string => {
     const body = splitDocument(agent.text).body.replace(/^\n+/, "").replace(/\s+$/, "");
-    return `${hashes} ${agent.name}\n\n${body}\n`;
-  });
+    return `${hashes} ${heading}\n\n${body}\n`;
+  };
+  // The includes follow the personas as `## _<stem>` sections (S11): a
+  // persona's "read _review-preamble first" then lands on a heading in the
+  // same document rather than on a file the surface never received.
+  const sections = [
+    ...options.agents.map((agent): string => section(agent, agent.name)),
+    ...includes.map((include): string => section(include, include.stem)),
+  ];
   const appendix = rewriteInvocations(
     `${markerFor(row.surface, stamp)}\n\n${sections.join("\n")}`,
     row,
@@ -608,6 +638,7 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     writableRootsPlaceholder,
     manifest,
     notes,
+    includes: (options.includes ?? []).map((include): string => include.relative),
   };
 }
 
@@ -660,15 +691,15 @@ export function universeFiles(outDir: string, row: SurfaceRow): readonly string[
   };
   const isDir = (path: string): boolean => existsSync(path) && statSync(path).isDirectory();
   // A `_`-prefixed file is a shared include on the source side (zheref/nen
-  // #223) and is never generated, so it is outside the universe on every
-  // row -- which matters for the verbatim one, where an installed plugin tree
-  // legitimately carries it beside the personas.
+  // #223) and is CARRIED as one (S11), so it is inside the universe on every
+  // row like any persona file: generated, checked, and deleted as an orphan
+  // when its source goes.
   const filesIn = (dir: string, extension: string): readonly string[] => {
     const absolute = join(outDir, ...dir.split("/"));
     if (!isDir(absolute)) return [];
     return readdirSync(absolute)
       .sort()
-      .filter((entry): boolean => entry.endsWith(extension) && !entry.startsWith("_"))
+      .filter((entry): boolean => entry.endsWith(extension))
       .map((entry): string => `${dir}/${entry}`);
   };
 

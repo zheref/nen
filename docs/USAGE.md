@@ -8201,9 +8201,19 @@ directory's `scripts/`, `references/` and assets are left where they are, and a
 mirror directory may hold them beside the generated file without either verb
 touching them. A hook script named by a `--hooks` command is read from beside the manifest **as its own bytes**: one that is a symbolic link is refused at exit 2 by name rather than followed to whatever it points at. A destination under `--out` that is a symbolic link is refused the same way, before the first byte is written — a write there would land wherever the link points. A script's declared mode (0755) is applied on every generate, unchanged bytes included, and reported under `written[]` when only the mode moved.
 Under `--agents`, a **`_`-prefixed file is a shared include**
-a persona pulls in, not a persona ([#223](https://github.com/zheref/nen/issues/223)):
-it is skipped and named in the report, never mirrored as a subagent nobody
-defined. The **filename universe** these two verbs consider their own has
+a persona cites by path ("read `agents/_review-preamble.md` first"), not a
+persona ([#223](https://github.com/zheref/nen/issues/223)): it is never
+mirrored as a subagent nobody defined, and it is **carried as an include**
+so the mirrored persona's citation lands on a file the mirror holds — on a
+files-kind row as `<out>/<agents dir>/_<stem>.md` with the frontmatter
+reduced like a persona's, the marker after it and the body verbatim (no
+required-key check, no empty-frontmatter refusal, no model rewriting: nothing
+routes on it); on the appendix row (codex) as a `## _<stem>` section after
+the personas, never a TOML persona. The report lists them under `includes[]`
+(`includes (shared, carried beside the personas, not personas):` in text);
+`skippedAgents[]` remains for anything else set aside — a `*.md` that is not
+a regular file — and is otherwise empty. The **filename universe** these two
+verbs consider their own has
 **two** conditions: a file must sit at one of the row's own locations
 (`<name>/SKILL.md`, the persona location, the row's hook manifest and
 `hooks/` scripts, rules, permission, plugin-manifest, fragment and TOML-persona
@@ -8287,8 +8297,8 @@ line the surface ignores, holding the sentence its picker would otherwise cut.
 
 **Output and exit codes** — prints `surface:`, `out:`, `stamp:` (when given),
 then `written:`, `unchanged:` and `deleted (orphaned):` (each `(none)` when
-empty), then the report lines that apply: `skipped (shared includes, not
-personas):`, `truncated (…):`, `model: inherit dropped (…):`, `model alias
+empty), then the report lines that apply: `includes (shared, carried beside
+the personas, not personas):`, `skipped (not a regular file):`, `truncated (…):`, `model: inherit dropped (…):`, `model alias
 outside the surface's documented set (…):`, and always `hooks:`, `rules:` and
 `permissions:` and `manifest:` (`none` when the flag was not given, `not
 supported` when the row has no such file, else what was written), then any
@@ -8297,7 +8307,7 @@ caveat goes to **stderr**, so `--json` stays one document. `--json`:
 `{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
 dryRun, written, unchanged, deleted, stamp, skippedAgents, truncated,
 droppedInherit, undocumentedAliases, hooks, rules, permissions, manifest, notes,
-permissionSurfaceRows, writableRootsPlaceholder }` — the
+permissionSurfaceRows, writableRootsPlaceholder, includes }` — the
 keys after `deleted` are v0.13.0's, appended at the end of the key order;
 `rules` is `"none"`, `"not supported"` or `{ path, chars, limit }`. Exit 0 on
 any completed run; exit 2 on a missing or unknown flag, an `--out` inside
@@ -8318,10 +8328,10 @@ nen surface mirror generate --source src/surface/fixtures/skills \
 nen: note: cursor: this surface documents that a skill's `name` must be lowercase letters, numbers and hyphens and must match its folder name; nen mirrors the folder name and the `name` line it was given, and refuses neither.
 surface: cursor (.cursor/skills/<name>/SKILL.md)
 out: /tmp/nen-doc/cursor
-written: agents/scout.md, alpha/SKILL.md, beta/SKILL.md
+written: agents/_shared.md, agents/scout.md, alpha/SKILL.md, beta/SKILL.md
 unchanged: (none)
 deleted (orphaned): (none)
-skipped (shared includes, not personas): _shared.md
+includes (shared, carried beside the personas, not personas): _shared.md
 truncated (description over the 30-char budget; summary: added): alpha, beta
 hooks: none
 rules: none
@@ -8335,7 +8345,8 @@ The `alpha` skill's source frontmatter carries `name`, `description`,
 in the description — has become `/alpha`. Under `--surface codex` the same
 source produces `name` and `description` only (both descriptions fit its
 186-character budget), `$alpha`, and one `AGENTS.md` holding a `## scout`
-section instead of `agents/scout.md`.
+section instead of `agents/scout.md`, followed by a `## _shared` section for
+the include.
 
 The full pack, stamped, with every optional file:
 
@@ -8366,7 +8377,8 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "manifest": "none",
   "notes": [],
   "permissionSurfaceRows": 0,
-  "writableRootsPlaceholder": false
+  "writableRootsPlaceholder": false,
+  "includes": ["_review-preamble.md"]
 }
 ```
 The same command with `--surface codex` writes `AGENTS.md`, one
