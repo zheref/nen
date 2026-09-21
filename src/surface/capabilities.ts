@@ -142,7 +142,7 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     artifact: false,
     notify: false,
     permissionsFile: ".cursor/cli.json (permissions.allow / permissions.deny)",
-    agentModelKey: "model (inherit, the default, or a Cursor model id)",
+    agentModelKey: "model (inherit, the default, or a Cursor model id; the mirror writes inherit for every persona -- a tier alias from models.cursor is not a documented id)",
     hookEvents: ["sessionStart", "sessionEnd", "preToolUse", "postToolUse", "beforeShellExecution", "afterShellExecution", "afterFileEdit", "stop"],
     // A plain .md under .cursor/rules is ignored; "Keep rules under 500 lines" is advice, not a limit.
     rulesFile: ".cursor/rules/<name>.mdc",
@@ -151,7 +151,7 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     descriptionBudgetSource: "measured 2026-09-19, not documented (hardening audit)",
     permissionsShape: "cursor-cli-json",
     source: "https://cursor.com/docs/agent/hooks",
-    caveat: "a persona whose model is another provider's alias falls back; emit 'inherit' or a Cursor id. A rules file must be .mdc (a plain .md is ignored); the page advises under 500 lines",
+    caveat: "a persona whose model is another provider's alias falls back, and a tier alias is not a documented id, so the mirror writes 'inherit' for every persona and reports the tier (modelMapped). A rules file must be .mdc (a plain .md is ignored); the page advises under 500 lines",
   },
   {
     surface: "antigravity",

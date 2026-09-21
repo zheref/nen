@@ -109,6 +109,53 @@ describe("GitHub Actions runner policy", () => {
     ]);
   });
 
+  it("signs, verifies and executes the darwin binary before the manifest, and executes the linux one on Ubuntu before anything is attached (zheref/nen#233)", () => {
+    const release = parse(sources["release-assets.yml"]!) as Row;
+    const jobs = release.jobs as Row;
+    expect(Object.keys(jobs)).toEqual(["build", "publish"]);
+    const build = jobs.build as Row;
+    const publish = jobs.publish as Row;
+    expect(build["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64"]);
+    expect(publish["runs-on"]).toBe("ubuntu-latest");
+    expect(publish.needs).toBe("build");
+    // Only the job that attaches assets holds the elevation and the token.
+    expect((build.permissions as Row | undefined)?.contents).toBeUndefined();
+    expect((publish.permissions as Row).contents).toBe("write");
+    expect((build.env as Row).GH_TOKEN).toBeUndefined();
+    expect((publish.env as Row).GH_TOKEN).toBe("${{ secrets.GITHUB_TOKEN }}");
+
+    const names = (job: Row): string[] => (job.steps as Row[]).map((step) => String(step.name));
+    const runOf = (job: Row, name: string): string => String((job.steps as Row[]).find((step) => step.name === name)?.run ?? "");
+    const buildNames = names(build);
+    const sign = buildNames.indexOf("Sign the darwin binary after the bundle, verify it, and execute it");
+    const manifest = buildNames.indexOf("Write dist/SHA256SUMS from the bytes about to be uploaded");
+    const compile = buildNames.indexOf("Cross-compile the three release binaries");
+    expect(compile).toBeGreaterThanOrEqual(0);
+    expect(sign).toBeGreaterThan(compile);
+    expect(manifest).toBeGreaterThan(sign);
+    const signRun = runOf(build, buildNames[sign]!);
+    expect(signRun).toContain("codesign -s - --force dist/nen-darwin-arm64");
+    expect(signRun).toContain("codesign -v dist/nen-darwin-arm64");
+    expect(signRun).toContain("./dist/nen-darwin-arm64 --version");
+    expect(signRun).toContain('[ "${printed}" = "${expected}" ]');
+    expect(signRun).toContain("set -euo pipefail");
+    // The publish side: verify, execute the linux binary, THEN attach.
+    const publishNames = names(publish);
+    const verify = publishNames.indexOf("Verify the received set is intact and COMPLETE");
+    const smoke = publishNames.indexOf("The linux binary answers --version");
+    const attach = publishNames.indexOf("Attach the four assets to the release");
+    expect(verify).toBeGreaterThanOrEqual(0);
+    expect(smoke).toBeGreaterThan(verify);
+    expect(attach).toBeGreaterThan(smoke);
+    const smokeRun = runOf(publish, publishNames[smoke]!);
+    expect(smokeRun).toContain("./dist/nen-linux-x64 --version");
+    expect(smokeRun).toContain('[ "${printed}" = "${EXPECTED_VERSION}" ]');
+    expect((publish.env as Row).EXPECTED_VERSION).toBe("${{ needs.build.outputs.version }}");
+    // Nothing on the publish side rebuilds: no bun, no checkout.
+    expect((publish.steps as Row[]).some((step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@"))).toBe(false);
+    expect(publishNames.some((name) => /compile|bun/i.test(name))).toBe(false);
+  });
+
   it("keeps credentials off every actual checkout step", () => {
     for (const [name, source] of Object.entries(sources)) {
       const workflow = parse(source) as Row;

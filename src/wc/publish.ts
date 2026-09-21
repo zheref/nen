@@ -3,13 +3,15 @@
 // somebody else's history (zheref/nen#227; Hatsu's `aka` skill hand-rolled
 // this).
 //
-// THE REMOTE IS THE UPSTREAM'S (Copilot review on zheref/nen#231). A branch
-// that tracks `fork/feature` is pushed to `fork`, and the fast-forward check
-// below is made against THAT remote's ref -- the one the push will move --
-// never against `origin` while pushing somewhere else. A branch with no
+// THE REMOTE IS THE UPSTREAM'S, AND SO IS THE BRANCH NAME (Copilot review on
+// zheref/nen#231, and its round 3, T9). A branch that tracks `fork/topic` is
+// pushed to `fork`, AS `topic`: the refspec is `refs/heads/<local>:refs/heads/
+// <tracked>`, so the ref the fast-forward check below was made against -- the
+// one the push will move -- is the one the push names, never a same-named
+// sibling on that remote while the check looked at another. A branch with no
 // upstream yet goes to `origin`, or to `--remote <name>` when the caller
-// names one; a `--remote` that disagrees with an existing upstream is refused,
-// because the branch already says where it goes.
+// names one, under its own name; a `--remote` that disagrees with an existing
+// upstream is refused, because the branch already says where it goes.
 //
 // FOUR REFUSALS BEFORE ANY WRITE, all at exit 2, because each is a mistake in
 // the invocation rather than a fact about the remote: a DETACHED HEAD (there
@@ -58,9 +60,12 @@ export const MIN_GIT_FOR_END_OF_OPTIONS = "2.24";
 /** KEY ORDER IS THE CONTRACT; ./command.test.ts pins it. */
 export interface PublishReport {
   readonly contract: string;
+  /** The local branch pushed: the source half of the refspec. */
   readonly branch: string;
   /** The remote pushed to: the upstream's own, or `--remote`/`origin` when the branch has no upstream. */
   readonly remote: string;
+  /** The branch name on the remote the push updates: the upstream's branch when one exists, else `branch`. */
+  readonly destination: string;
   /** The `<remote>/<branch>` the branch tracked before this call, or null. */
   readonly upstreamBefore: string | null;
   /** Commits on the branch not on its upstream; null when there is no upstream to count against. */
@@ -187,10 +192,15 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   let ahead: number | null = null;
   let needsForce = false;
   let remote: string;
+  // Where the push lands on the remote: the branch the upstream names when
+  // there is one -- a local `feature` tracking `fork/topic` updates `topic`,
+  // the ref the checks below look at -- and the local name otherwise.
+  let destination = branch;
   if (upstreamBefore !== null) {
     const upstream = splitUpstream(upstreamBefore);
     remote = upstream.remote;
     const tracked = upstream.branch;
+    destination = tracked;
     if (looksLikeRefspecOrForce(remote)) {
       return { kind: "refused", reason: `the upstream's remote '${remote}' looks like an option or a refspec (a leading '+' or '-', or a ':'), and this verb never lets a name change what a push or fetch does. Nothing was fetched or pushed.` };
     }
@@ -237,13 +247,15 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     }
   }
 
-  // THE REFSPEC IN FULL, behind `--`: `refs/heads/<b>:refs/heads/<b>` is a
-  // plain update of that one ref whatever the name looks like.
-  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${branch}`];
+  // THE REFSPEC IN FULL, behind `--`: `refs/heads/<local>:refs/heads/<dest>`
+  // is a plain update of that one ref whatever either name looks like.
+  const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${destination}`];
+  const as = destination === branch ? "" : ` as '${destination}'`;
   const report = (pushed: boolean): PublishReport => ({
     contract: PUBLISH_CONTRACT,
     branch,
     remote,
+    destination,
     upstreamBefore,
     ahead,
     needsForce,
@@ -267,6 +279,6 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   return {
     kind: "done",
     report: report(true),
-    lines: [`pushed '${branch}' to ${remote}${options.setUpstream ? " (upstream set)" : ""}${ahead === null ? "" : ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`}`],
+    lines: [`pushed '${branch}' to ${remote}${as}${options.setUpstream ? " (upstream set)" : ""}${ahead === null ? "" : ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`}`],
   };
 }

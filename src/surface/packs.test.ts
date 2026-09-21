@@ -225,7 +225,7 @@ describe("permissions", () => {
 
   it("reads a per-surface block of verbatim rows, and refuses a malformed one by pointer (S5)", () => {
     const src = readPermissions(tempFile("p.json", '{"allow":[{"exe":"nen","args":"*"}],"surfaces":{"cursor":{"allow":["Read(./**)","Write(./**)"],"deny":["Shell(rm:-rf *)"]},"$comment":"x"}}'));
-    expect(src.surfaces).toEqual({ cursor: { allow: ["Read(./**)", "Write(./**)"], deny: ["Shell(rm:-rf *)"] } });
+    expect(src.surfaces).toEqual({ cursor: { allow: ["Read(./**)", "Write(./**)"], deny: ["Shell(rm:-rf *)"], networkAccess: null } });
     expect(() => readPermissions(tempFile("p.json", '{"surfaces":[]}'))).toThrow(/surfaces is not an object/);
     expect(() => readPermissions(tempFile("p.json", '{"surfaces":{"cursor":{"allow":[""]}}}'))).toThrow(/surfaces\.cursor\.allow\[0\] is not a non-empty string/);
     expect(() => readPermissions(tempFile("p.json", '{"surfaces":{"cursor":{"deny":"x"}}}'))).toThrow(/surfaces\.cursor\.deny is not an array/);
@@ -252,7 +252,10 @@ describe("permissions", () => {
   it("appends a surface's own rows verbatim after the shared ones, for that surface only", () => {
     const src: PermissionsSource = {
       ...source,
-      surfaces: { cursor: { allow: ["Read(./**)", "Write(./**)"], deny: ["Shell(rm:-rf *)"] }, "claude-code": { allow: ["WebFetch"], deny: [] } },
+      surfaces: {
+        cursor: { allow: ["Read(./**)", "Write(./**)"], deny: ["Shell(rm:-rf *)"], networkAccess: null },
+        "claude-code": { allow: ["WebFetch"], deny: [], networkAccess: null },
+      },
     };
     const cursor = render("cursor", src);
     const doc = JSON.parse(cursor.content) as { permissions: { allow: string[]; deny: string[] } };
@@ -264,17 +267,39 @@ describe("permissions", () => {
     expect(claude.permissions.allow.at(-1)).toBe("WebFetch");
     expect(claude.permissions.allow).not.toContain("Read(./**)");
     // Codex has no rows to append to: a block for it is refused rather than dropped.
-    expect(() => render("codex", { ...source, surfaces: { codex: { allow: ["x"], deny: [] } } })).toThrow(/surfaces\.codex carries 1 row/);
+    expect(() => render("codex", { ...source, surfaces: { codex: { allow: ["x"], deny: [], networkAccess: null } } })).toThrow(/surfaces\.codex carries 1 row/);
   });
 
-  it("renders Codex's config.toml with the marker on line 1, the sandbox stated, and writable_roots EMPTY for the installer (S10)", () => {
+  it("renders Codex's config.toml with the marker on line 1, the sandbox stated, writable_roots EMPTY for the installer (S10), and NO network_access the source did not declare", () => {
     const rendered = render("codex");
     const text = rendered.content;
     expect(text.split("\n")[0]).toBe(`# ${MARKER}`);
+    expect(text).toContain('approval_policy = "on-failure"');
     expect(text).toContain('sandbox_mode = "workspace-write"');
-    expect(text).toContain(`[sandbox_workspace_write]\n${WRITABLE_ROOTS_NOTE}\nwritable_roots = []\nnetwork_access = true\n`);
+    expect(text.endsWith(`[sandbox_workspace_write]\n${WRITABLE_ROOTS_NOTE}\nwritable_roots = []\n`)).toBe(true);
+    expect(text).not.toContain("network_access");
     expect(text).not.toContain("<the working tree>");
     expect(rendered.writableRootsPlaceholder).toBe(true);
+    expect(rendered.sandbox).toEqual({ networkAccess: null });
+  });
+
+  it("writes network_access into Codex's sandbox block ONLY as surfaces.codex.network_access declares it, and refuses it on a pack with no sandbox", () => {
+    const declared = (value: boolean): PermissionsSource => ({ ...source, surfaces: { codex: { allow: [], deny: [], networkAccess: value } } });
+    const on = render("codex", declared(true));
+    expect(on.content.endsWith("writable_roots = []\nnetwork_access = true\n")).toBe(true);
+    expect(on.sandbox).toEqual({ networkAccess: true });
+    const off = render("codex", declared(false));
+    expect(off.content.endsWith("writable_roots = []\nnetwork_access = false\n")).toBe(true);
+    expect(off.sandbox).toEqual({ networkAccess: false });
+    // The other two packs state no sandbox: the key has nowhere to go, so it is refused rather than dropped.
+    const cursorSrc: PermissionsSource = { ...source, surfaces: { cursor: { allow: [], deny: [], networkAccess: true } } };
+    expect(() => render("cursor", cursorSrc)).toThrow(/surfaces\.cursor declares network_access, and this surface's pack states no sandbox/);
+    expect(render("claude-code", cursorSrc).sandbox).toBeNull();
+    // Read from a file: a boolean is carried, anything else is refused by pointer.
+    const read = readPermissions(tempFile("p.json", '{"allow":[],"surfaces":{"codex":{"network_access":true}}}'));
+    expect(read.surfaces["codex"]).toEqual({ allow: [], deny: [], networkAccess: true });
+    expect(readPermissions(tempFile("p.json", '{"allow":[],"surfaces":{"codex":{}}}')).surfaces["codex"]?.networkAccess).toBeNull();
+    expect(() => readPermissions(tempFile("p.json", '{"allow":[],"surfaces":{"codex":{"network_access":"yes"}}}'))).toThrow(/surfaces\.codex\.network_access is not a boolean/);
   });
 });
 
@@ -347,10 +372,33 @@ describe("models", () => {
   const entries = (text: string): ReturnType<typeof splitDocument>["entries"] => splitDocument(text).entries;
 
   it("rewrites a tier or a source alias to the target alias and leaves every other line alone", () => {
-    const result = rewriteModel(row("cursor"), maps("cursor"), entries("---\nname: x\nmodel: deep\n---\n"), "x.md");
+    const mapping = { ...row("cursor"), modelInheritOnly: false };
+    const result = rewriteModel(mapping, maps("cursor"), entries("---\nname: x\nmodel: deep\n---\n"), "x.md");
     expect(result.alias).toBe("claude-4-opus");
+    expect(result.mappedToInherit).toBeNull();
     expect(result.entries.map((entry): string => entry.lines.join("\n"))).toEqual(["name: x", "model: claude-4-opus"]);
-    expect(rewriteModel(row("cursor"), maps("cursor"), entries("---\nmodel: sonnet\n---\n"), "x.md").alias).toBe("gpt-4.1");
+    expect(rewriteModel(mapping, maps("cursor"), entries("---\nmodel: sonnet\n---\n"), "x.md").alias).toBe("gpt-4.1");
+  });
+
+  it("writes inherit for every persona on a modelInheritOnly row (cursor), resolving the tier for the report only", () => {
+    // The cursor page documents `model:` as inherit or a specific model id; a
+    // tier alias from models.cursor is neither, so the file never carries one.
+    expect(row("cursor").modelInheritOnly).toBe(true);
+    const tier = rewriteModel(row("cursor"), maps("cursor"), entries("---\nname: x\nmodel: deep\n---\n"), "x.md");
+    expect(tier.alias).toBe("inherit");
+    expect(tier.mappedToInherit).toBe("deep");
+    expect(tier.entries.map((entry): string => entry.lines.join("\n"))).toEqual(["name: x", "model: inherit"]);
+    // A source alias resolves through the source row first, and still lands on inherit.
+    const alias = rewriteModel(row("cursor"), maps("cursor"), entries("---\nmodel: sonnet\n---\n"), "x.md");
+    expect(alias).toMatchObject({ alias: "inherit", mappedToInherit: "fast", droppedInherit: false, undocumentedAlias: null });
+    // The lookup still runs: an unresolvable value is still refused by pointer.
+    expect(() => rewriteModel(row("cursor"), maps("cursor"), entries("---\nmodel: gigantic\n---\n"), "x.md")).toThrow(/'x\.md' says 'model: gigantic'/);
+    // An explicit inherit is carried as-is, with no mapping to report.
+    expect(rewriteModel(row("cursor"), maps("cursor"), entries("---\nmodel: inherit\n---\n"), "x.md")).toMatchObject({ alias: "inherit", mappedToInherit: null });
+    // Codex and antigravity are unchanged: their rows write the alias.
+    expect(row("codex").modelInheritOnly).toBe(false);
+    expect(row("antigravity").modelInheritOnly).toBe(false);
+    expect(rewriteModel(row("antigravity"), maps("antigravity"), entries("---\nmodel: deep\n---\n"), "x.md")).toMatchObject({ alias: "pro", mappedToInherit: null });
   });
 
   it("carries inherit where the row documents it and drops it, saying so, elsewhere", () => {

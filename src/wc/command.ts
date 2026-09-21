@@ -139,12 +139,13 @@ publish:
                     refused when the branch already tracks another remote.
   --dry-run         print the push line; push nothing.
 
-Pushes the CURRENT branch to the remote its upstream names -- a branch
-tracking fork/feature goes to fork, and the fast-forward check below is
-made against fork's ref, the one the push moves -- or to origin (or
---remote) when it tracks nothing yet: 'git push [-u] <remote> --
-refs/heads/<branch>:refs/heads/<branch>', the refspec in full so no branch
-NAME can change what the push does. Refused at exit 2: a
+Pushes the CURRENT branch to the remote its upstream names, AS the branch
+the upstream names -- a local 'feature' tracking fork/topic goes to fork as
+'topic', and the fast-forward check below is made against fork/topic, the
+ref the push moves -- or to origin (or --remote) under its own name when it
+tracks nothing yet: 'git push [-u] <remote> --
+refs/heads/<branch>:refs/heads/<destination>', the refspec in full so no
+branch NAME can change what the push does. Refused at exit 2: a
 detached HEAD; the trunk (${WORKFLOW_FILE}'s branch.base, and main/master
 regardless, compared with a leading '+' and 'refs/heads/' taken off); a
 branch name 'git check-ref-format --branch' rejects, or one shaped like a
@@ -158,7 +159,8 @@ not a fast-forward of it the push would need a force, and this verb never
 forces: needsForce: true, nothing pushed, exit 1.
 
 --json's contract is '${PUBLISH_CONTRACT}': { contract, branch, remote,
-upstreamBefore, ahead, needsForce, pushed, dryRun }.`;
+destination, upstreamBefore, ahead, needsForce, pushed, dryRun } --
+destination is the upstream's branch when one exists, else branch.`;
 
 function printFoldedCommits(context: CommandContext, folded: readonly FoldedCommit[]): void {
   for (const commit of folded) context.io.out(`  ${commit.sha} ${commit.subject}`);

@@ -308,6 +308,8 @@ export interface GenerateReport {
   readonly droppedInherit: readonly string[];
   /** Personas whose mapped alias is outside the surface's documented set, as `<persona>: <alias>`. */
   readonly undocumentedAliases: readonly string[];
+  /** Personas written `model: inherit` on a `modelInheritOnly` row, as `<persona>: <tier> -> inherit`. */
+  readonly modelMapped: readonly string[];
   /** `written`, `not supported` (the row has no manifest), or `none` (no --hooks). */
   readonly hooks: "written" | "not supported" | "none";
   readonly rules: { readonly path: string; readonly chars: number; readonly limit: number | null } | "not supported" | "none";
@@ -316,6 +318,12 @@ export interface GenerateReport {
   readonly permissionSurfaceRows: number;
   /** True when the permission pack carries a `writable_roots = []` an installer has to fill (codex). */
   readonly writableRootsPlaceholder: boolean;
+  /**
+   * The sandbox's network line: absent (null) where the pack states no
+   * sandbox; otherwise `network_access` as declared, or null when the source
+   * declares none and the pack carries no such line (the surface's default).
+   */
+  readonly permissionSandbox: { readonly networkAccess: boolean | null } | null;
   readonly manifest: "written" | "not supported" | "none";
   /** Everything else worth a line: unmapped hook events, an appendix past the read limit, a long rules file. */
   readonly notes: readonly string[];
@@ -404,6 +412,7 @@ interface AgentOutput {
   readonly files: readonly GeneratedFile[];
   readonly droppedInherit: readonly string[];
   readonly undocumentedAliases: readonly string[];
+  readonly modelMapped: readonly string[];
   readonly notes: readonly string[];
 }
 
@@ -414,9 +423,10 @@ function agentFiles(options: GenerateOptions): AgentOutput {
   const models = options.models ?? null;
   const droppedInherit: string[] = [];
   const undocumentedAliases: string[] = [];
+  const modelMapped: string[] = [];
   const notes: string[] = [];
   const includes = options.includes ?? [];
-  if (options.agents.length === 0 && includes.length === 0) return { files: [], droppedInherit, undocumentedAliases, notes };
+  if (options.agents.length === 0 && includes.length === 0) return { files: [], droppedInherit, undocumentedAliases, modelMapped, notes };
 
   /** `model:` through --models, for a persona whose entries the surface reads as frontmatter. */
   const mapped = (agent: SourceAgent, entries: readonly FrontmatterEntry[]): readonly FrontmatterEntry[] => {
@@ -424,6 +434,7 @@ function agentFiles(options: GenerateOptions): AgentOutput {
     const result = rewriteModel(row, models, entries, agent.relative);
     if (result.droppedInherit) droppedInherit.push(agent.stem);
     if (result.undocumentedAlias !== null) undocumentedAliases.push(`${agent.stem}: ${result.undocumentedAlias}`);
+    if (result.mappedToInherit !== null) modelMapped.push(`${agent.stem}: ${result.mappedToInherit} -> inherit`);
     return result.entries;
   };
 
@@ -476,7 +487,7 @@ function agentFiles(options: GenerateOptions): AgentOutput {
       const content = `${front}${markerFor(row.surface, stamp)}\n${document.body}`;
       files.push({ path, content: rewriteInvocations(content, row, options.invocationPrefix) });
     }
-    return { files, droppedInherit, undocumentedAliases, notes };
+    return { files, droppedInherit, undocumentedAliases, modelMapped, notes };
   }
 
   // The appendix: ONE document, a heading per persona, the persona's prose
@@ -537,7 +548,7 @@ function agentFiles(options: GenerateOptions): AgentOutput {
       files.push({ path: `${row.agentToml.dir}/${agent.stem}.toml`, content: lines.join("\n") });
     }
   }
-  return { files, droppedInherit, undocumentedAliases, notes };
+  return { files, droppedInherit, undocumentedAliases, modelMapped, notes };
 }
 
 /** Every file this run would write, sorted by path, with what the report needs to say about them. */
@@ -596,6 +607,7 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
   let permissions: GenerateReport["permissions"] = "none";
   let permissionSurfaceRows = 0;
   let writableRootsPlaceholder = false;
+  let permissionSandbox: GenerateReport["permissionSandbox"] = null;
   if (options.permissions !== undefined && options.permissions !== null) {
     if (row.permissions === null) permissions = "not supported";
     else {
@@ -604,6 +616,7 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
       files.push({ path: row.permissions.file, content: rendered.content });
       permissionSurfaceRows = rendered.surfaceRows;
       writableRootsPlaceholder = rendered.writableRootsPlaceholder;
+      permissionSandbox = rendered.sandbox;
       if (writableRootsPlaceholder) {
         notes.push(`${row.permissions.file} carries writable_roots = [] for the installer to fill (writableRootsPlaceholder)`);
       }
@@ -641,11 +654,13 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     truncated: truncated.sort(),
     droppedInherit: [...new Set(agents.droppedInherit)].sort(),
     undocumentedAliases: [...new Set(agents.undocumentedAliases)].sort(),
+    modelMapped: [...new Set(agents.modelMapped)].sort(),
     hooks,
     rules,
     permissions,
     permissionSurfaceRows,
     writableRootsPlaceholder,
+    permissionSandbox,
     manifest,
     notes,
     includes: (options.includes ?? []).map((include): string => include.relative),

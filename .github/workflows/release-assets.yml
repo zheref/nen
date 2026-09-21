@@ -25,10 +25,32 @@
 # a tag+release pair that fires both events attaches the same four bytes-
 # identical assets twice rather than half of them once.
 #
-# BUILD-ONCE-FROM-ONE-HOST: bun cross-compiles all three targets from whichever
-# runner this lands on (package.json's `build:*` scripts hold the triples), so
-# there is no matrix and no per-OS runner to keep in sync — and no way for two of
+# BUILD-ONCE-FROM-ONE-HOST: bun cross-compiles all three targets from the one
+# macOS runner (package.json's `build:*` scripts hold the triples), so there is
+# no build matrix and no per-OS build to keep in sync — and no way for two of
 # the three binaries to come from a different commit than the third.
+#
+# TWO JOBS, ONE SET OF BYTES (zheref/nen#233). `build` on macOS compiles the
+# three, ad-hoc-SIGNS the darwin one and EXECUTES it, writes SHA256SUMS from
+# those bytes and hands the four files on as a workflow artifact; `publish` on
+# Ubuntu takes that artifact, verifies the manifest again, EXECUTES the linux
+# binary, and only then attaches the four to the release. Nothing is rebuilt
+# on the second host: what the manifest describes is what was built once.
+#
+# WHY THE SIGNING STEP EXISTS. `bun build --compile` links an executable the
+# linker ad-hoc-signs, then APPENDS the bundled payload after the link. The
+# linker's signature covers the bytes as linked, so the append invalidates it
+# (`codesign -v`: "code or signature have been modified"), and a macOS that
+# enforces the signature SIGKILLs the process before main — exit 137, no
+# output. Every published nen-darwin-arm64 from v0.9.0 to v0.12.0 shipped
+# that way, and bootstrap/nen.sh could not catch it: the CHECKSUM was right,
+# because the bytes were exactly the broken bytes SHA256SUMS described. A
+# checksum proves the bytes; it proves nothing about whether they run. So the
+# darwin binary is re-signed whole (`codesign -s - --force`), verified
+# (`codesign -v`), and RUN (`--version` must print package.json's version) —
+# and the linux binary is run on the host that can — before a manifest is
+# written or anything is attached. A binary that does not execute here is a
+# red job, not a release.
 name: release-assets
 
 on:
@@ -47,8 +69,9 @@ on:
         required: true
         type: string
 
-# PERMISSIONS. The floor is `contents: read`, and the single elevation is on the
-# one job that needs it:
+# PERMISSIONS. The floor is `contents: read` (an artifact upload and download
+# need nothing above it), and the single elevation is on the one job that
+# needs it:
 #   * `contents: write` — REQUIRED. A GitHub release asset lives under the
 #     `contents` scope, so `gh release upload` cannot attach a file with
 #     `contents: read`. This is the ONE thing above the floor and it is the
@@ -70,23 +93,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  build:
     # The hard binding prevents a fork copy from allocating a runner when tag,
     # release, or manual events fire there after Actions has been enabled.
     if: github.repository == 'zheref/nen'
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
-    permissions:
-      # The one elevation. See the block above the `permissions:` floor.
-      contents: write
+    outputs:
+      # package.json's version, read once at the tagged commit, so the linux
+      # smoke on the other host compares against the same expectation without
+      # a second checkout.
+      version: ${{ steps.version.outputs.version }}
     env:
       # Resolved once, from whichever of the three triggers fired:
       #   push     -> github.ref_name is the tag (the trigger filters to v*)
       #   release  -> github.event.release.tag_name
       #   dispatch -> github.event.inputs.tag (required input)
       TAG: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
-      REPO: ${{ github.repository }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # No GH_TOKEN here: this job calls `gh` for nothing. The token lives on
+      # `publish`, the one job that attaches anything.
       # PINNED, and load-bearing rather than hygiene. `bun build --compile`
       # embeds the bun RUNTIME in every artifact, so the bun version is an INPUT
       # to the bytes: "the same commit produces the same binary" is only true at
@@ -164,9 +189,38 @@ jobs:
           bun run build:darwin-arm64
           bun run build:windows-x64
 
+      # SIGN AFTER THE BUNDLE, VERIFY, THEN EXECUTE (zheref/nen#233). The
+      # `build:darwin-arm64` script already runs src/dev/sign.ts as its last
+      # step, so a local build is signed too; the step is repeated here in the
+      # tool's own words so the release log shows the signature this lane
+      # ships, and so the lane does not depend on the script having run.
+      # `codesign -s -` is an AD-HOC signature: no identity, no notarization,
+      # nothing Gatekeeper trusts — the same shape v0.8.0 shipped and runs
+      # with. It is what makes the binary EXECUTE; what makes it TRUSTED is the
+      # checksum a consumer verifies through bootstrap/nen.sh.
+      #
+      # Then the binary is RUN. A signature that verifies and a process that
+      # still dies would be a different bug, and `--version` is the one
+      # question the bootstrap's own caller asks first; the answer has to be
+      # package.json's version at the tagged commit, not merely non-empty.
+      - name: Sign the darwin binary after the bundle, verify it, and execute it
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign -s - --force dist/nen-darwin-arm64
+          codesign -v dist/nen-darwin-arm64
+          codesign -dv dist/nen-darwin-arm64 2>&1 | grep -E '^CodeDirectory' || true
+          expected="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
+          printed="$(./dist/nen-darwin-arm64 --version)"
+          echo "darwin binary says '${printed}', package.json says '${expected}'"
+          [ "${printed}" = "${expected}" ]
+          echo "version=${expected}" >> "$GITHUB_OUTPUT"
+
       # The manifest is what a consumer verifies against (bootstrap/nen.sh), so
-      # it is generated HERE, from the bytes actually about to be uploaded,
-      # rather than carried in the repository.
+      # it is generated HERE, from the bytes actually about to be uploaded —
+      # AFTER the signing step, because signing rewrites the file — rather than
+      # carried in the repository.
       #
       # `shasum -a 256` over an explicit, sorted, literal file list: NOT a glob. A
       # glob would silently produce a shorter manifest if a target were missing,
@@ -226,6 +280,104 @@ jobs:
             <(printf '%s\n' 'nen-darwin-arm64' 'nen-linux-x64' 'nen-windows-x64.exe') \
             <(awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS)
 
+      # The four files, by name and nothing else (no glob: the `index.js.map`
+      # bun drops beside each outfile stays out), handed to the publish job.
+      # An artifact is the ONE way the bytes built here reach the host that can
+      # execute the linux binary without rebuilding them there. Pinned by SHA
+      # like every other action in this repository.
+      - name: Hand the four release files to the publish job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nen-release-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            dist/nen-darwin-arm64
+            dist/nen-linux-x64
+            dist/nen-windows-x64.exe
+            dist/SHA256SUMS
+
+      # The manifest, in the run summary, on every run — attached or not. This is
+      # what makes "the same commit produces the same binary" auditable after the
+      # fact rather than merely asserted: the sums are readable from the run that
+      # produced them, independently of the release they were (or were not)
+      # attached to.
+      #
+      # NOT `working-directory: dist`: this step runs on a FAILED job too, and
+      # `dist/` only exists once the build has succeeded. A step whose working
+      # directory is missing fails with "directory does not exist" — a second,
+      # meaningless error stacked on top of the real one, in the step whose job
+      # is to explain what happened.
+      - name: Record SHA256SUMS in the run summary
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          {
+            echo "### nen release assets — ${TAG} (built)"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS 2>/dev/null || echo '(no SHA256SUMS — the build did not reach the manifest step)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    # Same hard binding as `build`; `needs` makes a red build — a binary that
+    # did not sign, verify or execute — a publish that never starts.
+    if: github.repository == 'zheref/nen'
+    needs: build
+    # Ubuntu, on purpose: it is the one host in this repository's pools that can
+    # EXECUTE the linux binary, and `gh` is preinstalled on it. It builds
+    # nothing — the bytes come from `build`, and the manifest is re-checked
+    # against them before the smoke and before the upload.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # The one elevation. See the block above the `permissions:` floor.
+      contents: write
+    env:
+      TAG: ${{ github.event.inputs.tag || github.event.release.tag_name || github.ref_name }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # No checkout: nothing here reads the repository. The four files are the
+      # artifact, and the expected version is `build`'s output.
+      - name: Receive the four release files from the build job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nen-release-${{ github.run_id }}
+          path: dist
+
+      # The same two checks `build` made, on the other side of the artifact
+      # boundary: the bytes that arrived are the bytes the manifest describes,
+      # and the set is complete. `sha256sum` here, `shasum` there — the
+      # manifest format is the same, and bootstrap/nen.sh accepts either.
+      - name: Verify the received set is intact and COMPLETE
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -l
+          sha256sum -c SHA256SUMS
+          diff -u \
+            <(printf '%s\n' 'nen-darwin-arm64' 'nen-linux-x64' 'nen-windows-x64.exe') \
+            <(awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS)
+
+      # EXECUTE THE LINUX BINARY (zheref/nen#233): the same question the darwin
+      # one answered on the macOS runner, on the host that can ask it. The
+      # artifact round-trip drops the execute bit, so it is restored first;
+      # `chmod` changes no bytes, and the manifest above already agreed.
+      - name: The linux binary answers --version
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x dist/nen-linux-x64
+          printed="$(./dist/nen-linux-x64 --version)"
+          echo "linux binary says '${printed}', package.json said '${EXPECTED_VERSION}'"
+          [ -n "${EXPECTED_VERSION}" ]
+          [ "${printed}" = "${EXPECTED_VERSION}" ]
+
       # Does the human's half exist yet? `continue-on-error` makes the ANSWER
       # available as `steps.release_probe.outcome` without the absence of a
       # release turning the job red — a marker tag legitimately has no release,
@@ -267,26 +419,19 @@ jobs:
         run: |
           echo "::warning title=No release for ${TAG}::The binaries built and verified, but ${REPO} has no release for tag ${TAG}, so nothing was attached. This workflow never CREATES one: the release go/no-go is the human's, and a marker tag is a deliberate non-release. Publish the release and this workflow re-runs on 'release: published' — or re-run it by hand via workflow_dispatch with tag=${TAG}."
 
-      # The manifest, in the run summary, on every run — attached or not. This is
-      # what makes "the same commit produces the same binary" auditable after the
-      # fact rather than merely asserted: the sums are readable from the run that
-      # produced them, independently of the release they were (or were not)
-      # attached to.
-      #
-      # NOT `working-directory: dist`: this step runs on a FAILED job too, and
-      # `dist/` only exists once the build has succeeded. A step whose working
-      # directory is missing fails with "directory does not exist" — a second,
-      # meaningless error stacked on top of the real one, in the step whose job
-      # is to explain what happened.
+      # The manifest again, from the publish side, on every run of THIS job —
+      # attached or not — so the summary of a run says both what was built and
+      # what was (or was not) attached. `build`'s copy is the one that exists
+      # when this job never started.
       - name: Record SHA256SUMS in the run summary
         if: always()
         shell: bash
         run: |
           set -uo pipefail
           {
-            echo "### nen release assets — ${TAG}"
+            echo "### nen release assets — ${TAG} (published: ${{ steps.release_probe.outcome == 'success' && 'attached' || 'no release, nothing attached' }})"
             echo
             echo '```'
-            cat dist/SHA256SUMS 2>/dev/null || echo '(no SHA256SUMS — the build did not reach the manifest step)'
+            cat dist/SHA256SUMS 2>/dev/null || echo '(no SHA256SUMS — the artifact did not arrive)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

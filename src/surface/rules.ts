@@ -159,6 +159,15 @@ export interface SurfaceRow {
   /** Whether the surface documents `model: inherit`; a persona saying so is carried as-is where true and dropped, with a report line, where false. */
   readonly inheritModel: boolean;
   /**
+   * Whether EVERY persona is written `model: inherit`, whatever its tier. True
+   * where the surface documents `inherit` (its default) or a model id of its
+   * own and nothing else -- a tier alias from `models.<surface>` is not a
+   * documented id there, so writing one would be writing a value the page does
+   * not admit. The tier is still resolved (a bad value is still refused) and
+   * reaches the report as `modelMapped: <persona>: <tier> -> inherit`.
+   */
+  readonly modelInheritOnly: boolean;
+  /**
    * The model values the surface documents, or null for an open id space. An
    * alias from `--models` outside this list is emitted verbatim -- the
    * repository's alias is its own -- and named in the generate report.
@@ -322,6 +331,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     },
     agentModelMap: false,
     inheritModel: false,
+    modelInheritOnly: false,
     modelAliases: null,
     subagentModelFragment: {
       file: "config.toml.fragment",
@@ -395,6 +405,11 @@ export const SURFACES: readonly SurfaceRow[] = [
     agentModelMap: true,
     // "model: inherit" is valid and the default.
     inheritModel: true,
+    // The page documents `model:` as "inherit or a specific model ID"; a tier
+    // alias from `models.cursor` (`composer`, `grok`) is neither, so every
+    // persona is written `inherit` and the tier goes to the report only
+    // (Copilot review on the generated packs, 2026-09-20).
+    modelInheritOnly: true,
     modelAliases: null,
     subagentModelFragment: null,
     rules: {
@@ -465,6 +480,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     },
     agentModelMap: true,
     inheritModel: true,
+    modelInheritOnly: false,
     // "Model tier used when invoked (inherit, flash, or pro)".
     modelAliases: ["inherit", "flash", "pro"],
     subagentModelFragment: null,
@@ -529,6 +545,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     },
     agentModelMap: false,
     inheritModel: true,
+    modelInheritOnly: false,
     modelAliases: ["sonnet", "opus", "haiku", "fable", "inherit"],
     subagentModelFragment: null,
     rules: null,

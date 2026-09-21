@@ -298,6 +298,37 @@ describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/to-fork-fresh"])).toBe("");
   });
 
+  it("a local branch tracking a differently named upstream is pushed AS that name, and the same-named remote ref is never created (zheref/nen#231, T9)", async () => {
+    const work = branchWith("local-name", { "topic.txt": "topic\n" });
+    // Publish once under the REMOTE's name, then track it from the local one.
+    mustGit(work, [...PINNED, "push", "--quiet", "origin", "refs/heads/local-name:refs/heads/remote-topic"]);
+    mustGit(work, ["branch", "--set-upstream-to", "origin/remote-topic"]);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "local-name@{upstream}"])).toBe("origin/remote-topic");
+    writeFileSync(join(work, "topic.txt"), "topic more\n");
+    mustGit(work, ["add", "-A"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: more on the topic"]);
+    const result = await wc(["publish", "--repo", work]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ branch: "local-name", remote: "origin", destination: "remote-topic", upstreamBefore: "origin/remote-topic", ahead: 1, pushed: true, needsForce: false });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/remote-topic"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/local-name"])).toBe("");
+    // And the upstream's ref having moved past us is judged against remote-topic, not a local-name that does not exist there.
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-topic-elsewhere-"));
+    mustGit(root, [...PINNED, "clone", "--quiet", "--branch", "remote-topic", origin, elsewhere]);
+    pin(elsewhere);
+    writeFileSync(join(elsewhere, "other.txt"), "other\n");
+    mustGit(elsewhere, ["add", "-A"]);
+    mustGit(elsewhere, [...WHO, "commit", "--quiet", "-m", "feat: from elsewhere"]);
+    mustGit(elsewhere, [...PINNED, "push", "--quiet", "origin", "remote-topic"]);
+    writeFileSync(join(work, "topic.txt"), "topic diverged\n");
+    mustGit(work, ["add", "-A"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: diverged"]);
+    const diverged = await wc(["publish", "--repo", work]);
+    expect(diverged.code).toBe(1);
+    expect(diverged.doc).toMatchObject({ destination: "remote-topic", needsForce: true, pushed: false });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/local-name"])).toBe("");
+  });
+
   it("the real git accepts `git fetch --end-of-options` (2.24+): a publish with an upstream fetches through it and pushes", async () => {
     // The whole guard rests on this: Copilot (zheref/nen#231) read the flag
     // as one fetch rejects. On this host's git the fetch below succeeds.
