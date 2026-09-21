@@ -415,14 +415,25 @@ describe("--models", () => {
     "--models", join(PACKS, "workflow.json"), "--json", ...extra,
   ];
 
-  it("rewrites a persona's tier to the surface's alias and carries inherit where documented", async () => {
+  it("writes cursor personas as model: inherit whatever the tier, reporting the tier under modelMapped, and carries an explicit inherit", async () => {
     const out = tempDir();
     const result = await capture(modelsArgv("cursor", out));
     expect(result.code).toBe(0);
-    expect(readFileSync(join(out, "agents", "deep.md"), "utf8")).toContain("model: claude-4-opus");
+    // The cursor page documents `model:` as inherit or a specific model id;
+    // `claude-4-opus` from models.cursor is a tier alias, not a documented id.
+    expect(readFileSync(join(out, "agents", "deep.md"), "utf8")).toContain("model: inherit");
+    expect(readFileSync(join(out, "agents", "deep.md"), "utf8")).not.toContain("claude-4-opus");
     expect(readFileSync(join(out, "agents", "heir.md"), "utf8")).toContain("model: inherit");
     expect(readFileSync(join(out, "agents", "plain.md"), "utf8")).not.toContain("model:");
     expect(json(result)["droppedInherit"]).toEqual([]);
+    expect(json(result)["modelMapped"]).toEqual(["deep: deep -> inherit"]);
+    const text = await capture(modelsArgv("cursor", tempDir()).filter((arg): boolean => arg !== "--json"));
+    expect(text.out.join("\n")).toContain("modelMapped: deep: deep -> inherit (cursor writes no model id)");
+    // Antigravity still writes the alias, and reports no mapping.
+    const ag = tempDir();
+    const antigravity = await capture(modelsArgv("antigravity", ag));
+    expect(readFileSync(join(ag, "agents", "deep.md"), "utf8")).toContain("model: pro");
+    expect(json(antigravity)["modelMapped"]).toEqual([]);
   });
 
   it("names an alias outside antigravity's documented set without failing", async () => {
@@ -467,7 +478,9 @@ describe("--models", () => {
     const out = tempDir();
     const cursor = await capture([...generateArgv("cursor", out, ["--models", join(PACKS, "workflow.json")]), "--json"]);
     expect(cursor.code).toBe(0);
-    expect(readFileSync(join(out, "agents", "scout.md"), "utf8")).toContain("model: gpt-4.1");
+    // Read back through claude's row to the `fast` tier, then written as inherit (cursor writes no model id).
+    expect(readFileSync(join(out, "agents", "scout.md"), "utf8")).toContain("model: inherit");
+    expect(json(cursor)["modelMapped"]).toEqual(["scout: fast -> inherit"]);
     const ag = tempDir();
     const antigravity = await capture([...generateArgv("antigravity", ag, ["--models", join(PACKS, "workflow.json")]), "--json"]);
     expect(readFileSync(join(ag, "agents", "scout.md"), "utf8")).toContain("model: flash");
@@ -569,6 +582,23 @@ describe("--permissions", () => {
     expect(readFileSync(join(codexOut, "config.toml"), "utf8")).toContain("writable_roots = []");
     expect(json(codex)["writableRootsPlaceholder"]).toBe(true);
     expect(json(codex)["notes"]).toContain("config.toml carries writable_roots = [] for the installer to fill (writableRootsPlaceholder)");
+    // The source declares no network_access, so the pack carries none and the report says so.
+    expect(readFileSync(join(codexOut, "config.toml"), "utf8")).not.toContain("network_access");
+    expect(json(codex)["permissionNetworkAccess"]).toBeNull();
+    const codexText = await capture(generateArgv("codex", tempDir(), ["--permissions", join(PACKS, "permissions.json")]));
+    expect(codexText.out).toContain("network: not declared (no network_access line; the surface's own default applies)");
+    expect(json(cursor)["permissionNetworkAccess"]).toBeNull();
+    expect(block.out.join("\n")).not.toContain("network:");
+    // Declared under surfaces.codex, it is written as declared and reported as declared.
+    const declaredDir = tempDir();
+    writeFileSync(join(declaredDir, "permissions.json"), '{"allow":[{"exe":"nen","args":"*"}],"surfaces":{"codex":{"network_access":true}}}');
+    const declaredOut = tempDir();
+    const declared = await capture([...generateArgv("codex", declaredOut, ["--permissions", join(declaredDir, "permissions.json")]), "--json"]);
+    expect(declared.code).toBe(0);
+    expect(readFileSync(join(declaredOut, "config.toml"), "utf8").endsWith("writable_roots = []\nnetwork_access = true\n")).toBe(true);
+    expect(json(declared)["permissionNetworkAccess"]).toBe(true);
+    const declaredText = await capture(generateArgv("codex", tempDir(), ["--permissions", join(declaredDir, "permissions.json")]));
+    expect(declaredText.out).toContain("network: declared (network_access = true)");
 
     const agOut = tempDir();
     const antigravity = await capture([...generateArgv("antigravity", agOut, ["--permissions", join(PACKS, "permissions.json")]), "--json"]);

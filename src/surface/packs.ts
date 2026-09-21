@@ -399,6 +399,14 @@ export interface PermissionRule {
 export interface SurfacePermissionRows {
   readonly allow: readonly string[];
   readonly deny: readonly string[];
+  /**
+   * `surfaces.<name>.network_access`: whether the surface's sandbox may reach
+   * the network, or null when the source does not say. Only a pack that
+   * states a sandbox (codex) has a line to write it on; nothing declared,
+   * nothing written -- the surface's own default applies, and the report says
+   * `network: not declared` (Copilot review on zheref/hatsu, 2026-09-20).
+   */
+  readonly networkAccess: boolean | null;
 }
 
 export interface PermissionsSource {
@@ -410,8 +418,8 @@ export interface PermissionsSource {
 
 /**
  * `{ "allow": [ { "exe", "args" } ], "deny": [ ... ], "surfaces": { "<name>":
- * { "allow": [ "<row>" ], "deny": [ "<row>" ] } } }`; every other key is
- * ignored. A `(` or `)` in an exe or args is refused by pointer: every pack
+ * { "allow": [ "<row>" ], "deny": [ "<row>" ], "network_access": <bool> } } }`;
+ * every other key is ignored. A `(` or `)` in an exe or args is refused by pointer: every pack
  * shape wraps the row in the surface's own `Tool(...)` parentheses, and a
  * row that closes them early is a row that says something else (S8).
  */
@@ -462,7 +470,11 @@ export function readPermissions(path: string): PermissionsSource {
           return row;
         });
       };
-      surfaces[surface] = { allow: rows("allow"), deny: rows("deny") };
+      const networkRaw = blockRaw["network_access"];
+      if (networkRaw !== undefined && typeof networkRaw !== "boolean") {
+        throw new SurfacePackError(`--permissions '${path}': ${pointer}.network_access is not a boolean.`);
+      }
+      surfaces[surface] = { allow: rows("allow"), deny: rows("deny"), networkAccess: networkRaw ?? null };
     }
   }
   return { allow: list("allow"), deny: list("deny"), surfaces };
@@ -494,12 +506,23 @@ export interface RenderedPermissions {
   readonly surfaceRows: number;
   /** True when the pack carries a `writable_roots = []` the installer has to fill. */
   readonly writableRootsPlaceholder: boolean;
+  /**
+   * What the pack says about the sandbox's network: null where the shape
+   * states no sandbox; otherwise the declared boolean, or null again when the
+   * source declares none and the pack carries no `network_access` line.
+   */
+  readonly sandbox: { readonly networkAccess: boolean | null } | null;
 }
 
 /** The pack in the row's shape, as file content, with the surface's own rows appended for `surface` alone. */
 export function renderPermissions(rule: PermissionsRule, source: PermissionsSource, marker: string, surface: string): RenderedPermissions {
-  const own = source.surfaces[surface] ?? { allow: [], deny: [] };
+  const own = source.surfaces[surface] ?? { allow: [], deny: [], networkAccess: null };
   const surfaceRows = own.allow.length + own.deny.length;
+  if (rule.shape !== "codex-toml" && own.networkAccess !== null) {
+    throw new SurfacePackError(
+      `--permissions: surfaces.${surface} declares network_access, and this surface's pack states no sandbox to write it on. Remove the key.`,
+    );
+  }
   switch (rule.shape) {
     case "claude-settings":
       return {
@@ -517,6 +540,7 @@ export function renderPermissions(rule: PermissionsRule, source: PermissionsSour
         )}\n`,
         surfaceRows,
         writableRootsPlaceholder: false,
+        sandbox: null,
       };
     case "cursor-cli-json":
       return {
@@ -534,6 +558,7 @@ export function renderPermissions(rule: PermissionsRule, source: PermissionsSour
         )}\n`,
         surfaceRows,
         writableRootsPlaceholder: false,
+        sandbox: null,
       };
     case "codex-toml":
       // The allow/deny rows have no Codex spelling: its boundary is the
@@ -557,11 +582,17 @@ export function renderPermissions(rule: PermissionsRule, source: PermissionsSour
           "[sandbox_workspace_write]",
           WRITABLE_ROOTS_NOTE,
           "writable_roots = []",
-          "network_access = true",
+          // `network_access` ONLY when the source declares it: nothing in a
+          // permissions source says a sandbox may reach the network unless
+          // `surfaces.codex.network_access` does, and a line the source did
+          // not write is nen choosing a boundary. Absent, Codex's own default
+          // applies and the report says so.
+          ...(own.networkAccess === null ? [] : [`network_access = ${own.networkAccess ? "true" : "false"}`]),
           "",
         ].join("\n"),
         surfaceRows: 0,
         writableRootsPlaceholder: true,
+        sandbox: { networkAccess: own.networkAccess },
       };
   }
 }
@@ -675,6 +706,13 @@ export interface ModelRewrite {
   readonly droppedInherit: boolean;
   /** An alias outside the row's documented set, or null. */
   readonly undocumentedAlias: string | null;
+  /**
+   * The tier the persona's value resolved to when the row writes `inherit`
+   * for every persona (`modelInheritOnly`), or null: the lookup still runs,
+   * so an unresolvable value is still refused, but the tier reaches only the
+   * report line -- the file says `model: inherit`.
+   */
+  readonly mappedToInherit: string | null;
 }
 
 /**
@@ -714,7 +752,8 @@ export function resolveTier(maps: ModelMaps, value: string, relative: string): s
 /**
  * A persona's `model:` through the maps: alias or tier -> tier -> the target
  * surface's alias. `inherit` is carried where the row documents it and
- * dropped otherwise; anything unresolvable is refused by pointer.
+ * dropped otherwise; anything unresolvable is refused by pointer. A row with
+ * `modelInheritOnly` writes `inherit` whatever the tier, and says which tier.
  */
 export function rewriteModel(
   row: SurfaceRow,
@@ -724,19 +763,32 @@ export function rewriteModel(
 ): ModelRewrite {
   const entry = entries.find((candidate): boolean => candidate.key === "model");
   if (entry === undefined || !hasValue(entries, "model")) {
-    return { entries, alias: null, droppedInherit: false, undocumentedAlias: null };
+    return { entries, alias: null, droppedInherit: false, undocumentedAlias: null, mappedToInherit: null };
   }
   const value = inlineValue(entry);
   if (value === "inherit") {
-    if (row.inheritModel) return { entries, alias: "inherit", droppedInherit: false, undocumentedAlias: null };
+    if (row.inheritModel) return { entries, alias: "inherit", droppedInherit: false, undocumentedAlias: null, mappedToInherit: null };
     return {
       entries: entries.filter((candidate): boolean => candidate !== entry),
       alias: null,
       droppedInherit: true,
       undocumentedAlias: null,
+      mappedToInherit: null,
     };
   }
   const tier = resolveTier(maps, value, relative);
+  if (row.modelInheritOnly) {
+    // The surface documents `inherit` or a model id of its own, and a tier
+    // alias from `models.<surface>` is neither; the tier is resolved so a bad
+    // value is still refused by pointer, and then only reported.
+    return {
+      entries: entries.map((candidate): FrontmatterEntry => (candidate === entry ? { key: "model", lines: ["model: inherit"] } : candidate)),
+      alias: "inherit",
+      droppedInherit: false,
+      undocumentedAlias: null,
+      mappedToInherit: tier,
+    };
+  }
   const alias = maps.target[tier];
   /* c8 ignore next 3 -- resolveTier returns only a key of the target map */
   if (alias === undefined) {
@@ -746,7 +798,7 @@ export function rewriteModel(
     candidate === entry ? { key: "model", lines: [`model: ${alias}`] } : candidate,
   );
   const documented = row.modelAliases === null || row.modelAliases.includes(alias);
-  return { entries: rewritten, alias, droppedInherit: false, undocumentedAlias: documented ? null : alias };
+  return { entries: rewritten, alias, droppedInherit: false, undocumentedAlias: documented ? null : alias, mappedToInherit: null };
 }
 
 // ---------------------------------------------------------------------------

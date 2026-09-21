@@ -176,16 +176,21 @@ ${SURFACE_LIST}
                               frontmatter; over the surface's documented
                               character limit it is REFUSED, never truncated.
   --permissions <file.json>   A permissions source ({ allow: [{exe, args}],
-                              deny: [...], surfaces: { <name>: { allow, deny
-                              } } }), emitted as the surface's own pack --
-                              Bash(exe args) for claude-code, Shell(exe:args)
-                              for cursor, a config.toml with writable_roots =
-                              [] for codex (the installer fills it; the report
-                              says writableRootsPlaceholder). A surfaces.<name>
+                              deny: [...], surfaces: { <name>: { allow, deny,
+                              network_access } } }), emitted as the surface's
+                              own pack -- Bash(exe args) for claude-code,
+                              Shell(exe:args) for cursor, a config.toml with
+                              writable_roots = [] for codex (the installer
+                              fills it; the report says
+                              writableRootsPlaceholder). A surfaces.<name>
                               block is transcribed verbatim after the shared
-                              rows for that surface only. A surface with no
-                              allowlist file reports 'permissions: not
-                              supported'; a '(' or ')' in a row is refused.
+                              rows for that surface only; its network_access
+                              (a boolean) is written into codex's sandbox
+                              block ONLY when declared, and the report says
+                              'network: not declared' otherwise. A surface
+                              with no allowlist file reports 'permissions:
+                              not supported'; a '(' or ')' in a row is
+                              refused.
   --stamp <version>           MAJOR.MINOR.PATCH of the source, written into the
                               marker. 'check --stamp' then reports a file
                               carrying no stamp or another one as STALE.
@@ -405,6 +410,7 @@ function runGenerate(context: CommandContext): number {
       truncated: report.truncated,
       droppedInherit: report.droppedInherit,
       undocumentedAliases: report.undocumentedAliases,
+      modelMapped: report.modelMapped,
       hooks: report.hooks,
       rules: report.rules,
       permissions: report.permissions,
@@ -412,6 +418,7 @@ function runGenerate(context: CommandContext): number {
       notes: report.notes,
       permissionSurfaceRows: report.permissionSurfaceRows,
       writableRootsPlaceholder: report.writableRootsPlaceholder,
+      permissionNetworkAccess: report.permissionSandbox?.networkAccess ?? null,
       includes: report.includes,
     },
     [
@@ -436,9 +443,19 @@ function runGenerate(context: CommandContext): number {
       ...(report.undocumentedAliases.length === 0
         ? []
         : [`model alias outside the surface's documented set (${(inputs.row.modelAliases ?? []).join("|")}): ${report.undocumentedAliases.join(", ")}`]),
+      ...(report.modelMapped.length === 0
+        ? []
+        : [`modelMapped: ${report.modelMapped.join(", ")} (${inputs.row.surface} writes no model id)`]),
       `hooks: ${report.hooks}`,
       `rules: ${rulesLine}`,
       `permissions: ${report.permissions}${report.permissionSurfaceRows > 0 ? ` (+${report.permissionSurfaceRows} surface rows)` : ""}`,
+      ...(report.permissionSandbox === null
+        ? []
+        : [
+            report.permissionSandbox.networkAccess === null
+              ? "network: not declared (no network_access line; the surface's own default applies)"
+              : `network: declared (network_access = ${report.permissionSandbox.networkAccess})`,
+          ]),
       `manifest: ${report.manifest}`,
       ...report.notes.map((note): string => `note: ${note}`),
     ],
