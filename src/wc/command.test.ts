@@ -7,7 +7,7 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
-import { isTrunk, normalizeBranchName, trunkDestinationRefusal } from "./publish.js";
+import { isTrunk, trackedBranchName, trunkDestinationRefusal } from "./publish.js";
 
 async function capture(
   argv: readonly string[],
@@ -860,22 +860,29 @@ describe("nen wc publish -- a branch tracking the trunk is pushed under its own 
     expect(gitCalls(broken.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
   });
 
-  it("the same holds for master and for refs/heads/<trunk> as the tracked name", async () => {
-    for (const trunk of ["master", "refs/heads/main"]) {
-      const short = normalizeBranchName(trunk);
-      const result = await captureJson(["wc", "publish"], [
-        ON_WORK, WORK_OK,
-        { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: `origin/${trunk}\n` } },
-        { match: `git check-ref-format --branch ${trunk}`, result: { code: 0 } },
-        { match: `git fetch --end-of-options origin refs/heads/${trunk}:refs/remotes/origin/${trunk}`, result: { code: 0 } },
-        { match: PROBE_OWN, result: { code: 2 } },
-        { match: `git rev-list --count origin/${trunk}..HEAD`, result: { stdout: "1\n" } },
-        { match: PUSH_WORK, result: { code: 0 } },
-      ]);
-      expect(result.code, trunk).toBe(0);
-      expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: `origin/${trunk}` });
-      expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push") && call.endsWith(`:refs/heads/${short}`))).toBe(false);
-    }
+  it("the same holds for master as the tracked name", async () => {
+    const trunk = "master";
+    const result = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK,
+      { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: `origin/${trunk}\n` } },
+      { match: `git check-ref-format --branch ${trunk}`, result: { code: 0 } },
+      { match: `git fetch --end-of-options origin refs/heads/${trunk}:refs/remotes/origin/${trunk}`, result: { code: 0 } },
+      { match: PROBE_OWN, result: { code: 2 } },
+      { match: `git rev-list --count origin/${trunk}..HEAD`, result: { stdout: "1\n" } },
+      { match: PUSH_WORK, result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: `origin/${trunk}` });
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push") && call.endsWith(`:refs/heads/${trunk}`))).toBe(false);
+  });
+
+  it("trackedBranchName: a tracked name that already carries refs/heads/ is stripped once before it reaches a refspec -- and never a leading '+'", () => {
+    expect(trackedBranchName("main")).toBe("main");
+    expect(trackedBranchName("feature/work")).toBe("feature/work");
+    expect(trackedBranchName("refs/heads/main")).toBe("main");
+    expect(trackedBranchName("refs/heads/refs/heads/main")).toBe("refs/heads/main");
+    expect(trackedBranchName("+main")).toBe("+main");
+    expect(trackedBranchName("refs/tags/v1")).toBe("refs/tags/v1");
   });
 
   it("trunkDestinationRefusal: the belt under the retarget -- a destination that is the trunk is refused naming the destination and the upstream", () => {

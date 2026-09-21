@@ -138,6 +138,19 @@ export function normalizeBranchName(name: string): string {
   return name.replace(/^\++/, "").replace(/^refs\/heads\//, "");
 }
 
+/**
+ * The branch a tracked name means with ONE leading `refs/heads/` taken off.
+ * `git rev-parse --abbrev-ref <b>@{upstream}` reports `origin/main`, never
+ * `origin/refs/heads/main`; but a tracked name that already carries the
+ * prefix would otherwise be spelled `refs/heads/refs/heads/main` in the
+ * fetch refspec, so it is stripped once, defensively, before it is used
+ * in an argv (Copilot review on zheref/nen#235). A leading `+` is NOT taken
+ * off here: that shape is refused by refuseBranchName, never normalized away.
+ */
+export function trackedBranchName(name: string): string {
+  return name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : name;
+}
+
 /** True when `name`, normalized, is the workflow's `branch.base` or one of TRUNK_NAMES. */
 export function isTrunk(name: string, base: string): boolean {
   const named = normalizeBranchName(name);
@@ -243,7 +256,7 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   if (upstreamBefore !== null) {
     const upstream = splitUpstream(upstreamBefore);
     remote = upstream.remote;
-    const tracked = upstream.branch;
+    const tracked = trackedBranchName(upstream.branch);
     trunkTracked = isTrunk(tracked, options.base);
     destination = trunkTracked ? branch : tracked;
     retargetedUpstream = trunkTracked && options.setUpstream;
