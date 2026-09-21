@@ -468,7 +468,9 @@ bun run typecheck && bun run lint && bun run test   # or: bun src/index.ts dev t
 
 Tests live beside their sources (`src/**/*.test.ts`). `bun run build:linux-x64`
 (and the `darwin-arm64` / `windows-x64` siblings) cross-compile the release
-binaries from any one host; `bun run build:<target> && sha256sum dist/*` (or,
+binaries from any one host — `build:darwin-arm64` then ad-hoc-signs its output
+through `src/dev/sign.ts` where `codesign` exists, because bun's linker
+signature does not survive the appended payload ([#233](https://github.com/zheref/nen/issues/233)); `bun run build:<target> && sha256sum dist/*` (or,
 on a stock macOS dev setup, which has no `sha256sum` by default: `shasum -a
 256 dist/*` — the same fallback `bootstrap/nen.sh` itself uses) is the local
 equivalent of the release pipeline's `SHA256SUMS`.

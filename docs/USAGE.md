@@ -567,6 +567,22 @@ nen="$(bash nen-bootstrap.sh --ref v0.12.0)"
 "$nen" --version
 ```
 
+**The checksum proves the bytes, not that they run.** The `darwin-arm64`
+binary is ad-hoc-signed **after** `bun build --compile` has appended its
+payload (`codesign -s - --force`, in `bun run build:darwin-arm64` through
+`src/dev/sign.ts` and again in the release lane), because the linker's own
+signature covers only the bytes as linked and the append invalidates it — a
+macOS that enforces the signature then kills the process before `main`, exit
+137, with a checksum that still matches. Every published `darwin-arm64` from
+v0.9.0 to v0.12.0 shipped that way ([#233](https://github.com/zheref/nen/issues/233));
+from v0.13.0 the release lane verifies the signature (`codesign -v`) and
+**executes** both the darwin and the linux binary (`--version` must print the
+tagged `package.json`'s version) before `SHA256SUMS` is written and before
+anything is attached. An ad-hoc signature carries no identity and nothing
+Gatekeeper trusts; what makes the binary trusted is the checksum this script
+verifies, and what makes it run is the signature the lane refuses to ship
+without.
+
 There is no `latest`: `--ref` is required with no fallback, because a bootstrap
 that picked the newest release would convert a source-pinned supply chain into
 an unpinned one. Every integrity failure fails closed — an unfetchable or
