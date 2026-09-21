@@ -13,6 +13,23 @@
 // names one, under its own name; a `--remote` that disagrees with an existing
 // upstream is refused, because the branch already says where it goes.
 //
+// EXCEPT WHEN THE UPSTREAM NAMES THE TRUNK (zheref/nen#234). `git worktree
+// add -b x origin/main` leaves `x` tracking `origin/main`, and under the rule
+// above that made the destination `main`: on 2026-09-21 this verb pushed
+// `refs/heads/x:refs/heads/main` and fast-forwarded the trunk with no pull
+// request -- the one thing its header says it never does. So the trunk is
+// refused as a DESTINATION, not only as the local name: the branch name the
+// push would update is computed first, and when it is `branch.base`, `main`
+// or `master` (or `refs/heads/` of those) the answer is exit 2 naming the
+// destination and the upstream. A branch that TRACKS the trunk -- the
+// worktree convention, not a mistake -- is published under its OWN name
+// instead (`refs/heads/x:refs/heads/x`), its fast-forward judged against
+// `<remote>/x` when that exists, and `--set-upstream` retracks it to
+// `<remote>/x` (`retargetedUpstream: true`); without `--set-upstream` the
+// push still goes to `x`, and the text says the upstream still names the
+// trunk. The destination check runs again on the final refspec, right
+// before the push, whatever route computed it.
+//
 // FOUR REFUSALS BEFORE ANY WRITE, all at exit 2, because each is a mistake in
 // the invocation rather than a fact about the remote: a DETACHED HEAD (there
 // is no branch to push); the TRUNK -- the workflow's `branch.base`, and
@@ -74,6 +91,8 @@ export interface PublishReport {
   readonly needsForce: boolean;
   readonly pushed: boolean;
   readonly dryRun: boolean;
+  /** True when the upstream named the trunk and `--set-upstream` retracked the branch to `<remote>/<branch>` (zheref/nen#234). */
+  readonly retargetedUpstream: boolean;
 }
 
 export type PublishOutcome =
@@ -117,6 +136,27 @@ export function looksLikeRefspecOrForce(token: string): boolean {
 /** The branch a name means once a leading `+` and a `refs/heads/` prefix are taken off -- what the trunk is compared against. */
 export function normalizeBranchName(name: string): string {
   return name.replace(/^\++/, "").replace(/^refs\/heads\//, "");
+}
+
+/** True when `name`, normalized, is the workflow's `branch.base` or one of TRUNK_NAMES. */
+export function isTrunk(name: string, base: string): boolean {
+  const named = normalizeBranchName(name);
+  return named === base || TRUNK_NAMES.includes(named);
+}
+
+/**
+ * The exit-2 refusal for a push whose DESTINATION -- the branch name on the
+ * remote the refspec would update -- is the trunk, or null when it is not
+ * (zheref/nen#234). Compared normalized, so `refs/heads/main` and `+main` are
+ * the trunk too. This is the last check before the push argv is built, and
+ * it runs whatever route computed the destination: the local-name refusal
+ * stays as the first test, this one is the belt under it.
+ */
+export function trunkDestinationRefusal(branch: string, destination: string, upstreamBefore: string | null, base: string): string | null {
+  if (!isTrunk(destination, base)) return null;
+  const why = normalizeBranchName(destination) === base ? " (nen/workflow.json's branch.base)" : "";
+  const via = upstreamBefore === null ? "" : ` -- '${branch}' tracks '${upstreamBefore}', and the upstream's branch is where the push would land`;
+  return `the push destination '${destination}' is the trunk${why}${via}, and this verb never pushes the trunk directly: the trunk moves by merging a pull request. Retrack the branch under its own name ('git branch --set-upstream-to <remote>/${branch}') or cut a branch for this work. Nothing was pushed.`;
 }
 
 /**
@@ -174,7 +214,7 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   }
   const branch = branchResult.stdout.trim();
   const named = normalizeBranchName(branch);
-  if (named === options.base || TRUNK_NAMES.includes(named)) {
+  if (isTrunk(branch, options.base)) {
     return {
       kind: "refused",
       reason: `'${branch}' is the trunk${named === options.base ? " (nen/workflow.json's branch.base)" : ""}, and this verb never pushes the trunk directly: the trunk moves by merging a pull request. Cut a branch for this work.`,
@@ -196,11 +236,17 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   // there is one -- a local `feature` tracking `fork/topic` updates `topic`,
   // the ref the checks below look at -- and the local name otherwise.
   let destination = branch;
+  // The upstream names the trunk (`git worktree add -b x origin/main`): the
+  // push goes under the branch's OWN name, never to the trunk (zheref/nen#234).
+  let trunkTracked = false;
+  let retargetedUpstream = false;
   if (upstreamBefore !== null) {
     const upstream = splitUpstream(upstreamBefore);
     remote = upstream.remote;
     const tracked = upstream.branch;
-    destination = tracked;
+    trunkTracked = isTrunk(tracked, options.base);
+    destination = trunkTracked ? branch : tracked;
+    retargetedUpstream = trunkTracked && options.setUpstream;
     if (looksLikeRefspecOrForce(remote)) {
       return { kind: "refused", reason: `the upstream's remote '${remote}' looks like an option or a refspec (a leading '+' or '-', or a ':'), and this verb never lets a name change what a push or fetch does. Nothing was fetched or pushed.` };
     }
@@ -223,11 +269,32 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
       if (tooOld !== null) return { kind: "refused", reason: tooOld };
       throw new SquashStateError(`could not fetch the upstream '${upstreamBefore}' ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
     }
-    const ancestor = runGit(seams, cwd, ["merge-base", "--is-ancestor", upstreamBefore, "HEAD"]);
-    if (ancestor.spawnFailed || ancestor.code > 1) {
-      throw new SquashStateError(`could not test whether '${upstreamBefore}' is an ancestor of HEAD ('git merge-base --is-ancestor ${upstreamBefore} HEAD' failed: ${ancestor.error}).`);
+    // THE FAST-FORWARD IS JUDGED AGAINST THE REF THE PUSH MOVES. That is the
+    // upstream's branch -- except when the upstream is the trunk, where the
+    // push goes to `<remote>/<branch>` instead: that ref is fetched and
+    // compared when the remote has it, and when the remote does not (asked
+    // with `ls-remote --exit-code`, exit 2 = no such ref) there is nothing a
+    // push could rewrite, so no force is possible.
+    let moved: string | null = upstreamBefore;
+    if (trunkTracked) {
+      moved = null;
+      const probe = runGit(seams, cwd, ["ls-remote", "--exit-code", remote, `refs/heads/${branch}`]);
+      if (probe.code === 0) {
+        const ownArgs = fetchArgv(remote, branch);
+        const own = runGit(seams, cwd, ownArgs);
+        if (own.code !== 0) throw new SquashStateError(`could not fetch '${remote}/${branch}', the ref this push updates ('git ${ownArgs.join(" ")}' failed: ${own.error}).`);
+        moved = `${remote}/${branch}`;
+      } else if (probe.spawnFailed || probe.code !== 2) {
+        throw new SquashStateError(`could not ask '${remote}' whether it has 'refs/heads/${branch}' ('git ls-remote --exit-code ${remote} refs/heads/${branch}' failed: ${probe.error}).`);
+      }
     }
-    needsForce = ancestor.code !== 0;
+    if (moved !== null) {
+      const ancestor = runGit(seams, cwd, ["merge-base", "--is-ancestor", moved, "HEAD"]);
+      if (ancestor.spawnFailed || ancestor.code > 1) {
+        throw new SquashStateError(`could not test whether '${moved}' is an ancestor of HEAD ('git merge-base --is-ancestor ${moved} HEAD' failed: ${ancestor.error}).`);
+      }
+      needsForce = ancestor.code !== 0;
+    }
     const count = runGit(seams, cwd, ["rev-list", "--count", `${upstreamBefore}..HEAD`]);
     if (count.code !== 0 || !/^\d+$/.test(count.stdout.trim())) {
       throw new SquashStateError(`could not count the commits ahead of '${upstreamBefore}' ('git rev-list --count ${upstreamBefore}..HEAD' failed: ${count.error}).`);
@@ -247,6 +314,11 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     }
   }
 
+  // THE DESTINATION IS NEVER THE TRUNK, whichever route named it: checked on
+  // the name the refspec will carry, right before the argv exists (zheref/nen#234).
+  const trunkDestination = trunkDestinationRefusal(branch, destination, upstreamBefore, options.base);
+  if (trunkDestination !== null) return { kind: "refused", reason: trunkDestination };
+
   // THE REFSPEC IN FULL, behind `--`: `refs/heads/<local>:refs/heads/<dest>`
   // is a plain update of that one ref whatever either name looks like.
   const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${destination}`];
@@ -261,24 +333,32 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     needsForce,
     pushed,
     dryRun: options.dryRun,
+    retargetedUpstream,
   });
+  // What the text says about a trunk-tracking branch: where it went instead, and where its upstream is now.
+  const trunkNote = !trunkTracked
+    ? ""
+    : retargetedUpstream
+      ? ` -- its upstream '${upstreamBefore}' named the trunk, so it went under its own name and now tracks ${remote}/${branch}`
+      : ` -- its upstream '${upstreamBefore}' names the trunk, so it went under its own name; the upstream still names the trunk (pass --set-upstream to retrack it to ${remote}/${branch})`;
   if (needsForce) {
+    const against = trunkTracked ? `'${remote}/${branch}', the ref this push updates` : `its upstream '${upstreamBefore}'`;
     return {
       kind: "done",
       report: report(false),
       lines: [
-        `'${branch}' is not a fast-forward of its upstream '${upstreamBefore}': the push would need --force, and this verb never forces. Nothing was pushed. Catch the branch up first ('nen wc catch-up --base <ref>'), or decide the rewrite is wanted and do it by hand.`,
+        `'${branch}' is not a fast-forward of ${against}: the push would need --force, and this verb never forces. Nothing was pushed. Catch the branch up first ('nen wc catch-up --base <ref>'), or decide the rewrite is wanted and do it by hand.`,
       ],
     };
   }
   if (options.dryRun) {
-    return { kind: "done", report: report(false), lines: [`would run: git ${argv.join(" ")}${upstreamBefore === null ? "  (no upstream yet)" : `  (${ahead} ahead of ${upstreamBefore})`}`] };
+    return { kind: "done", report: report(false), lines: [`would run: git ${argv.join(" ")}${upstreamBefore === null ? "  (no upstream yet)" : `  (${ahead} ahead of ${upstreamBefore})`}${trunkNote}`] };
   }
   const push = runGit(seams, cwd, argv);
   if (push.code !== 0) throw new SquashStateError(`could not push '${branch}' ('git ${argv.join(" ")}' failed: ${push.error}).`);
   return {
     kind: "done",
     report: report(true),
-    lines: [`pushed '${branch}' to ${remote}${as}${options.setUpstream ? " (upstream set)" : ""}${ahead === null ? "" : ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`}`],
+    lines: [`pushed '${branch}' to ${remote}${as}${options.setUpstream ? " (upstream set)" : ""}${ahead === null ? "" : ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`}${trunkNote}`],
   };
 }

@@ -636,7 +636,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
-| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names, as the branch it names (origin, or `--remote`, under its own name when it has none), refusing a detached HEAD, the trunk, any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
+| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names, as the branch it names (origin, or `--remote`, under its own name when it has none), refusing a detached HEAD, the trunk as local name **or as destination** (a branch tracking `origin/main` is pushed under its own name and `-u` retracks it), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -1934,6 +1934,25 @@ goes to `origin`, or to `--remote <name>` when one is given, under its own
 name (`--set-upstream` then tracks `<remote>/<branch>`). Everything that
 could rewrite somebody else's history is refused before the push.
 
+**The destination is never the trunk** (v0.13.1,
+[#234](https://github.com/zheref/nen/issues/234)). `git worktree add -b x
+origin/main` leaves `x` tracking `origin/main`, and under the rule above the
+destination would be `main` — on 2026-09-21 that pushed
+`refs/heads/x:refs/heads/main` and fast-forwarded the trunk with no pull
+request. So the branch name the push would update is computed first, and
+when it is `branch.base`, `main` or `master` (or `refs/heads/` of those,
+compared normalized) the answer is exit 2 naming the destination and the
+upstream. A branch that **tracks** the trunk is the worktree convention, not
+a mistake: it is published under its **own** name
+(`refs/heads/x:refs/heads/x`), its fast-forward judged against `<remote>/x`
+when the remote already has it (`git ls-remote --exit-code`; exit 2 means no
+such ref, so there is nothing a push could rewrite) and never against the
+trunk. With `--set-upstream` the `-u` retracks the branch to `<remote>/x`
+— never left on the trunk — and the report says `retargetedUpstream: true`
+with `upstreamBefore: "origin/main"` and `destination: "x"`; without it the
+push still goes to `x`, the upstream stays where it was, and the text says
+so and names `--set-upstream` as the retrack.
+
 **Usage**
 
 ```text
@@ -1959,7 +1978,9 @@ nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run] [--j
 [`nen/workflow.json`](#nenworkflowjson)'s `branch.base`, and `main`/`master`
 whatever the policy says — because the trunk moves by merging a pull request,
 compared against the **normalized** name (a leading `+` and a `refs/heads/`
-prefix taken off, so a branch git holds as `+main` is the trunk too); a
+prefix taken off, so a branch git holds as `+main` is the trunk too), and
+the trunk as the **destination** of the final refspec, whichever route named
+it (#234); a
 branch name git itself rejects (`git check-ref-format --branch`, asked
 through the seam, its answer quoted); a branch name shaped like a refspec or
 a force even where git accepts it — git will hold a branch named `+main`,
@@ -1979,14 +2000,21 @@ push would need `--force`, and this verb never forces; the report says
 the repair.
 
 **`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
-destination, upstreamBefore, ahead, needsForce, pushed, dryRun }`. `branch`
+destination, upstreamBefore, ahead, needsForce, pushed, dryRun,
+retargetedUpstream }`. `branch`
 is the local branch, the source half of the refspec; `remote` is the one
 pushed to — the upstream's, or `origin`/`--remote` when there was none;
 `destination` is the branch name on that remote the push updates — the
 upstream's branch when one exists, else `branch`; `upstreamBefore` is `null`
-and `ahead` is `null` when the branch tracked nothing before this call. The
+and `ahead` is `null` when the branch tracked nothing before this call;
+`retargetedUpstream` is `true` only when the upstream named the trunk and
+`--set-upstream` retracked the branch to `<remote>/<branch>`. The
 text line says `pushed '<branch>' to <remote> as '<destination>'` when the two
-names differ.
+names differ, and appends `-- its upstream 'origin/main' named the trunk, so
+it went under its own name and now tracks origin/<branch>` (or, without
+`--set-upstream`, `... the upstream still names the trunk (pass
+--set-upstream to retrack it to origin/<branch>)`) for a trunk-tracking
+branch.
 
 **Example**
 

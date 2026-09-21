@@ -2,6 +2,16 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.13.1 — unreleased
+
+### Fixed
+
+- **wc publish** — the trunk is refused as a **destination**, not only as the local branch name ([#234](https://github.com/zheref/nen/issues/234)). The round-3 fix on [#231](https://github.com/zheref/nen/pull/231) (23cc9ee) made the push destination the tracked upstream's branch, so a branch whose upstream is `origin/main` — what `git worktree add -b x origin/main` sets — pushed `refs/heads/x:refs/heads/main` and fast-forwarded the trunk with no pull request (2026-09-21, zheref/nen). Now the destination branch is computed first (the tracked upstream's branch when one exists, else the local name) and a destination that is `branch.base`, `main` or `master` — or `refs/heads/` of those, compared normalized — is refused at exit 2 naming the destination and the upstream (`trunkDestinationRefusal`, run on the final refspec right before the push argv is built); the local-name refusal stays as the first test. A branch that **tracks** the trunk is the worktree convention, not a mistake, so it publishes under its **own** name: `refs/heads/x:refs/heads/x`, its fast-forward judged against `<remote>/x` when the remote has it (`git ls-remote --exit-code`, exit 2 = no such ref, so nothing to force) and never against the trunk; with `--set-upstream` the `-u` retracks it to `<remote>/x` and the report says `retargetedUpstream: true` (new, last key of `nen.wc.publish/v0.1`; `false` everywhere else), the text `its upstream 'origin/main' named the trunk, so it went under its own name and now tracks origin/x`; without it the push still goes to `x` and the text says the upstream still names the trunk, naming `--set-upstream` as the retrack. Integration test against a bare origin: a branch tracking `origin/main` pushes with and without `-u`, `main` does not move, the remote gains `refs/heads/<own>`, and a rewritten branch is reported `needsForce` against `origin/<own>`. Hatsu's `hooks/guard-base-branch.sh` (zheref/hatsu#94) refuses the same refspec on the consumer side; the verb no longer relies on it.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** A repository pinned `minimum: "0.7"` reads this build unchanged: the one surface change is `retargetedUpstream`, appended as the last key of `nen.wc.publish/v0.1`, and a push a v0.13.0 binary would have made to the trunk is now refused or redirected to the branch's own name — the direction every consumer's own rule already pointed. A consumer that depends on the retarget must pin `v0.13.1`.
+
 ## v0.13.0 — 2026-09-20
 
 Release unit for `v0.12.0..v0.13.0`: [#231](https://github.com/zheref/nen/pull/231) (the delivery) and the release proposal [#232](https://github.com/zheref/nen/pull/232).

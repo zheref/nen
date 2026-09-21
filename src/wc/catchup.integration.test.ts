@@ -329,6 +329,41 @@ describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/local-name"])).toBe("");
   });
 
+  it("a branch tracking origin/main -- `git worktree add -b x origin/main` -- never moves main: it is pushed under its own name, and -u retracks it to origin/<own> (zheref/nen#234)", async () => {
+    const work = branchWith("tracks-trunk", { "trunk.txt": "not main\n" });
+    mustGit(work, ["branch", "--set-upstream-to", "origin/main"]);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "tracks-trunk@{upstream}"])).toBe("origin/main");
+    const mainBefore = mustGit(work, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0];
+    const sha = mustGit(work, ["rev-parse", "HEAD"]);
+    // Without -u: the push lands on refs/heads/tracks-trunk, main does not move, the upstream is untouched.
+    const plain = await wc(["publish", "--repo", work]);
+    expect(plain.code).toBe(0);
+    expect(plain.doc).toMatchObject({ branch: "tracks-trunk", remote: "origin", destination: "tracks-trunk", upstreamBefore: "origin/main", ahead: 1, needsForce: false, pushed: true, retargetedUpstream: false });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0]).toBe(mainBefore);
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/tracks-trunk"]).split(/\s+/)[0]).toBe(sha);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "tracks-trunk@{upstream}"])).toBe("origin/main");
+    // With -u, on a second commit: the remote ref now exists, so the fast-forward is judged against it; main still does not move; the upstream is retargeted.
+    writeFileSync(join(work, "trunk.txt"), "still not main\n");
+    mustGit(work, ["add", "-A"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: more, still tracking the trunk"]);
+    const retargeted = await wc(["publish", "--repo", work, "--set-upstream"]);
+    expect(retargeted.code).toBe(0);
+    expect(retargeted.doc).toMatchObject({ destination: "tracks-trunk", upstreamBefore: "origin/main", ahead: 2, needsForce: false, pushed: true, retargetedUpstream: true });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0]).toBe(mainBefore);
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/tracks-trunk"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "tracks-trunk@{upstream}"])).toBe("origin/tracks-trunk");
+    // And a rewritten branch that still tracks the trunk is judged against origin/<own>, not against main: needsForce, nothing pushed, main untouched.
+    const rewritten = branchWith("tracks-trunk-rewrite", { "rw.txt": "one\n" });
+    mustGit(rewritten, [...PINNED, "push", "--quiet", "origin", "refs/heads/tracks-trunk-rewrite:refs/heads/tracks-trunk-rewrite"]);
+    mustGit(rewritten, ["branch", "--set-upstream-to", "origin/main"]);
+    mustGit(rewritten, [...WHO, "commit", "--quiet", "--amend", "--no-edit", "-m", "feat: rewritten"]);
+    const diverged = await wc(["publish", "--repo", rewritten, "--set-upstream"]);
+    expect(diverged.code).toBe(1);
+    expect(diverged.doc).toMatchObject({ destination: "tracks-trunk-rewrite", needsForce: true, pushed: false, retargetedUpstream: true });
+    expect(mustGit(rewritten, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0]).toBe(mainBefore);
+    expect(mustGit(rewritten, ["rev-parse", "--abbrev-ref", "tracks-trunk-rewrite@{upstream}"])).toBe("origin/main");
+  });
+
   it("the real git accepts `git fetch --end-of-options` (2.24+): a publish with an upstream fetches through it and pushes", async () => {
     // The whole guard rests on this: Copilot (zheref/nen#231) read the flag
     // as one fetch rejects. On this host's git the fetch below succeeds.
