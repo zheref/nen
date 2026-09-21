@@ -7,6 +7,7 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
+import { isTrunk, trackedBranchName, trunkDestinationRefusal } from "./publish.js";
 
 async function capture(
   argv: readonly string[],
@@ -654,8 +655,8 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
       ON_WORK, WORK_OK, NO_TRACKING, { match: PUSH_WORK_U, result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(Object.keys(result.doc)).toEqual(["contract", "branch", "remote", "destination", "upstreamBefore", "ahead", "needsForce", "pushed", "dryRun"]);
-    expect(result.doc).toEqual({ contract: "nen.wc.publish/v0.1", branch: "feature/work", remote: "origin", destination: "feature/work", upstreamBefore: null, ahead: null, needsForce: false, pushed: true, dryRun: false });
+    expect(Object.keys(result.doc)).toEqual(["contract", "branch", "remote", "destination", "upstreamBefore", "ahead", "needsForce", "pushed", "dryRun", "retargetedUpstream"]);
+    expect(result.doc).toEqual({ contract: "nen.wc.publish/v0.1", branch: "feature/work", remote: "origin", destination: "feature/work", upstreamBefore: null, ahead: null, needsForce: false, pushed: true, dryRun: false, retargetedUpstream: false });
   });
 
   it("fetches the upstream, checks the fast-forward, counts ahead, and pushes without -u", async () => {
@@ -774,6 +775,128 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
     expect(force.code).toBe(2);
     expect(force.err.join("\n")).toMatch(/unknown option '--force'/);
     expect((await capture(["wc", "publish"], [], null)).code).toBe(2);
+  });
+});
+
+// ── nen wc publish: the trunk is refused as a DESTINATION (zheref/nen#234) ──
+
+describe("nen wc publish -- a branch tracking the trunk is pushed under its own name, and the trunk is never a destination", () => {
+  const TRACKING_MAIN = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "origin/main\n" } };
+  const MAIN_OK = { match: "git check-ref-format --branch main", result: { code: 0 } };
+  const FETCH_MAIN = { match: "git fetch --end-of-options origin refs/heads/main:refs/remotes/origin/main", result: { code: 0 } };
+  const PROBE_OWN = "git ls-remote --exit-code origin refs/heads/feature/work";
+  const AHEAD_OF_MAIN = { match: "git rev-list --count origin/main..HEAD", result: { stdout: "8\n" } };
+
+  it("--set-upstream on a branch tracking origin/main pushes refs/heads/<own>:refs/heads/<own> with -u, and reports the retarget", async () => {
+    const result = await captureJson(["wc", "publish", "--set-upstream"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 2 } },
+      AHEAD_OF_MAIN,
+      { match: PUSH_WORK_U, result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ branch: "feature/work", remote: "origin", destination: "feature/work", upstreamBefore: "origin/main", ahead: 8, needsForce: false, pushed: true, retargetedUpstream: true });
+    const calls = gitCalls(result.seams);
+    expect(calls).toContain(PUSH_WORK_U);
+    // Nothing here names the trunk on the remote side of a refspec, and nothing asked whether main is an ancestor: the trunk is not the ref this push moves.
+    expect(calls.some((call): boolean => call.startsWith("git push") && /:refs\/heads\/main$/.test(call))).toBe(false);
+    expect(calls.some((call): boolean => call.startsWith("git merge-base"))).toBe(false);
+    const text = await capture(["wc", "publish", "--set-upstream"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 2 } },
+      AHEAD_OF_MAIN,
+      { match: PUSH_WORK_U, result: { code: 0 } },
+    ]);
+    expect(text.out).toEqual(["pushed 'feature/work' to origin (upstream set) -- 8 commit(s) ahead of origin/main -- its upstream 'origin/main' named the trunk, so it went under its own name and now tracks origin/feature/work"]);
+  });
+
+  it("without --set-upstream the push still goes to the branch's own name, the upstream is left as it was, and the text says it still names the trunk", async () => {
+    const result = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 2 } },
+      AHEAD_OF_MAIN,
+      { match: PUSH_WORK, result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: "origin/main", pushed: true, retargetedUpstream: false });
+    expect(gitCalls(result.seams)).toContain(PUSH_WORK);
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push -u"))).toBe(false);
+    const dry = await capture(["wc", "publish", "--dry-run"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 2 } },
+      AHEAD_OF_MAIN,
+    ]);
+    expect(dry.code).toBe(0);
+    expect(dry.out).toEqual([`would run: ${PUSH_WORK}  (8 ahead of origin/main) -- its upstream 'origin/main' names the trunk, so it went under its own name; the upstream still names the trunk (pass --set-upstream to retrack it to origin/feature/work)`]);
+    expect(gitCalls(dry.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+  });
+
+  it("the fast-forward is judged against origin/<own> when the remote already has it -- never against the trunk", async () => {
+    const diverged = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 0, stdout: "abc123\trefs/heads/feature/work\n" } },
+      FETCH_WORK,
+      { match: "git merge-base --is-ancestor origin/feature/work HEAD", result: { code: 1 } },
+      AHEAD_OF_MAIN,
+    ]);
+    expect(diverged.code).toBe(1);
+    expect(diverged.doc).toMatchObject({ destination: "feature/work", needsForce: true, pushed: false, retargetedUpstream: false });
+    expect(gitCalls(diverged.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+    const text = await capture(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 0, stdout: "abc123\trefs/heads/feature/work\n" } },
+      FETCH_WORK,
+      { match: "git merge-base --is-ancestor origin/feature/work HEAD", result: { code: 1 } },
+      AHEAD_OF_MAIN,
+    ]);
+    expect(text.out.join("\n")).toMatch(/not a fast-forward of 'origin\/feature\/work', the ref this push updates/);
+    // A probe that failed for any reason but "no such ref" is a git failure, not a green light.
+    const broken = await capture(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 128, stderr: "fatal: unable to access" } },
+    ]);
+    expect(broken.code).toBe(1);
+    expect(broken.err.join("\n")).toMatch(/could not ask 'origin' whether it has 'refs\/heads\/feature\/work'/);
+    expect(gitCalls(broken.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+  });
+
+  it("the same holds for master as the tracked name", async () => {
+    const trunk = "master";
+    const result = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK,
+      { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: `origin/${trunk}\n` } },
+      { match: `git check-ref-format --branch ${trunk}`, result: { code: 0 } },
+      { match: `git fetch --end-of-options origin refs/heads/${trunk}:refs/remotes/origin/${trunk}`, result: { code: 0 } },
+      { match: PROBE_OWN, result: { code: 2 } },
+      { match: `git rev-list --count origin/${trunk}..HEAD`, result: { stdout: "1\n" } },
+      { match: PUSH_WORK, result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: `origin/${trunk}` });
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push") && call.endsWith(`:refs/heads/${trunk}`))).toBe(false);
+  });
+
+  it("trackedBranchName: a tracked name that already carries refs/heads/ is stripped once before it reaches a refspec -- and never a leading '+'", () => {
+    expect(trackedBranchName("main")).toBe("main");
+    expect(trackedBranchName("feature/work")).toBe("feature/work");
+    expect(trackedBranchName("refs/heads/main")).toBe("main");
+    expect(trackedBranchName("refs/heads/refs/heads/main")).toBe("refs/heads/main");
+    expect(trackedBranchName("+main")).toBe("+main");
+    expect(trackedBranchName("refs/tags/v1")).toBe("refs/tags/v1");
+  });
+
+  it("trunkDestinationRefusal: the belt under the retarget -- a destination that is the trunk is refused naming the destination and the upstream", () => {
+    expect(trunkDestinationRefusal("feature/work", "feature/work", "origin/main", "main")).toBeNull();
+    for (const destination of ["main", "master", "refs/heads/main", "+main", "develop"]) {
+      const refusal = trunkDestinationRefusal("feature/work", destination, "origin/main", "develop");
+      expect(refusal, destination).toMatch(new RegExp(`the push destination '${destination.replace("+", "\\+")}' is the trunk`));
+      expect(refusal).toMatch(/'feature\/work' tracks 'origin\/main'/);
+      expect(refusal).toMatch(/Nothing was pushed/);
+    }
+    expect(trunkDestinationRefusal("feature/work", "develop", "origin/develop", "develop")).toMatch(/\(nen\/workflow.json's branch.base\)/);
+    expect(trunkDestinationRefusal("feature/work", "main", null, "develop")).not.toMatch(/tracks/);
+    expect(isTrunk("refs/heads/master", "develop")).toBe(true);
+    expect(isTrunk("feature/main", "develop")).toBe(false);
   });
 });
 
