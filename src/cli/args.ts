@@ -20,12 +20,22 @@
 // nor last-one-wins: a second occurrence is a usage error. Each of those is a
 // convention with a surprising edge; none is needed by any verb, and adding one
 // later is a reviewable diff rather than a silent behaviour change.
+//
+// THE ONE REVIEWABLE DIFF SO FAR: `lists` (zheref/nen#227). A flag a family
+// DECLARES as a list may repeat, and every occurrence is kept in order --
+// `nen commit write --trailer 'A: 1' --trailer 'B: 2'` is two trailers, each
+// with its own colon, which a comma-joined value could not carry. It is a
+// separate spec list rather than a relaxation of `values`, so a value flag
+// typed twice still fails loudly and a list flag is one a reviewer saw
+// declared.
 
 export interface FlagSpec {
   /** Flags that take a value: `--repo <path>` or `--repo=<path>`. */
   readonly values?: readonly string[];
   /** Flags that are present-or-absent: `--json`. */
   readonly booleans?: readonly string[];
+  /** Flags that take a value and MAY REPEAT, every occurrence kept in order: `--trailer <k: v>`. */
+  readonly lists?: readonly string[];
   /** Single-dash aliases, e.g. `{ v: "version", h: "help" }`. */
   readonly aliases?: Readonly<Record<string, string>>;
   /**
@@ -46,6 +56,8 @@ export interface ParsedArgs {
   readonly positionals: readonly string[];
   readonly values: Readonly<Record<string, string>>;
   readonly booleans: ReadonlySet<string>;
+  /** Every occurrence of each declared list flag, in argv order. A flag never given is absent. */
+  readonly lists: Readonly<Record<string, readonly string[]>>;
   /** Everything after a bare `--`, passed through untouched. */
   readonly passthrough: readonly string[];
   /**
@@ -66,11 +78,13 @@ export class UsageError extends Error {
 export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
   const valueFlags = new Set(spec.values ?? []);
   const booleanFlags = new Set(spec.booleans ?? []);
+  const listFlags = new Set(spec.lists ?? []);
   const aliases = spec.aliases ?? {};
 
   const positionals: string[] = [];
   const values: Record<string, string> = {};
   const booleans = new Set<string>();
+  const lists: Record<string, string[]> = {};
   const passthrough: string[] = [];
   const rest: string[] = [];
 
@@ -115,6 +129,28 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
         );
       }
       booleans.add(name);
+      continue;
+    }
+
+    if (listFlags.has(name)) {
+      // THE SAME "next token is a flag" GUARD AS A VALUE FLAG'S, below, and for
+      // the same reason: `--trailer --json` is a forgotten value, not a
+      // trailer spelled `--json`.
+      let value: string;
+      if (inlineValue !== null) {
+        value = inlineValue;
+      } else {
+        const next = argv[index];
+        if (next === undefined) throw new UsageError(`--${name} requires a value.`);
+        if (next.startsWith("-")) {
+          throw new UsageError(
+            `--${name} requires a value, and the next token '${next}' begins with '-' -- which is how a flag is spelled, so it is not read as this flag's value. Give one, or spell it --${name}='${next}' if that really is the value.`,
+          );
+        }
+        value = next;
+        index += 1;
+      }
+      (lists[name] ??= []).push(value);
       continue;
     }
 
@@ -191,6 +227,7 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
       `unknown option '${token}'. Known options here: ${
         [...valueFlags]
           .map((flag): string => `--${flag} <value>`)
+          .concat([...listFlags].map((flag): string => `--${flag} <value> (repeatable)`))
           .concat([...booleanFlags].map((flag): string => `--${flag}`))
           .sort()
           .join(", ") || "(none)"
@@ -198,5 +235,5 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
     );
   }
 
-  return { positionals, values, booleans, passthrough, rest };
+  return { positionals, values, booleans, lists, passthrough, rest };
 }

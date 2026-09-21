@@ -381,17 +381,18 @@ offline or saturated, its job queues; there is no hosted fallback.
 
 ## The verb surface
 
-`nen --help` lists every command family (39); each
+`nen --help` lists every command family (40); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-101 verbs outside the binary — each one's purpose, arguments, exit codes and
+106 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
 - **Readiness & pull requests** — `pr` (ready, staleness, body-check, fetch,
-  next-blocker, cascade-main, retarget, request-reviews, edit-body), `gate`,
-  `split`, `wc`, `stage`
+  next-blocker, cascade-main, retarget, request-reviews, edit-body, threads,
+  open), `gate`, `split`, `wc` (classify, squash, catch-up, publish), `stage`
 - **Backlog & boards** — `backlog`, `board`, `epic`, `effort`, `loop`,
+  `phase`, `usage` (the per-effort timing and spend ledgers),
   `warmup` (a *registry* stale-pin sweep — not `shu warmup`, below, which warms
   a working copy), `watch`
 - **Labels, issues & taxonomy** — `label`, `labels`, `schema check`, `color`,
@@ -467,7 +468,9 @@ bun run typecheck && bun run lint && bun run test   # or: bun src/index.ts dev t
 
 Tests live beside their sources (`src/**/*.test.ts`). `bun run build:linux-x64`
 (and the `darwin-arm64` / `windows-x64` siblings) cross-compile the release
-binaries from any one host; `bun run build:<target> && sha256sum dist/*` (or,
+binaries from any one host — `build:darwin-arm64` then ad-hoc-signs its output
+through `src/dev/sign.ts` where `codesign` exists, because bun's linker
+signature does not survive the appended payload ([#233](https://github.com/zheref/nen/issues/233)); `bun run build:<target> && sha256sum dist/*` (or,
 on a stock macOS dev setup, which has no `sha256sum` by default: `shasum -a
 256 dist/*` — the same fallback `bootstrap/nen.sh` itself uses) is the local
 equivalent of the release pipeline's `SHA256SUMS`.

@@ -49,6 +49,20 @@ function repoWithPolicy(commits: unknown): string {
   return root;
 }
 
+describe("nen commit write -- there is no --sign-off, and the refusal says where the trailer goes (zheref/nen#231)", () => {
+  it("refuses --sign-off as unknown at exit 2, naming the --trailer alternative", async () => {
+    const result = await capture(["commit", "write", "--repo", ".", "--message-file", "m.txt", "--sign-off"]);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/unknown option '--sign-off'/);
+    expect(err).toMatch(/there is no --sign-off .*'Signed-off-by' is an attribution-shaped trailer .* pass it as --trailer "Signed-off-by: Name <email>"/);
+    // The hint is for that spelling alone: another unknown flag gets none.
+    const other = await capture(["commit", "write", "--repo", ".", "--message-file", "m.txt", "--signoff"]);
+    expect(other.code).toBe(2);
+    expect(other.err.join("\n")).not.toMatch(/there is no --sign-off/);
+  });
+});
+
 describe("nen commit format -- CLI wiring", () => {
   it("prints the formatted message", async () => {
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "stop dropping the last row"]);

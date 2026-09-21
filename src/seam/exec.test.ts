@@ -19,6 +19,7 @@ import {
   mustJson,
   normalizeEol,
   outputLines,
+  redactRemoteCredentials,
   outputWindow,
   spawnInteractiveRunner,
   spawnRunner,
@@ -59,6 +60,42 @@ describe("outputLines", () => {
 
   it("returns an empty array for empty input", () => {
     expect(outputLines("")).toEqual([]);
+  });
+
+  it("redacts a credential a subprocess echoed, so every echo site inherits it (Feitan S6)", () => {
+    expect(outputLines("fatal: unable to access 'https://zheref:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/x/y.git/'")).toEqual([
+      "fatal: unable to access 'https://zheref:***@github.com/x/y.git/'",
+    ]);
+    expect(outputLines("remote: https://user:s3cret@host/repo\n")).toEqual(["remote: https://user:***@host/repo"]);
+    expect(outputLines("token gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ was rejected")).toEqual(["token *** was rejected"]);
+    expect(outputLines("github_pat_11ABCDEFG0_abcdefghijklmnop rejected")).toEqual(["*** rejected"]);
+    // A URL with no secret, and a short token-looking word, are left alone.
+    expect(outputLines("https://github.com/x/y.git ghp_short")).toEqual(["https://github.com/x/y.git ghp_short"]);
+  });
+});
+
+describe("redactRemoteCredentials", () => {
+  it("keeps the user and the host, and replaces only the secret", () => {
+    expect(redactRemoteCredentials("ssh://git@host/x")).toBe("ssh://git@host/x");
+    expect(redactRemoteCredentials("https://a:b@h/ https://c:d@i/")).toBe("https://a:***@h/ https://c:***@i/");
+  });
+
+  it("stops the secret only at whitespace or the '@', so a secret with '/', ':' or '%2F' in it is redacted too (zheref/nen#231 T6)", () => {
+    expect(redactRemoteCredentials("https://user:secret/with-slash@host/repo")).toBe("https://user:***@host/repo");
+    expect(redactRemoteCredentials("https://user:sec:ret@host/repo")).toBe("https://user:***@host/repo");
+    expect(redactRemoteCredentials("https://user:sec%2Fret@host/repo?x=1#f")).toBe("https://user:***@host/repo?x=1#f");
+    expect(redactRemoteCredentials("https://user:sec@ret@host/repo")).toBe("https://user:***@host/repo");
+    // The secret ends at whitespace: what follows on the line is kept.
+    expect(redactRemoteCredentials("fatal: 'https://u:p/q@h/r' rejected")).toBe("fatal: 'https://u:***@h/r' rejected");
+  });
+
+  it("keeps a URL with no password, a URL with no userinfo, and a bare token in text is still redacted", () => {
+    expect(redactRemoteCredentials("https://user@host")).toBe("https://user@host");
+    expect(redactRemoteCredentials("https://user@host/repo@v1")).toBe("https://user@host/repo@v1");
+    expect(redactRemoteCredentials("https://github.com/x/y.git")).toBe("https://github.com/x/y.git");
+    expect(redactRemoteCredentials("git@github.com:zheref/nen.git")).toBe("git@github.com:zheref/nen.git");
+    expect(redactRemoteCredentials("auth: ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 expired")).toBe("auth: *** expired");
+    expect(redactRemoteCredentials("https://user:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/x")).toBe("https://user:***@github.com/x");
   });
 });
 

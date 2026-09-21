@@ -3739,7 +3739,7 @@ describe("a stall guard: BOTH budgets, the repository's own remedy, and no kill"
     const result = await withDeclaration(guarded(), ["build", "--dry-run"]);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toContain(
-      `on stall:      after 180000ms elapsed AND 60000ms with no output: ${KILLER}  (up to 2 times)`,
+      `stall guard:   elapsed >180000 ms AND quiet >60000 ms (both): ${KILLER}  (up to 2 times)`,
     );
     expect(result.seams.calls).toEqual([]);
   });
@@ -3929,6 +3929,60 @@ describe("a stall guard: BOTH budgets, the repository's own remedy, and no kill"
     expect(result.seams.calls[0]?.streamed).toBeUndefined();
   });
 
+  it("strikes ONLY when BOTH elapsedMs and quietMs are exceeded -- the two-gate rule, pinned (zheref/nen#227)", async () => {
+    // Guard: 180s elapsed AND 60s quiet. Three timelines, one rule.
+    // (1) elapsed exceeded, output flowing: quiet never reaches 60s -> no strike.
+    const talking = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([
+          { atMs: 150_000, stream: "stdout", text: "a\n" },
+          { atMs: 200_000, stream: "stdout", text: "b\n" },
+          { atMs: 240_000 }, // 240s in, 40s quiet
+          { atMs: 250_000, stream: "stdout", text: "c\n" },
+          { atMs: 300_000 }, // 300s in, 50s quiet
+        ]),
+      ],
+    });
+    expect(talking.code).toBe(0);
+    expect(stallOf(talking)).toMatchObject({ strikes: 0, stalled: false });
+    // (2) quiet exceeded BEFORE elapsed: 100s of silence at 100s in -> no strike.
+    const earlyQuiet = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [timeline([{ atMs: 100_000 }, { atMs: 179_000 }], 0, 179_500)],
+    });
+    expect(earlyQuiet.code).toBe(0);
+    expect(stallOf(earlyQuiet)).toMatchObject({ strikes: 0, stalled: false });
+    // (3) both exceeded: one strike, and the remedy is the repository's own.
+    const both = await withDeclaration(guarded(), ["build", "--json"], {
+      script: [
+        timeline([{ atMs: 100_000, stream: "stdout", text: "x\n" }, { atMs: 181_000 }, { atMs: 190_000, stream: "stdout", text: "y\n" }]),
+        ok(KILLER),
+      ],
+    });
+    expect(both.code).toBe(0);
+    expect(stallOf(both)).toMatchObject({ strikes: 1, at: [181_000], stalled: false });
+    expect(spawned(both.seams)).toEqual(["placeholder-tool go", KILLER]);
+    // The dry-run line names the symptom, both gates, and says so.
+    const dry = await withDeclaration(guarded(), ["build", "--dry-run"]);
+    expect(dry.out.join("\n")).toMatch(/stall guard:\s+elapsed >180000 ms AND quiet >60000 ms \(both\)/);
+  });
+
+  it("refuses a stall guard on the 'test' row at LOAD, by pointer: tests are untimed (zheref/nen#227)", async () => {
+    const onRow = oneLane({ verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] }, test: { exe: "placeholder-tool", argv: ["check"], stall: STALL_GUARD } } } });
+    const result = await withDeclaration(onRow, ["test", "--dry-run"]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("project.verbs.only.test.stall");
+    expect(result.err.join("\n")).toContain("tests are untimed");
+    const onStep = oneLane({
+      verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] }, test: { steps: [{ exe: "placeholder-tool", argv: ["check"], stall: STALL_GUARD }] } } },
+    });
+    const step = await withDeclaration(onStep, ["build", "--dry-run"]);
+    expect(step.code).toBe(1);
+    expect(step.err.join("\n")).toContain("project.verbs.only.test.steps[0].stall");
+    // ui-test stays guardable: a browser lane is where a hang is real.
+    const ui = oneLane({ verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] }, "ui-test": { exe: "placeholder-tool", argv: ["e2e"], stall: STALL_GUARD } } } });
+    expect((await withDeclaration(ui, ["ui-test", "--dry-run"])).code).toBe(0);
+  });
+
   it("refuses a guard on a verb whose output nen never sees", async () => {
     const project = oneLane(
       { verbs: { only: { dev: { exe: "placeholder-tool", argv: ["serve"], stall: STALL_GUARD } } } },
@@ -3936,7 +3990,7 @@ describe("a stall guard: BOTH budgets, the repository's own remedy, and no kill"
     const result = await withDeclaration(project, ["dev", "--dry-run"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("nen cannot honour one on this verb");
-    expect(result.err.join("\n")).toContain("build, test, ui-test, lint, archive, coverage, test-report");
+    expect(result.err.join("\n")).toContain("build, ui-test, lint, archive, coverage, test-report");
   });
 
   it("refuses a budget that is not a positive whole number, by pointer, at load", async () => {
@@ -3977,5 +4031,133 @@ describe("a stall guard: BOTH budgets, the repository's own remedy, and no kill"
     );
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toContain("maxStrikes");
+  });
+});
+
+// ── steps into the phase ledger (zheref/nen#227) ────────────────────────────
+//
+// A `shu` run inside an OPEN phase leaves its steps on that entry -- verb,
+// argv, exit code, the same durationMs the report prints, and whether the
+// guard gave up -- and never becomes a phase of its own.
+
+describe("a run's steps land on the open phase entry", () => {
+  function ledgerWith(root: string, phases: readonly Record<string, unknown>[]): string {
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    const path = join(root, ".nen", "phases", "HA%2F85.json");
+    writeFileSync(path, JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "HA/85", phases }));
+    return path;
+  }
+  const OPEN = { phase: "rasengan", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [] };
+  const CLOSED = { ...OPEN, phase: "breath", endedAt: "2026-01-01T00:00:05.000Z", durationMs: 5000, exitCode: 0 };
+  type Ledger = { phases: { phase: string; steps?: { verb: string; argv: string; exitCode: number | null; durationMs: number | null; stalled: boolean }[] }[] };
+
+  it("with --effort, still runs every step and exits on the failing one (the ledger write itself is proved by the read-back case below)", async () => {
+    let path = "";
+    const result = await withDeclaration(
+      oneLane({}, { steps: [{ exe: "placeholder-tool", argv: ["one"] }, { exe: "placeholder-tool", argv: ["two", "a b"] }] }),
+      ["build", "--effort", "HA/85"],
+      { script: [ok("placeholder-tool one"), { match: "placeholder-tool two a b", result: { code: 3 } }], ticking: true },
+      (root): void => { path = ledgerWith(root, [CLOSED, OPEN]); },
+    );
+    // The ledger was read back before the temp dir went away, so capture it here.
+    expect(result.code).toBe(1);
+    expect(path).not.toBe("");
+    expect(result.seams.calls.map((c): string => [c.command, ...c.args].join(" "))).toEqual(["placeholder-tool one", "placeholder-tool two a b"]);
+  });
+
+  it("writes the steps, and only under the open entry (read back)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-steps-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane({}, { steps: [{ exe: "placeholder-tool", argv: ["one"] }, { exe: "placeholder-tool", argv: ["two", "a b"] }] }) }));
+      const path = ledgerWith(dir, [CLOSED, OPEN]);
+      const result = await capture(["build", "--effort", "HA/85"], {
+        repo: dir,
+        script: [ok("placeholder-tool one"), { match: "placeholder-tool two a b", result: { code: 3 } }],
+        ticking: true,
+      });
+      expect(result.code).toBe(1);
+      const ledger = JSON.parse(readFileSync(path, "utf8")) as Ledger;
+      expect(ledger.phases[0]?.steps).toEqual([]);
+      expect(ledger.phases[1]?.steps).toEqual([
+        { verb: "build", argv: "placeholder-tool one", exitCode: 0, durationMs: 1000, stalled: false },
+        { verb: "build", argv: "placeholder-tool two 'a b'", exitCode: 3, durationMs: 1000, stalled: false },
+      ]);
+      // A second run APPENDS rather than replacing.
+      await capture(["build", "--effort", "HA/85"], { repo: dir, script: [ok("placeholder-tool one"), ok("placeholder-tool two a b")], ticking: true });
+      expect((JSON.parse(readFileSync(path, "utf8")) as Ledger).phases[1]?.steps).toHaveLength(4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads NEN_EFFORT from the environment when --effort is absent, and records a spawn failure as durationMs null", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-steps-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane() }));
+      const path = ledgerWith(dir, [OPEN]);
+      const result = await capture(["build"], {
+        repo: dir,
+        env: { NEN_EFFORT: "HA/85" },
+        script: [{ match: "placeholder-tool go", result: { spawnFailed: true } }],
+      });
+      expect(result.code).toBe(5);
+      expect((JSON.parse(readFileSync(path, "utf8")) as Ledger).phases[0]?.steps).toEqual([
+        { verb: "build", argv: "placeholder-tool go", exitCode: null, durationMs: null, stalled: false },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes NOTHING with no open entry, no ledger, on a dry run, or with no effort at all", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-steps-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane() }));
+      // No ledger: none is created.
+      await capture(["build", "--effort", "HA/85"], { repo: dir, script: [ok("placeholder-tool go")] });
+      expect(existsSync(join(dir, ".nen", "phases"))).toBe(false);
+      // A ledger with only CLOSED entries: untouched.
+      const path = ledgerWith(dir, [CLOSED]);
+      const before = readFileSync(path, "utf8");
+      await capture(["build", "--effort", "HA/85"], { repo: dir, script: [ok("placeholder-tool go")] });
+      expect(readFileSync(path, "utf8")).toBe(before);
+      // An OPEN entry, but a dry run: untouched.
+      writeFileSync(path, JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "HA/85", phases: [OPEN] }));
+      const open = readFileSync(path, "utf8");
+      await capture(["build", "--effort", "HA/85", "--dry-run"], { repo: dir });
+      expect(readFileSync(path, "utf8")).toBe(open);
+      // An OPEN entry and a real run, but no effort named anywhere: untouched.
+      await capture(["build"], { repo: dir, script: [ok("placeholder-tool go")] });
+      expect(readFileSync(path, "utf8")).toBe(open);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses an --effort outside the ledger alphabet at exit 2, before anything runs", async () => {
+    const result = await capture(["build", "--effort", "../x"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("not a ledger id");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("records the stalled verdict when every remedy is spent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-steps-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project: guarded({ maxStrikes: 1 }) }));
+      const path = ledgerWith(dir, [OPEN]);
+      const result = await capture(["build", "--effort", "HA/85"], {
+        repo: dir,
+        script: [timeline([{ atMs: 200_000 }, { atMs: 300_000 }]), ok(KILLER)],
+      });
+      expect(result.code).toBe(1);
+      expect((JSON.parse(readFileSync(path, "utf8")) as Ledger).phases[0]?.steps?.[0]).toMatchObject({ verb: "build", exitCode: null, durationMs: null, stalled: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

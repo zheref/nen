@@ -29,6 +29,7 @@ import { SchemaError } from "./errors.js";
 import {
   describeReviewScopes,
   describeSections,
+  describeProfile,
   describeWorkflow,
   loadWorkflow,
   WORKFLOW_FILE,
@@ -366,6 +367,10 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // verbs that read them arrived (zheref/nen#220).
     pointerCheck(root, "reports.sections", describeSections),
     pointerCheck(root, "review.scopes", describeReviewScopes),
+    // ...and the `profile` row (zheref/nen#227): which run profile a bare turn
+    // runs under, and which it may be asked for. Defaults apply when absent,
+    // so this row reads the default rather than `none declared`.
+    pointerCheck(root, "profile", describeProfile),
     // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

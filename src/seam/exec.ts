@@ -314,9 +314,45 @@ export function normalizeEol(text: string): string {
   return text.replace(/\r\n/g, "\n");
 }
 
-/** Split subprocess output into non-empty lines, EOL-normalized and trimmed. */
+/**
+ * Text a subprocess printed, with any credential it may have echoed replaced
+ * by `***` (Feitan S6). `git fetch`/`push`/`ls-remote` print the remote URL
+ * on failure, and a URL carrying `https://<user>:<token>@host` prints the
+ * token; `gh` can print a token it was handed. Every verb that echoes a
+ * subprocess's stderr into its own message goes through `outputLines`, so
+ * the redaction lives here and no echo site has to remember it. The three
+ * shapes: a userinfo secret in a URL (`://user:secret@` -> `://user:***@`), a
+ * GitHub token prefix (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` + 20 or more
+ * alphanumerics) and a fine-grained `github_pat_...`.
+ *
+ * THE SECRET STOPS ONLY AT WHITESPACE OR THE `@` (Copilot review on
+ * zheref/nen#231, T6). A secret is whatever the user typed, and a character
+ * class that excluded `/` echoed `https://user:secret/with-slash@host/repo`
+ * unchanged. So the URL's userinfo is PARSED rather than pattern-matched:
+ * after `://`, the run of non-whitespace is the URL, its userinfo is
+ * everything up to the LAST `@` in that run, and everything after the first
+ * `:` of the userinfo is the secret. A `@` in the path (`host/repo@v1`)
+ * widens the userinfo and redacts more than the secret, which is the safe
+ * side of the trade; a userinfo with no `:` (`https://user@host`,
+ * `ssh://git@host`) carries no secret and is kept whole.
+ */
+export function redactRemoteCredentials(text: string): string {
+  return text
+    .replace(/:\/\/(\S+)/g, (whole: string, run: string): string => {
+      const at = run.lastIndexOf("@");
+      if (at === -1) return whole;
+      const userinfo = run.slice(0, at);
+      const colon = userinfo.indexOf(":");
+      if (colon === -1) return whole;
+      return `://${userinfo.slice(0, colon)}:***${run.slice(at)}`;
+    })
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}/g, "***")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "***");
+}
+
+/** Split subprocess output into non-empty lines, EOL-normalized, trimmed, and with remote credentials redacted. */
 export function outputLines(text: string): string[] {
-  return normalizeEol(text)
+  return normalizeEol(redactRemoteCredentials(text))
     .split("\n")
     .map((line): string => line.trim())
     .filter((line): boolean => line !== "");

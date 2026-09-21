@@ -9,24 +9,32 @@
 // handle is exercised by a real file rather than by a string in a test.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { splitDocument } from "./frontmatter.js";
 import {
   checkSurfaceMirror,
+  descriptionText,
+  firstSentence,
   generateSurfaceMirror,
+  generateSurfaceMirrorReport,
   markerFor,
+  markerText,
   mirrorReportOk,
   readMarker,
   readSourceAgents,
+  readSourceAgentsReport,
   readSourceSkills,
   rewriteInvocations,
   SurfaceMirrorError,
   universeFiles,
+  withoutStamp,
   writeSurfaceMirror,
   type GeneratedFile,
+  type SourceAgent,
 } from "./mirror.js";
+import { readHooksManifest, readPermissions, readRules } from "./packs.js";
 import { findSurface, type SurfaceRow } from "./rules.js";
 
 const FIXTURES = join(process.cwd(), "src", "surface", "fixtures");
@@ -119,7 +127,7 @@ describe("the generated marker", () => {
   });
 
   it("reads its surface back out, and reports null for a file that carries none", () => {
-    expect(readMarker(at(generate("codex"), "beta/SKILL.md"))).toBe("codex");
+    expect(readMarker(at(generate("codex"), "beta/SKILL.md"))).toEqual({ surface: "codex", stamp: null });
     expect(readMarker("---\nname: x\n---\n\nhand written\n")).toBeNull();
     expect(readMarker("plain prose")).toBeNull();
     // A marker-shaped line further DOWN is not the marker (../canon/mirror.ts's
@@ -136,7 +144,9 @@ describe("frontmatter is reduced to what the surface documents", () => {
 
   it("keeps the richer surface's own documented keys, and drops the rest", () => {
     const front = splitDocument(at(generate("cursor"), "alpha/SKILL.md")).entries.map((entry): string => entry.key);
-    expect(front).toEqual(["name", "description", "metadata"]);
+    // `summary` follows `description` because alpha's description is over
+    // the row's measured budget (zheref/nen#227); beta's one-liner is not.
+    expect(front).toEqual(["name", "description", "summary", "metadata"]);
     expect(front).not.toContain("allowed-tools");
     expect(front).not.toContain("license");
     expect(front).not.toContain("model");
@@ -533,7 +543,7 @@ describe("checking -- the four drift classes", () => {
     });
     const out = tempDir();
     writeSurfaceMirror(out, files, row("codex"));
-    expect(readMarker(readFileSync(join(out, "windows", "SKILL.md"), "utf8"))).toBe("codex");
+    expect(readMarker(readFileSync(join(out, "windows", "SKILL.md"), "utf8"))?.surface).toBe("codex");
     expect(mirrorReportOk(checkSurfaceMirror(out, files, row("codex")))).toBe(true);
   });
 
@@ -541,5 +551,233 @@ describe("checking -- the four drift classes", () => {
     const out = join(tempDir(), "not", "there", "yet");
     writeSurfaceMirror(out, generate("codex"), row("codex"));
     expect(readdirSync(dirname(join(out, "alpha", "SKILL.md")))).toEqual(["SKILL.md"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// zheref/nen#227: the stamped marker, the summary key, the shared include
+// ---------------------------------------------------------------------------
+
+describe("the stamped marker", () => {
+  it("reads both forms back, and masks the stamp for a comparison that did not ask", () => {
+    expect(readMarker(`${markerFor("codex", "0.43.0")}\n`)).toEqual({ surface: "codex", stamp: "0.43.0" });
+    expect(readMarker(`# ${markerText("codex", "1.2.3")}\n[agents]\n`)).toEqual({ surface: "codex", stamp: "1.2.3" });
+    expect(readMarker(`{"$generated": ${JSON.stringify(markerText("cursor"))}, "version": 1}`)).toEqual({ surface: "cursor", stamp: null });
+    expect(readMarker('{"version": 1}')).toBeNull();
+    expect(readMarker("{ not json")).toBeNull();
+    expect(withoutStamp(`a\n${markerFor("codex", "0.43.0")}\nb`)).toBe(`a\n${markerFor("codex")}\nb`);
+  });
+
+  it("classes a file by its stamp only when check is given one", () => {
+    const stamped = generateSurfaceMirror({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: PREFIX, stamp: "0.42.0" });
+    const out = tempDir();
+    writeSurfaceMirror(out, stamped, row("codex"));
+    const unstamped = generate("codex", false);
+    expect(mirrorReportOk(checkSurfaceMirror(out, unstamped, row("codex")))).toBe(true);
+    expect(checkSurfaceMirror(out, stamped, row("codex"), "0.42.0").ok).toHaveLength(2);
+    const older = checkSurfaceMirror(out, stamped, row("codex"), "0.43.0");
+    expect(older.stale).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
+    expect(older.handEdited).toEqual([]);
+  });
+
+  it("reports a stamp that is not a version as stale, naming the file, rather than exiting 2 (N14)", () => {
+    const stamped = generateSurfaceMirror({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: PREFIX, stamp: "0.43.0" });
+    const out = tempDir();
+    writeSurfaceMirror(out, stamped, row("codex"));
+    const path = join(out, "alpha", "SKILL.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace(markerFor("codex", "0.43.0"), markerFor("codex", "garbage")));
+    expect(() => checkSurfaceMirror(out, stamped, row("codex"), "0.43.0")).not.toThrow();
+    const report = checkSurfaceMirror(out, stamped, row("codex"), "0.43.0");
+    expect(report.stale).toEqual(["alpha/SKILL.md"]);
+    expect(report.ok).toEqual(["beta/SKILL.md"]);
+    // Without --stamp the stamp is masked and it is not drift at all.
+    expect(mirrorReportOk(checkSurfaceMirror(out, generate("codex", false), row("codex")))).toBe(true);
+  });
+});
+
+describe("the description budget", () => {
+  it("adds a summary of the first sentence, trimmed to the budget, and keeps the description whole", () => {
+    const front = splitDocument(at(generate("cursor"), "alpha/SKILL.md")).entries;
+    const summary = front.find((entry): boolean => entry.key === "summary");
+    expect(summary?.lines).toEqual(["summary: Warm a working copy and cut"]);
+    expect(front.find((entry): boolean => entry.key === "description")?.lines).toHaveLength(2);
+    // Codex's budget is wider than either fixture description: no summary.
+    const codex = splitDocument(at(generate("codex"), "alpha/SKILL.md")).entries;
+    expect(codex.find((entry): boolean => entry.key === "summary")).toBeUndefined();
+    const wide = generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null });
+    expect(wide.truncated).toEqual([]);
+  });
+
+  it("takes the first sentence, or the whole text when there is no sentence end", () => {
+    expect(firstSentence("One. Two.", 100)).toBe("One.");
+    expect(firstSentence("Is it? Yes", 100)).toBe("Is it?");
+    expect(firstSentence("no terminal punctuation here", 100)).toBe("no terminal punctuation here");
+    expect(firstSentence("a-very-long-single-token", 5)).toBe("a-ver");
+    expect(descriptionText(splitDocument("---\ndescription: a\n  b\n---\n").entries)).toBe("a b");
+  });
+
+  it("leaves a summary the source already carries alone, and lists nothing", () => {
+    const source = tempDir();
+    mkdirSync(join(source, "own"));
+    writeFileSync(join(source, "own", "SKILL.md"), `---\nname: own\ndescription: ${"long ".repeat(20)}\nsummary: mine\n---\nbody\n`);
+    const report = generateSurfaceMirrorReport({ row: row("cursor"), skills: readSourceSkills(source), agents: [], invocationPrefix: null });
+    expect(report.truncated).toEqual([]);
+    expect(at(report.files, "own/SKILL.md")).toContain("summary: mine");
+  });
+});
+
+describe("the shared include", () => {
+  const read = readSourceAgentsReport(AGENTS);
+  const withIncludes = (surface: string): readonly GeneratedFile[] =>
+    generateSurfaceMirror({ row: row(surface), skills: readSourceSkills(SKILLS), agents: read.agents, includes: read.includes, invocationPrefix: PREFIX });
+
+  it("is read as an include, never as a persona (zheref/nen#223), and nothing else is skipped", () => {
+    expect(read.includes.map((include): string => include.relative)).toEqual(["_shared.md"]);
+    expect(read.skipped).toEqual([]);
+    expect(read.agents.map((agent): string => agent.stem)).toEqual(["scout"]);
+    // Without the includes handed over, nothing is emitted for it.
+    expect(generate("cursor").map((file): string => file.path)).not.toContain("agents/_shared.md");
+  });
+
+  it("is carried beside the personas on a files row: marker, body verbatim, no persona-shaped refusal (S11)", () => {
+    const files = withIncludes("cursor");
+    const include = at(files, "agents/_shared.md");
+    // The fixture include has no frontmatter, which a PERSONA would be refused for.
+    expect(include).toBe(`${markerFor("cursor")}\n## Shared preamble\n\nThis file is pulled into every persona by reference. It is an include, not a\npersona: it has no frontmatter and names nobody.\n`);
+    const report = generateSurfaceMirrorReport({ row: row("cursor"), skills: readSourceSkills(SKILLS), agents: read.agents, includes: read.includes, invocationPrefix: null });
+    expect(report.includes).toEqual(["_shared.md"]);
+  });
+
+  it("drops model and tools from its frontmatter on every files row, and keeps name and description (Copilot on the Hatsu mirrors)", () => {
+    // An include is protocol text, not an agent: a `model: sonnet` carried
+    // verbatim landed in an Antigravity persona file whose model key does not
+    // admit it, and a tier rewritten as a persona's would be a tier for nobody.
+    const preamble: SourceAgent = {
+      stem: "_preamble",
+      name: "_preamble",
+      relative: "_preamble.md",
+      text: "---\nname: _preamble\ndescription: Read this before any review.\ntools: Read, Grep\nmodel: sonnet\n---\n## Preamble\n\nRead me first.\n",
+    };
+    for (const surface of ["cursor", "antigravity"]) {
+      const files = generateSurfaceMirror({ row: row(surface), skills: readSourceSkills(SKILLS), agents: read.agents, includes: [preamble], invocationPrefix: null });
+      const include = at(files, "agents/_preamble.md");
+      expect(include).toBe(`---\nname: _preamble\ndescription: Read this before any review.\n---\n${markerFor(surface)}\n## Preamble\n\nRead me first.\n`);
+      expect(include).not.toMatch(/^(model|tools):/m);
+    }
+    // The persona beside it is still rewritten as a persona, not dropped.
+    const scout = at(generateSurfaceMirror({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: read.agents, includes: [preamble], invocationPrefix: null }), "agents/scout.md");
+    expect(scout).toMatch(/^tools: Read, Grep, Glob$/m);
+  });
+
+  it("follows the personas as a ## _<stem> section on the appendix row", () => {
+    const appendix = at(withIncludes("codex"), "AGENTS.md");
+    expect(appendix.indexOf("## scout")).toBeLessThan(appendix.indexOf("## _shared"));
+    expect(appendix).toContain("## _shared\n\n## Shared preamble\n");
+    // Never a TOML persona for it.
+    expect(withIncludes("codex").map((file): string => file.path)).not.toContain("agents/_shared.toml");
+  });
+
+  it("is inside the universe like any persona file, so a stale copy is an orphan and a fresh one is ok", () => {
+    const out = tempDir();
+    writeSurfaceMirror(out, withIncludes("cursor"), row("cursor"));
+    expect(universeFiles(out, row("cursor"))).toContain("agents/_shared.md");
+    expect(mirrorReportOk(checkSurfaceMirror(out, withIncludes("cursor"), row("cursor")))).toBe(true);
+    const without = writeSurfaceMirror(out, generate("cursor"), row("cursor"));
+    expect(without.deleted).toEqual(["agents/_shared.md"]);
+  });
+});
+
+describe("hook scripts: symlinks and modes (S4, N6)", () => {
+  const withHooks = (): readonly GeneratedFile[] =>
+    generateSurfaceMirror({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: readHooksManifest(join(FIXTURES, "packs", "hooks.json")) });
+
+  it("refuses a destination that is a symbolic link before writing anything", () => {
+    const out = tempDir();
+    const elsewhere = join(tempDir(), "victim");
+    writeFileSync(elsewhere, "not mine\n");
+    mkdirSync(join(out, "hooks"));
+    symlinkSync(elsewhere, join(out, "hooks", "bell.hook"));
+    expect(() => writeSurfaceMirror(out, withHooks(), row("antigravity"))).toThrow(/refusing to write through a symbolic link.*hooks\/bell\.hook/);
+    expect(readFileSync(elsewhere, "utf8")).toBe("not mine\n");
+    expect(existsSync(join(out, "alpha", "SKILL.md"))).toBe(false);
+  });
+
+  it("re-applies a declared mode on unchanged bytes, and check calls a wrong mode hand-edited", () => {
+    const out = tempDir();
+    const files = withHooks();
+    writeSurfaceMirror(out, files, row("antigravity"));
+    const script = join(out, "hooks", "bell.hook");
+    expect(statSync(script).mode & 0o777).toBe(0o755);
+    chmodSync(script, 0o644);
+    const drifted = checkSurfaceMirror(out, files, row("antigravity"));
+    expect(drifted.handEdited).toEqual(["hooks/bell.hook"]);
+    // A regenerate repairs the mode without rewriting the bytes, and reports the file written.
+    const repaired = writeSurfaceMirror(out, files, row("antigravity"));
+    expect(repaired.written).toEqual(["hooks/bell.hook"]);
+    expect(statSync(script).mode & 0o777).toBe(0o755);
+    expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
+    // --dry-run reports it and touches nothing.
+    chmodSync(script, 0o644);
+    expect(writeSurfaceMirror(out, files, row("antigravity"), true).written).toEqual(["hooks/bell.hook"]);
+    expect(statSync(script).mode & 0o777).toBe(0o644);
+  });
+});
+
+describe("a markerless hook script (N12)", () => {
+  const nodeHooks = (): ReturnType<typeof readHooksManifest> => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "hooks.json"), '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"${CLAUDE_PLUGIN_ROOT}/hooks/bell.js"}]}]}}');
+    writeFileSync(join(dir, "bell.js"), "#!/usr/bin/env node\nconsole.log('bell');\n");
+    return readHooksManifest(join(dir, "hooks.json"));
+  };
+  const files = (): ReturnType<typeof generateSurfaceMirrorReport> =>
+    generateSurfaceMirrorReport({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, hooks: nodeHooks() });
+
+  it("is carried byte for byte, noted in the report, written and re-written without a marker guard, and checked by bytes", () => {
+    const report = files();
+    const script = report.files.find((file): boolean => file.path === "hooks/bell.js");
+    expect(script).toMatchObject({ content: "#!/usr/bin/env node\nconsole.log('bell');\n", mode: 0o755, markerless: true });
+    expect(report.notes).toContain("hooks/bell.js carries no marker: its interpreter does not read # comments, and the manifest beside it carries the marker");
+    const out = tempDir();
+    writeSurfaceMirror(out, report.files, row("antigravity"));
+    expect(mirrorReportOk(checkSurfaceMirror(out, report.files, row("antigravity")))).toBe(true);
+    // A second generate over it is not a clobber refusal: the manifest beside it is the guarded file.
+    expect(writeSurfaceMirror(out, report.files, row("antigravity")).unchanged).toContain("hooks/bell.js");
+    writeFileSync(join(out, "hooks", "bell.js"), "#!/usr/bin/env node\nconsole.log('changed');\n");
+    expect(checkSurfaceMirror(out, report.files, row("antigravity")).handEdited).toEqual(["hooks/bell.js"]);
+    // Outside the orphan universe: with the manifest gone it is neither extra nor deleted.
+    expect(universeFiles(out, row("antigravity"))).not.toContain("hooks/bell.js");
+  });
+});
+
+describe("the report's not-supported paths", () => {
+  it("say so for a row with no hooks, rules or permissions, and write nothing for them", () => {
+    const bare: SurfaceRow = { ...row("cursor"), hooks: null, rules: null, permissions: null };
+    const report = generateSurfaceMirrorReport({
+      row: bare,
+      skills: readSourceSkills(SKILLS),
+      agents: [],
+      invocationPrefix: null,
+      hooks: readHooksManifest(join(FIXTURES, "packs", "hooks.json")),
+      rules: readRules(join(FIXTURES, "packs", "rules.md")),
+      permissions: readPermissions(join(FIXTURES, "packs", "permissions.json")),
+    });
+    expect(report.hooks).toBe("not supported");
+    expect(report.rules).toBe("not supported");
+    expect(report.permissions).toBe("not supported");
+    expect(report.files.map((file): string => file.path)).toEqual(["alpha/SKILL.md", "beta/SKILL.md"]);
+  });
+
+  it("names an appendix past the surface's documented read limit", () => {
+    const agents = tempDir();
+    writeFileSync(join(agents, "big.md"), `---\nname: big\n---\n${"prose ".repeat(6_000)}\n`);
+    const report = generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: readSourceAgents(agents), invocationPrefix: null });
+    expect(report.notes[0]).toMatch(/AGENTS\.md is \d+ bytes, past the 32768-byte read limit/);
+  });
+
+  it("refuses a models fragment whose tier the map lacks", () => {
+    expect(() =>
+      generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, models: { target: { frontier: "x" }, surface: "codex", source: null, sourceSurface: "claude", known: ["codex"], surfaces: { codex: { frontier: "x" } } } }),
+    ).toThrow(/no 'models\.codex\.fast'/);
   });
 });

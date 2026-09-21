@@ -112,13 +112,18 @@ export const LAUNCHING_VERBS: readonly string[] = [...LAUNCH_VERBS];
  *     the one operation in this family that cannot be undone by running it
  *     again, and this release will not do that on a JSON file's say-so.
  *
+ *   * `test` is UNTIMED BY RULING (zheref/nen#227): a test suite that goes
+ *     quiet is a suite that is thinking, and a remedy fired at it would be nen
+ *     deciding how long somebody else's tests may take. ../schema/contract.ts
+ *     refuses a `stall` on the `test` row at LOAD, by pointer, with that
+ *     reason -- so it never reaches this list.
+ *
  * Everything else here is a captured, local, repeatable step, which is exactly
  * where a hung toolchain is somebody's afternoon. A `stall` declared anywhere
  * else is refused at load, by pointer, rather than accepted and never honoured.
  */
 export const STALL_GUARDED_VERBS: readonly string[] = [
   "build",
-  "test",
   "ui-test",
   "lint",
   "archive",
@@ -1282,6 +1287,16 @@ function bareStep(
  */
 export function renderArgv(step: { readonly exe: string; readonly argv: readonly string[] }): string {
   return [step.exe, ...step.argv]
-    .map((token): string => (/[\s'"]/.test(token) ? `'${token.replace(/'/g, "'\\''")}'` : token))
+    .map((token): string => (/[\s'"]/.test(token) ? shellSingleQuote(token) : token))
     .join(" ");
+}
+
+/**
+ * `value` as ONE POSIX-shell word inside single quotes: every `'` in it becomes
+ * `'\''` (close, an escaped quote, reopen), which is the only escape a
+ * single-quoted word has. This is the rule `renderArgv` prints with and the
+ * rule ../surface/packs.ts wraps a hook command with -- one owner, two users.
+ */
+export function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

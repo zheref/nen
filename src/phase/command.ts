@@ -22,30 +22,23 @@
 //
 // NOTHING IS SPAWNED. This family reads and writes one JSON file.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { emit, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { resolveRepoRoot } from "../repo/root.js";
 
-import { PHASE_CONTRACT, PHASE_LEDGER_DIR } from "./ledger.js";
-export { PHASE_CONTRACT, PHASE_LEDGER_DIR };
-
-export interface PhaseEntry {
-  readonly phase: string;
-  readonly startedAt: string;
-  readonly endedAt: string | null;
-  readonly durationMs: number | null;
-  readonly exitCode: number | null;
-  readonly surface: string | null;
-  readonly model: string | null;
-  readonly note: string | null;
-}
-
-export interface PhaseLedger {
-  readonly contract: string;
-  readonly effort: string;
-  readonly phases: readonly PhaseEntry[];
-}
+import {
+  EFFORT_ID,
+  PHASE_CONTRACT,
+  PHASE_LEDGER_DIR,
+  phaseLedgerPath,
+  readLedger,
+  withLedgerLock,
+  writeLedger,
+  type PhaseEntry,
+  type PhaseLedger,
+  type PhaseStep,
+} from "./ledger.js";
+export { PHASE_CONTRACT, PHASE_LEDGER_DIR, readLedger };
+export type { PhaseEntry, PhaseLedger, PhaseStep };
 
 const USAGE = `nen phase begin --effort <id> --phase <name> [--surface <s>] [--model <alias>] [--note <text>]
 nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
@@ -75,43 +68,18 @@ milliseconds and the exit code the caller reports. 'show' prints the ledger.
 
 Two open entries with the same phase name are refused: 'end' would not know
 which one to close. 'end' with nothing open is a usage error naming the
-effort. 'nen report data' merges every ledger it finds as 'phases[]'.`;
+effort. 'nen report data' merges every ledger it finds as 'phases[]'.
 
-const EFFORT = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-
-function ledgerPath(root: string, effort: string): string {
-  // encodeURIComponent is INJECTIVE on the id alphabet: '/' -> '%2F' and
-  // every other admitted character is left as itself, so no two effort ids
-  // share a file. A '/' -> '-' substitution was not (Copilot review on
-  // zheref/nen#217): 'HA/85' and 'HA-85' appended to the same ledger.
-  return join(root, ...PHASE_LEDGER_DIR.split("/"), `${encodeURIComponent(effort)}.json`);
-}
-
-export function readLedger(path: string, effort: string): PhaseLedger {
-  if (!existsSync(path)) return { contract: PHASE_CONTRACT, effort, phases: [] };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new Error(`'${path}' is not readable JSON (${error instanceof Error ? error.message : String(error)}). A phase ledger nen cannot read is not rewritten over; move it aside.`);
-  }
-  if (typeof parsed !== "object" || parsed === null || (parsed as { contract?: unknown }).contract !== PHASE_CONTRACT) {
-    throw new Error(`'${path}' does not carry contract '${PHASE_CONTRACT}'. A ledger written by something else is not appended to.`);
-  }
-  const phases = (parsed as { phases?: unknown }).phases;
-  if (!Array.isArray(phases)) throw new Error(`'${path}': 'phases' is not an array.`);
-  return { contract: PHASE_CONTRACT, effort, phases: phases as PhaseEntry[] };
-}
-
-function writeLedger(path: string, ledger: PhaseLedger): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(ledger, null, 2)}\n`, "utf8");
-}
+An entry carries 'steps: []' from 'begin'. A 'nen shu <verb> --effort <id>'
+run (or one with NEN_EFFORT in its environment) appends every step it ran --
+{verb, argv, exitCode, durationMs, stalled} -- to the OPEN entry on that
+effort, and writes nothing when none is open. 'show' renders them indented
+under their phase.`;
 
 function requireEffort(context: CommandContext): string {
   const effort = context.args.values["effort"];
   if (effort === undefined || effort.trim() === "") throw new VerbUsageError("--effort <id> is required.");
-  if (!EFFORT.test(effort)) throw new VerbUsageError(`--effort '${effort}' is not a ledger id: letters, digits, '.', '_', '-' and '/' only.`);
+  if (!EFFORT_ID.test(effort)) throw new VerbUsageError(`--effort '${effort}' is not a ledger id: letters, digits, '.', '_', '-' and '/' only.`);
   return effort;
 }
 
@@ -125,71 +93,83 @@ export const phaseCommand: Command = {
     const sub = requireSubcommand("phase", context.args, ["begin", "end", "show"]);
     const effort = requireEffort(context);
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-    const path = ledgerPath(root, effort);
-    const ledger = readLedger(path, effort);
+    const path = phaseLedgerPath(root, effort);
     const now = context.seams.now();
     const note = context.args.values["note"] ?? null;
 
     if (sub === "show") {
+      const ledger = readLedger(path, effort);
       emit(context.io, context.json, ledger, renderLedger(ledger));
       return 0;
     }
 
-    if (sub === "begin") {
-      const phase = context.args.values["phase"];
-      if (phase === undefined || phase.trim() === "") throw new VerbUsageError("--phase <name> is required for 'begin'.");
-      if (ledger.phases.some((entry): boolean => entry.phase === phase && entry.endedAt === null)) {
-        throw new VerbUsageError(`phase '${phase}' is already open on effort '${effort}'. End it first; two open entries with one name cannot be told apart.`);
-      }
-      const entry: PhaseEntry = {
-        phase,
-        startedAt: now.toISOString(),
-        endedAt: null,
-        durationMs: null,
-        exitCode: null,
-        surface: context.args.values["surface"] ?? null,
-        model: context.args.values["model"] ?? null,
-        note,
-      };
-      const next: PhaseLedger = { ...ledger, phases: [...ledger.phases, entry] };
-      writeLedger(path, next);
-      emit(context.io, context.json, { path, entry }, [`began ${phase} on '${effort}' at ${entry.startedAt} -- ${path}`]);
-      return 0;
-    }
+    // BEGIN AND END READ-MODIFY-WRITE UNDER THE SAME LOCK `nen shu --effort`'s
+    // step append takes (Copilot review on zheref/nen#231), so an `end` that
+    // races an append neither drops the appended steps nor is dropped by them.
+    return withLedgerLock(path, (): number => {
+      const ledger = readLedger(path, effort);
 
-    // end
-    const named = context.args.values["phase"] ?? null;
-    const openIndexes = ledger.phases
-      .map((entry, index): number => (entry.endedAt === null && (named === null || entry.phase === named) ? index : -1))
-      .filter((index): boolean => index >= 0);
-    const index = openIndexes.at(-1);
-    if (index === undefined) {
-      throw new VerbUsageError(
-        named === null
-          ? `no open phase on effort '${effort}'. 'begin' one first.`
-          : `phase '${named}' is not open on effort '${effort}'.`,
-      );
-    }
-    const exitRaw = context.args.values["exit"];
-    const exitCode = exitRaw === undefined ? null : Number(exitRaw);
-    if (exitCode !== null && (!Number.isInteger(exitCode) || exitCode < 0)) {
-      throw new VerbUsageError("--exit must be a non-negative integer.");
-    }
-    const open = ledger.phases[index] as PhaseEntry;
-    const endedAt = now.toISOString();
-    const closed: PhaseEntry = {
-      ...open,
-      endedAt,
-      durationMs: Math.max(0, now.getTime() - Date.parse(open.startedAt)),
-      exitCode,
-      note: note ?? open.note,
-    };
-    const phases = ledger.phases.map((entry, i): PhaseEntry => (i === index ? closed : entry));
-    writeLedger(path, { ...ledger, phases });
-    emit(context.io, context.json, { path, entry: closed }, [
-      `ended ${closed.phase} on '${effort}' after ${closed.durationMs}ms${exitCode === null ? "" : ` (exit ${exitCode})`} -- ${path}`,
-    ]);
-    return 0;
+      if (sub === "begin") {
+        const phase = context.args.values["phase"];
+        if (phase === undefined || phase.trim() === "") throw new VerbUsageError("--phase <name> is required for 'begin'.");
+        if (ledger.phases.some((entry): boolean => entry.phase === phase && entry.endedAt === null)) {
+          throw new VerbUsageError(`phase '${phase}' is already open on effort '${effort}'. End it first; two open entries with one name cannot be told apart.`);
+        }
+        const entry: PhaseEntry = {
+          phase,
+          startedAt: now.toISOString(),
+          endedAt: null,
+          durationMs: null,
+          exitCode: null,
+          surface: context.args.values["surface"] ?? null,
+          model: context.args.values["model"] ?? null,
+          note,
+          // EMPTY, AND PRESENT. `nen shu <verb> --effort <id>` appends to this
+          // list while the entry is open (zheref/nen#227); a reader of a fresh
+          // entry sees the key and knows nothing has run yet, rather than
+          // wondering whether this ledger predates it.
+          steps: [],
+        };
+        const next: PhaseLedger = { ...ledger, phases: [...ledger.phases, entry] };
+        writeLedger(path, next);
+        emit(context.io, context.json, { path, entry }, [`began ${phase} on '${effort}' at ${entry.startedAt} -- ${path}`]);
+        return 0;
+      }
+
+      // end
+      const named = context.args.values["phase"] ?? null;
+      const openIndexes = ledger.phases
+        .map((entry, index): number => (entry.endedAt === null && (named === null || entry.phase === named) ? index : -1))
+        .filter((index): boolean => index >= 0);
+      const index = openIndexes.at(-1);
+      if (index === undefined) {
+        throw new VerbUsageError(
+          named === null
+            ? `no open phase on effort '${effort}'. 'begin' one first.`
+            : `phase '${named}' is not open on effort '${effort}'.`,
+        );
+      }
+      const exitRaw = context.args.values["exit"];
+      const exitCode = exitRaw === undefined ? null : Number(exitRaw);
+      if (exitCode !== null && (!Number.isInteger(exitCode) || exitCode < 0)) {
+        throw new VerbUsageError("--exit must be a non-negative integer.");
+      }
+      const open = ledger.phases[index] as PhaseEntry;
+      const endedAt = now.toISOString();
+      const closed: PhaseEntry = {
+        ...open,
+        endedAt,
+        durationMs: Math.max(0, now.getTime() - Date.parse(open.startedAt)),
+        exitCode,
+        note: note ?? open.note,
+      };
+      const phases = ledger.phases.map((entry, i): PhaseEntry => (i === index ? closed : entry));
+      writeLedger(path, { ...ledger, phases });
+      emit(context.io, context.json, { path, entry: closed }, [
+        `ended ${closed.phase} on '${effort}' after ${closed.durationMs}ms${exitCode === null ? "" : ` (exit ${exitCode})`} -- ${path}`,
+      ]);
+      return 0;
+    }, { warn: context.io.err });
   },
 };
 
@@ -199,6 +179,18 @@ export function renderLedger(ledger: PhaseLedger): string[] {
     const duration = entry.durationMs === null ? "open" : `${entry.durationMs}ms`;
     const tail = [entry.exitCode === null ? null : `exit ${entry.exitCode}`, entry.surface, entry.model].filter((v): v is string => v !== null).join(" · ");
     lines.push(`  ${entry.phase.padEnd(14)} ${duration.padStart(9)}  ${entry.startedAt}${tail === "" ? "" : `  ${tail}`}`);
+    // THE STEPS, INDENTED UNDER THE PHASE THEY RAN IN. A step is never a row
+    // of its own at the phase's level: it is detail about that phase, and
+    // rendering it flush left would read as a phase nobody began.
+    for (const step of entry.steps ?? []) {
+      lines.push(`    ${step.verb.padEnd(12)} ${renderStepOutcome(step).padStart(9)}  ${step.argv}`);
+    }
   }
   return lines;
+}
+
+function renderStepOutcome(step: PhaseStep): string {
+  if (step.stalled) return "STALLED";
+  if (step.durationMs === null) return "no start";
+  return `${step.durationMs}ms${step.exitCode === null ? "" : ` e${step.exitCode}`}`;
 }

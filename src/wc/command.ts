@@ -1,9 +1,11 @@
-// src/wc/command.ts -- `nen wc classify` (tensho §2's working-copy table)
-// and `nen wc squash` (aka's residue: fold a branch's commits into one
-// before it is pushed).
+// src/wc/command.ts -- `nen wc classify` (tensho §2's working-copy table),
+// `nen wc squash` (aka's residue: fold a branch's commits into one before it
+// is pushed), and -- zheref/nen#227 -- `nen wc catch-up` (./catchup.ts) and
+// `nen wc publish` (./publish.ts), so no skill hand-rolls a rebase or a push.
 
 import { assertRepoRoot } from "../repo/root.js";
 import {
+  emit,
   requireRepoFlag,
   requireSubcommand,
   requireValue,
@@ -13,15 +15,19 @@ import {
 } from "../cli/command.js";
 import { readTextFile } from "../cli/inputs.js";
 import { SchemaError } from "../schema/errors.js";
-import { WORKFLOW_FILE } from "../schema/workflow.js";
+import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
+import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } from "./catchup.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 import { messageFileRefusals } from "./messagefile.js";
+import { looksLikeRefspecOrForce, PUBLISH_CONTRACT, publish } from "./publish.js";
 import { performSquash, planSquash, type FoldedCommit } from "./squash.js";
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
 const USAGE = `nen wc classify -- where the current working copy sits, tensho's own table.
 nen wc squash -- fold every commit on this branch since --onto into ONE.
+nen wc catch-up -- bring this branch up to date with its base; stop on a conflict.
+nen wc publish -- push this branch to its upstream's remote; never a force, never the trunk.
 
 classify:
   nen wc classify --repo <path> [--base main]
@@ -84,7 +90,77 @@ the upstream check above makes, never pushes, never force-anything.
 folded: [sha, ...], newSha, dryRun }. folded is oldest-first; newSha is null
 for a dry run and for 'nothing to squash'. Text output is one line per
 folded commit (sha and subject), then the new commit -- or, for a dry run,
-the message that would have been committed.`;
+the message that would have been committed.
+
+catch-up:
+  nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
+                  [--abort] [--dry-run] [--json]
+
+  --base <ref>      the base branch: validated by 'git check-ref-format
+                    --branch' and refused at exit 2 when git rejects it or it
+                    is shaped like an option, a refspec or a force -- before
+                    any fetch, --dry-run included; then fetched with the
+                    refspec in full ('refs/heads/<ref>:refs/remotes/origin/<ref>').
+  --strategy        rebase, merge, or auto (default). auto REBASES when no
+                    commit of this branch is on its @{upstream} -- the same
+                    detection 'wc squash' uses -- and MERGES otherwise,
+                    because a rebase rewrites what somebody else may hold.
+  --abort           back out an in-progress rebase or merge ('git rebase
+                    --abort' / 'git merge --abort') and stop; refused when
+                    none is in progress.
+  --dry-run         print the strategy and the git line; run neither.
+
+Refuses a dirty tree at exit 2. Already up to date is exit 0 and noOp:
+true. ON A CONFLICT nen picks no side: the tree is left exactly as git left
+it, every conflicted path is reported with OUR side (always this branch's,
+whichever index stage holds it -- 2 on a merge, 3 on a rebase) and THEIR
+side (always the base's), capped, '(binary, N bytes)' for a blob with a
+NUL, and the abort line is printed, at exit 1.
+RESUMING is the same command on the same tree: once the resolutions are
+staged, re-run 'nen wc catch-up' with the same --base and --strategy and it
+finds the rebase or merge in progress (git rebase --show-current-patch /
+MERGE_HEAD) and
+continues it -- 'git rebase --continue' under GIT_EDITOR=true, or 'git
+commit --no-edit' -- reporting resumed: true; unmerged paths or leftover
+conflict markers still staged are reported as conflicted[] again at exit 1
+and nothing is continued over them.
+
+--json's contract is '${CATCH_UP_CONTRACT}': { contract, base, strategy
+(the one that ran), before, after (null on a dry run or a conflict),
+behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
+resumed, aborted, dryRun }.
+
+publish:
+  nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run]
+                 [--json]
+
+  --set-upstream    push with -u, so the branch tracks <remote>/<branch>.
+  --remote <name>   where a branch with NO upstream goes (default origin);
+                    refused when the branch already tracks another remote.
+  --dry-run         print the push line; push nothing.
+
+Pushes the CURRENT branch to the remote its upstream names, AS the branch
+the upstream names -- a local 'feature' tracking fork/topic goes to fork as
+'topic', and the fast-forward check below is made against fork/topic, the
+ref the push moves -- or to origin (or --remote) under its own name when it
+tracks nothing yet: 'git push [-u] <remote> --
+refs/heads/<branch>:refs/heads/<destination>', the refspec in full so no
+branch NAME can change what the push does. Refused at exit 2: a
+detached HEAD; the trunk (${WORKFLOW_FILE}'s branch.base, and main/master
+regardless, compared with a leading '+' and 'refs/heads/' taken off); a
+branch name 'git check-ref-format --branch' rejects, or one shaped like a
+refspec or a force even where git accepts it ('+main' is a branch git will
+hold and a force push once it sits in an argv); any argument that looks like
+a refspec or a force (a positional, '+', ':', --force); a --remote this
+repository does not have. A git that rejects '--end-of-options' on the
+fetch (older than 2.24) is refused at exit 2 naming its version -- the
+guard is never dropped. When the upstream exists and the local branch is
+not a fast-forward of it the push would need a force, and this verb never
+forces: needsForce: true, nothing pushed, exit 1.
+
+--json's contract is '${PUBLISH_CONTRACT}': { contract, branch, remote,
+destination, upstreamBefore, ahead, needsForce, pushed, dryRun } --
+destination is the upstream's branch when one exists, else branch.`;
 
 function printFoldedCommits(context: CommandContext, folded: readonly FoldedCommit[]): void {
   for (const commit of folded) context.io.out(`  ${commit.sha} ${commit.subject}`);
@@ -195,15 +271,79 @@ function squash(context: CommandContext): number {
   return 0;
 }
 
+const STRATEGIES: readonly RequestedStrategy[] = ["rebase", "merge", "auto"];
+
+function doCatchUp(context: CommandContext): number {
+  // --repo unbracketed: this verb rebases or merges whatever tree it is
+  // pointed at (zheref/nen#28's rule).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the working tree being caught up -- this verb rebases or merges the current branch."),
+  });
+  const base = requireValue(context.args, "base", "The base branch this one is caught up to, fetched as origin/<base>.");
+  const strategyRaw = context.args.values["strategy"] ?? "auto";
+  if (!STRATEGIES.includes(strategyRaw as RequestedStrategy)) {
+    throw new VerbUsageError(`--strategy '${strategyRaw}' is not one of ${STRATEGIES.join(", ")}.`);
+  }
+  const outcome = catchUp(context.seams, root, {
+    base,
+    strategy: strategyRaw as RequestedStrategy,
+    dryRun: context.args.booleans.has("dry-run"),
+    abort: context.args.booleans.has("abort"),
+  });
+  if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
+  const { report, lines } = outcome;
+  emit(context.io, context.json, report, [...lines, ...renderConflicts(report.conflicted)]);
+  return report.conflicted.length > 0 ? 1 : 0;
+}
+
+function doPublish(context: CommandContext): number {
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the working tree whose current branch is pushed."),
+  });
+  // ANYTHING AFTER THE SUBCOMMAND IS A REFSPEC SOMEBODY MEANT, and this verb
+  // takes none: it pushes the current branch, by name, and nothing else.
+  const extra = [...context.args.positionals.slice(2), ...context.args.passthrough];
+  const suspicious = extra.find((token): boolean => looksLikeRefspecOrForce(token)) ?? extra[0];
+  if (suspicious !== undefined) {
+    throw new VerbUsageError(
+      `'${suspicious}' looks like a refspec or a force option, and 'wc publish' takes neither: it pushes the CURRENT branch by name, to the remote its upstream names, and never rewrites what is there. Drop it.`,
+    );
+  }
+  let base: string;
+  try {
+    base = loadWorkflow(root).workflow.branch.base;
+  } catch (error) {
+    if (!(error instanceof SchemaError)) throw error;
+    context.io.err(`nen: ${error.message}. This repository's ${WORKFLOW_FILE} names the trunk this verb refuses to push, and nen will not publish under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`);
+    return 1;
+  }
+  const outcome = publish(context.seams, root, {
+    base,
+    setUpstream: context.args.booleans.has("set-upstream"),
+    dryRun: context.args.booleans.has("dry-run"),
+    remote: context.args.values["remote"] ?? null,
+  });
+  if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
+  emit(context.io, context.json, outcome.report, outcome.lines);
+  return outcome.report.needsForce ? 1 : 0;
+}
+
 export const wcCommand: Command = {
   name: "wc",
-  subcommands: ["classify", "squash"],
-  summary: "Classify the working copy against tensho's four-case table, or squash it onto its base.",
+  subcommands: ["classify", "squash", "catch-up", "publish"],
+  summary: "Classify the working copy, squash it onto its base, catch it up with its base, or publish it.",
   usage: USAGE,
-  flags: { values: ["base", "onto", "message-file"], booleans: ["dry-run"] },
+  flags: { values: ["base", "onto", "message-file", "strategy", "remote"], booleans: ["dry-run", "abort", "set-upstream"] },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash"]);
+    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish"]);
+    // `--remote` IS PUBLISH'S ALONE; accepted and ignored elsewhere it would be
+    // an instruction silently dropped (../commit/command.ts's rule).
+    if (subcommand !== "publish" && context.args.values["remote"] !== undefined) {
+      throw new VerbUsageError(`--remote is not read by 'wc ${subcommand}'; only 'wc publish' takes it. A flag accepted and ignored is worse than one refused.`);
+    }
     if (subcommand === "squash") return squash(context);
+    if (subcommand === "catch-up") return doCatchUp(context);
+    if (subcommand === "publish") return doPublish(context);
 
     // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
     // never silently read as "classify wherever this process happens to be

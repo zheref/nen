@@ -33,7 +33,7 @@ import {
   requireTargetFlag,
   parseCallerToken,
 } from "../cli/command.js";
-import { readJsonFile, readTextFile } from "../cli/inputs.js";
+import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
@@ -49,6 +49,7 @@ import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
 import { fetchPrAndKnownBots, isCollaborator, requestBotReviews, type PrAndKnownBots } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
+import { OPEN_CONTRACT, openPullRequest } from "./open.js";
 import {
   EXIT_FOR,
   listThreads,
@@ -91,6 +92,7 @@ nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots id,id] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
+nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict, the first
@@ -241,7 +243,28 @@ threads:
   3 the thread is ALREADY RESOLVED, named, with nothing sent; 4 no such
   thread on this pull request, named; 5 the credential could not
   authenticate. --json: '{ contract: "nen.pr.threads/v0.1", target, pr,
-  head, thread, replied, resolved, dryRun, threads[] }'.`;
+  head, thread, replied, resolved, dryRun, threads[] }'.
+
+open:
+  Open exactly ONE pull request from a head that is already on the remote
+  (zheref/nen#227). The head is --head, or the branch checked out under
+  --repo (default: the current directory).
+  --base <ref>         the pull request's base branch on GitHub.
+  --title-file <path>  the title: the file's first non-empty line.
+  --body-file <path>   the body, handed to 'gh pr create --body-file' as is.
+  --head <branch>      the head branch; default the checked-out branch.
+  --draft              open it as a draft.
+  --dry-run            print the 'gh pr create' argv; still asks git and
+                       GitHub every question below, creates nothing.
+  REFUSED AT EXIT 2: a detached HEAD with no --head; a head with no upstream;
+  a head whose local sha is not what 'git ls-remote <remote> refs/heads/<b>'
+  answers, where <remote>/<b> is what '<head>@{upstream}' names (origin only
+  when that is the upstream's remote; a head tracking fork/<b> is asked of
+  fork) -- push first. EXIT 1, nothing opened: a pull request is already
+  open for that head ('gh pr list --head'), reported with its number and url.
+  --json: '{ contract: "${OPEN_CONTRACT}", number, url, head, base, draft,
+  dryRun, existing }' -- number and url null on a dry run; existing true on
+  the exit-1 case, where they name the pull request already there.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -370,9 +393,9 @@ function ready(context: CommandContext): Promise<number> {
 
 export const prCommand: Command = {
   name: "pr",
-  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "threads"],
+  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "threads", "open"],
   summary:
-    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, threads.",
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, threads, open.",
   usage: USAGE,
   flags: {
     values: [
@@ -393,8 +416,10 @@ export const prCommand: Command = {
       "add-bots",
       "body-file",
       "thread",
+      "title-file",
+      "head",
     ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run"],
+    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft"],
   },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("pr", context.args, [
@@ -408,6 +433,7 @@ export const prCommand: Command = {
       "request-reviews",
       "edit-body",
       "threads",
+      "open",
     ]);
     // --no-push sits in this family's shared boolean set (above) only because
     // that set has no per-subcommand table (review finding, PR #141) -- so
@@ -431,12 +457,21 @@ export const prCommand: Command = {
       subcommand !== "edit-body" &&
       subcommand !== "request-reviews" &&
       subcommand !== "threads" &&
+      subcommand !== "open" &&
       context.args.booleans.has("dry-run")
     ) {
-      throw new VerbUsageError("--dry-run is only read by 'pr edit-body', 'pr request-reviews' and 'pr threads'.");
+      throw new VerbUsageError("--dry-run is only read by 'pr edit-body', 'pr request-reviews', 'pr threads' and 'pr open'.");
     }
-    if (subcommand !== "edit-body" && subcommand !== "threads" && context.args.values["body-file"] !== undefined) {
-      throw new VerbUsageError("--body-file is only read by 'pr edit-body' and 'pr threads reply'.");
+    if (subcommand !== "edit-body" && subcommand !== "threads" && subcommand !== "open" && context.args.values["body-file"] !== undefined) {
+      throw new VerbUsageError("--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'.");
+    }
+    // Same shape for open's own three: a title file, a head and a draft flag
+    // mean nothing to any other subcommand here.
+    if (subcommand !== "open") {
+      for (const flag of ["title-file", "head"]) {
+        if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is only read by 'pr open'.`);
+      }
+      if (context.args.booleans.has("draft")) throw new VerbUsageError("--draft is only read by 'pr open'.");
     }
     // Same shape, same reason: --thread names a review thread and nothing
     // else in this family has one, so a caller who carried it over from a
@@ -466,6 +501,8 @@ export const prCommand: Command = {
         return doRequestReviews(context);
       case "threads":
         return threads(context);
+      case "open":
+        return open(context);
       default:
         return editBody(context);
     }
@@ -1059,4 +1096,38 @@ function threads(context: CommandContext): number {
     }
     throw error;
   }
+}
+
+/**
+ * `nen pr open`. `--repo` is OPTIONAL here, unlike the verbs that mutate a
+ * tree: the write goes to GitHub, and the checkout is only asked which branch
+ * is out and whether the remote holds it -- reads whose wrong answer is a
+ * refusal, never a wrong pull request.
+ */
+function open(context: CommandContext): number {
+  const target = requireTarget(context);
+  const base = requireValue(context.args, "base", "It is the pull request's base branch on GitHub.");
+  const titlePath = requireValue(context.args, "title-file", "It is the file whose first non-empty line is the title.");
+  const bodyPath = requireValue(context.args, "body-file", "It is the pull request body, handed to gh as is.");
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const title = readTextFile(titlePath, root, "It is the pull request's title -- 'pr open' reads no other source for it.")
+    .split("\n")
+    .map((line): string => line.trim())
+    .find((line): boolean => line !== "");
+  if (title === undefined) throw new VerbUsageError(`--title-file '${titlePath}' has no non-empty line, so there is no title to open with.`);
+  // READ TO PROVE IT IS THERE, then handed to gh by path: a body file gh
+  // cannot open would fail after the questions below were already asked.
+  const bodyFile = resolveAgainstRepo(root, bodyPath);
+  readTextFile(bodyPath, root, "It is the pull request body -- 'pr open' hands it to gh by path.");
+  const outcome = openPullRequest(context.seams, root, target, {
+    base,
+    head: context.args.values["head"] ?? null,
+    title,
+    bodyFile,
+    draft: context.args.booleans.has("draft"),
+    dryRun: context.args.booleans.has("dry-run"),
+  });
+  if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
+  emit(context.io, context.json, outcome.report, outcome.lines);
+  return outcome.report.existing ? 1 : 0;
 }

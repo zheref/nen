@@ -1,0 +1,7 @@
+{
+  "name": "demo",
+  "version": "0.1.0",
+  "description": "A demo plugin.",
+  "author": { "name": "fixtures" },
+  "keywords": ["demo"]
+}

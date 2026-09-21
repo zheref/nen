@@ -81,7 +81,7 @@ function runGit(seams: Seams, cwd: string, args: readonly string[]): GitCall {
 }
 
 /** `<sha>\t<subject>` lines (git log's own `%H%x09%s`) into typed rows. */
-function parseFolded(logOutput: string): FoldedCommit[] {
+export function parseFolded(logOutput: string): FoldedCommit[] {
   return rawLines(logOutput).map((line): FoldedCommit => {
     const index = line.indexOf("\t");
     return index === -1
@@ -166,43 +166,63 @@ export function planSquash(seams: Seams, cwd: string, onto: string): SquashPlan 
 
   // 4. NONE OF THE FOLDED COMMITS MAY ALREADY BE ON THE UPSTREAM. No upstream
   // configured is not a refusal -- there is nothing published to protect.
-  const upstreamResult = runGit(seams, cwd, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
-  let upstream: string | null = null;
-  if (upstreamResult.code === 0) {
-    upstream = upstreamResult.stdout.trim();
-    const slash = upstream.indexOf("/");
-    if (slash === -1) {
-      throw new SquashStateError(
-        `the upstream '${upstream}' does not look like '<remote>/<branch>' -- refusing to fetch a remote this module cannot name from it.`,
-      );
-    }
-    const remote = upstream.slice(0, slash);
-    const branch = upstream.slice(slash + 1);
-    // FETCH FIRST -- a stale remote-tracking ref would let an already-pushed
-    // commit slip past the check below by simply being invisible to it.
-    const fetch = runGit(seams, cwd, ["fetch", remote, branch]);
-    if (fetch.code !== 0) {
-      throw new SquashStateError(
-        `could not fetch the upstream '${upstream}' ('git fetch ${remote} ${branch}' failed: ${fetch.error}).`,
-      );
-    }
-    for (const commit of folded) {
-      const reachable = runGit(seams, cwd, ["merge-base", "--is-ancestor", commit.sha, upstream]);
-      if (reachable.spawnFailed || reachable.code > 1) {
-        throw new SquashStateError(
-          `could not test whether commit '${commit.sha}' is already on the upstream '${upstream}' ('git merge-base --is-ancestor ${commit.sha} ${upstream}' failed: ${reachable.error}).`,
-        );
-      }
-      if (reachable.code === 0) {
-        return {
-          kind: "refused",
-          reason: `commit ${commit.sha} ('${commit.subject}') is already on the upstream '${upstream}' -- already published; squashing would rewrite pushed history. Rebase or cut a fresh branch instead of folding a commit that is already there.`,
-        };
-      }
-    }
+  const { upstream, published } = findPublishedCommit(seams, cwd, folded);
+  if (published !== null) {
+    return {
+      kind: "refused",
+      reason: `commit ${published.sha} ('${published.subject}') is already on the upstream '${upstream ?? ""}' -- already published; squashing would rewrite pushed history. Rebase or cut a fresh branch instead of folding a commit that is already there.`,
+    };
   }
 
   return { kind: "ready", onto, mergeBase: mergeBaseSha, folded, upstream };
+}
+
+/** What the published-commit check found: the upstream, and the first commit already on it. */
+export interface PublishedCheck {
+  /** The resolved `<remote>/<branch>` this branch tracks, or null when none is set. */
+  readonly upstream: string | null;
+  /** The first of `commits` (in the order given) reachable from the upstream, or null. */
+  readonly published: FoldedCommit | null;
+}
+
+/**
+ * THE PUBLISHED-COMMIT DETECTION, shared by `wc squash` (which refuses to fold
+ * one) and `wc catch-up` (whose `auto` strategy merges rather than rebases
+ * when one exists; zheref/nen#227). One reader, so the two verbs never
+ * disagree about what "already pushed" means: the branch's `@{upstream}`,
+ * FETCHED FIRST -- a stale remote-tracking ref would let an already-pushed
+ * commit slip past by simply being invisible -- then `git merge-base
+ * --is-ancestor <sha> <upstream>` per commit. No upstream is `{upstream:
+ * null, published: null}`: there is nothing published to protect.
+ */
+export function findPublishedCommit(seams: Seams, cwd: string, commits: readonly FoldedCommit[]): PublishedCheck {
+  const upstreamResult = runGit(seams, cwd, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
+  if (upstreamResult.code !== 0) return { upstream: null, published: null };
+  const upstream = upstreamResult.stdout.trim();
+  const slash = upstream.indexOf("/");
+  if (slash === -1) {
+    throw new SquashStateError(
+      `the upstream '${upstream}' does not look like '<remote>/<branch>' -- refusing to fetch a remote this module cannot name from it.`,
+    );
+  }
+  const remote = upstream.slice(0, slash);
+  const branch = upstream.slice(slash + 1);
+  const fetch = runGit(seams, cwd, ["fetch", remote, branch]);
+  if (fetch.code !== 0) {
+    throw new SquashStateError(
+      `could not fetch the upstream '${upstream}' ('git fetch ${remote} ${branch}' failed: ${fetch.error}).`,
+    );
+  }
+  for (const commit of commits) {
+    const reachable = runGit(seams, cwd, ["merge-base", "--is-ancestor", commit.sha, upstream]);
+    if (reachable.spawnFailed || reachable.code > 1) {
+      throw new SquashStateError(
+        `could not test whether commit '${commit.sha}' is already on the upstream '${upstream}' ('git merge-base --is-ancestor ${commit.sha} ${upstream}' failed: ${reachable.error}).`,
+      );
+    }
+    if (reachable.code === 0) return { upstream, published: commit };
+  }
+  return { upstream, published: null };
 }
 
 /**

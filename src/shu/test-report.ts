@@ -92,6 +92,8 @@ export interface TestReportOptions {
   readonly dryRun: boolean;
   /** `--from-artifacts`: read the declared results and run nothing at all. */
   readonly fromArtifacts: boolean;
+  /** `--effort <id>`: the phase ledger the run's steps are appended to (zheref/nen#227). */
+  readonly effort?: string | null;
 }
 
 /**
@@ -291,6 +293,7 @@ export async function runTestReport(
       target: null,
       run: false,
       sink,
+      effort: options.effort ?? null,
     });
   } catch (error) {
     // A REFUSAL THAT ALREADY HANDED OVER A REPORT STILL PRINTS IT: ./run.ts's

@@ -11,8 +11,10 @@ import {
   ATTRIBUTION_TRAILERS,
   DEFAULT_BASE,
   DEFAULT_BRANCH_TEMPLATE,
+  PROFILE_NAMES,
   WORKFLOW_FILE,
   defaultWorkflow,
+  describeProfile,
   describeReviewScopes,
   describeSections,
   describeWorkflow,
@@ -591,9 +593,57 @@ describe("review.scopes", () => {
   });
 });
 
-describe("a workflow's ELEVEN blocks", () => {
-  it("says eleven, now that review is one of them", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's eleven blocks are/);
+describe("a workflow's TWELVE blocks", () => {
+  it("says twelve, now that profile is one of them", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's twelve blocks are/);
+  });
+});
+
+// ── profile (zheref/nen#227) ────────────────────────────────────────────────
+
+describe("profile -- the run profile a turn runs under", () => {
+  it("defaults to standard, allowing all three, and describes itself so", () => {
+    expect(defaultWorkflow().profile).toEqual({ default: "standard", allowed: ["fast", "standard", "thorough"], raw: {} });
+    expect(describeProfile(parseWorkflow("<doc>", {}))).toBe("default standard; allowed fast, standard, thorough");
+    expect(PROFILE_NAMES).toEqual(["fast", "standard", "thorough"]);
+  });
+
+  it("reads a declared default and allow-list, in the file's order", () => {
+    const workflow = parseWorkflow("<doc>", { profile: { $comment: "why", default: "thorough", allowed: ["thorough", "standard"] } });
+    expect(workflow.profile.default).toBe("thorough");
+    expect(workflow.profile.allowed).toEqual(["thorough", "standard"]);
+    expect(describeProfile(workflow)).toBe("default thorough; allowed thorough, standard");
+    expect(workflow.raw["profile"]).toEqual({ $comment: "why", default: "thorough", allowed: ["thorough", "standard"] });
+  });
+
+  it("a default with no allow-list allows all three; an allow-list with no default falls back to standard, or its first entry", () => {
+    expect(parseWorkflow("<doc>", { profile: { default: "fast" } }).profile).toMatchObject({ default: "fast", allowed: ["fast", "standard", "thorough"] });
+    expect(parseWorkflow("<doc>", { profile: { allowed: ["fast", "standard"] } }).profile.default).toBe("standard");
+    expect(parseWorkflow("<doc>", { profile: { allowed: ["thorough"] } }).profile.default).toBe("thorough");
+  });
+
+  it("refuses an unknown name, by pointer, in either key", () => {
+    expect(() => parseWorkflow("<doc>", { profile: { default: "turbo" } })).toThrow(/profile\.default.*not a run profile nen knows/);
+    expect(() => parseWorkflow("<doc>", { profile: { allowed: ["fast", "turbo"] } })).toThrow(/profile\.allowed\[1\]/);
+  });
+
+  it("refuses a default outside the allow-list, an empty allow-list, and a repeat", () => {
+    expect(() => parseWorkflow("<doc>", { profile: { default: "thorough", allowed: ["fast"] } })).toThrow(/profile\.default.*is not in profile\.allowed \(fast\)/);
+    expect(() => parseWorkflow("<doc>", { profile: { allowed: [] } })).toThrow(/profile\.allowed.*is empty/);
+    expect(() => parseWorkflow("<doc>", { profile: { allowed: ["fast", "fast"] } })).toThrow(/profile\.allowed\[1\].*repeats 'fast'/);
+  });
+
+  it("refuses a wrong type by pointer, and a near-miss of its keys and of the block itself", () => {
+    expect(() => parseWorkflow("<doc>", { profile: "fast" })).toThrow(/profile/);
+    expect(() => parseWorkflow("<doc>", { profile: { allowed: "fast" } })).toThrow(/profile\.allowed/);
+    expect(() => parseWorkflow("<doc>", { profile: { defalt: "fast" } })).toThrow(/is one letter away from 'default'/);
+    expect(() => parseWorkflow("<doc>", { profiles: {} })).toThrow(/is one letter away from 'profile'/);
+  });
+
+  it("loads from disk like every other block", () => {
+    const root = repoWith({ profile: { default: "fast", allowed: ["fast", "standard"] } });
+    expect(loadWorkflow(root).workflow.profile).toMatchObject({ default: "fast", allowed: ["fast", "standard"] });
+    expect(() => loadWorkflow(repoWith({ profile: { default: "turbo" } }))).toThrow(SchemaError);
   });
 });
 

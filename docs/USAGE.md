@@ -9,11 +9,12 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.12.0 line** (one new family, `review`, and three
-new verbs, `review scopes`, `report mermaid` and `pr threads`; the report
-register, the report variants and the architecture-delta graph arrive with
-them): 39 command
-families, 101 verbs, every flag checked against the binary this repository
+with the `nen` spelling. This document covers the **v0.13.0 line** (one new family, `usage`, and five
+new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
+`commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
+leaves on an open phase, the pinned stall rule and the `profile` policy key
+arrive with them): 40 command
+families, 106 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -182,7 +183,7 @@ qualify today and declare one:
 `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
 `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` ·
 `nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.decisions/v0.1` · `nen.phase.ledger/v0.1` · `nen.repo.classify/v0.1` · `nen.surface.capabilities/v0.1` ·
-`nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` ·
+`nen.surface.mirror.check/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.generate/v0.1` ·
 `nen.wc.squash/v0.1` · `nen.workflow/v0.1`
 
 Every one of them is read by a **program** that acts on it: a gate decides a
@@ -448,6 +449,7 @@ back empty or `null`.
 | `commits.runTrailer` | the trailer key an AUTOMATED commit must ALSO carry, alongside the one attribution trailer the hook requires. Absent (`null`) by default — a run identifier is optional, never itself an attribution trailer, so it is never folded into `allowedAttributionTrailers` | the generated `commit-msg` hook's automated half |
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
+| `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 
 **Unknown keys are preserved, and near-miss keys are refused *because* they
 are.** A key nen has never heard of survives a round trip untouched — the file
@@ -565,6 +567,22 @@ nen="$(bash nen-bootstrap.sh --ref v0.12.0)"
 "$nen" --version
 ```
 
+**The checksum proves the bytes, not that they run.** The `darwin-arm64`
+binary is ad-hoc-signed **after** `bun build --compile` has appended its
+payload (`codesign -s - --force`, in `bun run build:darwin-arm64` through
+`src/dev/sign.ts` and again in the release lane), because the linker's own
+signature covers only the bytes as linked and the append invalidates it — a
+macOS that enforces the signature then kills the process before `main`, exit
+137, with a checksum that still matches. Every published `darwin-arm64` from
+v0.9.0 to v0.12.0 shipped that way ([#233](https://github.com/zheref/nen/issues/233));
+from v0.13.0 the release lane verifies the signature (`codesign -v`) and
+**executes** both the darwin and the linux binary (`--version` must print the
+tagged `package.json`'s version) before `SHA256SUMS` is written and before
+anything is attached. An ad-hoc signature carries no identity and nothing
+Gatekeeper trusts; what makes the binary trusted is the checksum this script
+verifies, and what makes it run is the signature the lane refuses to ship
+without.
+
 There is no `latest`: `--ref` is required with no fallback, because a bootstrap
 that picked the newest release would convert a source-pinned supply chain into
 an unpinned one. Every integrity failure fails closed — an unfetchable or
@@ -594,7 +612,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 101 verbs, grouped as the README groups them. **Reads** is what a
+All 106 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -612,10 +630,13 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
+| [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
+| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names, as the branch it names (origin, or `--remote`, under its own name when it has none), refusing a detached HEAD, the trunk, any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -627,6 +648,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file and explicit caps | local file (--efforts) | yes |
 | [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `.nen/loop/<id>.json` under --repo (reads and writes) | yes |
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `.nen/phases/<effort>.json` under --repo (reads and writes); no git/gh | yes |
+| [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
@@ -653,9 +675,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
-| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout: the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them | caller-named --source + --agents directories; writes --out; no git/gh | yes |
-| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface) / hand-edited | caller-named --source + --agents + --out; writes nothing at all; no git/gh | yes |
-| [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file, agent model key -- as data with a citation per row | nothing; a table this binary ships | yes |
+| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, or with `--stamp` for another version) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
 | [`issue`](#family-issue) | [`nen issue open-pr-check`](#nen-issue-open-pr-check) | which candidate issues carry an OPEN pull request that closing would orphan | gh (pr list) | yes |
@@ -677,6 +699,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) -- never its content | nen/workflow.json under --repo, and only when the invocation carries a --trailer: the attribution-trailer policy | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
+| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -1447,6 +1470,61 @@ zheref/nen#217 @ 1f4bb2c0: 10 review thread(s), 0 unresolved
   …
 ```
 
+
+### `nen pr open`
+
+Opens exactly **one** pull request from a head that is already on the
+remote (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — the
+`gh pr create` Hatsu's `shibari` used to hand-roll.
+
+**Usage**
+
+```text
+nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path>
+            [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--target <owner/name>` | **yes** | the GitHub repository; `--repo` names a checkout and never addresses the API |
+| `--base <ref>` | **yes** | the pull request's base branch |
+| `--title-file <path>` | **yes** | the title is the file's first non-empty line; a file with none is refused at exit 2 |
+| `--body-file <path>` | **yes** | the body, handed to `gh pr create --body-file` by path (read once first, so a missing file is refused before any question is asked) |
+| `--head <branch>` | no | the head branch; default the branch checked out under `--repo` (the current directory by default — this verb's write goes to GitHub, and the checkout is only asked which branch is out) |
+| `--draft` | no | open as a draft |
+| `--dry-run` | no | print the `gh pr create` argv; still asks git and GitHub every question below, creates nothing |
+| `--json` | no | `nen.pr.open/v0.1` — see below |
+
+**Refused at exit 2:** a detached `HEAD` with no `--head`; a head with no
+upstream (never published); a head whose local sha is not what its
+**upstream's remote** holds — `<remote>/<branch>` is split off
+`<head>@{upstream}` the way [`wc publish`](#nen-wc-publish) splits it, and
+`git ls-remote <remote> refs/heads/<branch>` is asked (never a hard-coded
+`origin`; the refusal names the remote it asked) — nothing there, or an
+older sha — because a pull request opened now would not show the commits
+here. Push first ([`wc publish`](#nen-wc-publish)). A git failure echoed
+into any of these messages has remote credentials redacted (`://user:***@`,
+`***` for a GitHub token) before it is printed. **Exit 1, nothing opened:** a
+pull request is already open for that head (`gh pr list --head <branch>
+--state open`), reported with its number and url — one head, one pull
+request. Then `gh pr create --repo --base --head --title --body-file
+[--draft]`, and the number is **read out of the url gh printed**: a create
+that prints none is exit 1, never reported as opened.
+
+**`--json`** — `nen.pr.open/v0.1`: `{ contract, number, url, head, base,
+draft, dryRun, existing }`. `number` and `url` are `null` on a dry run;
+`existing` is `true` on the exit-1 case, where they name the pull request
+already there.
+
+**Example**
+
+```bash
+nen pr open --target zheref/nen --base main --title-file title.txt --body-file body.md --dry-run
+```
+```text
+would run: gh pr create --repo zheref/nen --base main --head feature/x --title "feat: the thing" --body-file /…/body.md
+```
+
 <a id="family-gate"></a>
 
 **`nen gate`**
@@ -1754,6 +1832,170 @@ squashed into 2bc2e0e68e8aa13fe7476b190dfccb3e8ac24bf8
 commits on `docs-example` folded onto `main` into one, `git log -1 --format=%B`
 afterwards reading exactly `message.txt`'s contents — `feat(wc): add
 one/two/three together`, blank line, `Closes: #99`)
+
+
+### `nen wc catch-up`
+
+Brings the current branch up to date with its base (v0.13.0,
+[#227](https://github.com/zheref/nen/issues/227)) — the git Hatsu's `ao`
+skill used to hand-roll. It fetches `origin/<base>`, decides rebase or merge,
+runs exactly one of them, and on a conflict **stops**: the tree is left
+exactly as git left it, every conflicted path is reported with our side and
+their side, and the abort line is printed. It never picks a side.
+
+**Usage** (needs **git ≥ 2.24** — the fetch is `--end-of-options`; an older
+git is refused at exit 2 naming its version, never fetched around)
+
+```text
+nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
+                [--abort] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | **yes** | the working tree being caught up | unbracketed; omitted is refused at exit 2 — this verb moves the branch ref |
+| `--base <ref>` | **yes** | the base branch | validated **before the first git call** by `git check-ref-format --branch` and refused at exit 2 (with git's answer) when git rejects it, or when it is shaped like an option, a refspec or a force (a leading `-` or `+`, a `:`) — so `--base=--upload-pack=/x` never reaches a fetch, under `--dry-run` either; then fetched as `git fetch --end-of-options origin refs/heads/<base>:refs/remotes/origin/<base>`, the refspec in full so nothing in the name is an option; the rebase/merge target is `origin/<base>`, never a stale local ref |
+| `--strategy` | no | `rebase`, `merge` or `auto` (default) | **auto rebases when no commit of the branch is on its `@{upstream}`** and merges otherwise — the same published-commit detection [`wc squash`](#nen-wc-squash) refuses on, shared rather than copied. A rebase rewrites what somebody else may already hold |
+| `--abort` | no | back out an in-progress rebase or merge | runs the matching `git rebase --abort` / `git merge --abort`; refused at exit 2 when nothing is in progress |
+| `--dry-run` | no | print the strategy and the git line | fetches (a read), runs neither |
+| `--json` | no | machine-readable result | `nen.wc.catch-up/v0.1` — see below |
+
+**Mechanism.** `--base` is validated first (above), then a dirty tree is
+refused at exit 2 before the fetch. Then `git fetch --end-of-options origin
+refs/heads/<base>:refs/remotes/origin/<base>`, `before`/`behindBefore`/`aheadBefore` are read,
+the strategy is resolved, and — unless the branch is already up to date
+(`noOp: true`, exit 0, nothing run) — `git rebase origin/<base>` or
+`git merge --no-edit origin/<base>` runs. **On a conflict** the report's
+`conflicted[]` carries each path with `ours` — **always this branch's
+side** — and `theirs` — **always the base's** — whichever index stage holds
+it: on a merge stage 2 is this branch and stage 3 is `origin/<base>`; on a
+rebase git replays this branch's commits on top of the base, so stage 2 is
+`origin/<base>` and stage 3 the replayed commit, and the verb labels by
+strategy so a reader never has to know which. Each side is capped at 4000
+characters, is `null` where that side deleted the path (the stage is absent
+from `git ls-files -u`), and reads `(binary, N bytes)` where the blob
+carries a NUL — its size, never its bytes. Paths are read raw (`-c
+core.quotePath=false`, `-z`), so a non-ASCII or spaced path is shown by the
+same name git holds it under; a stage the index lists but `git show` cannot
+read is an **error** at exit 1, never reported as a deletion. The text
+output prints the sides indented under the path with every control byte but
+the newline and tab stripped (`--json` keeps the bytes), then `to back out:
+git <strategy> --abort`. Exit 1. Nothing is resolved, aborted or pushed.
+
+**Resuming.** Re-run the **same command on the same tree** once the
+resolutions are staged — Hatsu's `ao` already says so. The verb asks git
+whether a rebase or merge is in progress (`git rebase --show-current-patch` / `MERGE_HEAD`,
+through the seam, so a worktree's relocated git directory changes nothing)
+and continues it: `git rebase --continue` under `GIT_EDITOR=true`, or
+`git commit --no-edit` for a merge, reporting `resumed: true`. No status
+refusal and no fetch on that path — the tree is dirty by definition. Unmerged
+paths, or a staged file `git diff --cached --check` says still carries a
+conflict marker, are reported as `conflicted[]` again at exit 1 with the
+abort line, and nothing is continued over them; a continued rebase that
+conflicts on a *later* commit reports that conflict the same way. A
+`--strategy` that disagrees with what is in progress is refused at exit 2.
+
+**`--json`** — `nen.wc.catch-up/v0.1`: `{ contract, base, strategy, before,
+after, behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
+resumed, aborted, dryRun }`. `strategy` is the one that ran (`auto` resolved);
+`after` is `null` on a dry run and on a conflict. Exit 0 on a clean catch-up,
+a resume, an abort, a dry run or `noOp`; exit 1 on a conflict (the document is
+still printed) or a git failure this verb did not expect; exit 2 on every
+refusal above.
+
+**Example**
+
+```bash
+nen wc catch-up --repo . --base main --dry-run
+```
+```text
+fetched origin/main
+strategy: rebase (auto -- nothing on 'origin/feature/x' yet)
+would run: git rebase origin/main  (2 ahead, 3 behind)
+```
+
+### `nen wc publish`
+
+Pushes the **current branch** to **the remote its upstream names** and nothing
+else (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push
+[-u] <remote> -- refs/heads/<branch>:refs/heads/<destination>`, the refspec
+spelled in full behind `--` so that no branch *name* can change what the push
+does. A branch tracking `fork/feature` is pushed to `fork`, and the
+fast-forward check below is made against `fork/feature` — the ref the push
+moves — never against `origin` while pushing somewhere else (Copilot review on
+[#231](https://github.com/zheref/nen/pull/231)). **The destination is the
+branch the upstream names**: a local `feature` tracking `fork/topic` is pushed
+as `refs/heads/feature:refs/heads/topic`, so the ref the preflight fetched and
+compared is the ref the push updates, never a same-named `fork/feature` the
+check never looked at (Copilot round 3 on #231). A branch with **no upstream**
+goes to `origin`, or to `--remote <name>` when one is given, under its own
+name (`--set-upstream` then tracks `<remote>/<branch>`). Everything that
+could rewrite somebody else's history is refused before the push.
+
+**Usage**
+
+```text
+nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--repo <path>` | **yes** | the working tree whose current branch is pushed |
+| `--set-upstream` | no | push with `-u`, so the branch tracks `<remote>/<branch>` afterwards |
+| `--remote <name>` | no | where a branch with **no upstream** goes (default `origin`); must be a remote `git remote` lists, and is refused at exit 2 when the branch already tracks a *different* remote — the branch says where it goes; `--remote` on any other `wc` subcommand is refused rather than ignored |
+| `--dry-run` | no | print the push line; push nothing (the upstream is still fetched — a read) |
+| `--json` | no | `nen.wc.publish/v0.1` — see below |
+
+> Needs **git ≥ 2.24**: the upstream fetch is spelled `git fetch
+> --end-of-options …`, a parse-options flag every git since 2.24 (2019)
+> accepts on `fetch`. An older git that answers `unknown option` is refused at
+> exit 2 naming its version — the flag is never dropped to make the fetch go
+> through, because it is what keeps a branch name from being read as an
+> option. The same floor applies to [`wc catch-up`](#nen-wc-catch-up).
+
+**Refused at exit 2:** a detached `HEAD` (no branch to push); the trunk —
+[`nen/workflow.json`](#nenworkflowjson)'s `branch.base`, and `main`/`master`
+whatever the policy says — because the trunk moves by merging a pull request,
+compared against the **normalized** name (a leading `+` and a `refs/heads/`
+prefix taken off, so a branch git holds as `+main` is the trunk too); a
+branch name git itself rejects (`git check-ref-format --branch`, asked
+through the seam, its answer quoted); a branch name shaped like a refspec or
+a force even where git accepts it — git will hold a branch named `+main`,
+and `git push origin +main` is a force push of `main`; and anything that
+looks like a refspec or a force on the command line: a positional, a `+`, a
+`:`, and `--force`, which the strict parser already refuses as an unknown
+option; a `--remote` shaped like an option, a refspec or a path, one `git
+remote` does not list, or one that contradicts the upstream. The branch the
+upstream tracks passes the same two checks before it is fetched, and the
+fetch is `git fetch --end-of-options <remote>
+refs/heads/<branch>:refs/remotes/<remote>/<branch>`, from the upstream's own
+remote. **Exit 1, nothing
+pushed:** the upstream exists and the local branch is not a fast-forward of
+it (fetched first, then `git merge-base --is-ancestor <upstream> HEAD`) — the
+push would need `--force`, and this verb never forces; the report says
+`needsForce: true` and the text names [`wc catch-up`](#nen-wc-catch-up) as
+the repair.
+
+**`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
+destination, upstreamBefore, ahead, needsForce, pushed, dryRun }`. `branch`
+is the local branch, the source half of the refspec; `remote` is the one
+pushed to — the upstream's, or `origin`/`--remote` when there was none;
+`destination` is the branch name on that remote the push updates — the
+upstream's branch when one exists, else `branch`; `upstreamBefore` is `null`
+and `ahead` is `null` when the branch tracked nothing before this call. The
+text line says `pushed '<branch>' to <remote> as '<destination>'` when the two
+names differ.
+
+**Example**
+
+```bash
+nen wc publish --repo . --set-upstream --dry-run
+```
+```text
+would run: git push -u origin -- refs/heads/feature/x:refs/heads/feature/x  (no upstream yet)
+```
 
 <a id="family-stage"></a>
 
@@ -2347,13 +2589,84 @@ branch slug, a PR number, a session id); a `/` in it becomes `-` in the filename
 every ledger it finds as `phases[]`.
 
 **`--json`** — `begin` and `end` emit `{ path, entry: { phase, startedAt, endedAt, durationMs, exitCode,
-surface, model, note } }`; `show` emits the ledger itself, `{ contract: "nen.phase.ledger/v0.1", effort,
-phases: [ … ] }`.
+surface, model, note, steps } }`; `show` emits the ledger itself, `{ contract: "nen.phase.ledger/v0.1", effort,
+phases: [ … ] }`. `steps` is `[]` from `begin` (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) and
+grows by one `{ verb, argv, exitCode, durationMs, stalled }` per step a `nen shu <verb> --effort <id>` run
+executes while the entry is open — the executor never opens an entry of its own. `show` renders them
+indented under their phase. The contract stays `v0.1`: the key is additive, and an entry written before it
+existed reads as `steps: []`.
 
 ```
 nen phase begin --effort HA/85 --phase breath --surface codex
 nen phase end   --effort HA/85 --exit 0
 ended breath on 'HA/85' after 7500ms (exit 0) -- /…/.nen/phases/HA%2F85.json
+nen phase show --effort HA/85
+effort: HA/85 (2 phase entries)
+  breath            7500ms  2026-01-01T00:00:00.000Z  exit 0 · codex
+  rasengan            open  2026-01-01T00:00:08.000Z
+    build        1200ms e0  pnpm turbo run build
+```
+
+
+<a id="family-usage"></a>
+
+**`nen usage`**
+
+Records what an effort COST, beside what [`nen phase`](#nen-phase) records
+about how long it took: which surface ran, which model alias, the token
+counts the surface exposed, the wall minutes, and where the numbers came
+from. Nen reads nothing from a surface and prices nothing — the caller types
+what it obtained, and a surface that exposes nothing says so.
+
+### `nen usage`
+
+`nen usage record|show` -- the per-effort usage ledger (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)).
+One JSON file per effort under `.nen/usage/<effort>.json` (generated output, gitignored), contract
+`nen.usage.ledger/v0.1`; `record` appends ONE entry per call, stamped with the invocation's clock, and
+`show` prints the ledger and the totals per surface and model.
+
+```
+nen usage record --effort <id> --surface <s> [--model <alias>]
+                 [--input <n>] [--output <n>] [--cache-read <n>] [--cache-write <n>]
+                 [--minutes <n>] [--source <text>] [--note <text>] [--not-reported] [--repo <path>] [--json]
+nen usage show   --effort <id> [--repo <path>] [--json]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--effort <id>` | the effort — the same id `nen phase` takes (letters, digits, `.`, `_`, `-`, `/`; a `/` is percent-encoded in the filename), so one effort names both ledgers |
+| `--surface <s>` | which surface ran (`claude-code`, `codex`, `cursor`, `antigravity`), recorded verbatim |
+| `--model <alias>` | which model alias ran, recorded verbatim; `null` when absent |
+| `--input` / `--output` / `--cache-read` / `--cache-write <n>` | token counts, non-negative whole numbers; each is `null` when absent, never `0` — zero is a measurement and null is the absence of one |
+| `--minutes <n>` | wall minutes, a non-negative number |
+| `--source <text>` | where the numbers came from, in your own words: `claude /cost`, `codex session log`, `gh actions timing` |
+| `--note <text>` | one free-text line kept on the entry |
+| `--not-reported` | this surface exposed no numbers: every count is recorded `null` and `notReported` is `true`. Given together with ANY number it is refused at exit 2 — a surface either reported or it did not |
+
+An entry with no number and no `--not-reported` is refused at exit 2 (it would record nothing about
+anything), as is a bad count or an effort id outside the alphabet. A ledger file that is present and does
+not carry the contract is exit 1, never appended to. `show` on an effort with no ledger is exit 0 with zero
+entries.
+
+**`--json`** — `record` emits `{ path, entry }`; `show` emits the ledger plus its totals:
+`{ contract: "nen.usage.ledger/v0.1", effort, entries: [{ recordedAt, surface, model, input, output,
+cacheRead, cacheWrite, minutes, source, note, notReported }], totals: [{ surface, model, entries,
+notReported, input, output, cacheRead, cacheWrite, minutes }] }`. A `null` number adds nothing to a total.
+[`nen report data`](#nen-report-data) merges every ledger it finds as `usage[]`, one row per entry carrying
+its `effort`.
+
+```
+nen usage record --effort HA/85 --surface claude-code --model opus --input 1200 --output 300 --cache-read 9000 --minutes 7.5 --source "claude /cost"
+recorded claude-code/opus on 'HA/85' -- /…/.nen/usage/HA%2F85.json
+nen usage record --effort HA/85 --surface cursor --not-reported
+recorded cursor on 'HA/85' (not reported) -- /…/.nen/usage/HA%2F85.json
+nen usage show --effort HA/85
+effort: HA/85 (2 usage entries)
+  2026-09-20T10:00:00.000Z  claude-code/opus         in 1200  out 300  cache r/w 9000/-  7.5 min  (claude /cost)
+  2026-09-20T10:00:00.000Z  cursor                   not reported
+totals:
+  claude-code/opus         in 1200  out 300  cache r/w 9000/0  7.5 min  (1 entry)
+  cursor                   in 0  out 0  cache r/w 0/0  0 min  (1 entry, 1 not reported)
 ```
 
 ### `nen warmup`
@@ -2701,17 +3014,20 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 nen schema check --repo <path> [--json]
 ```
 
-**Two POINTER rows from v0.12.0 (zheref/nen#220).** Two rows name a pointer
-rather than a file — `nen/workflow.json#reports.sections` and
-`nen/workflow.json#review.scopes` — and the `#` is what lets a machine reader
+**Three POINTER rows (zheref/nen#220, #227).** Three rows name a pointer
+rather than a file — `nen/workflow.json#reports.sections`,
+`nen/workflow.json#review.scopes` and, from v0.13.0,
+`nen/workflow.json#profile` — and the `#` is what lets a machine reader
 tell them from the file rows. They sit immediately under the policy row they
 read out of and answer a question it does not: whether this repository declares
 the thing [`report render --variant`](#nen-report-render) and [`review
-scopes`](#nen-review-scopes) need, which a warm-up should not have to read a
-coverage ladder to find out. Neither is ever required and neither FAILs on its
-own — a malformed block already fails the policy row by pointer, and a
-repository that declares neither is a repository that has not adopted the two
-verbs, which reads `none declared`.
+scopes`](#nen-review-scopes) need, and which run profile a bare turn runs
+under — which a warm-up should not have to read a coverage ladder to find out.
+None is ever required and none FAILs on its own — a malformed block already
+fails the policy row by pointer. A repository that declares neither of the
+first two has not adopted the two verbs, which reads `none declared`; the
+`profile` row reads the defaults when the key is absent, e.g.
+`nen/workflow.json#profile  default standard; allowed fast, standard, thorough`.
 
 **Two optional rows from v0.11.0 (zheref/nen#216).** `nen/colors.yml` is **optional**: an absent file is an
 `ok` row reading `absent (optional)` and no longer fails the aggregate -- the verbs that resolve a colour
@@ -4617,6 +4933,71 @@ verdict:   NOT PROVED -- the tree has moved since the build: it proved a63bdbfee
 ```
 exit 1. (both run for real, against this repository)
 
+
+### `nen commit write`
+
+Commits the index with a message file (v0.13.0,
+[#227](https://github.com/zheref/nen/issues/227)) — the `git commit` Hatsu's
+`kokusen` used to hand-roll. The message is validated **whole**, after every
+`--trailer` has been appended, under the same rules
+[`commit format`](#nen-commit-format) applies: the Conventional Commits shape
+and this repository's attribution-trailer policy, through the one validator
+[`wc squash`](#nen-wc-squash) already reads with (`src/wc/messagefile.ts`),
+never a second copy of it.
+
+**Usage**
+
+```text
+nen commit write --repo <path> --message-file <path> [--trailer <Key: value>]...
+                 [--require-proof <lane>] [--dry-run] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--repo <path>` | **yes** | the repository whose index is committed |
+| `--message-file <path>` | **yes** | the message; a relative path resolves against `--repo` |
+| `--trailer <Key: value>` | no, **repeatable** | appended to the message's trailer block in order — onto the file's own block when it ends in one, as a new final paragraph otherwise. Exactly `Key: value`: a key of letters, digits and `-`, a colon, one space, a value. The first flag in this CLI that repeats; `format`'s comma-joined `key=value` spelling is unchanged |
+| `--require-proof <lane>` | no | refuse unless [`commit check`](#nen-commit-check) would say OK for this lane — its own verdict, asked and acted on |
+| `--dry-run` | no | print the git line and the composed message; commit nothing, write no file |
+| `--json` | no | `nen.commit.write/v0.1` — see below |
+
+**Order of refusals.** The message or a `--trailer` failing the shape — exit
+**2**, every reason named, before any git call; the proof, when required —
+exit **1** (absent, for another lane, or the tree has moved since the
+build); an empty index — exit **1**, `nothing staged`. A malformed
+`nen/workflow.json` is exit 1 naming the pointer, as `format`'s own policy
+read. Only then `git commit -F .nen/commit/message.txt`: the composed message
+is written there (a deterministic path under the generated-output directory)
+and removed afterwards whatever git answered, and the `.nen/commit/`
+directory with it when the message was its only occupant.
+
+**There is no `--sign-off`.** `Signed-off-by` is an attribution-shaped
+trailer, and this repository's trailer policy forbids attribution trailers
+other than the ones it names — the verb would be adding a line the validator
+then refuses. Where a repository's policy *admits* it, pass it as any other
+trailer: `--trailer "Signed-off-by: Name <email>"`. Typing `--sign-off`
+anyway is refused as an unknown option at exit 2, and the refusal says
+exactly this (`nen commit --help` does too).
+
+**`--json`** — `nen.commit.write/v0.1`: `{ contract, sha, subject, trailers:
+[{ key, value }], dryRun }`. `sha` is `null` on a dry run; `trailers` is every
+trailer the committed message carries, the file's own first.
+
+**Example**
+
+```bash
+nen commit write --repo . --message-file message.txt --trailer "Hatsu-Agent: kurapika" --dry-run
+```
+```text
+would run: git commit -F .nen/commit/message.txt
+message:
+  feat(x): add a thing
+
+  Why it changed.
+
+  Hatsu-Agent: kurapika
+```
+
 ## Stack-aware developer verbs
 
 Build, test, lint, run and ship a *project* — as opposed to every other family
@@ -4650,6 +5031,32 @@ Stack-aware developer verbs. Every one of them runs what the TARGET REPOSITORY d
 **The declaration** — `<repo>/nen/contract.json`, `project` block. Absent, or
 present with no `project` block, is exit 2 naming the file; `nen shu detect`
 proposes one.
+
+<a id="stall-two-gate"></a>
+**Stall guard — the two-gate symptom.** A step with a declared `stall` block
+strikes only when **both** of its budgets are exceeded at the same tick:
+`elapsedMs` since the step started **and** `quietMs` since its last byte of
+output. Neither alone is a symptom. A build past its elapsed budget that is
+still printing has not stalled — its quiet window keeps resetting; a build
+that has said nothing for longer than `quietMs` but is still inside
+`elapsedMs` has not stalled either — a compile legitimately goes quiet early
+on. `nen shu <verb> --dry-run` states the rule on every guarded step as
+`stall guard: elapsed >N ms AND quiet >M ms (both): <remedy>`, so the second
+number cannot be read as a silence timeout on its own, and
+`src/shu/run.test.ts` pins all three cases against the seam's own window
+arithmetic. The `test` row carries no guard by ruling: tests are untimed, and
+a `stall` declared there is refused at load by pointer.
+
+**`--effort <id>` — a run's steps on the phase ledger** (v0.13.0,
+[#227](https://github.com/zheref/nen/issues/227)). Every executing `shu` verb
+takes `--effort <id>` (or reads `NEN_EFFORT` from the environment when the
+flag is absent) and, when the [`nen phase`](#nen-phase) ledger for that effort
+has an OPEN entry, appends every step it ran to that entry as
+`{ verb, argv, exitCode, durationMs, stalled }` — the same `durationMs` the run
+report prints, `null` when the tool never started. Nothing is written when no
+entry is open (a run outside a phase is never a phase of its own), when no
+ledger exists, on `--dry-run`, or on an interactive pre-flight; a ledger that
+cannot be written is a line on stderr and never a failed run.
 
 <a id="shu-run-report"></a>
 **The shared `--json` run report.** Every `shu` verb that EXECUTES a declared
@@ -4689,7 +5096,7 @@ by a server's log lines is not a document.
 | `project.lanes` | `{ "<lane>": { "stack": "<id>", "cwd": "<repo-relative>" } }`. A stack is a **per-lane** property: one repository is routinely several builds. |
 | `project.defaultLane` | Which lane `--lane` defaults to. `null` is legal and means `--lane` is required — even when there is exactly one lane, so a second lane arriving later cannot silently change what a scripted `nen shu build` builds. |
 | `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported), `artifacts` (repo-relative paths the verb produces, which nen reports and never creates) `stall` and `stdoutTo` (both below). |
-| `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `test`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. `--dry-run` prints it as an `on stall:` line under the step it guards. |
+| `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. **A `stall` on the `test` row is refused at load, by pointer, with the reason "tests are untimed"** (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)): a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. `--dry-run` prints the guard as a `stall guard: elapsed >N ms AND quiet >M ms (both)` line under the step it guards — see [the two-gate symptom](#stall-two-gate). |
 | `stdoutTo` | On an invocation, or on one entry of its `steps`: the **repo-relative file** that step's stdout is written to. There is still no shell and no redirection **operator** — nen already captures a child's stdout, and this says to write those bytes to a file rather than relay them. It is the answer for a tool that **prints** the thing nen then parses (`xccov view --report --json` is the bundled example: `nen shu coverage` reads a *file*). Refused **at load** for a path that is absolute, carries a `..` segment, or carries a glob character (`*`, `?`, `[…]`) — nen expands nothing, so a glob would create a file with that character in its name; refused **at the run**, before anything spawns, when a directory is already at the path or a symlink would land the write outside the tree. Refused outright on `dev` and `run`: those hand the terminal to the child, so nen never sees their output. The file is written whatever the tool exited (a half report is what a redirect leaves), and **not** written for a step that could not start. That step's stdout does not also go to the terminal; its **stderr** still does. `--dry-run` prints `stdout -> <path>` on the step, the report lists every such file beside `artifacts`, and `--json` carries `steps[].stdoutTo`. It works on a step that also carries a `stall` guard: that step's output arrives from the streaming seam as chunks rather than as one buffer, so the chunks are held and joined rather than relayed. |
 | `project.preconditions` | `{ "<lane>": [ { kind, value, why } ] }`. Nen **asserts** these and **never performs** them. |
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
@@ -5226,6 +5633,7 @@ nen shu build [--repo <path>] [--lane <name>] [--dry-run] [--json]
 |---|---|---|---|
 | `--lane <name>` | no | Which lane to build. | Defaults to `project.defaultLane`; exit 2 naming every declared lane when neither is given. |
 | `--dry-run` | no | Print every step and run nothing. | The argv printed **is** the argv that would be spawned — same rendering, same plan. |
+| `--effort <id>` | no | The `nen phase` effort whose OPEN entry this run's steps are appended to. | Or `NEN_EFFORT` from the environment; see [`--effort`](#stall-two-gate) above. Nothing is written when no entry is open. |
 
 **Output and exit codes** — the report, as text or `--json`. `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.build/v0.1"`.
 
@@ -5296,7 +5704,7 @@ verb:          build
 host:          darwin -- supported (the declaration constrains no platform)
 preconditions: (none declared)
 ran:           sleep 20  -- STALLED, still running (nen stopped waiting)
-on stall:      after 2000ms elapsed AND 1000ms with no output: echo 'the repository'\''s own remedy ran'  (up to 2 times; ran 2 at 2009ms, 3516ms; STALLED -- every remedy spent)
+stall guard:   elapsed >2000 ms AND quiet >1000 ms (both): echo 'the repository'\''s own remedy ran'  (up to 2 times; ran 2 at 2009ms, 3516ms; STALLED -- every remedy spent)
 …
 step 1 of 1 stalled: sleep 20 -- every one of the 2 declared remedies ran and it went quiet again. nen exits 1; the step itself was never killed and has no exit code to report.
 ```
@@ -7515,7 +7923,7 @@ token, an unevaluated gate, an unreachable API. An unevaluated gate has not said
 "not ready"; it has said nothing, and publishing the two as one word is the
 false-red twin of a false green.
 
-**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]`, and `objects[]` — **appended at the end of the key order** in v0.12.0, so a consumer reading the twelve keys before it reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
+**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]` (each entry flattened with its `effort`; since v0.13.0 also its `note` and the `steps[]` a `shu` run left under it), then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), and `objects[]` — **appended at the end of the key order** in v0.12.0 and kept last, so a consumer reading the twelve keys before them reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
 
 `evidence` is **an empty list in this release, and the empty list is the seam**: the rows belong to `nen shu evidence --base <ref>`, which reads `project.evidence` (globs, mechanism, a `{suite}-{scene}` template) and which does not exist yet. The field ships now so a template written against this contract does not change shape when the verb lands — `{{#each evidence}}` renders nothing today and renders rows tomorrow. This verb deliberately does **not** glob a tree for them: that answer must come from the one verb that owns `project.evidence`, or the two will disagree the first time a scene template changes.
 
@@ -7778,23 +8186,36 @@ spelled, where a persona goes — is **a row in `src/surface/rules.ts`**, not a
 branch in the generator, and each row carries the URL every fact in it was read
 from. Adding a surface is adding a row.
 
-The two rows this release ships, read on 2026-09-10:
+The three mirrored rows (read 2026-09-10, re-read 2026-09-20 for the pack
+fields; [#227](https://github.com/zheref/nen/issues/227)) and the verbatim one:
 
-| | `codex` | `cursor` |
-|---|---|---|
-| skills read from | `.agents/skills/<name>/SKILL.md` ([docs](https://learn.chatgpt.com/docs/build-skills)) | `.cursor/skills/<name>/SKILL.md` ([docs](https://cursor.com/docs/skills)) |
-| frontmatter kept | `name`, `description` — the page documents no other key | `name`, `description`, `paths`, `globs`, `disable-model-invocation`, `icon`, `color`, `metadata` — the documented table, whole |
-| required | `name`, `description` | `name`, `description` |
-| invocation spelled | `$<name>` (*"run /skills or type $ to mention a skill"*) | `/<name>` (*"you explicitly type /skill-name in chat"*) |
-| personas | **no markdown persona file** — every one becomes a `## <name>` section of a generated `AGENTS.md` ([docs](https://learn.chatgpt.com/docs/agent-configuration/agents-md)) | one file per persona under `<out>/agents/<stem>.md`, frontmatter reduced to `name`, `description`, `model`, `readonly`, `is_background` ([docs](https://cursor.com/docs/agent/subagents)) |
+| | `codex` | `cursor` | `antigravity` | `claude-code` |
+|---|---|---|---|---|
+| skills read from | `.agents/skills/<name>/SKILL.md` ([docs](https://learn.chatgpt.com/docs/build-skills)) | `.cursor/skills/<name>/SKILL.md` ([docs](https://cursor.com/docs/context/skills)) | `.agents/skills/<name>/SKILL.md` in a workspace — `.agent/` is the back-compatibility spelling ([docs](https://antigravity.google/docs/skills)); the **mirror is laid out as a plugin**, `<out>/skills/<name>/SKILL.md` beside `agents/`, `hooks.json`, `plugin.json` and `rules/` ([plugins](https://antigravity.google/docs/plugins)), because a global install symlinks the whole mirror as the plugin root; the workspace path is the installer's target | `.claude/skills/<name>/SKILL.md`; a plugin ships `skills/` and `agents/` at its root ([docs](https://code.claude.com/docs/en/skills)) |
+| frontmatter kept | `name`, `description` — the page documents no other key — plus nen's own `summary` (below) | `name`, `description`, `paths`, `globs`, `disable-model-invocation`, `icon`, `color`, `metadata` — the documented table, whole — plus `summary` | `name`, `description` | **every key**: the row is the identity |
+| required | `name`, `description` | `name`, `description` | `description` (the page makes `name` optional) | `name`, `description` |
+| invocation spelled | `$<name>` (*"run /skills or type $ to mention a skill"*) | `/<name>` (*"you explicitly type /skill-name in chat"*) | `/<name>` | none: nothing is rewritten |
+| personas | **no markdown persona file** — every one becomes a `## <name>` section of a generated `AGENTS.md` ([docs](https://learn.chatgpt.com/docs/agent-configuration/agents-md)); with `--models`, also one `agents/<stem>.toml` apiece (`name`, `description`, `model`, `developer_instructions`) for `.codex/agents/` | one file per persona under `<out>/agents/<stem>.md`, frontmatter reduced to `name`, `description`, `model`, `readonly`, `is_background` ([docs](https://cursor.com/docs/agent/subagents)) | one file per persona under `<out>/agents/<stem>.md`, keys `name`, `description`, `tools`, `mainAgent`, `subagent`, `model`, `commandExecutionPolicy`, `mcpServers`, `skills` ([docs](https://antigravity.google/docs/subagents)) | `agents/<stem>.md`, verbatim |
+| hooks (`--hooks`) | `hooks.json` → `.codex/hooks.json`, grouped shape, events `Stop` / `PreToolUse` / `SessionStart` | `hooks.json` → `.cursor/hooks.json`, `{ version: 1, hooks: { stop, beforeShellExecution, sessionStart } }`, one `{ command }` per entry | `hooks.json` → `.agents/hooks.json`, grouped, `Stop` / `PreToolUse` (matcher `run_command`) / **`PreInvocation`** — there is no SessionStart event | `hooks/hooks.json`, byte for byte |
+| model map (`--models`) | not on the appendix; `config.toml.fragment` carries `[agents] default_subagent_model = <models.codex.fast>`, and the TOML personas carry `model` | **`model: inherit` for every persona** — the page documents `model:` as inherit (the default) or a specific model ID, and a tier alias from `models.cursor` is neither, so the tier is resolved (a bad value is still refused) and reported as `modelMapped: <persona>: <tier> -> inherit`; an explicit `inherit` is carried | `model: <tier>` → `models.antigravity.<tier>`; `inherit` carried; an alias outside `inherit`/`flash`/`pro` is emitted and named | none |
+| rules (`--rules`) | none — `AGENTS.md` is the prose surface, read up to 32 KiB (`project_doc_max_bytes`); an appendix past it is named in the report | `rules/<stem>.mdc` → `.cursor/rules/`, with `description: <stem>` / `alwaysApply: true` frontmatter; no character limit, the page advises under 500 lines | `rules/<stem>.md` → `.agents/rules/`, **12,000-character limit**, over it refused ([docs](https://antigravity.google/docs/rules-workflows)) | none |
+| description budget | **186** chars | **30** chars | none | none here (the documented 1,536 is a capabilities fact) |
+| permissions (`--permissions`) | `config.toml` → `.codex/config.toml` (approval policy, sandbox, `writable_roots = []` for the installer to fill) | `cli.json` → `.cursor/cli.json` (`Shell(exe:args)` / `Shell(exe)` allow/deny — the documented grammar — plus whatever `surfaces.cursor` in the source declares, verbatim) | **none** — no allowlist file exists, and `commandExecutionPolicy: auto` would approve arbitrary commands, so nothing is written and the report says `not supported` | `settings.local.json` (`Bash(exe args)` allow/deny), for the consumer to merge |
 
-Two caveats the table carries and prints on stderr, rather than acting on:
-Codex **also** documents standalone per-agent **TOML** files under
-`.codex/agents/` (`name`, `description`, `developer_instructions`), which this
-verb does not write — it mirrors markdown to markdown, so a persona lands in
-`AGENTS.md` as prose; and Cursor documents that a skill's `name` must be
-lowercase letters, numbers and hyphens and must match its folder name, which nen
-carries through and does not enforce.
+The two description budgets are **measured, not documented** — the length at
+which each surface's picker cut a description off, measured 2026-09-19 in the
+hardening audit — and the row says so in its `descriptionBudgetSource`. Every
+other number and path in the table is a citation.
+
+Caveats the table carries and prints on stderr, rather than acting on: a
+project `.codex/config.toml` loads only for a project the user marked trusted;
+Cursor documents that a skill's `name` must be lowercase letters, numbers and
+hyphens and must match its folder name, which nen carries through and does not
+enforce; Antigravity's workflows are deprecated (retired 2026-11-01), so the
+rules file is its prose surface; and the `claude-code` row exists for
+[`check --installed`](#nen-surface-mirror-check---installed) and for a mirror
+that *is* the source — `generate` refuses it, because there is nothing to
+generate and no marker to guard a destination with.
 
 **The generated marker is the first *markdown* line, not the first line of the
 file.** Every surface here identifies a skill by YAML frontmatter delimited by
@@ -7805,19 +8226,48 @@ closing fence (and on line 1 of `AGENTS.md`, which has no frontmatter):
 
 ```text
 <!-- GENERATED by nen surface mirror (surface: cursor) -- do not edit; edit the source and regenerate -->
+<!-- GENERATED by nen surface mirror (surface: cursor, stamp: 0.43.0) -- do not edit; edit the source and regenerate -->
 ```
 
-It is ASCII, it names the surface, and `check` reads it back out of that one
+It is ASCII, it names the surface — and, with `--stamp <version>`, the version
+of the source it was generated from — and `check` reads it back out of that one
 position only — a marker-shaped line further down the file (a quoted example, a
 nested fence) is never mistaken for the real one, the same anchoring
-[`canon mirror check`](#nen-canon-mirror-check) applies to its own header.
+[`canon mirror check`](#nen-canon-mirror-check) applies to its own header. Both
+forms are read back; a stamped mirror checked without `--stamp` is compared
+with its stamp masked, so it is not drift. The files that are not markdown
+carry the same text in the comment their own format has: a TOML file
+(`config.toml`, `config.toml.fragment`, `agents/<stem>.toml`) as its `# ` first
+line, and a JSON file (`hooks.json`, `cli.json`, `settings.local.json`) — which
+has no comment — as a top-level `"$generated"` key, the `$`-prefixed
+convention every consumer of those files already ignores.
 
 **What is mirrored, and what is not.** Only `<name>/SKILL.md` — a skill
 directory's `scripts/`, `references/` and assets are left where they are, and a
 mirror directory may hold them beside the generated file without either verb
-touching them. The **filename universe** these two verbs consider their own has
+touching them. A hook script named by a `--hooks` command is read from beside the manifest **as its own bytes**: one that is a symbolic link is refused at exit 2 by name rather than followed to whatever it points at. A destination under `--out` that is a symbolic link is refused the same way, before the first byte is written — a write there would land wherever the link points. A script's declared mode (0755) is applied on every generate, unchanged bytes included, and reported under `written[]` when only the mode moved. The `# ` marker goes on line 2 only where the shebang implies `#` comments (`sh`, `bash`, `zsh`, `dash`, `ksh`, `python`, `perl`, `ruby`, or no shebang); a script under any other interpreter (`node`, `deno`, `bun`, …) is carried byte for byte with no marker — a `#` line there is a syntax error, and the manifest beside it carries the marker — noted in the report, compared by bytes in `check`, never clobber-guarded (the manifest is), and outside the orphan universe.
+Under `--agents`, a **`_`-prefixed file is a shared include**
+a persona cites by path ("read `agents/_review-preamble.md` first"), not a
+persona ([#223](https://github.com/zheref/nen/issues/223)): it is never
+mirrored as a subagent nobody defined, and it is **carried as an include**
+so the mirrored persona's citation lands on a file the mirror holds — on a
+files-kind row as `<out>/<agents dir>/_<stem>.md` with the frontmatter
+reduced like a persona's **minus `model` and `tools`, which are dropped on
+every row rather than rewritten** — an include is protocol text, not an
+agent, so a tier in its source has nothing to map to, and carried verbatim it
+put a `model: sonnet` in an Antigravity persona file whose model key does not
+admit it; `name` and `description` stay — the marker after it and the body
+verbatim (no required-key check, no empty-frontmatter refusal: nothing
+routes on it); on the appendix row (codex) as a `## _<stem>` section after
+the personas, never a TOML persona. The report lists them under `includes[]`
+(`includes (shared, carried beside the personas, not personas):` in text);
+`skippedAgents[]` remains for anything else set aside — a `*.md` that is not
+a regular file — and is otherwise empty. The **filename universe** these two
+verbs consider their own has
 **two** conditions: a file must sit at one of the row's own locations
-(`<name>/SKILL.md`, or the persona location) **and carry a generated marker**.
+(`<name>/SKILL.md`, the persona location, the row's hook manifest and
+`hooks/` scripts, rules, permission, plugin-manifest, fragment and TOML-persona
+files) **and carry a generated marker**.
 An unmarked file is somebody's own work wherever it sits, so it is never
 overwritten, never deleted as an orphan, and never reported as `extra` — a
 `SKILL.md` written by hand in the mirror directory is as untouchable as a
@@ -7830,7 +8280,8 @@ clears.
 ### `nen surface mirror generate`
 
 Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
-with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
+— `<out>/skills/<name>/SKILL.md` on the two plugin-shaped rows, `antigravity`
+and `claude-code`, whose mirror is a plugin root — with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
 documents, and — with `--invocation-prefix` — every `<prefix><name>` mention
 rewritten into that surface's own spelling. Writes only files whose content
 actually changed, and deletes an orphan whose source is gone (plus the directory
@@ -7847,9 +8298,13 @@ that is the self-healing the mirror is for.
 **Usage**
 
 ```text
-nen surface mirror generate --source <dir> --surface codex|cursor --out <dir>
+nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --out <dir>
                             [--agents <dir>] [--invocation-prefix <prefix>]
-                            [--dry-run] [--json]
+                            [--hooks <hooks.json>] [--hooks-root <expr>]
+                            [--manifest <plugin.json>] [--models <nen/workflow.json>]
+                            [--source-surface <name>] [--rules <file.md>]
+                            [--permissions <permissions.json>]
+                            [--stamp <version>] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -7861,17 +8316,59 @@ nen surface mirror generate --source <dir> --surface codex|cursor --out <dir>
 | `--out <dir>` | **yes** | where the mirror is written | a path resolving **inside** `--source` (its own directory included) is refused at exit 2 — the mirror would become part of the source, and the next run would mirror its own output. Created if absent |
 | `--agents <dir>` | no | a directory of `*.md` persona files | each persona's `name:` frontmatter names it, falling back to the filename. An empty directory is fine; an empty *value* is refused. On a surface that keeps personas as **files**, a persona that would mirror to an **empty frontmatter block** — no fence in the source, or a fence holding only keys that surface does not read — is refused at exit 2: the file written would carry no frontmatter at all, and there would be nothing for the surface to route on. On a surface whose personas are **prose** (the appendix), the same file is fine, because frontmatter is not a concept there |
 | `--invocation-prefix <p>` | no | the **source's own** invocation namespace, e.g. `myplugin:` | caller data, never a literal in this binary (§3), for the same reason [`canon mirror generate`](#nen-canon-mirror-generate)'s `--header-template` is a flag. Without it nothing is rewritten; with it, mentions of skills *outside* the mirrored set are rewritten too, because a half-rewritten document is worse than an unrewritten one |
+| `--hooks <hooks.json>` | no | a **Claude-Code-shaped** hook manifest: `{ "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command", "timeout"? } ] } ], "PreToolUse": [ { "matcher", "hooks": [ … ] } ], "SessionStart": [ … ] } }` (the `hooks` wrapper may be omitted) | emitted at the row's hook file with the three events renamed to the surface's own (`Stop`→`stop`, `PreToolUse`→`beforeShellExecution`, `SessionStart`→`sessionStart` on Cursor; `SessionStart`→`PreInvocation` on Antigravity, which has no session-start event) and the same commands; a `Bash` matcher becomes the surface's own (`run_command` on Antigravity) or is dropped where the surface has none. Any other event in the manifest is left out and named in `notes[]`. A malformed group or an empty command is refused by pointer at exit 2. A row with no hooks writes nothing and reports `hooks: not supported` |
+| `--hooks-root <expr>` | no | what `${CLAUDE_PLUGIN_ROOT}` in a `--hooks` command becomes — the source manifest names its root with Claude Code's own variable, which no other surface defines | every occurrence is replaced by the expression, **wrapped in double quotes inside the command** when it carries whitespace or anything a shell expands (`"${HATSU_PLUGIN_ROOT:-$HOME/.gemini/config/plugins/hatsu}"/hooks/bell.hook --mode $MODE`), so the root is one word and the command's own arguments stay separate words; a plain path (`/opt/demo`) is substituted bare. When the result still carries a `$`, or the root was quoted, the whole command is emitted as `sh -c 'exec <command>' --` with the single-quote rule (`'` → `'\''`) applied to the payload, so a surface that does not run hooks through a shell still expands it; a command that neither expands nor names the root is carried as it was. Without the flag commands are carried verbatim. Refused at exit 2 without `--hooks`, with an empty value, on the verbatim `claude-code` row (its manifest is byte for byte), and — naming the character — for a root expression or command carrying a `"`, a backtick, `$(`, a backslash or a newline, which the wrapper cannot hold safely. Give `check` the same expression |
+| `--manifest <plugin.json>` | no | a Claude plugin manifest (`.claude-plugin/plugin.json`) | a row that documents a plugin manifest of its own — Antigravity's `plugin.json` (`name`, `version`, `description`; `name` and `description` required) — gets `<out>/plugin.json` carrying those keys from the source under a `$generated` marker; every other row reports `manifest: not supported` and writes nothing. A required key the source lacks is refused at exit 2 |
+| `--models <workflow.json>` | no | a `nen/workflow.json` (or any JSON carrying its `models` block) whose `models.<surface>` maps tiers (`frontier`, `deep`, `fast`, `economy`, …) to the surface's own aliases | on a surface whose row maps models, a persona's `model: <tier>` is rewritten to `models.<surface>.<tier>` **from that file**; `model: inherit` is carried as `inherit` where the surface documents it (Cursor, Antigravity) and dropped elsewhere with a `droppedInherit[]` line. **Cursor writes `model: inherit` for every persona whatever the tier** (`modelInheritOnly` on its row): its page documents `model:` as `inherit` — the default — or a specific model ID, and a tier alias such as `composer` or `grok` from `models.cursor` is not a documented ID; the tier is still resolved, so an unknown value is still refused, and reaches only the report as `modelMapped: <persona>: <tier> -> inherit (cursor writes no model id)` (`modelMapped[]` under `--json`). Codex and Antigravity write the alias as before; a tier the file does not declare is refused at exit 2 by pointer (`models.<surface>.<tier>`), as is a file with no `models.<surface>` at all. An alias outside the surface's documented set (Antigravity documents `inherit`, `flash`, `pro`) is emitted verbatim — it is the repository's own word — and named in `undocumentedAliases[]`. **Codex** additionally gets `config.toml.fragment` carrying `[agents]` / `default_subagent_model = "<models.codex.fast>"` — a fragment the consumer merges; `config.toml` itself is never a destination for it — and one `agents/<stem>.toml` per persona for `.codex/agents/` |
+| `--source-surface <name>` | no | the surface the **source** personas were written for; default `claude` — the key every real workflow spells its Claude Code row under | a canonical persona file is read directly by one surface, so its `model:` carries *that* surface's alias (`opus`), never a tier — rewriting the source to tiers would break the surface that reads it unmirrored. With `--models`, a persona's value is resolved in two steps: first as a tier of `models.<surface>` (written as-is), else as an alias under `models.<source-surface>` read back to **the one tier** it sits under (`opus` → `deep`), then tier → `models.<surface>.<tier>` (`deep` → `pro` on Antigravity). An alias under two tiers of the source row, a value that is neither, or a source row the file lacks when a persona needs it are each refused at exit 2 by pointer; in the last case, when exactly one declared row *would* resolve the alias, the refusal ends `Did you mean --source-surface <name>?` (two candidates is a choice, and nen names none). The value is a key of the caller's own `models` matrix and nothing else — a workflow that spells the row `claude-code` passes `--source-surface claude-code` |
+| `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity), the marker first and the source verbatim under it — its invocation mentions are **not** rewritten. Over the surface's documented character limit (Antigravity: 12,000) it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
+| `--permissions <file.json>` | no | a permissions source: `{ "allow": [ { "exe", "args" } ], "deny": [ … ], "surfaces": { "<surface>": { "allow": [ "<row>" ], "deny": [ "<row>" ], "network_access": <boolean> } } }`; every other key is ignored | emitted as the row's pack: `settings.local.json` with `Bash(exe args)` patterns (claude-code); `cli.json` with `Shell(exe:args)` — or `Shell(exe)` when `args` is empty — patterns, Cursor's documented grammar (`Shell(commandBase)` with an optional `:args`; never `Shell(exe args)`) (cursor); `config.toml` stating the approval policy and workspace-write sandbox with **`writable_roots = []`** under a comment naming what fills it — the working tree, each linked worktree, the git common dir — never a placeholder string a consumer could copy beside a live setting; the report says `writableRootsPlaceholder: true` and adds a `note:` so an installer knows to fill it (codex). **The source decides `network_access`**: the sandbox block carries a `network_access = true|false` line **only when `surfaces.codex.network_access` declares it** (a boolean; anything else is refused by pointer); absent, no line is written — Codex's own default applies, nen never chooses a boundary the source did not state — and the report says `network: not declared (no network_access line; the surface's own default applies)`, or `network: declared (network_access = true)` when it was (`permissionNetworkAccess` under `--json`: the boolean, or null). A `network_access` under a surface whose pack states no sandbox (cursor, claude-code) is refused, since it has no line to land on. **Nothing the source did not declare is written**: the `Read(./**)` / `Write(./**)` grants Cursor needs come from a `surfaces.cursor.allow` block in the source, transcribed verbatim after the shared rows *for that surface only* and counted in the report as `permissions: written (+N surface rows)` (`permissionSurfaceRows` under `--json`); a block for a surface whose pack has no rows (codex) is refused. Antigravity has no allowlist file, so nothing is written and the report says `permissions: not supported`. A malformed row is refused by pointer, as is a `(` or `)` in an `exe` or `args` — every pack wraps the row in the surface's own `Tool(...)`, and a parenthesis inside it would close that early |
+| `--stamp <version>` | no | `MAJOR.MINOR.PATCH` of the source (a `-pre`/`+build` tail is accepted and ignored) | written into every marker as `, stamp: <version>`; anything not version-shaped is refused at exit 2 |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
 | `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values`, `--mirror-dir` and `--markdown-out` resolve against this root, not the process's directory; an absolute value is used as-is. |
 
-**Output and exit codes** — prints `surface:`, `out:`, then `written:`,
-`unchanged:` and `deleted (orphaned):` (each `(none)` when empty); the row's
+**Hook scripts travel with the manifest.** On every non-verbatim row, each
+script a `--hooks` command names as `${CLAUDE_PLUGIN_ROOT}/hooks/<file>` is
+read from beside the manifest and written to `<out>/hooks/<file>`, mode 755,
+with the marker as a `# ` comment on line 2 after the shebang (line 1 when
+there is none) — so a plugin-mode install, the mirror symlinked as the plugin
+root, resolves the commands to files it ships. They are reported under
+`written[]`, they are in `check`'s universe, and a manifest naming a script
+that is not beside it is refused at exit 2.
+
+**The description budget.** Where the row states one (codex 186, cursor 30 —
+both measured, neither documented), a skill whose `description` is longer keeps
+it **as-is** and gains a `summary:` key holding its first sentence trimmed to
+the budget (at the last whitespace inside it, or hard at the budget when there
+is none) — inserted right after `description`, and never added over a
+`summary` the source already carries. Each such skill is listed in
+`truncated[]`. `summary` is nen's key, not the surface's: an extra frontmatter
+line the surface ignores, holding the sentence its picker would otherwise cut.
+
+**Output and exit codes** — prints `surface:`, `out:`, `stamp:` (when given),
+then `written:`, `unchanged:` and `deleted (orphaned):` (each `(none)` when
+empty), then the report lines that apply: `includes (shared, carried beside
+the personas, not personas):`, `skipped (not a regular file):`, `truncated (…):`, `model: inherit dropped (…):`, `model alias
+outside the surface's documented set (…):`, `modelMapped: … (<surface> writes no model id)`, and always `hooks:`, `rules:` and
+`permissions:` and `manifest:` (`none` when the flag was not given, `not
+supported` when the row has no such file, else what was written), a
+`network:` line after `permissions:` when the pack states a sandbox (codex),
+then any `note:` lines; the row's
 caveat goes to **stderr**, so `--json` stays one document. `--json`:
 `{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
-dryRun, written, unchanged, deleted }`. Exit 0 on any completed run; exit 2 on a
-missing or unknown flag, an `--out` inside `--source`, a `--source` with no
-`SKILL.md`, a `SKILL.md` with no frontmatter block or missing a key the surface
-documents as required, or a destination that exists and carries no marker.
+dryRun, written, unchanged, deleted, stamp, skippedAgents, truncated,
+droppedInherit, undocumentedAliases, modelMapped, hooks, rules, permissions, manifest, notes,
+permissionSurfaceRows, writableRootsPlaceholder, permissionNetworkAccess, includes }` — the
+keys after `deleted` are v0.13.0's, appended at the end of the key order;
+`modelMapped` is `[]` except on a `modelInheritOnly` row (cursor) and
+`permissionNetworkAccess` is the declared boolean or null;
+`rules` is `"none"`, `"not supported"` or `{ path, chars, limit }`. Exit 0 on
+any completed run; exit 2 on a missing or unknown flag, an `--out` inside
+`--source`, a `--source` with no `SKILL.md`, a `SKILL.md` with no frontmatter
+block or missing a key the surface documents as required, a rules file over the
+surface's limit, a tier `--models` does not declare, a malformed pack file, a
+stamp that is not a version, the verbatim `claude-code` row, or a destination
+that exists and carries no marker.
 
 **Example**
 
@@ -7884,23 +8381,79 @@ nen surface mirror generate --source src/surface/fixtures/skills \
 nen: note: cursor: this surface documents that a skill's `name` must be lowercase letters, numbers and hyphens and must match its folder name; nen mirrors the folder name and the `name` line it was given, and refuses neither.
 surface: cursor (.cursor/skills/<name>/SKILL.md)
 out: /tmp/nen-doc/cursor
-written: agents/scout.md, alpha/SKILL.md, beta/SKILL.md
+written: agents/_shared.md, agents/scout.md, alpha/SKILL.md, beta/SKILL.md
 unchanged: (none)
 deleted (orphaned): (none)
+includes (shared, carried beside the personas, not personas): _shared.md
+truncated (description over the 30-char budget; summary: added): alpha, beta
+hooks: none
+rules: none
+permissions: none
+manifest: none
 ```
 The `alpha` skill's source frontmatter carries `name`, `description`,
 `allowed-tools`, `model`, `license` and `metadata`; what lands in the mirror is
-`name`, `description` and `metadata`, and every `demo:alpha` in the body — and
+`name`, `description`, a `summary` (both fixture descriptions are over Cursor's
+30-character budget) and `metadata`, and every `demo:alpha` in the body — and
 in the description — has become `/alpha`. Under `--surface codex` the same
-source produces `name` and `description` only, `$alpha`, and one `AGENTS.md`
-holding a `## scout` section instead of `agents/scout.md`.
+source produces `name` and `description` only (both descriptions fit its
+186-character budget), `$alpha`, and one `AGENTS.md` holding a `## scout`
+section instead of `agents/scout.md`, followed by a `## _shared` section for
+the include.
+
+The full pack, stamped, with every optional file:
+
+```bash
+nen surface mirror generate --source claude/skills --agents claude/agents \
+  --surface antigravity --out surfaces/antigravity --invocation-prefix "hatsu:" \
+  --hooks hooks/hooks.json --models nen/workflow.json --rules docs/rules.md \
+  --permissions contracts/permissions.json --stamp 0.43.0 --json
+```
+```json
+{
+  "contract": "nen.surface.mirror.generate/v0.1",
+  "surface": "antigravity",
+  "skillsPath": ".agents/skills/<name>/SKILL.md",
+  "out": "surfaces/antigravity",
+  "dryRun": false,
+  "written": ["agents/kurapika.md", "…", "hooks.json", "hooks/guard-base-branch.sh", "hooks/stop-bell.sh", "ren/SKILL.md", "rules/rules.md"],
+  "unchanged": [],
+  "deleted": [],
+  "stamp": "0.43.0",
+  "skippedAgents": ["_shared.md"],
+  "truncated": [],
+  "droppedInherit": [],
+  "undocumentedAliases": ["illumi: flash_lite"],
+  "modelMapped": [],
+  "hooks": "written",
+  "rules": { "path": "rules/rules.md", "chars": 4210, "limit": 12000 },
+  "permissions": "not supported",
+  "manifest": "none",
+  "notes": [],
+  "permissionSurfaceRows": 0,
+  "writableRootsPlaceholder": false,
+  "permissionNetworkAccess": null,
+  "includes": ["_review-preamble.md"]
+}
+```
+The same command with `--surface codex` writes `AGENTS.md`, one
+`agents/<stem>.toml` per persona, `config.toml` (the pack, its
+`writable_roots = []` left for the installer and `writableRootsPlaceholder:
+true` in the report, and `network_access` only as `surfaces.codex.network_access`
+declares it — `network: not declared` otherwise) and `config.toml.fragment`
+(the `[agents]` default), and reports `rules: not supported`; with
+`--surface cursor` it writes `agents/<stem>.md` with `model: inherit` for
+every persona (the tier under `modelMapped`), `hooks.json`, `cli.json`
+(`Shell(exe:args)` rows plus whatever `surfaces.cursor` declares) and
+`rules/rules.mdc`.
 
 ### `nen surface capabilities`
 
-What a RUNNING SESSION on a surface can do, as data with a citation per row (v0.11.0, zheref/nen#216),
-contract `nen.surface.capabilities/v0.1` -- so a skill branches on a fact rather than on prose that was true
-the day it was written. Four surfaces: `claude-code`, `codex`, `cursor`, `antigravity` (the mirror table in
-`nen surface mirror` still carries two; this table answers a different question about all four).
+What a RUNNING SESSION on a surface can do, as data with a citation per row (v0.11.0, zheref/nen#216;
+v0.13.0, zheref/nen#227), contract `nen.surface.capabilities/v0.1` -- so a skill branches on a fact rather
+than on prose that was true the day it was written. Four surfaces: `claude-code`, `codex`, `cursor`,
+`antigravity` (the mirror table in `nen surface mirror` carries the same four; this table answers a different
+question about them, and a test holds the two to the same answer where they overlap).
 
 ```
 nen surface capabilities --surface <name> [--json]
@@ -7909,11 +8462,17 @@ nen surface capabilities [--json]          # every surface
 
 Per row: `ask` (the multiple-choice tool), `subagent`, `hooks.{file, stop, preToolUse, sessionStart,
 decisionKey}`, `worktreeIsolation`, `sandboxExtraRoots` (a linked worktree must declare the main git
-directory as an extra writable root), `artifact`, `notify`, `permissionsFile`, `agentModelKey`, `source` and a
-`caveat`.
+directory as an extra writable root), `artifact`, `notify`, `permissionsFile`, `agentModelKey`, and since
+v0.13.0 `hookEvents[]` (every event the surface documents, in its own spelling), `rulesFile` and `rulesLimit`
+(characters, or null), `descriptionBudget` with `descriptionBudgetSource` (which says "measured" where no page
+states the number and "documented" with the page where one does), `permissionsShape` (the pack shape
+`nen surface mirror generate --permissions` writes: `claude-settings`, `codex-toml`, `cursor-cli-json`, or
+null where it writes none), then `source` and a `caveat`. In text the new facts render as `permissions
+shape:`, `hook events:`, `rules file: … (limit N chars)` and `description budget: N chars (source)`.
 
 **`--json`** — one surface: `{ contract: "nen.surface.capabilities/v0.1", surface, ask, subagent, hooks, worktreeIsolation,
-sandboxExtraRoots, artifact, notify, permissionsFile, agentModelKey, source, caveat }`; every surface: `{ contract, surfaces: [ … ] }`. An unknown surface exits 2 naming the four. Facts read 2026-09-19; when a row goes wrong, re-read
+sandboxExtraRoots, artifact, notify, permissionsFile, agentModelKey, hookEvents, rulesFile, rulesLimit, descriptionBudget,
+descriptionBudgetSource, permissionsShape, source, caveat }`; every surface: `{ contract, surfaces: [ … ] }`. An unknown surface exits 2 naming the four. Facts read 2026-09-19 and re-read 2026-09-20; when a row goes wrong, re-read
 the page in the row and change the row.
 
 ### `nen surface mirror check`
@@ -7927,31 +8486,44 @@ Regenerates from the SAME inputs `generate` uses and diffs the result against
 | `missing` | the source has it; `--out` has not |
 | `extra` | `--out` has it, in the mirror's filename universe, and no source produces it |
 | `stale` | it carries a marker, but for a **different surface** — really generated, really out of date |
-| `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright |
+| `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright — or the bytes match but a file that declares a mode (a `hooks/` script, 0755) sits under another one: a hook at 0644 is one the surface cannot run |
+| `stale` (with `--stamp`) | the marker is for this surface but carries **no stamp, or a stamp other than `--stamp`** — an older one is the case that matters (a mirror generated from an older source than the one now asked about); a newer one is not this source's either. A file with no stamp is stale **only when `--stamp` is given**; without it the stamp is masked on both sides and never a drift class. A marker whose stamp is not a `MAJOR.MINOR.PATCH` version is stale too, named like any other — never an exit-2 refusal, which could not have reported the file it was asked about. Ordering: a missing marker is `hand-edited`, another surface's is `stale`, then the stamp, then the bytes |
 
 `stale` is where [`canon mirror check`](#nen-canon-mirror-check)'s `--ref` sits
-in this verb: there is no pinned upstream version to compare, so the fact the
-marker carries is the **surface**, and a mirror generated for one surface and
-checked against another is exactly that verb's stale case. Calling it
-hand-edited would send its maintainer looking for an edit nobody made.
+in this verb: the facts the marker carries are the **surface** and, when
+stamped, the **source version**, and a mirror generated for one surface and
+checked against another — or stamped from an older source than the one now
+asked about — is exactly that verb's stale case. Calling it hand-edited would
+send its maintainer looking for an edit nobody made. On the verbatim
+`claude-code` row there is no marker to read, so a file is `ok` when its bytes
+match the source and `hand-edited` otherwise, and `stale` is never reported.
 
 **Usage**
 
 ```text
-nen surface mirror check --source <dir> --surface codex|cursor --out <dir>
+nen surface mirror check --source <dir> --surface <name> --out <dir>
                          [--agents <dir>] [--invocation-prefix <prefix>]
-                         [--json]
+                         [--hooks <hooks.json>] [--models <workflow.json>]
+                         [--rules <file.md>] [--permissions <permissions.json>]
+                         [--stamp <version>] [--json]
 ```
 
 **Arguments** — the same as `generate`, minus `--dry-run`, which is **refused**
 here (exit 2) rather than ignored: this verb never writes, so a flag saying "do
-not write" would be an instruction accepted and dropped.
+not write" would be an instruction accepted and dropped. Give the same pack
+flags the generate run had: a `hooks.json` the check does not regenerate is a
+file it reports as `extra`, and one it regenerates but the mirror lacks is
+`missing`. `--stamp <version>` compares the marker's stamp by version
+(numerically, component by component; a `-pre`/`+build` tail is ignored).
 
-**Output and exit codes** — prints `surface:`, `ok: <n>`, then `missing:`,
-`extra:`, `stale:` and `hand-edited:` (each `(none)` when empty). `--json`:
-`{ contract: "nen.surface.mirror.check/v0.1", surface, ok, missing, extra,
-stale, handEdited }`. Exit **0** when all four drift lists are empty; exit **1**
-on any drift; exit 2 on the same refusals `generate` has, plus `--dry-run`.
+**Output and exit codes** — prints `surface:`, `stamp:` (when given),
+`ok: <n>`, then `missing:`, `extra:`, `stale:` and `hand-edited:` (each `(none)`
+when empty). `--json`: `{ contract: "nen.surface.mirror.check/v0.1", surface,
+ok, missing, extra, stale, handEdited, stamp }` — `stamp` (the value asked
+about, or null) is v0.13.0's, appended at the end; the contract stays v0.1
+because nothing before it moved. Exit **0** when all four drift lists are
+empty; exit **1** on any drift; exit 2 on the same refusals `generate` has,
+plus `--dry-run`.
 
 **Example**
 
@@ -7972,6 +8544,96 @@ hand-edited: alpha/SKILL.md
 appended to `alpha/SKILL.md`, and a `gamma/SKILL.md` with no source was left
 behind. Re-running `generate` heals all three at once — `written: alpha/SKILL.md,
 beta/SKILL.md`, `deleted (orphaned): gamma/SKILL.md` — and the check then exits 0)
+
+A stamp check:
+
+```bash
+nen surface mirror generate --source claude/skills --surface codex --out surfaces/codex --stamp 0.42.0
+nen surface mirror check    --source claude/skills --surface codex --out surfaces/codex --stamp 0.43.0 --json
+```
+```json
+{
+  "contract": "nen.surface.mirror.check/v0.1",
+  "surface": "codex",
+  "ok": [],
+  "missing": [],
+  "extra": [],
+  "stale": ["AGENTS.md", "alpha/SKILL.md", "beta/SKILL.md"],
+  "handEdited": [],
+  "stamp": "0.43.0"
+}
+```
+(exit 1: every file was generated, from `0.42.0`; with `--stamp 0.42.0`, or with
+no `--stamp` at all, the same mirror is `ok` and the check exits 0)
+
+<a id="nen-surface-mirror-check---installed"></a>
+
+#### `check --installed <dir>`
+
+The same check, against a copy somebody **installed** on this host rather than
+the committed mirror ([#227](https://github.com/zheref/nen/issues/227)): the
+Claude plugin cache (`~/.claude/plugins/cache/<plugin>/<plugin>/<version>/claude`),
+a consumer's `.codex/`, `.cursor/` or `.agents/`. A warm-up that runs it copies
+only on drift, and says which file drifted rather than "something did". It
+reads the installed tree and writes nothing to it.
+
+**Usage**
+
+```text
+nen surface mirror check --source <dir> --surface <name> --installed <dir>
+                         [--agents <dir>] [--invocation-prefix <prefix>]
+                         [--hooks <hooks.json>] [--models <workflow.json>]
+                         [--rules <file.md>] [--permissions <permissions.json>]
+                         [--stamp <version>] [--json]
+```
+
+**Arguments** — the same inputs as `check`, with `--installed <dir>` **in place
+of** `--out`; giving both is refused at exit 2 (the installed copy *is* the
+directory being checked). `--installed` is `check`'s flag only — on `generate`
+it is refused as not read. The generation is fresh and in memory, from exactly
+the inputs given; the installed tree is compared against it file by file with
+the same five classes: `ok`, `missing` (generated, not installed), `stale`
+(installed from another surface or, with `--stamp`, another version),
+`hand-edited` (installed bytes differ), `extra` (in the installed tree's mirror
+universe, with no source).
+
+**`--surface claude-code`** is the case the verbatim row exists for: a Claude
+Code plugin's installed copy is the source tree itself, so the "generation" is
+the identity — `skills/<name>/SKILL.md` and `agents/<stem>.md` copied byte for
+byte, every frontmatter key kept, nothing rewritten, no marker. Point
+`--installed` at the directory holding `skills/` and `agents/` (for a plugin
+whose manifest maps them under `claude/`, that is `<cache>/claude`); a
+`hooks/hooks.json` given with `--hooks` is compared verbatim too. A
+`_`-prefixed file under `agents/` is a shared include on both sides and is
+never `extra`. `generate` on this row is refused: there is nothing to generate.
+
+**Output and exit codes** — prints `surface:`, `installed:`, `stamp:` (when
+given), `ok: <n>`, then the four drift lists. `--json`: `{ contract:
+"nen.surface.mirror.check-installed/v0.1", surface, ok, missing, extra, stale,
+handEdited, installed, stamp }`. Exit **0** on a fresh install; exit **1** on
+any drift; exit 2 on `check`'s refusals plus `--installed` with `--out`.
+
+**Example**
+
+```bash
+nen surface mirror check --source claude/skills --agents claude/agents \
+  --surface claude-code --installed ~/.claude/plugins/cache/hatsu/hatsu/0.43.0/claude --json
+```
+```json
+{
+  "contract": "nen.surface.mirror.check-installed/v0.1",
+  "surface": "claude-code",
+  "ok": ["agents/kurapika.md", "…", "skills/ren/SKILL.md"],
+  "missing": [],
+  "extra": [],
+  "stale": [],
+  "handEdited": ["skills/breath/SKILL.md"],
+  "installed": "/Users/me/.claude/plugins/cache/hatsu/hatsu/0.43.0/claude",
+  "stamp": null
+}
+```
+(exit 1, after one byte of the installed `breath/SKILL.md` was changed; on a
+fresh install the same command exits 0 with every file under `ok`)
 
 ## Developer workflows
 

@@ -114,8 +114,10 @@ describe("the bun pin", () => {
     const ci = yaml(CI);
     const release = yaml(RELEASE);
     const ciPin = (ci["env"] as Record<string, YamlValue>)["BUN_VERSION"];
-    const publish = (release["jobs"] as Record<string, YamlValue>)["publish"];
-    const releasePin = ((publish as Record<string, YamlValue>)["env"] as Record<string, YamlValue>)[
+    // The pin lives on the job that COMPILES (`build`, since zheref/nen#233 split
+    // the lane); `publish` installs no bun and carries none.
+    const build = (release["jobs"] as Record<string, YamlValue>)["build"];
+    const releasePin = ((build as Record<string, YamlValue>)["env"] as Record<string, YamlValue>)[
       "BUN_VERSION"
     ];
     expect(ciPin).toBe(releasePin);
@@ -227,7 +229,12 @@ describe("ci keeps the jobs the release lane depends on having been proved", () 
     const jobs = release["jobs"] as Record<string, YamlValue>;
     const publish = jobs["publish"] as Record<string, YamlValue>;
     expect(publish["permissions"]).toEqual({ contents: "write" });
-    expect(Object.keys(jobs)).toEqual(["publish"]);
+    // Two jobs since zheref/nen#233 -- `build` compiles, signs and executes;
+    // `publish` executes the linux binary and attaches -- and only the one
+    // that attaches is elevated.
+    expect(Object.keys(jobs)).toEqual(["build", "publish"]);
+    const build = jobs["build"] as Record<string, YamlValue>;
+    expect(build["permissions"]).toBeUndefined();
   });
 
   it("serializes per tag and never cancels an upload in flight", () => {

@@ -1004,6 +1004,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       check: RO(
         "reads a lane's build proof and hashes the working copy through git plumbing (a scratch index, never the repository's own); it writes no file, moves no ref and refuses no commit",
       ),
+      write: MUT("commits the index -- git commit -F on a validated message file; a local write, but a write"),
     },
   },
   dev: { subcommands: { test: DEV_FORWARDING_CHECKER, lint: DEV_FORWARDING_CHECKER, replay: DEV_CHECKER } },
@@ -1098,6 +1099,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // pull request) but that read never writes.
       threads: DRY("'list' reads every review thread; 'reply'/'resolve' send a GraphQL mutation, unless --dry-run is given, which prints the argv and writes nothing"),
       "edit-body": DRY("replaces a pull request's body via gh pr edit --body-file unless --dry-run is given; --dry-run still reads GitHub to certify the number is a pull request"),
+      open: DRY("opens ONE pull request via gh pr create unless --dry-run is given; --dry-run still asks git and GitHub whether the head is pushed and whether one is already open"),
     },
   },
   quality: {
@@ -1357,10 +1359,18 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       until: RO("re-classifies its own --command against this very table before the first observation"),
     },
   },
+  usage: {
+    subcommands: {
+      record: MUT("appends an entry to the .nen/usage/<effort>.json ledger -- a local write, but a write"),
+      show: RO("prints the ledger and its totals; reads one file"),
+    },
+  },
   wc: {
     subcommands: {
       classify: RO("classifies the working copy over git reads"),
       squash: MUT("resets the branch and commits -- git reset --soft plus git commit -F"),
+      "catch-up": MUT("fetches, then rebases or merges origin/<base> into the current branch (or continues / aborts one in progress) -- the working tree and the branch ref move"),
+      publish: MUT("pushes the current branch to origin -- a remote write, refused as a force or on the trunk"),
     },
   },
 };

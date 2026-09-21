@@ -24,6 +24,8 @@ describe("the surface table", () => {
     // A surface that REQUIRED a key it then dropped would refuse a source for
     // the sake of a line it was never going to write out.
     for (const row of SURFACES) {
+      // A verbatim row keeps EVERY key, so its (empty) list is not a filter.
+      if (row.verbatim) continue;
       for (const key of row.skillRequired) {
         expect(row.skillKeys, `${row.surface} requires '${key}' but does not keep it`).toContain(key);
       }
@@ -55,6 +57,11 @@ describe("the surface table", () => {
   it("keeps every surface's skills path a <name>/SKILL.md shape", () => {
     for (const row of SURFACES) expect(row.skillsPath.endsWith("<name>/SKILL.md")).toBe(true);
   });
+
+  it("lays the two plugin-shaped rows out with skills under skills/, and the two staged ones at the root", () => {
+    const dirs = Object.fromEntries(SURFACES.map((row): [string, string] => [row.surface, row.skillsDir]));
+    expect(dirs).toEqual({ codex: "", cursor: "", antigravity: "skills", "claude-code": "skills" });
+  });
 });
 
 describe("the two rows this release ships", () => {
@@ -65,7 +72,9 @@ describe("the two rows this release ships", () => {
   };
 
   it("keeps only name and description for the surface that documents only those two", () => {
-    expect(row("codex").skillKeys).toEqual(["name", "description"]);
+    // `summary` is nen's own addition under the description budget, not a
+    // key the page documents; the two documented keys are the first two.
+    expect(row("codex").skillKeys).toEqual(["name", "description", "summary"]);
     expect(row("codex").skillRequired).toEqual(["name", "description"]);
   });
 

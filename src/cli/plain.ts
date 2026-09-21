@@ -46,3 +46,20 @@ const CONTROL = /[\u0000-\u001F\u007F-\u009F]/g;
 export function plainLine(text: string): string {
   return text.replace(CONTROL, "");
 }
+
+/**
+ * Every control character EXCEPT the two a block of text is made of: a
+ * newline (U+000A) and a tab (U+0009). CR goes too -- it rewrites a line in
+ * place, which is the whole complaint.
+ */
+const CONTROL_IN_BLOCK = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
+
+/**
+ * A BLOCK of text nen did not write -- a conflict hunk, a diff -- made safe
+ * to print: `plainLine`'s sibling that keeps the newlines and tabs the block's
+ * shape is made of and strips every other C0, C1 and DEL byte. The `--json`
+ * document carries the original bytes, as with `plainLine`.
+ */
+export function plainBlock(text: string): string {
+  return text.replace(CONTROL_IN_BLOCK, "");
+}
