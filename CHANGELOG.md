@@ -2,7 +2,9 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
-## v0.13.1 — unreleased
+## v0.13.1 — 2026-09-21
+
+Release unit for `v0.13.0..v0.13.1`: [#235](https://github.com/zheref/nen/pull/235) (the delivery) and the release proposal (cited when it opens).
 
 ### Fixed
 
