@@ -120,7 +120,7 @@ nen bootstrap --ref v0.13.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 Once the `v0.13.0` release and its assets are published, the first prints
-`0.12.0`. Before the tag exists, a fresh install's `curl` command in
+`0.13.0`. Before the tag exists, a fresh install's `curl` command in
 [Install](#install) cannot fetch `bootstrap/nen.sh` from that ref and fails
 before the bootstrap runs; that download failure is not bootstrap exit 6.
 After the tag exists, the script can be downloaded, but without the release's
