@@ -4,6 +4,8 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## v0.13.0 — 2026-09-20
 
+Release unit for `v0.12.0..v0.13.0`: [#231](https://github.com/zheref/nen/pull/231) (the delivery) and the release proposal [#232](https://github.com/zheref/nen/pull/232).
+
 ### Added
 
 - **surface** — two corrections to the generated packs, from Copilot's review of them on the consumer (2026-09-20). **Codex's `config.toml` no longer carries `network_access = true` unconditionally**: nothing in a permissions source declared it. The line is written only when the source says `surfaces.codex.network_access` (a boolean; anything else refused by pointer), as declared; absent, nothing is written — Codex's own default applies, the source decides — and the report says `network: not declared (no network_access line; the surface's own default applies)` or `network: declared (network_access = <bool>)` (`permissionNetworkAccess` under `--json`). `approval_policy` and `sandbox_mode` are as they were; a `network_access` under a surface whose pack states no sandbox is refused. **Cursor personas are written `model: inherit` whatever their tier** (`modelInheritOnly` on the row): the subagents page documents `model:` as `inherit` — the default — or a specific model ID, and a tier alias from `models.cursor` (`composer`, `grok`) is neither. The tier is still resolved through `--models`, so an unknown value is still refused by pointer, and reaches only the report: `modelMapped: <persona>: <tier> -> inherit (cursor writes no model id)` (`modelMapped[]`). An explicit `inherit` is carried as before; Codex and Antigravity are unchanged. `nen surface capabilities cursor` says so on its `agentModelKey` and caveat ([#227](https://github.com/zheref/nen/issues/227)).
