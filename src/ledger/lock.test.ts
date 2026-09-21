@@ -1,7 +1,12 @@
 // src/ledger/lock.test.ts -- the advisory lock's two races (Copilot review on
-// zheref/nen#231, T8): a stale lock is broken by INODE, so a holder that
-// acquired between "read as stale" and "removed" keeps its lock, and the
-// release in `finally` never removes a lock this process no longer owns.
+// zheref/nen#231, T8): a stale lock is broken by IDENTITY -- inode AND the
+// token in it, because ext4 recycles a just-freed inode for the next file at
+// the path (the ubuntu check on #231 removed a successor's lock that way) --
+// so a holder that acquired between "read as stale" and "removed" keeps its
+// lock, and the release in `finally` never removes a lock this process no
+// longer owns. The "other process" below writes a different token and, on
+// APFS, lands on a different inode; on ext4 it may land on the SAME inode,
+// and the assertions hold either way.
 import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,13 +19,12 @@ const staleLock = (lock: string): void => {
   utimesSync(lock, old, old);
 };
 
-describe("withLedgerLock -- stale recovery and release are by inode, never by path", () => {
+describe("withLedgerLock -- stale recovery and release are by identity (inode and token), never by path", () => {
   it("a holder that acquires between the stale read and the recovery keeps its lock: nothing of theirs is removed, and the wait is refused by name", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-lock-toctou-"));
     const path = join(root, "ledger.json");
     const lock = ledgerLockPath(path);
     staleLock(lock);
-    const staleIno = statSync(lock).ino;
     const warned: string[] = [];
     let raced = false;
     expect(() =>
@@ -42,14 +46,14 @@ describe("withLedgerLock -- stale recovery and release are by inode, never by pa
     ).toThrow(/'.*ledger\.json\.lock' is held by another nen run and was not released within 150ms/);
     expect(raced).toBe(true);
     // The fresh holder's lock is exactly where it left it, contents and all.
+    // Its inode is not asserted: on ext4 it is very often the stale one's, reused.
     expect(readFileSync(lock, "utf8")).toBe("other\n");
-    expect(statSync(lock).ino).not.toBe(staleIno);
     // Nothing was said about breaking a stale lock -- none was broken -- and no aside file survives.
     expect(warned).toEqual([]);
     expect(readdirSync(root)).toEqual(["ledger.json.lock"]);
   });
 
-  it("a genuinely stale lock is broken by inode, said so, and the body runs under a lock this process created", () => {
+  it("a genuinely stale lock is broken, said so, and the body runs under a lock this process created", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-lock-stale-"));
     const path = join(root, "ledger.json");
     const lock = ledgerLockPath(path);
@@ -58,7 +62,7 @@ describe("withLedgerLock -- stale recovery and release are by inode, never by pa
     let ownIno: number | bigint = 0;
     const result = withLedgerLock(path, (): string => {
       ownIno = statSync(lock).ino;
-      expect(readFileSync(lock, "utf8")).toBe(`${process.pid}\n`);
+      expect(readFileSync(lock, "utf8")).toMatch(new RegExp(`^${process.pid} [a-z0-9]+\\n$`));
       return "ran";
     }, { staleMs: 1_000, waitMs: 150, warn: (line): void => { warned.push(line); } });
     expect(result).toBe("ran");

@@ -473,9 +473,15 @@ function agentFiles(options: GenerateOptions): AgentOutput {
       return { path, content: rewriteInvocations(content, row, options.invocationPrefix) };
     });
     // The includes, beside the personas (S11): frontmatter reduced the same
-    // way, marker after it, body verbatim -- and NO required-key check, no
-    // empty-frontmatter refusal and no model rewriting, because an include
-    // is not a persona: nothing routes on it, and a persona reads it by path.
+    // way, marker after it, body verbatim -- and NO required-key check and no
+    // empty-frontmatter refusal, because an include is not a persona: nothing
+    // routes on it, and a persona reads it by path. For the same reason its
+    // `model` and `tools` are DROPPED rather than rewritten (Copilot on the
+    // Hatsu mirrors): an include is protocol text, not an agent, so a tier
+    // in its source has nothing to map to -- carried verbatim it landed a
+    // `model: sonnet` in an Antigravity persona file, which that surface's
+    // model key does not admit. `name` and `description` stay, so the file
+    // still says what it is.
     for (const include of includes) {
       const path = `${rule.dir}/${include.stem}${rule.extension}`;
       if (row.verbatim) {
@@ -483,7 +489,7 @@ function agentFiles(options: GenerateOptions): AgentOutput {
         continue;
       }
       const document = splitDocument(include.text);
-      const front = renderFrontmatter(document.entries, new Set(rule.keys));
+      const front = renderFrontmatter(document.entries.filter((entry): boolean => !INCLUDE_DROPPED_KEYS.has(entry.key)), new Set(rule.keys));
       const content = `${front}${markerFor(row.surface, stamp)}\n${document.body}`;
       files.push({ path, content: rewriteInvocations(content, row, options.invocationPrefix) });
     }
@@ -550,6 +556,13 @@ function agentFiles(options: GenerateOptions): AgentOutput {
   }
   return { files, droppedInherit, undocumentedAliases, modelMapped, notes };
 }
+
+/**
+ * Frontmatter keys an include never carries into a files-kind mirror: an
+ * include is protocol text a persona reads by path, not an agent, so a model
+ * tier or a tool list in its source describes nothing the surface can route.
+ */
+const INCLUDE_DROPPED_KEYS: ReadonlySet<string> = new Set(["model", "tools"]);
 
 /** Every file this run would write, sorted by path, with what the report needs to say about them. */
 export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateReport {

@@ -8252,8 +8252,12 @@ persona ([#223](https://github.com/zheref/nen/issues/223)): it is never
 mirrored as a subagent nobody defined, and it is **carried as an include**
 so the mirrored persona's citation lands on a file the mirror holds — on a
 files-kind row as `<out>/<agents dir>/_<stem>.md` with the frontmatter
-reduced like a persona's, the marker after it and the body verbatim (no
-required-key check, no empty-frontmatter refusal, no model rewriting: nothing
+reduced like a persona's **minus `model` and `tools`, which are dropped on
+every row rather than rewritten** — an include is protocol text, not an
+agent, so a tier in its source has nothing to map to, and carried verbatim it
+put a `model: sonnet` in an Antigravity persona file whose model key does not
+admit it; `name` and `description` stay — the marker after it and the body
+verbatim (no required-key check, no empty-frontmatter refusal: nothing
 routes on it); on the appendix row (codex) as a `## _<stem>` section after
 the personas, never a TOML persona. The report lists them under `includes[]`
 (`includes (shared, carried beside the personas, not personas):` in text);

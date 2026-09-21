@@ -32,6 +32,7 @@ import {
   withoutStamp,
   writeSurfaceMirror,
   type GeneratedFile,
+  type SourceAgent,
 } from "./mirror.js";
 import { readHooksManifest, readPermissions, readRules } from "./packs.js";
 import { findSurface, type SurfaceRow } from "./rules.js";
@@ -645,6 +646,27 @@ describe("the shared include", () => {
     expect(include).toBe(`${markerFor("cursor")}\n## Shared preamble\n\nThis file is pulled into every persona by reference. It is an include, not a\npersona: it has no frontmatter and names nobody.\n`);
     const report = generateSurfaceMirrorReport({ row: row("cursor"), skills: readSourceSkills(SKILLS), agents: read.agents, includes: read.includes, invocationPrefix: null });
     expect(report.includes).toEqual(["_shared.md"]);
+  });
+
+  it("drops model and tools from its frontmatter on every files row, and keeps name and description (Copilot on the Hatsu mirrors)", () => {
+    // An include is protocol text, not an agent: a `model: sonnet` carried
+    // verbatim landed in an Antigravity persona file whose model key does not
+    // admit it, and a tier rewritten as a persona's would be a tier for nobody.
+    const preamble: SourceAgent = {
+      stem: "_preamble",
+      name: "_preamble",
+      relative: "_preamble.md",
+      text: "---\nname: _preamble\ndescription: Read this before any review.\ntools: Read, Grep\nmodel: sonnet\n---\n## Preamble\n\nRead me first.\n",
+    };
+    for (const surface of ["cursor", "antigravity"]) {
+      const files = generateSurfaceMirror({ row: row(surface), skills: readSourceSkills(SKILLS), agents: read.agents, includes: [preamble], invocationPrefix: null });
+      const include = at(files, "agents/_preamble.md");
+      expect(include).toBe(`---\nname: _preamble\ndescription: Read this before any review.\n---\n${markerFor(surface)}\n## Preamble\n\nRead me first.\n`);
+      expect(include).not.toMatch(/^(model|tools):/m);
+    }
+    // The persona beside it is still rewritten as a persona, not dropped.
+    const scout = at(generateSurfaceMirror({ row: row("antigravity"), skills: readSourceSkills(SKILLS), agents: read.agents, includes: [preamble], invocationPrefix: null }), "agents/scout.md");
+    expect(scout).toMatch(/^tools: Read, Grep, Glob$/m);
   });
 
   it("follows the personas as a ## _<stem> section on the appendix row", () => {
