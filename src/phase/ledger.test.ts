@@ -97,7 +97,7 @@ describe("appendStepsToOpenPhase under contention (zheref/nen#231)", () => {
     const warned: string[] = [];
     expect(appendStepsToOpenPhase(root, "stale", [step(7, "after")], { warn: (l): void => { warned.push(l); } })).toBe(true);
     expect(warned).toHaveLength(1);
-    expect(warned[0]).toMatch(/broke the stale phase-ledger lock '.*stale\.json\.lock' \(\d+s old; a holder that old has crashed\)/);
+    expect(warned[0]).toMatch(/broke the stale ledger lock '.*stale\.json\.lock' \(\d+s old; a holder that old has crashed\)/);
     expect(readLedger(path, "stale").phases[0]?.steps).toEqual([step(7, "after")]);
     expect(existsSync(lock)).toBe(false);
   });

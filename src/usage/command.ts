@@ -17,11 +17,10 @@
 // dot-prefixed directory, one file per effort, contract
 // `nen.usage.ledger/v0.1` (./ledger.ts). One ENTRY per invocation, appended.
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { emit, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import {
+  appendUsageEntry,
   EFFORT_ID,
   readUsageLedger,
   USAGE_CONTRACT,
@@ -71,12 +70,16 @@ here; nen writes down what you typed and where you said it came from.
 
 const COUNT_FLAGS = ["input", "output", "cache-read", "cache-write"] as const;
 
-function ledgerFor(context: CommandContext): { readonly effort: string; readonly path: string; readonly ledger: UsageLedger } {
+function ledgerPathFor(context: CommandContext): { readonly effort: string; readonly path: string } {
   const effort = context.args.values["effort"];
   if (effort === undefined || effort.trim() === "") throw new VerbUsageError("--effort <id> is required.");
   if (!EFFORT_ID.test(effort)) throw new VerbUsageError(`--effort '${effort}' is not a ledger id: letters, digits, '.', '_', '-' and '/' only.`);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const path = usageLedgerPath(root, effort);
+  return { effort, path: usageLedgerPath(root, effort) };
+}
+
+function ledgerFor(context: CommandContext): { readonly effort: string; readonly path: string; readonly ledger: UsageLedger } {
+  const { effort, path } = ledgerPathFor(context);
   return { effort, path, ledger: readUsageLedger(path, effort) };
 }
 
@@ -98,7 +101,10 @@ function readMinutes(context: CommandContext): number | null {
 }
 
 function record(context: CommandContext): number {
-  const { effort, path, ledger } = ledgerFor(context);
+  // THE PATH ONLY, HERE: the ledger is read inside the lock, in
+  // `appendUsageEntry`, so what is appended to is what is on disk at the
+  // moment of the write and not a copy taken before another run's.
+  const { effort, path } = ledgerPathFor(context);
   const surface = context.args.values["surface"];
   if (surface === undefined || surface.trim() === "") throw new VerbUsageError("--surface <s> is required for 'record'.");
   const notReported = context.args.booleans.has("not-reported");
@@ -129,9 +135,7 @@ function record(context: CommandContext): number {
     note: context.args.values["note"] ?? null,
     notReported,
   };
-  const next: UsageLedger = { ...ledger, entries: [...ledger.entries, entry] };
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  appendUsageEntry(path, effort, entry);
   emit(context.io, context.json, { path, entry }, [
     `recorded ${surface}${entry.model === null ? "" : `/${entry.model}`} on '${effort}'${notReported ? " (not reported)" : ""} -- ${path}`,
   ]);

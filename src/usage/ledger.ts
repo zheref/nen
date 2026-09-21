@@ -1,7 +1,8 @@
 // src/usage/ledger.ts -- the usage ledger's constants and its one reader, in a
 // module with no command in it, so the report assembler can read the
 // directory without importing a verb (../phase/ledger.ts's own rule, applied
-// to the second ledger; zheref/nen#227).
+// to the second ledger; zheref/nen#227) -- and its one writer, so the append
+// can be exercised across processes without going through the verb.
 //
 // WHAT IS RECORDED. One ENTRY per `nen usage record` call: which surface ran
 // (claude-code, codex, cursor, antigravity), which model alias, the token
@@ -18,6 +19,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { withLedgerLock, writeLedgerAtomically, type LedgerLockOptions } from "../ledger/lock.js";
 
 export const USAGE_LEDGER_DIR = ".nen/usage";
 export const USAGE_CONTRACT = "nen.usage.ledger/v0.1";
@@ -71,4 +73,22 @@ export function readUsageLedger(path: string, effort: string): UsageLedger {
   const entries = (parsed as { entries?: unknown }).entries;
   if (!Array.isArray(entries)) throw new Error(`'${path}': 'entries' is not an array.`);
   return { contract: USAGE_CONTRACT, effort, entries: entries as UsageEntry[] };
+}
+
+/**
+ * Append `entry` to `effort`'s ledger at `path`, creating the ledger when
+ * there is none. THE READ-MODIFY-WRITE IS SERIALIZED under the shared
+ * `withLedgerLock` (../ledger/lock.ts; Copilot review on zheref/nen#231, T7):
+ * two `nen usage record` calls on the same effort at once -- one per surface,
+ * say, at the end of a turn -- would otherwise both read the same `entries`
+ * and the later write would drop the earlier entry. The ledger is written
+ * through a temp file and a rename, so a reader never sees it torn.
+ */
+export function appendUsageEntry(path: string, effort: string, entry: UsageEntry, lock: LedgerLockOptions = {}): UsageLedger {
+  return withLedgerLock(path, (): UsageLedger => {
+    const ledger = readUsageLedger(path, effort);
+    const next: UsageLedger = { ...ledger, entries: [...ledger.entries, entry] };
+    writeLedgerAtomically(path, next);
+    return next;
+  }, lock);
 }
