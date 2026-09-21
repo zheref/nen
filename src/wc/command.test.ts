@@ -654,8 +654,8 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
       ON_WORK, WORK_OK, NO_TRACKING, { match: PUSH_WORK_U, result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(Object.keys(result.doc)).toEqual(["contract", "branch", "remote", "upstreamBefore", "ahead", "needsForce", "pushed", "dryRun"]);
-    expect(result.doc).toEqual({ contract: "nen.wc.publish/v0.1", branch: "feature/work", remote: "origin", upstreamBefore: null, ahead: null, needsForce: false, pushed: true, dryRun: false });
+    expect(Object.keys(result.doc)).toEqual(["contract", "branch", "remote", "destination", "upstreamBefore", "ahead", "needsForce", "pushed", "dryRun"]);
+    expect(result.doc).toEqual({ contract: "nen.wc.publish/v0.1", branch: "feature/work", remote: "origin", destination: "feature/work", upstreamBefore: null, ahead: null, needsForce: false, pushed: true, dryRun: false });
   });
 
   it("fetches the upstream, checks the fast-forward, counts ahead, and pushes without -u", async () => {
@@ -666,7 +666,45 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
       { match: PUSH_WORK, result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(result.doc).toMatchObject({ upstreamBefore: "origin/feature/work", ahead: 3, needsForce: false, pushed: true });
+    expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: "origin/feature/work", ahead: 3, needsForce: false, pushed: true });
+  });
+
+  it("a local branch tracking a DIFFERENTLY NAMED upstream is pushed AS that name: the ref the preflight compared is the ref the push moves (Copilot round 3 on zheref/nen#231, T9)", async () => {
+    const TRACKING_TOPIC = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "fork/topic\n" } };
+    const TOPIC_OK = { match: "git check-ref-format --branch topic", result: { code: 0 } };
+    const FETCH_TOPIC = "git fetch --end-of-options fork refs/heads/topic:refs/remotes/fork/topic";
+    const PUSH_AS_TOPIC = "git push fork -- refs/heads/feature/work:refs/heads/topic";
+    const result = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK,
+      { match: FETCH_TOPIC, result: { code: 0 } },
+      { match: "git merge-base --is-ancestor fork/topic HEAD", result: { code: 0 } },
+      { match: "git rev-list --count fork/topic..HEAD", result: { stdout: "2\n" } },
+      { match: PUSH_AS_TOPIC, result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ branch: "feature/work", remote: "fork", destination: "topic", upstreamBefore: "fork/topic", ahead: 2, pushed: true });
+    const calls = gitCalls(result.seams);
+    expect(calls).toContain(FETCH_TOPIC);
+    expect(calls).toContain(PUSH_AS_TOPIC);
+    // Never the same-named sibling: nothing here spells refs/heads/feature/work on the remote side.
+    expect(calls.some((call): boolean => call.endsWith(":refs/heads/feature/work"))).toBe(false);
+    // The text says both names, and --dry-run prints the same refspec.
+    const text = await capture(["wc", "publish"], [
+      ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK,
+      { match: FETCH_TOPIC, result: { code: 0 } },
+      { match: "git merge-base --is-ancestor fork/topic HEAD", result: { code: 0 } },
+      { match: "git rev-list --count fork/topic..HEAD", result: { stdout: "2\n" } },
+      { match: PUSH_AS_TOPIC, result: { code: 0 } },
+    ]);
+    expect(text.out).toEqual(["pushed 'feature/work' to fork as 'topic' -- 2 commit(s) ahead of fork/topic"]);
+    const dry = await capture(["wc", "publish", "--dry-run"], [
+      ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK,
+      { match: FETCH_TOPIC, result: { code: 0 } },
+      { match: "git merge-base --is-ancestor fork/topic HEAD", result: { code: 0 } },
+      { match: "git rev-list --count fork/topic..HEAD", result: { stdout: "2\n" } },
+    ]);
+    expect(dry.out).toEqual([`would run: ${PUSH_AS_TOPIC}  (2 ahead of fork/topic)`]);
+    expect(gitCalls(dry.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
   });
 
   it("--dry-run prints the push line and pushes nothing", async () => {
@@ -755,7 +793,7 @@ describe("nen wc publish -- the remote pushed to is the one the upstream names",
       { match: PUSH_FORK, result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(result.doc).toMatchObject({ remote: "fork", upstreamBefore: "fork/feature/work", ahead: 2, pushed: true });
+    expect(result.doc).toMatchObject({ remote: "fork", destination: "feature/work", upstreamBefore: "fork/feature/work", ahead: 2, pushed: true });
     const calls = gitCalls(result.seams);
     expect(calls).toContain(FETCH_FORK);
     expect(calls).toContain(PUSH_FORK);
@@ -781,7 +819,7 @@ describe("nen wc publish -- the remote pushed to is the one the upstream names",
       { match: "git push -u fork -- refs/heads/feature/work:refs/heads/feature/work", result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(result.doc).toMatchObject({ remote: "fork", upstreamBefore: null, pushed: true });
+    expect(result.doc).toMatchObject({ remote: "fork", destination: "feature/work", upstreamBefore: null, pushed: true });
 
     const unknown = await capture(["wc", "publish", "--remote", "nosuch"], [
       ON_WORK, WORK_OK, NO_TRACKING,

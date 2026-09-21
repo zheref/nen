@@ -620,7 +620,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
-| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk, any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
+| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names, as the branch it names (origin, or `--remote`, under its own name when it has none), refusing a detached HEAD, the trunk, any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -1904,13 +1904,18 @@ would run: git rebase origin/main  (2 ahead, 3 behind)
 
 Pushes the **current branch** to **the remote its upstream names** and nothing
 else (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push
-[-u] <remote> -- refs/heads/<branch>:refs/heads/<branch>`, the refspec
+[-u] <remote> -- refs/heads/<branch>:refs/heads/<destination>`, the refspec
 spelled in full behind `--` so that no branch *name* can change what the push
 does. A branch tracking `fork/feature` is pushed to `fork`, and the
 fast-forward check below is made against `fork/feature` — the ref the push
 moves — never against `origin` while pushing somewhere else (Copilot review on
-[#231](https://github.com/zheref/nen/pull/231)). A branch with **no upstream**
-goes to `origin`, or to `--remote <name>` when one is given. Everything that
+[#231](https://github.com/zheref/nen/pull/231)). **The destination is the
+branch the upstream names**: a local `feature` tracking `fork/topic` is pushed
+as `refs/heads/feature:refs/heads/topic`, so the ref the preflight fetched and
+compared is the ref the push updates, never a same-named `fork/feature` the
+check never looked at (Copilot round 3 on #231). A branch with **no upstream**
+goes to `origin`, or to `--remote <name>` when one is given, under its own
+name (`--set-upstream` then tracks `<remote>/<branch>`). Everything that
 could rewrite somebody else's history is refused before the push.
 
 **Usage**
@@ -1958,10 +1963,14 @@ push would need `--force`, and this verb never forces; the report says
 the repair.
 
 **`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
-upstreamBefore, ahead, needsForce, pushed, dryRun }`. `remote` is the one
+destination, upstreamBefore, ahead, needsForce, pushed, dryRun }`. `branch`
+is the local branch, the source half of the refspec; `remote` is the one
 pushed to — the upstream's, or `origin`/`--remote` when there was none;
-`upstreamBefore` is `null` and `ahead` is `null` when the branch tracked
-nothing before this call.
+`destination` is the branch name on that remote the push updates — the
+upstream's branch when one exists, else `branch`; `upstreamBefore` is `null`
+and `ahead` is `null` when the branch tracked nothing before this call. The
+text line says `pushed '<branch>' to <remote> as '<destination>'` when the two
+names differ.
 
 **Example**
 
