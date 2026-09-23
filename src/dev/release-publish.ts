@@ -34,9 +34,19 @@
 // EVERY REFUSAL FIRES BEFORE ANYTHING IS SENT. A GitHub Release notifies
 // watchers the moment it exists, and one G3 go publishes one target once:
 //   exit 1 -- no `v*` tag to derive from; the tag does not resolve locally; no
-//             changelog section for it; the tag is not on the remote; a release
-//             already exists for it.
-//   exit 2 -- a usage defect; no `gh` or no usable token; no derivable slug.
+//             changelog section for it; the tag is not on an ACCESSIBLE remote
+//             repository; a release already exists for it.
+//   exit 2 -- a usage defect; no `gh` or no usable token; no derivable slug; an
+//             origin on a host other than github.com; a repository `gh` cannot
+//             read; any `gh` failure, `gh release create` included.
+//
+// GITHUB.COM ONLY. The slug carries no host, so a `gh` call would silently go to
+// github.com (or to wherever `GH_HOST` points) while the tag came from another
+// host. So an origin on any other host is refused before a slug is derived, and
+// every `gh` call names github.com explicitly (`--hostname` on `gh api` and
+// `gh auth status`, `--repo github.com/<owner>/<name>` on `gh release`) so the
+// environment cannot redirect it either. nen's releases, and the
+// `release-assets` workflow that completes them, live on github.com.
 // G3 (CON-6) still holds the go: this row is what mugetsu RUNS, never
 // permission to run it.
 //
@@ -126,10 +136,30 @@ export function parseArgs(argv: readonly string[]): Options {
  * `bare/repo` and published against.
  */
 export function slugFromRemote(url: string): string | undefined {
-  const slug = parseRemoteUrl(url.split("\n")[0] ?? "")?.slug;
+  const line = url.split("\n")[0] ?? "";
+  // The shared parser accepts any host (an enterprise install is legitimate there),
+  // but returns no host, and every `gh` call here targets github.com. So a remote on
+  // another host is refused rather than published against a same-named github.com repo.
+  if (remoteHost(line) !== GITHUB_HOST) return undefined;
+  const slug = parseRemoteUrl(line)?.slug;
   // The shared parser checks the URL's SHAPE; a remote with extra path segments
   // (https://github.com/o/n/extra) still yields a slug, so it must also be owner/name.
   return slug !== undefined && looksLikeOwnerSlug(slug) ? slug : undefined;
+}
+
+/** The one host this script publishes to; named on every `gh` call. */
+export const GITHUB_HOST = "github.com";
+
+/**
+ * The host of a remote in either shape git writes -- `user@host:path` or
+ * `scheme://[user@]host[:port]/path` -- lowercased, or `undefined` for anything else.
+ */
+export function remoteHost(url: string): string | undefined {
+  const trimmed = url.trim();
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d*)?\//i.exec(trimmed);
+  if (scheme !== null) return scheme[1]?.toLowerCase();
+  const scp = /^[^@/:]+@([^:/]+):/.exec(trimmed);
+  return scp?.[1]?.toLowerCase();
 }
 
 /** The tag immediately BELOW `tag` in descending version order -- not merely the newest other one. */
@@ -209,6 +239,12 @@ export function plan(options: Options, run: Run = defaultRun): Plan {
   }
   if (slug === undefined) {
     const origin = git(run, options.repo, ["remote", "get-url", "origin"]);
+    if (origin.status === 0) {
+      const host = remoteHost(origin.stdout.split("\n")[0] ?? "");
+      if (host !== undefined && host !== GITHUB_HOST) {
+        throw new Refusal(`origin is on '${host}', not ${GITHUB_HOST}. This script publishes to ${GITHUB_HOST} only -- every 'gh' call names it -- so a tag from another host is never published against a same-named ${GITHUB_HOST} repository. If origin is an SSH alias for ${GITHUB_HOST}, pass --slug.`, 2);
+      }
+    }
     slug = origin.status === 0 ? slugFromRemote(origin.stdout) : undefined;
     if (slug === undefined) throw new Refusal("could not derive <owner/name> from origin; pass --slug", 2);
   }
@@ -246,7 +282,7 @@ export function plan(options: Options, run: Run = defaultRun): Plan {
   const latest = tag === newest;
   const latestWhy = latest ? `yes -- '${tag}' is the newest v* tag` : `NO -- '${tag}' is older than '${newest ?? "?"}'; --latest would move the pointer backwards`;
   const title = options.title ?? `Nen ${tag}`;
-  const argv = ["release", "create", tag, "--repo", slug, "--title", title, "--notes-file", "<notes>", "--verify-tag", ...(latest ? ["--latest"] : ["--latest=false"])];
+  const argv = ["release", "create", tag, "--repo", `${GITHUB_HOST}/${slug}`, "--title", title, "--notes-file", "<notes>", "--verify-tag", ...(latest ? ["--latest"] : ["--latest=false"])];
   return { slug, tag, derived, previous, title, notes: composed.notes, sections: composed.sections, latest, latestWhy, argv };
 }
 
@@ -283,13 +319,23 @@ export function publish(options: Options, run: Run = defaultRun, io: Io = defaul
     io.out(options.json ? JSON.stringify({ schema: "nen.dev.release-publish/v0.1", sent: false, ...p }) : renderPlan(p, source));
     return 0;
   }
-  const auth = run("gh", ["auth", "status"], options.repo);
+  const auth = run("gh", ["auth", "status", "--hostname", GITHUB_HOST], options.repo);
   if (auth.error !== undefined) throw new Refusal("no 'gh' on PATH -- this row publishes through the GitHub CLI", 2);
-  if (auth.status !== 0) throw new Refusal("'gh' has no usable token; publication needs one", 2);
-  const remoteTag = run("gh", ["api", `repos/${p.slug}/git/ref/tags/${p.tag}`, "--jq", ".object.sha"], options.repo);
+  if (auth.status !== 0) throw new Refusal(`'gh' has no usable token for ${GITHUB_HOST}; publication needs one`, 2);
+  // Certify the REPOSITORY first: GitHub answers 404 for an unknown or inaccessible
+  // repository exactly as for a missing ref, so a ref 404 means "push the tag" only
+  // once the repository itself is known to be readable.
+  const repository = run("gh", ["api", `repos/${p.slug}`, "--hostname", GITHUB_HOST, "--jq", ".full_name"], options.repo);
+  if (repository.error !== undefined || repository.status !== 0) {
+    const why = repository.error?.message ?? (repository.stderr.trim() || `exit ${repository.status}`);
+    throw new Refusal(`'gh api' could not read repository ${p.slug} on ${GITHUB_HOST} (${why}); it does not exist or this token cannot see it. Fix the slug or the token -- this is never a missing tag.`, 2);
+  }
+  const remoteTag = run("gh", ["api", `repos/${p.slug}/git/ref/tags/${p.tag}`, "--hostname", GITHUB_HOST, "--jq", ".object.sha"], options.repo);
+  if (remoteTag.error !== undefined) throw new Refusal(`could not run 'gh api' for tag '${p.tag}': ${remoteTag.error.message}`, 2);
   if (remoteTag.status !== 0) {
-    // Only a confirmed 404 is the tag's absence; a network, permission, rate-limit
-    // or repository failure is gh's, and is never reported as "does not exist".
+    // Only a confirmed 404 on a repository certified readable above is the tag's
+    // absence; a network, permission or rate-limit failure is gh's, and is never
+    // reported as "does not exist".
     if (/\(HTTP 404\)|\bNot Found\b/.test(remoteTag.stderr)) {
       throw new Refusal(`tag '${p.tag}' does not exist on ${p.slug}. Push it first ('nen tag cut --push'); a release must not point at a ref nobody can fetch.`, 1);
     }
@@ -302,7 +348,7 @@ export function publish(options: Options, run: Run = defaultRun, io: Io = defaul
   if (localTag.status !== 0 || remoteTag.stdout.trim() !== localTag.stdout.trim()) {
     throw new Refusal(`tag '${p.tag}' on ${p.slug} is ${remoteTag.stdout.trim() || "?"} but this checkout's is ${localTag.stdout.trim() || "?"}; fetch the tags and re-run -- the notes must come from the tag the release will point at.`, 1);
   }
-  const view = run("gh", ["release", "view", p.tag, "--repo", p.slug], options.repo);
+  const view = run("gh", ["release", "view", p.tag, "--repo", `${GITHUB_HOST}/${p.slug}`], options.repo);
   if (view.status === 0) {
     throw new Refusal(`a release already exists for '${p.tag}' on ${p.slug}. Re-publishing is never the fix; edit it by hand if the notes are wrong.`, 1);
   }
@@ -318,7 +364,10 @@ export function publish(options: Options, run: Run = defaultRun, io: Io = defaul
     writeFileSync(notesFile, p.notes);
     const argv = p.argv.map((a): string => (a === "<notes>" ? notesFile : a));
     const created = run("gh", argv, options.repo);
-    if (created.status !== 0) throw new Refusal(`'gh release create ${p.tag}' failed: ${created.stderr.trim()}`, 1);
+    // A failed create is gh's defect (exit 2), whether gh could not be started
+    // (`error`, whose message is the only diagnostic there is) or ran and failed.
+    if (created.error !== undefined) throw new Refusal(`could not run 'gh release create ${p.tag}': ${created.error.message}`, 2);
+    if (created.status !== 0) throw new Refusal(`'gh release create ${p.tag}' failed: ${created.stderr.trim() || `exit ${created.status}`}`, 2);
     const url = created.stdout.trim().split("\n").pop() ?? "";
     io.out(options.json
       ? JSON.stringify({ schema: "nen.dev.release-publish/v0.1", sent: true, slug: p.slug, tag: p.tag, derived: p.derived, latest: p.latest, url })
@@ -367,13 +416,14 @@ export function selfTest(): SelfTestResult {
     return { io: { out: (l): void => { buf.push(l); }, err: (l): void => { buf.push(l); } }, text: (): string => buf.join("\n") };
   };
   // Fake gh: remote tags, existing releases and every call recorded. Git is real.
-  const fakeGh = (remoteTags: readonly string[], released: readonly string[], calls: string[][], moved: readonly string[] = []): Run => (exe, args, cwd) => {
+  const fakeGh = (remoteTags: readonly string[], released: readonly string[], calls: string[][], moved: readonly string[] = [], repoAnswer?: RunResult): Run => (exe, args, cwd) => {
     if (exe !== "gh") return defaultRun(exe, args, cwd);
     calls.push([...args]);
     const pass: RunResult = { status: 0, stdout: "https://github.com/acme/widget/releases/tag/x\n", stderr: "" };
     const notFound: RunResult = { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
     const noRelease: RunResult = { status: 1, stdout: "", stderr: "release not found" };
     if (args[0] === "auth") return pass;
+    if (args[0] === "api" && /^repos\/[^/]+\/[^/]+$/.test(args[1] ?? "")) return repoAnswer ?? { status: 0, stdout: "acme/widget\n", stderr: "" };
     if (args[0] === "api") {
       const hit = remoteTags.find((t): boolean => (args[1] ?? "").endsWith(`/tags/${t}`));
       if (hit === undefined) return notFound;
@@ -464,11 +514,48 @@ export function selfTest(): SelfTestResult {
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), denied, quiet)) === 2, "a 'release view' stderr merely CONTAINING 'not found' is not the missing-release answer (2)");
     ok(!calls2c.some((c): boolean => c[1] === "create"), "and no release was created");
     const calls2d: string[][] = [];
-    const apiDown: Run = (exe, args, cwd) => (exe === "gh" && args[0] === "api" ? { status: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" } : fakeGh(["v2.0.0"], [], calls2d)(exe, args, cwd));
+    const apiDown: Run = (exe, args, cwd) => (exe === "gh" && args[0] === "api" && (args[1] ?? "").includes("/git/ref/") ? { status: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" } : fakeGh(["v2.0.0"], [], calls2d)(exe, args, cwd));
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), apiDown, quiet)) === 2, "a 'gh api' failure that is not a 404 is gh's defect (2), never 'the tag does not exist'");
     const calls2e: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], calls2e, ["v2.0.0"]), quiet)) === 1, "a remote tag at a different object than the local one refuses (1)");
     ok(!calls2e.some((c): boolean => c[1] === "create"), "and no release was created from mismatched notes");
+    const calls2f: string[][] = [];
+    const hidden = fakeGh(["v2.0.0"], [], calls2f, [], { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" });
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), hidden, quiet)) === 2, "a repository 404 (unknown or inaccessible) is a gh/usage defect (2), never 'push the tag'");
+    ok(!calls2f.some((c): boolean => c[1] === "create") && !calls2f.some((c): boolean => (c[1] ?? "").includes("/git/ref/")), "and no ref was read and no release created");
+    const calls2g: string[][] = [];
+    const forbidden = fakeGh(["v2.0.0"], [], calls2g, [], { status: 1, stdout: "", stderr: "gh: Resource not accessible by integration (HTTP 403)" });
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), forbidden, quiet)) === 2, "a repository permission failure is a gh/usage defect (2)");
+    ok(!calls2g.some((c): boolean => c[1] === "create"), "and no release was created");
+    const calls2h: string[][] = [];
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh([], [], calls2h), quiet)) === 1
+      && calls2h.findIndex((c): boolean => c[1] === "repos/acme/widget") !== -1
+      && calls2h.findIndex((c): boolean => c[1] === "repos/acme/widget") < calls2h.findIndex((c): boolean => (c[1] ?? "").includes("/git/ref/")),
+      "the ref-404 refusal (1) comes only after the repository was certified readable");
+
+    lines.push("the host -- github.com only, named on every gh call");
+    const ghe = join(root, "ghe");
+    spawnSync("git", ["init", "-q", ghe], { encoding: "utf8" });
+    const gg = (...args: string[]): void => {
+      const r = spawnSync("git", ["-c", "user.email=a@b", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], { cwd: ghe, encoding: "utf8" });
+      if (r.status !== 0) throw new Error(`self-test fixture: git ${args.join(" ")}: ${r.stderr}`);
+    };
+    writeFileSync(join(ghe, "CHANGELOG.md"), FIXTURE_CHANGELOG);
+    gg("add", "CHANGELOG.md");
+    gg("commit", "-qm", "chore: seed");
+    gg("tag", "v2.0.0");
+    gg("remote", "add", "origin", "https://github.com/acme/widget.git");
+    for (const remote of ["git@git.example.com:acme/widget.git", "https://git.example.com/acme/widget.git", "ssh://git@git.example.com:2222/acme/widget.git"]) {
+      gg("remote", "set-url", "origin", remote);
+      const callsHost: string[][] = [];
+      const err = capture();
+      const code = releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsHost), err.io);
+      ok(code === 2 && err.text().includes("git.example.com") && callsHost.length === 0, `an origin on another host (${remote}) refuses (2) before any gh call`);
+    }
+    const calls2i: string[][] = [];
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], calls2i), quiet)) === 0 &&
+      calls2i.length > 0 && calls2i.every((c): boolean => c.includes("--hostname") ? c[c.indexOf("--hostname") + 1] === "github.com" : c[c.indexOf("--repo") + 1] === "github.com/acme/widget"),
+      "every gh call names github.com, so GH_HOST cannot redirect it");
 
     lines.push("the one send");
     const calls3: string[][] = [];
@@ -480,6 +567,16 @@ export function selfTest(): SelfTestResult {
     ok(create.includes("--verify-tag") && !create.includes("<notes>") && create.includes("--notes-file"), "with --verify-tag and a real notes file");
     ok(!calls3.some((c): boolean => c[1] === "upload" || c[0] === "push"), "no asset upload, no push");
     ok(sent.text().startsWith("published v2.0.0"), "the output names the tag it published");
+
+    lines.push("a failed create -- gh's defect (2), with its diagnostic");
+    const failing = (answer: RunResult): Run => (exe, args, cwd) => (exe === "gh" && args[0] === "release" && args[1] === "create" ? answer : fakeGh(["v2.0.0"], [], [])(exe, args, cwd));
+    const failedErr = capture();
+    ok(releasePublishMain(["--repo", repo, "--tag", "v2.0.0"], failing({ status: 1, stdout: "", stderr: "HTTP 422: Validation Failed" }), failedErr.io) === 2
+      && failedErr.text().includes("Validation Failed"), "a non-zero 'gh release create' is gh's defect (2) and quotes its stderr");
+    const spawnErr = capture();
+    const enoent = Object.assign(new Error("spawnSync gh ENOENT"), { code: "ENOENT" }) as NodeJS.ErrnoException;
+    ok(releasePublishMain(["--repo", repo, "--tag", "v2.0.0"], failing({ status: null, stdout: "", stderr: "", error: enoent }), spawnErr.io) === 2
+      && spawnErr.text().includes("spawnSync gh ENOENT"), "a 'gh release create' that could not be started is gh's defect (2) and names the spawn error");
   } catch (error) {
     ok(false, `fixture: ${error instanceof Error ? error.message : String(error)}`);
   } finally {

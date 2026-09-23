@@ -9,7 +9,7 @@
       "release-guard": {
         "stack": "bun-cli",
         "cwd": ".",
-        "$comment": "The focused lane for src/dev/release-publish.ts, the publisher behind `verbs.nen.release`. Its fixtures are hermetic and offline: a throwaway git repository with tags and a changelog, `gh` faked, proving notes composition, the multi-version gap, the DERIVED tag, --latest withheld for an older tag, and every refusal -- publishing nothing, ever."
+        "$comment": "The focused lane for src/dev/release-publish.ts, the publisher behind `verbs.nen.release`. Its fixtures are hermetic and offline: a throwaway git repository with tags and a changelog, `gh` faked, proving notes composition, the multi-version gap, the DERIVED tag, --latest withheld for an older tag, the github.com-only host refusal, repository access certified before a ref 404 is read, a failed create classified as gh's defect, and every refusal -- publishing nothing, ever."
       }
     },
     "defaultLane": "nen",
@@ -64,7 +64,7 @@
         "release": {
           "exe": "bun",
           "argv": ["src/dev/release-publish.ts", "--repo", "."],
-          "why": "Publishes ONE GitHub Release for the newest v* tag (named as DERIVED) that already resolves on origin, notes from that tag's own CHANGELOG.md section; refuses before anything is sent if the tag is absent, missing on the remote, or already released. Cuts no tag, pushes nothing, uploads no asset -- release-assets attaches the binaries on `release: published`. G3 (CON-6) holds the go; this row is what mugetsu RUNS, never permission to run it.",
+          "why": "Publishes ONE GitHub Release for the newest v* tag (named as DERIVED) that already resolves on origin, notes from that tag's own CHANGELOG.md section; refuses before anything is sent if origin is not on github.com, the repository is not readable, or the tag is absent, missing on the remote, or already released. Cuts no tag, pushes nothing, uploads no asset -- release-assets attaches the binaries on `release: published`. G3 (CON-6) holds the go; this row is what mugetsu RUNS, never permission to run it.",
           "$comment": "RETIRED SEAT, 2026-09-22, following zheref/hatsu's identical fix of 2026-09-19. This row previously read: \"publishing is `nen tag cut` plus a GitHub Release the maintainer creates by hand; there is no single local publish step nen can declare for itself.\" -- false in practice: v0.12.0, v0.13.0, v0.13.1 and v0.14.0 were each published by an agent session running `gh release create` on the maintainer's credentials after the maintainer's G3 go, and the seat made `hatsu:mugetsu` (which runs `nen shu release`) stop at exit 4, so publication happened outside the declared machinery. A declaration that disagrees with the practice is a bug in the declaration. The publisher is TypeScript in src/dev/ rather than Hatsu's bash because bootstrap/nen.sh is the one shell file this repository ships (AK-11) and D16 bars a runtime python3. --tag is omitted deliberately: `nen shu release` passes no arguments, so the script derives the newest v* tag."
         },
         "deploy": { "unsupported": "nen ships as release binaries fetched by `bootstrap/nen.sh`, not as a deploy to a named destination." }
