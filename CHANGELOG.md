@@ -12,7 +12,9 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 - **No repin: the compatibility floor stays `0.7`.** Only a repository script under `src/dev/` and its `nen/contract.json` prose change; no verb, flag or `--json` contract moves. A caller of the release row that branched on exit `1` for a failed `gh release create` or an unreadable repository now sees exit `2`, as the script's own documentation always said.
 
-## v0.14.1 — unreleased
+## v0.14.1 — 2026-09-23
+
+Release unit for `v0.14.0..v0.14.1`: [#247](https://github.com/zheref/nen/pull/247) (the delivery) and [#256](https://github.com/zheref/nen/pull/256) (the release proposal).
 
 ### Fixed
 
