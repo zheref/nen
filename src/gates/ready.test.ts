@@ -3,7 +3,8 @@
 // predicates it composes (already exercised, case for case, by
 // ./predicates.test.ts against the SAME fixture identities). What this file
 // proves that the predicate suite cannot: the evaluation ORDER, that a failure
-// stops the walk with every later row `unevaluated` rather than `ready`, that
+// no longer stops the walk -- every row is evaluated and a row that cannot be
+// computed names its missing fact (zheref/nen#248) -- that
 // the reason attached is the gate's own sentence rather than a paraphrase, and
 // the three PORT CHANGE mappings (§3) that route a structural identity flag
 // (`bounded_policy_exempt`, `approves_when_posted_at_head`) to the string the
@@ -299,11 +300,43 @@ describe("evaluateReady -- CON-30's dependency-author carve-out (zheref/nen#18)"
   });
 });
 
-describe("evaluateReady -- short-circuit: a failing row leaves every later row `unevaluated`, never `ready`", () => {
-  it("mergeable fails first: every other row is unevaluated, none is `ready`", () => {
+describe("evaluateReady -- every row is evaluated; the verdict stays the conjunction (zheref/nen#248)", () => {
+  const status = (evaluation: ReturnType<typeof evaluateReady>): Map<ConjunctId, string> =>
+    new Map(evaluation.conjuncts.map((c): [ConjunctId, string] => [c.id, c.status]));
+
+  it("THE REGRESSION: a red check AND an unresolved thread are BOTH reported, not the first alone", () => {
+    // zheref/nen#247, 2026-09-23: row 2 failed on a Windows job ruled out of
+    // scope, and row 6 -- two real unresolved Copilot threads -- was printed
+    // `unevaluated`. A caller reading the verdict saw one infrastructure
+    // failure and the PR was called ready on that basis.
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        checks: [greenCheck(), { name: "windows / test", status: "COMPLETED", conclusion: "FAILURE" }],
+        unresolved_threads: 2,
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.failing).toEqual(["checks-green", "unresolved-threads"]);
+    // `firstFailing` and the LINE are exactly what they were: the first failure.
+    expect(evaluation.firstFailing).toBe("checks-green");
+    expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+    const threads = evaluation.conjuncts.find((c): boolean => c.id === "unresolved-threads");
+    expect(threads?.status).toBe("failed");
+    expect(threads?.reason).toBe("not-ready: 2 unresolved review thread(s) (CON-32d)");
+    // The rows between them were evaluated and passed -- not `unevaluated`.
+    const statuses = status(evaluation);
+    expect(statuses.get("round-stalled")).toBe("ready");
+    expect(statuses.get("rounds-owed")).toBe("ready");
+    expect(statuses.get("approvals-at-head")).toBe("ready");
+  });
+
+  it("mergeable failing first no longer hides the rest: every other row is evaluated on its own evidence", () => {
     const evaluation = evaluateReady(IDENTITIES, readyState({ mergeable: "CONFLICTING" }), OPTIONS);
     expect(evaluation.ready).toBe(false);
     expect(evaluation.firstFailing).toBe("mergeable");
+    expect(evaluation.failing).toEqual(["mergeable"]);
     expect(evaluation.line).toBe(
       "not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)",
     );
@@ -311,22 +344,86 @@ describe("evaluateReady -- short-circuit: a failing row leaves every later row `
     expect(mergeable?.status).toBe("failed");
     expect(mergeable?.reason).toBe(evaluation.line);
     for (const conjunct of rest) {
-      expect(conjunct.status).toBe("unevaluated");
+      expect(conjunct.status).toBe("ready");
       expect(conjunct.reason).toBeNull();
+      expect(conjunct.missing).toBeNull();
     }
   });
 
-  it("a later failure leaves EARLIER rows `ready` and only LATER ones `unevaluated`", () => {
-    // unresolved-threads is the last row; every row before it must read `ready`.
+  it("a stalled round fails BOTH CON-32(b) rows it is (stalled and owed); the line stays the stall's", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        review_requests: [{ login: "copilot-pull-request-reviewer[bot]" }],
+        stall_requested_at: "2025-06-01T11:00:00Z",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.failing).toEqual(["round-stalled", "rounds-owed"]);
+    expect(evaluation.line).toMatch(/^not-ready: copilot round stalled/);
+  });
+
+  it("an owed round and a missing APPROVE are both reported -- each is its own predicate", () => {
+    // tenma posted nothing: its round is owed AND it has no APPROVE at head.
+    const evaluation = evaluateReady(IDENTITIES, readyState({ reviews: [approvedAtHead("sasuke")] }), OPTIONS);
+    expect(evaluation.failing).toEqual(["rounds-owed", "approvals-at-head"]);
+    expect(evaluation.firstFailing).toBe("rounds-owed");
+  });
+
+  it("no head SHA: the three CON-32(b) rows are unknown and NAME the missing fact, never a blanket `unevaluated`", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState({ head_sha: "" }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.failing).toEqual([]);
+    expect(evaluation.firstFailing).toBeNull();
+    for (const id of ["round-stalled", "rounds-owed", "approvals-at-head"] as const) {
+      const row = evaluation.conjuncts.find((c): boolean => c.id === id);
+      expect(row?.status).toBe("unevaluated");
+      expect(row?.missing).toMatch(/no head SHA was read/);
+      expect(row?.reason).toBeNull();
+    }
+    // An unknown row is never a pass, so with no failure the line names it.
+    expect(evaluation.line).toMatch(/^not-ready: CON-32\(b\) could not be judged — no head SHA was read/);
+    expect(evaluation.context.headSha).toBe("");
+  });
+
+  it("an unreadable rollup fails row 2 and leaves the rows that read it unknown -- the thread row is still judged", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: "not-an-array", unresolved_threads: 1 }),
+      OPTIONS,
+    );
+    expect(evaluation.failing).toEqual(["checks-green", "unresolved-threads"]);
+    const owed = evaluation.conjuncts.find((c): boolean => c.id === "rounds-owed");
+    expect(owed?.status).toBe("unevaluated");
+    expect(owed?.missing).toMatch(/check rollup could not be read/);
+  });
+
+  it("unreadable reviews fail rounds-owed (obligation A) and leave stalled/approvals unknown by name", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState({ reviews: "nope" }), OPTIONS);
+    expect(evaluation.firstFailing).toBe("rounds-owed");
+    expect(evaluation.line).toMatch(/^not-ready: the PR state could not be read/);
+    const approvals = evaluation.conjuncts.find((c): boolean => c.id === "approvals-at-head");
+    expect(approvals?.status).toBe("unevaluated");
+    expect(approvals?.missing).toMatch(/reviews could not be read/);
+  });
+
+  it("the LAST row failing still leaves every earlier row `ready`", () => {
     const evaluation = evaluateReady(IDENTITIES, readyState({ unresolved_threads: 3 }), OPTIONS);
     expect(evaluation.firstFailing).toBe("unresolved-threads");
-    const statuses = new Map(evaluation.conjuncts.map((c): [ConjunctId, string] => [c.id, c.status]));
+    expect(evaluation.failing).toEqual(["unresolved-threads"]);
+    const statuses = status(evaluation);
     expect(statuses.get("mergeable")).toBe("ready");
     expect(statuses.get("checks-green")).toBe("ready");
     expect(statuses.get("round-stalled")).toBe("ready");
     expect(statuses.get("rounds-owed")).toBe("ready");
     expect(statuses.get("approvals-at-head")).toBe("ready");
     expect(statuses.get("unresolved-threads")).toBe("failed");
+  });
+
+  it("a ready verdict has an empty `failing` list", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState(), OPTIONS);
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.failing).toEqual([]);
   });
 });
 

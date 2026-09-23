@@ -756,7 +756,8 @@ never merges, labels, or comments on a pull request.
 ### `nen pr ready`
 
 Reports one pull request's CON-32 readiness: the deterministic gate's
-verdict, quoted, plus the first failing conjunct — nothing else. It is
+verdict, quoted, plus every conjunct row — `ready`, `FAILED`, or `unknown`
+with the missing fact named. It is
 read-only: it never labels, merges or comments, and it holds no readiness
 *authority* today (the shell gate still does; see the verb's own header for
 the shadow-window position). A `<CODE>#<N>` ref is resolved through the
@@ -822,10 +823,63 @@ minutes and can be overridden per repository with `nen/gates.json`'s
 Omitting `round_policy` (or `stallMinutes` within it) keeps the built-in
 30-minute default.
 
+**Every row is evaluated, not only up to the first failure (zheref/nen#248).**
+Through v0.14.0 the gate stopped at the first failing row and printed every
+later row `unevaluated`. On zheref/nen#247 that hid two real unresolved review
+threads behind a red check that the maintainer had ruled out of scope. Now each row is its
+own predicate on its own evidence, asked whether or not an earlier row failed.
+**No row's criterion changed**, the verdict is still the whole conjunction,
+the first line (`gateLine`) is still the *first* failing row's reason byte for
+byte, `firstFailing` is kept, and the exit code is unchanged. What is new is
+`failing`, which lists every failed row in order. A row that cannot be computed
+names the fact it lacked (`conjuncts[].missing`), for example *no head SHA was read* or
+*the check rollup could not be read (row 2 carries the parse error)*, instead of a
+blanket `unevaluated`. In `--json` its `status` stays `unevaluated`, so the v0.1
+closed set does not move. `--explain` renders it as `unknown`. An `unknown` row is
+never a pass: a table with no failure but an unknown row is still `not-ready`.
+Two rows can now fail together where they are one fact seen twice. A stalled
+round is also an owed one, so rows 3 and 4 both fail and the line is row 3's.
+CON-30's carve-out is read whenever the rollup is readable, rather than only
+after row 2 passed.
+
+**Which head the verdict is about (zheref/nen#245).** The verdict concerns
+**GitHub's current head** for the pull request at the moment the verb reads
+it. That is not necessarily your local commit. On zheref/KroApple#577 a `ready`
+was decided eight seconds before a push registered, so it judged the parent
+commit. Three things make that visible:
+
+- **The judged head is always stated.** The plain output's second line and
+  `--explain`'s second line are `judged head: <sha>`. `--json` carries it as the
+  top-level `judgedHead`, the same value as `meta.headSha`.
+- **A local tip that differs is warned about, in every output mode.** When the
+  verb runs inside a checkout of the pull request's **head branch**, the
+  branch name must match *and* a remote must name the repository, since `main` exists
+  everywhere. If that checkout's `git rev-parse HEAD` is not GitHub's head, a
+  `head mismatch:` warning naming both SHAs goes into `meta.warnings`. The plain
+  output and `--explain` print it, and `--json` carries it together with
+  `localHead: { branch, sha, matches }`. `localHead` is `null` outside such a
+  checkout. The warning never changes the verdict or the exit code.
+- **`--require-head <sha>` pins it.** It takes 7–40 hex digits and matches them
+  as a case-insensitive prefix of GitHub's head. If GitHub's head is anything
+  else, or GitHub answered none, the verb exits **`8`** with status
+  `head-mismatch`, prints both SHAs, and prints **no verdict**. A `8` is never
+  `ready` or `not-ready`, because the question was about a commit GitHub does not
+  hold as the head. The code collides with nothing else this CLI or its
+  bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s and
+  `pr threads`', and `3`–`7` are the bootstrap script's). Under `--json` the mismatch
+  prints its own document with its own contract,
+  `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
+  `requiredHead`, `githubHead`, `message`, `evaluatedAt` and `generator`. It deliberately does
+  *not* use a `nen.pr.ready/v0.1` report with an invented verdict. In the other modes the output is one
+  stdout line, `<repo>#<pr>: head-mismatch: required <sha>, GitHub's head is <sha>`,
+  followed by the reason on stderr. On a match the verdict is exactly what it would be
+  without the flag, and `meta.requiredHead` records the flag's value. The verb
+  **never waits or retries**. Whether to poll until the head registers is the caller's decision.
+
 **Usage**
 
 ```text
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>[,<name>...]] [--gates <path>] [--token-env <VAR>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>[,<name>...]] [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 ```
 
 **Arguments**
@@ -842,6 +896,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | comma-joined for more than one name; this CLI's flag reader refuses a *repeated* occurrence of the same flag, so `--exclude-check a,b` is the form, not `--exclude-check a --exclude-check b` |
 | `--gates <path>` | no | read reviewer identities from this file instead of `nen/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
+| `--require-head <sha>` | no | judge only this commit: 7–40 hex digits, a case-insensitive prefix of GitHub's head | any other head is exit `8` (`head-mismatch`), both SHAs printed, no verdict; malformed is exit `2` |
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
 
@@ -916,15 +971,23 @@ on stderr on every invocation either — every verb in this binary shares one
 stderr that callers treat as diagnostics, and `pr ready` is not privileged among
 them; the report carries it, and a caller that wants it reads the report.
 
-**Output and exit codes** — human line is `<repo>#<pr>: <gateLine>` (or the
-full conjunct table with `--explain`); `--json` top-level keys: `contract`,
+**Output and exit codes**. The human output's first line is `<repo>#<pr>: <gateLine>`,
+unchanged. It is followed by the `judged head:` line, one `also FAILED <clause>: <reason>`
+line for each failing row after the first, and one `warning:` line for each warning.
+`--explain` prints the full conjunct table instead, headed by the same two lines and a
+`failing rows (<n>):` summary. The `--json` top-level keys are `contract`,
 `verdict` (`ready`\|`not-ready`\|`unevaluated`), `gateLine`, `firstFailing`,
-`conjuncts[]` (each row `id`, `order`, `clause`, `title`, `status`, `reason`,
-`note`), `caveats[]`, `remedy`, `meta`. Exit 0 only on `verdict: ready`;
-exit 1 on `not-ready` **or** `unevaluated` (a non-zero exit never means
-"cleared" — SKILL.md §4's "absence is never a pass"); exit 2 on a malformed
-ref, an unresolvable code, or no reviewer-identity source at all (a usage
-problem, never a verdict).
+`failing[]`, `judgedHead`, `localHead`, `conjuncts[]` (each row has `id`, `order`,
+`clause`, `title`, `status`, `reason`, `note` and `missing`), `caveats[]`, `remedy` and `meta`
+(`meta.requiredHead` included). `failing`, `judgedHead`, `localHead`,
+`conjuncts[].missing` and `meta.requiredHead` are additive to `nen.pr.ready/v0.1`.
+Exit 0 only on `verdict: ready`.
+Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
+"cleared" (SKILL.md §4's "absence is never a pass").
+Exit 2 on a malformed ref, an unresolvable code, a malformed `--require-head`, or no
+reviewer-identity source at all. That is a usage problem, never a verdict.
+Exit **8** on `head-mismatch`: `--require-head` named a commit that is not GitHub's head, and no verdict was
+decided.
 
 **Example**
 

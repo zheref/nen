@@ -9,6 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CONTRACT,
+  EXIT_HEAD_MISMATCH,
+  HEAD_MISMATCH_CONTRACT,
+  remoteNamesRepo,
   identitiesFromFlags,
   prReady,
   renderExplain,
@@ -18,6 +21,7 @@ import {
   IdentityError,
   type Io,
   type PrReadyDeps,
+  type LocalCheckout,
   type PrReadyInput,
   type ReadyReport,
 } from "./pr_ready.js";
@@ -560,9 +564,12 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
     verdict: "not-ready",
     gateLine: "not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)",
     firstFailing: "mergeable",
+    failing: ["mergeable"],
+    judgedHead: "deadbeef",
+    localHead: null,
     conjuncts: [
-      { id: "mergeable", order: 1, clause: "CON-42/1", title: "Mergeable", status: "failed", reason: "not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)", note: null },
-      { id: "checks-green", order: 2, clause: "CON-32(a)", title: "Every reported check green", status: "unevaluated", reason: null, note: null },
+      { id: "mergeable", order: 1, clause: "CON-42/1", title: "Mergeable", status: "failed", reason: "not-ready: mergeable=CONFLICTING (expected MERGEABLE — CON-42/1's added predicate)", note: null, missing: null },
+      { id: "checks-green", order: 2, clause: "CON-32(a)", title: "Every reported check green", status: "unevaluated", reason: null, note: null, missing: "the check rollup could not be read" },
     ],
     caveats: [{ id: "addressed-is-approximated", clause: "CON-32(c)", text: "Approximated." }],
     remedy: null,
@@ -576,6 +583,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       approvalPolicy: "required",
       roundPolicy: "bounded",
       excludeRun: null,
+      requiredHead: null,
       excludedChecks: [],
       deliveryPr: false,
       identities: { source: "schema", path: "/repo/nen/gates.json" },
@@ -594,7 +602,11 @@ describe("renderExplain", () => {
     const text = lines.join("\n");
     expect(text).toContain("zheref/example#1: not-ready: mergeable=CONFLICTING");
     expect(text).toMatch(/1\s+FAILED\s+CON-42\/1\s+Mergeable/);
-    expect(text).toMatch(/2\s+unevaluated\s+CON-32\(a\)/);
+    // `unevaluated` is RENDERED `unknown`, with the missing fact beneath it
+    // (zheref/nen#248); the JSON value is unchanged.
+    expect(text).toMatch(/2\s+unknown\s+CON-32\(a\)/);
+    expect(text).toContain("└ unknown: the check rollup could not be read");
+    expect(text).toContain("failing rows (1): 1 CON-42/1 (mergeable)");
     expect(text).toContain("What the gate does NOT decide:");
     expect(text).toContain("CON-32(c): Approximated.");
   });
@@ -661,12 +673,15 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
   };
 }
 
-function stubDeps(source: PrStateSource | null): PrReadyDeps {
+function stubDeps(source: PrStateSource | null, local: LocalCheckout | null = null): PrReadyDeps {
   return {
     now: (): string => "2025-01-01T00:00:00Z",
     executable: (): string => "/opt/nen/nen-linux-x64",
     openSource: (): { ok: true; source: PrStateSource } | { ok: false; message: string } =>
       source === null ? { ok: false, message: "no usable token" } : { ok: true, source },
+    // NEVER the real checkout: the suite runs from whatever branch it runs from,
+    // and a warning that depended on that would be a flaky test.
+    localCheckout: (): LocalCheckout | null => local,
   };
 }
 
@@ -1128,7 +1143,12 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
   it("the plain default is the gate's own quotable line, repo-prefixed", async () => {
     const { io, out } = capture();
     await prReady(input({ booleans: new Set() }), io, stubDeps(stubSource()));
-    expect(out).toEqual(["zheref/example#9: ready"]);
+    // The FIRST line is unchanged -- a caller reading one line reads what it
+    // always read. The judged head follows it, unconditionally (zheref/nen#245).
+    expect(out).toEqual([
+      "zheref/example#9: ready",
+      "  judged head: cafebabe (GitHub's head for this pull request when it was read; the verdict is about this commit)",
+    ]);
   });
 
   it("a not-ready PR exits 1 and quotes the FIRST failing conjunct's reason verbatim", async () => {
@@ -1358,5 +1378,284 @@ describe("prReady -- a relative --gates is the target repository's file, and the
     expect(text).toContain(BANKAI_REPO);
     expect(text).toMatch(/absolute path/);
     expect(text).not.toMatch(/ENOENT/);
+  });
+});
+
+// ── zheref/nen#248: every row, not the first failure alone ─────────────────
+
+/** stubSource with a red check AND two unresolved threads -- the #247 shape. */
+function redCheckAndThreads(): PrStateSource {
+  return stubSource({
+    pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+      pullRequest: {
+        number: 9,
+        mergeable: "MERGEABLE",
+        isDraft: false,
+        headRefOid: "cafebabe",
+        headRefName: "feature/x",
+        baseRefName: "main",
+        author: { login: "someone" },
+        labels: [],
+        reviewRequests: [],
+      },
+      defaultBranch: "main",
+      checkRollup: [
+        { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
+        { name: "ci / windows", status: "COMPLETED", conclusion: "FAILURE" },
+      ],
+      checkRollupPageInfo: { hasNextPage: false, endCursor: null },
+      reviewRequests: [],
+      reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
+    }),
+    reviewThreadsPage: async (): Promise<ReviewThreadPage> => ({
+      nodes: [
+        { isResolved: false, isOutdated: false },
+        { isResolved: false, isOutdated: false },
+      ],
+      hasNextPage: false,
+      endCursor: null,
+    }),
+  });
+}
+
+describe("prReady -- every CON-32 row is reported, not the first failure alone (zheref/nen#248)", () => {
+  it("--json: a red check AND unresolved threads are BOTH in `failing`; firstFailing and the exit code are unchanged", async () => {
+    const { io, out } = capture();
+    const code = await prReady(input(), io, stubDeps(redCheckAndThreads()));
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    expect(report.firstFailing).toBe("checks-green");
+    expect(report.failing).toEqual(["checks-green", "unresolved-threads"]);
+    expect(report.gateLine).toBe("not-ready: required checks reported but are not all green (CON-32a)");
+    const threads = report.conjuncts.find((c): boolean => c.id === "unresolved-threads");
+    expect(threads?.status).toBe("failed");
+    expect(threads?.reason).toBe("not-ready: 2 unresolved review thread(s) (CON-32d)");
+  });
+
+  it("--explain lists every failing row, and the thread row reads FAILED rather than unevaluated", async () => {
+    const { io, out } = capture();
+    await prReady(input({ booleans: new Set(["explain"]) }), io, stubDeps(redCheckAndThreads()));
+    const text = out.join("\n");
+    expect(text).toContain("failing rows (2): 2 CON-32(a) (checks-green), 6 CON-32(d) (unresolved-threads)");
+    expect(text).toMatch(/6\s+FAILED\s+CON-32\(d\)\s+Zero unresolved review threads/);
+    expect(text).not.toMatch(/unevaluated/);
+  });
+
+  it("the plain line stays the first failure; every OTHER failing row follows it", async () => {
+    const { io, out } = capture();
+    await prReady(input({ booleans: new Set() }), io, stubDeps(redCheckAndThreads()));
+    expect(out[0]).toBe("zheref/example#9: not-ready: required checks reported but are not all green (CON-32a)");
+    expect(out).toContain("  also FAILED CON-32(d): not-ready: 2 unresolved review thread(s) (CON-32d)");
+  });
+
+  it("an unevaluated report names the missing fact on every row, never a blanket `unevaluated`", async () => {
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(null));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.failing).toEqual([]);
+    expect(report.judgedHead).toBeNull();
+    for (const conjunct of report.conjuncts) {
+      expect(conjunct.status).toBe("unevaluated");
+      expect(conjunct.missing).toBe("GitHub could not be read (no usable token, so GitHub could not be read)");
+    }
+  });
+});
+
+// ── zheref/nen#245: the head the verdict judged ────────────────────────────
+
+const ORIGIN = ["git@github.com:zheref/example.git"];
+
+describe("prReady -- the judged head is always stated (zheref/nen#245)", () => {
+  it("--json carries `judgedHead` as a field, equal to meta.headSha", async () => {
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(stubSource()));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.judgedHead).toBe("cafebabe");
+    expect(report.meta.headSha).toBe("cafebabe");
+    expect(report.localHead).toBeNull();
+    expect(report.meta.requiredHead).toBeNull();
+  });
+
+  it("--explain states the judged head on its second line", async () => {
+    const { io, out } = capture();
+    await prReady(input({ booleans: new Set(["explain"]) }), io, stubDeps(stubSource()));
+    expect(out[1]).toMatch(/^ {2}judged head: cafebabe /);
+  });
+});
+
+describe("prReady -- local tip differs from GitHub's head: a warning naming both SHAs, in every mode (zheref/nen#245)", () => {
+  const behind: LocalCheckout = { branch: "feature/x", sha: "0123456789abcdef", remoteUrls: ORIGIN };
+
+  it("--json: `localHead.matches` is false and meta.warnings names both SHAs; the verdict is unchanged", async () => {
+    const { io, out } = capture();
+    const code = await prReady(input(), io, stubDeps(stubSource(), behind));
+    expect(code).toBe(0);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("ready");
+    expect(report.localHead).toEqual({ branch: "feature/x", sha: "0123456789abcdef", matches: false });
+    const warning = report.meta.warnings.find((w): boolean => w.startsWith("head mismatch:"));
+    expect(warning).toContain("cafebabe");
+    expect(warning).toContain("0123456789abcdef");
+  });
+
+  it("plain: the warning follows the verdict line", async () => {
+    const { io, out } = capture();
+    await prReady(input({ booleans: new Set() }), io, stubDeps(stubSource(), behind));
+    expect(out[0]).toBe("zheref/example#9: ready");
+    expect(out.join("\n")).toMatch(/warning: head mismatch: .*cafebabe.*0123456789abcdef/);
+  });
+
+  it("--explain: the warning is printed", async () => {
+    const { io, out } = capture();
+    await prReady(input({ booleans: new Set(["explain"]) }), io, stubDeps(stubSource(), behind));
+    expect(out.join("\n")).toMatch(/warning: head mismatch: .*cafebabe.*0123456789abcdef/);
+  });
+
+  it("a matching local tip is recorded and warns about nothing", async () => {
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(stubSource(), { ...behind, sha: "CAFEBABE" }));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.localHead?.matches).toBe(true);
+    expect(report.meta.warnings.some((w): boolean => w.startsWith("head mismatch:"))).toBe(false);
+  });
+
+  it("a different branch is not a checkout of the PR's head branch: no localHead, no warning", async () => {
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(stubSource(), { ...behind, branch: "main" }));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.localHead).toBeNull();
+    expect(report.meta.warnings).toEqual([]);
+  });
+
+  it("the same branch name in a checkout whose remotes name another repository is not this PR's checkout", async () => {
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(stubSource(), { ...behind, remoteUrls: ["https://github.com/someone/else.git"] }));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.localHead).toBeNull();
+  });
+});
+
+describe("prReady -- --require-head <sha> (zheref/nen#245)", () => {
+  it("a NON-matching SHA exits 8 with status head-mismatch, prints both SHAs, and NO verdict", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "require-head": "0123456789abcdef" } }),
+      io,
+      stubDeps(stubSource()),
+    );
+    expect(code).toBe(EXIT_HEAD_MISMATCH);
+    expect(code).toBe(8);
+    const report = JSON.parse(out.join("\n")) as Record<string, unknown>;
+    expect(report["contract"]).toBe(HEAD_MISMATCH_CONTRACT);
+    expect(report["status"]).toBe("head-mismatch");
+    expect(report["requiredHead"]).toBe("0123456789abcdef");
+    expect(report["githubHead"]).toBe("cafebabe");
+    // No verdict, no table: nothing a consumer could quote as ready/not-ready.
+    expect(report).not.toHaveProperty("verdict");
+    expect(report).not.toHaveProperty("gateLine");
+    expect(report).not.toHaveProperty("conjuncts");
+  });
+
+  it("plain mode: one head-mismatch line naming both SHAs, the reason on stderr, never `ready`", async () => {
+    const { io, out, err } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "require-head": "0123456" }, booleans: new Set() }),
+      io,
+      stubDeps(stubSource()),
+    );
+    expect(code).toBe(8);
+    expect(out).toEqual(["zheref/example#9: head-mismatch: required 0123456, GitHub's head is cafebabe"]);
+    expect(err.join("\n")).toContain("No verdict was decided");
+    expect(out.join("\n")).not.toMatch(/: (not-)?ready/);
+  });
+
+  it("--explain on a mismatch prints the same head-mismatch line and no table", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "require-head": "0123456" }, booleans: new Set(["explain"]) }),
+      io,
+      stubDeps(stubSource()),
+    );
+    expect(code).toBe(8);
+    expect(out.join("\n")).not.toContain("What the gate does NOT decide");
+  });
+
+  it("a MATCHING SHA (full, abbreviated, any case) leaves the verdict exactly as it would be without the flag", async () => {
+    const plain = capture();
+    const baseline = await prReady(input(), plain.io, stubDeps(stubSource()));
+    const baselineReport = JSON.parse(plain.out.join("\n")) as ReadyReport;
+    for (const sha of ["cafebabe", "CAFEBAB"]) {
+      const { io, out } = capture();
+      const code = await prReady(
+        input({ values: { ...input().values, "require-head": sha } }),
+        io,
+        stubDeps(stubSource()),
+      );
+      expect(code).toBe(baseline);
+      const report = JSON.parse(out.join("\n")) as ReadyReport;
+      expect(report.verdict).toBe(baselineReport.verdict);
+      expect(report.gateLine).toBe(baselineReport.gateLine);
+      expect(report.conjuncts).toEqual(baselineReport.conjuncts);
+      expect(report.meta.requiredHead).toBe(sha);
+    }
+  });
+
+  it("a malformed SHA is a usage error (exit 2) before GitHub is read", async () => {
+    const { io, err } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "require-head": "not-a-sha" } }),
+      io,
+      stubDeps(stubSource()),
+    );
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/--require-head takes a commit SHA/);
+  });
+
+  it("GitHub answering no head matches nothing: head-mismatch, never a verdict", async () => {
+    const headless = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+        pullRequest: {
+          number: 9,
+          mergeable: "MERGEABLE",
+          isDraft: false,
+          headRefOid: "",
+          headRefName: "feature/x",
+          baseRefName: "main",
+          author: { login: "someone" },
+          labels: [],
+          reviewRequests: [],
+        },
+        defaultBranch: "main",
+        checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
+        checkRollupPageInfo: { hasNextPage: false, endCursor: null },
+        reviewRequests: [],
+        reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
+      }),
+    });
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "require-head": "cafebabe" } }),
+      io,
+      stubDeps(headless),
+    );
+    expect(code).toBe(8);
+    const report = JSON.parse(out.join("\n")) as Record<string, unknown>;
+    expect(report["githubHead"]).toBeNull();
+  });
+});
+
+describe("remoteNamesRepo", () => {
+  it("matches https, scp-style and ssh URLs, with or without .git, case-insensitively", () => {
+    for (const url of [
+      "https://github.com/zheref/example.git",
+      "https://github.com/Zheref/Example",
+      "git@github.com:zheref/example.git",
+      "ssh://git@github.com/zheref/example/",
+    ]) {
+      expect(remoteNamesRepo(url, "zheref", "example")).toBe(true);
+    }
+    expect(remoteNamesRepo("https://github.com/zheref/example-two.git", "zheref", "example")).toBe(false);
+    expect(remoteNamesRepo("https://github.com/notzheref/example.git", "zheref", "example")).toBe(false);
   });
 });
