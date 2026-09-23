@@ -6,6 +6,10 @@ const CLEAN = { match: "git status --porcelain=v1 -uall", result: { stdout: "" }
 const ANCESTOR_OK = { match: "git merge-base --is-ancestor main HEAD", result: { code: 0 } };
 const MERGE_BASE = { match: "git merge-base main HEAD", result: { stdout: "base0000\n" } };
 const NO_UPSTREAM = { match: "git rev-parse --abbrev-ref @{upstream}", result: { code: 1, stderr: "fatal: no upstream configured" } };
+const BASE = { name: "main", source: "--base" };
+/** Neither origin/main nor main resolves: the base check is NOT performed. */
+const NO_ORIGIN_BASE = { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { code: 1 } };
+const NO_LOCAL_BASE = { match: "git rev-parse --verify --quiet refs/heads/main^{commit}", result: { code: 1 } };
 
 function twoCommits(): { match: string; result: { stdout: string } } {
   return {
@@ -19,7 +23,7 @@ describe("planSquash -- refuses before anything moves", () => {
     const seams = new ScriptedSeams([
       { match: "git status --porcelain=v1 -uall", result: { stdout: " M a.ts\n?? b.ts\n" } },
     ]);
-    const plan = planSquash(seams, "/repo", "main");
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("refused");
     if (plan.kind !== "refused") return;
     expect(plan.reason).toMatch(/dirty/);
@@ -29,7 +33,7 @@ describe("planSquash -- refuses before anything moves", () => {
 
   it("never calls merge-base at all when the tree is dirty", () => {
     const seams = new ScriptedSeams([{ match: "git status --porcelain=v1 -uall", result: { stdout: " M a.ts\n" } }]);
-    planSquash(seams, "/repo", "main");
+    planSquash(seams, "/repo", "main", BASE);
     expect(seams.calls.some((call): boolean => call.args.includes("merge-base"))).toBe(false);
   });
 
@@ -39,7 +43,7 @@ describe("planSquash -- refuses before anything moves", () => {
       MERGE_BASE,
       { match: "git merge-base --is-ancestor main HEAD", result: { code: 1 } },
     ]);
-    const plan = planSquash(seams, "/repo", "main");
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("refused");
     if (plan.kind !== "refused") return;
     expect(plan.reason).toMatch(/not an ancestor/);
@@ -52,7 +56,7 @@ describe("planSquash -- refuses before anything moves", () => {
       MERGE_BASE,
       { match: "git merge-base --is-ancestor main HEAD", result: { code: 129, stderr: "fatal: bad object" } },
     ]);
-    expect((): unknown => planSquash(seams, "/repo", "main")).toThrow(SquashStateError);
+    expect((): unknown => planSquash(seams, "/repo", "main", BASE)).toThrow(SquashStateError);
   });
 
   it("throws when the merge-base itself cannot be resolved", () => {
@@ -60,7 +64,7 @@ describe("planSquash -- refuses before anything moves", () => {
       CLEAN,
       { match: "git merge-base main HEAD", result: { code: 1, stderr: "fatal: not a valid object name" } },
     ]);
-    expect((): unknown => planSquash(seams, "/repo", "main")).toThrow(SquashStateError);
+    expect((): unknown => planSquash(seams, "/repo", "main", BASE)).toThrow(SquashStateError);
   });
 
   it("answers nothing-to-squash (a SUCCESS, not a refusal) with zero commits ahead", () => {
@@ -70,7 +74,7 @@ describe("planSquash -- refuses before anything moves", () => {
       ANCESTOR_OK,
       { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "" } },
     ]);
-    const plan = planSquash(seams, "/repo", "main");
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("nothing-to-squash");
     if (plan.kind !== "nothing-to-squash") return;
     expect(plan.folded).toEqual([]);
@@ -83,7 +87,7 @@ describe("planSquash -- refuses before anything moves", () => {
       ANCESTOR_OK,
       { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "sha1\tonly commit\n" } },
     ]);
-    const plan = planSquash(seams, "/repo", "main");
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("nothing-to-squash");
     if (plan.kind !== "nothing-to-squash") return;
     expect(plan.folded).toEqual([{ sha: "sha1", subject: "only commit" }]);
@@ -91,8 +95,8 @@ describe("planSquash -- refuses before anything moves", () => {
   });
 
   it("answers ready with two or more commits, oldest first, when there is no upstream configured", () => {
-    const seams = new ScriptedSeams([CLEAN, MERGE_BASE, ANCESTOR_OK, twoCommits(), NO_UPSTREAM]);
-    const plan = planSquash(seams, "/repo", "main");
+    const seams = new ScriptedSeams([CLEAN, MERGE_BASE, ANCESTOR_OK, twoCommits(), NO_UPSTREAM, NO_ORIGIN_BASE, NO_LOCAL_BASE]);
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("ready");
     if (plan.kind !== "ready") return;
     expect(plan.folded).toEqual([
@@ -113,7 +117,7 @@ describe("planSquash -- refuses before anything moves", () => {
       { match: "git fetch origin work", result: { code: 0 } },
       { match: "git merge-base --is-ancestor sha1 origin/work", result: { code: 0 } },
     ]);
-    const plan = planSquash(seams, "/repo", "main");
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("refused");
     if (plan.kind !== "refused") return;
     expect(plan.reason).toContain("sha1");
@@ -131,8 +135,10 @@ describe("planSquash -- refuses before anything moves", () => {
       { match: "git fetch origin work", result: { code: 0 } },
       { match: "git merge-base --is-ancestor sha1 origin/work", result: { code: 1 } },
       { match: "git merge-base --is-ancestor sha2 origin/work", result: { code: 1 } },
+      NO_ORIGIN_BASE,
+      NO_LOCAL_BASE,
     ]);
-    const plan = planSquash(seams, "/repo", "main");
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("ready");
     const fetchIndex = seams.calls.findIndex((call): boolean => call.args[0] === "fetch");
     const checkIndex = seams.calls.findIndex(
@@ -152,11 +158,118 @@ describe("planSquash -- refuses before anything moves", () => {
       { match: "git fetch origin work", result: { code: 0 } },
       { match: "git merge-base --is-ancestor sha1 origin/work", result: { code: 1 } },
       { match: "git merge-base --is-ancestor sha2 origin/work", result: { code: 1 } },
+      NO_ORIGIN_BASE,
+      NO_LOCAL_BASE,
     ]);
-    const plan = planSquash(seams, "/repo", "main");
+    const plan = planSquash(seams, "/repo", "main", BASE);
     expect(plan.kind).toBe("ready");
     if (plan.kind !== "ready") return;
     expect(plan.upstream).toBe("origin/work");
+    expect(plan.baseRefs).toEqual([]);
+  });
+
+  // ── the base guard (zheref/nen#251) ─────────────────────────────────────
+  const ORIGIN_BASE = { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { stdout: "originsha\n" } };
+  const LOCAL_BASE = { match: "git rev-parse --verify --quiet refs/heads/main^{commit}", result: { stdout: "localsha\n" } };
+
+  it("refuses when a folded commit is already on origin/<base>, naming it and the ref it is on", () => {
+    const seams = new ScriptedSeams([
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      twoCommits(),
+      NO_UPSTREAM,
+      ORIGIN_BASE,
+      // origin/main holds sha1: only sha2 is this branch's own.
+      { match: "git rev-list HEAD --not base0000 originsha", result: { stdout: "sha2\n" } },
+      LOCAL_BASE,
+      { match: "git rev-list HEAD --not base0000 localsha", result: { stdout: "sha2\n" } },
+    ]);
+    const plan = planSquash(seams, "/repo", "main", { name: "main", source: "nen/workflow.json's branch.base" });
+    expect(plan.kind).toBe("refused");
+    if (plan.kind !== "refused") return;
+    expect(plan.reason).toContain("sha1 ('first commit', on origin/main)");
+    expect(plan.reason).not.toContain("sha2 (");
+    expect(plan.reason).toContain("already on the base 'main' (nen/workflow.json's branch.base; checked against origin/main, main)");
+    expect(plan.reason).toMatch(/flatten the merge's ancestry/);
+  });
+
+  it("refuses when only the LOCAL <base> holds a folded commit -- a merge of an unpushed trunk", () => {
+    const seams = new ScriptedSeams([
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      twoCommits(),
+      NO_UPSTREAM,
+      NO_ORIGIN_BASE,
+      LOCAL_BASE,
+      { match: "git rev-list HEAD --not base0000 localsha", result: { stdout: "sha1\n" } },
+    ]);
+    const plan = planSquash(seams, "/repo", "main", BASE);
+    expect(plan.kind).toBe("refused");
+    if (plan.kind !== "refused") return;
+    expect(plan.reason).toContain("sha2 ('second commit', on main)");
+    expect(plan.reason).toContain("checked against main)");
+  });
+
+  it("answers ready and names the refs it checked when none of the folded commits is on the base", () => {
+    const seams = new ScriptedSeams([
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      twoCommits(),
+      NO_UPSTREAM,
+      ORIGIN_BASE,
+      { match: "git rev-list HEAD --not base0000 originsha", result: { stdout: "sha2\nsha1\n" } },
+      LOCAL_BASE,
+      { match: "git rev-list HEAD --not base0000 localsha", result: { stdout: "sha2\nsha1\n" } },
+    ]);
+    const plan = planSquash(seams, "/repo", "main", BASE);
+    expect(plan.kind).toBe("ready");
+    if (plan.kind !== "ready") return;
+    expect(plan.baseRefs).toEqual(["origin/main", "main"]);
+  });
+
+  it("keeps the upstream refusal's precedence: a published commit is refused before the base is even read", () => {
+    const seams = new ScriptedSeams([
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      twoCommits(),
+      { match: "git rev-parse --abbrev-ref @{upstream}", result: { stdout: "origin/work\n" } },
+      { match: "git fetch origin work", result: { code: 0 } },
+      { match: "git merge-base --is-ancestor sha1 origin/work", result: { code: 0 } },
+    ]);
+    const plan = planSquash(seams, "/repo", "main", BASE);
+    expect(plan.kind).toBe("refused");
+    if (plan.kind !== "refused") return;
+    expect(plan.reason).toMatch(/already published/);
+    expect(seams.calls.some((call): boolean => call.args.includes("--verify"))).toBe(false);
+  });
+
+  it("throws (never 'no base') when resolving a base ref fails outright", () => {
+    const seams = new ScriptedSeams([
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      twoCommits(),
+      NO_UPSTREAM,
+      { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { code: 128, stderr: "fatal: not a git repository" } },
+    ]);
+    expect((): unknown => planSquash(seams, "/repo", "main", BASE)).toThrow(SquashStateError);
+  });
+
+  it("throws when the base's rev-list cannot run", () => {
+    const seams = new ScriptedSeams([
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      twoCommits(),
+      NO_UPSTREAM,
+      ORIGIN_BASE,
+      { match: "git rev-list HEAD --not base0000 originsha", result: { code: 128, stderr: "fatal: bad object" } },
+    ]);
+    expect((): unknown => planSquash(seams, "/repo", "main", BASE)).toThrow(SquashStateError);
   });
 
   it("throws when the fetch of the upstream fails", () => {
@@ -168,12 +281,12 @@ describe("planSquash -- refuses before anything moves", () => {
       { match: "git rev-parse --abbrev-ref @{upstream}", result: { stdout: "origin/work\n" } },
       { match: "git fetch origin work", result: { code: 1, stderr: "fatal: unable to access" } },
     ]);
-    expect((): unknown => planSquash(seams, "/repo", "main")).toThrow(SquashStateError);
+    expect((): unknown => planSquash(seams, "/repo", "main", BASE)).toThrow(SquashStateError);
   });
 
   it("throws when the working copy's status cannot be read", () => {
     const seams = new ScriptedSeams([{ match: "git status --porcelain=v1 -uall", result: { code: 1, stderr: "fatal: not a git repository" } }]);
-    expect((): unknown => planSquash(seams, "/repo", "main")).toThrow(SquashStateError);
+    expect((): unknown => planSquash(seams, "/repo", "main", BASE)).toThrow(SquashStateError);
   });
 });
 
