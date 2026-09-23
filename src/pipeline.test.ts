@@ -385,19 +385,28 @@ describe("ci runs the same three commands a developer runs", () => {
     // `sha256sum` is absent (the macOS case and no other), and it avoids bash-4
     // parameter expansion because /bin/bash on macOS is 3.2. A parity claim CI
     // does not exercise is a parity claim.
+    // Windows runs as `check-windows`, gated on NEN_WINDOWS_RUNNER == 'online'
+    // so an empty pool skips rather than queuing forever; it is still declared
+    // here, under the same check name and the very same steps.
     const jobs = ci["jobs"] as Record<string, YamlValue>;
-    const check = jobs["check"] as Record<string, YamlValue>;
-    const strategy = check["strategy"] as Record<string, YamlValue>;
-    const matrix = strategy["matrix"] as Record<string, YamlValue>;
-    const include = matrix["include"] as Array<Record<string, YamlValue>>;
+    const include: Array<Record<string, YamlValue>> = [];
+    for (const name of ["check", "check-windows"]) {
+      const job = jobs[name] as Record<string, YamlValue>;
+      const strategy = job["strategy"] as Record<string, YamlValue>;
+      const matrix = strategy["matrix"] as Record<string, YamlValue>;
+      include.push(...(matrix["include"] as Array<Record<string, YamlValue>>));
+      // fail-fast off, so one platform's failure does not hide another's.
+      expect(strategy["fail-fast"], name).toBe(false);
+    }
     expect(include.map((entry) => entry["os"])).toEqual(["ubuntu", "macOS", "Windows"]);
     expect(include.map((entry) => entry["runner"])).toEqual([
       '"ubuntu-latest"',
       '["self-hosted","macOS","ARM64"]',
       '["self-hosted","Windows","X64"]',
     ]);
-    // fail-fast off, so one platform's failure does not hide another's.
-    expect(strategy["fail-fast"]).toBe(false);
+    const windows = jobs["check-windows"] as Record<string, YamlValue>;
+    expect(windows["name"]).toBe("check");
+    expect(windows["steps"]).toEqual((jobs["check"] as Record<string, YamlValue>)["steps"]);
   });
 
   it("pins every third-party action to a commit SHA", () => {
