@@ -1801,7 +1801,7 @@ nen wc squash --repo <path> --onto <ref> --message-file <file> [--base <branch>]
 | `--repo <path>` | **yes** | the working tree being squashed | unbracketed in usage; omitted is refused at exit 2, exactly as `wc classify`'s (#28) |
 | `--onto <ref>` | **yes** | the ref this branch is built on top of | e.g. `main` or `origin/main`; every commit `git merge-base <onto> HEAD` finds is folded |
 | `--message-file <file>` | **yes** | the new commit's whole message | validated to `nen commit format`'s shape before anything moves |
-| `--base <branch>` | no | the base whose commits are never folded | default: `nen/workflow.json`'s `branch.base` (`main` when the file is absent), the key [`wc publish`](#nen-wc-publish) reads; validated by `git check-ref-format --branch` and refused at exit 2 otherwise, as [`wc catch-up`](#nen-wc-catch-up)'s `--base` is |
+| `--base <branch>` | no | the base whose commits are never folded | default: `nen/workflow.json`'s `branch.base` (`main` when the file is absent), the key [`wc publish`](#nen-wc-publish) reads; validated by `git check-ref-format --branch` and refused at exit 2 otherwise, as [`wc catch-up`](#nen-wc-catch-up)'s `--base` is. The policy's value is held to the same rule, and a name git rejects (`main/`) is exit 1 naming the file, since otherwise no ref would resolve and the base guard would silently not run |
 | `--dry-run` | no | print the commits that would fold and the message | spawns neither `git reset` nor `git commit` |
 | `--json` | no | machine-readable result | `nen.wc.squash/v0.1` — see below |
 
@@ -1837,10 +1837,10 @@ never folded into one of the exit-2 refusals, exactly as
 nen wc squash --repo . --onto main --message-file message.txt --dry-run
 ```
 ```text
-would fold 3 commit(s) onto e2404a26af29856e1bdc254b22e04c3f90fa9e9b (--onto main):
-  94c5b042ce7d2db8c8398287c4f487fc30f035d3 feat: add one.txt
-  4e67b59d715570985e8109b930d707cdd283e472 feat: add two.txt
-  697d9999ee0c94db177b697834b8e6ab327223ec feat: add three.txt
+would fold 3 commit(s) onto 40cc931000edabb8f7979aebd6fc69fe08c4716d (--onto main):
+  ad31f70e4d58083fc5cf6590329dd101ec40ce98 feat: add one.txt
+  6c2088d8016be75e3b0f2322c0747739850028e8 feat: add two.txt
+  a46a710615ed8a118b5551f7d7319c988597150c feat: add three.txt
 base check: none of the folded commits is on origin/main or main (branch.base's default -- no nen/workflow.json)
 message:
   feat(wc): add one/two/three together
@@ -1851,21 +1851,21 @@ message:
 nen wc squash --repo . --onto main --message-file message.txt
 ```
 ```text
-  94c5b042ce7d2db8c8398287c4f487fc30f035d3 feat: add one.txt
-  4e67b59d715570985e8109b930d707cdd283e472 feat: add two.txt
-  697d9999ee0c94db177b697834b8e6ab327223ec feat: add three.txt
+  ad31f70e4d58083fc5cf6590329dd101ec40ce98 feat: add one.txt
+  6c2088d8016be75e3b0f2322c0747739850028e8 feat: add two.txt
+  a46a710615ed8a118b5551f7d7319c988597150c feat: add three.txt
 base check: none of the folded commits is on origin/main or main (branch.base's default -- no nen/workflow.json)
-squashed into 25afede09cea7a95355f16dd2cd21ce5c2f2ec89
+squashed into df56d7826b9d3df10ced19167122388e36d7ca10
 ```
 Then the [#251](https://github.com/zheref/nen/issues/251) case: a branch
-published at `0fad2ba4`, caught up with a merge of `origin/main` (which had
+published at `d5f31529`, caught up with a merge of `origin/main` (which had
 moved on by one commit), one more commit on top, and squashed `--onto` its own
 upstream sha. Exit 2, nothing moved:
 ```bash
-nen wc squash --repo . --onto 0fad2ba4d9eb2545ec0c22ce7260c7570f5ca735 --message-file message.txt --dry-run
+nen wc squash --repo . --onto d5f315297f2186697cfb953a8d18fad96b08fbd1 --message-file message.txt --dry-run
 ```
 ```text
-nen wc: 1 of the 3 commit(s) since 'git merge-base 0fad2ba4d9eb2545ec0c22ce7260c7570f5ca735 HEAD' (0fad2ba4d9eb2545ec0c22ce7260c7570f5ca735) are already on the base 'main' (branch.base's default -- no nen/workflow.json; checked against origin/main, main) -- a merge of the base brought them into this branch, and squashing would rewrite the base's published history into one commit on this branch and flatten the merge's ancestry: 9c7f49c908c5c7839170f7ea3a6101406059f333 ('chore: the base moves on', on origin/main). Squash only this branch's own commits (an --onto at or after the last base merge), or publish them unsquashed.
+nen wc: the base 'main' (branch.base's default -- no nen/workflow.json; checked against origin/main, main) already holds 1 of the 3 commit(s) since 'git merge-base d5f315297f2186697cfb953a8d18fad96b08fbd1 HEAD' (d5f315297f2186697cfb953a8d18fad96b08fbd1) -- a merge of the base brought them into this branch, and squashing would rewrite the base's published history into one commit on this branch and flatten the merge's ancestry: 6a1b27eec3511b87ddf80e938702bb062b708459 ('chore: the base moves on', on origin/main). Squash only this branch's own commits (an --onto at or after the last base merge), or publish them unsquashed.
 Run 'nen wc --help'.
 ```
 (from a real run, on a throwaway local repository with a bare `origin`, built

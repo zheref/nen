@@ -154,6 +154,8 @@ const TWO_COMMITS = {
   match: "git log base0000..HEAD --format=%H%x09%s",
   result: { stdout: "sha2\tsecond commit\nsha1\tfirst commit\n" },
 };
+/** The base name from the policy (here: branch.base's default, `main`) passed git's own branch-name rule. */
+const NAME_OK = { match: "git check-ref-format --branch main", result: { code: 0 } };
 /** origin/main resolves and holds neither folded commit; local main does not resolve. */
 const BASE_CLEAR = [
   { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { stdout: "originsha\n" } },
@@ -198,7 +200,7 @@ describe("nen wc squash -- CLI wiring", () => {
   it("refuses a dirty working tree at exit 2, and never even reads --onto's ancestry", async () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
-      [{ match: "git status --porcelain=v1 -uall", result: { stdout: " M dirty.ts\n" } }],
+      [NAME_OK, { match: "git status --porcelain=v1 -uall", result: { stdout: " M dirty.ts\n" } }],
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/dirty.ts/);
@@ -207,7 +209,7 @@ describe("nen wc squash -- CLI wiring", () => {
   it("refuses --onto not an ancestor of HEAD, at exit 2", async () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
-      [CLEAN, MERGE_BASE, { match: "git merge-base --is-ancestor main HEAD", result: { code: 1 } }],
+      [NAME_OK, CLEAN, MERGE_BASE, { match: "git merge-base --is-ancestor main HEAD", result: { code: 1 } }],
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/not an ancestor/);
@@ -217,7 +219,7 @@ describe("nen wc squash -- CLI wiring", () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
       [
-        CLEAN,
+        NAME_OK, CLEAN,
         MERGE_BASE,
         ANCESTOR_OK,
         TWO_COMMITS,
@@ -233,14 +235,14 @@ describe("nen wc squash -- CLI wiring", () => {
   it("exits 0 with one line, not a refusal, when fewer than two commits would fold", async () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
-      [CLEAN, MERGE_BASE, ANCESTOR_OK, { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "" } }],
+      [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "" } }],
     );
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/nothing to squash/);
   });
 
   it("--dry-run prints the folded commits and the message, and touches neither reset nor commit", async () => {
-    const script = [CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR];
+    const script = [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR];
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: add a thing\n\nCloses: #4\n"), "--dry-run"],
       script,
@@ -257,7 +259,7 @@ describe("nen wc squash -- CLI wiring", () => {
   it("performs the real squash: reset --soft then commit -F, in that order, after every refusal has passed", async () => {
     const path = messageFile("feat: add a thing\n");
     const script = [
-      CLEAN,
+      NAME_OK, CLEAN,
       MERGE_BASE,
       ANCESTOR_OK,
       TWO_COMMITS,
@@ -278,7 +280,7 @@ describe("nen wc squash -- CLI wiring", () => {
     const err: string[] = [];
     const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
     const seams: Seams = new ScriptedSeams([
-      CLEAN,
+      NAME_OK, CLEAN,
       MERGE_BASE,
       ANCESTOR_OK,
       TWO_COMMITS,
@@ -304,7 +306,7 @@ describe("nen wc squash -- CLI wiring", () => {
 
   it("names the base check in text output, and says so when it was NOT performed", async () => {
     const script = [
-      CLEAN,
+      NAME_OK, CLEAN,
       MERGE_BASE,
       ANCESTOR_OK,
       TWO_COMMITS,
@@ -330,13 +332,13 @@ describe("nen wc squash -- CLI wiring", () => {
       const out: string[] = [];
       const err: string[] = [];
       const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
-      const seams = new ScriptedSeams([CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_HOLDS_SHA1]);
+      const seams = new ScriptedSeams([NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_HOLDS_SHA1]);
       const code = await runFamily(wcCommand, argv, BANKAI_REPO, dryRun, io, seams);
       expect(code).toBe(2);
       expect(out).toEqual([]);
       const message = err.join("\n");
       expect(message).toContain("sha1 ('first commit', on origin/main)");
-      expect(message).toContain("already on the base 'main' (branch.base's default -- no nen/workflow.json; checked against origin/main)");
+      expect(message).toContain("the base 'main' (branch.base's default -- no nen/workflow.json; checked against origin/main) already holds 1 of the 2 commit(s)");
       expect(seams.calls.some((call): boolean => call.args[0] === "reset" || call.args[0] === "commit")).toBe(false);
     });
   }
@@ -370,6 +372,28 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/--base 'bad\.\.name' is not a branch name git will accept/);
     expect(result.seams.calls.some((call): boolean => call.args[0] === "status")).toBe(false);
+  });
+
+  // Review finding on zheref/nen#253: the POLICY's base is held to git's rule
+  // too, or a schema-valid name git rejects ('main/') would resolve no ref and
+  // the base guard would silently not run.
+  it("refuses a policy branch.base git will not accept as a branch name, at exit 1, before any status read", async () => {
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
+      [{ match: "git check-ref-format --branch main", result: { code: 1, stderr: "fatal: 'main' is not a valid branch name" } }],
+    );
+    expect(result.code).toBe(1);
+    const message = result.err.join("\n");
+    expect(message).toMatch(/branch\.base's default -- no nen\/workflow\.json 'main' is not a branch name git will accept/);
+    expect(message).toMatch(/Fix branch\.base, or pass --base/);
+    expect(result.seams.calls.some((call): boolean => call.args[0] === "status")).toBe(false);
+  });
+
+  it("validates the policy's base name before any other git call", async () => {
+    const script = [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR];
+    const result = await capture(["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n"), "--dry-run"], script);
+    expect(result.code).toBe(0);
+    expect(result.seams.calls[0]?.args.join(" ")).toBe("check-ref-format --branch main");
   });
 });
 

@@ -271,8 +271,8 @@ describe.skipIf(!HAVE_GIT)("nen wc squash, against the real git", () => {
       expect(result.code).toBe(2);
       expect(result.out).toEqual([]);
       const message = result.err.join("\n");
-      expect(message).toMatch(/2 of the 4 commit\(s\) since 'git merge-base [0-9a-f]+ HEAD'/);
-      expect(message).toContain("already on the base 'main'");
+      expect(message).toMatch(/already holds 2 of the 4 commit\(s\) since 'git merge-base [0-9a-f]+ HEAD'/);
+      expect(message).toContain("the base 'main' (");
       expect(message).toContain("checked against origin/main");
       for (const sha of baseShas) expect(message).toContain(`${sha} (`);
       expect(message).toMatch(/flatten the merge's ancestry/);

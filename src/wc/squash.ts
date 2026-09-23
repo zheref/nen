@@ -228,7 +228,7 @@ export function planSquash(seams: Seams, cwd: string, onto: string, base: Squash
     const more = reachable.length > BASE_LIST_CAP ? `; and ${reachable.length - BASE_LIST_CAP} more` : "";
     return {
       kind: "refused",
-      reason: `${reachable.length} of the ${folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${mergeBaseSha}) are already on the base '${base.name}' (${base.source}; checked against ${baseRefs.join(", ")}) -- a merge of the base brought them into this branch, and squashing would rewrite the base's published history into one commit on this branch and flatten the merge's ancestry: ${listed.join("; ")}${more}. Squash only this branch's own commits (an --onto at or after the last base merge), or publish them unsquashed.`,
+      reason: `the base '${base.name}' (${base.source}; checked against ${baseRefs.join(", ")}) already holds ${reachable.length} of the ${folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${mergeBaseSha}) -- a merge of the base brought them into this branch, and squashing would rewrite the base's published history into one commit on this branch and flatten the merge's ancestry: ${listed.join("; ")}${more}. Squash only this branch's own commits (an --onto at or after the last base merge), or publish them unsquashed.`,
     };
   }
 

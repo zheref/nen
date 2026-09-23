@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ScriptedSeams } from "../seam/scripted.js";
-import { performSquash, planSquash, SquashStateError } from "./squash.js";
+import { BASE_LIST_CAP, performSquash, planSquash, SquashStateError } from "./squash.js";
 
 const CLEAN = { match: "git status --porcelain=v1 -uall", result: { stdout: "" } };
 const ANCESTOR_OK = { match: "git merge-base --is-ancestor main HEAD", result: { code: 0 } };
@@ -190,7 +190,7 @@ describe("planSquash -- refuses before anything moves", () => {
     if (plan.kind !== "refused") return;
     expect(plan.reason).toContain("sha1 ('first commit', on origin/main)");
     expect(plan.reason).not.toContain("sha2 (");
-    expect(plan.reason).toContain("already on the base 'main' (nen/workflow.json's branch.base; checked against origin/main, main)");
+    expect(plan.reason).toContain("the base 'main' (nen/workflow.json's branch.base; checked against origin/main, main) already holds 1 of the 2 commit(s)");
     expect(plan.reason).toMatch(/flatten the merge's ancestry/);
   });
 
@@ -257,6 +257,31 @@ describe("planSquash -- refuses before anything moves", () => {
       { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { code: 128, stderr: "fatal: not a git repository" } },
     ]);
     expect((): unknown => planSquash(seams, "/repo", "main", BASE)).toThrow(SquashStateError);
+  });
+
+  it(`lists at most ${BASE_LIST_CAP} base commits by name, oldest first, and counts the rest`, () => {
+    const total = BASE_LIST_CAP + 2;
+    // git log prints newest first; c0 is the oldest.
+    const log = Array.from({ length: total }, (_, index): string => `c${total - 1 - index}\tbase commit ${total - 1 - index}`).join("\n");
+    const seams = new ScriptedSeams([
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: `${log}\n` } },
+      NO_UPSTREAM,
+      ORIGIN_BASE,
+      // origin/main holds every one of them.
+      { match: "git rev-list HEAD --not base0000 originsha", result: { stdout: "" } },
+      NO_LOCAL_BASE,
+    ]);
+    const plan = planSquash(seams, "/repo", "main", BASE);
+    expect(plan.kind).toBe("refused");
+    if (plan.kind !== "refused") return;
+    expect(plan.reason).toContain(`already holds ${total} of the ${total} commit(s)`);
+    expect(plan.reason).toContain("c0 ('base commit 0', on origin/main)");
+    expect(plan.reason).toContain(`c${BASE_LIST_CAP - 1} ('base commit ${BASE_LIST_CAP - 1}', on origin/main)`);
+    expect(plan.reason).not.toContain(`c${BASE_LIST_CAP} (`);
+    expect(plan.reason).toContain("; and 2 more.");
   });
 
   it("throws when the base's rev-list cannot run", () => {

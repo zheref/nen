@@ -80,8 +80,9 @@ squash:
   --base           the base branch whose published commits are never folded
                     -- default ${WORKFLOW_FILE}'s branch.base ('main' when
                     the file is absent). Validated by 'git check-ref-format
-                    --branch'; checked as 'origin/<base>' and '<base>',
-                    whichever resolve, with no fetch.
+                    --branch' (exit 2 for --base; exit 1 for a policy value
+                    git rejects, naming the file); checked as 'origin/<base>'
+                    and '<base>', whichever resolve, with no fetch.
   --message-file    a file holding the new commit's whole message, validated
                     to the SAME shape 'nen commit format' enforces: a
                     Conventional Commits header (<=72 characters, no trailing
@@ -359,6 +360,18 @@ function squash(context: CommandContext): number {
       if (!(error instanceof SchemaError)) throw error;
       context.io.err(
         `nen: ${error.message}. This repository's ${WORKFLOW_FILE} names the base whose published commits a squash never folds, and nen will not squash under a policy it could not read. Run 'nen schema check' for the whole file's verdict, or pass --base.`,
+      );
+      return 1;
+    }
+    // THE POLICY'S NAME IS HELD TO GIT'S RULE TOO. The schema admits names git
+    // rejects as branches ('main/', 'foo//bar'); both refs built from one
+    // would answer "absent" and the base guard would silently not run. Exit 1,
+    // not 2, on the argument above: the invocation was right, the repository's
+    // own file is not (review finding on zheref/nen#253).
+    const refused = refuseBranchName(context.seams, root, base.name, base.source);
+    if (refused !== null) {
+      context.io.err(
+        `nen: ${refused} This repository's ${WORKFLOW_FILE} names the base whose published commits a squash never folds, and nen will not squash with that guard unable to run. Fix branch.base, or pass --base.`,
       );
       return 1;
     }
