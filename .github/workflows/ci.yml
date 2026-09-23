@@ -24,6 +24,10 @@
 # -- and it deliberately avoids bash-4 parameter expansion because macOS ships
 # /bin/bash 3.2. Both of those are claims about a platform nothing in the matrix
 # was running. A parity claim CI does not exercise is a parity claim.
+#
+# The Windows leg runs as its own job, `check-windows`, gated on the repository
+# variable NEN_WINDOWS_RUNNER == 'online' -- see that job's comment for why a
+# pool with no runner has to skip rather than queue.
 name: ci
 
 on:
@@ -67,6 +71,87 @@ jobs:
             runner: '"ubuntu-latest"'
           - os: macOS
             runner: '["self-hosted","macOS","ARM64"]'
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: 15
+    # check-windows below repeats these steps VERBATIM (no YAML anchor: nen's
+    # own reader refuses them); src/pipeline.test.ts asserts the two lists are
+    # equal, so a copy that drifts fails CI.
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install bun (version-pinned)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # `--frozen-lockfile` on CI as well as on release. A pull request whose
+      # dependency tree differs from bun.lock is a pull request whose green
+      # checks describe a tree nobody reviewed.
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --ignore-scripts --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      # The whole harness, including the cases that drive bootstrap/nen.sh
+      # through `bash`. Those skip themselves on a host with no bash; the guard
+      # below makes sure that never silently becomes "the shell is untested".
+      - name: Test
+        run: bun run test
+
+      # A skip is invisible in a summary, and the shell coverage is exactly the
+      # part a cross-platform difference lives in. On ubuntu and macOS, bash
+      # always exists, so a skip would mean the harness had stopped finding it --
+      # which would take the whole supply-layer suite with it, quietly.
+      #
+      # BOTH POSIX LANES, not just ubuntu. macOS is the platform two of the
+      # script's branches exist FOR (`shasum` when `sha256sum` is absent; no
+      # bash-4 parameter expansion, because /bin/bash there is 3.2), so it is the
+      # lane where a silent skip would hide the most.
+      - name: Assert the shell suite actually ran
+        if: matrix.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bash >/dev/null || { echo "::error::no bash on ${{ matrix.os }}"; exit 1; }
+          # Only the supply suite is re-run, with a machine-readable reporter --
+          # it is the one that skips itself, so it is the only one worth paying
+          # a second run for.
+          bunx vitest run src/supply/bootstrap.test.ts \
+            --reporter=json --outputFile=vitest-supply.json >/dev/null
+          skipped="$(bun -e 'const r = await Bun.file("vitest-supply.json").json(); console.log(r.numPendingTests ?? 0)')"
+          echo "skipped in the supply suite on ${{ matrix.os }}: ${skipped}"
+          if [ "${skipped}" != "0" ]; then
+            echo "::error::${skipped} supply test(s) skipped on ${{ matrix.os }} — the shell coverage must never skip here"
+            exit 1
+          fi
+
+
+  # The Windows leg of `check`, split out so it runs ONLY while a Windows runner
+  # is declared online. The self-hosted Windows pool went offline in September
+  # 2026, and a job queued on a pool with no runner does not fail -- it stays
+  # PENDING forever. That held every pull request's CON-32(a) row red, `main`'s
+  # own run included, and `pr ready --exclude-check` cannot name a matrix check
+  # whose name carries commas (zheref/nen#243). Skipped by this `if`, the job
+  # reports SKIPPED, which the readiness gate reads as green, and the parity
+  # claim above stays declared rather than silently dropped. Set the repository
+  # variable NEN_WINDOWS_RUNNER to `online` when a runner is registered again,
+  # and the leg is back, under the same check name, with no edit here.
+  # (Maintainer ruling, 2026-09-23, during the NN@p1 futon run.)
+  check-windows:
+    name: check
+    if: github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - os: Windows
             runner: '["self-hosted","Windows","X64"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
