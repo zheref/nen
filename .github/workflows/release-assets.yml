@@ -21,9 +21,10 @@
 # today and released next week — so the assets land whenever the human's half
 # happens, without this file ever making that call itself. `workflow_dispatch` is
 # the recovery lane: an upload that failed, or a release published before this
-# workflow existed. All three converge on ONE idempotent upload (`--clobber`), so
-# a tag+release pair that fires both events attaches the same four bytes-
-# identical assets twice rather than half of them once.
+# workflow existed. All three converge on the same idempotent per-asset upload
+# (`--clobber`, see the attach steps in `publish`), so a tag+release pair that
+# fires both events attaches the same four byte-identical assets twice rather
+# than half of them once.
 #
 # BUILD-ONCE-FROM-ONE-HOST: bun cross-compiles all three targets from the one
 # macOS runner (package.json's `build:*` scripts hold the triples), so there is
@@ -331,7 +332,14 @@ jobs:
     # nothing — the bytes come from `build`, and the manifest is re-checked
     # against them before the smoke and before the upload.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # RED, NEVER CANCELLED (zheref/nen#228). Every step below carries its own
+    # `timeout-minutes`, and their SUM stays under this budget
+    # (src/pipeline.test.ts asserts it). So whatever stalls, a STEP times out
+    # first, fails by name, and the verdict step still runs and names what is
+    # missing — the job killer is never the one that ends a run. v0.11.0 and
+    # v0.12.0 were cancelled at the job budget with nothing but "cancelled" to
+    # say which of four files had stalled.
+    timeout-minutes: 60
     permissions:
       # The one elevation. See the block above the `permissions:` floor.
       contents: write
@@ -340,10 +348,63 @@ jobs:
       REPO: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+      # The four release assets IN ATTACH ORDER — the three binaries, then the
+      # manifest that describes them — read by the verdict step to name what
+      # is missing and to print the by-hand line in the order it must run.
+      RELEASE_ASSETS: nen-darwin-arm64 nen-linux-x64 nen-windows-x64.exe SHA256SUMS
+      # The retry bound, declared once. Each attempt's `gh release upload` is
+      # killed at ATTACH_ATTEMPT_SECONDS (v0.10.0 attached all four in 6s, so
+      # 120s is twenty times the healthy case, not a throughput claim), each
+      # read-back at 20s, and the backoff is 15s × the attempt number. Worst
+      # case per asset: 3 × (20 + 130 + 20) + 15 + 30 = 555s, inside the
+      # 10-minute step bound below — so the helper, not the step killer, is
+      # what normally reports an exhausted asset.
+      ATTACH_ATTEMPTS: '3'
+      ATTACH_ATTEMPT_SECONDS: '120'
+      # ONE ASSET, BOUNDED AND RETRIED — the body every attach step runs, with
+      # the asset name as $1, defined once here so the four steps cannot drift
+      # into four different retry policies. An attempt counts only when the
+      # upload exits 0 AND the release reads back that name, state `uploaded`,
+      # at the byte size on disk; each attempt first logs what the release
+      # already carries, so a log shows how far a stalled run got.
+      ATTACH_ONE: |
+        set -uo pipefail
+        asset="$1"
+        want="${asset} $(stat -c %s "${asset}")"
+        readback() {
+          timeout 20 gh release view "${TAG}" --repo "${REPO}" --json assets \
+            --jq '.assets[] | select(.state == "uploaded") | "\(.name) \(.size)"'
+        }
+        for attempt in $(seq 1 "${ATTACH_ATTEMPTS}"); do
+          echo "::group::${asset} — attempt ${attempt} of ${ATTACH_ATTEMPTS} (upload bounded at ${ATTACH_ATTEMPT_SECONDS}s)"
+          echo "Already attached to ${TAG} before this attempt (name size):"
+          readback | sed 's/^/  /' || echo "  (read-back failed; attempting the upload anyway)"
+          timeout --kill-after=10 "${ATTACH_ATTEMPT_SECONDS}" \
+            gh release upload "${TAG}" "${asset}" --repo "${REPO}" --clobber
+          code=$?
+          if [ "${code}" -eq 0 ] && readback | grep -qxF "${want}"; then
+            echo "attempt ${attempt}: ${asset} attached and read back as '${want}'."
+            echo "::endgroup::"
+            exit 0
+          elif [ "${code}" -eq 0 ]; then
+            echo "attempt ${attempt}: upload exited 0 but the release does not read back '${want}'."
+          elif [ "${code}" -eq 124 ] || [ "${code}" -eq 137 ]; then
+            echo "attempt ${attempt}: upload TIMED OUT after ${ATTACH_ATTEMPT_SECONDS}s."
+          else
+            echo "attempt ${attempt}: upload exited ${code}."
+          fi
+          echo "::endgroup::"
+          if [ "${attempt}" -lt "${ATTACH_ATTEMPTS}" ]; then
+            sleep "$((attempt * 15))"
+          fi
+        done
+        echo "::error title=${asset} not attached to ${TAG}::${ATTACH_ATTEMPTS} attempts, each bounded at ${ATTACH_ATTEMPT_SECONDS}s, did not attach ${asset}. The verdict step names every missing asset and the by-hand upload line."
+        exit 1
     steps:
       # No checkout: nothing here reads the repository. The four files are the
       # artifact, and the expected version is `build`'s output.
       - name: Receive the four release files from the build job
+        timeout-minutes: 5
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: nen-release-${{ github.run_id }}
@@ -354,6 +415,7 @@ jobs:
       # and the set is complete. `sha256sum` here, `shasum` there — the
       # manifest format is the same, and bootstrap/nen.sh accepts either.
       - name: Verify the received set is intact and COMPLETE
+        timeout-minutes: 2
         shell: bash
         working-directory: dist
         run: |
@@ -369,6 +431,7 @@ jobs:
       # artifact round-trip drops the execute bit, so it is restored first;
       # `chmod` changes no bytes, and the manifest above already agreed.
       - name: The linux binary answers --version
+        timeout-minutes: 2
         shell: bash
         run: |
           set -euo pipefail
@@ -382,54 +445,150 @@ jobs:
       # available as `steps.release_probe.outcome` without the absence of a
       # release turning the job red — a marker tag legitimately has no release,
       # and a lane that went red on every marker would train everyone to ignore
-      # it. The job stays green; the two mutually exclusive steps below say which
-      # world we are in, out loud.
+      # it. The job stays green; the steps below say which world we are in, out
+      # loud.
       - name: Is there a release for this tag yet?
         id: release_probe
+        timeout-minutes: 2
         continue-on-error: true
         shell: bash
         run: gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease
 
-      # Idempotent by `--clobber`: re-running after a partial upload, or having
-      # both the push and release events fire for one tag, replaces the assets
-      # with byte-identical ones instead of erroring on "already exists". All
-      # four in ONE invocation so the manifest and the binaries it describes are
-      # attached together — uploading SHA256SUMS separately would open a window
-      # where a release advertises checksums for files that are not there yet.
-      - name: Attach the four assets to the release
-        if: steps.release_probe.outcome == 'success'
+      # ONE STEP PER ASSET, BINARIES FIRST, THE MANIFEST LAST (zheref/nen#228).
+      #
+      # WHY NOT ONE INVOCATION ANY MORE. The four files used to go up in ONE
+      # `gh release upload` so the manifest and the binaries "arrived
+      # together". They never did: gh attaches them one after another inside
+      # that invocation, so the atomicity was never real — and the one
+      # invocation had no bound, no retry and no per-file progress. v0.11.0 and
+      # v0.12.0 stalled in it to the job budget and were cancelled with
+      # SHA256SUMS attached and no binaries: a release that advertised checksums
+      # for files that were not there, the exact state the old comment said the
+      # shape prevented.
+      #
+      # WHAT REPLACES IT. Each asset is its own step, so the run list names
+      # WHICH asset stalled; each step has its own `timeout-minutes`, well under
+      # the job budget, and runs ATTACH_ONE's bounded, logged retries. The three
+      # binaries run whatever happened to the one before them (`!cancelled()`),
+      # so one bad file does not hide the state of the other two. SHA256SUMS
+      # goes LAST and ONLY when all three binaries attached, so a partial
+      # release carries binaries and no manifest — which bootstrap/nen.sh
+      # refuses closed (exit 6) — and never a manifest naming absent files.
+      #
+      # IDEMPOTENT AND RE-RUNNABLE, by `--clobber`: re-running over a partial or
+      # a complete release — the tag+release double fire, or a
+      # `workflow_dispatch` recovery — replaces each asset with the same bytes
+      # (build is pinned, see BUN_VERSION) instead of erroring on "already
+      # exists". gh replaces an existing asset by deleting it and uploading
+      # again, so on a re-run over a COMPLETE release one binary is briefly
+      # absent while the manifest still names it; a consumer in that window gets
+      # the bootstrap's retryable download failure (exit 4), not a wrong byte,
+      # and a failure there ends this job red naming that asset.
+      - name: Attach nen-darwin-arm64 (bounded, retried)
+        id: attach_darwin
+        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        working-directory: dist
+        run: bash -c "$ATTACH_ONE" attach-one 'nen-darwin-arm64'
+
+      - name: Attach nen-linux-x64 (bounded, retried)
+        id: attach_linux
+        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        working-directory: dist
+        run: bash -c "$ATTACH_ONE" attach-one 'nen-linux-x64'
+
+      - name: Attach nen-windows-x64.exe (bounded, retried)
+        id: attach_windows
+        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        working-directory: dist
+        run: bash -c "$ATTACH_ONE" attach-one 'nen-windows-x64.exe'
+
+      - name: Attach SHA256SUMS LAST, only after all three binaries
+        id: attach_manifest
+        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' && steps.attach_darwin.outcome == 'success' && steps.attach_linux.outcome == 'success' && steps.attach_windows.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        working-directory: dist
+        run: bash -c "$ATTACH_ONE" attach-one 'SHA256SUMS'
+
+      # THE VERDICT, read back from the release rather than inferred from the
+      # step outcomes: every asset in RELEASE_ASSETS must be attached, state
+      # `uploaded`, at the byte size in dist/. Anything else ends the job RED
+      # with the missing names in an `::error` annotation and in the run
+      # summary, plus the by-hand line — binaries before SHA256SUMS, the same
+      # order as the steps above — to run from this run's artifact.
+      - name: Every asset is attached, or the job is red naming the missing ones
+        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        timeout-minutes: 2
         shell: bash
         working-directory: dist
         run: |
-          set -euo pipefail
-          gh release upload "$TAG" \
-            'nen-darwin-arm64' \
-            'nen-linux-x64' \
-            'nen-windows-x64.exe' \
-            'SHA256SUMS' \
-            --repo "$REPO" --clobber
-          echo "Attached 4 assets to ${REPO} release ${TAG}."
+          set -uo pipefail
+          if ! listing="$(timeout 20 gh release view "$TAG" --repo "$REPO" --json assets \
+                --jq '.assets[] | select(.state == "uploaded") | "\(.name) \(.size)"')"; then
+            echo "::error title=Could not read ${TAG}'s assets back::gh release view failed or timed out, so this run cannot say what is attached. Re-run via workflow_dispatch with tag=${TAG}."
+            exit 1
+          fi
+          missing=()
+          {
+            echo "### Attach verdict — ${TAG}"
+            echo
+            echo '| Asset | Expected bytes | Attached |'
+            echo '|---|---|---|'
+          } >> "$GITHUB_STEP_SUMMARY"
+          for asset in $RELEASE_ASSETS; do
+            want="${asset} $(stat -c %s "${asset}")"
+            if grep -qxF "${want}" <<<"${listing}"; then
+              state='yes'
+            else
+              state='**MISSING**'
+              missing+=("${asset}")
+            fi
+            echo "| \`${asset}\` | ${want#* } | ${state} |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            line="gh release upload ${TAG} ${missing[*]} --repo ${REPO} --clobber"
+            {
+              echo
+              echo "**Missing: ${missing[*]}.** From this run's \`nen-release-${GITHUB_RUN_ID}\` artifact, by hand (binaries before \`SHA256SUMS\`):"
+              echo
+              echo '```'
+              echo "${line}"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Missing release assets for ${TAG}::${missing[*]} not attached. Re-run via workflow_dispatch with tag=${TAG}, or by hand from this run's artifact: ${line}"
+            exit 1
+          fi
+          echo "All four assets attached to ${REPO} release ${TAG} and read back at the expected sizes."
 
       # The other world, and it is a WARNING rather than an error on purpose —
       # see the probe step. It is not SILENCE, though: an absent release and a
       # successful upload must not look the same in the run list.
       - name: No release for this tag — nothing attached
         if: steps.release_probe.outcome != 'success'
+        timeout-minutes: 1
         shell: bash
         run: |
           echo "::warning title=No release for ${TAG}::The binaries built and verified, but ${REPO} has no release for tag ${TAG}, so nothing was attached. This workflow never CREATES one: the release go/no-go is the human's, and a marker tag is a deliberate non-release. Publish the release and this workflow re-runs on 'release: published' — or re-run it by hand via workflow_dispatch with tag=${TAG}."
 
       # The manifest again, from the publish side, on every run of THIS job —
       # attached or not — so the summary of a run says both what was built and
-      # what was (or was not) attached. `build`'s copy is the one that exists
-      # when this job never started.
+      # whether there was a release to attach to; the verdict above says what
+      # actually landed. `build`'s copy is the one that exists when this job
+      # never started.
       - name: Record SHA256SUMS in the run summary
         if: always()
+        timeout-minutes: 2
         shell: bash
         run: |
           set -uo pipefail
           {
-            echo "### nen release assets — ${TAG} (published: ${{ steps.release_probe.outcome == 'success' && 'attached' || 'no release, nothing attached' }})"
+            echo "### nen release assets — ${TAG} (${{ steps.release_probe.outcome == 'success' && 'release found; see the attach verdict' || 'no release, nothing attached' }})"
             echo
             echo '```'
             cat dist/SHA256SUMS 2>/dev/null || echo '(no SHA256SUMS — the artifact did not arrive)'
