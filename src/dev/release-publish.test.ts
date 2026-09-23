@@ -4,14 +4,14 @@
 // carries it, and pins the pure helpers it rests on.
 
 import { describe, expect, it } from "vitest";
-import { composeNotes, parseArgs, previousTagOf, releasePublishMain, selfTest, slugFromRemote, unreleasedHeading } from "./release-publish.js";
+import { composeNotes, parseArgs, previousTagOf, releasePublishMain, remoteHost, selfTest, slugFromRemote, unreleasedHeading } from "./release-publish.js";
 
 describe("release-publish --self-test", () => {
   it("is all green", () => {
     const result = selfTest();
     expect(result.lines.filter((line): boolean => line.includes("FAIL"))).toEqual([]);
     expect(result.failed).toBe(0);
-    expect(result.ran).toBeGreaterThan(20);
+    expect(result.ran).toBeGreaterThan(40);
   });
 });
 
@@ -27,6 +27,17 @@ describe("release-publish helpers", () => {
     expect(slugFromRemote("../elsewhere/repo.git\n")).toBeUndefined();
     expect(slugFromRemote("file:///tmp/bare/repo.git")).toBeUndefined();
     expect(slugFromRemote("https://github.com/owner/name/extra")).toBeUndefined();
+  });
+
+  it("refuses a remote on any host but github.com -- every gh call targets github.com", () => {
+    expect(slugFromRemote("git@git.example.com:owner/name.git")).toBeUndefined();
+    expect(slugFromRemote("https://git.example.com/owner/name.git")).toBeUndefined();
+    expect(slugFromRemote("ssh://git@git.example.com:2222/owner/name.git")).toBeUndefined();
+    expect(slugFromRemote("ssh://git@github.com/zheref/nen.git")).toBe("zheref/nen");
+    expect(slugFromRemote("https://GitHub.com/zheref/nen.git")).toBe("zheref/nen");
+    expect(remoteHost("git@git.example.com:owner/name.git")).toBe("git.example.com");
+    expect(remoteHost("https://user@git.example.com:8443/owner/name")).toBe("git.example.com");
+    expect(remoteHost("/tmp/bare/repo.git")).toBeUndefined();
   });
 
   it("takes the tag immediately below the target", () => {

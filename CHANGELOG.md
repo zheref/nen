@@ -2,6 +2,16 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.14.2 — unreleased
+
+### Fixed
+
+- **contract** — `src/dev/release-publish.ts` (the `project.verbs.nen.release` publisher) closes the three findings of the post-merge Copilot round on [#247](https://github.com/zheref/nen/pull/247). **The host:** an origin on any host but `github.com` (`git@git.example.com:owner/name.git`, its `https://` and `ssh://` forms) is refused at exit `2` before a slug is derived and before any `gh` call, and every `gh` call now names `github.com` (`--hostname github.com` on `gh auth status` and `gh api`, `--repo github.com/<owner>/<name>` on `gh release`), so neither an enterprise origin nor `GH_HOST` can send a release to a different repository than the one that supplied the tag; an SSH alias for github.com passes `--slug`. **Repository access:** `gh api repos/<slug>` is certified before the tag ref is read, because GitHub answers `404` for an unknown or inaccessible repository exactly as for a missing ref; a repository `404` or permission failure is now exit `2`, and only a ref `404` on a readable repository means "push the tag" (exit `1`). **A failed create:** `gh release create` that could not be started (its spawn error, previously ignored, is now the message) or that exited non-zero is exit `2`, gh's defect as the script documents, rather than `1`. The hermetic `--self-test` grows to 48 assertions, each new refusal asserting no `create` call was made; `src/dev/release-publish.test.ts` pins the host helper.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** Only a repository script under `src/dev/` and its `nen/contract.json` prose change; no verb, flag or `--json` contract moves. A caller of the release row that branched on exit `1` for a failed `gh release create` or an unreadable repository now sees exit `2`, as the script's own documentation always said.
+
 ## v0.14.1 — unreleased
 
 ### Fixed
