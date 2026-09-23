@@ -22,6 +22,12 @@ describe("release-publish helpers", () => {
     expect(slugFromRemote("https://github.com/zheref/nen")).toBe("zheref/nen");
   });
 
+  it("refuses a remote that is not a repository instead of reading a slug out of its path", () => {
+    expect(slugFromRemote("/tmp/bare/repo.git")).toBeUndefined();
+    expect(slugFromRemote("../elsewhere/repo.git\n")).toBeUndefined();
+    expect(slugFromRemote("file:///tmp/bare/repo.git")).toBeUndefined();
+  });
+
   it("takes the tag immediately below the target", () => {
     expect(previousTagOf(["v3.0.0", "v2.0.0", "v1.0.0"], "v2.0.0")).toBe("v1.0.0");
     expect(previousTagOf(["v3.0.0", "v2.0.0"], "v2.0.0")).toBeUndefined();
@@ -40,5 +46,12 @@ describe("release-publish helpers", () => {
     const err: string[] = [];
     expect(releasePublishMain(["--nope"], undefined, { out: (): void => undefined, err: (l): void => { err.push(l); } })).toBe(2);
     expect(err.join("\n")).toContain("release-publish: unexpected argument '--nope'");
+  });
+
+  it("refuses a value flag given twice rather than taking the last one", () => {
+    expect(() => parseArgs(["--tag", "v1.0.0", "--tag", "v2.0.0"])).toThrow(/--tag is given more than once/);
+    expect(() => parseArgs(["--slug", "a/b", "--slug", "c/d"])).toThrow(/--slug is given more than once/);
+    expect(() => parseArgs(["--repo", ".", "--repo", ".."])).toThrow(/--repo is given more than once/);
+    expect(parseArgs(["--json", "--json"]).json).toBe(true);
   });
 });

@@ -50,6 +50,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseRemoteUrl } from "../github/target.js";
+import { looksLikeOwnerSlug } from "../repo/root.js";
 
 export const USAGE =
   "usage: bun src/dev/release-publish.ts [--tag <vX.Y.Z>] [--repo <path>] [--slug <owner/name>] [--changelog <path>] [--previous-tag <vX.Y.Z>] [--title <text>] [--dry-run] [--json] | --self-test";
@@ -91,6 +93,7 @@ const VALUED = new Set(["--tag", "--repo", "--slug", "--changelog", "--previous-
 
 export function parseArgs(argv: readonly string[]): Options {
   const options: Options = { repo: ".", dryRun: false, json: false, selfTest: false };
+  const seen = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] ?? "";
     if (flag === "--dry-run") options.dryRun = true;
@@ -99,6 +102,10 @@ export function parseArgs(argv: readonly string[]): Options {
     else if (VALUED.has(flag)) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("--") || value === "") throw new Refusal(`${flag} needs a value. ${USAGE}`, 2);
+      // A value flag given twice is refused, never last-one-wins: on a publishing command
+      // the destination must not depend on argv ORDER (the shared rule, src/cli/args.ts).
+      if (seen.has(flag)) throw new Refusal(`${flag} is given more than once; state it once. ${USAGE}`, 2);
+      seen.add(flag);
       i += 1;
       if (flag === "--tag") options.tag = value;
       else if (flag === "--repo") options.repo = value;
@@ -111,10 +118,14 @@ export function parseArgs(argv: readonly string[]): Options {
   return options;
 }
 
-/** `https://github.com/o/n.git` or `git@github.com:o/n.git` -> `o/n`. */
+/**
+ * `https://github.com/o/n.git` or `git@github.com:o/n.git` -> `o/n`, through the shared
+ * parser (src/github/target.ts): only the two shapes git writes are accepted, so a
+ * non-repository remote such as `/tmp/bare/repo.git` is refused rather than read as
+ * `bare/repo` and published against.
+ */
 export function slugFromRemote(url: string): string | undefined {
-  const match = /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(url.trim());
-  return match?.[1];
+  return parseRemoteUrl(url.split("\n")[0] ?? "")?.slug;
 }
 
 /** The tag immediately BELOW `tag` in descending version order -- not merely the newest other one. */
@@ -189,6 +200,9 @@ export function plan(options: Options, run: Run = defaultRun): Plan {
   }
 
   let slug = options.slug;
+  if (slug !== undefined && !looksLikeOwnerSlug(slug)) {
+    throw new Refusal(`--slug takes an owner/name repository slug and '${slug}' is not one.`, 2);
+  }
   if (slug === undefined) {
     const origin = git(run, options.repo, ["remote", "get-url", "origin"]);
     slug = origin.status === 0 ? slugFromRemote(origin.stdout) : undefined;
