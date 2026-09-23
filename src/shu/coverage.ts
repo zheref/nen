@@ -380,50 +380,46 @@ interface TouchedSources {
  * the files this change touched did the tests measure?" -- and a workspace
  * answers that across every member's report, or it cannot answer it at all.
  *
- * THE FIRST REPORT IS NOT READ TWICE: its parse is handed in. Every other one
- * is opened here through the same `insideRepo` containment and the same one
- * `readReport`; one that cannot be read is NAMED in `artifacts[].error` and
- * turns the run into exit 1, exactly as the first one failing always has --
- * reporting its files `unmatched` instead would be the silent miss this whole
- * change exists to remove.
+ * THE FIRST REPORT IS NOT READ TWICE: its outcome is handed in -- its parse
+ * and the rows already extracted from it, or the error it failed with. Every
+ * other one is opened here through the same `insideRepo` containment and the
+ * same one `readReport`. One that cannot be read -- the FIRST included -- is
+ * NAMED in `artifacts[].error` and turns the run into exit 1, and the reports
+ * after it are still read: a missing first report must not hide a sound second
+ * one, nor go unlisted itself. Reporting an unread report's files `unmatched`
+ * instead would be the silent miss this whole change exists to remove.
+ * (Raised by Copilot on zheref/nen#254.)
  */
 function readTouchedSources(
   run: ShuReport,
   repoRoot: string,
-  primary: { readonly artifact: ShuArtifactReport; readonly absolute: string; readonly parsed: ParsedReport },
+  primary: PrimaryRead,
 ): TouchedSources {
   const laneCwd = laneCwdRelative(repoRoot, run.cwd);
   const exists = fileExists(repoRoot);
   const groups: TouchedGroup[] = [];
   const artifacts: TouchedArtifact[] = [];
   for (const artifact of chooseArtifacts(run.artifacts)) {
-    let absolute: string;
     let parsed: ParsedReport;
+    let raw: readonly CoverageTarget[];
     if (artifact === primary.artifact) {
-      absolute = primary.absolute;
+      if (primary.error !== null) {
+        artifacts.push(unread(artifact.value, primary.error));
+        continue;
+      }
       parsed = primary.parsed;
+      raw = primary.rows;
     } else {
-      absolute = insideRepo(repoRoot, artifact.value, `project.verbs.${run.lane}.coverage.artifacts`);
+      const absolute = insideRepo(repoRoot, artifact.value, `project.verbs.${run.lane}.coverage.artifacts`);
       try {
         parsed = readReport(absolute, artifact.value);
       } catch (error) {
         if (!(error instanceof CoverageReportError)) throw error;
-        artifacts.push({
-          path: artifact.value,
-          format: null,
-          root: null,
-          basis: null,
-          rows: 0,
-          onDisk: null,
-          error: error.message,
-        });
+        artifacts.push(unread(artifact.value, error.message));
         continue;
       }
+      raw = fileGrainRows(absolute, artifact.value, parsed);
     }
-    const raw =
-      parsed.format.id === XCCOV.id
-        ? (xccovFileRows(absolute, artifact.value) ?? parsed.coverage.targets)
-        : parsed.coverage.targets;
     const grain = grainOf(parsed.format.id);
     if (grain === "package") {
       // PACKAGE ROWS ARE NOT PATHS, so there is no root to rebase them onto:
@@ -454,6 +450,35 @@ function readTouchedSources(
     });
   }
   return { groups, artifacts };
+}
+
+/**
+ * The first report's outcome, handed to `readTouchedSources` so it is never
+ * read twice: its parse and the rows already taken from it, or the message it
+ * failed with.
+ */
+type PrimaryRead =
+  | {
+      readonly artifact: ShuArtifactReport;
+      readonly parsed: ParsedReport;
+      readonly rows: readonly CoverageTarget[];
+      readonly error: null;
+    }
+  | { readonly artifact: ShuArtifactReport; readonly parsed: null; readonly rows: null; readonly error: string };
+
+/** A declared report that could not be read, as `touched.artifacts` lists it. */
+function unread(path: string, error: string): TouchedArtifact {
+  return { path, format: null, root: null, basis: null, rows: 0, onDisk: null, error };
+}
+
+/**
+ * The rows `--touched` matches: an xccov report's FILE rows (see
+ * `parseAfterRun`), every other format's own rows.
+ */
+function fileGrainRows(absolute: string, display: string, parsed: ParsedReport): readonly CoverageTarget[] {
+  return parsed.format.id === XCCOV.id
+    ? (xccovFileRows(absolute, display) ?? parsed.coverage.targets)
+    : parsed.coverage.targets;
 }
 
 /** Every declared artifact whose NAME nen reads, in declaration order. */
@@ -542,15 +567,12 @@ function parseAfterRun(
     // (the first one just proved the file exists and parses) that fails for
     // some other reason falls back to the target-level rows already in hand
     // rather than failing a run over a read this verb does not strictly need.
-    const targets =
-      options.touched && parsed.format.id === XCCOV.id
-        ? (xccovFileRows(absolute, artifact.value) ?? parsed.coverage.targets)
-        : parsed.coverage.targets;
+    const targets = options.touched ? fileGrainRows(absolute, artifact.value, parsed) : parsed.coverage.targets;
     // The format is re-stated from what actually PARSED the file, which is
     // not always the one the name suggested: the content decides.
     const parsedSource: CoverageSource = { format: parsed.format.id, path: artifact.value };
     if (options.touched) {
-      const sources = readTouchedSources(run, repoRoot, { artifact, absolute, parsed });
+      const sources = readTouchedSources(run, repoRoot, { artifact, parsed, rows: targets, error: null });
       const failed = sources.artifacts.filter((entry): boolean => entry.error !== null);
       return {
         total: parsed.coverage.total,
@@ -581,15 +603,38 @@ function parseAfterRun(
     // EXIT 1, NOT 2. The invocation was correct and the run succeeded; a file
     // that is missing or unreadable is a fact about this repository's tooling,
     // which is the same class this CLI answers 1 for everywhere else.
+    if (!options.touched) {
+      return {
+        total: null,
+        targets: [],
+        source,
+        exitCode: 1,
+        why: "the run succeeded and its report could not be read -- see below",
+        note: error.message,
+        groups: [],
+        artifacts: [],
+      };
+    }
+    // UNDER --touched THE REMAINING REPORTS ARE STILL READ, and the first one's
+    // failure is listed among them: the run stays exit 1, but a sound second
+    // report still answers for the files it measured, and `touched.artifacts`
+    // names every report that did not (Copilot on zheref/nen#254).
+    const sources = readTouchedSources(run, repoRoot, {
+      artifact,
+      parsed: null,
+      rows: null,
+      error: error.message,
+    });
+    const failed = sources.artifacts.filter((entry): boolean => entry.error !== null);
     return {
       total: null,
       targets: [],
       source,
       exitCode: 1,
-      why: "the run succeeded and its report could not be read -- see below",
-      note: error.message,
-      groups: [],
-      artifacts: [],
+      why: `the run succeeded and ${failed.length} of its declared reports could not be read -- see below`,
+      note: failed.map((entry): string => entry.error ?? "").join("\n"),
+      groups: sources.groups,
+      artifacts: sources.artifacts,
     };
   }
 }
@@ -817,7 +862,7 @@ function computeTouched(
   base: string,
   parsed: Parsed,
   threshold: number | null,
-): { readonly files: readonly string[]; readonly filter: TouchedFilter; readonly grain: CoverageGrain } {
+): { readonly files: readonly string[]; readonly filter: TouchedFilter; readonly grain: CoverageGrain | null } {
   const result = must(context.seams, GIT, ["diff", "--name-only", `${base}...HEAD`], { cwd: repoRoot });
   // `rawLines`, NEVER `outputLines`: THESE ARE PATHS, AND A PATH'S SPACES ARE
   // PART OF IT. ../seam/lines.ts exists for exactly this distinction --
@@ -828,9 +873,24 @@ function computeTouched(
   // caller most needs banded would be reported `unmatched` with nothing to say
   // why. (Raised by Copilot on zheref/nen#147.)
   const files = rawLines(result.stdout);
-  const grain: CoverageGrain = parsed.source === null ? "file" : grainOf(parsed.source.format);
   // EVERY DECLARED REPORT, EACH AT ITS OWN GRAIN (zheref/nen#236): `groups`
   // is one entry per report nen read, already rebased onto that report's
   // root, and empty on every path that parsed nothing.
-  return { files, filter: filterTouchedGroups(parsed.groups, files, threshold), grain };
+  return { files, filter: filterTouchedGroups(parsed.groups, files, threshold), grain: touchedGrain(parsed) };
+}
+
+/**
+ * The grain the text rendering NARRATES, or null for no note.
+ *
+ * FROM EVERY REPORT READ, NOT THE FIRST: "rows matched BY PACKAGE" under a
+ * package-grain first report would be false of a file-grain second one's rows
+ * (Copilot on zheref/nen#254). Mixed grains get no global note -- each report's
+ * own `from:` line already says which kind of rows it has. With no report read
+ * at all (a dry run, a failed run), the first declared report's format answers,
+ * as it always has.
+ */
+function touchedGrain(parsed: Parsed): CoverageGrain | null {
+  if (parsed.groups.length === 0) return parsed.source === null ? "file" : grainOf(parsed.source.format);
+  const grains = new Set(parsed.groups.map((group): CoverageGrain => group.grain));
+  return grains.size === 1 ? (parsed.groups[0]?.grain ?? "file") : null;
 }

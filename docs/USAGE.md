@@ -6408,8 +6408,10 @@ The match depends on what a row **is**:
   *package*, not a file, so a touched file matches when its own path contains
   that package's segments, in order, with the file itself left over —
   "this touched file sits **under** that package". The text rendering says so
-  (`-- rows matched BY PACKAGE, not by file`); `--json` does not carry the
-  grain, because it already follows from `report.format`.
+  (`-- rows matched BY PACKAGE, not by file`) when every report read is
+  package-grain, and omits the note when reports of both grains were read —
+  each report's own `from:` line says which it is; `--json` does not carry the
+  grain, because it already follows from each `touched.artifacts[].format`.
 - **`xccov-report`** is read at **file** grain here only: nen descends
   `targets[].files[]` instead of stopping at the target row, because "this
   whole app/framework was touched" is true of nearly every diff and would

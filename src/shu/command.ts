@@ -455,8 +455,9 @@ flags:
                    is ALSO reported per row, against that row's own counts.
   --touched        'coverage' only. Narrow 'targets' to the rows a change
                    touched: 'git diff --name-only <base>...HEAD', run AFTER
-                   the coverage tool's own run and parse, against the
-                   REPOSITORY ROOT. EVERY declared artifact whose format nen
+                   the coverage tool's own run and parse, with the
+                   repository root as its cwd, so every path it names is
+                   repo-relative. EVERY declared artifact whose format nen
                    reads is parsed and merged here (not only the first), and
                    each report's RELATIVE row names are resolved against that
                    report's OWN ROOT before the join, so a workspace member's

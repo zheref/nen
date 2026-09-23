@@ -1173,6 +1173,73 @@ describe("--touched resolves each declared report against its own root (zheref/n
     }
   });
 
+  it("a missing FIRST report is named too, and the sound second one is still read (Copilot on #254)", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          coverage: {
+            exe: "x",
+            argv: ["y"],
+            artifacts: ["packages/a/coverage/lcov.info", "apps/web/coverage/lcov.info"],
+          },
+        },
+      },
+    });
+    mkdirSync(join(repo, "apps", "web", "coverage"), { recursive: true });
+    writeFileSync(join(repo, "apps", "web", "coverage", "lcov.info"), "SF:src/page.tsx\nDA:1,1\nend_of_record\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\n" } }],
+      });
+      expect(result.code).toBe(1);
+      const parsed = document(result);
+      expect(parsed.total).toBeNull();
+      expect(parsed.touched?.matched).toEqual(["apps/web/src/page.tsx"]);
+      expect(parsed.touched?.artifacts?.map((entry): string | null => entry.root)).toEqual([null, "apps/web"]);
+      expect(parsed.touched?.artifacts?.[0]?.error).toContain("no coverage report at packages/a/coverage/lcov.info");
+      expect(result.err.join("\n")).toContain("no coverage report at packages/a/coverage/lcov.info");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("mixed grains get no global 'BY PACKAGE' note -- each report's own 'from:' line says it (Copilot on #254)", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          coverage: { exe: "x", argv: ["y"], artifacts: ["coverage.cobertura.xml", "web/coverage/lcov.info"] },
+        },
+      },
+    });
+    writeFileSync(
+      join(repo, "coverage.cobertura.xml"),
+      '<coverage line-rate="1" lines-covered="1" lines-valid="1"><packages><package name="Placeholder.Core"><classes><class name="C" filename="Core/Store.cs"><lines><line number="1" hits="1"/></lines></class></classes></package></packages></coverage>',
+    );
+    mkdirSync(join(repo, "web", "coverage"), { recursive: true });
+    writeFileSync(join(repo, "web", "coverage", "lcov.info"), "SF:src/a.ts\nDA:1,1\nend_of_record\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [
+          ok("x y"),
+          { match: diff("main"), result: { code: 0, stdout: "src/Placeholder/Core/Store.cs\nweb/src/a.ts\n" } },
+        ],
+      });
+      expect(result.code).toBe(0);
+      const text = result.out.join("\n");
+      expect(text).toMatch(/2 files \(2 matched, 0 unmatched\)$/m);
+      expect(text).not.toMatch(/BY PACKAGE/);
+      expect(text).toContain("rows are packages, matched anywhere under a touched path");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("a SECOND declared report that is missing is NAMED and is exit 1 -- never its files as 'unmatched'", async () => {
     const repo = withProject({
       lanes: { only: { stack: "nextjs", cwd: "." } },
