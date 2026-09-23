@@ -173,9 +173,24 @@ describe("the release pipeline never authors a release decision", () => {
 
   it("uploads only when the probe found a release", () => {
     for (const step of attachSteps()) {
-      expect(String(step["if"]), String(step["name"])).toContain("steps.release_probe.outcome == 'success'");
+      expect(String(step["if"]), String(step["name"])).toContain("steps.release_probe.outputs.exists == 'true'");
     }
-    expect(source).toMatch(/if: steps\.release_probe\.outcome != 'success'/);
+    expect(source).toMatch(/if: steps\.release_probe\.outputs\.exists == 'false'/);
+  });
+
+  it("tells 'no release' apart from a probe that could not answer", () => {
+    // `continue-on-error` used to fold a timeout or a 5xx into "no release",
+    // which skipped every attach step and left the job GREEN with a warning.
+    // Only gh's own `release not found` is the green no-release world; any
+    // other probe failure is red (a Copilot finding on zheref/nen#252).
+    const steps = publishJob()["steps"] as Record<string, YamlValue>[];
+    const probe = steps.find((step) => step["id"] === "release_probe");
+    expect(probe?.["continue-on-error"]).toBeUndefined();
+    const run = String(probe?.["run"]);
+    expect(run).toContain('echo "exists=true" >> "$GITHUB_OUTPUT"');
+    expect(run).toContain('elif [ "${out}" = "release not found" ]; then');
+    expect(run).toContain('echo "exists=false" >> "$GITHUB_OUTPUT"');
+    expect(run).toMatch(/::error title=Could not tell whether \$\{TAG\} has a release::[\s\S]*exit 1/);
   });
 
   it("builds the manifest from a literal list, never a glob", () => {
@@ -273,7 +288,8 @@ describe("the release pipeline never authors a release decision", () => {
     const run = String(verdict?.["run"]);
     expect(run).toContain("for asset in $RELEASE_ASSETS");
     expect(run).toContain("::error title=Missing release assets for ${TAG}::");
-    expect(run).toContain('gh release upload ${TAG} ${missing[*]} --repo ${REPO} --clobber');
+    // Shell-quoted, because it is offered as the exact line to paste.
+    expect(run).toContain(`printf -v line '%q ' gh release upload "\${TAG}" "\${missing[@]}" --repo "\${REPO}" --clobber`);
     expect(run).toContain("$GITHUB_STEP_SUMMARY");
     expect(run).toMatch(/exit 1/);
     // After every attach step.

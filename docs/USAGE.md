@@ -553,12 +553,15 @@ tag does not by itself publish a release, so the assets exist once a release
 has actually been published for that tag — not the moment
 [`tag cut`](#nen-tag-cut) runs. The release lane attaches them one asset per
 step, each bounded and retried, the three binaries first and `SHA256SUMS`
-**last** and only once all three are attached, so a release still being
-attached — or one whose attach run ended red naming the missing assets — has
-no manifest yet, and the bootstrap refuses it at exit `6` until the manifest
-lands rather than trusting an unlisted download
-([#228](https://github.com/zheref/nen/issues/228)). Fetch the bootstrap script,
-then run it:
+**last** and only once all three are attached. So a release on its first
+attach — or one whose attach run ended red, naming the missing assets, before
+its manifest went up — has no manifest yet, and the bootstrap refuses it at
+exit `6` until the manifest lands rather than trusting an unlisted download. A
+re-run over an already-complete release is different: it replaces each asset
+in place with the same bytes and leaves the existing `SHA256SUMS` up, so while
+it runs one binary can be briefly absent, which the bootstrap reports as its
+retryable exit `4` ([#228](https://github.com/zheref/nen/issues/228)). Fetch
+the bootstrap script, then run it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.14.0/bootstrap/nen.sh -o nen-bootstrap.sh

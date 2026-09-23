@@ -441,18 +441,31 @@ jobs:
           [ -n "${EXPECTED_VERSION}" ]
           [ "${printed}" = "${EXPECTED_VERSION}" ]
 
-      # Does the human's half exist yet? `continue-on-error` makes the ANSWER
-      # available as `steps.release_probe.outcome` without the absence of a
-      # release turning the job red — a marker tag legitimately has no release,
-      # and a lane that went red on every marker would train everyone to ignore
-      # it. The job stays green; the steps below say which world we are in, out
-      # loud.
+      # Does the human's half exist yet? THREE answers, not two, and only one of
+      # them is green without attaching. `exists=true`: a release is there, and
+      # the attach steps run. `exists=false`: gh said `release not found` — a
+      # marker tag legitimately has no release, and a lane that went red on
+      # every marker would train everyone to ignore it, so the job stays green
+      # and the warning step below says so out loud. ANYTHING ELSE — a timeout,
+      # a 5xx, an auth failure — is NOT "no release": it is a probe that could
+      # not answer, and it fails this step red with gh's own words rather than
+      # letting a slow API pass for a marker tag and skip the upload silently.
       - name: Is there a release for this tag yet?
         id: release_probe
         timeout-minutes: 2
-        continue-on-error: true
         shell: bash
-        run: gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease
+        run: |
+          set -uo pipefail
+          if out="$(timeout 60 gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease 2>&1)"; then
+            echo "${out}"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif [ "${out}" = "release not found" ]; then
+            echo "gh: ${out}"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error title=Could not tell whether ${TAG} has a release::gh release view failed or timed out, and that is not 'release not found'. Nothing was attached. Re-run via workflow_dispatch with tag=${TAG}. gh said: ${out}"
+            exit 1
+          fi
 
       # ONE STEP PER ASSET, BINARIES FIRST, THE MANIFEST LAST (zheref/nen#228).
       #
@@ -486,7 +499,7 @@ jobs:
       # and a failure there ends this job red naming that asset.
       - name: Attach nen-darwin-arm64 (bounded, retried)
         id: attach_darwin
-        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.release_probe.outputs.exists == 'true' }}
         timeout-minutes: 10
         shell: bash
         working-directory: dist
@@ -494,7 +507,7 @@ jobs:
 
       - name: Attach nen-linux-x64 (bounded, retried)
         id: attach_linux
-        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.release_probe.outputs.exists == 'true' }}
         timeout-minutes: 10
         shell: bash
         working-directory: dist
@@ -502,7 +515,7 @@ jobs:
 
       - name: Attach nen-windows-x64.exe (bounded, retried)
         id: attach_windows
-        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.release_probe.outputs.exists == 'true' }}
         timeout-minutes: 10
         shell: bash
         working-directory: dist
@@ -510,7 +523,7 @@ jobs:
 
       - name: Attach SHA256SUMS LAST, only after all three binaries
         id: attach_manifest
-        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' && steps.attach_darwin.outcome == 'success' && steps.attach_linux.outcome == 'success' && steps.attach_windows.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.release_probe.outputs.exists == 'true' && steps.attach_darwin.outcome == 'success' && steps.attach_linux.outcome == 'success' && steps.attach_windows.outcome == 'success' }}
         timeout-minutes: 10
         shell: bash
         working-directory: dist
@@ -523,7 +536,7 @@ jobs:
       # summary, plus the by-hand line — binaries before SHA256SUMS, the same
       # order as the steps above — to run from this run's artifact.
       - name: Every asset is attached, or the job is red naming the missing ones
-        if: ${{ !cancelled() && steps.release_probe.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.release_probe.outputs.exists == 'true' }}
         timeout-minutes: 2
         shell: bash
         working-directory: dist
@@ -552,7 +565,10 @@ jobs:
             echo "| \`${asset}\` | ${want#* } | ${state} |" >> "$GITHUB_STEP_SUMMARY"
           done
           if [ "${#missing[@]}" -gt 0 ]; then
-            line="gh release upload ${TAG} ${missing[*]} --repo ${REPO} --clobber"
+            # Shell-quoted (`%q`), because this is offered as the exact line to
+            # paste: a git tag may legally carry `$`, `;`, `&` or quotes.
+            printf -v line '%q ' gh release upload "${TAG}" "${missing[@]}" --repo "${REPO}" --clobber
+            line="${line% }"
             {
               echo
               echo "**Missing: ${missing[*]}.** From this run's \`nen-release-${GITHUB_RUN_ID}\` artifact, by hand (binaries before \`SHA256SUMS\`):"
@@ -570,7 +586,7 @@ jobs:
       # see the probe step. It is not SILENCE, though: an absent release and a
       # successful upload must not look the same in the run list.
       - name: No release for this tag — nothing attached
-        if: steps.release_probe.outcome != 'success'
+        if: steps.release_probe.outputs.exists == 'false'
         timeout-minutes: 1
         shell: bash
         run: |
@@ -588,7 +604,7 @@ jobs:
         run: |
           set -uo pipefail
           {
-            echo "### nen release assets — ${TAG} (${{ steps.release_probe.outcome == 'success' && 'release found; see the attach verdict' || 'no release, nothing attached' }})"
+            echo "### nen release assets — ${TAG} (${{ steps.release_probe.outputs.exists == 'true' && 'release found; see the attach verdict' || steps.release_probe.outputs.exists == 'false' && 'no release, nothing attached' || 'release not probed or probe failed, nothing attached' }})"
             echo
             echo '```'
             cat dist/SHA256SUMS 2>/dev/null || echo '(no SHA256SUMS — the artifact did not arrive)'
