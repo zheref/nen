@@ -26,6 +26,7 @@ describe("release-publish helpers", () => {
     expect(slugFromRemote("/tmp/bare/repo.git")).toBeUndefined();
     expect(slugFromRemote("../elsewhere/repo.git\n")).toBeUndefined();
     expect(slugFromRemote("file:///tmp/bare/repo.git")).toBeUndefined();
+    expect(slugFromRemote("https://github.com/owner/name/extra")).toBeUndefined();
   });
 
   it("takes the tag immediately below the target", () => {
