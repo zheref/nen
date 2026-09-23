@@ -236,6 +236,32 @@ export function planSquash(seams: Seams, cwd: string, onto: string, base: Squash
 }
 
 /**
+ * The refusal for a base name this guard cannot use, or null when `name` is
+ * a canonical short branch name. The guard builds `refs/remotes/origin/<name>`
+ * and `refs/heads/<name>` from it, so anything but the name as it appears
+ * under `refs/heads/` would resolve nothing and read as "check not performed"
+ * while the squash went ahead (review finding on zheref/nen#253). Asked of
+ * `git check-ref-format --branch`, whose OUTPUT is the name git would use:
+ * a rejected name, a name git rewrites (`@{-1}`), and a full ref spelling
+ * (`refs/heads/main`, which git passes through unchanged) are all refused.
+ * `what` says where the name came from (`--base`, or the policy).
+ */
+export function baseNameRefusal(seams: Seams, cwd: string, name: string, what: string): string | null {
+  const checked = runGit(seams, cwd, ["check-ref-format", "--branch", name]);
+  if (checked.spawnFailed) {
+    throw new SquashStateError(`could not check the base name '${name}' ('git check-ref-format --branch' failed: ${checked.error}).`);
+  }
+  if (checked.code !== 0) {
+    return `${what} '${name}' is not a branch name git will accept ('git check-ref-format --branch' answered ${checked.error}). Nothing was reset or committed.`;
+  }
+  const normalized = checked.stdout.trim();
+  if (normalized !== name || name.startsWith("refs/")) {
+    return `${what} '${name}' is not a short branch name (git reads it as '${normalized}'). The base guard looks for 'origin/<base>' and '<base>', so name the branch as it appears under refs/heads/, e.g. 'main'. Nothing was reset or committed.`;
+  }
+  return null;
+}
+
+/**
  * Which folded commits the base already holds. The candidate refs are
  * `origin/<base>` and `<base>`, each resolved with `git rev-parse --verify
  * --quiet <full ref>^{commit}` -- an absent ref is exit 1 and is skipped; a

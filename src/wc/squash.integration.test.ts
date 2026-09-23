@@ -310,6 +310,16 @@ describe.skipIf(!HAVE_GIT)("nen wc squash, against the real git", () => {
     expect(mustGit(work, ["rev-list", "--count", `${publishedSha}..HEAD`])).toBe("1");
   });
 
+  it("refuses --base refs/heads/main against the real git: the guard only accepts the short name", async () => {
+    const work = freshBranch("full-ref-base", ["feat: a", "feat: b"]);
+    const beforeHead = mustGit(work, ["rev-parse", "HEAD"]);
+    const msg = messageFile("feat: would fold\n");
+    const result = await squash(["squash", "--repo", work, "--onto", "main", "--base", "refs/heads/main", "--message-file", msg]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--base 'refs\/heads\/main' is not a short branch name/);
+    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(beforeHead);
+  });
+
   it("exits 0 with nothing moved when fewer than two commits would fold", async () => {
     const work = freshBranch("single-commit-case", ["feat: only one"]);
     const beforeHead = mustGit(work, ["rev-parse", "HEAD"]);

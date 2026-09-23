@@ -155,7 +155,7 @@ const TWO_COMMITS = {
   result: { stdout: "sha2\tsecond commit\nsha1\tfirst commit\n" },
 };
 /** The base name from the policy (here: branch.base's default, `main`) passed git's own branch-name rule. */
-const NAME_OK = { match: "git check-ref-format --branch main", result: { code: 0 } };
+const NAME_OK = { match: "git check-ref-format --branch main", result: { stdout: "main\n" } };
 /** origin/main resolves and holds neither folded commit; local main does not resolve. */
 const BASE_CLEAR = [
   { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { stdout: "originsha\n" } },
@@ -345,7 +345,7 @@ describe("nen wc squash -- CLI wiring", () => {
 
   it("--base overrides the workflow's branch.base, held to git's own branch-name rule", async () => {
     const script = [
-      { match: "git check-ref-format --branch develop", result: { code: 0 } },
+      { match: "git check-ref-format --branch develop", result: { stdout: "develop\n" } },
       CLEAN,
       MERGE_BASE,
       ANCESTOR_OK,
@@ -387,6 +387,36 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(message).toMatch(/branch\.base's default -- no nen\/workflow\.json 'main' is not a branch name git will accept/);
     expect(message).toMatch(/Fix branch\.base, or pass --base/);
     expect(result.seams.calls.some((call): boolean => call.args[0] === "status")).toBe(false);
+  });
+
+  // Review round 2 on zheref/nen#253: the guard builds refs from the name, so
+  // only the canonical SHORT name will do. A full ref git passes through
+  // unchanged, or a name git rewrites, would resolve nothing and let the
+  // squash proceed with the check "not performed".
+  it("refuses --base refs/heads/main at exit 2: not a short branch name, before any status read", async () => {
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--base", "refs/heads/main", "--message-file", messageFile("feat: x\n")],
+      [{ match: "git check-ref-format --branch refs/heads/main", result: { stdout: "refs/heads/main\n" } }],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--base 'refs\/heads\/main' is not a short branch name/);
+    expect(result.seams.calls.some((call): boolean => call.args[0] === "status")).toBe(false);
+  });
+
+  it("refuses a --base git rewrites to another name (@{-1}) at exit 2, naming what git read it as", async () => {
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--base", "@{-1}", "--message-file", messageFile("feat: x\n")],
+      [{ match: "git check-ref-format --branch @{-1}", result: { stdout: "feature/x\n" } }],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--base '@{-1}' is not a short branch name (git reads it as 'feature/x')");
+  });
+
+  it("refuses a --base shaped like an option or a force before any git call at all", async () => {
+    const result = await capture(["wc", "squash", "--onto", "main", "--base=--upload-pack=/x", "--message-file", messageFile("feat: x\n")]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/looks like a refspec or a force option/);
+    expect(result.seams.calls).toEqual([]);
   });
 
   it("validates the policy's base name before any other git call", async () => {

@@ -21,8 +21,8 @@ import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } from "./catchup.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 import { messageFileRefusals } from "./messagefile.js";
-import { looksLikeRefspecOrForce, PUBLISH_CONTRACT, publish, refuseBranchName } from "./publish.js";
-import { performSquash, planSquash, type FoldedCommit, type SquashBase } from "./squash.js";
+import { looksLikeRefspecOrForce, PUBLISH_CONTRACT, publish } from "./publish.js";
+import { baseNameRefusal, performSquash, planSquash, type FoldedCommit, type SquashBase } from "./squash.js";
 import {
   listWorktrees,
   PARK_REF,
@@ -79,10 +79,12 @@ squash:
                     ancestor of HEAD.
   --base           the base branch whose published commits are never folded
                     -- default ${WORKFLOW_FILE}'s branch.base ('main' when
-                    the file is absent). Validated by 'git check-ref-format
-                    --branch' (exit 2 for --base; exit 1 for a policy value
-                    git rejects, naming the file); checked as 'origin/<base>'
-                    and '<base>', whichever resolve, with no fetch.
+                    the file is absent). Must be the SHORT branch name
+                    'git check-ref-format --branch' returns unchanged -- not
+                    'refs/heads/main', not '@{-1}' -- because the guard builds
+                    'origin/<base>' and '<base>' from it (exit 2 for --base;
+                    exit 1 for a policy value, naming the file). Checked
+                    against whichever of the two resolve, with no fetch.
   --message-file    a file holding the new commit's whole message, validated
                     to the SAME shape 'nen commit format' enforces: a
                     Conventional Commits header (<=72 characters, no trailing
@@ -283,6 +285,14 @@ function squashJson(
   };
 }
 
+/** A base name squash can guard with, or the refusal: the refspec/force shape first (./publish.ts's own test), then git's verdict. */
+function squashBaseRefusal(context: CommandContext, root: string, name: string, what: string): string | null {
+  if (looksLikeRefspecOrForce(name)) {
+    return `${what} '${name}' looks like a refspec or a force option (a leading '+' or '-', or a ':'), not a branch name. Nothing was reset or committed.`;
+  }
+  return baseNameRefusal(context.seams, root, name, what);
+}
+
 /** The base check's own line: which refs it ran against, or that it did NOT run -- never silence read as clean. */
 function baseCheckLine(base: SquashBase, baseRefs: readonly string[]): string {
   return baseRefs.length > 0
@@ -339,14 +349,17 @@ function squash(context: CommandContext): number {
   }
 
   // THE BASE WHOSE PUBLISHED COMMITS ARE NEVER FOLDED (zheref/nen#251): --base
-  // when given, held to git's own branch-name rule exactly as 'wc catch-up'
-  // holds its --base; otherwise the workflow's branch.base, the same key
-  // 'wc publish' reads for the trunk. A policy that will not load is exit 1,
+  // when given, otherwise the workflow's branch.base, the same key 'wc
+  // publish' reads for the trunk. Either name must be a CANONICAL SHORT
+  // branch name (./squash.ts's baseNameRefusal): the guard builds refs from
+  // it, and a spelling that resolves nothing would read as "not performed"
+  // while the squash went ahead. The refspec/force shape is refused first, so
+  // no name reaches git as an option. A policy that will not load is exit 1,
   // on the argument the message-file block above makes.
   let base: SquashBase;
   const baseFlag = context.args.values["base"];
   if (baseFlag !== undefined) {
-    const refused = refuseBranchName(context.seams, root, baseFlag, "--base");
+    const refused = squashBaseRefusal(context, root, baseFlag, "--base");
     if (refused !== null) throw new VerbUsageError(refused);
     base = { name: baseFlag, source: "--base" };
   } else {
@@ -368,7 +381,7 @@ function squash(context: CommandContext): number {
     // would answer "absent" and the base guard would silently not run. Exit 1,
     // not 2, on the argument above: the invocation was right, the repository's
     // own file is not (review finding on zheref/nen#253).
-    const refused = refuseBranchName(context.seams, root, base.name, base.source);
+    const refused = squashBaseRefusal(context, root, base.name, base.source);
     if (refused !== null) {
       context.io.err(
         `nen: ${refused} This repository's ${WORKFLOW_FILE} names the base whose published commits a squash never folds, and nen will not squash with that guard unable to run. Fix branch.base, or pass --base.`,
