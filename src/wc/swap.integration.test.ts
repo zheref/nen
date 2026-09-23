@@ -368,3 +368,102 @@ describe.skipIf(!HAVE_GIT)("nen wc swap -- what the port adds", () => {
     expect(mustGit(C, ["stash", "list"])).toBe("");
   });
 });
+
+// ── Copilot's review on #242: one regression per finding ─────────────────────
+
+describe.skipIf(!HAVE_GIT)("nen wc swap -- the review findings on #242", () => {
+  it("a record with a malformed optional field is refused (1), never coerced to null", async () => {
+    const record = join(C, ".git", STATE_FILE);
+    writeFileSync(record, JSON.stringify({ contract: "nen.wc.swap.state/v0.1", target: W, branch: "feat", mode: "view", home: "main", homeSha: headOf(C), parked: 123 }));
+    const run = await wc(["swap", "--return"], C);
+    expect(run.code).toBe(1);
+    expect(run.err).toMatch(/is not a nen\.wc\.swap\.state\/v0\.1 document/);
+    expect(existsSync(record)).toBe(true);
+    rmSync(record);
+  });
+
+  it("a swap whose lock another run holds is refused (2), and nothing moves", async () => {
+    const lock = join(C, ".git", `${STATE_FILE}.lock`);
+    writeFileSync(lock, "999999 held\n");
+    const head = headOf(C);
+    const run = await wc(["swap", "feat"], C);
+    expect(run.code).toBe(2);
+    expect(run.err).toMatch(/another 'nen wc swap' holds/);
+    expect(headOf(C)).toBe(head);
+    expect(branchOf(C)).toBe("main");
+    expect(parkRef(C)).toBe(false);
+    rmSync(lock);
+  });
+
+  it("a local edit to a reload-worthy file that the swap clears is hinted, and the record is never torn", async () => {
+    writeFileSync(join(C, "Package.resolved"), "{ \"local\": true }\n");
+    const run = await wc(["swap", "feat"], C);
+    expect(run.code).toBe(0);
+    expect(run.out).toContain("Package.resolved");
+    const leftovers = mustGit(C, ["rev-parse", "--git-common-dir"]);
+    expect(readFileSync(join(C, leftovers, STATE_FILE), "utf8")).toMatch(/"mode": "view"/);
+    expect(existsSync(join(C, ".git", `${STATE_FILE}.lock`))).toBe(false);
+    expect((await wc(["swap", "--return"], C)).code).toBe(0);
+    expect(readFileSync(join(C, "Package.resolved"), "utf8")).toBe("{ \"local\": true }\n");
+    rmSync(join(C, "Package.resolved"));
+  });
+
+  it("a re-swap after a take views the target's CURRENT tip, commits made in core included -- by path", async () => {
+    expect((await wc(["swap", "feat", "--take"], C)).code).toBe(0);
+    writeFileSync(join(C, "during-take.txt"), "x\n");
+    mustGit(C, ["add", "during-take.txt"]);
+    mustGit(C, ["commit", "--quiet", "-m", "commit made during the take"]);
+    const tip = headOf(C);
+    const run = await wc(["swap", W], C);
+    expect(run.code).toBe(0);
+    expect(branchOf(W)).toBe("feat");
+    expect(headOf(W)).toBe(tip);
+    expect(headOf(C)).toBe(tip);
+    expect(branchOf(C)).toBeNull();
+    expect((await wc(["swap", "--return"], C)).code).toBe(0);
+  });
+
+  it("-- and by the branch name, which core holds while the take is active", async () => {
+    expect((await wc(["swap", "feat", "--take"], C)).code).toBe(0);
+    writeFileSync(join(C, "during-take-2.txt"), "y\n");
+    mustGit(C, ["add", "during-take-2.txt"]);
+    mustGit(C, ["commit", "--quiet", "-m", "second commit during a take"]);
+    const tip = headOf(C);
+    const run = await wc(["swap", "feat"], C, true);
+    expect(run.code).toBe(0);
+    expect(run.doc["mode"]).toBe("view");
+    expect(run.doc["branch"]).toBe("feat");
+    expect(headOf(C)).toBe(tip);
+    expect(branchOf(W)).toBe("feat");
+    expect((await wc(["swap", "--return"], C)).code).toBe(0);
+    expect(branchOf(C)).toBe("main");
+    expect(readFileSync(join(C, "a.txt"), "utf8")).toBe("one-edited\n");
+  });
+
+  it("a core with a dirty submodule is refused (3) before anything is parked or cleared", async () => {
+    const base = join(root, "submodule-case");
+    const lib = join(base, "lib");
+    const app = join(base, "app");
+    const wt = join(base, "app-wt");
+    mkdirSync(base, { recursive: true });
+    mustGit(base, ["init", "--quiet", "--initial-branch=main", lib]);
+    pin(lib);
+    commitIn(lib, { "lib.txt": "lib\n" }, "lib");
+    mustGit(base, ["init", "--quiet", "--initial-branch=main", app]);
+    pin(app);
+    commitIn(app, { "app.txt": "app\n" }, "app");
+    mustGit(app, [...PINNED, "submodule", "add", "--quiet", lib, "mod"]);
+    mustGit(app, ["commit", "--quiet", "-m", "add the submodule"]);
+    mustGit(app, ["worktree", "add", "--quiet", "-b", "side", wt]);
+    commitIn(wt, { "side.txt": "side\n" }, "side work");
+    writeFileSync(join(app, "mod", "lib.txt"), "edited inside the submodule\n");
+    const head = headOf(app);
+    const run = await wc(["swap", "side"], app, true);
+    expect(run.code).toBe(3);
+    expect((run.doc["dirty"] as { paths: string[] }).paths).toEqual(["mod"]);
+    expect(headOf(app)).toBe(head);
+    expect(branchOf(app)).toBe("main");
+    expect(parkRef(app)).toBe(false);
+    expect(readFileSync(join(app, "mod", "lib.txt"), "utf8")).toBe("edited inside the submodule\n");
+  });
+});

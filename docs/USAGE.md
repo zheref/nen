@@ -2107,7 +2107,21 @@ exists is core cleared (`git reset --hard` + `git clean -fd`, never `-x`).
 and drops the ref. The swap record is `<common git dir>/nen-wc-swap.json`,
 never in the tree. After a swap any changed `project.pbxproj`,
 `Package.resolved`, `Podfile.lock` or `Cartfile.resolved` is named — the IDE
-may ask to reload or re-resolve packages.
+may ask to reload or re-resolve packages — measured from the tree the IDE had
+open (the parked tree on a first swap from a dirty core) to the tree it has
+now.
+
+**Concurrency.** A swap and a return run under one advisory lock beside the
+record (`nen-wc-swap.json.lock`, the phase and usage ledgers' own); a
+second swap that finds it held is refused at exit 2 with nothing moved. The
+record is written through a temp file and a rename, so `--status` and
+`worktrees` never read half of one. A record whose fields are not the
+contract's types is refused at exit 1 rather than read around.
+
+**While a take is active** the branch is core's and its worktree is detached;
+naming that branch or that worktree means the take's own target, which gets
+the branch back first — so a re-swap views the branch's **current** tip,
+commits made in core included.
 
 **Usage**
 
@@ -2134,8 +2148,8 @@ subcommand, and `--base` is refused here, rather than accepted and ignored.
 | Code | Meaning |
 |---|---|
 | `0` | done |
-| `2` | refused before anything moved — an unknown or ambiguous target, core itself, no swap to return from, `--take` on a detached worktree, a bad argument, not a checkout, or `refs/nen/wc-swap/parked` still pinned by an interrupted swap with no swap recorded (a second park would overwrite it; the refusal names the recovery) |
-| `3` | a tree is dirty — the target on a swap, or core on `--return` or a re-swap — every path listed on stderr; nothing moved, and nothing is committed, discarded or stashed on anyone's behalf |
+| `2` | refused before anything moved — an unknown or ambiguous target, core itself, no swap to return from, `--take` on a detached worktree, a bad argument, not a checkout, `refs/nen/wc-swap/parked` still pinned by an interrupted swap with no swap recorded (a second park would overwrite it; the refusal names the recovery), or another swap holding the lock |
+| `3` | a tree is dirty — the target on a swap, core on `--return` or a re-swap, or a submodule dirty *inside* core on a first swap (a park holds the superproject's gitlink only, so those edits could be neither kept nor cleared) — every path listed on stderr; nothing moved, and nothing is committed, discarded or stashed on anyone's behalf |
 | `1` | a git step failed part-way; the message says where, and the parked commit is still pinned |
 
 `3` is not `2` on purpose, unlike [`wc squash`](#nen-wc-squash)'s and

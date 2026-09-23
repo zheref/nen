@@ -57,8 +57,9 @@
 // here goes through `resolve` and then `realpathSync.native` before it is
 // compared, and git's own spelling is what is printed.
 
-import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { ledgerLockPath, withLedgerLock, writeLedgerAtomically } from "../ledger/lock.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 
@@ -331,23 +332,35 @@ export function readState(core: Core): SwapState | null {
     record.contract !== SWAP_STATE_CONTRACT ||
     typeof record.target !== "string" ||
     (record.mode !== "view" && record.mode !== "take") ||
-    typeof record.homeSha !== "string"
+    typeof record.homeSha !== "string" ||
+    // OPTIONAL FIELDS ARE A STRING OR null, NEVER COERCED (Copilot on #242):
+    // a damaged `parked: 123` read as null would skip the unpark and drop the
+    // record with the parked ref still pinned, and a damaged `home` would
+    // return core somewhere it never was.
+    !stringOrNull(record.branch) ||
+    !stringOrNull(record.home) ||
+    !stringOrNull(record.parked)
   ) {
     throw new SwapStepError(`the swap record '${file}' is not a ${SWAP_STATE_CONTRACT} document; read it, put core back by hand, and delete it.`);
   }
   return {
     contract: SWAP_STATE_CONTRACT,
     target: record.target,
-    branch: typeof record.branch === "string" ? record.branch : null,
+    branch: record.branch ?? null,
     mode: record.mode,
-    home: typeof record.home === "string" ? record.home : null,
+    home: record.home ?? null,
     homeSha: record.homeSha,
-    parked: typeof record.parked === "string" ? record.parked : null,
+    parked: record.parked ?? null,
   };
 }
 
+function stringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+/** Through a temp file and a rename, so a reader never sees a torn record (../ledger/lock.ts). */
 function writeState(core: Core, state: SwapState): void {
-  writeFileSync(statePath(core), `${JSON.stringify(state, null, 2)}\n`);
+  writeLedgerAtomically(statePath(core), state);
 }
 
 function clearState(core: Core): void {
@@ -507,17 +520,90 @@ function handBranchBack(seams: Seams, core: Core, state: SwapState): void {
   mustGit(seams, state.target, ["checkout", "-q", branch], `could not hand '${branch}' back to ${state.target}; core is detached on it`);
 }
 
+/** A lock older than this is a crashed swap's; a real one on a large tree can take minutes. */
+const SWAP_LOCK_STALE_MS = 600_000;
+
+/**
+ * THE WHOLE TRANSITION RUNS UNDER ONE LOCK in the common git directory
+ * (Copilot on #242): the temporary index, PARK_REF and the record are shared
+ * by every checkout of the project, and two swaps that both read "no swap
+ * recorded" would race on all three. ../ledger/lock.ts's advisory lock is
+ * reused rather than a second one written; a swap that finds it held is
+ * refused at exit 2 -- nothing moved. The readers (--status, worktrees) take
+ * no lock: the record is written through a rename, so they read the old
+ * document or the new one, never half of one.
+ */
+function locked<T>(core: Core, body: () => T): T {
+  try {
+    return withLedgerLock(statePath(core), body, { staleMs: SWAP_LOCK_STALE_MS });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      !(error instanceof SwapRefusal) &&
+      !(error instanceof SwapStepError) &&
+      error.message.includes("is held by another nen run")
+    ) {
+      throw new SwapRefusal(
+        `another 'nen wc swap' holds '${ledgerLockPath(statePath(core))}'; nothing moved. Run again once it finishes, or remove the lock if nothing holds it.`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Submodules whose OWN tree is dirty (`git status --porcelain=v2`'s `S<c><m><u>`
+ * field with any flag set). The park snapshots the superproject only -- a
+ * gitlink, never the submodule's edits -- and the non-recursive reset/clean
+ * would leave them in place, so a dirty submodule in core is refused before
+ * anything moves (Copilot on #242).
+ */
+export function dirtySubmodules(seams: Seams, cwd: string): string[] {
+  const status = mustGit(
+    seams,
+    cwd,
+    ["-c", "core.quotePath=false", "status", "--porcelain=v2", "--untracked-files=no"],
+    `could not read the submodule status of '${cwd}'`,
+  );
+  const paths: string[] = [];
+  for (const line of rawLines(status)) {
+    const fields = line.split(" ");
+    const kind = fields[0];
+    const sub = fields[2] ?? "";
+    if ((kind !== "1" && kind !== "2") || !sub.startsWith("S") || sub === "S...") continue;
+    const rest = fields.slice(kind === "1" ? 8 : 9).join(" ");
+    paths.push(kind === "2" ? (rest.split("\t")[0] ?? rest) : rest);
+  }
+  return paths;
+}
+
 /** `wc swap <target> [--take]`. */
 export function swap(seams: Seams, repo: string, token: string, take: boolean): SwapOutcome {
   const core = resolveCore(seams, repo);
-  const hit = findTarget(worktrees(seams, core), token, resolve(repo));
+  return locked(core, () => swapLocked(seams, core, repo, token, take));
+}
+
+function swapLocked(seams: Seams, core: Core, repo: string, token: string, take: boolean): SwapOutcome {
+  let state = readState(core);
+  const rows = worktrees(seams, core);
+  let hit = findTarget(rows, token, resolve(repo));
+  // WHILE A TAKE IS ACTIVE THE BRANCH IS CORE'S and the worktree it came from
+  // is detached (Copilot on #242). Its branch name then resolves to core, and
+  // the worktree itself reads as detached; both mean the take's own target,
+  // which holds the branch again the moment it is handed back below.
+  if (state !== null && state.mode === "take") {
+    const taken = canonical(state.target);
+    const home = rows.find((row): boolean => row.canonical === taken);
+    if (home !== undefined && (hit.canonical === taken || (hit.canonical === core.path && token === state.branch))) {
+      hit = { ...home, branch: state.branch };
+    }
+  }
   if (hit.canonical === core.path) {
     throw new SwapRefusal(`'${token}' is the core checkout itself; there is nothing to swap in.`);
   }
   if (take && hit.branch === null) {
     throw new SwapRefusal(`--take moves a branch, and '${hit.path}' is detached.`);
   }
-  let state = readState(core);
 
   const targetDirty = dirtyPaths(seams, hit.path);
   if (targetDirty.length > 0) {
@@ -535,6 +621,7 @@ export function swap(seams: Seams, repo: string, token: string, take: boolean): 
   let home: string | null;
   let homeSha: string;
   let parked: string | null;
+  let reloadFrom: string | null = null;
   if (state !== null) {
     // A RE-SWAP: core must hold nothing new, and the home stays the first swap's.
     const coreDirty = dirtyPaths(seams, core.path);
@@ -572,6 +659,10 @@ export function swap(seams: Seams, repo: string, token: string, take: boolean): 
       handBranchBack(seams, core, state);
       state = { ...state, mode: "view" };
       writeState(core, state);
+      // The branch is back in its worktree -- with any commit made in core on
+      // it -- so the target's HEAD is re-read, never the pre-hand-back one.
+      const fresh = worktrees(seams, core).find((row): boolean => row.canonical === hit.canonical);
+      if (fresh !== undefined) hit = fresh;
     }
     home = state.home;
     homeSha = state.homeSha;
@@ -585,13 +676,36 @@ export function swap(seams: Seams, repo: string, token: string, take: boolean): 
         `${PARK_REF} already pins ${stranded}, and no swap is recorded: an earlier swap stopped part-way. Recover that work with 'git checkout ${stranded} -- .' in core, then 'git update-ref -d ${PARK_REF}', and swap again.`,
       );
     }
+    const submodules = dirtySubmodules(seams, core.path);
+    if (submodules.length > 0) {
+      return dirtyOutcome(
+        seams,
+        core,
+        "swap",
+        null,
+        core.path,
+        submodules,
+        "core has a submodule with uncommitted changes inside it; a park holds the superproject only, so they could be neither kept nor cleared. Commit or discard them inside the submodule, then swap again:",
+      );
+    }
     home = branchOf(seams, core.path);
     homeSha = headOf(seams, core.path);
     parked = park(seams, core);
-    if (parked !== null) clearCore(seams, core, parked);
+    if (parked !== null) {
+      clearCore(seams, core, parked);
+      const left = dirtyPaths(seams, core.path);
+      if (left.length > 0) {
+        throw new SwapStepError(
+          `core's work is parked at ${parked} (${PARK_REF}) but core is still dirty after clearing (${left.join(", ")}); nothing was checked out. 'git checkout ${parked} -- .' restores the parked work.`,
+        );
+      }
+      // What the IDE saw before the swap was the parked tree, not HEAD's.
+      reloadFrom = parked;
+    }
   }
 
   const before = headOf(seams, core.path);
+  reloadFrom ??= before;
   let mode: SwapMode;
   if (take) {
     const branch = hit.branch ?? "";
@@ -616,10 +730,14 @@ export function swap(seams: Seams, repo: string, token: string, take: boolean): 
   const next: SwapState = { contract: SWAP_STATE_CONTRACT, target: hit.path, branch: hit.branch, mode, home, homeSha, parked };
   writeState(core, next);
 
-  const reloadHints = before === headOf(seams, core.path)
+  // RELOAD HINTS ARE WHAT THE IDE SAW CHANGE (Copilot on #242): from the tree
+  // it had open -- the parked one on a first swap from a dirty core, HEAD
+  // otherwise -- to the tree it has now.
+  const after = headOf(seams, core.path);
+  const reloadHints = reloadFrom === after
     ? []
     : rawLines(
-        mustGit(seams, core.path, ["-c", "core.quotePath=false", "diff", "--name-only", before, "HEAD"], "could not list what the swap changed"),
+        mustGit(seams, core.path, ["-c", "core.quotePath=false", "diff", "--name-only", reloadFrom, after], "could not list what the swap changed"),
       ).filter((path): boolean => RELOAD_HINT.test(path));
   const done = report(seams, core, "swap", next, { reloadHints });
   const lines = [`core now holds '${hit.branch ?? hit.head}' from ${hit.path} (${mode}, ${done.head.slice(0, 9)}).`];
@@ -634,6 +752,10 @@ export function swap(seams: Seams, repo: string, token: string, take: boolean): 
 /** `wc swap --return`. */
 export function swapReturn(seams: Seams, repo: string): SwapOutcome {
   const core = resolveCore(seams, repo);
+  return locked(core, () => swapReturnLocked(seams, core));
+}
+
+function swapReturnLocked(seams: Seams, core: Core): SwapOutcome {
   const state = readState(core);
   if (state === null) {
     const branch = branchOf(seams, core.path);

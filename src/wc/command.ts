@@ -230,9 +230,11 @@ to reload or re-resolve packages.
 
 EXIT CODES: 0 done. 2 refused before anything moved -- an unknown or
 ambiguous target, core itself, no swap to return from, --take on a detached
-worktree, a bad argument, not a checkout, or ${PARK_REF} still pinned by an
-interrupted swap with no swap recorded. 3 a tree is dirty -- the target on a
-swap, or core on --return or a re-swap -- every path listed on stderr (and in
+worktree, a bad argument, not a checkout, ${PARK_REF} still pinned by an
+interrupted swap with no swap recorded, or another swap holding the lock
+(<common git dir>/${STATE_FILE}.lock). 3 a tree is dirty -- the target on a
+swap, core on --return or a re-swap, or a submodule dirty inside core (a park
+holds the superproject only) -- every path listed on stderr (and in
 'dirty' under --json); nothing moved, and nothing is committed, discarded or
 stashed on anyone's behalf. 1 a git step failed part-way; the message says
 where, and the parked commit is still pinned.
