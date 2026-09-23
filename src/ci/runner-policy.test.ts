@@ -5,6 +5,10 @@ import { parse } from "yaml";
 
 const WORKFLOWS = join(process.cwd(), ".github", "workflows");
 const CANONICAL_GUARD = "github.repository == 'zheref/nen'";
+// The one widening of the exact guard: the canonical binding AND a repository
+// variable declaring a self-hosted pool online. It can only NARROW when a job
+// runs -- never let a fork, an event or a runner in.
+const POOL_GATED_GUARD = /^github\.repository == 'zheref\/nen' && vars\.[A-Z][A-Z0-9_]* == 'online'$/;
 const MATRIX_RUNNER = "${{ fromJSON(matrix.runner) }}";
 const ALLOWED_HOSTED = "ubuntu-latest";
 const ALLOWED_SELF_HOSTED = new Set([
@@ -62,7 +66,7 @@ function violations(workflows: Record<string, string>): string[] {
         continue;
       }
       const job = value as Row;
-      if (job.if !== CANONICAL_GUARD) {
+      if (job.if !== CANONICAL_GUARD && !(typeof job.if === "string" && POOL_GATED_GUARD.test(job.if))) {
         found.push(`${name}:${jobName}: guard must exactly bind the canonical repository`);
       }
 
@@ -100,13 +104,18 @@ describe("GitHub Actions runner policy", () => {
   it("keeps CI on canonical branch pushes and the declared runner pools", () => {
     const ci = parse(sources["ci.yml"]!) as Row;
     expect(ci.on).toEqual({ push: { branches: ["**"] } });
-    const check = (ci.jobs as Row).check as Row;
-    const include = ((check.strategy as Row).matrix as Row).include as Row[];
-    expect(include.map((row) => row.runner)).toEqual([
+    const rows = (job: string): unknown[] =>
+      ((((ci.jobs as Row)[job] as Row).strategy as Row).matrix as Row).include as Row[];
+    expect(rows("check").map((row) => (row as Row).runner)).toEqual([
       '"ubuntu-latest"',
       '["self-hosted","macOS","ARM64"]',
-      '["self-hosted","Windows","X64"]',
     ]);
+    // The Windows pool is gated on a declared-online variable, so an empty pool
+    // skips instead of holding every PR's check rollup pending.
+    const windows = (ci.jobs as Row)["check-windows"] as Row;
+    expect(windows.if).toBe("github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online'");
+    expect(windows.name).toBe("check");
+    expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64"]']);
   });
 
   it("signs, verifies and executes the darwin binary before the manifest, and executes the linux one on Ubuntu before anything is attached (zheref/nen#233)", () => {
@@ -172,9 +181,18 @@ describe("GitHub Actions runner policy", () => {
     }
   });
 
+  it("accepts the canonical binding narrowed by a pool-online variable, and nothing wider", () => {
+    const gated =
+      "on:\n  push:\njobs:\n  ok:\n    if: github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online'\n    runs-on: [self-hosted, Windows, X64]\n";
+    expect(violations({ "gated.yml": gated })).toEqual([]);
+  });
+
   it.each([
     ["pinned hosted macOS", "on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: macos-14\n"],
     ["guard with an escape", "on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen' || true\n    runs-on: ubuntu-latest\n"],
+    ["pool gate with an escape", "on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online' || true\n    runs-on: ubuntu-latest\n"],
+    ["pool gate without the canonical binding", "on:\n  push:\njobs:\n  bad:\n    if: vars.NEN_WINDOWS_RUNNER == 'online'\n    runs-on: ubuntu-latest\n"],
+    ["pool gate on another value", "on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER != 'offline'\n    runs-on: ubuntu-latest\n"],
     ["step-only guard", "on:\n  push:\njobs:\n  bad:\n    runs-on: ubuntu-latest\n    steps:\n      - if: github.repository == 'zheref/nen'\n        run: true\n"],
     ["fork-triggerable event", "on:\n  pull_request:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ubuntu-latest\n"],
     ["indirect event", "on:\n  workflow_run:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ubuntu-latest\n"],
