@@ -2,6 +2,16 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.14.1 — unreleased
+
+### Fixed
+
+- **contract** — `project.verbs.nen.release` is no longer a seat. It read "publishing is `nen tag cut` plus a GitHub Release the maintainer creates by hand", while v0.12.0, v0.13.0, v0.13.1 and v0.14.0 were each published by an agent session running `gh release create` after the maintainer's G3 go; the seat made Hatsu's `mugetsu` (which runs `nen shu release`) stop at exit `4`, so publication happened outside the declared machinery. The row now runs `bun src/dev/release-publish.ts --repo .`, which publishes ONE GitHub Release for a tag that already resolves on origin: with no `--tag` the newest `v*`, named as DERIVED; title `Nen <tag>`; notes from the tag's own `CHANGELOG.md` section(s), read from the tag's tree; `--latest` only for the newest tag. It refuses before anything is sent when there is no tag, the tag does not resolve locally or on the remote, its section is missing or still says `unreleased`, or a release already exists (exit `1`; usage and `gh` defects exit `2`). It cuts no tag, pushes nothing and uploads no asset — `release-assets` attaches the binaries on `release: published`. Ported from zheref/hatsu's identical fix of 2026-09-19, in TypeScript because `bootstrap/nen.sh` is the one shell file this repository ships (AK-11). The retired seat's text is kept in the row's `$comment`. A new `release-guard` lane runs the script's hermetic `--self-test` (27 assertions, `gh` faked, nothing sent), and `src/dev/release-publish.test.ts` carries it into the vitest regression.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** Only nen's own `nen/contract.json` and a repository script under `src/dev/` change; no verb, flag or `--json` contract moves.
+
 ## v0.14.0 — 2026-09-22
 
 Release unit for `v0.13.1..v0.14.0`: [#242](https://github.com/zheref/nen/pull/242) (the delivery) and [#246](https://github.com/zheref/nen/pull/246) (the release proposal).
