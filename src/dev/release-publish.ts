@@ -47,9 +47,9 @@
 //   bun src/dev/release-publish.ts --self-test
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { parseRemoteUrl } from "../github/target.js";
 import { looksLikeOwnerSlug } from "../repo/root.js";
 
@@ -212,12 +212,18 @@ export function plan(options: Options, run: Run = defaultRun): Plan {
   let changelog: string;
   let changelogSource: string;
   if (options.changelog !== undefined) {
-    changelogSource = options.changelog;
-    try {
-      changelog = readFileSync(options.changelog, "utf8");
-    } catch {
-      throw new Refusal(`changelog '${options.changelog}' is not readable. The notes are composed from it; this script does not invent them.`, 1);
+    // Read from the TAG's tree, never the working tree: an uncommitted edit, or a
+    // same-named file beside a caller running from elsewhere, must never become the
+    // notes of a release that points at a different commit.
+    if (isAbsolute(options.changelog)) {
+      throw new Refusal(`--changelog names a path inside the repository ('${options.changelog}' is absolute); it is read from '${tag}'s tree, never from disk.`, 2);
     }
+    changelogSource = `${tag}:${options.changelog}`;
+    const shown = git(run, options.repo, ["show", `${tag}:./${options.changelog}`]);
+    if (shown.status !== 0) {
+      throw new Refusal(`'${options.changelog}' is not in '${tag}'s tree. The notes are composed from the tag's own files; this script does not invent them.`, 1);
+    }
+    changelog = shown.stdout;
   } else {
     changelogSource = `${tag}:CHANGELOG.md`;
     const shown = git(run, options.repo, ["show", `${tag}:CHANGELOG.md`]);
@@ -279,8 +285,15 @@ export function publish(options: Options, run: Run = defaultRun, io: Io = defaul
   if (run("gh", ["api", `repos/${p.slug}/git/ref/tags/${p.tag}`], options.repo).status !== 0) {
     throw new Refusal(`tag '${p.tag}' does not exist on ${p.slug}. Push it first ('nen tag cut --push'); a release must not point at a ref nobody can fetch.`, 1);
   }
-  if (run("gh", ["release", "view", p.tag, "--repo", p.slug], options.repo).status === 0) {
+  const view = run("gh", ["release", "view", p.tag, "--repo", p.slug], options.repo);
+  if (view.status === 0) {
     throw new Refusal(`a release already exists for '${p.tag}' on ${p.slug}. Re-publishing is never the fix; edit it by hand if the notes are wrong.`, 1);
+  }
+  // Only a CONFIRMED not-found proves publication is safe. A network, permission or
+  // rate-limit failure is also non-zero, and falling through to create on it could
+  // attempt a duplicate release during an outage.
+  if (!/release not found|not found/i.test(view.stderr)) {
+    throw new Refusal(`'gh release view ${p.tag}' failed without saying the release is absent (${view.stderr.trim() || `exit ${view.status}`}); refusing rather than risking a duplicate.`, 1);
   }
   const dir = mkdtempSync(join(tmpdir(), "nen-release-notes-"));
   try {
@@ -363,7 +376,8 @@ export function selfTest(): SelfTestResult {
     spawnSync("git", ["init", "-q", repo], { encoding: "utf8" });
     g("remote", "add", "origin", "https://github.com/acme/widget.git");
     writeFileSync(join(repo, "CHANGELOG.md"), FIXTURE_CHANGELOG);
-    g("add", "CHANGELOG.md");
+    writeFileSync(join(repo, "partial.md"), "# Changelog\n\n## v1.0.0 — only this\n\n- x\n");
+    g("add", "CHANGELOG.md", "partial.md");
     g("commit", "-qm", "chore: seed");
     g("tag", "v1.0.0");
     g("tag", "v2.0.0");
@@ -397,9 +411,12 @@ export function selfTest(): SelfTestResult {
     spawnSync("git", ["init", "-q", empty], { encoding: "utf8" });
     ok(outcome(() => publish({ ...base({ dryRun: true }), repo: empty, slug: "a/b" }, defaultRun, quiet)) === 1, "no v* tag at all refuses (1) -- it publishes a tag, never creates one");
     ok(outcome(() => publish(base({ tag: "v9.9.9", dryRun: true }), defaultRun, quiet)) === 1, "a tag that does not resolve locally refuses (1)");
-    ok(outcome(() => publish(base({ tag: "v2.0.0", changelog: join(root, "nope.md"), dryRun: true }), defaultRun, quiet)) === 1, "an unreadable --changelog refuses (1)");
-    writeFileSync(join(root, "partial.md"), "# Changelog\n\n## v1.0.0 — only this\n\n- x\n");
-    ok(outcome(() => publish(base({ tag: "v2.0.0", changelog: join(root, "partial.md"), dryRun: true }), defaultRun, quiet)) === 1, "no section for the tag refuses (1) -- notes are never invented");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", changelog: "nope.md", dryRun: true }), defaultRun, quiet)) === 1, "a --changelog not in the tag's tree refuses (1)");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", changelog: join(root, "x.md"), dryRun: true }), defaultRun, quiet)) === 2, "an absolute --changelog refuses (2) -- it is read from the tag, never from disk");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", changelog: "partial.md", dryRun: true }), defaultRun, quiet)) === 1, "no section for the tag refuses (1) -- notes are never invented");
+    writeFileSync(join(repo, "partial.md"), "# Changelog\n\n## v2.0.0 — an uncommitted edit\n\n- y\n");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", changelog: "partial.md", dryRun: true }), defaultRun, quiet)) === 1, "an uncommitted edit to --changelog is not what gets published -- the tag's tree is read");
+    g("checkout", "-q", "--", "partial.md");
     g("add", "CHANGELOG.md");
     g("commit", "-qm", "chore: v3 pending");
     g("tag", "v3.0.0");
@@ -414,6 +431,10 @@ export function selfTest(): SelfTestResult {
     const calls2: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], ["v2.0.0"], calls2), quiet)) === 1, "a tag that already has a release refuses (1)");
     ok(!calls2.some((c): boolean => c[1] === "create"), "and no release was created");
+    const calls2b: string[][] = [];
+    const outage: Run = (exe, args, cwd) => (exe === "gh" && args[0] === "release" && args[1] === "view" ? { status: 1, stdout: "", stderr: "HTTP 502: Bad Gateway" } : fakeGh(["v2.0.0"], [], calls2b)(exe, args, cwd));
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), outage, quiet)) === 1, "a 'release view' failure that is not a confirmed not-found refuses (1)");
+    ok(!calls2b.some((c): boolean => c[1] === "create"), "and no release was created during the outage");
 
     lines.push("the one send");
     const calls3: string[][] = [];
