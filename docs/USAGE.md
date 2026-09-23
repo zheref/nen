@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 40 command
-families, 106 verbs, every flag checked against the binary this repository
+families, 108 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -612,7 +612,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 106 verbs, grouped as the README groups them. **Reads** is what a
+All 108 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -637,6 +637,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names, as the branch it names (origin, or `--remote`, under its own name when it has none), refusing a detached HEAD, the trunk as local name **or as destination** (a branch tracking `origin/main` is pushed under its own name and `-u` retracks it), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
+| [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
+| [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -1656,7 +1658,9 @@ Reports tensho's own four-case table for where the current working copy
 sits — on the trunk, on a dirty branch, or on a clean branch — so tensho
 knows whether to move it before opening a PR (`classify`, read-only); and
 folds a branch's own commits into one before it is pushed (`squash`, aka's
-own residue — the only verb in this family that writes anything).
+own residue); catches it up with its base (`catch-up`) and publishes it
+(`publish`); and lists every checkout of the project (`worktrees`) and swaps
+one worktree's committed tree into the core checkout and back (`swap`).
 
 
 `--json`: the full `VerifyResult` — `{ ok, error, missing[], duplicated[], altered[], extra[], filesInOriginal, filesInBranches }`, where each entry of the four arrays carries `{ path, header }` and `duplicated` adds `branches[]`, `altered` adds `branch` and `diff`.
@@ -2023,6 +2027,156 @@ nen wc publish --repo . --set-upstream --dry-run
 ```
 ```text
 would run: git push -u origin -- refs/heads/feature/x:refs/heads/feature/x  (no upstream yet)
+```
+
+### `nen wc worktrees`
+
+Lists **every checkout of the project** — the core checkout (the one whose
+`.git` is the common git directory) and each of its worktrees — so a caller
+can see what each one holds before [`wc swap`](#nen-wc-swap) brings one into
+core (v0.14.0, [#241](https://github.com/zheref/nen/issues/241)). Read-only.
+`--repo` may name **any** of them: core is resolved through `git rev-parse
+--git-common-dir`. Parsed off `git worktree list --porcelain`; a `prunable`
+worktree (its directory is gone) is skipped.
+
+**Usage**
+
+```text
+nen wc worktrees --repo <path> [--base main] [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--repo <path>` | **yes** | any checkout of the project — core or one of its worktrees |
+| `--base <branch>` | no | the distance column is measured against `origin/<base>` (default `main`) |
+| `--json` | no | `nen.wc.worktrees/v0.1` — see below |
+
+One row per worktree, core first: a `core` / `in` mark (`in` is the worktree
+core is currently holding), the branch or `(detached)`, the uncommitted-path
+count (untracked included), `+ahead/-behind` against `origin/<base>` (`?`
+when that range does not resolve), the short HEAD, the last commit's subject
+and git's own relative age, and the path. When a swap is active a closing
+line names what core holds and its home. Exit 0; exit 2 outside a checkout.
+
+**`--json`** — `nen.wc.worktrees/v0.1`: `{ contract, core, base, swap,
+worktrees: [{ path, mark, branch, head, dirty, ahead, behind, lastSubject,
+lastAge }] }`. `swap` is the swap record (below) or `null`; `mark` is
+`"core"`, `"in"` or `null`; `branch` is `null` for a detached worktree;
+`dirty`, `ahead` and `behind` are `null` when git could not answer.
+
+**Example**
+
+```bash
+nen wc worktrees --repo .
+```
+```text
+     BRANCH                                       DIRTY     ±main   HEAD      LAST COMMIT · PATH
+core main                                         3         +0/-0   4f5c11a2b fix(stops): a decision on the page (2 hours ago) · /work/app
+in   opus/kurapika/login-flow                     0         +2/-0   9a1e0c7d3 feat(login): the flow (5 minutes ago) · /work/app/.claude/worktrees/login
+core is holding /work/app/.claude/worktrees/login (view); home: main
+```
+
+### `nen wc swap`
+
+Brings one worktree's **committed** tree into the core checkout, and puts
+core back (v0.14.0, [#241](https://github.com/zheref/nen/issues/241)). The
+use: a developer who debugs from an IDE opened on core — its project path,
+derived data, signing and untracked local config — sees a worktree's work
+there instead of opening a second project on the worktree.
+
+- **View (the default)** — core checks out the worktree's HEAD **detached**;
+  the worktree keeps its branch, so a session working there is undisturbed.
+  Swapping again picks up the worktree's newer commits and keeps the
+  **first** swap's home.
+- **`--take`** — the **branch** moves: the worktree is detached at the same
+  commit and core checks the branch out, so a commit made in core lands on
+  it. Refused on a detached worktree. A dirty core that is *viewing* the same
+  commit is promoted to a take **in place**, its edits kept.
+- **`--return`** — core goes back to its home branch (or its detached home
+  commit); after a take the branch goes back to the worktree; core's parked
+  work is restored.
+- **`--status`** — the recorded swap, or `no swap active`.
+
+**Only committed work travels**: a target worktree with uncommitted changes
+is refused. **Core's own work is parked, never stashed** — the stash stack is
+shared by every worktree and every session. Uncommitted work in core
+(untracked included, **ignored never**) is written through a temporary index
+into a commit pinned at `refs/nen/wc-swap/parked`, and only once that ref
+exists is core cleared (`git reset --hard` + `git clean -fd`, never `-x`).
+`--return` restores modified, new and deleted paths exactly, nothing staged,
+and drops the ref. The swap record is `<common git dir>/nen-wc-swap.json`,
+never in the tree. After a swap any changed `project.pbxproj`,
+`Package.resolved`, `Podfile.lock` or `Cartfile.resolved` is named — the IDE
+may ask to reload or re-resolve packages — measured from the tree the IDE had
+open (the parked tree on a first swap from a dirty core) to the tree it has
+now.
+
+**Concurrency.** A swap and a return run under one advisory lock beside the
+record (`nen-wc-swap.json.lock`, the phase and usage ledgers' own); a
+second swap that finds it held is refused at exit 2 with nothing moved. The
+record is written through a temp file and a rename, so `--status` and
+`worktrees` never read half of one. A record whose fields are not the
+contract's types is refused at exit 1 rather than read around.
+
+**While a take is active** the branch is core's and its worktree is detached;
+naming that branch or that worktree means the take's own target, which gets
+the branch back first — so a re-swap views the branch's **current** tip,
+commits made in core included.
+
+**Usage**
+
+```text
+nen wc swap <worktree path | branch | worktree dir name> --repo <path> [--take] [--json]
+nen wc swap --return --repo <path> [--json]
+nen wc swap --status --repo <path> [--json]
+```
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `<target>` | for a swap | a worktree's path (a relative one resolves against `--repo`), its branch, or its directory name; a name matching two worktrees is refused — pass the path |
+| `--repo <path>` | **yes** | any checkout of the project; core is resolved from it |
+| `--take` | no | move the branch into core rather than view its commit |
+| `--return` | no | put core back; takes no target |
+| `--status` | no | print the swap record; takes no target |
+| `--json` | no | `nen.wc.swap/v0.1` — see below |
+
+`--take`, `--return` and `--status` are refused on every other `wc`
+subcommand, and `--base` is refused here, rather than accepted and ignored.
+
+**Exit codes** — the reference engine's own, kept:
+
+| Code | Meaning |
+|---|---|
+| `0` | done |
+| `2` | refused before anything moved — an unknown or ambiguous target, core itself, no swap to return from, `--take` on a detached worktree, a bad argument, not a checkout, `refs/nen/wc-swap/parked` still pinned by an interrupted swap with no swap recorded (a second park would overwrite it; the refusal names the recovery), or another swap holding the lock |
+| `3` | a tree is dirty — the target on a swap, core on `--return` or a re-swap, or a submodule dirty *inside* core on a first swap (a park holds the superproject's gitlink only, so those edits could be neither kept nor cleared) — every path listed on stderr; nothing moved, and nothing is committed, discarded or stashed on anyone's behalf |
+| `1` | a git step failed part-way; the message says where, and the parked commit is still pinned |
+
+`3` is not `2` on purpose, unlike [`wc squash`](#nen-wc-squash)'s and
+[`wc catch-up`](#nen-wc-catch-up)'s dirty refusal: the invocation was right,
+and what the caller owes is a decision about somebody's uncommitted work.
+
+**`--json`** — `nen.wc.swap/v0.1`: `{ contract, action, core, coreBranch,
+head, active, target, branch, mode, home, homeSha, parked, reloadHints,
+dirty }`. `action` is `swap`, `promote`, `return` or `status`; `coreBranch`
+and `head` are core's after the run; `mode` is `view` or `take`; `home` is
+`null` when core's home was a detached commit (`homeSha`); `dirty` is `{
+checkout, paths[] }` on exit 3 (printed to stdout as well as the prose to
+stderr) and `null` otherwise. After `--return`, `active` is `false` and the
+other fields describe the swap that was undone. The record in the common git
+directory is `nen.wc.swap.state/v0.1`: `{ contract, target, branch, mode,
+home, homeSha, parked }`.
+
+**Example**
+
+```bash
+nen wc swap opus/kurapika/login-flow --repo .
+```
+```text
+core now holds 'opus/kurapika/login-flow' from /work/app/.claude/worktrees/login (view, 9a1e0c7d3).
+core's uncommitted work is parked at 5b7c2e110 (refs/nen/wc-swap/parked); 'nen wc swap --return' restores it.
+project or dependency files changed -- the IDE may ask to reload or re-resolve packages:
+  App.xcodeproj/project.pbxproj
 ```
 
 <a id="family-stage"></a>

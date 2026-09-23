@@ -1,7 +1,9 @@
 // src/wc/command.ts -- `nen wc classify` (tensho §2's working-copy table),
 // `nen wc squash` (aka's residue: fold a branch's commits into one before it
 // is pushed), and -- zheref/nen#227 -- `nen wc catch-up` (./catchup.ts) and
-// `nen wc publish` (./publish.ts), so no skill hand-rolls a rebase or a push.
+// `nen wc publish` (./publish.ts), so no skill hand-rolls a rebase or a push;
+// and -- zheref/nen#241 -- `nen wc worktrees` and `nen wc swap` (./swap.ts),
+// so no skill hand-rolls a worktree swap with raw checkout and stash.
 
 import { assertRepoRoot } from "../repo/root.js";
 import {
@@ -21,6 +23,18 @@ import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 import { messageFileRefusals } from "./messagefile.js";
 import { looksLikeRefspecOrForce, PUBLISH_CONTRACT, publish } from "./publish.js";
 import { performSquash, planSquash, type FoldedCommit } from "./squash.js";
+import {
+  listWorktrees,
+  PARK_REF,
+  STATE_FILE,
+  swap,
+  SWAP_CONTRACT,
+  SwapRefusal,
+  swapReturn,
+  swapStatus,
+  WORKTREES_CONTRACT,
+  type SwapOutcome,
+} from "./swap.js";
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
@@ -28,6 +42,8 @@ const USAGE = `nen wc classify -- where the current working copy sits, tensho's 
 nen wc squash -- fold every commit on this branch since --onto into ONE.
 nen wc catch-up -- bring this branch up to date with its base; stop on a conflict.
 nen wc publish -- push this branch to its upstream's remote; never a force, never the trunk.
+nen wc worktrees -- every checkout of this project: branch, dirt, distance, last commit.
+nen wc swap -- bring a worktree's committed tree into the core checkout, and put core back.
 
 classify:
   nen wc classify --repo <path> [--base main]
@@ -160,7 +176,74 @@ forces: needsForce: true, nothing pushed, exit 1.
 
 --json's contract is '${PUBLISH_CONTRACT}': { contract, branch, remote,
 destination, upstreamBefore, ahead, needsForce, pushed, dryRun } --
-destination is the upstream's branch when one exists, else branch.`;
+destination is the upstream's branch when one exists, else branch.
+
+worktrees:
+  nen wc worktrees --repo <path> [--base main] [--json]
+
+  --repo    ANY checkout of the project -- core or one of its worktrees; the
+            core checkout is resolved through 'git rev-parse --git-common-dir'.
+  --base    the branch the distance column is measured against, as
+            origin/<base> -- default 'main'.
+
+One row per worktree, core first (a prunable one is skipped): a 'core' / 'in'
+mark (in = the worktree core is currently holding), the branch or
+'(detached)', the uncommitted-path count (untracked included), +ahead/-behind
+against origin/<base> ('?' when that range does not resolve), the short HEAD,
+the last commit's subject and age, and the path. Read-only; exit 0.
+
+--json's contract is '${WORKTREES_CONTRACT}': { contract, core, base, swap
+(the swap record, or null), worktrees: [{ path, mark, branch, head, dirty,
+ahead, behind, lastSubject, lastAge }] }.
+
+swap:
+  nen wc swap <worktree path | branch | worktree dir name> --repo <path>
+              [--take] [--json]
+  nen wc swap --return --repo <path> [--json]
+  nen wc swap --status --repo <path> [--json]
+
+  <target>   a worktree's path (a relative one resolves against --repo), its
+             branch, or its directory name; a name matching two worktrees is
+             refused -- pass the path.
+  --take     move the BRANCH, not just the commit: the worktree is detached at
+             the same commit and core checks the branch out, so a commit made in
+             core lands on it. Without it (VIEW, the default) core checks out
+             the worktree's HEAD DETACHED and the worktree keeps its branch.
+  --return   put core back on its home branch (or detached home commit) and
+             restore its parked work; after a take, hand the branch back.
+  --status   print the recorded swap, or 'no swap active'.
+
+ONLY COMMITTED WORK TRAVELS: a target worktree with uncommitted changes is
+refused. A swap while one is active keeps the FIRST home and picks up the
+target's newer commits. A dirty core VIEWING the same commit as the target is
+promoted to a take IN PLACE by '<target> --take', its edits kept.
+
+CORE'S OWN WORK IS PARKED, NEVER STASHED -- the stash stack is shared by every
+worktree and every session. Uncommitted work in core (untracked included,
+ignored never) is written through a temporary index into a commit pinned at
+${PARK_REF}, and only then is core cleared ('reset --hard' + 'clean -fd',
+never -x). --return restores modified, new and deleted paths exactly, nothing
+staged, and drops the ref. The swap record is <common git dir>/${STATE_FILE},
+never in the tree. After a swap, any changed project.pbxproj,
+Package.resolved, Podfile.lock or Cartfile.resolved is named: the IDE may ask
+to reload or re-resolve packages.
+
+EXIT CODES: 0 done. 2 refused before anything moved -- an unknown or
+ambiguous target, core itself, no swap to return from, --take on a detached
+worktree, a bad argument, not a checkout, ${PARK_REF} still pinned by an
+interrupted swap with no swap recorded, or another swap holding the lock
+(<common git dir>/${STATE_FILE}.lock). 3 a tree is dirty -- the target on a
+swap, core on --return or a re-swap, or a submodule dirty inside core (a park
+holds the superproject only) -- every path listed on stderr (and in
+'dirty' under --json); nothing moved, and nothing is committed, discarded or
+stashed on anyone's behalf. 1 a git step failed part-way; the message says
+where, and the parked commit is still pinned.
+
+--json's contract is '${SWAP_CONTRACT}': { contract, action (swap | promote |
+return | status), core, coreBranch, head, active, target, branch, mode (view |
+take), home, homeSha, parked, reloadHints: [path, ...], dirty ({ checkout,
+paths } on exit 3, else null) }. After --return, active is false and the
+other fields describe the swap that was undone.`;
 
 function printFoldedCommits(context: CommandContext, folded: readonly FoldedCommit[]): void {
   for (const commit of folded) context.io.out(`  ${commit.sha} ${commit.subject}`);
@@ -328,22 +411,101 @@ function doPublish(context: CommandContext): number {
   return outcome.report.needsForce ? 1 : 0;
 }
 
+/** Run a swap-family call, turning its refusal into the family's exit 2. */
+function swapCall<T>(call: () => T): T {
+  try {
+    return call();
+  } catch (error) {
+    if (error instanceof SwapRefusal) throw new VerbUsageError(error.message);
+    throw error;
+  }
+}
+
+function extraPositionals(context: CommandContext): string[] {
+  return [...context.args.positionals.slice(2), ...context.args.passthrough];
+}
+
+function doWorktrees(context: CommandContext): number {
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It names any checkout of the project whose worktrees are listed."),
+  });
+  const extra = extraPositionals(context);
+  if (extra.length > 0) throw new VerbUsageError(`'wc worktrees' takes no positional argument; got '${extra[0]}'.`);
+  const base = context.args.values["base"] ?? "main";
+  const { report, lines } = swapCall(() => listWorktrees(context.seams, root, base));
+  emit(context.io, context.json, report, lines);
+  return 0;
+}
+
+function doSwap(context: CommandContext): number {
+  // --repo unbracketed: this verb checks out, parks and clears whatever
+  // project it is pointed at (zheref/nen#28's rule).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It names any checkout of the project whose core checkout is swapped."),
+  });
+  if (context.args.values["base"] !== undefined) {
+    throw new VerbUsageError("--base is not read by 'wc swap'; it measures 'wc worktrees'' distance column. A flag accepted and ignored is worse than one refused.");
+  }
+  const take = context.args.booleans.has("take");
+  const back = context.args.booleans.has("return");
+  const status = context.args.booleans.has("status");
+  const targets = extraPositionals(context);
+  if (back && status) throw new VerbUsageError("--return and --status are two different questions; ask one.");
+  if ((back || status) && take) throw new VerbUsageError(`--take moves a branch INTO core; it has no meaning with --${back ? "return" : "status"}.`);
+  if ((back || status) && targets.length > 0) {
+    throw new VerbUsageError(`--${back ? "return" : "status"} takes no target; got '${targets[0]}'.`);
+  }
+  if (targets.length > 1) throw new VerbUsageError(`one target only; got ${targets.map((token): string => `'${token}'`).join(", ")}.`);
+
+  let outcome: SwapOutcome;
+  if (back) outcome = swapCall(() => swapReturn(context.seams, root));
+  else if (status) outcome = swapCall(() => swapStatus(context.seams, root));
+  else {
+    const target = targets[0];
+    if (target === undefined || target.trim() === "") {
+      throw new VerbUsageError("'wc swap' needs a target -- a worktree path, a branch or a worktree directory name -- or --return / --status.");
+    }
+    outcome = swapCall(() => swap(context.seams, root, target, take));
+  }
+
+  if (outcome.kind === "dirty") {
+    if (context.json) context.io.out(JSON.stringify(outcome.report, null, 2));
+    context.io.err(`nen wc: ${outcome.message}`);
+    for (const path of outcome.report.dirty?.paths ?? []) context.io.err(path);
+    return 3;
+  }
+  emit(context.io, context.json, outcome.report, outcome.lines);
+  return 0;
+}
+
+const SWAP_ONLY_BOOLEANS: readonly string[] = ["take", "return", "status"];
+
 export const wcCommand: Command = {
   name: "wc",
-  subcommands: ["classify", "squash", "catch-up", "publish"],
-  summary: "Classify the working copy, squash it onto its base, catch it up with its base, or publish it.",
+  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap"],
+  summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, or swap one into core.",
   usage: USAGE,
-  flags: { values: ["base", "onto", "message-file", "strategy", "remote"], booleans: ["dry-run", "abort", "set-upstream"] },
+  flags: {
+    values: ["base", "onto", "message-file", "strategy", "remote"],
+    booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status"],
+  },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish"]);
+    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap"]);
     // `--remote` IS PUBLISH'S ALONE; accepted and ignored elsewhere it would be
     // an instruction silently dropped (../commit/command.ts's rule).
     if (subcommand !== "publish" && context.args.values["remote"] !== undefined) {
       throw new VerbUsageError(`--remote is not read by 'wc ${subcommand}'; only 'wc publish' takes it. A flag accepted and ignored is worse than one refused.`);
     }
+    // --take / --return / --status ARE SWAP'S ALONE, by the same rule.
+    const stray = SWAP_ONLY_BOOLEANS.find((flag): boolean => context.args.booleans.has(flag));
+    if (subcommand !== "swap" && stray !== undefined) {
+      throw new VerbUsageError(`--${stray} is not read by 'wc ${subcommand}'; only 'wc swap' takes it. A flag accepted and ignored is worse than one refused.`);
+    }
     if (subcommand === "squash") return squash(context);
     if (subcommand === "catch-up") return doCatchUp(context);
     if (subcommand === "publish") return doPublish(context);
+    if (subcommand === "worktrees") return doWorktrees(context);
+    if (subcommand === "swap") return doSwap(context);
 
     // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
     // never silently read as "classify wherever this process happens to be

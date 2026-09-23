@@ -1005,3 +1005,57 @@ describe("nen wc publish / catch-up -- a git without --end-of-options is refused
     expect(gitCalls(result.seams)).not.toContain("git --version");
   });
 });
+
+// ── wc worktrees / wc swap: the refusals made before any git call (zheref/nen#241) ──
+//
+// Every one of these is exit 2 with NO git spawned: the flag grammar is
+// settled at the command boundary, so a mistyped swap never parks or clears
+// anything. The behaviour against a real repository is
+// ./swap.integration.test.ts's.
+
+describe("nen wc swap / worktrees -- CLI refusals", () => {
+  const refused = async (argv: readonly string[], pattern: RegExp, repo: string | null = BANKAI_REPO): Promise<void> => {
+    const result = await capture(argv, [], repo);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(pattern);
+    expect(result.seams.calls).toHaveLength(0);
+  };
+
+  it("refuses swap with no target and no mode", async () => {
+    await refused(["wc", "swap"], /needs a target/);
+  });
+
+  it("refuses two targets", async () => {
+    await refused(["wc", "swap", "a", "b"], /one target only/);
+  });
+
+  it("refuses --return with --status", async () => {
+    await refused(["wc", "swap", "--return", "--status"], /two different questions/);
+  });
+
+  it("refuses --take with --return", async () => {
+    await refused(["wc", "swap", "--return", "--take"], /--take moves a branch INTO core/);
+  });
+
+  it("refuses a target with --return", async () => {
+    await refused(["wc", "swap", "feat", "--return"], /--return takes no target/);
+  });
+
+  it("refuses --base on swap -- it is worktrees' flag", async () => {
+    await refused(["wc", "swap", "feat", "--base", "main"], /--base is not read by 'wc swap'/);
+  });
+
+  it("refuses --take / --return / --status on any other subcommand", async () => {
+    await refused(["wc", "classify", "--take"], /--take is not read by 'wc classify'/);
+    await refused(["wc", "worktrees", "--return"], /--return is not read by 'wc worktrees'/);
+  });
+
+  it("refuses a positional on worktrees", async () => {
+    await refused(["wc", "worktrees", "extra"], /takes no positional argument/);
+  });
+
+  it("refuses an OMITTED --repo on both, naming the flag", async () => {
+    await refused(["wc", "swap", "feat"], /--repo <path> is required/, null);
+    await refused(["wc", "worktrees"], /--repo <path> is required/, null);
+  });
+});
