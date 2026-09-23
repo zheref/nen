@@ -1772,7 +1772,7 @@ on ([#251](https://github.com/zheref/nen/issues/251)); a `--message-file` that f
 header ≤ 72 characters, trailers as `Key: value` lines in the final
 paragraph, and any attribution trailer this repository's
 [`nen/workflow.json`](#nenworkflowjson) does not admit). Fewer than two
-commits to fold is **not** a refusal: exit 0, one line, nothing moves.
+commits to fold is **not** a refusal: exit 0, one line (ending `base check: NOT performed.`, since the base is not read), nothing moves.
 
 **Why the base is guarded on its own.** The fold set is `git merge-base
 <onto> HEAD`..`HEAD`, so on a published branch that was caught up with a

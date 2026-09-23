@@ -107,7 +107,8 @@ with the ref it is on (zheref/nen#251); refused rather than excluded, because
 a fold that skipped them would still flatten the merge; a --message-file that
 fails the shape above (every reason named). --dry-run reaches the same
 verdict the real call would. Fewer than two commits to fold is NOT a
-refusal: exit 0, one line, nothing moves.
+refusal: exit 0, one line (it says the base check was NOT performed),
+nothing moves.
 
 MECHANISM: 'git reset --soft <merge-base>' then 'git commit -F
 <message-file>', both through the seam, in that order, only once every
@@ -400,7 +401,10 @@ function squash(context: CommandContext): number {
       context.io.out(JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, null, dryRun, base.name, []), null, 2));
     } else {
       context.io.out(
-        `nothing to squash: ${plan.folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${plan.mergeBase}) -- need at least two to fold.`,
+        // baseRefs is [] here, and [] is always said out loud -- on the SAME
+        // line, since this case's contract is one line (review finding on
+        // zheref/nen#253).
+        `nothing to squash: ${plan.folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${plan.mergeBase}) -- need at least two to fold; base check: NOT performed.`,
       );
     }
     return 0;

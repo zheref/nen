@@ -238,7 +238,10 @@ describe("nen wc squash -- CLI wiring", () => {
       [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "" } }],
     );
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/nothing to squash/);
+    expect(result.out).toHaveLength(1);
+    expect(result.out[0]).toMatch(/nothing to squash/);
+    // baseRefs is [] here; the text says the base check was not performed rather than staying silent.
+    expect(result.out[0]).toMatch(/base check: NOT performed\.$/);
   });
 
   it("--dry-run prints the folded commits and the message, and touches neither reset nor commit", async () => {
