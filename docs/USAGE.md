@@ -853,8 +853,10 @@ commit. Three things make that visible:
   top-level `judgedHead`, the same value as `meta.headSha`.
 - **A local tip that differs is warned about, in every output mode.** When the
   verb runs inside a checkout of the pull request's **head branch**, the
-  branch name must match *and* a remote must name the repository, since `main` exists
-  everywhere. If that checkout's `git rev-parse HEAD` is not GitHub's head, a
+  branch name must match *and* a remote must name the repository on github.com, since `main` exists
+  everywhere. The remote URL is parsed and its host checked (`https`, `ssh`, `git`, or
+  scp-style `git@github.com:o/r`, with `ssh.github.com` also accepted), so a trailing-slug
+  look-alike such as `github.com.evil/o/r` or a local path does not count. If that checkout's `git rev-parse HEAD` is not GitHub's head, a
   `head mismatch:` warning naming both SHAs goes into `meta.warnings`. The plain
   output and `--explain` print it, and `--json` carries it together with
   `localHead: { branch, sha, matches }`. `localHead` is `null` outside such a
@@ -873,7 +875,9 @@ commit. Three things make that visible:
   *not* use a `nen.pr.ready/v0.1` report with an invented verdict. In the other modes the output is one
   stdout line, `<repo>#<pr>: head-mismatch: required <sha>, GitHub's head is <sha>`,
   followed by the reason on stderr. On a match the verdict is exactly what it would be
-  without the flag, and `meta.requiredHead` records the flag's value. The verb
+  without the flag, and `meta.requiredHead` records the flag's value.
+  `meta.requiredHead` is non-null **only once verified**. An `unevaluated` report,
+  where GitHub was never read, carries `null` even when the flag was given. The verb
   **never waits or retries**. Whether to poll until the head registers is the caller's decision.
 
 **Usage**

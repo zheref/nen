@@ -1658,4 +1658,46 @@ describe("remoteNamesRepo", () => {
     expect(remoteNamesRepo("https://github.com/zheref/example-two.git", "zheref", "example")).toBe(false);
     expect(remoteNamesRepo("https://github.com/notzheref/example.git", "zheref", "example")).toBe(false);
   });
+
+  it("validates the HOST, never the trailing slug alone (Copilot, zheref/nen#255)", () => {
+    for (const url of [
+      "https://github.com.evil/zheref/example.git",
+      "https://evil.example/zheref/example.git",
+      "git@gitlab.com:zheref/example.git",
+      "/home/someone/src/zheref/example",
+      "../zheref/example",
+      "C:/src/zheref/example",
+      "file:///srv/git/zheref/example.git",
+      "https://github.com/zheref/example/extra",
+      "",
+    ]) {
+      expect(remoteNamesRepo(url, "zheref", "example")).toBe(false);
+    }
+  });
+
+  it("accepts credentials, a port, git://, and GitHub's own ssh.github.com endpoint", () => {
+    for (const url of [
+      "https://x-access-token:abc@github.com/zheref/example.git",
+      "ssh://git@ssh.github.com:443/zheref/example.git",
+      "git://github.com/zheref/example.git",
+      "github.com:zheref/example",
+    ]) {
+      expect(remoteNamesRepo(url, "zheref", "example")).toBe(true);
+    }
+  });
+});
+
+describe("prReady -- an unevaluated report never carries an unverified requiredHead (Copilot, zheref/nen#255)", () => {
+  it("--require-head given, GitHub never read: meta.requiredHead is null, never the requested value", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, "require-head": "cafebabe" } }),
+      io,
+      stubDeps(null),
+    );
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("unevaluated");
+    expect(report.meta.requiredHead).toBeNull();
+  });
 });

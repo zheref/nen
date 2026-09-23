@@ -1010,15 +1010,7 @@ export function evaluateReady(
     );
   };
 
-  if (carveOut) {
-    const contexts = identities.dependabotCarveOut?.satisfiedByContext.join(", ") ?? "";
-    const note =
-      `satisfied by dependabot_carve_out: the author matches the declared pattern and ` +
-      `every named context reported green (${contexts})`;
-    stalledRow = passed(note);
-    owedRow = passed(note);
-    approvalsRow = passed(approvalNote === null ? note : `${note}; ${approvalNote}`);
-  } else if (!parsedChecks.ok) {
+  if (!parsedChecks.ok) {
     // The review-check half of an owed round and the carve-out are both read
     // off the rollup, so with the rollup unreadable neither can be judged. Row 2
     // already carries the parse error; these three rows name it rather than
@@ -1030,12 +1022,26 @@ export function evaluateReady(
     owedRow = unknown(missing);
     approvalsRow = unknown(missing);
   } else if (!headKnown) {
+    // BEFORE the carve-out, not after it (Copilot's review of zheref/nen#255):
+    // the carve-out needs no head of its own, so placed first it marked these
+    // rows ready on a head nobody read, and a verdict could come out `ready`
+    // with no judged commit at all. A readiness verdict is always ABOUT a
+    // commit; with none read, these rows are unknown and the verdict cannot
+    // be ready.
     const missing =
       "no head SHA was read for this pull request, so no review round can be placed at the " +
       "current head";
     stalledRow = unknown(missing);
     owedRow = unknown(missing);
     approvalsRow = unknown(missing);
+  } else if (carveOut) {
+    const contexts = identities.dependabotCarveOut?.satisfiedByContext.join(", ") ?? "";
+    const note =
+      `satisfied by dependabot_carve_out: the author matches the declared pattern and ` +
+      `every named context reported green (${contexts})`;
+    stalledRow = passed(note);
+    owedRow = passed(note);
+    approvalsRow = passed(approvalNote === null ? note : `${note}; ${approvalNote}`);
   } else if (!parsedReviews.ok) {
     // pending_rounds is handed `{review_requests, checks, reviews}` from the RAW
     // state, and reviews are read first -- so an unreadable reviews array is the
@@ -1147,7 +1153,9 @@ export function evaluateReady(
       policy,
       headSha: head === "null" ? "" : head,
       deliveryPr: delivery,
-      dependabotCarveOut: carveOut,
+      // Fired only where it actually cleared rows: with no head read, the
+      // CON-32(b) rows are unknown and the carve-out cleared nothing.
+      dependabotCarveOut: carveOut && headKnown,
       warnings: excludeCheckWarnings,
     },
   };

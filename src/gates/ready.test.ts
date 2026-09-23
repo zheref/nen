@@ -208,6 +208,22 @@ describe("evaluateReady -- CON-30's dependency-author carve-out (zheref/nen#18)"
     });
   }
 
+  it("never clears rows on a head nobody read: no head_sha is NEVER ready, carve-out or not (Copilot, zheref/nen#255)", () => {
+    // The carve-out needs no head of its own. Evaluated ahead of the head
+    // check, it marked rows 3-5 ready and the verdict came out `ready` with no
+    // judged commit at all.
+    const evaluation = evaluateReady(IDENTITIES, botState({ head_sha: "" }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.headSha).toBe("");
+    expect(evaluation.context.dependabotCarveOut).toBe(false);
+    for (const id of ["round-stalled", "rounds-owed", "approvals-at-head"] as const) {
+      const row = evaluation.conjuncts.find((c): boolean => c.id === id);
+      expect(row?.status).toBe("unevaluated");
+      expect(row?.missing).toMatch(/no head SHA was read/);
+      expect(row?.note).toBeNull();
+    }
+  });
+
   it("clears the three CON-32(b) rows for the declared author when every context is green", () => {
     const evaluation = evaluateReady(IDENTITIES, botState(), OPTIONS);
     expect(evaluation.ready).toBe(true);

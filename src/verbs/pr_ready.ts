@@ -234,17 +234,52 @@ export function readLocalCheckout(repoRoot: string): LocalCheckout | null {
   return { branch: name, sha: tip.stdout.trim(), remoteUrls };
 }
 
+// The hosts a remote may name for it to be THIS pull request's repository.
+// `pr ready` reads github.com and nothing else (its client is opened with no
+// `baseUrl`), so a remote on any other host names some other repository, and
+// `ssh.github.com` is GitHub's own SSH-over-443 endpoint.
+const GITHUB_HOSTS: ReadonlySet<string> = new Set(["github.com", "ssh.github.com"]);
+
 /**
- * Whether a remote URL names `owner/repo` -- `https://github.com/o/r(.git)`,
- * `git@github.com:o/r(.git)`, `ssh://git@github.com/o/r`. Case-insensitive, as
- * GitHub's own slugs are. A checkout with no remote naming the pull request's
- * repository is not "a checkout of the PR's head branch", however its branch is
- * named -- `main` exists in every repository.
+ * Whether a remote URL names `owner/repo` ON GITHUB. The URL is PARSED and its
+ * host validated -- never matched on its trailing slug alone, which would accept
+ * `https://github.com.evil/o/r` or a local path ending in `o/r` (Copilot's
+ * review of zheref/nen#255). Accepted forms: `https://`/`http://`/`ssh://`/
+ * `git://` URLs (credentials and a port allowed), and scp-style
+ * `[user@]github.com:o/r`. `.git` and trailing slashes are optional; the
+ * comparison is case-insensitive, as GitHub's own slugs are. A checkout with no
+ * remote naming the pull request's repository is not "a checkout of the PR's
+ * head branch", however its branch is named -- `main` exists in every
+ * repository.
  */
 export function remoteNamesRepo(url: string, owner: string, repo: string): boolean {
-  const normalized = url.trim().toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "");
-  const slug = `${owner}/${repo}`.toLowerCase();
-  return normalized.endsWith(`/${slug}`) || normalized.endsWith(`:${slug}`);
+  const trimmed = url.trim();
+  let host: string;
+  let path: string;
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/.exec(trimmed);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return false;
+    }
+    if (!["https:", "http:", "ssh:", "git:"].includes(parsed.protocol)) return false;
+    host = parsed.hostname;
+    path = parsed.pathname;
+  } else if (scp !== null) {
+    host = scp[1] ?? "";
+    path = scp[2] ?? "";
+  } else {
+    return false;
+  }
+  if (!GITHUB_HOSTS.has(host.toLowerCase())) return false;
+  const slug = path
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "")
+    .toLowerCase();
+  return slug === `${owner}/${repo}`.toLowerCase();
 }
 
 export const defaultDeps: PrReadyDeps = {
@@ -396,8 +431,10 @@ export interface ReadyMeta {
   readonly roundPolicy: RoundPolicy;
   readonly excludeRun: string | null;
   /**
-   * `--require-head <sha>` as given (zheref/nen#245), or `null`. On a report
-   * that exists at all it MATCHED -- a mismatch prints no verdict report.
+   * `--require-head <sha>` as given (zheref/nen#245) AND VERIFIED against
+   * GitHub's head, or `null`. Non-null means it MATCHED: a mismatch prints no
+   * verdict report, and an unevaluated report -- GitHub never read, so nothing
+   * compared -- carries `null` even when the flag was given.
    */
   readonly requiredHead: string | null;
   /**
@@ -1122,7 +1159,6 @@ export async function prReady(
         stallMinutes,
         excludeRun,
         excludeCheckNames,
-        requiredHead ?? null,
         flagWarnings,
         "no usable token, so GitHub could not be read",
         opened.message,
@@ -1157,7 +1193,6 @@ export async function prReady(
         stallMinutes,
         excludeRun,
         excludeCheckNames,
-        requiredHead ?? null,
         flagWarnings,
         `GitHub could not be read (${error instanceof Error ? error.message : String(error)})`,
         "Check the token's grants (pull-requests:read AND checks:read AND actions:read), that it is not expired, and that the network reached github.com. Never read this as ready.",
@@ -1179,7 +1214,6 @@ export async function prReady(
         stallMinutes,
         excludeRun,
         excludeCheckNames,
-        requiredHead ?? null,
         flagWarnings,
         fetched.reason,
         fetched.remedy,
@@ -1337,7 +1371,6 @@ function unevaluatedReport(
   stallMinutes: number,
   excludeRun: string,
   excludeCheckNames: readonly string[],
-  requiredHead: string | null,
   warnings: readonly string[],
   reason: string,
   remedy: string,
@@ -1375,7 +1408,11 @@ function unevaluatedReport(
       approvalPolicy: identities.identities.approvalPolicy,
       roundPolicy: policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
-      requiredHead,
+      // ALWAYS null here, whatever `--require-head` said (Copilot's review of
+      // zheref/nen#255): GitHub was never read, so the head was never compared,
+      // and a non-null value would read as "verified" when it was only
+      // requested. `requiredHead` means "given AND matched", on every report.
+      requiredHead: null,
       excludedChecks: excludeCheckNames,
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
