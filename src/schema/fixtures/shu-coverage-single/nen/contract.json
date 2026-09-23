@@ -1,0 +1,28 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the SINGLE-PACKAGE shape: lane cwd, artifact root and repository root are one directory, the case `nen shu coverage --touched` has always handled. It is the regression guard for zheref/nen#236: resolving each report against its own root must leave this repository's rows exactly as they were. Not shipped; see ../README.md.",
+
+  "project": {
+    "lanes": {
+      "app": { "stack": "nextjs", "cwd": "." }
+    },
+    "defaultLane": "app",
+
+    "preconditions": {},
+
+    "verbs": {
+      "app": {
+        "coverage": {
+          "exe": "npm",
+          "argv": ["run", "test:coverage"],
+          "artifacts": ["coverage/lcov.info"],
+          "why": "One report, written at the repository root, naming `src/a.ts` -- which is exactly what the diff names it."
+        }
+      }
+    },
+
+    "profiles": {},
+    "targets": {},
+    "hosts": { "*": ["darwin", "linux", "win32"] }
+  }
+}

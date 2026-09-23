@@ -1,0 +1,28 @@
+{
+  "$schema": "nen.contract/v0.1",
+  "$comment": "TEST FIXTURE -- the WORKSPACE shape zheref/nen#236 reported: one lane rooted at the repository, two workspace members each writing an LCOV tracefile whose SF: paths are relative to THAT MEMBER. `nen shu coverage --touched` must resolve each report against its own root (packages/a, apps/web) and merge both. Not shipped; see ../README.md.",
+
+  "project": {
+    "lanes": {
+      "web": { "stack": "nextjs", "cwd": "." }
+    },
+    "defaultLane": "web",
+
+    "preconditions": {},
+
+    "verbs": {
+      "web": {
+        "coverage": {
+          "exe": "pnpm",
+          "argv": ["-r", "test:coverage"],
+          "artifacts": ["packages/a/coverage/lcov.info", "apps/web/coverage/lcov.info"],
+          "why": "TWO REPORTS, EACH PACKAGE-RELATIVE. packages/a's tracefile names `src/sum.ts`, apps/web's names `src/page.tsx`; the diff names them `packages/a/src/sum.ts` and `apps/web/src/page.tsx`. Joined without a root per report they never meet, and before zheref/nen#236 only the FIRST report was read at all."
+        }
+      }
+    },
+
+    "profiles": {},
+    "targets": {},
+    "hosts": { "*": ["darwin", "linux", "win32"] }
+  }
+}

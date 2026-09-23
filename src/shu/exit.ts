@@ -44,6 +44,21 @@ export const EXIT_UNSUPPORTED_VERB = 4;
 export const EXIT_TOOL_NOT_INSTALLED = 5;
 
 /**
+ * `shu coverage --touched` measured nothing: the report parsed, the diff named
+ * files, and not one of them joined to a row (zheref/nen#236).
+ *
+ * `coverage` ONLY, AND NOT 0 AND NOT 1. Exit 0 was the defect -- "0 of 58
+ * matched" read as "measured and fine" to every caller branching on `$?` --
+ * and 1 already means "the tool failed, or its report could not be read",
+ * which is not this: the run passed and the report is sound, and what failed
+ * is the JOIN between the report's paths and the diff's. A distinct code lets
+ * a gate tell "fix the tests" from "fix the path shape". 6 because 3, 4 and 5
+ * are this family's already; the bootstrap family's own 6 (a manifest fault)
+ * is a different command's contract and never reaches `nen shu`.
+ */
+export const EXIT_COVERAGE_UNJOINED = 6;
+
+/**
  * A refusal that exits with one of this family's own codes.
  *
  * It is NOT a VerbUsageError subclass on purpose: ../index.ts's `runFamily`

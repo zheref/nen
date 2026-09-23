@@ -70,6 +70,21 @@ export const SHU_TOOLS_REPO = join(FIXTURES, "shu-tools-repo");
 export const SHU_COVERAGE_REPO = join(FIXTURES, "shu-coverage-repo");
 
 /**
+ * The WORKSPACE shape zheref/nen#236 reported: one lane at the repository
+ * root, two members (`packages/a`, `apps/web`) each writing an LCOV tracefile
+ * whose `SF:` names are relative to THAT MEMBER, with the named source files
+ * committed so the root each report is resolved against is evidenced on disk.
+ */
+export const SHU_COVERAGE_WORKSPACE = join(FIXTURES, "shu-coverage-workspace");
+
+/**
+ * The SINGLE-PACKAGE shape -- lane cwd, artifact root and repository root all
+ * one directory -- held as the regression guard for zheref/nen#236: resolving
+ * each report against its own root must leave this one's rows as they were.
+ */
+export const SHU_COVERAGE_SINGLE = join(FIXTURES, "shu-coverage-single");
+
+/**
  * A repository whose `nen/contract.json` carries a `project.evidence` block:
  * a KroApple-shaped glob and the `public-mirror` mechanism, plus the one lane
  * every project block requires regardless of whether `evidence` is declared

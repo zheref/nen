@@ -66,6 +66,44 @@ export interface TouchedReport {
   readonly files: readonly string[];
   readonly matched: readonly string[];
   readonly unmatched: readonly string[];
+  /**
+   * Every declared artifact nen read (or tried to read) for this join, in
+   * declaration order -- APPENDED, so a reader that took the first four keys
+   * is unaffected (zheref/nen#236 acceptance 5). Empty on a run that parsed
+   * nothing: a dry run, or a run whose tool failed.
+   */
+  readonly artifacts: readonly TouchedArtifact[];
+}
+
+/**
+ * One declared report's part in a `--touched` join: which file, how it was
+ * read, and WHICH ROOT its row names were resolved against.
+ *
+ * `root` IS THE AUDIT TRAIL zheref/nen#236 asked for. A workspace member's
+ * LCOV names its files relative to that member, and ./roots.ts chooses the
+ * directory each report's names are rebased onto; printing the choice is what
+ * lets a reader check it without re-deriving it from the tree.
+ */
+export interface TouchedArtifact {
+  /** Repo-relative, exactly as the declaration wrote it. */
+  readonly path: string;
+  /** The format that PARSED it, or null when it could not be read. */
+  readonly format: string | null;
+  /**
+   * The repo-relative directory the report's relative row names were
+   * resolved against (`.` for the repository root), or null: a package-grain
+   * report (its rows are packages, not paths, and are never rebased), or a
+   * report that could not be read.
+   */
+  readonly root: string | null;
+  /** Which candidate `root` came from: `artifact`, `lane-cwd` or `repo-root`; null exactly when `root` is. */
+  readonly basis: string | null;
+  /** Rows this report contributed before the touched filter. 0 when unread. */
+  readonly rows: number;
+  /** Of its RELATIVE row names, how many name a file on disk under `root`; null exactly when `root` is. */
+  readonly onDisk: number | null;
+  /** Why it could not be read, or null. A non-null error makes the run exit 1. */
+  readonly error: string | null;
 }
 
 /**
@@ -318,7 +356,17 @@ export function renderCoverage(
     ),
   );
   if (report.targets.length === 0) {
-    if (report.total !== null) lines.push(labelled("targets", "(the report states none)"));
+    // UNDER --touched AN EMPTY TABLE IS THE FILTER'S ANSWER, NOT THE REPORT'S:
+    // "the report states none" beside an exit-6 join failure would send a
+    // reader to the wrong file (zheref/nen#236).
+    if (report.total !== null) {
+      lines.push(
+        labelled(
+          "targets",
+          report.touched === null ? "(the report states none)" : "(no touched file matched a report row)",
+        ),
+      );
+    }
   } else {
     lines.push("targets:");
     for (const row of targetTable(report.targets)) lines.push(row);
@@ -364,9 +412,30 @@ export function renderCoverage(
         `base ${t.base}: ${t.files.length} file${t.files.length === 1 ? "" : "s"} (${t.matched.length} matched, ${t.unmatched.length} unmatched)${grainNote}`,
       ),
     );
+    for (const artifact of t.artifacts) {
+      lines.push(`  from: ${describeArtifact(artifact)}`);
+    }
     if (t.unmatched.length > 0) {
       lines.push(`  unmatched: ${t.unmatched.join(", ")}`);
     }
   }
   return lines;
+}
+
+/**
+ * `packages/core/coverage/lcov.info (lcov) -- root packages/core [artifact], 12 rows, 12 on disk`.
+ *
+ * ONE LINE PER DECLARED REPORT, printed only under `--touched`: the root is
+ * the fact a reader needs to trust the `matched` count above it, and a line
+ * that omitted it would put the whole zheref/nen#236 question back behind a
+ * `--json` flag.
+ */
+function describeArtifact(artifact: TouchedArtifact): string {
+  if (artifact.error !== null) return `${artifact.path} -- NOT READ: ${artifact.error}`;
+  const rows = `${artifact.rows} row${artifact.rows === 1 ? "" : "s"}`;
+  const root =
+    artifact.root === null
+      ? "rows are packages, matched anywhere under a touched path"
+      : `root ${artifact.root} [${artifact.basis ?? "?"}], ${artifact.onDisk ?? 0} on disk`;
+  return `${artifact.path} (${artifact.format ?? "?"}) -- ${rows}, ${root}`;
 }

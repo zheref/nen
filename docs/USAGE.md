@@ -6293,13 +6293,15 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touche
 |---|---|---|---|
 | `--lane <name>` | no | Which lane to measure. | Defaults to `project.defaultLane`, as everywhere else in this family. |
 | `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. Under `--touched`, also reported **per row**, and giving it OVERRIDES the workflow-file ladder below for that run. |
-| `--touched` | no | Narrow `targets` to the rows a change touched. | Requires `--base`; given without it, **exit 2**. With `--threshold` absent, also loads `nen/workflow.json`'s coverage ladder (defaulting to 80/85/90 when that file is absent) and bands each row; a malformed policy is exit 1 before anything is spawned. See below. |
+| `--touched` | no | Narrow `targets` to the rows a change touched. | Requires `--base`; given without it, **exit 2**. Reads **every** declared report nen can parse, each resolved against its own root; **0 matched against a non-empty touched set is exit 6**. With `--threshold` absent, also loads `nen/workflow.json`'s coverage ladder (defaulting to 80/85/90 when that file is absent) and bands each row; a malformed policy is exit 1 before anything is spawned. See below. |
 | `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. |
 | `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
 first path under `project.verbs.<lane>.coverage.artifacts` whose **format** it
-recognises, and it never searches a tree for one:
+recognises, and it never searches a tree for one. Under `--touched` it parses
+**every** such path instead — see [each report against its own
+root](#coverage-touched-roots) below:
 
 ```json
 "coverage": {
@@ -6376,7 +6378,10 @@ number nen guessed at.
 
 **Output and exit codes** — `0`/`1`/`2`/`3`/`4`/`5` as the family's table above,
 plus: **exit 1** when the run succeeded and the report is missing, unreadable, in
-no format nen reads, or not declared at all. A run that did **not** succeed is
+no format nen reads, or not declared at all — under `--touched`, when **any**
+declared report is, each one named — and **exit 6**, under `--touched` only, when
+the run succeeded, its reports parsed, the diff named at least one file, and
+**not one** of them joined to a report row (below). A run that did **not** succeed is
 not parsed at all — the file on disk may be a previous run's, and nen cannot tell
 by looking. On **exit 5** (the tool could not be started) the executor's report
 is still printed, and under `--json` stdout still carries exactly one document,
@@ -6411,9 +6416,10 @@ The match depends on what a row **is**:
   keep almost the entire table. The file path is relativised the same way
   every other format's row name is.
 
-`--json` gains a ninth key, `touched: { base, files, matched, unmatched }`
-(`files` is everything git named; `matched` and `unmatched` partition it —
-their lengths always sum to `files.length`), and each **row** gains its own
+`--json` gains a ninth key, `touched: { base, files, matched, unmatched,
+artifacts }` (`files` is everything git named; `matched` and `unmatched`
+partition it — their lengths always sum to `files.length`; `artifacts` is
+described just below), and each **row** gains its own
 `met` when `--threshold` is also given — the aggregate `threshold.met` above
 still answers for the whole report; a row's `met` answers for that row alone,
 both compared on the **counts**, never the rounded percentage. **This still
@@ -6421,7 +6427,57 @@ never gates**: the exit code is the run's, exactly as bare `--threshold` is.
 
 `--dry-run --touched` still computes and reports the touched set: that read is
 `git diff`, not the declared tool, so a preview costs nothing — `targets` is
-still empty, because nothing was parsed to filter.
+still empty, because nothing was parsed to filter, and `artifacts` is `[]`.
+
+<a id="coverage-touched-roots"></a>
+**Each report against its own root** ([#236](https://github.com/zheref/nen/issues/236)).
+A workspace runs its coverage tool once per member, and each member's tool
+writes paths relative to **that member** — `packages/core/coverage/lcov.info`
+says `SF:src/utils/q.ts` — while git names the same file
+`packages/core/src/utils/q.ts`. Under `--touched`, nen therefore:
+
+- **reads every declared artifact whose format it reads**, not only the first,
+  and merges their rows — a file touched in `apps/web` is matched from
+  `apps/web`'s report. A row two reports both name is kept once, from the
+  first-declared report. A report that cannot be read is **named** in
+  `touched.artifacts[].error` and on stderr, and the run is **exit 1** — never
+  its files silently reported `unmatched`;
+- **resolves each report's relative row names against that report's root**,
+  chosen once per report from three candidates, in order: **`artifact`** — the
+  artifact's directory with one trailing `coverage/` removed
+  (`packages/core/coverage/lcov.info` → `packages/core`), proposed only when
+  that segment is there; **`lane-cwd`** — the lane's declared `cwd`; and
+  **`repo-root`**. The candidate under which **more** of the report's paths
+  exist on disk wins, and a tie — including a tree with none of them on it —
+  goes to the earlier one. So a report that already writes repo-relative
+  paths keeps them (the tree outvotes the `coverage/` guess), and a
+  single-package repository, where all three candidates are one directory,
+  is resolved exactly as it always was. Absolute row names are relativised
+  as above and never rebased; a relative name that would climb out of the
+  repository is left as written; package-grain rows (`cobertura`, `jacoco`)
+  are never rebased, because they are package names rather than paths.
+
+`touched.artifacts` carries one `{ path, format, root, basis, rows, onDisk,
+error }` per report, so the join is auditable without re-deriving it: `root`
+is the repo-relative directory the report's paths were resolved against (`.`
+for the repository root; `null` for package rows or an unread report),
+`basis` is which candidate it was, and `onDisk` how many of its relative
+paths name a file there. The text rendering prints the same as one `from:`
+line per report. `total`, `report` and the aggregate `threshold.met` stay the
+**first** report's — exactly what a run without `--touched` reports — so
+`--threshold`'s meaning does not move.
+
+**Zero matched is exit 6, never 0.** When the reports parsed, the diff named
+at least one file and **not one** of them joined to a row, nothing was
+measured, and `0 of 58 matched` at exit 0 reads as "measured, and fine" to
+every caller checking `$?`. nen exits **6** — distinct from 1 (the tool failed,
+or a report could not be read) — and stderr names the path shape the rows
+carried beside the repo-relative shape git uses, plus the root each report
+was resolved against. An **empty** touched set is still exit 0: nothing was
+touched, so there was nothing to join. A change that touches only files no
+test measures (a README) *is* exit 6, deliberately: nen cannot tell "nothing
+to measure" from "could not join" by looking, and it reports neither as a
+pass. A dry run and a run whose tool failed are never 6.
 
 **The ladder — `nen/workflow.json`'s `coverage.{minimum,recommended,ideal}`,
 when `--threshold` is not given.** The design's own shape for that file states
@@ -6464,7 +6520,8 @@ still never gates.**
 
 **`--json`** is a different contract from the other executing verbs
 (`nen.shu.coverage/v0.1`), keys in order: `{ contract, lane, stack, total,
-targets, threshold, report, exitCode, touched, ladder }`. `percent` is computed
+targets, threshold, report, exitCode, touched, ladder }`; `touched` is `{ base,
+files, matched, unmatched, artifacts }`, the last key appended. `percent` is computed
 from the counts (two decimals) rather than read out of the file — three of the five
 formats carry a percentage of their own, rounded three different ways, one of
 them as a fraction — and it is `null` for a report about no code, because 0 of 0
@@ -6542,6 +6599,37 @@ merely marked unmet. `--json` for the same run:)
     "unmatched": ["README.md"]
   }
 }
+```
+
+(recorded before `touched.artifacts` and the `from:` lines existed; a run today
+adds both, as the workspace example below shows.)
+
+**Example — `--touched` in a two-package workspace**
+
+```bash
+nen shu coverage --touched --base <base>
+```
+```text
+report:        packages/a/coverage/lcov.info  (lcov)
+total:         lines 75.00% (3/4)
+targets:
+  lines          band           target
+  75.00% (3/4)   under-minimum  packages/a/src/sum.ts
+  100.00% (5/5)  ideal          apps/web/src/page.tsx
+ladder:        nen/workflow.json is absent -- these are nen's defaults -- minimum 80% / recommended 85% / ideal 90%. REPORTED per row as 'band', and never enforced: nen exits 0 here, whatever the bands say.
+touched:       base <base>: 3 files (2 matched, 1 unmatched)
+  from: packages/a/coverage/lcov.info (lcov) -- 1 row, root packages/a [artifact], 1 on disk
+  from: apps/web/coverage/lcov.info (lcov) -- 1 row, root apps/web [artifact], 1 on disk
+  unmatched: .env.example
+```
+(the executor's block above `report:` omitted. Rendered from
+`src/schema/fixtures/shu-coverage-workspace/` — whose two tracefiles say
+`SF:src/sum.ts` and `SF:src/page.tsx` — with the diff scripted to name
+`.env.example`, `apps/web/src/page.tsx` and `packages/a/src/sum.ts`. The same
+run with the diff naming only `.env.example` exits **6** and prints on stderr:)
+
+```text
+--touched joined 0 of 1 touched file to the 2 rows nen read, so NOTHING was measured -- exit 6, not 0. Path shape SEEN in the report rows: 'packages/a/src/sum.ts', 'apps/web/src/page.tsx'. Path shape EXPECTED, as git names the touched files (repo-relative): '.env.example'. Roots used: packages/a/coverage/lcov.info -> root packages/a; apps/web/coverage/lcov.info -> root apps/web. If the two shapes should meet, […]
 ```
 (elided to the keys this example is about; the full document still carries all
 ten, `ladder: null` among them since `--threshold` was given)
