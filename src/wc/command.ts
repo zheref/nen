@@ -22,7 +22,7 @@ import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } f
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 import { messageFileRefusals } from "./messagefile.js";
 import { looksLikeRefspecOrForce, PUBLISH_CONTRACT, publish } from "./publish.js";
-import { performSquash, planSquash, type FoldedCommit } from "./squash.js";
+import { baseNameRefusal, performSquash, planSquash, type FoldedCommit, type SquashBase } from "./squash.js";
 import {
   listWorktrees,
   PARK_REF,
@@ -71,12 +71,20 @@ with no commits yet, where there is nothing to classify.
 
 squash:
   nen wc squash --repo <path> --onto <ref> --message-file <file>
-               [--dry-run] [--json]
+               [--base <branch>] [--dry-run] [--json]
 
   --onto           the ref this branch is built on top of (e.g. 'main' or
                     'origin/main'). Every commit 'git merge-base <onto> HEAD'
                     finds between there and HEAD is folded; --onto must be an
                     ancestor of HEAD.
+  --base           the base branch whose published commits are never folded
+                    -- default ${WORKFLOW_FILE}'s branch.base ('main' when
+                    the file is absent). Must be the SHORT branch name
+                    'git check-ref-format --branch' returns unchanged -- not
+                    'refs/heads/main', not '@{-1}' -- because the guard builds
+                    'origin/<base>' and '<base>' from it (exit 2 for --base;
+                    exit 1 for a policy value, naming the file). Checked
+                    against whichever of the two resolve, with no fetch.
   --message-file    a file holding the new commit's whole message, validated
                     to the SAME shape 'nen commit format' enforces: a
                     Conventional Commits header (<=72 characters, no trailing
@@ -93,9 +101,14 @@ working tree (every uncommitted/untracked path named); --onto not an
 ancestor of HEAD (what 'git merge-base' found instead, quoted); any commit in
 the range already reachable from this branch's upstream (@{upstream},
 fetched first through the seam) -- squashing published history is refused
-outright; a --message-file that fails the shape above (every reason named).
-Fewer than two commits to fold is NOT a refusal: exit 0, one line, nothing
-moves.
+outright; any commit in the range already on the BASE ('origin/<base>' or
+'<base>') -- what a catch-up merge of the base brings in, every one named
+with the ref it is on (zheref/nen#251); refused rather than excluded, because
+a fold that skipped them would still flatten the merge; a --message-file that
+fails the shape above (every reason named). --dry-run reaches the same
+verdict the real call would. Fewer than two commits to fold is NOT a
+refusal: exit 0, one line (it says the base check was NOT performed),
+nothing moves.
 
 MECHANISM: 'git reset --soft <merge-base>' then 'git commit -F
 <message-file>', both through the seam, in that order, only once every
@@ -103,10 +116,13 @@ refusal above has passed. Never touches a remote except the read-only fetch
 the upstream check above makes, never pushes, never force-anything.
 
 --json's contract is '${SQUASH_CONTRACT}': { contract, onto, mergeBase,
-folded: [sha, ...], newSha, dryRun }. folded is oldest-first; newSha is null
-for a dry run and for 'nothing to squash'. Text output is one line per
-folded commit (sha and subject), then the new commit -- or, for a dry run,
-the message that would have been committed.
+folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...] }. folded is
+oldest-first; newSha is null for a dry run and for 'nothing to squash'.
+baseRefs are the refs the base check ran against; EMPTY means the check was
+NOT performed (neither ref resolves, or nothing to squash), never that it
+passed. Text output is one line per folded commit (sha and subject), a line
+naming the base check, then the new commit -- or, for a dry run, the message
+that would have been committed.
 
 catch-up:
   nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
@@ -255,6 +271,8 @@ function squashJson(
   folded: readonly FoldedCommit[],
   newSha: string | null,
   dryRun: boolean,
+  base: string,
+  baseRefs: readonly string[],
 ): Readonly<Record<string, unknown>> {
   return {
     contract: SQUASH_CONTRACT,
@@ -263,7 +281,24 @@ function squashJson(
     folded: folded.map((commit): string => commit.sha),
     newSha,
     dryRun,
+    base,
+    baseRefs,
   };
+}
+
+/** A base name squash can guard with, or the refusal: the refspec/force shape first (./publish.ts's own test), then git's verdict. */
+function squashBaseRefusal(context: CommandContext, root: string, name: string, what: string): string | null {
+  if (looksLikeRefspecOrForce(name)) {
+    return `${what} '${name}' looks like a refspec or a force option (a leading '+' or '-', or a ':'), not a branch name. Nothing was reset or committed.`;
+  }
+  return baseNameRefusal(context.seams, root, name, what);
+}
+
+/** The base check's own line: which refs it ran against, or that it did NOT run -- never silence read as clean. */
+function baseCheckLine(base: SquashBase, baseRefs: readonly string[]): string {
+  return baseRefs.length > 0
+    ? `base check: none of the folded commits is on ${baseRefs.join(" or ")} (${base.source})`
+    : `base check: NOT performed -- neither origin/${base.name} nor ${base.name} resolves here (${base.source})`;
 }
 
 function squash(context: CommandContext): number {
@@ -314,17 +349,62 @@ function squash(context: CommandContext): number {
     );
   }
 
-  const plan = planSquash(context.seams, root, onto);
+  // THE BASE WHOSE PUBLISHED COMMITS ARE NEVER FOLDED (zheref/nen#251): --base
+  // when given, otherwise the workflow's branch.base, the same key 'wc
+  // publish' reads for the trunk. Either name must be a CANONICAL SHORT
+  // branch name (./squash.ts's baseNameRefusal): the guard builds refs from
+  // it, and a spelling that resolves nothing would read as "not performed"
+  // while the squash went ahead. The refspec/force shape is refused first, so
+  // no name reaches git as an option. A policy that will not load is exit 1,
+  // on the argument the message-file block above makes.
+  let base: SquashBase;
+  const baseFlag = context.args.values["base"];
+  if (baseFlag !== undefined) {
+    const refused = squashBaseRefusal(context, root, baseFlag, "--base");
+    if (refused !== null) throw new VerbUsageError(refused);
+    base = { name: baseFlag, source: "--base" };
+  } else {
+    try {
+      const loaded = loadWorkflow(root);
+      base = {
+        name: loaded.workflow.branch.base,
+        source: loaded.present ? `${WORKFLOW_FILE}'s branch.base` : `branch.base's default -- no ${WORKFLOW_FILE}`,
+      };
+    } catch (error) {
+      if (!(error instanceof SchemaError)) throw error;
+      context.io.err(
+        `nen: ${error.message}. This repository's ${WORKFLOW_FILE} names the base whose published commits a squash never folds, and nen will not squash under a policy it could not read. Run 'nen schema check' for the whole file's verdict, or pass --base.`,
+      );
+      return 1;
+    }
+    // THE POLICY'S NAME IS HELD TO GIT'S RULE TOO. The schema admits names git
+    // rejects as branches ('main/', 'foo//bar'); both refs built from one
+    // would answer "absent" and the base guard would silently not run. Exit 1,
+    // not 2, on the argument above: the invocation was right, the repository's
+    // own file is not (review finding on zheref/nen#253).
+    const refused = squashBaseRefusal(context, root, base.name, base.source);
+    if (refused !== null) {
+      context.io.err(
+        `nen: ${refused} This repository's ${WORKFLOW_FILE} names the base whose published commits a squash never folds, and nen will not squash with that guard unable to run. Fix branch.base, or pass --base.`,
+      );
+      return 1;
+    }
+  }
+
+  const plan = planSquash(context.seams, root, onto, base);
   if (plan.kind === "refused") {
     throw new VerbUsageError(plan.reason);
   }
 
   if (plan.kind === "nothing-to-squash") {
     if (context.json) {
-      context.io.out(JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, null, dryRun), null, 2));
+      context.io.out(JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, null, dryRun, base.name, []), null, 2));
     } else {
       context.io.out(
-        `nothing to squash: ${plan.folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${plan.mergeBase}) -- need at least two to fold.`,
+        // baseRefs is [] here, and [] is always said out loud -- on the SAME
+        // line, since this case's contract is one line (review finding on
+        // zheref/nen#253).
+        `nothing to squash: ${plan.folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${plan.mergeBase}) -- need at least two to fold; base check: NOT performed.`,
       );
     }
     return 0;
@@ -332,10 +412,13 @@ function squash(context: CommandContext): number {
 
   if (dryRun) {
     if (context.json) {
-      context.io.out(JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, null, true), null, 2));
+      context.io.out(
+        JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, null, true, base.name, plan.baseRefs), null, 2),
+      );
     } else {
       context.io.out(`would fold ${plan.folded.length} commit(s) onto ${plan.mergeBase} (--onto ${onto}):`);
       printFoldedCommits(context, plan.folded);
+      context.io.out(baseCheckLine(base, plan.baseRefs));
       context.io.out("message:");
       for (const line of messageText.replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n")) {
         context.io.out(`  ${line}`);
@@ -346,9 +429,12 @@ function squash(context: CommandContext): number {
 
   const newSha = performSquash(context.seams, root, plan.mergeBase, messageFilePath);
   if (context.json) {
-    context.io.out(JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false), null, 2));
+    context.io.out(
+      JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false, base.name, plan.baseRefs), null, 2),
+    );
   } else {
     printFoldedCommits(context, plan.folded);
+    context.io.out(baseCheckLine(base, plan.baseRefs));
     context.io.out(`squashed into ${newSha}`);
   }
   return 0;

@@ -154,6 +154,14 @@ const TWO_COMMITS = {
   match: "git log base0000..HEAD --format=%H%x09%s",
   result: { stdout: "sha2\tsecond commit\nsha1\tfirst commit\n" },
 };
+/** The base name from the policy (here: branch.base's default, `main`) passed git's own branch-name rule. */
+const NAME_OK = { match: "git check-ref-format --branch main", result: { stdout: "main\n" } };
+/** origin/main resolves and holds neither folded commit; local main does not resolve. */
+const BASE_CLEAR = [
+  { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { stdout: "originsha\n" } },
+  { match: "git rev-list HEAD --not base0000 originsha", result: { stdout: "sha2\nsha1\n" } },
+  { match: "git rev-parse --verify --quiet refs/heads/main^{commit}", result: { code: 1 } },
+];
 
 describe("nen wc squash -- CLI wiring", () => {
   it("refuses an OMITTED --repo at exit 2, naming the flag", async () => {
@@ -192,7 +200,7 @@ describe("nen wc squash -- CLI wiring", () => {
   it("refuses a dirty working tree at exit 2, and never even reads --onto's ancestry", async () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
-      [{ match: "git status --porcelain=v1 -uall", result: { stdout: " M dirty.ts\n" } }],
+      [NAME_OK, { match: "git status --porcelain=v1 -uall", result: { stdout: " M dirty.ts\n" } }],
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/dirty.ts/);
@@ -201,7 +209,7 @@ describe("nen wc squash -- CLI wiring", () => {
   it("refuses --onto not an ancestor of HEAD, at exit 2", async () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
-      [CLEAN, MERGE_BASE, { match: "git merge-base --is-ancestor main HEAD", result: { code: 1 } }],
+      [NAME_OK, CLEAN, MERGE_BASE, { match: "git merge-base --is-ancestor main HEAD", result: { code: 1 } }],
     );
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/not an ancestor/);
@@ -211,7 +219,7 @@ describe("nen wc squash -- CLI wiring", () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
       [
-        CLEAN,
+        NAME_OK, CLEAN,
         MERGE_BASE,
         ANCESTOR_OK,
         TWO_COMMITS,
@@ -227,14 +235,17 @@ describe("nen wc squash -- CLI wiring", () => {
   it("exits 0 with one line, not a refusal, when fewer than two commits would fold", async () => {
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
-      [CLEAN, MERGE_BASE, ANCESTOR_OK, { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "" } }],
+      [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, { match: "git log base0000..HEAD --format=%H%x09%s", result: { stdout: "" } }],
     );
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/nothing to squash/);
+    expect(result.out).toHaveLength(1);
+    expect(result.out[0]).toMatch(/nothing to squash/);
+    // baseRefs is [] here; the text says the base check was not performed rather than staying silent.
+    expect(result.out[0]).toMatch(/base check: NOT performed\.$/);
   });
 
   it("--dry-run prints the folded commits and the message, and touches neither reset nor commit", async () => {
-    const script = [CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM];
+    const script = [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR];
     const result = await capture(
       ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: add a thing\n\nCloses: #4\n"), "--dry-run"],
       script,
@@ -251,11 +262,12 @@ describe("nen wc squash -- CLI wiring", () => {
   it("performs the real squash: reset --soft then commit -F, in that order, after every refusal has passed", async () => {
     const path = messageFile("feat: add a thing\n");
     const script = [
-      CLEAN,
+      NAME_OK, CLEAN,
       MERGE_BASE,
       ANCESTOR_OK,
       TWO_COMMITS,
       NO_UPSTREAM,
+      ...BASE_CLEAR,
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
@@ -271,11 +283,12 @@ describe("nen wc squash -- CLI wiring", () => {
     const err: string[] = [];
     const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
     const seams: Seams = new ScriptedSeams([
-      CLEAN,
+      NAME_OK, CLEAN,
       MERGE_BASE,
       ANCESTOR_OK,
       TWO_COMMITS,
       NO_UPSTREAM,
+      ...BASE_CLEAR,
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
@@ -289,6 +302,131 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(parsed["folded"]).toEqual(["sha1", "sha2"]);
     expect(parsed["newSha"]).toBe("newsha00");
     expect(parsed["dryRun"]).toBe(false);
+    expect(parsed["base"]).toBe("main");
+    expect(parsed["baseRefs"]).toEqual(["origin/main"]);
+    expect(Object.keys(parsed)).toEqual(["contract", "onto", "mergeBase", "folded", "newSha", "dryRun", "base", "baseRefs"]);
+  });
+
+  it("names the base check in text output, and says so when it was NOT performed", async () => {
+    const script = [
+      NAME_OK, CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      TWO_COMMITS,
+      NO_UPSTREAM,
+      { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { code: 1 } },
+      { match: "git rev-parse --verify --quiet refs/heads/main^{commit}", result: { code: 1 } },
+    ];
+    const result = await capture(["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n"), "--dry-run"], script);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/base check: NOT performed -- neither origin\/main nor main resolves here/);
+  });
+
+  // zheref/nen#251: a catch-up merge's base commits are refused, and --dry-run reaches the same verdict.
+  const BASE_HOLDS_SHA1 = [
+    { match: "git rev-parse --verify --quiet refs/remotes/origin/main^{commit}", result: { stdout: "originsha\n" } },
+    { match: "git rev-list HEAD --not base0000 originsha", result: { stdout: "sha2\n" } },
+    { match: "git rev-parse --verify --quiet refs/heads/main^{commit}", result: { code: 1 } },
+  ];
+  for (const dryRun of [false, true]) {
+    it(`refuses a folded commit already on origin/<base> at exit 2${dryRun ? " under --dry-run --json too" : ""}, and never resets`, async () => {
+      const argv = ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")];
+      if (dryRun) argv.push("--dry-run");
+      const out: string[] = [];
+      const err: string[] = [];
+      const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
+      const seams = new ScriptedSeams([NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_HOLDS_SHA1]);
+      const code = await runFamily(wcCommand, argv, BANKAI_REPO, dryRun, io, seams);
+      expect(code).toBe(2);
+      expect(out).toEqual([]);
+      const message = err.join("\n");
+      expect(message).toContain("sha1 ('first commit', on origin/main)");
+      expect(message).toContain("the base 'main' (branch.base's default -- no nen/workflow.json; checked against origin/main) already holds 1 of the 2 commit(s)");
+      expect(seams.calls.some((call): boolean => call.args[0] === "reset" || call.args[0] === "commit")).toBe(false);
+    });
+  }
+
+  it("--base overrides the workflow's branch.base, held to git's own branch-name rule", async () => {
+    const script = [
+      { match: "git check-ref-format --branch develop", result: { stdout: "develop\n" } },
+      CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      TWO_COMMITS,
+      NO_UPSTREAM,
+      { match: "git rev-parse --verify --quiet refs/remotes/origin/develop^{commit}", result: { stdout: "devsha\n" } },
+      { match: "git rev-list HEAD --not base0000 devsha", result: { stdout: "sha1\n" } },
+      { match: "git rev-parse --verify --quiet refs/heads/develop^{commit}", result: { code: 1 } },
+    ];
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--base", "develop", "--message-file", messageFile("feat: x\n")],
+      script,
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("sha2 ('second commit', on origin/develop)");
+    expect(result.err.join("\n")).toContain("(--base; checked against origin/develop)");
+  });
+
+  it("refuses a --base git will not accept as a branch name, at exit 2, before any status read", async () => {
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--base", "bad..name", "--message-file", messageFile("feat: x\n")],
+      [{ match: "git check-ref-format --branch bad..name", result: { code: 1, stderr: "fatal: 'bad..name' is not a valid branch name" } }],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--base 'bad\.\.name' is not a branch name git will accept/);
+    expect(result.seams.calls.some((call): boolean => call.args[0] === "status")).toBe(false);
+  });
+
+  // Review finding on zheref/nen#253: the POLICY's base is held to git's rule
+  // too, or a schema-valid name git rejects ('main/') would resolve no ref and
+  // the base guard would silently not run.
+  it("refuses a policy branch.base git will not accept as a branch name, at exit 1, before any status read", async () => {
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n")],
+      [{ match: "git check-ref-format --branch main", result: { code: 1, stderr: "fatal: 'main' is not a valid branch name" } }],
+    );
+    expect(result.code).toBe(1);
+    const message = result.err.join("\n");
+    expect(message).toMatch(/branch\.base's default -- no nen\/workflow\.json 'main' is not a branch name git will accept/);
+    expect(message).toMatch(/Fix branch\.base, or pass --base/);
+    expect(result.seams.calls.some((call): boolean => call.args[0] === "status")).toBe(false);
+  });
+
+  // Review round 2 on zheref/nen#253: the guard builds refs from the name, so
+  // only the canonical SHORT name will do. A full ref git passes through
+  // unchanged, or a name git rewrites, would resolve nothing and let the
+  // squash proceed with the check "not performed".
+  it("refuses --base refs/heads/main at exit 2: not a short branch name, before any status read", async () => {
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--base", "refs/heads/main", "--message-file", messageFile("feat: x\n")],
+      [{ match: "git check-ref-format --branch refs/heads/main", result: { stdout: "refs/heads/main\n" } }],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--base 'refs\/heads\/main' is not a short branch name/);
+    expect(result.seams.calls.some((call): boolean => call.args[0] === "status")).toBe(false);
+  });
+
+  it("refuses a --base git rewrites to another name (@{-1}) at exit 2, naming what git read it as", async () => {
+    const result = await capture(
+      ["wc", "squash", "--onto", "main", "--base", "@{-1}", "--message-file", messageFile("feat: x\n")],
+      [{ match: "git check-ref-format --branch @{-1}", result: { stdout: "feature/x\n" } }],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--base '@{-1}' is not a short branch name (git reads it as 'feature/x')");
+  });
+
+  it("refuses a --base shaped like an option or a force before any git call at all", async () => {
+    const result = await capture(["wc", "squash", "--onto", "main", "--base=--upload-pack=/x", "--message-file", messageFile("feat: x\n")]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/looks like a refspec or a force option/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("validates the policy's base name before any other git call", async () => {
+    const script = [NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR];
+    const result = await capture(["wc", "squash", "--onto", "main", "--message-file", messageFile("feat: x\n"), "--dry-run"], script);
+    expect(result.code).toBe(0);
+    expect(result.seams.calls[0]?.args.join(" ")).toBe("check-ref-format --branch main");
   });
 });
 

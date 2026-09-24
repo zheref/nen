@@ -23,6 +23,26 @@
 // module never runs a second write that could make that state permanent --
 // no `--hard`, no `push` -- so the two-line recovery it names in its own
 // error is always available.
+//
+// THE BASE IS A SECOND PUBLISHED PLACE, AND IT IS GUARDED ON ITS OWN
+// (zheref/nen#251). The fold set is `git merge-base <onto> HEAD`..HEAD, so a
+// branch carrying a CATCH-UP MERGE of its base folds every commit that merge
+// brought in -- commits published on `origin/<base>`, which the `@{upstream}`
+// guard never sees because they are not on `origin/<branch>`. Squashing them
+// would rewrite other people's published history into one commit authored on
+// this branch and flatten the merge's ancestry. So once the upstream guard
+// passes, every folded commit reachable from the base -- `origin/<base>` and
+// the local `<base>`, whichever resolve -- is named and the squash REFUSED.
+// Refused rather than silently excluded: a fold that skipped the base commits
+// would still collapse the merge into a single-parent commit, which is the
+// ancestry loss the refusal exists to prevent.
+//
+// THE BASE CHECK DOES NOT FETCH. A catch-up merge can only have brought in
+// commits this repository already holds, and `origin/<base>` is the ref `nen
+// wc catch-up` fetched them into; the local `<base>` covers a merge of an
+// unpushed trunk. A repository where neither ref resolves has no base to
+// guard against, and the report says the check was NOT performed (an empty
+// `baseRefs`, a text line saying so) rather than rendering it as clean.
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
@@ -47,7 +67,29 @@ export type SquashPlan =
       readonly folded: readonly FoldedCommit[];
       /** The resolved `<remote>/<branch>` this branch tracks, or null when none is set. */
       readonly upstream: string | null;
+      /** The base refs the fold set was checked against (`origin/<base>`, `<base>`); empty when neither resolves -- NOT checked. */
+      readonly baseRefs: readonly string[];
     };
+
+/** The remote a base is fetched into by `nen wc catch-up` -- ./publish.ts's REMOTE, restated so this module imports nothing from its own importer. */
+const BASE_REMOTE = "origin";
+
+/** How many base-reachable commits a refusal lists by name before it counts the rest. */
+export const BASE_LIST_CAP = 20;
+
+/** The base a squash guards against, and where its name came from -- quoted in the refusal. */
+export interface SquashBase {
+  /** The branch name, e.g. `main`. */
+  readonly name: string;
+  /** Where the name came from: `--base`, or nen/workflow.json's `branch.base` (its default when the file is absent). */
+  readonly source: string;
+}
+
+/** One folded commit found on the base, and the base ref it was found on. */
+export interface BaseHit {
+  readonly commit: FoldedCommit;
+  readonly ref: string;
+}
 
 /**
  * A git command this module could not run at all, as distinct from one that
@@ -94,11 +136,12 @@ export function parseFolded(logOutput: string): FoldedCommit[] {
  * Every read-only fact `nen wc squash` needs, and the refusal decision, all
  * before a single write: a dirty working tree; `--onto` not an ancestor of
  * HEAD; any commit in the range already reachable from this branch's
- * upstream (fetched first). Fewer than two commits to fold is answered as
- * `nothing-to-squash` -- a SUCCESS, not a refusal, per the verb's own
- * contract.
+ * upstream (fetched first); any commit in the range already on the base
+ * (`origin/<base>` or `<base>`; zheref/nen#251). Fewer than two commits to
+ * fold is answered as `nothing-to-squash` -- a SUCCESS, not a refusal, per
+ * the verb's own contract.
  */
-export function planSquash(seams: Seams, cwd: string, onto: string): SquashPlan {
+export function planSquash(seams: Seams, cwd: string, onto: string, base: SquashBase): SquashPlan {
   // 1. THE WORKING TREE MUST BE CLEAN. Same invocation as ../wc/classify.ts's
   // readWorkingCopyState, so the two verbs never disagree about what "dirty"
   // means.
@@ -174,7 +217,99 @@ export function planSquash(seams: Seams, cwd: string, onto: string): SquashPlan 
     };
   }
 
-  return { kind: "ready", onto, mergeBase: mergeBaseSha, folded, upstream };
+  // 5. NONE OF THE FOLDED COMMITS MAY ALREADY BE ON THE BASE (zheref/nen#251).
+  // After the upstream guard, so every refusal that existed before keeps its
+  // precedence and its words.
+  const { refs: baseRefs, reachable } = findBaseReachable(seams, cwd, mergeBaseSha, folded, base.name);
+  if (reachable.length > 0) {
+    const listed = reachable
+      .slice(0, BASE_LIST_CAP)
+      .map((hit): string => `${hit.commit.sha} ('${hit.commit.subject}', on ${hit.ref})`);
+    const more = reachable.length > BASE_LIST_CAP ? `; and ${reachable.length - BASE_LIST_CAP} more` : "";
+    return {
+      kind: "refused",
+      reason: `the base '${base.name}' (${base.source}; checked against ${baseRefs.join(", ")}) already holds ${reachable.length} of the ${folded.length} commit(s) since 'git merge-base ${onto} HEAD' (${mergeBaseSha}) -- a merge of the base brought them into this branch, and squashing would rewrite the base's published history into one commit on this branch and flatten the merge's ancestry: ${listed.join("; ")}${more}. Squash only this branch's own commits (an --onto at or after the last base merge), or publish them unsquashed.`,
+    };
+  }
+
+  return { kind: "ready", onto, mergeBase: mergeBaseSha, folded, upstream, baseRefs };
+}
+
+/**
+ * The refusal for a base name this guard cannot use, or null when `name` is
+ * a canonical short branch name. The guard builds `refs/remotes/origin/<name>`
+ * and `refs/heads/<name>` from it, so anything but the name as it appears
+ * under `refs/heads/` would resolve nothing and read as "check not performed"
+ * while the squash went ahead (review finding on zheref/nen#253). Asked of
+ * `git check-ref-format --branch`, whose OUTPUT is the name git would use:
+ * a rejected name, a name git rewrites (`@{-1}`), and a full ref spelling
+ * (`refs/heads/main`, which git passes through unchanged) are all refused.
+ * `what` says where the name came from (`--base`, or the policy).
+ */
+export function baseNameRefusal(seams: Seams, cwd: string, name: string, what: string): string | null {
+  const checked = runGit(seams, cwd, ["check-ref-format", "--branch", name]);
+  if (checked.spawnFailed) {
+    throw new SquashStateError(`could not check the base name '${name}' ('git check-ref-format --branch' failed: ${checked.error}).`);
+  }
+  if (checked.code !== 0) {
+    return `${what} '${name}' is not a branch name git will accept ('git check-ref-format --branch' answered ${checked.error}). Nothing was reset or committed.`;
+  }
+  const normalized = checked.stdout.trim();
+  if (normalized !== name || name.startsWith("refs/")) {
+    return `${what} '${name}' is not a short branch name (git reads it as '${normalized}'). The base guard looks for 'origin/<base>' and '<base>', so name the branch as it appears under refs/heads/, e.g. 'main'. Nothing was reset or committed.`;
+  }
+  return null;
+}
+
+/**
+ * Which folded commits the base already holds. The candidate refs are
+ * `origin/<base>` and `<base>`, each resolved with `git rev-parse --verify
+ * --quiet <full ref>^{commit}` -- an absent ref is exit 1 and is skipped; a
+ * git that never started, or any other code, is a git FAILURE and throws,
+ * never read as "no base". Per resolved ref, ONE `git rev-list HEAD --not
+ * <merge-base> <ref sha>` lists the folded commits that ref does NOT hold;
+ * every folded commit missing from that list is on the base.
+ */
+export function findBaseReachable(
+  seams: Seams,
+  cwd: string,
+  mergeBaseSha: string,
+  folded: readonly FoldedCommit[],
+  base: string,
+): { readonly refs: readonly string[]; readonly reachable: readonly BaseHit[] } {
+  const candidates = [
+    { short: `${BASE_REMOTE}/${base}`, full: `refs/remotes/${BASE_REMOTE}/${base}` },
+    { short: base, full: `refs/heads/${base}` },
+  ];
+  const refs: string[] = [];
+  const hits = new Map<string, BaseHit>();
+  for (const candidate of candidates) {
+    const resolved = runGit(seams, cwd, ["rev-parse", "--verify", "--quiet", `${candidate.full}^{commit}`]);
+    if (resolved.spawnFailed || resolved.code > 1) {
+      throw new SquashStateError(
+        `could not resolve the base ref '${candidate.full}' ('git rev-parse --verify --quiet ${candidate.full}^{commit}' failed: ${resolved.error}).`,
+      );
+    }
+    if (resolved.code !== 0) continue;
+    const refSha = resolved.stdout.trim();
+    refs.push(candidate.short);
+    const own = runGit(seams, cwd, ["rev-list", "HEAD", "--not", mergeBaseSha, refSha]);
+    if (own.code !== 0) {
+      throw new SquashStateError(
+        `could not list the folded commits '${candidate.short}' does not hold ('git rev-list HEAD --not ${mergeBaseSha} ${refSha}' failed: ${own.error}).`,
+      );
+    }
+    const notOnBase = new Set(rawLines(own.stdout).map((line): string => line.trim()));
+    for (const commit of folded) {
+      if (!notOnBase.has(commit.sha) && !hits.has(commit.sha)) hits.set(commit.sha, { commit, ref: candidate.short });
+    }
+  }
+  // Oldest first: the fold set's own order.
+  const reachable = folded.flatMap((commit): BaseHit[] => {
+    const hit = hits.get(commit.sha);
+    return hit === undefined ? [] : [hit];
+  });
+  return { refs, reachable };
 }
 
 /** What the published-commit check found: the upstream, and the first commit already on it. */

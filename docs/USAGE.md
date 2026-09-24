@@ -1841,17 +1841,34 @@ is `--message-file`'s contents. The one write this family makes, and every
 refusal below runs BEFORE it: a dirty working tree; `--onto` not an ancestor
 of HEAD; any commit in the range already reachable from this branch's own
 `@{upstream}` (fetched first, through the seam) — squashing published history
-is refused outright; a `--message-file` that fails the same shape
+is refused outright; any commit in the range already on the **base**
+(`origin/<base>` or the local `<base>`, whichever resolve) — what a catch-up
+merge of the base brings into a branch, every one named with the ref it is
+on ([#251](https://github.com/zheref/nen/issues/251)); a `--message-file` that fails the same shape
 [`nen commit format`](#nen-commit-format) enforces (a Conventional Commits
 header ≤ 72 characters, trailers as `Key: value` lines in the final
 paragraph, and any attribution trailer this repository's
 [`nen/workflow.json`](#nenworkflowjson) does not admit). Fewer than two
-commits to fold is **not** a refusal: exit 0, one line, nothing moves.
+commits to fold is **not** a refusal: exit 0, one line (ending `base check: NOT performed.`, since the base is not read), nothing moves.
+
+**Why the base is guarded on its own.** The fold set is `git merge-base
+<onto> HEAD`..`HEAD`, so on a published branch that was caught up with a
+**merge** of its base, `--onto <upstream sha>` reaches back through that
+merge and would fold every base commit it brought in. Those commits are
+published on `origin/<base>`, not on `origin/<branch>`, so the `@{upstream}`
+check never sees them. The verb **refuses** rather than excluding them: a
+fold that skipped them would still collapse the merge into a single-parent
+commit and lose its ancestry. The refusal names every such commit and the
+base ref it was found on; squash only the branch's own commits (an `--onto`
+at or after the last base merge), or publish them unsquashed. `--dry-run`
+reaches the same verdict the real call would. The base check reads the refs
+already in the repository and does **not** fetch: a merge can only bring in
+commits the repository already holds.
 
 **Usage**
 
 ```text
-nen wc squash --repo <path> --onto <ref> --message-file <file> [--dry-run] [--json]
+nen wc squash --repo <path> --onto <ref> --message-file <file> [--base <branch>] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -1861,6 +1878,7 @@ nen wc squash --repo <path> --onto <ref> --message-file <file> [--dry-run] [--js
 | `--repo <path>` | **yes** | the working tree being squashed | unbracketed in usage; omitted is refused at exit 2, exactly as `wc classify`'s (#28) |
 | `--onto <ref>` | **yes** | the ref this branch is built on top of | e.g. `main` or `origin/main`; every commit `git merge-base <onto> HEAD` finds is folded |
 | `--message-file <file>` | **yes** | the new commit's whole message | validated to `nen commit format`'s shape before anything moves |
+| `--base <branch>` | no | the base whose commits are never folded | default: `nen/workflow.json`'s `branch.base` (`main` when the file is absent), the key [`wc publish`](#nen-wc-publish) reads; must be the **short** branch name that `git check-ref-format --branch` returns unchanged. Not `refs/heads/main`, not `@{-1}`, and nothing shaped like a refspec or a force. Otherwise it is refused at exit 2, because the guard builds `origin/<base>` and `<base>` from the name, and any other spelling would resolve nothing and silently skip the guard. The policy's value is held to the same rule, and a rejected one (`main/`) is exit 1 naming the file |
 | `--dry-run` | no | print the commits that would fold and the message | spawns neither `git reset` nor `git commit` |
 | `--json` | no | machine-readable result | `nen.wc.squash/v0.1` — see below |
 
@@ -1874,11 +1892,16 @@ remote except the read-only fetch the upstream check makes, never pushes,
 never force-anything.
 
 **Output and exit codes** — text output is one line per folded commit
-(`<sha> <subject>`, oldest first), then either the new commit line
+(`<sha> <subject>`, oldest first), a `base check:` line naming the refs the
+base check ran against (or saying it was **NOT performed** because neither
+`origin/<base>` nor `<base>` resolves), then either the new commit line
 (`squashed into <sha>`) or, for `--dry-run`, the message that would have been
 committed. `--json`'s contract is `nen.wc.squash/v0.1`: `{ contract, onto,
-mergeBase, folded: [sha, ...], newSha, dryRun }` — `folded` is oldest first;
-`newSha` is `null` for a dry run and for "nothing to squash". Exit 0 on a
+mergeBase, folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...] }`
+— `folded` is oldest first; `newSha` is `null` for a dry run and for "nothing
+to squash"; `base` is the base branch's name and `baseRefs` the refs checked,
+**empty meaning the check was not performed** (no ref resolves, or nothing to
+squash), never that it passed. Exit 0 on a
 squash, a dry run, or "nothing to squash"; exit 2 on every refusal above,
 naming it; exit 1 when a git command this verb did not expect to fail fails
 anyway (an unresolvable `--onto`, a fetch that cannot reach the upstream) —
@@ -1891,10 +1914,11 @@ never folded into one of the exit-2 refusals, exactly as
 nen wc squash --repo . --onto main --message-file message.txt --dry-run
 ```
 ```text
-would fold 3 commit(s) onto 82d4c9bc5882f21eb8b8d19a27dcedf2406fb316 (--onto main):
-  f362ffd1cc489b413f0ecb40af06a208827d34f3 feat: add one.txt
-  2069b623c8d8885db60ff94bd098ccc821caf271 feat: add two.txt
-  33e9e20d4ef97e60a94a34deb86c8744c5635621 feat: add three.txt
+would fold 3 commit(s) onto 40cc931000edabb8f7979aebd6fc69fe08c4716d (--onto main):
+  ad31f70e4d58083fc5cf6590329dd101ec40ce98 feat: add one.txt
+  6c2088d8016be75e3b0f2322c0747739850028e8 feat: add two.txt
+  a46a710615ed8a118b5551f7d7319c988597150c feat: add three.txt
+base check: none of the folded commits is on origin/main or main (branch.base's default -- no nen/workflow.json)
 message:
   feat(wc): add one/two/three together
 
@@ -1904,15 +1928,29 @@ message:
 nen wc squash --repo . --onto main --message-file message.txt
 ```
 ```text
-  f362ffd1cc489b413f0ecb40af06a208827d34f3 feat: add one.txt
-  2069b623c8d8885db60ff94bd098ccc821caf271 feat: add two.txt
-  33e9e20d4ef97e60a94a34deb86c8744c5635621 feat: add three.txt
-squashed into 2bc2e0e68e8aa13fe7476b190dfccb3e8ac24bf8
+  ad31f70e4d58083fc5cf6590329dd101ec40ce98 feat: add one.txt
+  6c2088d8016be75e3b0f2322c0747739850028e8 feat: add two.txt
+  a46a710615ed8a118b5551f7d7319c988597150c feat: add three.txt
+base check: none of the folded commits is on origin/main or main (branch.base's default -- no nen/workflow.json)
+squashed into df56d7826b9d3df10ced19167122388e36d7ca10
 ```
-(from a real run, on a throwaway local repository built for this check: three
-commits on `docs-example` folded onto `main` into one, `git log -1 --format=%B`
-afterwards reading exactly `message.txt`'s contents — `feat(wc): add
-one/two/three together`, blank line, `Closes: #99`)
+Then the [#251](https://github.com/zheref/nen/issues/251) case: a branch
+published at `d5f31529`, caught up with a merge of `origin/main` (which had
+moved on by one commit), one more commit on top, and squashed `--onto` its own
+upstream sha. Exit 2, nothing moved:
+```bash
+nen wc squash --repo . --onto d5f315297f2186697cfb953a8d18fad96b08fbd1 --message-file message.txt --dry-run
+```
+```text
+nen wc: the base 'main' (branch.base's default -- no nen/workflow.json; checked against origin/main, main) already holds 1 of the 3 commit(s) since 'git merge-base d5f315297f2186697cfb953a8d18fad96b08fbd1 HEAD' (d5f315297f2186697cfb953a8d18fad96b08fbd1) -- a merge of the base brought them into this branch, and squashing would rewrite the base's published history into one commit on this branch and flatten the merge's ancestry: 6a1b27eec3511b87ddf80e938702bb062b708459 ('chore: the base moves on', on origin/main). Squash only this branch's own commits (an --onto at or after the last base merge), or publish them unsquashed.
+Run 'nen wc --help'.
+```
+(from a real run, on a throwaway local repository with a bare `origin`, built
+for this check: three commits on `docs-example` folded onto `main` into one,
+`git log -1 --format=%B` afterwards reading exactly `message.txt`'s contents —
+`feat(wc): add one/two/three together`, blank line, `Closes: #99`; then the
+refusal above from the same repository. That the call without `--dry-run`
+refuses in the same words is `src/wc/squash.integration.test.ts`'s claim)
 
 
 ### `nen wc catch-up`

@@ -234,6 +234,92 @@ describe.skipIf(!HAVE_GIT)("nen wc squash, against the real git", () => {
     expect(mustGit(work, ["rev-list", "--count", "main..HEAD"])).toBe("2");
   });
 
+  // zheref/nen#251: the base is a second published place. A branch published,
+  // then caught up with a MERGE of origin/main, then squashed --onto its own
+  // upstream sha would fold every commit that merge brought in -- commits the
+  // @{upstream} guard never sees, because they are on origin/main, not on
+  // origin/<branch>. Refused at exit 2 in both modes, and nothing moves.
+  it("refuses to fold a catch-up merge's base commits, at exit 2, dry-run and real alike, and writes nothing", async () => {
+    const work = freshBranch("base-merge-case", ["feat: a", "feat: b"]);
+    mustGit(work, [...PINNED, "push", "--quiet", "-u", "origin", "base-merge-case"]);
+    const publishedSha = mustGit(work, ["rev-parse", "HEAD"]);
+
+    // The base moves on: two commits land on origin/main after the branch was cut.
+    const baseShas: string[] = [];
+    for (const name of ["base-one", "base-two"]) {
+      writeFileSync(join(upstream, `${name}.txt`), `${name}\n`);
+      mustGit(upstream, ["add", `${name}.txt`]);
+      mustGit(upstream, [...WHO, "commit", "--quiet", "-m", `chore: ${name}`]);
+      baseShas.push(mustGit(upstream, ["rev-parse", "HEAD"]));
+    }
+
+    // The catch-up merge -- what 'nen wc catch-up' makes on a published branch -- then one more own commit.
+    mustGit(work, [...PINNED, "fetch", "--quiet", "origin"]);
+    mustGit(work, [...WHO, "merge", "--quiet", "--no-ff", "-m", "Merge origin/main into base-merge-case", "origin/main"]);
+    writeFileSync(join(work, "after-merge.txt"), "after\n");
+    mustGit(work, ["add", "after-merge.txt"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: after the merge"]);
+
+    const beforeHead = mustGit(work, ["rev-parse", "HEAD"]);
+    const beforeReflog = mustGit(work, ["reflog", "--format=%H", "-n", "1"]);
+    const msg = messageFile("feat: would fold\n");
+    const argv = ["squash", "--repo", work, "--onto", publishedSha, "--message-file", msg];
+
+    const dry = await squash([...argv, "--dry-run", "--json"]);
+    const real = await squash(argv);
+    for (const result of [dry, real]) {
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      const message = result.err.join("\n");
+      expect(message).toMatch(/already holds 2 of the 4 commit\(s\) since 'git merge-base [0-9a-f]+ HEAD'/);
+      expect(message).toContain("the base 'main' (");
+      expect(message).toContain("checked against origin/main");
+      for (const sha of baseShas) expect(message).toContain(`${sha} (`);
+      expect(message).toMatch(/flatten the merge's ancestry/);
+    }
+    // The same verdict, word for word, from both modes.
+    expect(dry.err).toEqual(real.err);
+
+    // Nothing was written: HEAD, the reflog, the tree and the merge are exactly as they were.
+    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(beforeHead);
+    expect(mustGit(work, ["reflog", "--format=%H", "-n", "1"])).toBe(beforeReflog);
+    expect(mustGit(work, ["status", "--porcelain=v1", "-uall"])).toBe("");
+    expect(mustGit(work, ["rev-list", "--merges", "--count", `${publishedSha}..HEAD`])).toBe("1");
+  });
+
+  it("still folds a published branch's own new commits onto its upstream sha when no base merge is in the range", async () => {
+    const work = freshBranch("published-then-more", ["feat: a"]);
+    mustGit(work, [...PINNED, "push", "--quiet", "-u", "origin", "published-then-more"]);
+    const publishedSha = mustGit(work, ["rev-parse", "HEAD"]);
+    for (const name of ["more-one", "more-two"]) {
+      writeFileSync(join(work, `${name}.txt`), `${name}\n`);
+      mustGit(work, ["add", `${name}.txt`]);
+      mustGit(work, [...WHO, "commit", "--quiet", "-m", `feat: ${name}`]);
+    }
+
+    const msg = messageFile("feat: fold the unpublished tail\n");
+    const dry = await squash(["squash", "--repo", work, "--onto", publishedSha, "--message-file", msg, "--dry-run", "--json"]);
+    expect(dry.code).toBe(0);
+    const parsed = JSON.parse(dry.out.join("\n")) as Record<string, unknown>;
+    expect(parsed["folded"]).toHaveLength(2);
+    expect(parsed["baseRefs"]).toEqual(["origin/main", "main"]);
+
+    const real = await squash(["squash", "--repo", work, "--onto", publishedSha, "--message-file", msg]);
+    expect(real.code).toBe(0);
+    expect(real.out.join("\n")).toMatch(/base check: none of the folded commits is on origin\/main or main/);
+    expect(mustGit(work, ["rev-list", "--count", `${publishedSha}..HEAD`])).toBe("1");
+  });
+
+  it("refuses --base refs/heads/main against the real git: the guard only accepts the short name", async () => {
+    const work = freshBranch("full-ref-base", ["feat: a", "feat: b"]);
+    const beforeHead = mustGit(work, ["rev-parse", "HEAD"]);
+    const msg = messageFile("feat: would fold\n");
+    const result = await squash(["squash", "--repo", work, "--onto", "main", "--base", "refs/heads/main", "--message-file", msg]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--base 'refs\/heads\/main' is not a short branch name/);
+    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(beforeHead);
+  });
+
   it("exits 0 with nothing moved when fewer than two commits would fold", async () => {
     const work = freshBranch("single-commit-case", ["feat: only one"]);
     const beforeHead = mustGit(work, ["rev-parse", "HEAD"]);
