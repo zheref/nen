@@ -33,7 +33,6 @@ Release unit for `v0.14.2..v0.14.3`: [#260](https://github.com/zheref/nen/pull/2
   - **A consumer that parses `pr ready`'s plain output as a single line**, or matches `unevaluated` in `--explain`, must read line 1 or `--json` instead.
   - **A consumer that relies on any of the fixes** must pin `v0.14.3`.
   - Exit `8` (`head-mismatch`) is reachable only through the new `--require-head`.
-- **CI:** the Windows leg is not exercised while the repository variable `NEN_WINDOWS_RUNNER` is unset. Setting it to `online` restores it with no workflow edit.
 
 ## v0.14.2 — 2026-09-23
 
