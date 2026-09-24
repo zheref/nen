@@ -19,8 +19,10 @@
 // THE LOGIC IS UNCHANGED. Every branch, every ordering, every asymmetry and
 // every conservative direction is exactly as it was. The gate is NEVER PARTIALLY
 // READY -- the whole conjunction -- and the reason returned is always the FIRST
-// failing conjunct. The reason strings are transcribed BYTE FOR BYTE, em dashes
-// and backticks included; the one exception is stated below and is the only one.
+// failing conjunct (every row is now EVALUATED rather than the walk stopping
+// there -- divergence (8) below -- but the verdict and its line are unchanged).
+// The reason strings are transcribed BYTE FOR BYTE, em dashes and backticks
+// included; the one exception is stated below and is the only one.
 //
 // (1) IDENTITIES ARE DATA (§3). The original decides against names written into
 //     the source: `${2:-sasuke,tenma}`, `grep -Ex 'sasuke|tenma'`, an
@@ -81,7 +83,7 @@
 //     and every consumer downstream (`--explain`, `--json`, the ported pr-state
 //     skill) was re-deriving the table by parsing the sentence. Recording it
 //     structurally is BC-6-clean: the rows, their order, their clause IDs and
-//     the short-circuit rule are the skill's own published table
+//     the short-circuit rule (retired by (8)) are the skill's own published table
 //     (claude/skills/pr-state/SKILL.md § 3), not a new taxonomy. `line` and
 //     `ready` remain exactly what they were, so a caller that wants only the
 //     original's answer reads only those two fields.
@@ -123,6 +125,20 @@
 //     ("Those are the CAVEATS `--explain` prints...") describing this file's
 //     own `CAVEATS` export. Both are nen-side prose about nen-side additions,
 //     not transcriptions of anything the original says.
+//
+// (7) is recorded inline, at the CON-30 carve-out below.
+//
+// (8) EVERY ROW IS EVALUATED; THE WALK NO LONGER STOPS AT THE FIRST FAILURE
+//     (zheref/nen#248). The original short-circuits, and this port used to
+//     report every row after the first failure as `unevaluated`. On
+//     zheref/nen#247 that hid two real unresolved threads behind a red check
+//     the maintainer had ruled out of scope, and a PR was called ready on it.
+//     Each row is now its own predicate on its own evidence, asked whether or
+//     not an earlier row failed; `failing` lists every failure, and a row that
+//     genuinely cannot be computed names the missing fact (`missing`). WHAT IS
+//     NOT CHANGED, and is the point: no row's criterion, the verdict (still the
+//     whole conjunction), the LINE (still the first failing row's reason,
+//     byte for byte), `firstFailing`, and the exit code.
 // ============================================================================
 // pr_ready_gate.ts -- the TypeScript port of scripts/pr_ready_gate.sh
 // (BC-IS-#733 Phase 2, BC-IS-#737, rank 1).
@@ -218,6 +234,9 @@
 //   CON-32(b) approve-- every APPROVING reviewer's LATEST round is an APPROVE
 //                       against the CURRENT head (CON-16's current-head rule);
 //   CON-32(d)        -- zero unresolved review threads.
+//
+// Every row is evaluated (divergence (8)); the verdict is their conjunction and
+// the line is the first failure's reason.
 //
 // SCOPE NOTE, carried across unchanged (never silent, CON-16/_conventions.md's
 // "no silent caps"): this gate does NOT independently re-derive CON-32(c)
@@ -330,18 +349,21 @@ export function minutesSince(timestamp: string, now: string): number | undefined
 
 // ── the conjunct table ───────────────────────────────────────────────────────
 //
-// The rows, their ORDER, their clause IDs and the short-circuit rule are the
-// published pr-state table (claude/skills/pr-state/SKILL.md § 3), recorded
-// structurally instead of re-derived from the reason sentence by every
-// consumer. NO ROW IS NEW: each is a branch `evaluate_ready` already takes, in
-// the order it already takes it.
+// The rows, their ORDER and their clause IDs are the published pr-state table
+// (claude/skills/pr-state/SKILL.md § 3), recorded structurally instead of
+// re-derived from the reason sentence by every consumer. NO ROW IS NEW: each is
+// a branch `evaluate_ready` already takes, in the order it already takes it.
+// The short-circuit rule that table also published is RETIRED (divergence (8),
+// zheref/nen#248): every row is evaluated.
 //
 // ROW 3 IS INSIDE ROW 4'S BRANCH in the shell -- the stall bound is only
 // consulted once a round is owed -- and the table keeps it as its own row
 // because that is how the skill publishes it and because the two failures want
 // different actions: a stalled round wants a RE-REQUEST, an ordinary owed round
 // wants the reviewer to run. When no round is owed at all, row 3 passes
-// vacuously, which is exactly what the shell's control flow says.
+// vacuously, which is exactly what the shell's control flow says. When a round
+// is stalled, BOTH rows fail: the stalled round is also an owed one, and the
+// line is row 3's, as it always was.
 
 export type ConjunctId =
   | "mergeable"
@@ -352,12 +374,18 @@ export type ConjunctId =
   | "unresolved-threads";
 
 /**
- * `unevaluated` is the SHORT-CIRCUIT classification, and it is not a pass.
+ * `unevaluated` is UNKNOWN, and it is not a pass.
  *
- * The gate stops at the first failing conjunct, so every row after it is
- * genuinely UNKNOWN -- the skill's rule is that they must be reported as unknown
- * rather than as passing, because "the gate did not get that far" and "the gate
- * checked and was satisfied" are different facts and only one of them is
+ * Until zheref/nen#248 this was the SHORT-CIRCUIT classification: the gate
+ * stopped at the first failing conjunct and every later row was reported
+ * `unevaluated`. The gate now evaluates EVERY row, so the value means one thing
+ * only -- this row could not be computed because a fact it needs is missing
+ * (no head SHA was read; the rollup or the reviews could not be parsed; GitHub
+ * could not be read at all) -- and the row's `missing` field names that fact.
+ * The value itself is KEPT rather than renamed to `unknown`, so the frozen
+ * `nen.pr.ready/v0.1` contract's closed set does not change; `--explain` renders
+ * it as `unknown`. It is still never a pass: "the gate could not tell" and "the
+ * gate checked and was satisfied" are different facts and only one of them is
  * evidence.
  */
 export type ConjunctStatus = "ready" | "failed" | "unevaluated";
@@ -391,6 +419,14 @@ export interface Conjunct {
    * exactly the silent exemption it forbids. Additive to `nen.pr.ready/v0.1`.
    */
   readonly note: string | null;
+  /**
+   * On an `unevaluated` row, the FACT that was missing, by name (zheref/nen#248)
+   * -- "no head SHA was read", "the reviews could not be read", "GitHub could
+   * not be read (...)". `null` on every `ready` and `failed` row. A blanket
+   * "unevaluated" told a caller nothing it could act on; the missing fact is
+   * what it acts on. Additive to `nen.pr.ready/v0.1`.
+   */
+  readonly missing: string | null;
 }
 
 interface ConjunctSpec {
@@ -493,8 +529,16 @@ export interface ReadyVerdict {
  */
 export interface ReadyEvaluation extends ReadyVerdict {
   readonly conjuncts: readonly Conjunct[];
-  /** The id of the FIRST failing conjunct, or `null` on a ready verdict. */
+  /**
+   * The id of the FIRST failing conjunct, or `null` when no row failed. Kept,
+   * unchanged in meaning, for every caller that read it before `failing` existed.
+   */
   readonly firstFailing: ConjunctId | null;
+  /**
+   * EVERY failing conjunct, in evaluation order (zheref/nen#248). Empty on a
+   * ready verdict. `failing[0]` is always `firstFailing`.
+   */
+  readonly failing: readonly ConjunctId[];
   /** Facts the renderers report but the verdict does not turn on. */
   readonly context: EvaluationContext;
 }
@@ -616,40 +660,54 @@ function unreadable(error: ParseError): string {
 }
 
 /**
- * Assemble the table for a verdict that failed at `failedAt`, or for `ready`.
+ * One row's outcome, before it is laid into the table.
  *
- * Rows BEFORE the failure are `ready` -- the gate reached them and was satisfied.
- * The failing row carries the reason VERBATIM. Rows AFTER it are `unevaluated`,
- * never `ready`: the gate short-circuits, so their state is unknown, and
- * reporting an unknown as a pass is the one reading a readiness gate must never
- * offer.
+ * `unevaluated` carries the MISSING FACT by name (zheref/nen#248): a row that
+ * cannot be computed says what it would have needed, never a blanket "the gate
+ * did not get that far" -- the gate always gets that far now.
  */
-function table(
-  failedAt: ConjunctId | null,
-  reason: string | null,
-  notes: Readonly<Partial<Record<ConjunctId, string>>> = {},
-): readonly Conjunct[] {
-  let seen = false;
+type RowResult =
+  | { readonly status: "ready"; readonly note: string | null }
+  | { readonly status: "failed"; readonly reason: string }
+  | { readonly status: "unevaluated"; readonly missing: string };
+
+const passed = (note: string | null = null): RowResult => ({ status: "ready", note });
+const failed = (reason: string): RowResult => ({ status: "failed", reason });
+const unknown = (missing: string): RowResult => ({ status: "unevaluated", missing });
+
+/**
+ * Lay the six row outcomes into the published table, in evaluation order.
+ *
+ * Only a `ready` row carries a `note`, only a `failed` row carries a `reason`,
+ * and only an `unevaluated` row carries `missing` -- a reason attached to a row
+ * that did not fail is the "plausible, wrong" output class bankai-core#639/#698
+ * were both about, and the same holds for a note on a row that did not pass.
+ */
+function table(rows: Readonly<Record<ConjunctId, RowResult>>): readonly Conjunct[] {
   return CONJUNCTS.map((spec, index): Conjunct => {
-    const note = notes[spec.id] ?? null;
-    if (failedAt === null) {
-      return { ...spec, order: index + 1, status: "ready", reason: null, note };
-    }
-    if (spec.id === failedAt) {
-      seen = true;
-      // A row that FAILED does not carry a passing note: it did not pass.
-      return { ...spec, order: index + 1, status: "failed", reason, note: null };
-    }
-    const status: ConjunctStatus = seen ? "unevaluated" : "ready";
+    const row = rows[spec.id];
     return {
       ...spec,
       order: index + 1,
-      status,
-      reason: null,
-      // A row the gate never reached explains nothing either.
-      note: status === "ready" ? note : null,
+      status: row.status,
+      reason: row.status === "failed" ? row.reason : null,
+      note: row.status === "ready" ? row.note : null,
+      missing: row.status === "unevaluated" ? row.missing : null,
     };
   });
+}
+
+/**
+ * The whole table with EVERY row unknown for one named reason -- the shape an
+ * unevaluated report publishes when GitHub could not be read at all. Not one row
+ * is `ready`: nothing about the pull request was established, and a table with
+ * green rows in it would be a claim about evidence nobody read.
+ */
+export function unknownTable(missing: string): readonly Conjunct[] {
+  const rows = Object.fromEntries(
+    CONJUNCTS.map((spec): [ConjunctId, RowResult] => [spec.id, unknown(missing)]),
+  ) as Record<ConjunctId, RowResult>;
+  return table(rows);
 }
 
 /**
@@ -657,8 +715,14 @@ function table(
  * shell would print, whether it means ready, and the conjunct table.
  *
  * NEVER PARTIALLY READY -- the whole conjunction, same stance CON-32 itself
- * takes, and the reason returned is always the FIRST failing one so the reader
- * has one thing to fix rather than a list.
+ * takes -- and the LINE is always the FIRST failing row's reason, so a caller
+ * quoting it quotes exactly what it quoted before. What changed (zheref/nen#248)
+ * is that the walk no longer stops there: EVERY row is evaluated and reported,
+ * because a first failure on an ignorable check hid two real unresolved threads
+ * on zheref/nen#247, and "the gate did not look" threw away facts that were
+ * cheap to read and that decide what the author must do next. No row's
+ * criterion moved; each is the same predicate on the same evidence, now asked
+ * whether or not an earlier one failed.
  */
 export function evaluateReady(
   identities: GateIdentities,
@@ -672,6 +736,12 @@ export function evaluateReady(
 
   const mergeable = jqRaw(state["mergeable"]);
   const head = jqRaw(state["head_sha"]);
+  // A head is KNOWN only when the state carries one as a non-empty string. The
+  // transport writes `""` when GitHub answered no `headRefOid`, and a hand-built
+  // blob may omit it; either way the three CON-32(b) rows would be comparing
+  // rounds against `""` or the four characters `null`, and "no round at a head
+  // nobody read" is not a finding about the reviewer (zheref/nen#248).
+  const headKnown = typeof state["head_sha"] === "string" && state["head_sha"] !== "";
   const unresolved = jqRaw(state["unresolved_threads"]);
   // `.exclude_run_id // empty` -- absent, null and false all yield "".
   const excludeRunValue = state["exclude_run_id"];
@@ -727,11 +797,11 @@ export function evaluateReady(
   );
   let approversCsv = approverList.join(",");
 
-  // Parsing is LAZY and in the shell's own consumption order, so a malformed
-  // slice cannot pre-empt an earlier predicate's verdict. The shell reaches
-  // `.reviews` here through a tolerant `jq -e` whose failure simply reads as "no
-  // conditional-approver round at head" -- reproduced exactly: a reviews array
-  // this port cannot parse does not enrol the reviewer and does not yet abort.
+  // The shell reaches `.reviews` here through a tolerant `jq -e` whose failure
+  // simply reads as "no conditional-approver round at head" -- reproduced
+  // exactly: a reviews array this port cannot parse does not enrol the
+  // reviewer here. The parse error itself is reported on the rounds-owed row
+  // below, exactly where the short-circuiting gate used to report it.
   const parsedReviews = parseReviews(state["reviews"]);
   for (const name of reviewers) {
     const identity = identities.reviewer(name);
@@ -762,50 +832,26 @@ export function evaluateReady(
   // into BOTH CON-32(b) limbs; every other predicate is untouched by it.
   const delivery = isDeliveryPr(identities, deliveryEvidence(state));
 
-  const context: EvaluationContext = {
-    reviewers,
-    approvers,
-    approvalPolicy: identities.approvalPolicy,
-    policy,
-    headSha: head,
-    deliveryPr: delivery,
-    dependabotCarveOut: false,
-    warnings: excludeCheckWarnings,
-  };
   const approvalNote =
     identities.approvalPolicy === "review-round-only" && approversCsv === ""
       ? "satisfied by approval_policy 'review-round-only': configured reviewer rounds are still required at the current head, but no separate APPROVED review is required; human merge authority remains separate"
-      : undefined;
-  const approvalNotes: Partial<Record<ConjunctId, string>> =
-    approvalNote === undefined ? {} : { "approvals-at-head": approvalNote };
-  const fail = (at: ConjunctId, line: string): ReadyEvaluation => ({
-    ready: false,
-    line,
-    conjuncts: table(at, line, approvalNotes),
-    firstFailing: at,
-    context,
-  });
+      : null;
 
-  if (mergeable !== "MERGEABLE") {
-    return fail(
-      "mergeable",
-      `not-ready: mergeable=${mergeable} (expected MERGEABLE — CON-42/1's added predicate)`,
-    );
-  }
+  // ── row 1: mergeable (CON-42/1) ─────────────────────────────────────────
+  const mergeableRow: RowResult =
+    mergeable === "MERGEABLE"
+      ? passed()
+      : failed(`not-ready: mergeable=${mergeable} (expected MERGEABLE — CON-42/1's added predicate)`);
 
-  // `.checks // []`: GitHub answers `statusCheckRollup: null` on a PR with no
-  // runs -- the very state bankai-core#671 is about -- and that null reaching
-  // `map(select(...))` aborted the whole script and emitted NO verdict, breaking
-  // --verdict's always-print contract (Copilot, BC-PR-#745).
-  //
-  // `rawChecks`/`parsedChecks`/`checksExcludedByRun` were already computed
-  // above, ahead of `context`, so `context.warnings` could carry an unmatched
-  // `--exclude-check <name>` from the start -- reused here rather than
-  // reparsed.
-  if (!parsedChecks.ok) return fail("checks-green", unreadable(parsedChecks.error));
-  const checksExcluded = excludeCheckNames(checksExcludedByRun, options.excludeCheckNames);
-
-  if (!checksAllGreen(checksExcluded)) {
+  // ── row 2: checks green (CON-32(a)) ─────────────────────────────────────
+  const checksRow = ((): RowResult => {
+    // `.checks // []`: GitHub answers `statusCheckRollup: null` on a PR with no
+    // runs -- the very state bankai-core#671 is about -- and that null reaching
+    // `map(select(...))` aborted the whole script and emitted NO verdict,
+    // breaking --verdict's always-print contract (Copilot, BC-PR-#745).
+    if (!parsedChecks.ok) return failed(unreadable(parsedChecks.error));
+    const checksExcluded = excludeCheckNames(checksExcludedByRun, options.excludeCheckNames);
+    if (checksAllGreen(checksExcluded)) return passed();
     // AN EMPTY ROLLUP IS NOT A RED ROLLUP (bankai-core#671). `checksAllGreen`
     // opens with a non-empty test, so "no checks at all" and "a check failed"
     // both arrive here -- and used to leave through ONE string that named both.
@@ -821,8 +867,7 @@ export function evaluateReady(
       // telling that agent its CI is dead when it is the one running is worse
       // than useless -- it is the exact wrong remedy.
       if (excludeRun !== "" && parsedChecks.value.length > 0) {
-        return fail(
-          "checks-green",
+        return failed(
           `not-ready: NO checks remain after excluding run ${excludeRun} (CON-32a) — the rollup ` +
             "held only the excluded run, so the gate has no evidence to judge. This is an ABSENT " +
             "verdict, not a red one; ask again once a check outside that run reports.",
@@ -835,8 +880,7 @@ export function evaluateReady(
       // readiness check's prior report must not read a false READY off a
       // rollup that, once that name is dropped, has nothing left to judge.
       if (options.excludeCheckNames.length > 0 && checksExcludedByRun.length > 0) {
-        return fail(
-          "checks-green",
+        return failed(
           "not-ready: no checks reported (after excluding: " +
             `${options.excludeCheckNames.join(", ")}) (CON-32a) — the rollup held only the ` +
             "excluded name(s), so the gate has no evidence to judge. This is an ABSENT verdict, " +
@@ -854,8 +898,7 @@ export function evaluateReady(
       // Nothing else about the string moves, and the difference cannot change a
       // verdict: it is the same branch, on the same evidence, for the same
       // reason.
-      return fail(
-        "checks-green",
+      return failed(
         "not-ready: NO checks reported at head (CON-32a) — an EMPTY rollup, not a red one. " +
           "Either CI has not started yet, or its run concluded startup_failure and no check will " +
           "ever attach. Tell them apart with: gh run list --branch <head-branch> " +
@@ -871,18 +914,26 @@ export function evaluateReady(
     const cancelledList = report.cancelled.join(", ");
     const failingList = report.failing.join(", ");
     if (cancelledList !== "") {
-      return fail(
-        "checks-green",
+      return failed(
         "not-ready: required checks are not all green (CON-32a) — latest run CANCELLED, no " +
           `verdict (needs a re-run, not a fix): ${cancelledList}` +
           (failingList === "" ? "" : `; failing: ${failingList}`),
       );
     }
-    return fail(
-      "checks-green",
-      "not-ready: required checks reported but are not all green (CON-32a)",
-    );
-  }
+    return failed("not-ready: required checks reported but are not all green (CON-32a)");
+  })();
+
+  // ── row 6: zero unresolved threads (CON-32(d)) ──────────────────────────
+  //
+  // `${unresolved:-1}` -- an empty value is 1, i.e. not-ready. "Cannot confirm
+  // zero" is never "zero" at CON-32(d)'s boundary. Computed on its own, from its
+  // own field: nothing it reads depends on any other row, which is exactly why
+  // a red check hiding it (zheref/nen#248) was a reporting defect and not a
+  // dependency.
+  const threadsRow: RowResult =
+    (unresolved === "" ? "1" : unresolved) !== "0"
+      ? failed(`not-ready: ${unresolved} unresolved review thread(s) (CON-32d)`)
+      : passed();
 
   // ── CON-30's dependency-author carve-out (zheref/nen#18) ─────────────────
   //
@@ -896,128 +947,45 @@ export function evaluateReady(
   // from its own copy of a rule -- which is how two callers come to disagree
   // about whether a dependency PR is ready, on the same evidence.
   //
-  // WHERE IT SITS, and why exactly here: AFTER CON-32(a). A dependency bot's
-  // pull request is never exempted from having checks -- an empty rollup is
-  // still a failing CON-32(a) row above, and a red one still fails. What the
-  // carve-out clears is the three CON-32(b) rows: the stall bound, the owed
-  // round, and the approve limb. Those are the rows a review shim's `success`
-  // contexts are STANDING IN FOR, and they are the only ones. CON-32(d)'s
-  // unresolved-thread row below is untouched: a human who did open a thread on a
-  // dependency PR is owed an answer, carve-out or not.
+  // WHAT IT CLEARS, and what it does not: the three CON-32(b) rows -- the stall
+  // bound, the owed round, and the approve limb. Those are the rows a review
+  // shim's `success` contexts are STANDING IN FOR, and they are the only ones.
+  // A dependency bot's pull request is never exempted from having checks -- an
+  // empty rollup still fails row 2 above, and a red one still fails it -- and
+  // CON-32(d)'s unresolved-thread row is untouched: a human who did open a
+  // thread on a dependency PR is owed an answer, carve-out or not. Since every
+  // row is evaluated (zheref/nen#248), the carve-out is read whenever the
+  // rollup is readable rather than only once row 2 passed: it is a fact about
+  // the named contexts, and a red check elsewhere does not change it.
   //
   // The rollup it reads is the UN-excluded one, for the same reason
   // `pending_rounds` reads it: `--exclude-run` is a CON-32(a) carve-out for the
   // asking job's own check and was never scoped to change which reviewers owe a
   // round -- nor, therefore, what stands in for one.
-  const carveOut = dependabotCarveOutSatisfied(
-    identities,
-    deliveryEvidence(state).author,
-    parsedChecks.value,
-  );
-  if (carveOut) {
-    const contexts = identities.dependabotCarveOut?.satisfiedByContext.join(", ") ?? "";
-    const note =
-      `satisfied by dependabot_carve_out: the author matches the declared pattern and ` +
-      `every named context reported green (${contexts})`;
-    const notes: Partial<Record<ConjunctId, string>> = {
-      "round-stalled": note,
-      "rounds-owed": note,
-      "approvals-at-head": approvalNote === undefined ? note : `${note}; ${approvalNote}`,
-    };
-    const carved: EvaluationContext = { ...context, dependabotCarveOut: true };
-    // CON-32(d) STILL RUNS, on the same reading as below: an empty value is 1,
-    // i.e. not-ready. A human who did open a thread on a dependency PR is owed
-    // an answer whether or not a shim covered the review rounds.
-    if ((unresolved === "" ? "1" : unresolved) !== "0") {
-      const line = `not-ready: ${unresolved} unresolved review thread(s) (CON-32d)`;
-      return {
-        ready: false,
-        line,
-        conjuncts: table("unresolved-threads", line, notes),
-        firstFailing: "unresolved-threads",
-        context: carved,
-      };
-    }
-    return {
-      ready: true,
-      line: "ready",
-      conjuncts: table(null, null, notes),
-      firstFailing: null,
-      context: carved,
-    };
-  }
+  const carveOut =
+    parsedChecks.ok &&
+    dependabotCarveOutSatisfied(identities, deliveryEvidence(state).author, parsedChecks.value);
 
-  // pending_rounds is handed `{review_requests, checks, reviews}` from the RAW
-  // state -- the UN-excluded rollup. Transcribed deliberately: `--exclude-run`
-  // is a CON-32(a) carve-out for the asking job's own check, and it was never
-  // scoped to change which reviewers owe a round.
-  if (!parsedReviews.ok) return fail("rounds-owed", unreadable(parsedReviews.error));
-  const parsedRequests = parseReviewRequests(state["review_requests"]);
-  if (!parsedRequests.ok) return fail("rounds-owed", unreadable(parsedRequests.error));
-  const owed = pendingRounds(
-    identities,
-    {
-      reviewRequests: parsedRequests.value,
-      checks: parsedChecks.value,
-      reviews: parsedReviews.value,
-    },
-    head,
-    reviewers,
-    policy,
-    delivery,
-  );
-  if (owed.length > 0) {
-    const requestedAt = state["stall_requested_at"];
-    const requestedAtText = typeof requestedAt === "string" ? requestedAt : "";
-    // PORT CHANGE (§3): `entry.reviewer === "copilot"` -> the reviewer the FILE
-    // marks `bounded_policy_exempt`. That flag already names, structurally, the
-    // reviewer nothing re-requests after a final push -- which is precisely the
-    // reviewer a PENDING request can go stale on.
-    const stalled = owed.find(
-      (entry): boolean =>
-        entry.reason === "review-requested-not-yet-posted" &&
-        identities.reviewer(entry.reviewer)?.boundedPolicyExempt === true,
-    );
-    if (stalled !== undefined && requestedAtText !== "") {
-      // Under BOTH policies a pending request older than the stall bound is
-      // reported as STALLED -- loud, never silently ready. `bounded` is not
-      // "ignore that reviewer": a pending request is the one footprint an
-      // un-posted round has, and it is honoured either way.
-      const age = minutesSince(requestedAtText, options.now);
-      // `>=`, NOT `>`. The bound is "STALL_MINUTES old OR MORE", so a request
-      // that is EXACTLY that old is already stalled. The distinction is one
-      // character and was invisible to both the port's first test suite and
-      // tests/pr_ready_gate.bats itself -- neither exercised the boundary, both
-      // sampled 90 minutes against a 30-minute bound and 10 minutes against the
-      // same -- so a deliberate `>=` -> `>` mutation replayed GREEN through the
-      // whole corpus. Found by sabotage, closed by the two boundary cases in
-      // ./ready.test.ts ("the stall bound fires AT the boundary").
-      if (age !== undefined && age >= options.stallMinutes) {
-        return fail(
-          "round-stalled",
-          `not-ready: ${stalled.reviewer} round stalled — requested ${age} min ago and never posted ` +
-            "(CON-32b; re-request it, a user token is required)",
-        );
-      }
-    }
-    return fail(
-      "rounds-owed",
-      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
-        owed.map((entry): string => describeOwedRound(identities, entry)).join(";"),
-    );
-  }
+  // ── rows 3, 4, 5: CON-32(b) ─────────────────────────────────────────────
+  let stalledRow: RowResult;
+  let owedRow: RowResult;
+  let approvalsRow: RowResult;
 
-  // An EMPTY approver set makes this predicate vacuous BY DESIGN: the caller
-  // configured a reviewer set with no approving reviewer in it, so there is no
-  // approval to require. Owed rounds are still enforced above. The shell has to
-  // guard the call explicitly because its `${2:-sasuke,tenma}` default
-  // substitutes on an EMPTY argument as well as an absent one -- and would
-  // therefore demand exactly the approvals the caller excluded; here "omitted"
-  // and "empty" are different values and the guard is the empty array itself.
-  if (
-    approversCsv !== "" &&
-    !reviewsAllApprovedAtHead(identities, parsedReviews.value, head, approvers, delivery)
-  ) {
+  const approvalsFrom = (reviews: Parameters<typeof reviewsAllApprovedAtHead>[1]): RowResult => {
+    // An EMPTY approver set makes this predicate vacuous BY DESIGN: the caller
+    // configured a reviewer set with no approving reviewer in it, so there is
+    // no approval to require. Owed rounds are still enforced on row 4. The
+    // shell has to guard the call explicitly because its `${2:-sasuke,tenma}`
+    // default substitutes on an EMPTY argument as well as an absent one -- and
+    // would therefore demand exactly the approvals the caller excluded; here
+    // "omitted" and "empty" are different values and the guard is the empty
+    // array itself.
+    if (
+      approversCsv === "" ||
+      reviewsAllApprovedAtHead(identities, reviews, head, approvers, delivery)
+    ) {
+      return passed(approvalNote);
+    }
     // NAME the approver(s) actually failing, with the reading applied to each,
     // rather than asserting which one it must be. On a delivery PR the old
     // message blamed the CON-40 pair's holistic pass unconditionally, while a
@@ -1026,44 +994,169 @@ export function evaluateReady(
     // BC-PR-#773). The verdict was right and the reason pointed at the wrong
     // reviewer, which is the "plausible, wrong" class bankai-core#639 and #698
     // were both about.
-    const unapproved = unapprovedApprovers(
-      identities,
-      parsedReviews.value,
-      head,
-      approvers,
-      delivery,
-    )
+    const unapproved = unapprovedApprovers(identities, reviews, head, approvers, delivery)
       .map(describeUnapproved)
       .join(";");
     if (unapproved !== "") {
-      return fail(
-        "approvals-at-head",
+      return failed(
         `not-ready: not every approving reviewer's latest round is an APPROVE (CON-32b): ${unapproved}`,
       );
     }
     // Unreachable in practice -- the two predicates share their per-approver
     // test -- but a disagreement must degrade to the plain message, never to an
     // empty one that names nobody.
-    return fail(
-      "approvals-at-head",
+    return failed(
       `not-ready: not every approving reviewer's latest round is an APPROVE (CON-32b: ${approversCsv})`,
     );
+  };
+
+  if (!parsedChecks.ok) {
+    // The review-check half of an owed round and the carve-out are both read
+    // off the rollup, so with the rollup unreadable neither can be judged. Row 2
+    // already carries the parse error; these three rows name it rather than
+    // guess a pass or manufacture a second failure.
+    const missing =
+      "the check rollup could not be read (row 2 carries the parse error), so neither a " +
+      "reviewer's review check nor CON-30's carve-out can be read";
+    stalledRow = unknown(missing);
+    owedRow = unknown(missing);
+    approvalsRow = unknown(missing);
+  } else if (!headKnown) {
+    // BEFORE the carve-out, not after it (Copilot's review of zheref/nen#255):
+    // the carve-out needs no head of its own, so placed first it marked these
+    // rows ready on a head nobody read, and a verdict could come out `ready`
+    // with no judged commit at all. A readiness verdict is always ABOUT a
+    // commit; with none read, these rows are unknown and the verdict cannot
+    // be ready.
+    const missing =
+      "no head SHA was read for this pull request, so no review round can be placed at the " +
+      "current head";
+    stalledRow = unknown(missing);
+    owedRow = unknown(missing);
+    approvalsRow = unknown(missing);
+  } else if (carveOut) {
+    const contexts = identities.dependabotCarveOut?.satisfiedByContext.join(", ") ?? "";
+    const note =
+      `satisfied by dependabot_carve_out: the author matches the declared pattern and ` +
+      `every named context reported green (${contexts})`;
+    stalledRow = passed(note);
+    owedRow = passed(note);
+    approvalsRow = passed(approvalNote === null ? note : `${note}; ${approvalNote}`);
+  } else if (!parsedReviews.ok) {
+    // pending_rounds is handed `{review_requests, checks, reviews}` from the RAW
+    // state, and reviews are read first -- so an unreadable reviews array is the
+    // rounds-owed row's own failure (obligation (A): a ParseError is not-ready,
+    // loudly), exactly where the short-circuiting gate reported it.
+    owedRow = failed(unreadable(parsedReviews.error));
+    const missing = "the reviews could not be read (row 4 carries the parse error)";
+    stalledRow = unknown(missing);
+    approvalsRow = unknown(missing);
+  } else {
+    approvalsRow = approvalsFrom(parsedReviews.value);
+    const parsedRequests = parseReviewRequests(state["review_requests"]);
+    if (!parsedRequests.ok) {
+      owedRow = failed(unreadable(parsedRequests.error));
+      stalledRow = unknown("the review requests could not be read (row 4 carries the parse error)");
+    } else {
+      // The UN-excluded rollup, transcribed deliberately: `--exclude-run` is a
+      // CON-32(a) carve-out for the asking job's own check, and it was never
+      // scoped to change which reviewers owe a round.
+      const owed = pendingRounds(
+        identities,
+        {
+          reviewRequests: parsedRequests.value,
+          checks: parsedChecks.value,
+          reviews: parsedReviews.value,
+        },
+        head,
+        reviewers,
+        policy,
+        delivery,
+      );
+      owedRow =
+        owed.length === 0
+          ? passed()
+          : failed(
+              "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
+                owed.map((entry): string => describeOwedRound(identities, entry)).join(";"),
+            );
+      stalledRow = passed();
+      const requestedAt = state["stall_requested_at"];
+      const requestedAtText = typeof requestedAt === "string" ? requestedAt : "";
+      // PORT CHANGE (§3): `entry.reviewer === "copilot"` -> the reviewer the FILE
+      // marks `bounded_policy_exempt`. That flag already names, structurally, the
+      // reviewer nothing re-requests after a final push -- which is precisely the
+      // reviewer a PENDING request can go stale on.
+      const stalled = owed.find(
+        (entry): boolean =>
+          entry.reason === "review-requested-not-yet-posted" &&
+          identities.reviewer(entry.reviewer)?.boundedPolicyExempt === true,
+      );
+      if (stalled !== undefined && requestedAtText !== "") {
+        // Under BOTH policies a pending request older than the stall bound is
+        // reported as STALLED -- loud, never silently ready. `bounded` is not
+        // "ignore that reviewer": a pending request is the one footprint an
+        // un-posted round has, and it is honoured either way.
+        const age = minutesSince(requestedAtText, options.now);
+        // `>=`, NOT `>`. The bound is "STALL_MINUTES old OR MORE", so a request
+        // that is EXACTLY that old is already stalled. The distinction is one
+        // character and was invisible to both the port's first test suite and
+        // tests/pr_ready_gate.bats itself -- neither exercised the boundary, both
+        // sampled 90 minutes against a 30-minute bound and 10 minutes against the
+        // same -- so a deliberate `>=` -> `>` mutation replayed GREEN through the
+        // whole corpus. Found by sabotage, closed by the two boundary cases in
+        // ./ready.test.ts ("the stall bound fires AT the boundary").
+        if (age !== undefined && age >= options.stallMinutes) {
+          stalledRow = failed(
+            `not-ready: ${stalled.reviewer} round stalled — requested ${age} min ago and never posted ` +
+              "(CON-32b; re-request it, a user token is required)",
+          );
+        }
+      }
+    }
   }
 
-  // `${unresolved:-1}` -- an empty value is 1, i.e. not-ready. "Cannot confirm
-  // zero" is never "zero" at CON-32(d)'s boundary.
-  if ((unresolved === "" ? "1" : unresolved) !== "0") {
-    return fail(
-      "unresolved-threads",
-      `not-ready: ${unresolved} unresolved review thread(s) (CON-32d)`,
-    );
-  }
+  const conjuncts = table({
+    mergeable: mergeableRow,
+    "checks-green": checksRow,
+    "round-stalled": stalledRow,
+    "rounds-owed": owedRow,
+    "approvals-at-head": approvalsRow,
+    "unresolved-threads": threadsRow,
+  });
+  const failing = conjuncts
+    .filter((conjunct): boolean => conjunct.status === "failed")
+    .map((conjunct): ConjunctId => conjunct.id);
+  const firstFailed = conjuncts.find((conjunct): boolean => conjunct.status === "failed");
+  const firstUnknown = conjuncts.find((conjunct): boolean => conjunct.status === "unevaluated");
+  // READY IS EVERY ROW READY. An `unevaluated` row is never a pass, so a table
+  // with no failure but an unknown row in it is still not-ready -- with a line
+  // that names the row and the missing fact rather than borrowing another
+  // row's sentence.
+  const ready = firstFailed === undefined && firstUnknown === undefined;
+  const line = ready
+    ? "ready"
+    : firstFailed !== undefined
+      ? (firstFailed.reason ?? "not-ready")
+      : `not-ready: ${firstUnknown?.clause ?? "CON-32"} could not be judged — ${firstUnknown?.missing ?? "a fact was missing"}`;
 
   return {
-    ready: true,
-    line: "ready",
-    conjuncts: table(null, null, approvalNotes),
-    firstFailing: null,
-    context,
+    ready,
+    line,
+    conjuncts,
+    firstFailing: failing[0] ?? null,
+    failing,
+    context: {
+      reviewers,
+      approvers,
+      approvalPolicy: identities.approvalPolicy,
+      policy,
+      headSha: head === "null" ? "" : head,
+      deliveryPr: delivery,
+      // Fired only where it actually cleared rows: with no head read, the
+      // CON-32(b) rows are unknown and the carve-out cleared nothing.
+      dependabotCarveOut: carveOut && headKnown,
+      warnings: excludeCheckWarnings,
+    },
   };
 }

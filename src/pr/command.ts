@@ -82,7 +82,7 @@ function requirePr(context: CommandContext): number {
   return number;
 }
 
-const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <a,b>] [--gates <path>] [--token-env <VAR>]
+const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <a,b>] [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> --requirements-from <path>
 nen pr fetch --target <owner/name> --pr <n>
@@ -95,9 +95,16 @@ nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>]
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
 
 ready:
-  Report a pull request's CON-32 readiness: the gate's verdict, the first
-  failing conjunct, nothing else. Read-only -- it never labels, merges or
-  comments.
+  Report a pull request's CON-32 readiness: the gate's verdict and every
+  conjunct row (ready / FAILED / unknown, with why). Every row is evaluated;
+  the verdict is their conjunction and the first line quotes the FIRST failing
+  row. Read-only -- it never labels, merges or comments.
+  THE VERDICT CONCERNS GITHUB'S CURRENT HEAD for the pull request at the moment
+  it is read -- not your local commit. A push still in flight is judged as its
+  parent. Every output states the judged head, and warns (naming both SHAs)
+  when run inside a checkout of the PR's head branch whose tip differs.
+  --require-head <sha> pins it. Exit 0 ready; 1 not-ready or unevaluated;
+  2 usage; 8 head-mismatch (--require-head did not match; no verdict).
   <ref>                       <CODE>#<N> via the target repo's product codes,
                               or a bare <N> with --gh-repo. The '#' may be
                               omitted (AB123 = AB#123); the shorthand reads the
@@ -128,6 +135,11 @@ ready:
                               and --json report.
   --token-env <VAR>           Environment variable holding the token. Default
                               GH_TOKEN; never picked up ambiently.
+  --require-head <sha>        Judge ONLY this commit (7-40 hex digits, a prefix
+                              of GitHub's head, any case). If GitHub's head is
+                              anything else: exit 8, status head-mismatch, both
+                              SHAs printed, and NO verdict. The verb never
+                              waits or retries; polling is the caller's.
 
 staleness:
   A pull request is STALE at >=2 verified no-commit wakes AND >=60 minutes

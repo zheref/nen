@@ -68,12 +68,20 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { evaluateReady, CAVEATS, type Conjunct, type ReadyEvaluation } from "../gates/ready.js";
+import {
+  evaluateReady,
+  unknownTable,
+  CAVEATS,
+  type Conjunct,
+  type ConjunctId,
+  type ReadyEvaluation,
+} from "../gates/ready.js";
 import type { RoundPolicy } from "../gates/predicates.js";
 import { createClient, tokenFromEnv } from "../github/client.js";
 import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { SchemaError } from "../schema/errors.js";
+import { GIT, spawnRunner } from "../seam/exec.js";
 import { safePattern } from "../schema/pattern.js";
 import {
   parseGateIdentities,
@@ -101,6 +109,7 @@ export const PR_READY_FLAGS = {
     "exclude-check",
     "gates",
     "token-env",
+    "require-head",
   ],
   booleans: ["explain"],
 } as const;
@@ -181,6 +190,96 @@ export interface PrReadyDeps {
   readonly openSource: (
     tokenEnvVar: string,
   ) => { readonly ok: true; readonly source: PrStateSource } | { readonly ok: false; readonly message: string };
+  /**
+   * What the checkout at the `--repo` root (default cwd) has checked out, or
+   * `null` when it is not a git checkout, is detached, or git could not be
+   * read (zheref/nen#245). Injected for the same reason `now` is: a test must
+   * not depend on whichever branch the suite happens to run from. It only ever
+   * produces a WARNING -- never a verdict, never an exit code.
+   */
+  readonly localCheckout: (repoRoot: string) => LocalCheckout | null;
+}
+
+/** The local branch tip the head-mismatch warning compares against. */
+export interface LocalCheckout {
+  readonly branch: string;
+  readonly sha: string;
+  /** Every configured remote's URL, verbatim from `git config`. */
+  readonly remoteUrls: readonly string[];
+}
+
+/**
+ * Read the checkout's branch, tip and remote URLs through three read-only git
+ * calls. Any failure -- not a checkout, no git on PATH, a detached HEAD -- is
+ * `null`: the warning this feeds is a courtesy about the caller's OWN checkout,
+ * and failing to read that checkout must never turn into a verdict.
+ */
+export function readLocalCheckout(repoRoot: string): LocalCheckout | null {
+  const branch = spawnRunner(GIT, ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: repoRoot });
+  if (branch.spawnFailed || branch.code !== 0) return null;
+  const name = branch.stdout.trim();
+  // `HEAD` is what `--abbrev-ref` answers on a detached checkout: that is not a
+  // checkout OF a branch, so there is no branch tip to compare.
+  if (name === "" || name === "HEAD") return null;
+  const tip = spawnRunner(GIT, ["rev-parse", "HEAD"], { cwd: repoRoot });
+  if (tip.spawnFailed || tip.code !== 0) return null;
+  const remotes = spawnRunner(GIT, ["config", "--get-regexp", "^remote\\..*\\.url$"], { cwd: repoRoot });
+  const remoteUrls =
+    remotes.spawnFailed || remotes.code !== 0
+      ? []
+      : remotes.stdout
+          .split("\n")
+          .map((line): string => line.trim().split(/\s+/)[1] ?? "")
+          .filter((url): boolean => url !== "");
+  return { branch: name, sha: tip.stdout.trim(), remoteUrls };
+}
+
+// The hosts a remote may name for it to be THIS pull request's repository.
+// `pr ready` reads github.com and nothing else (its client is opened with no
+// `baseUrl`), so a remote on any other host names some other repository, and
+// `ssh.github.com` is GitHub's own SSH-over-443 endpoint.
+const GITHUB_HOSTS: ReadonlySet<string> = new Set(["github.com", "ssh.github.com"]);
+
+/**
+ * Whether a remote URL names `owner/repo` ON GITHUB. The URL is PARSED and its
+ * host validated -- never matched on its trailing slug alone, which would accept
+ * `https://github.com.evil/o/r` or a local path ending in `o/r` (Copilot's
+ * review of zheref/nen#255). Accepted forms: `https://`/`http://`/`ssh://`/
+ * `git://` URLs (credentials and a port allowed), and scp-style
+ * `[user@]github.com:o/r`. `.git` and trailing slashes are optional; the
+ * comparison is case-insensitive, as GitHub's own slugs are. A checkout with no
+ * remote naming the pull request's repository is not "a checkout of the PR's
+ * head branch", however its branch is named -- `main` exists in every
+ * repository.
+ */
+export function remoteNamesRepo(url: string, owner: string, repo: string): boolean {
+  const trimmed = url.trim();
+  let host: string;
+  let path: string;
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/.exec(trimmed);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return false;
+    }
+    if (!["https:", "http:", "ssh:", "git:"].includes(parsed.protocol)) return false;
+    host = parsed.hostname;
+    path = parsed.pathname;
+  } else if (scp !== null) {
+    host = scp[1] ?? "";
+    path = scp[2] ?? "";
+  } else {
+    return false;
+  }
+  if (!GITHUB_HOSTS.has(host.toLowerCase())) return false;
+  const slug = path
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "")
+    .toLowerCase();
+  return slug === `${owner}/${repo}`.toLowerCase();
 }
 
 export const defaultDeps: PrReadyDeps = {
@@ -196,6 +295,7 @@ export const defaultDeps: PrReadyDeps = {
     if (!token.ok) return { ok: false, message: token.message };
     return { ok: true, source: createClient(token.token) };
   },
+  localCheckout: readLocalCheckout,
 };
 
 // ── the frozen machine contract ─────────────────────────────────────────────
@@ -222,9 +322,14 @@ export const defaultDeps: PrReadyDeps = {
 //     a not-ready it is the FIRST failing conjunct's reason -- never a summary,
 //     never a list. A skill that paraphrases it has re-derived the verdict.
 //   * `conjuncts` is ALWAYS all six rows, ALWAYS in evaluation order, and
-//     `status` is `ready` | `failed` | `unevaluated`. A row AFTER the failing
-//     one is `unevaluated` and MUST NOT be rendered as passing: the gate
-//     short-circuits, so those rows are unknown.
+//     `status` is `ready` | `failed` | `unevaluated`. EVERY row is evaluated
+//     (zheref/nen#248); `unevaluated` now means "could not be computed" and the
+//     row's `missing` names the fact that was missing. It MUST NOT be rendered
+//     as passing. `failing` lists every failed row; `firstFailing` is kept.
+//   * `judgedHead` is the head commit the verdict was decided against --
+//     GitHub's head at the moment of the read, which is not necessarily the
+//     caller's local tip (zheref/nen#245). `localHead` says, when the verb ran
+//     inside a checkout of the pull request's head branch, what that tip is.
 //   * `caveats` is the fixed "what the gate does not decide" set. It travels
 //     with the verdict so every consumer states the same three things rather
 //     than each keeping its own copy to drift.
@@ -282,6 +387,31 @@ export interface ReadyReport {
   /** The line to quote verbatim. */
   readonly gateLine: string;
   readonly firstFailing: string | null;
+  /**
+   * EVERY failed row's id, in evaluation order (zheref/nen#248). Empty on a
+   * ready or an unevaluated report. Additive to v0.1; `firstFailing` is kept
+   * and is always `failing[0] ?? null`.
+   */
+  readonly failing: readonly ConjunctId[];
+  /**
+   * The head commit this verdict was decided against -- GitHub's head for the
+   * pull request at the moment it was read, `null` when it could not be read
+   * (zheref/nen#245). The same value as `meta.headSha`, promoted to the top
+   * level because it is what a caller compares against its own tip. Additive.
+   */
+  readonly judgedHead: string | null;
+  /**
+   * The caller's own checkout, when the verb ran inside a checkout of this pull
+   * request's head branch (the branch name matches AND a remote names the
+   * repository); `null` otherwise. `matches: false` is the in-flight-push case
+   * zheref/nen#245 is about, and it also puts a warning naming both SHAs in
+   * `meta.warnings`. Never a verdict and never an exit code. Additive.
+   */
+  readonly localHead: {
+    readonly branch: string;
+    readonly sha: string;
+    readonly matches: boolean;
+  } | null;
   readonly conjuncts: readonly Conjunct[];
   readonly caveats: typeof CAVEATS;
   /** What would fix an `unevaluated`; `null` for a decided verdict. */
@@ -300,6 +430,13 @@ export interface ReadyMeta {
   readonly approvalPolicy: "required" | "review-round-only";
   readonly roundPolicy: RoundPolicy;
   readonly excludeRun: string | null;
+  /**
+   * `--require-head <sha>` as given (zheref/nen#245) AND VERIFIED against
+   * GitHub's head, or `null`. Non-null means it MATCHED: a mismatch prints no
+   * verdict report, and an unevaluated report -- GitHub never read, so nothing
+   * compared -- carries `null` even when the flag was given.
+   */
+  readonly requiredHead: string | null;
   /**
    * `--exclude-check <name>` (name-based exclusion, zheref/nen#216), the names actually applied --
    * always the ARRAY, empty when the flag was not given, never `null`: unlike
@@ -751,15 +888,45 @@ function pad(text: string, width: number): string {
   return text.length >= width ? text : text + " ".repeat(width - text.length);
 }
 
+// `unevaluated` is RENDERED as `unknown` (zheref/nen#248): the JSON value is
+// kept so the v0.1 contract's closed set does not move, but the word a human
+// reads says what it now means -- this row could not be computed -- with the
+// missing fact on the line beneath it.
 const STATUS_LABEL: Readonly<Record<string, string>> = {
   ready: "ready",
   failed: "FAILED",
-  unevaluated: "unevaluated",
+  unevaluated: "unknown",
 };
+
+/**
+ * The judged-head line, printed UNCONDITIONALLY in the plain and `--explain`
+ * renderings (zheref/nen#245): a verdict is about one commit, and a reader who
+ * cannot see which one cannot tell a verdict on their push from a verdict on
+ * its parent.
+ */
+export function judgedHeadLine(report: ReadyReport): string {
+  return report.judgedHead === null
+    ? "  judged head: (unread) -- GitHub's head for this pull request could not be read, so no commit was judged"
+    : `  judged head: ${report.judgedHead} (GitHub's head for this pull request when it was read; the verdict is about this commit)`;
+}
+
+/** The local-tip warning, or `null` when there is nothing to warn about. */
+export function localHeadWarning(report: ReadyReport): string | null {
+  if (report.localHead === null || report.localHead.matches || report.judgedHead === null) {
+    return null;
+  }
+  return (
+    `head mismatch: GitHub's head for ${report.meta.repo}#${report.meta.pr} is ${report.judgedHead}, ` +
+    `but this checkout's '${report.localHead.branch}' is at ${report.localHead.sha}. The verdict is ` +
+    "about GitHub's head, not your local commit -- a push may still be in flight. Pass " +
+    "--require-head <sha> to refuse any other head."
+  );
+}
 
 export function renderExplain(report: ReadyReport): string[] {
   const lines: string[] = [];
   lines.push(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`);
+  lines.push(judgedHeadLine(report));
   lines.push("");
   const delivery =
     report.meta.deliveryPr === null ? "unknown" : report.meta.deliveryPr ? "yes" : "no";
@@ -768,6 +935,9 @@ export function renderExplain(report: ReadyReport): string[] {
       report.meta.reviewers.join(",") || "(none)"
     } · approvers ${report.meta.approvers.join(",") || "(none — the approve row is vacuous)"}`,
   );
+  if (report.meta.requiredHead !== null) {
+    lines.push(`  --require-head ${report.meta.requiredHead} matched GitHub's head`);
+  }
   lines.push(
     `  policy ${report.meta.roundPolicy} · delivery PR ${delivery} · identities ${
       report.meta.identities.path ?? "from --reviewers (reduced: no review checks, no carve-outs)"
@@ -789,9 +959,22 @@ export function renderExplain(report: ReadyReport): string[] {
   }
   for (const warning of report.meta.warnings) lines.push(`  warning: ${warning}`);
   lines.push("");
-  lines.push("  The gate is a CONJUNCTION, evaluated in this order, short-circuiting on the");
-  lines.push("  first failure. Everything after the failing row is genuinely unknown.");
+  lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
+  lines.push("  when every row is ready, and the line above is the first failing row's reason.");
+  lines.push("  An 'unknown' row could not be computed, names the missing fact, and is never a pass.");
   lines.push("");
+  if (report.failing.length > 0) {
+    const byId = new Map(report.conjuncts.map((c): [string, Conjunct] => [c.id, c]));
+    lines.push(
+      `  failing rows (${report.failing.length}): ${report.failing
+        .map((id): string => {
+          const row = byId.get(id);
+          return row === undefined ? id : `${row.order} ${row.clause} (${id})`;
+        })
+        .join(", ")}`,
+    );
+    lines.push("");
+  }
   for (const conjunct of report.conjuncts) {
     lines.push(
       `  ${conjunct.order}  ${pad(STATUS_LABEL[conjunct.status] ?? conjunct.status, 12)}${pad(
@@ -800,6 +983,7 @@ export function renderExplain(report: ReadyReport): string[] {
       )}${conjunct.title}`,
     );
     if (conjunct.reason !== null) lines.push(`        └ ${conjunct.reason}`);
+    if (conjunct.missing !== null) lines.push(`        └ unknown: ${conjunct.missing}`);
     // CON-30's "never a silent exemption" (zheref/nen#18). A CON-32(b) row that
     // passed because a review shim covered it, on a pull request nobody
     // reviewed, must say so on the row itself -- a reader who sees `ready`
@@ -822,6 +1006,27 @@ export function renderExplain(report: ReadyReport): string[] {
 // ── the verb ────────────────────────────────────────────────────────────────
 
 /**
+ * `--require-head <sha>` named a commit GitHub does not hold as this pull
+ * request's head (zheref/nen#245). NO VERDICT is printed for the head GitHub
+ * does hold: the caller asked about one commit, and an answer about another is
+ * the silent wrong result that issue records (a `ready` decided eight seconds
+ * before the push registered). EIGHT because it collides with nothing this CLI
+ * or its bootstrap already returns: 1/2 are the family's, 3/4/5 are `shu`'s and
+ * `wc`'s and `pr threads`', 3-7 are the bootstrap script's. It is not 1 because
+ * "not ready" is a verdict and this is the absence of one about the commit
+ * asked for; it is not 2 because the invocation was correct.
+ */
+export const EXIT_HEAD_MISMATCH = 8;
+
+/** The contract of the one document a head mismatch prints under `--json`. */
+export const HEAD_MISMATCH_CONTRACT = "nen.pr.ready.head-mismatch/v0.1";
+
+// `--require-head` takes a full or abbreviated commit SHA. Seven hex digits is
+// git's own default abbreviation and the shortest a caller would paste; forty is
+// a full SHA-1. Anything else is a typo, refused at exit 2 before GitHub is read.
+const SHA_PREFIX = /^[0-9a-f]{7,40}$/i;
+
+/**
  * Exit codes, and why `unevaluated` is not `ready`.
  *
  * 0 is READY and nothing else. `not-ready` and `unevaluated` both exit 1,
@@ -830,6 +1035,10 @@ export function renderExplain(report: ReadyReport): string[] {
  * never a pass", expressed as an exit code. The two are told apart by `verdict`
  * in `--json` and by the first line in every other mode; they are NOT told apart
  * by the status, so a caller cannot accidentally treat one as the other.
+ *
+ * 8 is `head-mismatch` (EXIT_HEAD_MISMATCH above): `--require-head` named a
+ * commit that is not GitHub's head for the pull request, and no verdict was
+ * decided. 2 is a usage error, as everywhere in this CLI.
  */
 export async function prReady(
   input: PrReadyInput,
@@ -889,11 +1098,19 @@ export async function prReady(
   // contract, unchanged).
   const approversFlag = input.values["approvers"];
   const approverNames = approversFlag === undefined ? reviewerNames : splitCsv(approversFlag);
+  const requiredHead = input.values["require-head"];
+  if (requiredHead !== undefined && !SHA_PREFIX.test(requiredHead)) {
+    io.err(
+      `${PROGRAM}: --require-head takes a commit SHA of 7 to 40 hex digits (got '${requiredHead}').`,
+    );
+    return 2;
+  }
 
   let ref: ResolvedRef;
   let identities: ResolvedIdentities;
+  let repoRoot: string;
   try {
-    const repoRoot = assertRepoRoot({ repoFlag: input.repoFlag });
+    repoRoot = assertRepoRoot({ repoFlag: input.repoFlag });
     ref = resolveRef(typedRef, input.values["gh-repo"], () => loadRepoRegistry(repoRoot));
     identities = resolveIdentities(
       repoRoot,
@@ -1004,6 +1221,57 @@ export async function prReady(
     );
   }
 
+  // ── --require-head: the head the caller asked about, or no verdict ─────────
+  //
+  // zheref/nen#245. Compared BEFORE the gate runs, against the head the SAME
+  // read produced -- never a second read, which would reopen the very window
+  // the flag closes. A prefix match on the lower-cased SHA, because a caller
+  // pastes `git rev-parse --short HEAD` as often as the full form. An EMPTY
+  // head (GitHub answered none) matches nothing: "could not confirm" is not
+  // "confirmed".
+  const githubHead = typeof fetched.state["head_sha"] === "string" ? fetched.state["head_sha"] : "";
+  if (
+    requiredHead !== undefined &&
+    (githubHead === "" || !githubHead.toLowerCase().startsWith(requiredHead.toLowerCase()))
+  ) {
+    return emitHeadMismatch(io, json, {
+      contract: HEAD_MISMATCH_CONTRACT,
+      status: "head-mismatch",
+      ref: ref.typed,
+      repo: `${ref.owner}/${ref.repo}`,
+      pr: ref.number,
+      requiredHead,
+      githubHead: githubHead === "" ? null : githubHead,
+      message:
+        `--require-head ${requiredHead} does not match GitHub's head for ${ref.owner}/${ref.repo}#${ref.number}, ` +
+        `which is ${githubHead === "" ? "(unread)" : githubHead}. No verdict was decided: the question was about ` +
+        "a commit GitHub does not hold as this pull request's head. If a push is in flight, ask again once it registers.",
+      evaluatedAt: deps.now(),
+      generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
+    });
+  }
+
+  // ── the local tip, for the warning only ──────────────────────────────────
+  //
+  // zheref/nen#245's second half: without the flag, a caller standing in a
+  // checkout of the pull request's head branch whose tip is not GitHub's head
+  // is about to read a verdict on a commit it did not mean. The checkout counts
+  // only when its branch IS the pull request's head branch AND one of its
+  // remotes names the repository -- a branch name alone (`main`, `develop`)
+  // exists in every repository. A warning, never a verdict or an exit code.
+  const headRef = typeof fetched.state["head_ref"] === "string" ? fetched.state["head_ref"] : "";
+  const local = headRef === "" || githubHead === "" ? null : deps.localCheckout(repoRoot);
+  const localHead =
+    local !== null &&
+    local.branch === headRef &&
+    local.remoteUrls.some((url): boolean => remoteNamesRepo(url, ref.owner, ref.repo))
+      ? {
+          branch: local.branch,
+          sha: local.sha,
+          matches: local.sha.toLowerCase() === githubHead.toLowerCase(),
+        }
+      : null;
+
   const evaluation: ReadyEvaluation = evaluateReady(identities.identities, fetched.state, {
     roundPolicyDefault: policy,
     stallMinutes,
@@ -1016,6 +1284,9 @@ export async function prReady(
     verdict: evaluation.ready ? "ready" : "not-ready",
     gateLine: evaluation.line,
     firstFailing: evaluation.firstFailing,
+    failing: evaluation.failing,
+    judgedHead: evaluation.context.headSha === "" ? null : evaluation.context.headSha,
+    localHead,
     conjuncts: evaluation.conjuncts,
     caveats: CAVEATS,
     remedy: null,
@@ -1029,6 +1300,7 @@ export async function prReady(
       approvalPolicy: evaluation.context.approvalPolicy,
       roundPolicy: evaluation.context.policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
+      requiredHead: requiredHead ?? null,
       excludedChecks: excludeCheckNames,
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
@@ -1038,7 +1310,49 @@ export async function prReady(
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
     },
   };
-  return emit(io, json, explain, report);
+  // The mismatch warning rides in `meta.warnings` so it reaches EVERY output
+  // mode -- `--json` included -- through the one channel each already renders.
+  const mismatch = localHeadWarning(report);
+  return emit(
+    io,
+    json,
+    explain,
+    mismatch === null ? report : { ...report, meta: { ...report.meta, warnings: [...report.meta.warnings, mismatch] } },
+  );
+}
+
+/** The document `--require-head` prints on a mismatch, in place of a verdict. */
+export interface HeadMismatchReport {
+  readonly contract: typeof HEAD_MISMATCH_CONTRACT;
+  readonly status: "head-mismatch";
+  readonly ref: string;
+  readonly repo: string;
+  readonly pr: number;
+  readonly requiredHead: string;
+  /** GitHub's head when it was read; `null` when GitHub answered none. */
+  readonly githubHead: string | null;
+  readonly message: string;
+  readonly evaluatedAt: string;
+  readonly generator: ReadyMeta["generator"];
+}
+
+/**
+ * Print a head mismatch and return EXIT_HEAD_MISMATCH. Under `--json` it is its
+ * OWN document with its OWN contract string -- deliberately NOT a
+ * `nen.pr.ready/v0.1` report with an invented verdict, because that contract's
+ * `verdict` is a closed set of three and a consumer that meets anything else
+ * must stop. A consumer that does not know this contract stops too, which is
+ * the right reaction to "no verdict". In the other modes it is one line on
+ * stdout naming both SHAs, and nothing that could be quoted as a verdict.
+ */
+function emitHeadMismatch(io: Io, json: boolean, report: HeadMismatchReport): number {
+  if (json) {
+    io.out(JSON.stringify(report, null, 2));
+  } else {
+    io.out(`${report.repo}#${report.pr}: head-mismatch: required ${report.requiredHead}, GitHub's head is ${report.githubHead ?? "(unread)"}`);
+    io.err(`${PROGRAM}: ${report.message}`);
+  }
+  return EXIT_HEAD_MISMATCH;
 }
 
 function splitCsv(csv: string): string[] {
@@ -1068,15 +1382,14 @@ function unevaluatedReport(
     // `unevaluated` rather than something that could be mistaken for a verdict.
     gateLine: `unevaluated: ${reason}`,
     firstFailing: null,
+    failing: [],
+    judgedHead: null,
+    localHead: null,
     // NOT ONE ROW IS `ready`. The gate did not run; nothing about this pull
     // request was established, and a table with green rows in it would be a
-    // claim about evidence nobody read.
-    conjuncts: evaluateReady(identities.identities, {}, {
-      roundPolicyDefault: policy,
-      stallMinutes,
-      now,
-      excludeCheckNames,
-    }).conjuncts.map((conjunct): Conjunct => ({ ...conjunct, status: "unevaluated", reason: null })),
+    // claim about evidence nobody read. Every row names WHY (zheref/nen#248):
+    // the one missing fact is the whole state.
+    conjuncts: unknownTable(`GitHub could not be read (${reason})`),
     caveats: CAVEATS,
     remedy,
     meta: {
@@ -1095,6 +1408,11 @@ function unevaluatedReport(
       approvalPolicy: identities.identities.approvalPolicy,
       roundPolicy: policy,
       excludeRun: excludeRun === "" ? null : excludeRun,
+      // ALWAYS null here, whatever `--require-head` said (Copilot's review of
+      // zheref/nen#255): GitHub was never read, so the head was never compared,
+      // and a non-null value would read as "verified" when it was only
+      // requested. `requiredHead` means "given AND matched", on every report.
+      requiredHead: null,
       excludedChecks: excludeCheckNames,
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
@@ -1119,8 +1437,18 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
   } else {
     // The default is the SHELL GATE'S OWN LINE, prefixed with the repository the
     // ref resolved to. Quotable as-is, which is what SKILL.md § 3 asks a caller
-    // to do with it.
+    // to do with it -- and still the FIRST line, unchanged, so a caller that
+    // reads one line reads exactly what it read before. Beneath it: the judged
+    // head, unconditionally (zheref/nen#245); every OTHER failing row, so a
+    // first failure cannot hide the rest (zheref/nen#248); and every warning,
+    // the head-mismatch one included.
     io.out(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`);
+    io.out(judgedHeadLine(report));
+    for (const id of report.failing.slice(1)) {
+      const row = report.conjuncts.find((conjunct): boolean => conjunct.id === id);
+      if (row !== undefined) io.out(`  also FAILED ${row.clause}: ${row.reason ?? row.title}`);
+    }
+    for (const warning of report.meta.warnings) io.out(`  warning: ${warning}`);
   }
   if (report.verdict === "unevaluated" && !json) {
     io.err(
