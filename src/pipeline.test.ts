@@ -70,6 +70,24 @@ const ARTIFACTS = [
   "nen-windows-x64.exe",
 ] as const;
 
+function publishJob(): Record<string, YamlValue> {
+  const jobs = yaml(RELEASE)["jobs"] as Record<string, YamlValue>;
+  return jobs["publish"] as Record<string, YamlValue>;
+}
+
+// The attach steps, in file order: every publish step whose body is the one
+// shared helper, `bash -c "$ATTACH_ONE" attach-one '<asset>'`.
+const ATTACH_RUN = /^bash -c "\$ATTACH_ONE" attach-one '([^']+)'$/;
+
+function attachedAsset(step: Record<string, YamlValue>): string {
+  return ATTACH_RUN.exec(String(step["run"] ?? "").trim())?.[1] ?? "";
+}
+
+function attachSteps(): Record<string, YamlValue>[] {
+  const steps = publishJob()["steps"] as Record<string, YamlValue>[];
+  return steps.filter((step) => attachedAsset(step) !== "");
+}
+
 describe("the published filename contract", () => {
   it("is spelled identically by package.json's build scripts", () => {
     const pkg: unknown = JSON.parse(read("package.json"));
@@ -154,8 +172,25 @@ describe("the release pipeline never authors a release decision", () => {
   });
 
   it("uploads only when the probe found a release", () => {
-    expect(source).toMatch(/if: steps\.release_probe\.outcome == 'success'/);
-    expect(source).toMatch(/if: steps\.release_probe\.outcome != 'success'/);
+    for (const step of attachSteps()) {
+      expect(String(step["if"]), String(step["name"])).toContain("steps.release_probe.outputs.exists == 'true'");
+    }
+    expect(source).toMatch(/if: steps\.release_probe\.outputs\.exists == 'false'/);
+  });
+
+  it("tells 'no release' apart from a probe that could not answer", () => {
+    // `continue-on-error` used to fold a timeout or a 5xx into "no release",
+    // which skipped every attach step and left the job GREEN with a warning.
+    // Only gh's own `release not found` is the green no-release world; any
+    // other probe failure is red (a Copilot finding on zheref/nen#252).
+    const steps = publishJob()["steps"] as Record<string, YamlValue>[];
+    const probe = steps.find((step) => step["id"] === "release_probe");
+    expect(probe?.["continue-on-error"]).toBeUndefined();
+    const run = String(probe?.["run"]);
+    expect(run).toContain('echo "exists=true" >> "$GITHUB_OUTPUT"');
+    expect(run).toContain('elif [ "${out}" = "release not found" ]; then');
+    expect(run).toContain('echo "exists=false" >> "$GITHUB_OUTPUT"');
+    expect(run).toMatch(/::error title=Could not tell whether \$\{TAG\} has a release::[\s\S]*exit 1/);
   });
 
   it("builds the manifest from a literal list, never a glob", () => {
@@ -167,24 +202,100 @@ describe("the release pipeline never authors a release decision", () => {
     expect(source).toMatch(/diff -u/);
   });
 
-  it("UPLOADS the manifest, in the same invocation as the binaries", () => {
-    // Deleting `'SHA256SUMS'` from the upload list left every other test green:
+  it("UPLOADS the manifest -- one step per asset, the three binaries first and SHA256SUMS LAST (zheref/nen#228)", () => {
+    // Deleting the manifest from the attach steps left every other test green:
     // the manifest was still written, still checked for integrity and still
     // checked for completeness -- and then simply not attached, so a consumer
     // would find three binaries and nothing to verify them against. Every
     // fail-closed property of bootstrap/nen.sh rests on that fourth asset
     // existing; without it, "refuse an unverifiable download" becomes "refuse
     // every download", for every consumer, silently at release time.
-    expect(source).toMatch(/gh release upload[\s\S]*?'SHA256SUMS'/);
+    //
+    // And it goes LAST, as its own step: the old single four-file invocation
+    // stalled to the job budget on v0.11.0 and v0.12.0 and left releases with
+    // SHA256SUMS and no binaries -- checksums advertised for absent files.
+    const steps = attachSteps();
+    expect(steps.map((step) => attachedAsset(step))).toEqual([...ARTIFACTS, "SHA256SUMS"]);
 
-    // In ONE invocation, so a release can never advertise checksums for files
-    // that are not attached yet, or binaries with no manifest beside them.
-    const upload = /gh release upload "\$TAG" \\\n([\s\S]*?)--repo/.exec(source)?.[1] ?? "";
-    expect(upload).not.toBe("");
-    for (const artifact of ARTIFACTS) {
-      expect(upload, artifact).toContain(`'${artifact}'`);
+    // The manifest step is gated on EVERY binary step having succeeded.
+    const manifest = steps[steps.length - 1]!;
+    for (const id of steps.slice(0, -1).map((step) => String(step["id"]))) {
+      expect(String(manifest["if"]), id).toContain(`steps.${id}.outcome == 'success'`);
     }
-    expect(upload).toContain("'SHA256SUMS'");
+    // The binaries each run whatever happened to the one before them, so one
+    // stalled file does not hide the state of the other two; none of them
+    // runs on a cancelled job.
+    for (const step of steps) {
+      expect(String(step["if"]), String(step["name"])).toContain("!cancelled()");
+    }
+  });
+
+  it("bounds every asset by its own step timeout, and every step under the job budget, so a stall ends RED not cancelled", () => {
+    // Per-asset `timeout-minutes` is what makes the run list name WHICH asset
+    // stalled. And the SUM of every step's bound stays under the job's, so the
+    // job killer can never be the thing that ends a run -- a cancelled job is
+    // what v0.11.0 and v0.12.0 got, with nothing to say which file stalled.
+    const publish = publishJob();
+    const job = Number(publish["timeout-minutes"]);
+    const steps = publish["steps"] as Record<string, YamlValue>[];
+    let sum = 0;
+    for (const step of steps) {
+      const bound = Number(step["timeout-minutes"]);
+      expect(Number.isInteger(bound) && bound > 0, String(step["name"])).toBe(true);
+      sum += bound;
+    }
+    expect(sum).toBeLessThan(job);
+    for (const step of attachSteps()) {
+      expect(Number(step["timeout-minutes"]) * 4, String(step["name"])).toBeLessThanOrEqual(job);
+    }
+  });
+
+  it("retries each asset a bounded, declared number of times, logging every attempt, idempotently", () => {
+    const env = publishJob()["env"] as Record<string, YamlValue>;
+    const attempts = Number(env["ATTACH_ATTEMPTS"]);
+    const seconds = Number(env["ATTACH_ATTEMPT_SECONDS"]);
+    expect(attempts).toBeGreaterThan(1);
+    expect(seconds).toBeGreaterThan(0);
+    // The declared worst case -- each attempt's two 20s read-backs, the upload
+    // plus its 10s kill grace, and the 15s x n backoff -- fits inside the step
+    // bound, so the helper rather than the step killer reports an exhausted
+    // asset.
+    const backoff = (15 * attempts * (attempts - 1)) / 2;
+    const worst = attempts * (20 + seconds + 10 + 20) + backoff;
+    for (const step of attachSteps()) {
+      expect(worst, String(step["name"])).toBeLessThan(Number(step["timeout-minutes"]) * 60);
+    }
+    const helper = String(env["ATTACH_ONE"]);
+    expect(helper).toContain('for attempt in $(seq 1 "${ATTACH_ATTEMPTS}")');
+    expect(helper).toMatch(/timeout --kill-after=10 "\$\{ATTACH_ATTEMPT_SECONDS\}"/);
+    expect(helper).toMatch(/gh release upload "\$\{TAG\}" "\$\{asset\}" --repo "\$\{REPO\}" --clobber/);
+    expect(helper).toContain("::group::${asset} — attempt ${attempt} of ${ATTACH_ATTEMPTS}");
+    // An attempt counts only when the release READS BACK the asset at its size.
+    expect(helper).toContain('readback | grep -qxF "${want}"');
+    expect(helper).toMatch(/::error title=\$\{asset\} not attached/);
+    expect(helper).toMatch(/exit 1\s*$/);
+  });
+
+  it("ends with a verdict that names every missing asset and goes red", () => {
+    const env = publishJob()["env"] as Record<string, YamlValue>;
+    // The verdict's expectations, in attach order: the filename contract plus
+    // the manifest, last.
+    expect(String(env["RELEASE_ASSETS"]).split(" ")).toEqual([...ARTIFACTS, "SHA256SUMS"]);
+    const steps = publishJob()["steps"] as Record<string, YamlValue>[];
+    const verdict = steps.find((step) => String(step["name"]).startsWith("Every asset is attached"));
+    expect(verdict).toBeDefined();
+    expect(String(verdict?.["if"])).toContain("!cancelled()");
+    const run = String(verdict?.["run"]);
+    expect(run).toContain("for asset in $RELEASE_ASSETS");
+    expect(run).toContain("::error title=Missing release assets for ${TAG}::");
+    // Shell-quoted, because it is offered as the exact line to paste.
+    expect(run).toContain(`printf -v line '%q ' gh release upload "\${TAG}" "\${missing[@]}" --repo "\${REPO}" --clobber`);
+    expect(run).toContain("$GITHUB_STEP_SUMMARY");
+    expect(run).toMatch(/exit 1/);
+    // After every attach step.
+    const names = steps.map((step) => String(step["name"]));
+    const last = Math.max(...attachSteps().map((step) => names.indexOf(String(step["name"]))));
+    expect(names.indexOf(String(verdict?.["name"]))).toBeGreaterThan(last);
   });
 
   it("installs bun from the VERSION-PINNED installer, not a floating one", () => {

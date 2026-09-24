@@ -152,7 +152,8 @@ describe("GitHub Actions runner policy", () => {
     const publishNames = names(publish);
     const verify = publishNames.indexOf("Verify the received set is intact and COMPLETE");
     const smoke = publishNames.indexOf("The linux binary answers --version");
-    const attach = publishNames.indexOf("Attach the four assets to the release");
+    // The first of the per-asset attach steps (zheref/nen#228).
+    const attach = publishNames.indexOf("Attach nen-darwin-arm64 (bounded, retried)");
     expect(verify).toBeGreaterThanOrEqual(0);
     expect(smoke).toBeGreaterThan(verify);
     expect(attach).toBeGreaterThan(smoke);
