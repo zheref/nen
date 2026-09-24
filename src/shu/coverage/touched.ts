@@ -136,3 +136,48 @@ export function filterTouched(
     unmatched: touchedFiles.filter((file): boolean => !matchedFiles.has(file)),
   };
 }
+
+/** One declared report's rows, and the grain they are matched at. */
+export interface TouchedGroup {
+  readonly rows: readonly CoverageTarget[];
+  readonly grain: CoverageGrain;
+}
+
+/**
+ * `filterTouched` over SEVERAL reports at once -- one per declared artifact
+ * nen read (zheref/nen#236 acceptance 3) -- each matched at its OWN grain.
+ *
+ * A TOUCHED FILE IS MATCHED IF ANY REPORT CLAIMS IT: a workspace's three
+ * members write three reports, and a file under `apps/web` is only ever in
+ * `apps/web`'s. `matched` and `unmatched` still partition the ONE touched list,
+ * in git's order, exactly as they do for a single report.
+ *
+ * A ROW NAMED BY TWO REPORTS IS KEPT ONCE -- THE FIRST-DECLARED REPORT'S. Two
+ * runs measuring the same file measured it twice, and neither the sum nor the
+ * union of their counts is a number either tool reported; the declaration's
+ * own order is the one tie-break the repository chose rather than nen.
+ */
+export function filterTouchedGroups(
+  groups: readonly TouchedGroup[],
+  touchedFiles: readonly string[],
+  threshold: number | null,
+): TouchedFilter {
+  const matchedFiles = new Set<string>();
+  const seen = new Set<string>();
+  const kept: CoverageTarget[] = [];
+  for (const group of groups) {
+    const filter = filterTouched(group.rows, touchedFiles, group.grain, threshold);
+    for (const file of filter.matched) matchedFiles.add(file);
+    for (const row of filter.rows) {
+      const key = toPosix(row.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      kept.push(row);
+    }
+  }
+  return {
+    rows: kept,
+    matched: touchedFiles.filter((file): boolean => matchedFiles.has(file)),
+    unmatched: touchedFiles.filter((file): boolean => !matchedFiles.has(file)),
+  };
+}

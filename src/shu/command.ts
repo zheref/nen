@@ -198,7 +198,8 @@ verbs:
               the first path under this verb's 'artifacts' whose format nen
               reads; a lane that names none is exit 1 saying so.
               --touched --base <ref> narrows the rows to the files a change
-              touched, per --threshold and --touched below.
+              touched, reading EVERY such artifact and resolving each one's
+              paths against its own root, per --touched below.
   test-report Run the lane's declared 'test', then PARSE the results file
               that run produced: a row per test, and the four counts. The
               report is the first path under the TEST verb's 'artifacts' nen
@@ -454,8 +455,23 @@ flags:
                    is ALSO reported per row, against that row's own counts.
   --touched        'coverage' only. Narrow 'targets' to the rows a change
                    touched: 'git diff --name-only <base>...HEAD', run AFTER
-                   the coverage tool's own run and parse, against the
-                   REPOSITORY ROOT. A file-grain report (istanbul-summary,
+                   the coverage tool's own run and parse, with the
+                   repository root as its cwd, so every path it names is
+                   repo-relative. EVERY declared artifact whose format nen
+                   reads is parsed and merged here (not only the first), and
+                   each report's RELATIVE row names are resolved against that
+                   report's OWN ROOT before the join, so a workspace member's
+                   'SF:src/a.ts' becomes 'packages/core/src/a.ts' (zheref/
+                   nen#236). The root is chosen per report from, in order:
+                   the artifact's directory minus a trailing 'coverage/'
+                   ('artifact'), the lane cwd ('lane-cwd'), the repository
+                   root ('repo-root') -- and the candidate under which MORE of
+                   the report's paths exist on disk wins, ties to the earlier.
+                   Absolute row names are never rebased; package-grain rows
+                   are never rebased. A declared report that cannot be read is
+                   named and is exit 1. 'total', 'report' and threshold.met
+                   stay the FIRST report's, exactly as without --touched.
+                   A file-grain report (istanbul-summary,
                    lcov) matches a touched path by equality; a package-grain
                    one (cobertura, jacoco) matches when a touched path
                    contains the package's own segments, in order, with the
@@ -465,9 +481,17 @@ flags:
                    the target row, because "this whole app was touched" is
                    true of nearly every diff. REQUIRES --base; given without
                    it, exit 2. --json's 'touched' key carries
-                   { base, files, matched, unmatched } -- 'files' is
-                   everything git named, 'matched' and 'unmatched' partition
-                   it by whether a row claimed it. WHEN --threshold IS NOT
+                   { base, files, matched, unmatched, artifacts } -- 'files'
+                   is everything git named, 'matched' and 'unmatched' partition
+                   it by whether a row claimed it, and 'artifacts' is one
+                   { path, format, root, basis, rows, onDisk, error } per
+                   report read, 'root' being the repo-relative directory its
+                   paths were resolved against ('.' for the repository root).
+                   ZERO MATCHED AGAINST A NON-EMPTY TOUCHED SET IS EXIT 6, not
+                   0: the report parsed and the diff named files, and nothing
+                   joined -- stderr names the path shape the rows had and the
+                   one git uses. An EMPTY touched set is still 0. WHEN
+                   --threshold IS NOT
                    GIVEN, nen also loads <repo>/nen/workflow.json's
                    'coverage.{minimum,recommended,ideal}' -- the same loader
                    'nen schema check' validates -- and reports each row's own
@@ -712,8 +736,9 @@ flags:
                    'dryRun' boolean here either. The EXECUTOR's own report for
                    this verb is rendered to stderr under --json, so stdout stays
                    exactly one document and nothing it produced is lost.
-                   'touched' is { base, files, matched, unmatched } under
-                   --touched, or null without it; 'targets' is then narrowed to
+                   'touched' is { base, files, matched, unmatched, artifacts }
+                   under --touched, or null without it; 'targets' is then
+                   narrowed to
                    the matched rows, and each carries its own 'met' when
                    --threshold was also given -- reported per file, on top of
                    the aggregate 'threshold.met' above.
@@ -851,7 +876,16 @@ exit codes:
      install form is permanently red on a machine nen can never fix, and the
      question "is this host ready" is what the CHECK and its 5 are for
 
-  Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91).
+  6  'coverage --touched' only: the run succeeded and its reports parsed, the
+     diff named at least one file, and NOT ONE of them joined to a report row
+     -- nothing was measured. Not 0, which read as "measured and fine" to a
+     caller checking $? (zheref/nen#236); not 1, which is a failed tool or an
+     unreadable report. stderr names the path shape the rows carried and the
+     repo-relative shape git names, and --json's touched.artifacts[].root says
+     which root each report was resolved against. An empty touched set is 0.
+
+  Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91); 6 is
+  'coverage' --touched's own (zheref/nen#236).
 
 placeholders:
   Only the reference pack's own tokens are refused -- {pm}, {scheme},

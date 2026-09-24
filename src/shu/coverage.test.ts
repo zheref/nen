@@ -23,7 +23,12 @@ import { runFamily } from "../index.js";
 import { classifyCommand } from "../parse/izanami.js";
 import { loadProfilesPack } from "../profiles/pack.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
-import { SHU_COVERAGE_REPO, SHU_REPO } from "../schema/fixtures/paths.js";
+import {
+  SHU_COVERAGE_REPO,
+  SHU_COVERAGE_SINGLE,
+  SHU_COVERAGE_WORKSPACE,
+  SHU_REPO,
+} from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { coverageAdvisories } from "./coverage-defaults.js";
 import { parseThreshold, relativiseName } from "./coverage.js";
@@ -95,6 +100,15 @@ interface TouchedDoc {
   readonly files: readonly string[];
   readonly matched: readonly string[];
   readonly unmatched: readonly string[];
+  readonly artifacts?: readonly {
+    readonly path: string;
+    readonly format: string | null;
+    readonly root: string | null;
+    readonly basis: string | null;
+    readonly rows: number;
+    readonly onDisk: number | null;
+    readonly error: string | null;
+  }[];
 }
 
 interface LadderDoc {
@@ -752,6 +766,20 @@ describe("--touched --base <ref>", () => {
       files: ["packages/core/src/index.ts", "README.md"],
       matched: ["packages/core/src/index.ts"],
       unmatched: ["README.md"],
+      // The committed fixture is the SINGLE-PACKAGE shape (zheref/nen#236
+      // acceptance 6): artifact under `coverage/`, lane cwd `.`, so every
+      // candidate root is the repository root and the rows are untouched.
+      artifacts: [
+        {
+          path: "coverage/coverage-summary.json",
+          format: "istanbul-summary",
+          root: ".",
+          basis: "artifact",
+          rows: 2,
+          onDisk: 0,
+          error: null,
+        },
+      ],
     });
   });
 
@@ -843,7 +871,14 @@ describe("--touched --base <ref>", () => {
     const parsed = document(result);
     expect(parsed.total).toBeNull();
     expect(parsed.targets).toEqual([]);
-    expect(parsed.touched).toEqual({ base: "main", files: ["a.ts"], matched: [], unmatched: ["a.ts"] });
+    expect(parsed.touched).toEqual({
+      base: "main",
+      files: ["a.ts"],
+      matched: [],
+      unmatched: ["a.ts"],
+      artifacts: [],
+    });
+    // NOTHING WAS PARSED, so a zero match here is not the unjoined refusal.
   });
 
   it("a run that failed still reports the touched set as entirely unmatched, and stays exit 1", async () => {
@@ -931,6 +966,312 @@ describe("--touched --base <ref>", () => {
       const parsed = document(result);
       expect(parsed.targets.map((row): string => row.name)).toEqual(["Core/Store.swift"]);
       expect(parsed.touched?.matched).toEqual(["Core/Store.swift"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── zheref/nen#236: each report against its OWN root ────────────────────────
+
+describe("--touched resolves each declared report against its own root (zheref/nen#236)", () => {
+  const diff = (base: string): string => `git diff --name-only ${base}...HEAD`;
+  const WORKSPACE_RUN = "pnpm -r test:coverage";
+  const SINGLE_RUN = "npm run test:coverage";
+
+  it("a two-package workspace: BOTH package-relative reports join, rows are repo-relative", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      repo: SHU_COVERAGE_WORKSPACE,
+      script: [
+        ok(WORKSPACE_RUN),
+        {
+          match: diff("main"),
+          result: { code: 0, stdout: ".env.example\napps/web/src/page.tsx\npackages/a/src/sum.ts\n" },
+        },
+      ],
+    });
+    expect(result.code).toBe(0);
+    const parsed = document(result);
+    // Acceptance 1: the matched ROWS name repo-relative paths, never `src/sum.ts`.
+    expect(parsed.targets.map((row): string => row.name)).toEqual([
+      "packages/a/src/sum.ts",
+      "apps/web/src/page.tsx",
+    ]);
+    expect(parsed.touched?.matched).toEqual(["apps/web/src/page.tsx", "packages/a/src/sum.ts"]);
+    expect(parsed.touched?.unmatched).toEqual([".env.example"]);
+    // Acceptance 2, 3 and 5: every report read, each with the root it was
+    // resolved against -- auditable without re-deriving it.
+    expect(parsed.touched?.artifacts).toEqual([
+      {
+        path: "packages/a/coverage/lcov.info",
+        format: "lcov",
+        root: "packages/a",
+        basis: "artifact",
+        rows: 1,
+        onDisk: 1,
+        error: null,
+      },
+      {
+        path: "apps/web/coverage/lcov.info",
+        format: "lcov",
+        root: "apps/web",
+        basis: "artifact",
+        rows: 1,
+        onDisk: 1,
+        error: null,
+      },
+    ]);
+    // The whole-report fields stay the FIRST report's: --threshold's aggregate
+    // and `report` mean what they meant before this change.
+    expect(parsed.report).toEqual({ format: "lcov", path: "packages/a/coverage/lcov.info" });
+    expect(parsed.total?.lines).toEqual({ covered: 3, total: 4, percent: 75 });
+  });
+
+  it("the text rendering prints one 'from:' line per report, root and basis included", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main"], {
+      repo: SHU_COVERAGE_WORKSPACE,
+      script: [ok(WORKSPACE_RUN), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\n" } }],
+    });
+    expect(result.code).toBe(0);
+    const text = result.out.join("\n");
+    expect(text).toContain(
+      "from: packages/a/coverage/lcov.info (lcov) -- 1 row, root packages/a [artifact], 1 on disk",
+    );
+    expect(text).toContain("from: apps/web/coverage/lcov.info (lcov) -- 1 row, root apps/web [artifact], 1 on disk");
+    expect(text).toMatch(/1 file \(1 matched, 0 unmatched\)/);
+  });
+
+  it("0 matched against a NON-EMPTY touched set is exit 6, naming both path shapes -- never 0", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      repo: SHU_COVERAGE_WORKSPACE,
+      script: [ok(WORKSPACE_RUN), { match: diff("main"), result: { code: 0, stdout: ".env.example\nREADME.md\n" } }],
+    });
+    expect(result.code).toBe(6);
+    const parsed = document(result);
+    expect(parsed.exitCode).toBe(6);
+    expect(parsed.touched?.matched).toEqual([]);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/--touched joined 0 of 2 touched files to the 2 rows nen read/);
+    expect(err).toContain("SEEN in the report rows: 'packages/a/src/sum.ts', 'apps/web/src/page.tsx'");
+    expect(err).toContain("EXPECTED, as git names the touched files (repo-relative): '.env.example', 'README.md'");
+    expect(err).toContain("packages/a/coverage/lcov.info -> root packages/a");
+  });
+
+  it("the ISSUE's own shape, one root off: a report nen cannot root still says so at 6, not 0", async () => {
+    // A report written package-relative but declared somewhere that gives nen
+    // no `coverage/` to strip, on a lane rooted at the repository, whose files
+    // are not on disk: every candidate scores 0, the first one wins the tie,
+    // and the join finds nothing. That is the exact 0-of-N zheref/nen#236 saw
+    // at exit 0.
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["out/lcov.info"] } } },
+    });
+    mkdirSync(join(repo, "out"));
+    writeFileSync(join(repo, "out", "lcov.info"), "SF:src/utils/q.ts\nDA:1,1\nend_of_record\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [
+          ok("x y"),
+          { match: diff("main"), result: { code: 0, stdout: "packages/core/src/utils/q.ts\n" } },
+        ],
+      });
+      expect(result.code).toBe(6);
+      expect(result.out.join("\n")).toContain("targets:       (no touched file matched a report row)");
+      const err = result.err.join("\n");
+      expect(err).toContain("SEEN in the report rows: 'src/utils/q.ts'");
+      expect(err).toContain("'packages/core/src/utils/q.ts'");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("an EMPTY touched set is still exit 0: nothing touched, nothing to join", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      repo: SHU_COVERAGE_WORKSPACE,
+      script: [ok(WORKSPACE_RUN), { match: diff("main"), result: { code: 0, stdout: "" } }],
+    });
+    expect(result.code).toBe(0);
+    expect(document(result).touched?.files).toEqual([]);
+  });
+
+  it("a single-package repository is unchanged -- the regression fixture (acceptance 6)", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      repo: SHU_COVERAGE_SINGLE,
+      script: [ok(SINGLE_RUN), { match: diff("main"), result: { code: 0, stdout: "src/a.ts\n" } }],
+    });
+    expect(result.code).toBe(0);
+    const parsed = document(result);
+    expect(parsed.targets.map((row): string => row.name)).toEqual(["src/a.ts"]);
+    expect(parsed.touched?.matched).toEqual(["src/a.ts"]);
+    expect(parsed.touched?.artifacts).toEqual([
+      { path: "coverage/lcov.info", format: "lcov", root: ".", basis: "artifact", rows: 1, onDisk: 1, error: null },
+    ]);
+  });
+
+  it("a plain run (no --touched) on the workspace is untouched: first report only, rows as written", async () => {
+    const result = await capture(["coverage", "--json"], {
+      repo: SHU_COVERAGE_WORKSPACE,
+      script: [ok(WORKSPACE_RUN)],
+    });
+    expect(result.code).toBe(0);
+    const parsed = document(result);
+    expect(parsed.report?.path).toBe("packages/a/coverage/lcov.info");
+    expect(parsed.targets.map((row): string => row.name)).toEqual(["src/sum.ts"]);
+  });
+
+  it("no `coverage/` to strip: the LANE CWD is the root the tree evidences", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "apps/web" } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["apps/web/reports/lcov.info"] } } },
+    });
+    mkdirSync(join(repo, "apps", "web", "reports"), { recursive: true });
+    mkdirSync(join(repo, "apps", "web", "src"), { recursive: true });
+    writeFileSync(join(repo, "apps", "web", "reports", "lcov.info"), "SF:src/page.tsx\nDA:1,1\nend_of_record\n");
+    writeFileSync(join(repo, "apps", "web", "src", "page.tsx"), "export {};\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\n" } }],
+      });
+      expect(result.code).toBe(0);
+      const parsed = document(result);
+      expect(parsed.touched?.matched).toEqual(["apps/web/src/page.tsx"]);
+      expect(parsed.touched?.artifacts?.[0]).toMatchObject({ root: "apps/web", basis: "lane-cwd", onDisk: 1 });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a report that ALREADY writes repo-relative names keeps them: the tree outvotes the `coverage/` guess", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts: ["packages/a/coverage/lcov.info"] } } },
+    });
+    mkdirSync(join(repo, "packages", "a", "coverage"), { recursive: true });
+    mkdirSync(join(repo, "packages", "a", "src"), { recursive: true });
+    writeFileSync(
+      join(repo, "packages", "a", "coverage", "lcov.info"),
+      "SF:packages/a/src/sum.ts\nDA:1,1\nend_of_record\n",
+    );
+    writeFileSync(join(repo, "packages", "a", "src", "sum.ts"), "export {};\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "packages/a/src/sum.ts\n" } }],
+      });
+      expect(result.code).toBe(0);
+      const parsed = document(result);
+      expect(parsed.targets.map((row): string => row.name)).toEqual(["packages/a/src/sum.ts"]);
+      expect(parsed.touched?.artifacts?.[0]).toMatchObject({ root: ".", basis: "lane-cwd", onDisk: 1 });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a missing FIRST report is named too, and the sound second one is still read (Copilot on #254)", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          coverage: {
+            exe: "x",
+            argv: ["y"],
+            artifacts: ["packages/a/coverage/lcov.info", "apps/web/coverage/lcov.info"],
+          },
+        },
+      },
+    });
+    mkdirSync(join(repo, "apps", "web", "coverage"), { recursive: true });
+    writeFileSync(join(repo, "apps", "web", "coverage", "lcov.info"), "SF:src/page.tsx\nDA:1,1\nend_of_record\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\n" } }],
+      });
+      expect(result.code).toBe(1);
+      const parsed = document(result);
+      expect(parsed.total).toBeNull();
+      expect(parsed.touched?.matched).toEqual(["apps/web/src/page.tsx"]);
+      expect(parsed.touched?.artifacts?.map((entry): string | null => entry.root)).toEqual([null, "apps/web"]);
+      expect(parsed.touched?.artifacts?.[0]?.error).toContain("no coverage report at packages/a/coverage/lcov.info");
+      expect(result.err.join("\n")).toContain("no coverage report at packages/a/coverage/lcov.info");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("mixed grains get no global 'BY PACKAGE' note -- each report's own 'from:' line says it (Copilot on #254)", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          coverage: { exe: "x", argv: ["y"], artifacts: ["coverage.cobertura.xml", "web/coverage/lcov.info"] },
+        },
+      },
+    });
+    writeFileSync(
+      join(repo, "coverage.cobertura.xml"),
+      '<coverage line-rate="1" lines-covered="1" lines-valid="1"><packages><package name="Placeholder.Core"><classes><class name="C" filename="Core/Store.cs"><lines><line number="1" hits="1"/></lines></class></classes></package></packages></coverage>',
+    );
+    mkdirSync(join(repo, "web", "coverage"), { recursive: true });
+    writeFileSync(join(repo, "web", "coverage", "lcov.info"), "SF:src/a.ts\nDA:1,1\nend_of_record\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [
+          ok("x y"),
+          { match: diff("main"), result: { code: 0, stdout: "src/Placeholder/Core/Store.cs\nweb/src/a.ts\n" } },
+        ],
+      });
+      expect(result.code).toBe(0);
+      const text = result.out.join("\n");
+      expect(text).toMatch(/2 files \(2 matched, 0 unmatched\)$/m);
+      expect(text).not.toMatch(/BY PACKAGE/);
+      expect(text).toContain("rows are packages, matched anywhere under a touched path");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a SECOND declared report that is missing is NAMED and is exit 1 -- never its files as 'unmatched'", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: {
+        only: {
+          coverage: {
+            exe: "x",
+            argv: ["y"],
+            artifacts: ["packages/a/coverage/lcov.info", "apps/web/coverage/lcov.info"],
+          },
+        },
+      },
+    });
+    mkdirSync(join(repo, "packages", "a", "coverage"), { recursive: true });
+    writeFileSync(join(repo, "packages", "a", "coverage", "lcov.info"), "SF:src/sum.ts\nDA:1,1\nend_of_record\n");
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "packages/a/src/sum.ts\n" } }],
+      });
+      expect(result.code).toBe(1);
+      const parsed = document(result);
+      expect(parsed.exitCode).toBe(1);
+      expect(parsed.touched?.matched).toEqual(["packages/a/src/sum.ts"]);
+      expect(parsed.touched?.artifacts?.[1]).toMatchObject({
+        path: "apps/web/coverage/lcov.info",
+        format: null,
+        root: null,
+        error: expect.stringContaining("no coverage report at apps/web/coverage/lcov.info"),
+      });
+      expect(result.err.join("\n")).toContain("no coverage report at apps/web/coverage/lcov.info");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

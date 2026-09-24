@@ -96,6 +96,21 @@ different things.
   quotes differs per lane — one stack has a conventional report location and the
   others say why they have none.
 
+- `shu-coverage-workspace/` — the **workspace** shape
+  [zheref/nen#236](https://github.com/zheref/nen/issues/236) reported, for
+  `nen shu coverage --touched`: one lane at the repository root and two
+  members, `packages/a` and `apps/web`, each with a committed LCOV tracefile
+  under its own `coverage/` whose `SF:` names are relative to **that member**
+  (`src/sum.ts`, `src/page.tsx`). The named source files are committed too, so
+  the root each report resolves against is evidenced on disk rather than
+  assumed. Kept apart from `shu-coverage-repo` because that one is the
+  single-report fixture every other coverage test is written against.
+
+- `shu-coverage-single/` — the **single-package** shape (lane cwd, artifact
+  root and repository root all one directory), held as the regression guard
+  for the same issue: resolving each report against its own root must leave
+  this repository's `src/a.ts` row exactly as it was.
+
 - `shu-test-report-repo/nen/contract.json` — the repository `nen shu
   test-report` is proved against, and the one fixture here that declares **no
   row for the verb it is about**: that verb runs `project.verbs.<lane>.test` and
