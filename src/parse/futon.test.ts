@@ -11,7 +11,9 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
       expect(result.value).toEqual({
         repoToken: "BC",
         band: { severity: "high", plus: false, severities: ["high"] },
+        label: null,
         terminal: null,
+        then: null,
       });
     }
   });
@@ -19,16 +21,16 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
   it("expands '+' to this band and everything more severe", () => {
     const result = parseFutonInvocation("bc@high+");
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.band.severities).toEqual(["critical", "high"]);
+    if (result.ok) expect(result.value.band?.severities).toEqual(["critical", "high"]);
   });
 
   it("a bare severity never sweeps up the highs", () => {
     const result = parseFutonInvocation("bc@medium");
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.band.severities).toEqual(["medium"]);
+    if (result.ok) expect(result.value.band?.severities).toEqual(["medium"]);
   });
 
-  it("reads the terminal from the LAST whole-word 'then'", () => {
+  it("reads the terminal from the whole-word 'then'", () => {
     const result = parseFutonInvocation("bc@high then tag");
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.terminal).toBe("tag");
@@ -52,19 +54,70 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     if (!result.ok) expect(result.error.message).toMatch(/no '@<severity>'/);
   });
 
-  it("refuses an unknown severity, offering a corrected line", () => {
-    const result = parseFutonInvocation("bc@urgent");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.message).toMatch(/is not a severity/);
-      expect(result.error.correctedLine).toMatch(/^bc@critical$/);
+  it("reads any non-severity token as an exact label, never expanded", () => {
+    const result = parseFutonInvocation("bc@bug then tag");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ repoToken: "bc", band: null, label: "bug", terminal: "tag", then: { kind: "terminal", terminal: "tag" } });
     }
   });
 
-  it("refuses an unrecognized terminal, offering the build-only line", () => {
-    const result = parseFutonInvocation("bc@high then ship-it");
+  it("keeps a label's case and spaces, stripping surrounding quotes", () => {
+    const result = parseFutonInvocation('@"Good First Issue"');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.label).toBe("Good First Issue");
+  });
+
+  it("refuses '+' on a label, offering the exact-label line", () => {
+    const result = parseFutonInvocation("bc@bug+");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.correctedLine).toBe("bc@high then tag");
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/severity band only/);
+      expect(result.error.correctedLine).toBe("bc@bug");
+    }
+  });
+
+  it("refuses an empty selector, offering a corrected line", () => {
+    const result = parseFutonInvocation("bc@");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.correctedLine).toBe("bc@critical");
+  });
+
+  it("classifies kebab tokens after 'then' as a skill chain", () => {
+    const result = parseFutonInvocation("hatsu@bug then hatsu:getsuga+kagutsuchi@testflight+mugetsu@github");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.terminal).toBeNull();
+      expect(result.value.then).toEqual({
+        kind: "skills",
+        steps: [
+          { skill: "hatsu:getsuga", target: null },
+          { skill: "kagutsuchi", target: "testflight" },
+          { skill: "mugetsu", target: "github" },
+        ],
+      });
+    }
+  });
+
+  it("a single skill is a one-step chain", () => {
+    const result = parseFutonInvocation("bc@high then getsuga");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.then).toEqual({ kind: "skills", steps: [{ skill: "getsuga", target: null }] });
+  });
+
+  it("keeps anything else after the FIRST 'then' as prose, verbatim", () => {
+    const result = parseFutonInvocation("@bug then fan out to every consumer, then tell me");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.label).toBe("bug");
+      expect(result.value.then).toEqual({ kind: "prose", text: "fan out to every consumer, then tell me" });
+    }
+  });
+
+  it("refuses a 'then' that names nothing, offering the build-only line", () => {
+    const result = parseFutonInvocation("bc@high then");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.correctedLine).toBe("bc@high");
   });
 
   it("refuses empty input", () => {

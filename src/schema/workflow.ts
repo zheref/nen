@@ -237,6 +237,46 @@ export interface ReviewPolicy {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/** The three repo kinds `futon.advanceGo` may name -- ../repo/classify.ts's own vocabulary, never a fourth invented here. */
+export type AdvanceGoKind = "product" | "process" | "library";
+export const ADVANCE_GO_KINDS: readonly AdvanceGoKind[] = ["product", "process", "library"];
+
+/**
+ * `release.unitPaths` -- the repo-relative path set (a prefix or a narrow glob,
+ * ../report/patterns.ts's own grammar -- the same one `review.scopes` above
+ * reads, so a maintainer who writes `hooks/**` in one table is entitled to
+ * have it claim the same files in the other) a release unit is bounded to.
+ *
+ * `null` MEANS UNDECLARED, NOT "EVERYTHING" OR "NOTHING". `nen release
+ * unit-check` REFUSES (exit 2) when this is null, naming the key to add: a
+ * repository that never declared a unit has stated no boundary at all, and
+ * reporting every changed path as "outside the unit" (or the other silent
+ * failure, "inside" by default) would be this binary inventing a boundary the
+ * repository never drew.
+ */
+export interface ReleasePolicy {
+  readonly unitPaths: readonly string[] | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * `futon.advanceGo` -- the ONLY repo-kind gate an advance-go skill chain is
+ * held to, keyed by skill name.
+ *
+ * KEYS ARE NORMALIZED WITHOUT A `plugin:` PREFIX, because ../parse/futon.ts's
+ * own skill-chain grammar accepts a step's skill both ways (`plugin:mugetsu`
+ * and `mugetsu` name the same skill) and a gate keyed on one spelling would
+ * silently never match the other. A skill this map does not name is UNGATED --
+ * ../grammar/command.ts's futon() annotates a step with a `gate` field only
+ * for a skill this record lists, exactly as `review.scopes` raises a scope
+ * only for a path a declared pattern claims.
+ */
+export interface FutonPolicy {
+  /** skill name, plugin-prefix stripped, lower-cased -> the repo kinds it may advance-go against. */
+  readonly advanceGo: Readonly<Record<string, readonly AdvanceGoKind[]>>;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface NotificationsPolicy {
   readonly rungs: readonly string[];
   readonly sound: string;
@@ -324,6 +364,8 @@ export interface Workflow {
   readonly models: ModelsPolicy;
   readonly review: ReviewPolicy;
   readonly profile: ProfilePolicy;
+  readonly release: ReleasePolicy;
+  readonly futon: FutonPolicy;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -413,6 +455,8 @@ export function defaultWorkflow(): Workflow {
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
     review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
     profile: { default: DEFAULT_PROFILE, allowed: PROFILE_NAMES, raw: empty },
+    release: { unitPaths: null, raw: empty },
+    futon: { advanceGo: emptyRecord<readonly AdvanceGoKind[]>(), raw: empty },
     raw: empty,
   };
 }
@@ -433,6 +477,8 @@ const ROOT_KEYS: readonly string[] = [
   "models",
   "review",
   "profile",
+  "release",
+  "futon",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -442,6 +488,8 @@ const COVERAGE_KEYS: readonly string[] = ["minimum", "recommended", "ideal", "sc
 const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
 const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures", "sections"];
 const REVIEW_KEYS: readonly string[] = ["scopes"];
+const RELEASE_KEYS: readonly string[] = ["unitPaths"];
+const FUTON_KEYS: readonly string[] = ["advanceGo"];
 const NOTIFICATIONS_KEYS: readonly string[] = ["rungs", "sound", "turn"];
 const COMMITS_KEYS: readonly string[] = [
   "allowedAttributionTrailers",
@@ -895,6 +943,86 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
   return { scopes, raw };
 }
 
+/**
+ * `release.unitPaths` -- SHAPE ONLY, exactly as `review.scopes` above: a
+ * non-empty list of non-empty path patterns, or `null` when the key was never
+ * declared. `nen release unit-check` is the one place this is read; this
+ * loader states only what a caller may parse, never what the declared paths
+ * mean for a repository's own release process.
+ */
+function parseReleasePolicy(path: string, value: unknown): ReleasePolicy {
+  const raw = block(path, "release", value, RELEASE_KEYS, "A release policy's one key is");
+  const unitPathsRaw = raw["unitPaths"];
+  if (unitPathsRaw === undefined || unitPathsRaw === null) return { unitPaths: null, raw };
+  const list = requireArray(path, "release.unitPaths", unitPathsRaw).map((entry, index): string => {
+    const pattern = requireString(path, `release.unitPaths[${index}]`, entry);
+    if (pattern.trim() === "") {
+      throw new SchemaError(
+        path,
+        `release.unitPaths[${index}]`,
+        "is empty. An empty pattern matches nothing, so it is a path list entry that can never bound the release unit",
+      );
+    }
+    return pattern;
+  });
+  if (list.length === 0) {
+    throw new SchemaError(
+      path,
+      "release.unitPaths",
+      "names no paths. A release unit that bounds nothing would make every changed path read as outside it, which is never what declaring the key empty is meant to say -- drop the key entirely to leave the unit undeclared, or list at least one prefix or glob",
+    );
+  }
+  return { unitPaths: list, raw };
+}
+
+/**
+ * `futon.advanceGo` -- SHAPE ONLY, mirroring `review.scopes`'s discipline: a
+ * skill name mapped to a non-empty list of repo kinds drawn from the CLOSED
+ * three ../repo/classify.ts already reports (`product` | `process` |
+ * `library`) -- a fourth name would be a kind that verb can never classify a
+ * repository as, so it is refused by pointer rather than preserved for a
+ * reader that never comes.
+ */
+function parseFutonPolicy(path: string, value: unknown): FutonPolicy {
+  const raw = block(path, "futon", value, FUTON_KEYS, "A futon policy's one key is");
+  const advanceGoRaw = raw["advanceGo"];
+  if (advanceGoRaw === undefined || advanceGoRaw === null) {
+    return { advanceGo: emptyRecord<readonly AdvanceGoKind[]>(), raw };
+  }
+  const record = requireRecord(path, "futon.advanceGo", advanceGoRaw);
+  const advanceGo = emptyRecord<readonly AdvanceGoKind[]>();
+  for (const [name, entry] of Object.entries(record)) {
+    if (name.startsWith("$")) continue;
+    const pointer = `futon.advanceGo.${name}`;
+    // NORMALIZED WITHOUT A 'plugin:' PREFIX before the name check, so a
+    // maintainer who writes 'plugin:mugetsu' is held to the same slug rule as
+    // 'mugetsu' -- the prefix is a namespace marker, never part of the name.
+    const normalized = name.replace(/^plugin:/i, "").toLowerCase();
+    requirePolicyName(path, pointer, normalized, "a skill name");
+    const kindsRaw = requireArray(path, pointer, entry);
+    if (kindsRaw.length === 0) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `names no repo kind. A skill listed here with nothing allowed is a gate that always refuses every target -- drop the key entirely to leave '${normalized}' ungated`,
+      );
+    }
+    const kinds = kindsRaw.map((item, index): AdvanceGoKind => {
+      const kind = requireString(path, `${pointer}[${index}]`, item);
+      if (!ADVANCE_GO_KINDS.includes(kind as AdvanceGoKind)) {
+        throw new SchemaError(
+          path,
+          `${pointer}[${index}]`,
+          `'${kind}' is not a repo kind this policy knows. The three are ${ADVANCE_GO_KINDS.join(", ")} -- ../repo/classify.ts's own vocabulary, not this file's to invent a fourth of`,
+        );
+      }
+      return kind as AdvanceGoKind;
+    });
+    advanceGo[normalized] = kinds;
+  }
+  return { advanceGo, raw };
+}
+
 function parseNotifications(path: string, value: unknown): NotificationsPolicy {
   const raw = block(
     path,
@@ -1075,7 +1203,7 @@ function parseProfile(path: string, value: unknown): ProfilePolicy {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twelve blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's fourteen blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -1093,6 +1221,8 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     models: parseModels(path, raw["models"]),
     review: parseReview(path, raw["review"]),
     profile: parseProfile(path, raw["profile"]),
+    release: parseReleasePolicy(path, raw["release"]),
+    futon: parseFutonPolicy(path, raw["futon"]),
     raw,
   };
 }

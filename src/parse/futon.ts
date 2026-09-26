@@ -1,5 +1,8 @@
-// src/parse/futon.ts -- the futon invocation grammar: `<repo>@<severity>[+]
-// [then <terminal>]`, ported from the futon skill's §1.
+// src/parse/futon.ts -- the futon invocation grammar: `<repo>@<selector>[+]
+// [then <terminal>]`, ported from the futon skill's §1. The selector is a
+// severity (a band, `+` allowed) or any other label, matched exactly and
+// never expanded -- a backlog carrying no severity taxonomy is still
+// scoped by the maintainer's own word (zheref/hatsu futon, 2026-09-26).
 //
 // RESOLVE OR REFUSE, NEVER GUESS -- the skill states this as the one rule every
 // parsing decision below is an instance of. An unparseable invocation is
@@ -31,6 +34,38 @@ export const SEVERITY_ORDER: readonly Severity[] = ["critical", "high", "medium"
 
 export type Terminal = "tag" | "tag+fanout";
 
+/**
+ * What follows `then`. `tag`/`tag+fanout` are the built-in terminals (and
+ * keep the self-repo rule); one or more kebab skill tokens joined by `+`,
+ * each optionally `plugin:`-prefixed and optionally `@<target>`-suffixed
+ * (`getsuga+kagutsuchi@testflight+mugetsu@github`), are a skill chain run in
+ * order; anything else is prose, kept verbatim.
+ * Whether a named skill exists, and whether the step is allowed at all, is the
+ * calling skill's to decide -- nen names the shape, never the authority.
+ */
+export type FutonThen =
+  | { readonly kind: "terminal"; readonly terminal: Terminal }
+  | { readonly kind: "skills"; readonly steps: readonly FutonStep[] }
+  | { readonly kind: "prose"; readonly text: string };
+
+export interface FutonStep {
+  readonly skill: string;
+  /** The destination the step names after `@`, verbatim; `null` when none. */
+  readonly target: string | null;
+}
+
+const SKILL_STEP = /^((?:[a-z0-9][a-z0-9-]*:)?[a-z0-9][a-z0-9-]*)(?:@([A-Za-z0-9][A-Za-z0-9._\/-]*))?$/i;
+
+function parseSkillChain(text: string): readonly FutonStep[] | null {
+  const steps: FutonStep[] = [];
+  for (const part of text.split("+")) {
+    const match = SKILL_STEP.exec(part.trim());
+    if (match === null) return null;
+    steps.push({ skill: (match[1] ?? "").toLowerCase(), target: match[2] ?? null });
+  }
+  return steps;
+}
+
 export interface FutonBand {
   readonly severity: Severity;
   readonly plus: boolean;
@@ -41,8 +76,14 @@ export interface FutonBand {
 export interface FutonInvocation {
   /** `null` means "the repo you are standing in" -- no token was given. */
   readonly repoToken: string | null;
-  readonly band: FutonBand;
+  /** Set when the selector is a severity; `null` when it is a label. Exactly one of `band`/`label` is set. */
+  readonly band: FutonBand | null;
+  /** The literal label the run filters on when the selector is not a severity. */
+  readonly label: string | null;
+  /** The built-in terminal, when the `then` clause is one; `null` otherwise. */
   readonly terminal: Terminal | null;
+  /** The whole `then` clause, classified; `null` when there is none. */
+  readonly then: FutonThen | null;
 }
 
 export interface FutonParseError {
@@ -61,8 +102,8 @@ function expandBand(severity: Severity, plus: boolean): readonly Severity[] {
   return SEVERITY_ORDER.slice(0, index + 1);
 }
 
-// The terminal is read from the LAST whole-word `then`, so an issue title (or
-// a repo token) containing the word cannot be mistaken for the clause.
+// The clause starts at the FIRST whole-word `then` after the '@', so prose
+// after it may itself say "then" without splitting a second time.
 const THEN_SPLIT = /\bthen\b/gi;
 
 export function parseFutonInvocation(raw: string): FutonParseResult {
@@ -70,28 +111,34 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   if (trimmed === "") {
     return {
       ok: false,
-      error: { message: "empty invocation. Expected '<repo>@<severity>[+] [then <terminal>]'.", correctedLine: null },
+      error: { message: "empty invocation. Expected '<repo>@<severity>[+] [then <terminal>]' or '<repo>@<label> [then <terminal>]'.", correctedLine: null },
     };
   }
 
-  const thenMatches = [...trimmed.matchAll(THEN_SPLIT)];
-  const lastThen = thenMatches.at(-1);
-  const head = lastThen === undefined ? trimmed : trimmed.slice(0, lastThen.index).trim();
-  const tail = lastThen === undefined ? null : trimmed.slice(lastThen.index + lastThen[0].length).trim();
+  const atIndex = trimmed.indexOf("@");
+  const firstThen = [...trimmed.matchAll(THEN_SPLIT)].find((match): boolean => match.index > atIndex);
+  const head = firstThen === undefined ? trimmed : trimmed.slice(0, firstThen.index).trim();
+  const tail = firstThen === undefined ? null : trimmed.slice(firstThen.index + firstThen[0].length).trim();
 
   let terminal: Terminal | null = null;
+  let then: FutonThen | null = null;
   if (tail !== null) {
     const lowered = tail.toLowerCase();
-    if (lowered === "tag") terminal = "tag";
-    else if (lowered === "tag+fanout") terminal = "tag+fanout";
-    else {
+    if (tail === "") {
       return {
         ok: false,
         error: {
-          message: `'then ${tail}' is not a recognized terminal. Only 'then tag' and 'then tag+fanout' are accepted.`,
-          correctedLine: `${head} then tag`,
+          message: "'then' names nothing. Expected 'then tag', 'then tag+fanout', 'then <skill>' or 'then <what to do, in prose>'.",
+          correctedLine: head,
         },
       };
+    }
+    if (lowered === "tag" || lowered === "tag+fanout") {
+      terminal = lowered;
+      then = { kind: "terminal", terminal };
+    } else {
+      const steps = /\s/.test(tail) ? null : parseSkillChain(tail);
+      then = steps === null ? { kind: "prose", text: tail } : { kind: "skills", steps };
     }
   }
 
@@ -100,23 +147,42 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
     return {
       ok: false,
       error: {
-        message: `'${head}' has no '@<severity>'. Expected '<repo>@<severity>[+]', or bare '@<severity>' to mean the repo you are standing in.`,
+        message: `'${head}' has no '@<severity>' or '@<label>'. Expected '<repo>@<severity>[+]' or '<repo>@<label>', or a bare '@...' to mean the repo you are standing in.`,
         correctedLine: null,
       },
     };
   }
   const repoPart = head.slice(0, at).trim();
-  const severityPart = head.slice(at + 1).trim();
-  const plus = severityPart.endsWith("+");
-  const severityRaw = (plus ? severityPart.slice(0, -1) : severityPart).toLowerCase();
-  const severity = SEVERITY_ORDER.find((candidate): boolean => candidate === severityRaw);
-  if (severity === undefined) {
+  const selectorPart = head.slice(at + 1).trim();
+  const plus = selectorPart.endsWith("+");
+  const selectorRaw = stripQuotes((plus ? selectorPart.slice(0, -1) : selectorPart).trim());
+  const suffix = tail === null ? "" : ` then ${tail}`;
+  const repoPrefix = repoPart === "" ? "@" : `${repoPart}@`;
+  if (selectorRaw === "") {
     return {
       ok: false,
       error: {
-        message: `'${severityPart || "(none)"}' is not a severity. Expected one of ${SEVERITY_ORDER.join(", ")}, optionally suffixed '+'.`,
-        correctedLine: `${repoPart === "" ? "" : `${repoPart}@`}${SEVERITY_ORDER[0]}${plus ? "+" : ""}${terminal === null ? "" : ` then ${terminal}`}`,
+        message: `no selector after '@'. Expected a severity (${SEVERITY_ORDER.join(", ")}, optionally suffixed '+') or a label.`,
+        correctedLine: `${repoPrefix}${SEVERITY_ORDER[0]}${suffix}`,
       },
+    };
+  }
+  const severity = SEVERITY_ORDER.find((candidate): boolean => candidate === selectorRaw.toLowerCase());
+  if (severity === undefined) {
+    // Any other token is a label, taken exactly as typed. `+` ranks
+    // severities only; a label has no order to expand along.
+    if (plus) {
+      return {
+        ok: false,
+        error: {
+          message: `'+' expands a severity band only; '${selectorRaw}' is a label, which is matched exactly and never expanded.`,
+          correctedLine: `${repoPrefix}${selectorRaw}${suffix}`,
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: { repoToken: repoPart === "" ? null : repoPart, band: null, label: selectorRaw, terminal, then },
     };
   }
 
@@ -125,9 +191,22 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
     value: {
       repoToken: repoPart === "" ? null : repoPart,
       band: { severity, plus, severities: expandBand(severity, plus) },
+      label: null,
       terminal,
+      then,
     },
   };
+}
+
+function stripQuotes(text: string): string {
+  const match = /^(["'])(.*)\1$/.exec(text);
+  return match === null ? text : (match[2] ?? "").trim();
+}
+
+/** The selector as typed back: `high+`, `medium`, or a label. */
+export function formatFutonSelector(invocation: FutonInvocation): string {
+  if (invocation.band !== null) return `${invocation.band.severity}${invocation.band.plus ? "+" : ""}`;
+  return invocation.label ?? "";
 }
 
 export interface FutonResolvedRepo {

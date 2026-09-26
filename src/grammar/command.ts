@@ -21,7 +21,9 @@
 
 import { targetFromRemote } from "../github/target.js";
 import { assertRepoRoot } from "../repo/root.js";
+import { classifyRepo } from "../repo/classify.js";
 import { loadRepoRegistry } from "../schema/repos.js";
+import { loadWorkflow } from "../schema/workflow.js";
 import {
   emit,
   requireRepoFlag,
@@ -31,14 +33,14 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { GrammarError, parseInvocation, parseTemplate, type Grammar } from "./engine.js";
-import { FutonResolveError, parseFutonInvocation, resolveFutonRepo } from "../parse/futon.js";
+import { FutonResolveError, formatFutonSelector, parseFutonInvocation, resolveFutonRepo, type FutonStep } from "../parse/futon.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { classifyInvocation, parseIzanamiInvocation } from "../parse/izanami.js";
 
 const SKILL_GRAMMARS = new Set(["futon", "izanagi", "izanami"]);
 
 const USAGE = `nen parse <skill> --grammar <template> --line <invocation>
-nen parse futon --repo <path> "<repo>@<severity>[+] [then <terminal>]" [--self <owner/name>]
+nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
 nen parse izanagi "<task> until <condition> up to <N>"
 nen parse izanami "<task> until <condition>"
 
@@ -76,8 +78,13 @@ and the corrected line is printed on stderr so a caller can paste it.
 futon:
   Parses the futon invocation grammar and resolves its repo token against
   --repo's nen/repos.json registry. '+' means this severity band OR
-  HIGHER; a bare severity is that band alone. 'then tag' / 'then tag+fanout'
-  is read from the LAST whole-word 'then'. The terminal is refused unless
+  HIGHER; a bare severity is that band alone; any other token is a label,
+  matched exactly. The 'then' clause starts at the FIRST whole-word 'then'
+  after the '@': 'tag' / 'tag+fanout' are terminals, kebab skill tokens
+  joined by '+' (each optionally plugin-prefixed and '@<target>'-suffixed)
+  are a skill chain, anything else is prose kept
+  verbatim -- skill and prose are classified, never authorized, here.
+  A tag terminal is refused unless
   the resolved repo IS the one you are standing in (or --self names it) --
   a consumer's release is a different job than the registry owner's.
   Exits 2 on an unparseable or unresolvable invocation, with a corrected
@@ -264,23 +271,82 @@ function futon(context: CommandContext, raw: string): number {
     context.io.err(
       `nen: 'then ${parsed.value.terminal}' is refused against '${resolved.slug}' -- the terminal is that repository's own release machinery, and it is not the one you are standing in (${currentSlug}). Try the corrected build-only line:`,
     );
-    context.io.err(`  try: ${parsed.value.repoToken ?? resolved.slug}@${parsed.value.band.severity}${parsed.value.band.plus ? "+" : ""}`);
+    context.io.err(`  try: ${parsed.value.repoToken ?? resolved.slug}@${formatFutonSelector(parsed.value)}`);
     return 2;
   }
+
+  // ── advance-go gate (maintainer's ruling, 2026-09-26): "make the three
+  // things that are still judged by reading rather than by a nen command be
+  // deterministic". A `then` clause naming a SKILL CHAIN is annotated,
+  // step by step, against --repo's nen/workflow.json `futon.advanceGo` --
+  // skill name -> the repo kinds it may advance-go against. A skill this
+  // map does not name is left UNANNOTATED (no `gate` field at all), exactly
+  // as ../review/scopes.ts raises a scope only for a path a declared
+  // pattern claims. THE KIND IS ../repo/classify.ts's OWN VERDICT, derivable
+  // only when the resolved repo IS the checkout `--repo` names (its origin
+  // remote matches) -- otherwise `unknown`, and `unknown` FAILS CLOSED: an
+  // unclassifiable target is never treated as allowed. A REFUSED STEP DOES
+  // NOT FAIL THE PARSE -- exit stays 0, and the refusal is reported inline
+  // (`gate.allowed: false`, plus a `refused: <skill> (<reason>)` line in the
+  // plain rendering) so the calling skill can act on it without nen ever
+  // deciding whether the chain may proceed.
+  const then = parsed.value.then;
+  const gatedThen =
+    then !== null && then.kind === "skills"
+      ? {
+          kind: "skills" as const,
+          steps: then.steps.map((step): FutonStep & { readonly gate?: { readonly allowed: boolean; readonly kind: string; readonly reason: string } } => {
+            const bareSkill = step.skill.replace(/^plugin:/i, "");
+            const allowedKinds = loadWorkflow(root).workflow.futon.advanceGo[bareSkill];
+            if (allowedKinds === undefined) return step;
+            const classification = classifyRepo({ seams: context.seams, root, target: resolved.slug });
+            const kind = classification.kind;
+            const allowed = kind !== "unknown" && (allowedKinds as readonly string[]).includes(kind);
+            const reason =
+              kind === "unknown"
+                ? `'${resolved.slug}''s repo kind is unknown (its contract is not this checkout's, or declares none) -- an unclassifiable target is never treated as allowed`
+                : allowed
+                  ? `'${kind}' is an allowed repo kind for '${bareSkill}'`
+                  : `'${kind}' is not an allowed repo kind for '${bareSkill}' (allowed: ${allowedKinds.join(", ")})`;
+            return { ...step, gate: { allowed, kind, reason } };
+          }),
+        }
+      : then;
 
   const result = {
     repo: resolved.slug,
     code: resolved.code,
     isSelf: resolved.isSelf,
     band: parsed.value.band,
+    label: parsed.value.label,
     terminal: parsed.value.terminal,
+    then: gatedThen,
   };
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return 0;
   }
   context.io.out(`repo: ${result.repo}${result.code === null ? "" : ` (${result.code})`}`);
-  context.io.out(`band: ${result.band.severity}${result.band.plus ? "+" : ""} -> ${result.band.severities.join(", ")}`);
-  context.io.out(`terminal: ${result.terminal ?? "(none -- build-only)"}`);
+  if (result.band !== null) {
+    context.io.out(`band: ${result.band.severity}${result.band.plus ? "+" : ""} -> ${result.band.severities.join(", ")}`);
+  } else {
+    context.io.out(`label: ${result.label ?? ""} (exact match, no expansion)`);
+  }
+  const renderedThen = result.then;
+  if (renderedThen === null) context.io.out("terminal: (none -- build-only)");
+  else if (renderedThen.kind === "terminal") context.io.out(`terminal: ${renderedThen.terminal}`);
+  else if (renderedThen.kind === "skills") {
+    const chain = renderedThen.steps.map((step): string => (step.target === null ? step.skill : `${step.skill}@${step.target}`)).join(" -> ");
+    context.io.out(`then: skills ${chain} (existence and authority are the caller's to check)`);
+    for (const step of renderedThen.steps) {
+      if (step.gate === undefined) continue;
+      context.io.out(
+        step.gate.allowed
+          ? `  gate: ${step.skill} allowed (${step.gate.reason})`
+          : `  refused: ${step.skill} (${step.gate.reason})`,
+      );
+    }
+  }
+  else context.io.out(`then: prose "${(renderedThen as { readonly text: string }).text}" (verbatim; the caller decides what it may run)`);
   return 0;
 }

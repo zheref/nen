@@ -579,6 +579,77 @@ describe("nen release self-check -- CLI wiring", () => {
   });
 });
 
+describe("nen release unit-check -- CLI wiring", () => {
+  function workflowRepo(unitPaths: readonly string[] | undefined): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-unit-check-"));
+    mkdirSync(join(dir, "nen"), { recursive: true });
+    const body = unitPaths === undefined ? {} : { release: { unitPaths } };
+    writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify(body));
+    return dir;
+  }
+
+  it("exits 2 and names the key when release.unitPaths is not declared", async () => {
+    const result = await capture(
+      ["release", "unit-check", "--pr", "acme/widgets#9"],
+      BANKAI_REPO,
+      new ScriptedSeams([]).run,
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/declares no 'release\.unitPaths'/);
+  });
+
+  it("exits 0 when every changed path is inside the declared unit", async () => {
+    const root = workflowRepo(["src/unit/**"]);
+    const script: readonly ScriptedCall[] = [
+      {
+        match: "gh pr view 9 --repo acme/widgets --json files",
+        result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }] }) },
+      },
+    ];
+    const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/every changed path is inside the release unit/);
+  });
+
+  it("exits 1 and lists every path outside the declared unit", async () => {
+    const root = workflowRepo(["src/unit/**"]);
+    const script: readonly ScriptedCall[] = [
+      {
+        match: "gh pr view 9 --repo acme/widgets --json files",
+        result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }, { path: "src/other/b.ts" }] }) },
+      },
+    ];
+    const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/outside: src\/other\/b\.ts/);
+  });
+
+  it("resolves a bare --pr number against this checkout's own origin", async () => {
+    const root = workflowRepo(["src/unit/**"]);
+    const script: readonly ScriptedCall[] = [
+      { match: "git remote get-url origin", result: { code: 0, stdout: "git@github.com:acme/widgets.git\n" } },
+      {
+        match: "gh pr view 9 --repo acme/widgets --json files",
+        result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }] }) },
+      },
+    ];
+    const result = await capture(["release", "unit-check", "--pr", "9"], root, new ScriptedSeams(script).run);
+    expect(result.code).toBe(0);
+  });
+
+  it("refuses an omitted --repo at the parser (exit 2), naming the flag", async () => {
+    const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], null, new ScriptedSeams([]).run);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
+  it("refuses a bad --pr reference at exit 2", async () => {
+    const root = workflowRepo(["src/unit/**"]);
+    const result = await capture(["release", "unit-check", "--pr", "not-a-ref"], root, new ScriptedSeams([]).run);
+    expect(result.code).toBe(2);
+  });
+});
+
 describe("nen release -- refuses an unknown subcommand", () => {
   it("exits 2", async () => {
     const result = await capture(["release", "bogus"], BANKAI_REPO, new ScriptedSeams([]).run);

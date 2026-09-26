@@ -67,7 +67,8 @@ classify:
   ONE verdict about what kind of repository this is (zheref/nen#216): role
   (canon | consumer | unregistered, from nen/repos.json -- maintained_tools is
   canon, consumers and pending_onboarding are consumers), kind (product |
-  process | unknown, from nen/contract.json's lane stacks), the default lane's
+  process | library | unknown: a declared project.kind wins -- the only way
+  to read library -- else nen/contract.json's lane stacks), the default lane's
   stack, the lanes, and the gate a change there stands at -- G4 for canon,
   G2 otherwise, by the maintainer's ruling of 2026-09-18 that the gate is the
   repository's ROLE, not the file's kind. Every fact names its source; an

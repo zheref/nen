@@ -593,9 +593,9 @@ describe("review.scopes", () => {
   });
 });
 
-describe("a workflow's TWELVE blocks", () => {
-  it("says twelve, now that profile is one of them", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's twelve blocks are/);
+describe("a workflow's FOURTEEN blocks", () => {
+  it("says fourteen, now that release and futon are two of them", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's fourteen blocks are/);
   });
 });
 

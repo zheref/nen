@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 40 command
-families, 108 verbs, every flag checked against the binary this repository
+families, 110 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -622,7 +622,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 108 verbs, grouped as the README groups them. **Reads** is what a
+All 110 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -641,6 +641,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + `pr body-check` (live body) + `release unit-check`, all three must pass; `gh pr merge --merge` only under `--run` | github (gh pr view ×2, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -671,12 +672,13 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
 | [`repo`](#family-repo) | [`nen repo scenario`](#nen-repo-scenario) | reads back the scenario recorded for one --target in the registry | nen/repos.json | yes |
-| [`repo`](#family-repo) | [`nen repo classify`](#nen-repo-classify) | one verdict about a repository: role (canon / consumer / unregistered), kind (product / process / unknown), stack, lanes, and the gate a change there stands at | nen/repos.json + nen/contract.json under --repo; `git remote get-url origin` when no --target | yes |
+| [`repo`](#family-repo) | [`nen repo classify`](#nen-repo-classify) | one verdict about a repository: role (canon / consumer / unregistered), kind (product / process / library / unknown), stack, lanes, and the gate a change there stands at | nen/repos.json + nen/contract.json under --repo; `git remote get-url origin` when no --target | yes |
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
+| [`release`](#family-release) | [`nen release unit-check`](#nen-release-unit-check) | whether a pull request's changed files stay inside `--repo`'s declared `release.unitPaths` | github (gh pr view --json files), nen/workflow.json | yes |
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)) | git log --merges, CHANGELOG.md, changelog.d/ | yes |
@@ -1603,6 +1605,67 @@ nen pr open --target zheref/nen --base main --title-file title.txt --body-file b
 ```text
 would run: gh pr create --repo zheref/nen --base main --head feature/x --title "feat: the thing" --body-file /…/body.md
 ```
+
+### `nen pr merge`
+
+THE ONE BOUNDED MERGE THIS BINARY PERFORMS — never a general-purpose merge.
+The second of the maintainer's 2026-09-26 "make it deterministic" trio: it
+evaluates, IN ORDER, `pr ready` (`../verbs/pr_ready.ts`'s own gate, called
+IN-PROCESS — never a subprocess), `pr body-check` (against the pull
+request's LIVE body and `--requirements-from`), and `release unit-check`
+(against `--repo`'s `nen/workflow.json` `release.unitPaths`). ALL THREE
+must pass, and every one runs regardless of an earlier failure — every
+verdict line is printed VERBATIM, the same sentence the standalone verb
+would print.
+
+**Usage**
+
+```text
+nen pr merge <n|owner/name#n> --release-unit --requirements-from <path> [--run] [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `<n\|owner/name#n>` | **yes** | the pull request to merge | positional; a bare `<n>` resolves against `--repo`'s own `origin` remote |
+| `--release-unit` | **yes** | says explicitly that this is a bounded release-unit merge | omitted: exit 2, "nen pr merge only merges a release unit" — there is no general-purpose merge here |
+| `--requirements-from <path>` | **yes** | the same `{ name, pattern }` JSON array `pr body-check` takes | checked against the pull request's CURRENT body, read live over `gh` — never a `--body-from` file, which could have drifted from what GitHub will merge |
+| `--run` | no | execute the merge once every gate passes | omit to see the plan only |
+| `--repo <path>` | **yes** | the checkout whose `nen/gates.json` and `nen/workflow.json` supply reviewer identities and `release.unitPaths` | unbracketed in usage; omitted is refused at exit 2 (#28) |
+| `--json` | no | machine-readable result | — |
+
+**Without `--run`:** prints the plan only (every verdict line, plus the
+exact `gh pr merge` argv that WOULD run) and exits 0 when all three gates
+passed, 1 otherwise. **With `--run`:** on a passing plan, executes `gh pr
+merge <n> --merge` — NEVER `--admin`, NEVER `--auto`; this subcommand's own
+flag set declares neither, so passing either is refused at the parser (exit
+2) before the merge composition ever runs.
+
+**Exit codes:** 0 merged, or a passing plan printed without `--run`; 1 at
+least one gate did not pass; 2 usage (missing `--release-unit`, a bad ref,
+missing `--requirements-from`, or an unknown flag such as `--admin`/`--auto`);
+5 `gh` REFUSED the merge (branch protection, a required review, …) — its
+stderr and the exact command are printed for a human to run once the
+refusal is resolved.
+
+**`--json`** — `nen.pr.merge-unit/v0.1`: `{ contract, target, pr, ready,
+bodyOk, unitOk, ok, ran, mergeArgv, gates: [{ name, ok, lines }] }`.
+
+**Example**
+
+```bash
+nen pr merge zheref/example#9 --release-unit --requirements-from pr-requirements.json
+```
+```text
+pr ready: ready
+pr body-check: 1/1 requirement(s) satisfied
+  ok  how to verify
+release unit-check: zheref/example#9: 1 changed file(s), unit 'src/unit/**'
+release unit-check: every changed path is inside the release unit
+plan only (pass --run to execute): gh pr merge 9 --repo zheref/example --merge
+```
+(from `src/pr/mergeunit.test.ts`'s scripted fixture)
 
 <a id="family-gate"></a>
 
@@ -3640,7 +3703,7 @@ nen repo classify [--target <owner/name>] [--repo <path>] [--json]
 | Fact | Source | Values |
 |---|---|---|
 | `role` | `nen/repos.json` under `--repo`: a repository under `maintained_tools` is **canon** (its product is the process -- a merge there changes how OTHER repositories behave, and `maintained_tools` wins over a `consumers` entry for the same slug); one under `consumers` or `pending_onboarding` is a **consumer**; one the registry does not know is **unregistered**, reported as such with a note and never rounded to consumer | `canon` · `consumer` · `unregistered` |
-| `kind` | `nen/contract.json`'s lane stacks: any application stack (`xcode-ios`, `gradle-android`, `nextjs`, `expo`, `gatsby`, `compose-desktop`, `dotnet-winui`, …) makes it a **product**; tooling stacks only make it a **process** repository; no `project` block is **unknown** | `product` · `process` · `unknown` |
+| `kind` | A declared `project.kind` (`product`, `process` or `library`) wins, with `sources.kind` naming what the lanes alone read -- it is the only way to be a **library** (reusable code shared across repositories, any stack). Otherwise `nen/contract.json`'s lane stacks: any application stack (`xcode-ios`, `gradle-android`, `nextjs`, `expo`, `gatsby`, `compose-desktop`, `dotnet-winui`, …) makes it a **product**; tooling stacks only make it a **process** repository; no `project` block is **unknown** | `product` · `process` · `unknown` |
 | `stack`, `lanes` | the default lane's stack and every lane name | — |
 | `defaultGate` | the maintainer's ruling of 2026-09-18: the gate is the repository's ROLE, not the file's kind | `G4` for canon, `G2` for a consumer, `null` (not derived) for an unregistered repository |
 
@@ -3925,6 +3988,51 @@ nen release self-check --repo . --pr-merge-sha pr-sha --previous-tag v1.0.0 --cu
 #pr-sha should list ITSELF -- it falls inside <v1.0.0>..<cut-point>
 ```
 (from `src/release/command.test.ts`'s scripted `git merge-base --is-ancestor pr-sha cut-point` (0) / `git merge-base --is-ancestor pr-sha v1.0.0` (1) case — this is local git-only, but the exact SHAs/tags are synthetic test values, so quoted rather than fabricated as a "real" release)
+
+### `nen release unit-check`
+
+Whether a pull request's changed files stay inside a DECLARED release unit —
+one of the three things the maintainer's 2026-09-26 ruling names as "judged
+by reading rather than by a nen command": reads the PR's changed files (`gh
+pr view --json files`) and compares them to `--repo`'s `nen/workflow.json`
+key `release.unitPaths` (a repo-relative prefix or narrow glob list, the same
+grammar `nen review scopes`/`report data --tiers` read — see
+`src/report/patterns.ts`).
+
+**Usage**
+
+```text
+nen release unit-check --pr <n|owner/name#n> [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--pr <n\|owner/name#n>` | **yes** | the pull request to check | a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` names the repository explicitly |
+| `--repo <path>` | **yes** | the checkout whose `nen/workflow.json` declares `release.unitPaths` | unbracketed in usage; omitted is refused at exit 2 (#28) |
+| `--json` | no | machine-readable result | — |
+
+**Output and exit codes** — Exit 0: every changed path is inside the unit.
+Exit 1: lists every path outside it (`outside: <path>` lines). Exit 2:
+usage, OR `--repo` declares no `release.unitPaths` — the refusal names the
+exact key to add (`{"release": {"unitPaths": ["src/my-unit/**"]}}`), because
+"every path is outside the unit" and "every path is inside it" are both a
+guess this verb refuses to make about a boundary the repository never drew.
+`--json`: `{ contract: "nen.release.unit-check/v0.1", target, pr, unitPaths,
+changedFiles, outsideUnit, ok }`.
+
+**Example**
+
+```bash
+nen release unit-check --pr acme/widgets#9
+```
+```text
+acme/widgets#9: 2 changed file(s), unit 'src/unit/**'
+1 path(s) outside the release unit
+  outside: docs/readme.md
+```
+(from `src/release/unitcheck.test.ts`/`src/release/command.test.ts`'s scripted `gh pr view 9 --repo acme/widgets --json files` case)
 
 <a id="family-changelog"></a>
 
@@ -5391,6 +5499,7 @@ by a server's log lines is not a document.
 | Field | Meaning |
 |---|---|
 | `project.lanes` | `{ "<lane>": { "stack": "<id>", "cwd": "<repo-relative>" } }`. A stack is a **per-lane** property: one repository is routinely several builds. |
+| `project.kind` | Optional. `product`, `process` (plugins and machinery) or `library` (reusable code shared across repositories, products and other process or library repositories, whatever its stack). Absent, [`repo classify`](#nen-repo-classify) derives `product` or `process` from the lanes' stacks; a declaration wins, and is the only way to read `library`. A value outside the three is refused by pointer at load. |
 | `project.defaultLane` | Which lane `--lane` defaults to. `null` is legal and means `--lane` is required — even when there is exactly one lane, so a second lane arriving later cannot silently change what a scripted `nen shu build` builds. |
 | `project.verbs` | `{ "<lane>": { "<verb>": <invocation> } }`, where an invocation is `{ exe, argv }`, `{ steps: [...] }`, or `{ unsupported: "<why>" }`. `argv` is a **list**, never a string: there is no shell, no expansion, no `sh -c`. An invocation may also carry `env` (NAME → value, passed to the child; only the names are ever reported), `artifacts` (repo-relative paths the verb produces, which nen reports and never creates) `stall` and `stdoutTo` (both below). |
 | `…<verb>.stall` | `{ elapsedMs, quietMs, onStall: { exe, argv }, maxStrikes }` — what to do about a step that stops making progress, **in the repository's own words**. Some toolchains hang: a compiler process wedges, the build stops emitting and never finishes, and the fix is to kill the wedged **grandchild** and let the build respawn it. Which process that is, and how it is named, is knowledge about a toolchain — the one thing this family's executor may not carry — so the repository declares the remedy as an ordinary argv and nen contributes the two numbers that decide **when**. It runs `onStall` once **both** budgets are past: `elapsedMs` since the step started **and** `quietMs` with no output. Both, never one — a guard that acted on silence alone would fire at a healthy build that legitimately went quiet early on. Each firing restarts the quiet window and costs a strike; after `maxStrikes` (default **2**) the step is reported **stalled** at exit 1. **Nen never kills the child it started**, at any strike count: on a stall it stops watching, stops waiting, and says the process is still running and is yours to stop. Both budgets and `maxStrikes` are required positive integers (a default for either budget would be nen deciding what "too long" means for somebody else's build) and `onStall` is argv, never a string. Declarable on an invocation (it reaches every step that declares none) or on one `steps[]` entry (which wins). Only on the verbs whose output nen READS — `build`, `ui-test`, `lint`, `archive`, `coverage`, `test-report` — since [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) hand this terminal to the child and `release`/`deploy` put bytes where nen will not intervene mid-flight; anywhere else is exit 2 naming the set. **A `stall` on the `test` row is refused at load, by pointer, with the reason "tests are untimed"** (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)): a test suite that goes quiet is a suite that is thinking, and a remedy fired at it would be nen deciding how long somebody else's tests may take. `--dry-run` prints the guard as a `stall guard: elapsed >N ms AND quiet >M ms (both)` line under the step it guards — see [the two-gate symptom](#stall-two-gate). |
@@ -7898,12 +8007,12 @@ Corrected line:
 
 ### `nen parse futon`
 
-Parses futon's own invocation grammar (`<repo>@<severity>[+] [then <terminal>]`) and resolves its repo token against `--repo`'s `nen/repos.json` registry -- `+` means this severity band OR HIGHER, a bare severity means that band alone, and `then tag`/`then tag+fanout` is read from the LAST whole-word `then`. The terminal clause is refused unless the resolved repo IS the one you are standing in (or `--self` names it): a consumer's release is a different job than the registry owner's, and this refusal is what keeps a consumer's futon invocation from accidentally cutting the OWNER's tag.
+Parses futon's own invocation grammar (`<repo>@<severity>[+] [then <terminal>]`, or `<repo>@<label> [then <terminal>]`) and resolves its repo token against `--repo`'s `nen/repos.json` registry -- `+` means this severity band OR HIGHER, a bare severity means that band alone, any other token is a **label** matched exactly (case and spaces kept, surrounding quotes stripped, never expanded: `+` on a label is refused with the exact-label line offered; `--json` carries `band: null, label: "<label>"`), and the `then` clause starts at the FIRST whole-word `then` after the `@`: `tag`/`tag+fanout` are the built-in terminals, kebab skill tokens joined by `+`, each optionally `plugin:`-prefixed and `@<target>`-suffixed (`getsuga+mugetsu@github`), are classified as a **skill chain** run in order, and anything else as **prose** kept verbatim (`--json` carries `then: {kind: "terminal"|"skills"|"prose", ...}`, `skills` with `steps: [{skill, target}]` beside the unchanged `terminal`). nen classifies a skill or prose step and never authorizes it -- whether it exists and may run is the calling skill's rule. A tag terminal is refused unless the resolved repo IS the one you are standing in (or `--self` names it): a consumer's release is a different job than the registry owner's, and this refusal is what keeps a consumer's futon invocation from accidentally cutting the OWNER's tag.
 
 **Usage**
 
 ```text
-nen parse futon --repo <path> "<repo>@<severity>[+] [then <terminal>]" [--self <owner/name>]
+nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
 ```
 
 **Arguments**
@@ -7927,6 +8036,36 @@ band: high+ -> critical, high
 terminal: tag
 ```
 (run for real against the bundled fixture repo)
+
+**The advance-go gate** (maintainer's ruling, 2026-09-26; the third of the
+"make it deterministic" trio). When the `then` clause classifies as a
+**skill chain**, every step whose skill is listed in `--repo`'s
+`nen/workflow.json` `futon.advanceGo` (skill name -> allowed repo kinds,
+from `product` | `process` | `library`) is annotated with `gate: {allowed,
+kind, reason}`. A step whose skill this map does **not** name gets no
+`gate` field at all -- exactly as `nen review scopes` raises a scope only
+for a path a declared pattern claims. The kind is [`nen repo
+classify`](#nen-repo-classify)'s own verdict for the RESOLVED band's repo,
+derivable only when that repo IS the checkout `--repo` names (its origin
+remote matches) -- otherwise `unknown`, and `unknown` FAILS CLOSED (never
+treated as allowed). A REFUSED step does **not** fail the parse: the exit
+code stays 0, and the plain rendering prints a `refused: <skill> (<reason>)`
+line for it. `'plugin:mugetsu'` and `'mugetsu'` are matched against the
+same map key -- the prefix is stripped on both the declaration and the
+step before comparison.
+
+```json
+{"futon": {"advanceGo": {"mugetsu": ["process", "library"], "kagutsuchi": ["product"]}}}
+```
+
+```bash
+nen parse futon --repo <path> "@high then mugetsu"
+```
+```text
+then: skills mugetsu (existence and authority are the caller's to check)
+  refused: mugetsu (repo kind 'product' is not an allowed repo kind for 'mugetsu' (allowed: process, library))
+```
+(from `src/grammar/command.test.ts`'s advance-go gate suite)
 
 ### `nen parse izanagi`
 

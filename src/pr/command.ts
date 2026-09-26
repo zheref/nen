@@ -34,6 +34,7 @@ import {
   parseCallerToken,
 } from "../cli/command.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED } from "./mergeunit.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
@@ -93,6 +94,7 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
+nen pr merge <n|owner/name#n> --release-unit --requirements-from <path> [--run] [--repo <path>] [--json]
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict and every
@@ -276,7 +278,38 @@ open:
   open for that head ('gh pr list --head'), reported with its number and url.
   --json: '{ contract: "${OPEN_CONTRACT}", number, url, head, base, draft,
   dryRun, existing }' -- number and url null on a dry run; existing true on
-  the exit-1 case, where they name the pull request already there.`;
+  the exit-1 case, where they name the pull request already there.
+
+merge:
+  THE ONE BOUNDED MERGE THIS BINARY PERFORMS. Never a general-purpose
+  merge -- refused (exit 2) without --release-unit: "nen pr merge only
+  merges a release unit". Evaluates, IN ORDER, every one of: 'pr ready'
+  (../verbs/pr_ready.ts's own gate, called IN-PROCESS -- never a
+  subprocess), 'pr body-check' (against the pull request's LIVE body and
+  --requirements-from), and 'release unit-check' (against --repo's
+  nen/workflow.json 'release.unitPaths'). ALL THREE must pass; every one
+  runs regardless of an earlier failure, and every verdict line is printed
+  VERBATIM, the same sentence the standalone verb would print.
+  Without --run: prints the plan only (every verdict line, plus the exact
+  'gh pr merge' argv that WOULD run) and exits 0 when all three passed, 1
+  otherwise. With --run: on a passing plan, executes 'gh pr merge <n>
+  --merge' -- NEVER --admin, NEVER --auto; this verb's own flag set
+  declares neither, so passing either is refused at the parser (exit 2)
+  before this subcommand ever runs.
+  --requirements-from <path>  The same '{ name, pattern }' JSON array
+                              'pr body-check' takes, checked against the
+                              pull request's CURRENT body read live over
+                              gh -- never a --body-from file, which could
+                              have drifted from what GitHub will merge.
+  --run                       Execute the merge once every gate passes.
+                              Omit it to see the plan only.
+  Exit codes: 0 merged, or a passing plan printed without --run; 1 at
+  least one gate did not pass; 2 usage (missing --release-unit, a bad ref,
+  missing --requirements-from, or an unknown flag such as --admin/--auto);
+  5 gh REFUSED the merge (branch protection, a required review, ...) --
+  its stderr and the exact command are printed for a human.
+  --json: '{ contract: "nen.pr.merge-unit/v0.1", target, pr, ready,
+  bodyOk, unitOk, ok, ran, mergeArgv, gates: [{ name, ok, lines }] }'.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -405,9 +438,9 @@ function ready(context: CommandContext): Promise<number> {
 
 export const prCommand: Command = {
   name: "pr",
-  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "threads", "open"],
+  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "threads", "open", "merge"],
   summary:
-    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, threads, open.",
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, threads, open, merge.",
   usage: USAGE,
   flags: {
     values: [
@@ -431,7 +464,7 @@ export const prCommand: Command = {
       "title-file",
       "head",
     ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft"],
+    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft", "release-unit", "run"],
   },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("pr", context.args, [
@@ -446,7 +479,18 @@ export const prCommand: Command = {
       "edit-body",
       "threads",
       "open",
+      "merge",
     ]);
+    // 'merge''s own two: a general-purpose merge is exactly what this
+    // subcommand refuses to be, so a caller who carried '--release-unit' or
+    // '--run' over from a 'merge' invocation onto any other subcommand is
+    // told rather than silently ignored.
+    if (subcommand !== "merge" && context.args.booleans.has("release-unit")) {
+      throw new VerbUsageError("--release-unit is only read by 'pr merge'.");
+    }
+    if (subcommand !== "merge" && context.args.booleans.has("run")) {
+      throw new VerbUsageError("--run is only read by 'pr merge'.");
+    }
     // --no-push sits in this family's shared boolean set (above) only because
     // that set has no per-subcommand table (review finding, PR #141) -- so
     // without this, it would parse cleanly and be silently ignored on every
@@ -515,6 +559,8 @@ export const prCommand: Command = {
         return threads(context);
       case "open":
         return open(context);
+      case "merge":
+        return doMerge(context);
       default:
         return editBody(context);
     }
@@ -1142,4 +1188,54 @@ function open(context: CommandContext): number {
   if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
   emit(context.io, context.json, outcome.report, outcome.lines);
   return outcome.report.existing ? 1 : 0;
+}
+
+/**
+ * `nen pr merge <ref> --release-unit`. See ./mergeunit.ts's header for the
+ * whole composition; this adapter only reads the CLI's own flags and renders.
+ */
+async function doMerge(context: CommandContext): Promise<number> {
+  if (!context.args.booleans.has("release-unit")) {
+    throw new VerbUsageError(
+      "nen pr merge only merges a release unit -- pass --release-unit to say so explicitly. There is no general-purpose merge here.",
+    );
+  }
+  const typedRef = context.args.positionals[2];
+  if (typedRef === undefined) {
+    throw new VerbUsageError("'pr merge' requires a pull-request reference. Try 'pr merge <n> --release-unit ...' or 'pr merge owner/name#<n> --release-unit ...'.");
+  }
+  const requirementsPath = requireValue(
+    context.args,
+    "requirements-from",
+    "The same '{ name, pattern }' JSON array 'pr body-check' takes, checked against the pull request's LIVE body.",
+  );
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/workflow.json declares release.unitPaths."),
+  });
+  const requirements = readJsonFile<readonly BodyRequirement[]>(requirementsPath, root);
+
+  let outcome;
+  try {
+    outcome = await mergeUnit({
+      typedRef,
+      repoFlag: context.repoFlag,
+      requirements,
+      run: context.args.booleans.has("run"),
+      seams: context.seams,
+      root,
+    });
+  } catch (error) {
+    if (error instanceof MergeUnitUsageError) throw new VerbUsageError(error.message);
+    throw error;
+  }
+
+  emit(context.io, context.json, outcome.report, outcome.lines);
+  if (!outcome.report.ok) {
+    // gh itself refused the merge (branch protection, a required review, ...)
+    // -- distinct from an ordinary gate failure (exit 1), so a caller's script
+    // can tell "the checks did not pass" from "the checks passed and gh said
+    // no" apart without parsing the message.
+    return outcome.report.ran === false && outcome.report.mergeArgv !== null ? EXIT_GH_REFUSED : 1;
+  }
+  return 0;
 }

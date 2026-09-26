@@ -26,9 +26,18 @@ import {
 } from "../changelog/completeness.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { GH, GIT, must, outputLines, type CommandResult } from "../seam/exec.js";
+import { loadWorkflow } from "../schema/workflow.js";
 import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflight.js";
 import { resolveReleaseTarget, ResolveTargetError } from "./target.js";
 import { checkSelfEnumeration, SelfCheckError } from "./selfcheck.js";
+import {
+  assembleUnitCheck,
+  fetchChangedFiles,
+  renderUnitCheck,
+  resolvePrRef,
+  resolveUnitCheckTarget,
+  UnitCheckRefError,
+} from "./unitcheck.js";
 
 /**
  * RELEASE_HOLD has THREE states, not two (review finding): `gh` failing to
@@ -104,6 +113,7 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
 const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
+nen release unit-check --pr <n|owner/name#n> [--repo <path>] [--json]
 
 preflight:
   Every precondition of the release preflight table, checked and reported
@@ -151,7 +161,26 @@ resolve-target:
 self-check:
   getsuga §3: whether a release PR should list itself -- true iff its own
   merge commit is reachable from --cut-point and not already reachable
-  from --previous-tag. A git-mechanical fact, never a judgement.`;
+  from --previous-tag. A git-mechanical fact, never a judgement.
+
+unit-check:
+  Reads the pull request's changed files (gh) and compares them to
+  --repo's declared release-unit path set (nen/workflow.json's
+  'release.unitPaths' -- a repo-relative prefix or glob list,
+  ../report/patterns.ts's grammar, the same one 'nen review scopes' reads).
+  A DETERMINISTIC replacement for a human re-reading the diff: this was one
+  of the three things "judged by reading rather than by a nen command"
+  (maintainer's ruling, 2026-09-26).
+  --pr <n|owner/name#n>     A bare number resolves against --repo's own
+                            'origin' remote; 'owner/name#n' names the
+                            repository explicitly.
+  Exit 0: every changed path is inside the unit. Exit 1: lists every path
+  outside it. Exit 2: usage, OR --repo declares no 'release.unitPaths' --
+  the message names the exact key to add, because "everything is outside
+  the unit" and "everything is inside it" are both a guess this verb
+  refuses to make about a boundary the repository never drew.
+  --json: '{ contract: "nen.release.unit-check/v0.1", target, pr,
+  unitPaths, changedFiles, outsideUnit, ok }'.`;
 
 const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 // DEFAULT_FRAGMENT_DIR now lives in ../changelog/completeness.ts, shared with
@@ -160,8 +189,8 @@ const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 
 export const releaseCommand: Command = {
   name: "release",
-  subcommands: ["preflight", "resolve-target", "self-check"],
-  summary: "Preflight table, target resolution, and a release PR's self-enumeration check.",
+  subcommands: ["preflight", "resolve-target", "self-check", "unit-check"],
+  summary: "Preflight table, target resolution, a release PR's self-enumeration check, and release-unit membership.",
   usage: USAGE,
   flags: {
     values: [
@@ -179,12 +208,14 @@ export const releaseCommand: Command = {
       "pr-merge-sha",
       "previous-tag",
       "cut-point",
+      "pr",
     ],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("release", context.args, ["preflight", "resolve-target", "self-check"]);
+    const subcommand = requireSubcommand("release", context.args, ["preflight", "resolve-target", "self-check", "unit-check"]);
     if (subcommand === "resolve-target") return resolveTarget(context);
     if (subcommand === "self-check") return selfCheck(context);
+    if (subcommand === "unit-check") return unitCheck(context);
 
     const repoSlug = requireValue(context.args, "repo-slug", "The owner/name to check RELEASE_HOLD and the tag against.");
     const tag = requireValue(context.args, "tag", "The tag being proposed for this cut.");
@@ -315,4 +346,55 @@ function selfCheck(context: CommandContext): number {
       : `#${result.prMergeSha} should NOT list itself -- it is outside <${result.previousTag}>..<${result.cutPoint}>`,
   );
   return 0;
+}
+
+function unitCheck(context: CommandContext): number {
+  const prRaw = requireValue(
+    context.args,
+    "pr",
+    "The pull request whose changed files are checked against this checkout's declared release unit.",
+  );
+  // Usage lists --repo unbracketed: this verb reads --repo's own
+  // nen/workflow.json AND (absent an explicit owner/name in --pr) its own
+  // origin remote, so a silent cwd default would check the wrong checkout's
+  // policy against the wrong repository's pull request (zheref/nen#28).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/workflow.json declares release.unitPaths."),
+  });
+
+  let ref;
+  try {
+    ref = resolvePrRef(prRaw);
+  } catch (error) {
+    if (error instanceof UnitCheckRefError) {
+      context.io.err(`nen: ${error.message}`);
+      return 2;
+    }
+    throw error;
+  }
+
+  const loaded = loadWorkflow(root);
+  const unitPaths = loaded.workflow.release.unitPaths;
+  if (unitPaths === null) {
+    context.io.err(
+      `nen: '${loaded.path}' declares no 'release.unitPaths'. This verb never guesses a boundary the repository never drew -- add the key, e.g. {"release": {"unitPaths": ["src/my-unit/**"]}}.`,
+    );
+    return 2;
+  }
+
+  let target;
+  try {
+    target = resolveUnitCheckTarget(context.seams, root, ref);
+  } catch (error) {
+    if (error instanceof UnitCheckRefError) {
+      context.io.err(`nen: ${error.message}`);
+      return 2;
+    }
+    throw error;
+  }
+
+  const changedFiles = fetchChangedFiles(context.seams, target, ref.number);
+  const report = assembleUnitCheck(target, ref.number, unitPaths, changedFiles);
+  emit(context.io, context.json, report, renderUnitCheck(report));
+  return report.ok ? 0 : 1;
 }

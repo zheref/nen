@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runFamily, type Io } from "../index.js";
@@ -1044,5 +1044,89 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     const out = result.out.join("\n");
     expect(out).toMatch(/nen pr edit-body --target <owner\/name> --pr <n> --body-file <path> \[--dry-run\]/);
     expect(out).toMatch(/does not read as a pull request/);
+  });
+});
+
+describe("nen pr merge -- the bounded merge, CLI wiring", () => {
+  function unitRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-merge-"));
+    mkdirSync(join(dir, "nen"), { recursive: true });
+    writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ release: { unitPaths: ["src/unit/**"] } }));
+    copyFileSync(join(BANKAI_REPO, "nen", "gates.json"), join(dir, "nen", "gates.json"));
+    return dir;
+  }
+
+  const REQUIREMENTS_FILE = tempFile("requirements.json", JSON.stringify([{ name: "how to verify", pattern: "## How to verify" }]));
+
+  it("only merges a release unit -- refused (exit 2) without --release-unit", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/nen pr merge only merges a release unit/);
+  });
+
+  it("requires a pull-request reference", async () => {
+    const result = await capture(["pr", "merge", "--release-unit", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
+    expect(result.code).toBe(2);
+  });
+
+  it("requires --requirements-from", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--release-unit"], unitRepo());
+    expect(result.code).toBe(2);
+  });
+
+  it("--release-unit is refused on every other subcommand", async () => {
+    const result = await capture(["pr", "staleness", "--release-unit", "--wakes-from", "x", "--last-activity", "2025-01-01T00:00:00Z", "--now", "2025-01-01T00:00:00Z"], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--release-unit is only read by 'pr merge'/);
+  });
+
+  it("--run is refused on every other subcommand", async () => {
+    const result = await capture(["pr", "staleness", "--run", "--wakes-from", "x", "--last-activity", "2025-01-01T00:00:00Z", "--now", "2025-01-01T00:00:00Z"], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--run is only read by 'pr merge'/);
+  });
+
+  // pr_ready's own transport (../verbs/pr_ready.ts's `deps.openSource`) is
+  // stubbed exhaustively, for a fully-passing chain, in ../pr/mergeunit.test.ts
+  // -- this CLI-level test proves only the ADAPTER: the positional ref, the
+  // --release-unit/--requirements-from/--repo wiring, and that a real
+  // invocation reaches the composition rather than refusing at the parser.
+  // 'pr ready' has no seam here at all (../verbs/pr_ready.ts reads its token
+  // from `process.env` directly, unlike every seam-driven verb in this
+  // family), so the deterministic way to reach it without a live network call
+  // is the same one ../verbs/pr_ready.test.ts's own CLI test uses: an
+  // explicitly unset token-env variable is not a flag this subcommand takes,
+  // so GH_TOKEN itself is cleared for the duration of this one test.
+  it("reaches the composition (no parser refusal) and reports 'pr ready' as unevaluated with no usable token", async () => {
+    const root = unitRepo();
+    const priorToken = process.env["GH_TOKEN"];
+    delete process.env["GH_TOKEN"];
+    try {
+      const script: readonly ScriptedCall[] = [
+        {
+          match: "gh pr view 9 --repo zheref/example --json body",
+          result: { code: 0, stdout: JSON.stringify({ body: "## Summary\ndone\n\n## How to verify\nrun\n" }) },
+        },
+        {
+          match: "gh pr view 9 --repo zheref/example --json files",
+          result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }] }) },
+        },
+      ];
+      const result = await capture(
+        ["pr", "merge", "zheref/example#9", "--release-unit", "--requirements-from", REQUIREMENTS_FILE],
+        root,
+        new ScriptedSeams(script),
+      );
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toMatch(/pr ready: unevaluated: no usable token/);
+      // The two gates that DID pass are printed too -- "every gate evaluated,
+      // every verdict line quoted verbatim" holds even when the overall merge
+      // does not.
+      expect(result.out.join("\n")).toMatch(/pr body-check: 1\/1 requirement/);
+      expect(result.out.join("\n")).toMatch(/every changed path is inside the release unit/);
+    } finally {
+      if (priorToken === undefined) delete process.env["GH_TOKEN"];
+      else process.env["GH_TOKEN"] = priorToken;
+    }
   });
 });
