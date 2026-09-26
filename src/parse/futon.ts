@@ -102,9 +102,56 @@ function expandBand(severity: Severity, plus: boolean): readonly Severity[] {
   return SEVERITY_ORDER.slice(0, index + 1);
 }
 
-// The clause starts at the FIRST whole-word `then` after the '@', so prose
-// after it may itself say "then" without splitting a second time.
-const THEN_SPLIT = /\bthen\b/gi;
+// The clause starts at the FIRST `then` after the '@' that has whitespace on
+// both sides (or the string's end) -- 'nen@then-review' names a LABEL, not a
+// then clause, because nothing after the word is whitespace. Prose after a
+// real split may itself say "then" without splitting a second time.
+const THEN_SPLIT = /(?<=\s)then(?=\s|$)/gi;
+
+// Where a quoted selector right after '@' ends, so a "then" living INSIDE the
+// quotes (`nen@"ready then ship"`) is never mistaken for the clause split --
+// it returns `atIndex` itself (a no-op search boundary) when the selector
+// is not quoted.
+function quotedSelectorEnd(text: string, atIndex: number): number {
+  const afterAt = text.slice(atIndex + 1);
+  const opened = /^(\s*)(["'])/.exec(afterAt);
+  if (opened === null) return atIndex;
+  const quote = opened[2] as string;
+  const openPos = atIndex + 1 + opened[1]!.length;
+  const closePos = text.indexOf(quote, openPos + 1);
+  return closePos === -1 ? atIndex : closePos;
+}
+
+// The skill name a chain step names, ignoring its '@target' suffix and any
+// namespace prefix -- what F3's reserved-name rule and F4's near-miss check
+// both actually compare against.
+function stepName(part: string): string {
+  const withoutTarget = (part.trim().split("@")[0] ?? "");
+  return withoutTarget.replace(/^[a-z0-9][a-z0-9-]*:/i, "").toLowerCase();
+}
+
+function editDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp: number[][] = Array.from({ length: rows }, (): number[] => new Array(cols).fill(0));
+  for (let i = 0; i < rows; i++) dp[i]![0] = i;
+  for (let j = 0; j < cols; j++) dp[0]![j] = j;
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      dp[i]![j] = a[i - 1] === b[j - 1] ? dp[i - 1]![j - 1]! : 1 + Math.min(dp[i - 1]![j]!, dp[i]![j - 1]!, dp[i - 1]![j - 1]!);
+    }
+  }
+  return dp[rows - 1]![cols - 1]!;
+}
+
+// A near-miss of one of the two built-in terminals (edit distance <= 2),
+// checked against the WHOLE normalized then-clause -- 'tga' misses 'tag' by
+// one substitution, 'tag+fanuot' misses 'tag+fanout' by a two-character swap.
+function nearMissTerminal(lowered: string): Terminal | null {
+  if (lowered !== "tag" && editDistance(lowered, "tag") <= 2) return "tag";
+  if (lowered !== "tag+fanout" && editDistance(lowered, "tag+fanout") <= 2) return "tag+fanout";
+  return null;
+}
 
 export function parseFutonInvocation(raw: string): FutonParseResult {
   const trimmed = raw.trim();
@@ -116,14 +163,14 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   }
 
   const atIndex = trimmed.indexOf("@");
-  const firstThen = [...trimmed.matchAll(THEN_SPLIT)].find((match): boolean => match.index > atIndex);
+  const thenSearchFrom = atIndex === -1 ? -1 : quotedSelectorEnd(trimmed, atIndex);
+  const firstThen = [...trimmed.matchAll(THEN_SPLIT)].find((match): boolean => match.index > thenSearchFrom);
   const head = firstThen === undefined ? trimmed : trimmed.slice(0, firstThen.index).trim();
   const tail = firstThen === undefined ? null : trimmed.slice(firstThen.index + firstThen[0].length).trim();
 
   let terminal: Terminal | null = null;
   let then: FutonThen | null = null;
   if (tail !== null) {
-    const lowered = tail.toLowerCase();
     if (tail === "") {
       return {
         ok: false,
@@ -133,12 +180,62 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
         },
       };
     }
+    // F12: normalize spacing around the chain operator BEFORE classifying, so
+    // 'getsuga + mugetsu' reads as the chain 'getsuga+mugetsu' rather than
+    // falling through to prose merely because someone put spaces around '+'.
+    const normalized = tail.replace(/\s*\+\s*/g, "+");
+    const lowered = normalized.toLowerCase();
     if (lowered === "tag" || lowered === "tag+fanout") {
-      terminal = lowered;
+      terminal = lowered as Terminal;
       then = { kind: "terminal", terminal };
-    } else {
-      const steps = /\s/.test(tail) ? null : parseSkillChain(tail);
+    } else if (!/\s/.test(normalized)) {
+      const parts = normalized.split("+");
+      if (parts.some((part): boolean => part.trim() === "")) {
+        return {
+          ok: false,
+          error: {
+            message: `'${tail}' is a malformed chain -- an empty step between '+'s. Expected '<skill>[@target][+<skill>[@target]...]'.`,
+            correctedLine: null,
+          },
+        };
+      }
+      // F4 checked BEFORE F3's reserved-name rule: a two-part typo like
+      // 'tag+fanuot' names 'tag' exactly, so the reserved-name rule would
+      // otherwise catch it first and report the wrong reason.
+      const nearMiss = nearMissTerminal(lowered);
+      if (nearMiss !== null) {
+        return {
+          ok: false,
+          error: {
+            message: `'${tail}' is not a recognized terminal (closest to 'then ${nearMiss}'). Expected 'then tag', 'then tag+fanout', 'then <skill>' or 'then <what to do, in prose>'.`,
+            correctedLine: `${head} then ${nearMiss}`,
+          },
+        };
+      }
+      const names = parts.map(stepName);
+      const hasTag = names.includes("tag");
+      const hasFanout = names.includes("fanout");
+      if (parts.length > 1 && (hasTag || hasFanout)) {
+        // F3: 'tag'/'fanout' are the terminal's own vocabulary and are
+        // reserved as step names -- a chain naming either alongside other
+        // steps escapes the terminal's self-repo rule.
+        const remaining = parts.filter((_part, index): boolean => names[index] !== "tag" && names[index] !== "fanout");
+        const suggestions: string[] = [];
+        if (hasTag && hasFanout) suggestions.push(`${head} then tag+fanout`);
+        else if (hasTag) suggestions.push(`${head} then tag`);
+        if (remaining.length > 0) suggestions.push(`${head} then ${remaining.join("+")}`);
+        return {
+          ok: false,
+          error: {
+            message: "'tag' and 'fanout' are reserved step names -- the terminal's own vocabulary -- and cannot appear inside a skill chain. Use 'then tag' or 'then tag+fanout' alone, or the chain without them.",
+            correctedLine: suggestions[0] ?? `${head} then tag`,
+          },
+        };
+      }
+      const steps = parseSkillChain(normalized);
       then = steps === null ? { kind: "prose", text: tail } : { kind: "skills", steps };
+    } else {
+      then = { kind: "prose", text: tail };
     }
   }
 
@@ -154,8 +251,12 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   }
   const repoPart = head.slice(0, at).trim();
   const selectorPart = head.slice(at + 1).trim();
-  const plus = selectorPart.endsWith("+");
-  const selectorRaw = stripQuotes((plus ? selectorPart.slice(0, -1) : selectorPart).trim());
+  // F6: a trailing '+' is the band operator ONLY when the token in front of
+  // it is itself a severity -- otherwise it stays part of the label verbatim
+  // ('c++' is the label 'c++', not the label 'c' with a refused '+').
+  const plusCandidate = selectorPart.endsWith("+") ? stripQuotes(selectorPart.slice(0, -1).trim()) : null;
+  const plus = plusCandidate !== null && (SEVERITY_ORDER as readonly string[]).includes(plusCandidate.toLowerCase());
+  const selectorRaw = stripQuotes((plus ? (plusCandidate as string) : selectorPart).trim());
   const suffix = tail === null ? "" : ` then ${tail}`;
   const repoPrefix = repoPart === "" ? "@" : `${repoPart}@`;
   if (selectorRaw === "") {
@@ -169,17 +270,9 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   }
   const severity = SEVERITY_ORDER.find((candidate): boolean => candidate === selectorRaw.toLowerCase());
   if (severity === undefined) {
-    // Any other token is a label, taken exactly as typed. `+` ranks
-    // severities only; a label has no order to expand along.
-    if (plus) {
-      return {
-        ok: false,
-        error: {
-          message: `'+' expands a severity band only; '${selectorRaw}' is a label, which is matched exactly and never expanded.`,
-          correctedLine: `${repoPrefix}${selectorRaw}${suffix}`,
-        },
-      };
-    }
+    // Any other token is a label, taken exactly as typed -- including one
+    // that ends in a literal '+' that failed F6's severity check above
+    // ('c++' is the label 'c++', not a refused severity-band operator).
     return {
       ok: true,
       value: { repoToken: repoPart === "" ? null : repoPart, band: null, label: selectorRaw, terminal, then },

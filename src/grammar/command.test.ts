@@ -271,6 +271,18 @@ describe("nen parse futon -- the advance-go gate on a skill chain", () => {
     const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { allowed: boolean } }[] } };
     expect(parsed.then.steps[0]?.gate?.allowed).toBe(true);
   });
+
+  // F1: the lookup once stripped ONLY 'plugin:', so a chain step from any
+  // other namespace ('hatsu:mugetsu') fell through as an unlisted skill and
+  // the gate fell open (unannotated) instead of judging it against the same
+  // 'mugetsu' policy key. A refusing kind must still refuse it.
+  it("matches a 'hatsu:'-prefixed step against the same unprefixed key, and still refuses a disallowed kind (F1)", async () => {
+    const root = gateRepo("product", { mugetsu: ["process", "library"] });
+    const result = await capture(["parse", "futon", "@high then hatsu:mugetsu", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { allowed: boolean; kind: string } }[] } };
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "product", reason: expect.any(String) });
+  });
 });
 
 describe("nen parse izanagi/izanami -- dispatch through the merged family", () => {

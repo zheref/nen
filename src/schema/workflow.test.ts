@@ -593,6 +593,28 @@ describe("review.scopes", () => {
   });
 });
 
+describe("release.unitPaths -- a bounded unit, never everything (FEI-3)", () => {
+  it("is null when the key is never declared", () => {
+    expect(parseWorkflow("<doc>", {}).release.unitPaths).toBeNull();
+  });
+
+  it("accepts a genuine bounded list", () => {
+    expect(parseWorkflow("<doc>", { release: { unitPaths: ["src/my-unit/**"] } }).release.unitPaths).toEqual([
+      "src/my-unit/**",
+    ]);
+  });
+
+  it.each(["**", "*", "**/*", "/**"])("refuses '%s', which claims every path", (pattern) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [pattern] } })).toThrow(
+      /claims every path in the checkout/,
+    );
+  });
+
+  it("does not refuse a narrower glob that merely starts with '*'", () => {
+    expect(parseWorkflow("<doc>", { release: { unitPaths: ["*.md"] } }).release.unitPaths).toEqual(["*.md"]);
+  });
+});
+
 describe("a workflow's FOURTEEN blocks", () => {
   it("says fourteen, now that release and futon are two of them", () => {
     expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's fourteen blocks are/);

@@ -68,12 +68,12 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     if (result.ok) expect(result.value.label).toBe("Good First Issue");
   });
 
-  it("refuses '+' on a label, offering the exact-label line", () => {
-    const result = parseFutonInvocation("bc@bug+");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.message).toMatch(/severity band only/);
-      expect(result.error.correctedLine).toBe("bc@bug");
+  it("keeps a trailing '+' as part of the label when the token before it is not a severity (F6)", () => {
+    const result = parseFutonInvocation("bc@c++");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.band).toBeNull();
+      expect(result.value.label).toBe("c++");
     }
   });
 
@@ -97,6 +97,89 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
         ],
       });
     }
+  });
+
+  // F3: 'tag'/'fanout' are the terminal's own vocabulary and are reserved as
+  // chain step names -- a chain naming either alongside other steps escapes
+  // the terminal's self-repo rule and must be refused, not silently chained.
+  it("refuses 'tag' inside a multi-step chain, suggesting the bare terminal (F3)", () => {
+    const result = parseFutonInvocation("bc@high then tag+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/reserved step names/);
+      expect(result.error.correctedLine).toBe("bc@high then tag");
+    }
+  });
+
+  it("refuses 'tag'+'fanout' alongside another step, suggesting the terminal and the remainder (F3)", () => {
+    const result = parseFutonInvocation("bc@high then tag+fanout+getsuga");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/reserved step names/);
+      expect(result.error.correctedLine).toBe("bc@high then tag+fanout");
+    }
+  });
+
+  // F4: a mistyped terminal is refused with the corrected line, not silently
+  // accepted as an ordinary (nonexistent) single-step skill chain.
+  it("refuses a near-miss single-token terminal, offering 'then tag' (F4)", () => {
+    const result = parseFutonInvocation("bc@high then tga");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/not a recognized terminal/);
+      expect(result.error.correctedLine).toBe("bc@high then tag");
+    }
+  });
+
+  it("refuses a near-miss 'tag+fanout', offering the corrected terminal (F4)", () => {
+    const result = parseFutonInvocation("bc@high then tag+fanuot");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/not a recognized terminal/);
+      expect(result.error.correctedLine).toBe("bc@high then tag+fanout");
+    }
+  });
+
+  // F5: the 'then' split needs whitespace on both sides, and never fires
+  // inside a quoted selector.
+  it("does not split on 'then' with no whitespace after it -- it is part of the label (F5)", () => {
+    const result = parseFutonInvocation("nen@then-review");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.label).toBe("then-review");
+      expect(result.value.then).toBeNull();
+    }
+  });
+
+  it("does not split on a 'then' living inside a quoted selector (F5)", () => {
+    const result = parseFutonInvocation('nen@"ready then ship"');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.label).toBe("ready then ship");
+      expect(result.value.then).toBeNull();
+    }
+  });
+
+  // F12: spacing around the chain operator is normalized before classifying,
+  // and an empty step between '+'s is a malformed chain, refused at exit 2.
+  it("normalizes spaces around '+' before classifying a chain (F12)", () => {
+    const result = parseFutonInvocation("bc@high then getsuga + mugetsu");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.then).toEqual({
+        kind: "skills",
+        steps: [
+          { skill: "getsuga", target: null },
+          { skill: "mugetsu", target: null },
+        ],
+      });
+    }
+  });
+
+  it("refuses an empty chain part as a malformed chain (F12)", () => {
+    const result = parseFutonInvocation("bc@high then a++b");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/malformed chain/);
   });
 
   it("a single skill is a one-step chain", () => {

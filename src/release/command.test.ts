@@ -602,8 +602,12 @@ describe("nen release unit-check -- CLI wiring", () => {
     const root = workflowRepo(["src/unit/**"]);
     const script: readonly ScriptedCall[] = [
       {
-        match: "gh pr view 9 --repo acme/widgets --json files",
-        result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }] }) },
+        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }]) },
+      },
+      {
+        match: "gh api repos/acme/widgets/pulls/9",
+        result: { code: 0, stdout: JSON.stringify({ changed_files: 1 }) },
       },
     ];
     const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
@@ -615,13 +619,17 @@ describe("nen release unit-check -- CLI wiring", () => {
     const root = workflowRepo(["src/unit/**"]);
     const script: readonly ScriptedCall[] = [
       {
-        match: "gh pr view 9 --repo acme/widgets --json files",
-        result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }, { path: "src/other/b.ts" }] }) },
+        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }, { filename: "src/other/b.ts" }]) },
+      },
+      {
+        match: "gh api repos/acme/widgets/pulls/9",
+        result: { code: 0, stdout: JSON.stringify({ changed_files: 2 }) },
       },
     ];
     const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
     expect(result.code).toBe(1);
-    expect(result.out.join("\n")).toMatch(/outside: src\/other\/b\.ts/);
+    expect(result.out.join("\n")).toMatch(/outside: "src\/other\/b\.ts"/);
   });
 
   it("resolves a bare --pr number against this checkout's own origin", async () => {
@@ -629,8 +637,12 @@ describe("nen release unit-check -- CLI wiring", () => {
     const script: readonly ScriptedCall[] = [
       { match: "git remote get-url origin", result: { code: 0, stdout: "git@github.com:acme/widgets.git\n" } },
       {
-        match: "gh pr view 9 --repo acme/widgets --json files",
-        result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }] }) },
+        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }]) },
+      },
+      {
+        match: "gh api repos/acme/widgets/pulls/9",
+        result: { code: 0, stdout: JSON.stringify({ changed_files: 1 }) },
       },
     ];
     const result = await capture(["release", "unit-check", "--pr", "9"], root, new ScriptedSeams(script).run);

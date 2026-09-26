@@ -37,6 +37,7 @@ import {
   resolvePrRef,
   resolveUnitCheckTarget,
   UnitCheckRefError,
+  UnitCheckTruncatedError,
 } from "./unitcheck.js";
 
 /**
@@ -113,7 +114,7 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
 const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
-nen release unit-check --pr <n|owner/name#n> [--repo <path>] [--json]
+nen release unit-check --pr <n|owner/name#n> --repo <path> [--json]
 
 preflight:
   Every precondition of the release preflight table, checked and reported
@@ -393,7 +394,16 @@ function unitCheck(context: CommandContext): number {
     throw error;
   }
 
-  const changedFiles = fetchChangedFiles(context.seams, target, ref.number);
+  let changedFiles;
+  try {
+    changedFiles = fetchChangedFiles(context.seams, target, ref.number);
+  } catch (error) {
+    if (error instanceof UnitCheckTruncatedError) {
+      context.io.err(`nen: ${error.message}`);
+      return 1;
+    }
+    throw error;
+  }
   const report = assembleUnitCheck(target, ref.number, unitPaths, changedFiles);
   emit(context.io, context.json, report, renderUnitCheck(report));
   return report.ok ? 0 : 1;

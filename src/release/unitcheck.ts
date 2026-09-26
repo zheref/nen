@@ -78,39 +78,89 @@ export function resolveUnitCheckTarget(seams: Seams, repoRoot: string, ref: Reso
   }
 }
 
-interface PrFilesResponse {
-  readonly files: readonly { readonly path: string }[];
+interface PrFileEntry {
+  readonly filename: string;
+  readonly previous_filename?: string;
+}
+
+interface PrMetaResponse {
+  // GitHub's REST API spells this `changed_files`; some gh-side JSON
+  // re-encodings camel-case it as `changedFiles` -- both are read.
+  readonly changed_files?: number;
+  readonly changedFiles?: number;
+}
+
+/** One changed path, and the path it was renamed FROM when it is a rename. */
+export interface ChangedFile {
+  readonly path: string;
+  /** `null` unless this entry is a rename -- then the file's PREVIOUS path. */
+  readonly previousPath: string | null;
+}
+
+/** GitHub silently caps a pull request's files listing at this many entries. */
+export const GITHUB_FILES_CAP = 3000;
+
+export class UnitCheckTruncatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnitCheckTruncatedError";
+  }
 }
 
 /**
- * `gh pr view <n> --json files`. ONE CALL, no diff-name-only shell-out: `gh`'s
- * own `--json files` field is exactly the changed-path list this check needs,
- * and reading it through the same `mustJson` seam every other gh-reading verb
- * in this binary uses keeps this verb's failure mode identical to theirs -- a
- * non-JSON or non-zero answer is a ToolError, never an empty file list read as
- * "nothing changed, so nothing is outside the unit".
+ * `gh api --paginate repos/{slug}/pulls/{n}/files`, not `gh pr view --json
+ * files` -- that field is ITSELF paginated by `gh` without `--paginate`
+ * ever being offered for it, so a large pull request's changed-path list
+ * silently truncated with no signal this check could read. `--paginate`
+ * walks every page of the REST endpoint directly, and gh's own
+ * array-response handling concatenates them into one JSON array.
+ *
+ * THE PR'S OWN `changed_files` COUNT IS CROSS-CHECKED against what the files
+ * endpoint actually returned, and a mismatch -- or hitting GitHub's
+ * documented 3000-file cap on this endpoint -- is refused rather than
+ * silently reported as a possibly-incomplete unit-check verdict: this verb
+ * exists so the answer is mechanical, and a mechanical answer over a
+ * truncated list is worse than no answer.
  */
-export function fetchChangedFiles(seams: Seams, target: Target, prNumber: number): readonly string[] {
-  const response = mustJson<PrFilesResponse>(seams, GH, [
-    "pr",
-    "view",
-    String(prNumber),
-    "--repo",
-    target.slug,
-    "--json",
-    "files",
+export function fetchChangedFiles(seams: Seams, target: Target, prNumber: number): readonly ChangedFile[] {
+  const entries = mustJson<readonly PrFileEntry[]>(seams, GH, [
+    "api",
+    "--paginate",
+    `repos/${target.slug}/pulls/${prNumber}/files`,
   ]);
-  return response.files.map((file): string => file.path);
+  const meta = mustJson<PrMetaResponse>(seams, GH, ["api", `repos/${target.slug}/pulls/${prNumber}`]);
+  const declared = meta.changed_files ?? meta.changedFiles;
+  if (declared !== undefined && declared !== entries.length) {
+    throw new UnitCheckTruncatedError(
+      `'${target.slug}#${prNumber}' reports ${declared} changed file(s), but the files endpoint returned ${entries.length} -- the list is truncated, so a unit-check verdict off it would be a guess about files this check never saw.`,
+    );
+  }
+  if (entries.length >= GITHUB_FILES_CAP) {
+    throw new UnitCheckTruncatedError(
+      `'${target.slug}#${prNumber}' has ${entries.length} changed file(s), at or past GitHub's ${GITHUB_FILES_CAP}-file cap on this endpoint -- the true changed-file set cannot be read past this point, so no unit-check verdict is given.`,
+    );
+  }
+  return entries.map((entry): ChangedFile => ({ path: entry.filename, previousPath: entry.previous_filename ?? null }));
 }
 
-/** The pure classification: every changed path the declared unit does NOT claim. */
+/**
+ * The pure classification: every changed path the declared unit does NOT
+ * claim. A RENAME'S PREVIOUS PATH IS CHECKED TOO -- a file the unit now owns
+ * that was renamed in FROM outside it is still a change outside the unit's
+ * declared boundary, not a change the unit can claim just because its new
+ * name happens to sit inside.
+ */
 export function outsideReleaseUnit(
-  changedFiles: readonly string[],
+  changedFiles: readonly ChangedFile[],
   unitPaths: readonly string[],
 ): readonly string[] {
-  return changedFiles.filter(
-    (path): boolean => !unitPaths.some((pattern): boolean => matchesPattern(path, pattern)),
-  );
+  const claims = (path: string): boolean => unitPaths.some((pattern): boolean => matchesPattern(path, pattern));
+  const outside: string[] = [];
+  for (const file of changedFiles) {
+    const previousOutside = file.previousPath !== null && !claims(file.previousPath);
+    if (!claims(file.path) || previousOutside) outside.push(file.path);
+  }
+  return outside;
 }
 
 export interface UnitCheckReport {
@@ -127,7 +177,7 @@ export function assembleUnitCheck(
   target: Target,
   prNumber: number,
   unitPaths: readonly string[],
-  changedFiles: readonly string[],
+  changedFiles: readonly ChangedFile[],
 ): UnitCheckReport {
   const outsideUnit = outsideReleaseUnit(changedFiles, unitPaths);
   return {
@@ -135,7 +185,7 @@ export function assembleUnitCheck(
     target: target.slug,
     pr: prNumber,
     unitPaths,
-    changedFiles,
+    changedFiles: changedFiles.map((file): string => file.path),
     outsideUnit,
     ok: outsideUnit.length === 0,
   };
@@ -148,6 +198,9 @@ export function renderUnitCheck(report: UnitCheckReport): readonly string[] {
       ? "every changed path is inside the release unit"
       : `${report.outsideUnit.length} path(s) outside the release unit`,
   ];
-  for (const path of report.outsideUnit) lines.push(`  outside: ${path}`);
+  // FEI-7: each path printed via JSON.stringify, so a path carrying a quote,
+  // control character or leading/trailing space is unambiguous in the text
+  // rendering rather than blending into the line around it.
+  for (const path of report.outsideUnit) lines.push(`  outside: ${JSON.stringify(path)}`);
   return lines;
 }

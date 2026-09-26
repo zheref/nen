@@ -34,7 +34,7 @@ import {
   parseCallerToken,
 } from "../cli/command.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
-import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED } from "./mergeunit.js";
+import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE } from "./mergeunit.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
@@ -94,7 +94,7 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
-nen pr merge <n|owner/name#n> --release-unit --requirements-from <path> [--run] [--repo <path>] [--json]
+nen pr merge <n|owner/name#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict and every
@@ -285,31 +285,45 @@ merge:
   merge -- refused (exit 2) without --release-unit: "nen pr merge only
   merges a release unit". Evaluates, IN ORDER, every one of: 'pr ready'
   (../verbs/pr_ready.ts's own gate, called IN-PROCESS -- never a
-  subprocess), 'pr body-check' (against the pull request's LIVE body and
-  --requirements-from), and 'release unit-check' (against --repo's
-  nen/workflow.json 'release.unitPaths'). ALL THREE must pass; every one
-  runs regardless of an earlier failure, and every verdict line is printed
-  VERBATIM, the same sentence the standalone verb would print.
+  subprocess), 'head pin' (GitHub's head must still be the exact commit
+  'pr ready' judged), 'pr body-check' (against the pull request's LIVE
+  body -- read as part of the ONE 'gh pr view' fetch this verb makes of
+  the pull request, never a second, independent read -- and
+  --requirements-from), 'release unit-check' (against 'release.unitPaths'
+  in nen/workflow.json AT THE PULL REQUEST'S BASE COMMIT, never this
+  checkout's own local file -- refused outright when the pull request
+  itself changes nen/workflow.json or nen/gates.json, or when a changed
+  path inside the unit is a symlink or a submodule), and 'whose pr'
+  (refused when the pull request is cross-repository, or its author is
+  not the authenticated viewer). EVERY GATE runs regardless of an earlier
+  failure, and every verdict line is printed VERBATIM, the same sentence
+  the standalone verb would print.
   Without --run: prints the plan only (every verdict line, plus the exact
-  'gh pr merge' argv that WOULD run) and exits 0 when all three passed, 1
+  'gh pr merge' argv that WOULD run) and exits 0 when every gate passed, 1
   otherwise. With --run: on a passing plan, executes 'gh pr merge <n>
-  --merge' -- NEVER --admin, NEVER --auto; this verb's own flag set
-  declares neither, so passing either is refused at the parser (exit 2)
-  before this subcommand ever runs.
+  --merge --match-head-commit <judgedHead>' -- NEVER --admin, NEVER
+  --auto; this verb's own flag set declares neither, so passing either is
+  refused at the parser (exit 2) before this subcommand ever runs. A
+  successful 'gh pr merge' exit is not itself trusted as "merged": the
+  pull request's state is re-read, and 'merged' is reported only when
+  GitHub's own state is MERGED -- otherwise this prints "queued (auto-merge
+  or merge queue)", naming the state read back.
   --requirements-from <path>  The same '{ name, pattern }' JSON array
-                              'pr body-check' takes, checked against the
-                              pull request's CURRENT body read live over
-                              gh -- never a --body-from file, which could
-                              have drifted from what GitHub will merge.
+                              'pr body-check' takes, validated (exists,
+                              non-empty, parseable) before ANY gh call.
   --run                       Execute the merge once every gate passes.
                               Omit it to see the plan only.
   Exit codes: 0 merged, or a passing plan printed without --run; 1 at
   least one gate did not pass; 2 usage (missing --release-unit, a bad ref,
-  missing --requirements-from, or an unknown flag such as --admin/--auto);
+  missing --requirements-from, --repo's origin naming a different
+  repository than the ref, or an unknown flag such as --admin/--auto);
   5 gh REFUSED the merge (branch protection, a required review, ...) --
-  its stderr and the exact command are printed for a human.
+  its stderr and the exact command are printed for a human; 6 gh could
+  not be RUN at all (not on PATH, no permission) -- distinct from 5,
+  which means gh ran and said no.
   --json: '{ contract: "nen.pr.merge-unit/v0.1", target, pr, ready,
-  bodyOk, unitOk, ok, ran, mergeArgv, gates: [{ name, ok, lines }] }'.`;
+  bodyOk, unitOk, pinOk, wholeOk, ok, ran, spawnFailed, judgedHead, state,
+  mergeArgv, gates: [{ name, ok, lines }] }'.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -1232,10 +1246,14 @@ async function doMerge(context: CommandContext): Promise<number> {
   emit(context.io, context.json, outcome.report, outcome.lines);
   if (!outcome.report.ok) {
     // gh itself refused the merge (branch protection, a required review, ...)
-    // -- distinct from an ordinary gate failure (exit 1), so a caller's script
-    // can tell "the checks did not pass" from "the checks passed and gh said
-    // no" apart without parsing the message.
-    return outcome.report.ran === false && outcome.report.mergeArgv !== null ? EXIT_GH_REFUSED : 1;
+    // -- distinct from an ordinary gate failure (exit 1) and from gh never
+    // having been RUNNABLE at all (F8(b)) -- so a caller's script can tell
+    // "the checks did not pass" from "the checks passed and gh said no" from
+    // "gh could not even be started" without parsing the message.
+    if (outcome.report.ran === false && outcome.report.mergeArgv !== null) {
+      return outcome.report.spawnFailed ? EXIT_GH_NOT_RUNNABLE : EXIT_GH_REFUSED;
+    }
+    return 1;
   }
   return 0;
 }

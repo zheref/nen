@@ -1051,7 +1051,6 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
   function unitRepo(): string {
     const dir = mkdtempSync(join(tmpdir(), "nen-pr-merge-"));
     mkdirSync(join(dir, "nen"), { recursive: true });
-    writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ release: { unitPaths: ["src/unit/**"] } }));
     copyFileSync(join(BANKAI_REPO, "nen", "gates.json"), join(dir, "nen", "gates.json"));
     return dir;
   }
@@ -1103,14 +1102,44 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     delete process.env["GH_TOKEN"];
     try {
       const script: readonly ScriptedCall[] = [
+        { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } },
         {
-          match: "gh pr view 9 --repo zheref/example --json body",
-          result: { code: 0, stdout: JSON.stringify({ body: "## Summary\ndone\n\n## How to verify\nrun\n" }) },
+          match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,body,isCrossRepository,author,state",
+          result: {
+            code: 0,
+            stdout: JSON.stringify({
+              headRefOid: "cafebabe",
+              baseRefOid: "deadbeef",
+              body: "## Summary\ndone\n\n## How to verify\nrun\n",
+              isCrossRepository: false,
+              author: { login: "someone" },
+              state: "OPEN",
+            }),
+          },
         },
         {
-          match: "gh pr view 9 --repo zheref/example --json files",
-          result: { code: 0, stdout: JSON.stringify({ files: [{ path: "src/unit/a.ts" }] }) },
+          match: "gh api --paginate repos/zheref/example/pulls/9/files",
+          result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }]) },
         },
+        {
+          match: "gh api repos/zheref/example/pulls/9",
+          result: { code: 0, stdout: JSON.stringify({ changed_files: 1 }) },
+        },
+        {
+          match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=deadbeef",
+          result: {
+            code: 0,
+            stdout: JSON.stringify({
+              content: Buffer.from(JSON.stringify({ release: { unitPaths: ["src/unit/**"] } })).toString("base64"),
+              encoding: "base64",
+            }),
+          },
+        },
+        {
+          match: "gh api repos/zheref/example/git/trees/cafebabe?recursive=1",
+          result: { code: 0, stdout: JSON.stringify({ tree: [{ path: "src/unit/a.ts", mode: "100644" }] }) },
+        },
+        { match: "gh api user --jq .login", result: { code: 0, stdout: "someone\n" } },
       ];
       const result = await capture(
         ["pr", "merge", "zheref/example#9", "--release-unit", "--requirements-from", REQUIREMENTS_FILE],

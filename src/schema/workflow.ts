@@ -963,6 +963,20 @@ function parseReleasePolicy(path: string, value: unknown): ReleasePolicy {
         "is empty. An empty pattern matches nothing, so it is a path list entry that can never bound the release unit",
       );
     }
+    // FEI-3: a pattern that claims EVERY path is not a bounded release unit --
+    // it is the same silent "everything passes" a null 'unitPaths' already
+    // refuses (this function's own header), just spelled as a glob instead of
+    // an absent key. Refused by the four literal spellings that mean "every
+    // path" in ../report/patterns.ts's grammar, not by evaluating the pattern
+    // against a sample path: a repository is entitled to a refusal that names
+    // the exact entry, not a guess about what it would have matched.
+    if (pattern === "**" || pattern === "*" || pattern === "**/*" || pattern === "/**") {
+      throw new SchemaError(
+        path,
+        `release.unitPaths[${index}]`,
+        `is '${pattern}', which claims every path in the checkout. A release unit that bounds nothing is never what declaring this key is meant to say -- name the actual prefix or glob this release owns, or drop the key entirely to leave the unit undeclared`,
+      );
+    }
     return pattern;
   });
   if (list.length === 0) {
@@ -994,10 +1008,12 @@ function parseFutonPolicy(path: string, value: unknown): FutonPolicy {
   for (const [name, entry] of Object.entries(record)) {
     if (name.startsWith("$")) continue;
     const pointer = `futon.advanceGo.${name}`;
-    // NORMALIZED WITHOUT A 'plugin:' PREFIX before the name check, so a
-    // maintainer who writes 'plugin:mugetsu' is held to the same slug rule as
-    // 'mugetsu' -- the prefix is a namespace marker, never part of the name.
-    const normalized = name.replace(/^plugin:/i, "").toLowerCase();
+    // NORMALIZED WITHOUT ANY NAMESPACE PREFIX before the name check, so a
+    // maintainer who writes 'plugin:mugetsu' or 'hatsu:mugetsu' is held to the
+    // same slug rule as 'mugetsu' -- the prefix is a namespace marker, never
+    // part of the name, and 'plugin:' is not the only namespace a skill chain
+    // step can carry (../parse/futon.ts's SKILL_STEP grammar).
+    const normalized = name.replace(/^[a-z0-9][a-z0-9-]*:/i, "").toLowerCase();
     requirePolicyName(path, pointer, normalized, "a skill name");
     const kindsRaw = requireArray(path, pointer, entry);
     if (kindsRaw.length === 0) {

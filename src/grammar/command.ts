@@ -296,7 +296,11 @@ function futon(context: CommandContext, raw: string): number {
       ? {
           kind: "skills" as const,
           steps: then.steps.map((step): FutonStep & { readonly gate?: { readonly allowed: boolean; readonly kind: string; readonly reason: string } } => {
-            const bareSkill = step.skill.replace(/^plugin:/i, "");
+            // Strip ANY namespace prefix, not just 'plugin:' -- a step like
+            // 'hatsu:mugetsu' names the same skill as 'mugetsu' and must be
+            // looked up under the same key parseFutonPolicy normalizes to,
+            // or the gate fails open for every namespace but one.
+            const bareSkill = step.skill.replace(/^[a-z0-9][a-z0-9-]*:/i, "");
             const allowedKinds = loadWorkflow(root).workflow.futon.advanceGo[bareSkill];
             if (allowedKinds === undefined) return step;
             const classification = classifyRepo({ seams: context.seams, root, target: resolved.slug });
