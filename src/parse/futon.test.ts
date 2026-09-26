@@ -68,6 +68,18 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     if (result.ok) expect(result.value.label).toBe("Good First Issue");
   });
 
+  it("preserves boundary spaces inside a quoted selector", () => {
+    const result = parseFutonInvocation('@" bug "');
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.label).toBe(" bug ");
+  });
+
+  it("still trims an unquoted selector", () => {
+    const result = parseFutonInvocation("bc@ bug ");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.label).toBe("bug");
+  });
+
   it("keeps a trailing '+' as part of the label when the token before it is not a severity (F6)", () => {
     const result = parseFutonInvocation("bc@c++");
     expect(result.ok).toBe(true);

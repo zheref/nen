@@ -1118,7 +1118,7 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
           },
         },
         {
-          match: "gh api --paginate repos/zheref/example/pulls/9/files",
+          match: "gh api --paginate --slurp repos/zheref/example/pulls/9/files",
           result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }]) },
         },
         {
@@ -1139,6 +1139,10 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
           match: "gh api repos/zheref/example/git/trees/cafebabe?recursive=1",
           result: { code: 0, stdout: JSON.stringify({ tree: [{ path: "src/unit/a.ts", mode: "100644" }] }) },
         },
+        {
+          match: "gh api repos/zheref/example/git/trees/deadbeef?recursive=1",
+          result: { code: 0, stdout: JSON.stringify({ tree: [{ path: "src/unit/a.ts", mode: "100644" }] }) },
+        },
         { match: "gh api user --jq .login", result: { code: 0, stdout: "someone\n" } },
       ];
       const result = await capture(
@@ -1157,5 +1161,33 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
       if (priorToken === undefined) delete process.env["GH_TOKEN"];
       else process.env["GH_TOKEN"] = priorToken;
     }
+  });
+
+  describe("validates the requirements file's shape before ever calling gh (item 4)", () => {
+    it("refuses (exit 2) an empty requirements array, with no gh call made", async () => {
+      const emptyFile = tempFile("empty-requirements.json", JSON.stringify([]));
+      const seams = new ScriptedSeams([]);
+      const result = await capture(
+        ["pr", "merge", "zheref/example#9", "--release-unit", "--requirements-from", emptyFile],
+        unitRepo(),
+        seams,
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/requirement list is empty/);
+      expect(seams.calls.length).toBe(0);
+    });
+
+    it("refuses (exit 2) a requirement with an unparseable regex, with no gh call made", async () => {
+      const badFile = tempFile("bad-requirements.json", JSON.stringify([{ name: "broken", pattern: "(" }]));
+      const seams = new ScriptedSeams([]);
+      const result = await capture(
+        ["pr", "merge", "zheref/example#9", "--release-unit", "--requirements-from", badFile],
+        unitRepo(),
+        seams,
+      );
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/unparseable pattern/);
+      expect(seams.calls.length).toBe(0);
+    });
   });
 });

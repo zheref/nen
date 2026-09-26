@@ -604,7 +604,7 @@ describe("release.unitPaths -- a bounded unit, never everything (FEI-3)", () => 
     ]);
   });
 
-  it.each(["**", "*", "**/*", "/**"])("refuses '%s', which claims every path", (pattern) => {
+  it.each(["**", "**/*"])("refuses '%s', which claims every path", (pattern) => {
     expect(() => parseWorkflow("<doc>", { release: { unitPaths: [pattern] } })).toThrow(
       /claims every path in the checkout/,
     );
@@ -612,6 +612,45 @@ describe("release.unitPaths -- a bounded unit, never everything (FEI-3)", () => 
 
   it("does not refuse a narrower glob that merely starts with '*'", () => {
     expect(parseWorkflow("<doc>", { release: { unitPaths: ["*.md"] } }).release.unitPaths).toEqual(["*.md"]);
+  });
+
+  it("accepts a bare '*' -- one path segment, never every path (item 6)", () => {
+    expect(parseWorkflow("<doc>", { release: { unitPaths: ["*"] } }).release.unitPaths).toEqual(["*"]);
+  });
+
+  it("refuses '/**' as an invalid absolute pattern, with its own message, not the catch-all one (item 6)", () => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: ["/**"] } })).toThrow(
+      /begins with a leading '\/'/,
+    );
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: ["/**"] } })).not.toThrow(
+      /claims every path in the checkout/,
+    );
+  });
+
+  it("refuses a glob the shared matcher proves universal even though it is not one of the literal spellings (item 6)", () => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: ["**/**"] } })).toThrow(
+      /claims every path in the checkout/,
+    );
+  });
+});
+
+describe("futon.advanceGo -- duplicate names after namespace normalization are refused (item 7)", () => {
+  it("accepts distinct skill names", () => {
+    const parsed = parseWorkflow("<doc>", { futon: { advanceGo: { mugetsu: ["product"], getsuga: ["product"] } } });
+    expect(parsed.futon.advanceGo["mugetsu"]).toEqual(["product"]);
+    expect(parsed.futon.advanceGo["getsuga"]).toEqual(["product"]);
+  });
+
+  it("refuses 'mugetsu' and 'plugin:mugetsu' -- the same gate under two spellings", () => {
+    expect(() =>
+      parseWorkflow("<doc>", { futon: { advanceGo: { mugetsu: ["product"], "plugin:mugetsu": ["library"] } } }),
+    ).toThrow(/normalizes to 'mugetsu', the same as 'futon\.advanceGo\.mugetsu'/);
+  });
+
+  it("refuses two differently-namespaced spellings of the same name ('hatsu:mugetsu' vs 'plugin:mugetsu')", () => {
+    expect(() =>
+      parseWorkflow("<doc>", { futon: { advanceGo: { "hatsu:mugetsu": ["product"], "plugin:mugetsu": ["library"] } } }),
+    ).toThrow(/normalizes to 'mugetsu'/);
   });
 });
 

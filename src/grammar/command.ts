@@ -308,7 +308,7 @@ function futon(context: CommandContext, raw: string): number {
             const allowed = kind !== "unknown" && (allowedKinds as readonly string[]).includes(kind);
             const reason =
               kind === "unknown"
-                ? `'${resolved.slug}''s repo kind is unknown (its contract is not this checkout's, or declares none) -- an unclassifiable target is never treated as allowed`
+                ? `${resolved.slug}'s repo kind is unknown (its contract is not this checkout's, or declares none) -- an unclassifiable target is never treated as allowed`
                 : allowed
                   ? `'${kind}' is an allowed repo kind for '${bareSkill}'`
                   : `'${kind}' is not an allowed repo kind for '${bareSkill}' (allowed: ${allowedKinds.join(", ")})`;

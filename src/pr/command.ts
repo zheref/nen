@@ -41,7 +41,7 @@ import { loadGateIdentities } from "../schema/gates.js";
 import type { Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
-import { checkBody, type BodyRequirement } from "./bodycheck.js";
+import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
 import { computeStaleness, type VerifiedWake } from "./staleness.js";
 import { nextBlocker } from "./blocker.js";
 import { cascadeMain } from "./cascade.js";
@@ -1226,7 +1226,14 @@ async function doMerge(context: CommandContext): Promise<number> {
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the checkout whose nen/workflow.json declares release.unitPaths."),
   });
-  const requirements = readJsonFile<readonly BodyRequirement[]>(requirementsPath, root);
+  const rawRequirements = readJsonFile<unknown>(requirementsPath, root);
+  try {
+    validateRequirements(rawRequirements);
+  } catch (error) {
+    if (error instanceof BodyCheckError) throw new VerbUsageError(`'${requirementsPath}': ${error.message}`);
+    throw error;
+  }
+  const requirements: readonly BodyRequirement[] = rawRequirements;
 
   let outcome;
   try {

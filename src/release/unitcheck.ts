@@ -112,8 +112,13 @@ export class UnitCheckTruncatedError extends Error {
  * files` -- that field is ITSELF paginated by `gh` without `--paginate`
  * ever being offered for it, so a large pull request's changed-path list
  * silently truncated with no signal this check could read. `--paginate`
- * walks every page of the REST endpoint directly, and gh's own
- * array-response handling concatenates them into one JSON array.
+ * walks every page of the REST endpoint directly, but WITHOUT `--slurp` it
+ * writes each page's own JSON array to stdout back-to-back -- one page, one
+ * array, no wrapping structure joining them -- which is not one parseable
+ * JSON document once there is more than one page. `--slurp` is what turns
+ * that into a single JSON array OF each page's array, which `JSON.parse`
+ * can read, and which this function then flattens back into one changed-file
+ * list.
  *
  * THE PR'S OWN `changed_files` COUNT IS CROSS-CHECKED against what the files
  * endpoint actually returned, and a mismatch -- or hitting GitHub's
@@ -123,11 +128,13 @@ export class UnitCheckTruncatedError extends Error {
  * truncated list is worse than no answer.
  */
 export function fetchChangedFiles(seams: Seams, target: Target, prNumber: number): readonly ChangedFile[] {
-  const entries = mustJson<readonly PrFileEntry[]>(seams, GH, [
+  const pages = mustJson<readonly (readonly PrFileEntry[])[]>(seams, GH, [
     "api",
     "--paginate",
+    "--slurp",
     `repos/${target.slug}/pulls/${prNumber}/files`,
   ]);
+  const entries = pages.flat();
   const meta = mustJson<PrMetaResponse>(seams, GH, ["api", `repos/${target.slug}/pulls/${prNumber}`]);
   const declared = meta.changed_files ?? meta.changedFiles;
   if (declared !== undefined && declared !== entries.length) {

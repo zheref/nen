@@ -291,9 +291,15 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   };
 }
 
+/**
+ * Strips a matching pair of surrounding quotes. The unquoted branch returns
+ * `text` as given (the caller has already trimmed it); the quoted branch
+ * returns the interior VERBATIM -- boundary spaces inside the quotes are the
+ * label, e.g. `@" bug "` names the label `' bug '`, not `'bug'`.
+ */
 function stripQuotes(text: string): string {
   const match = /^(["'])(.*)\1$/.exec(text);
-  return match === null ? text : (match[2] ?? "").trim();
+  return match === null ? text : (match[2] ?? "");
 }
 
 /** The selector as typed back: `high+`, `medium`, or a label. */

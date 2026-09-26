@@ -366,13 +366,31 @@ function fetchBaseReleasePolicy(
   return { ok: true, unitPaths: workflow.release.unitPaths };
 }
 
+/**
+ * The recursive git trees API silently caps its response and reports
+ * `truncated: true` rather than an error -- a mode check run over a
+ * truncated tree could miss the very entry it exists to catch, so this is
+ * refused rather than treated as "no bad mode found" (Feitan FEI-8 / gate
+ * failing closed).
+ */
+export class TreeTruncatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TreeTruncatedError";
+  }
+}
+
 /** `repos/{slug}/git/trees/<sha>?recursive=1`, keyed by path, for the mode check FEI-8 wants. */
 function fetchTreeModes(seams: Seams, target: Target, sha: string): ReadonlyMap<string, string> {
-  const tree = mustJson<{ readonly tree?: readonly { readonly path?: string; readonly mode?: string }[] }>(
-    seams,
-    GH,
-    ["api", `repos/${target.slug}/git/trees/${sha}?recursive=1`],
-  );
+  const tree = mustJson<{
+    readonly tree?: readonly { readonly path?: string; readonly mode?: string }[];
+    readonly truncated?: boolean;
+  }>(seams, GH, ["api", `repos/${target.slug}/git/trees/${sha}?recursive=1`]);
+  if (tree.truncated === true) {
+    throw new TreeTruncatedError(
+      `'${target.slug}'@${sha}'s recursive tree is truncated (GitHub's own cap on this endpoint) -- a mode check over an incomplete tree could miss the very entry it exists to catch, so this is refused rather than reported as clean.`,
+    );
+  }
   const modes = new Map<string, string>();
   for (const entry of tree.tree ?? []) {
     if (entry.path !== undefined && entry.mode !== undefined) modes.set(entry.path, entry.mode);
@@ -444,20 +462,37 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
   // FEI-8: a changed path the unit claims by NAME may still be a symlink or a
   // submodule entry rather than an ordinary file -- neither is something
   // `outsideReleaseUnit`'s path-pattern comparison can see, since both are a
-  // property of the git tree, not the path string.
-  let modes: ReadonlyMap<string, string>;
+  // property of the git tree, not the path string. Both the HEAD tree and the
+  // BASE tree are read: a PR that DELETES a symlink or gitlink inside the
+  // unit leaves no trace of the forbidden mode at HEAD, only at BASE, and a
+  // rename's PREVIOUS path is checked against the base tree the same way its
+  // new path is checked against head.
+  let headModes: ReadonlyMap<string, string>;
+  let baseModes: ReadonlyMap<string, string>;
   try {
-    modes = fetchTreeModes(options.seams, options.target, options.prOnce.headRefOid);
+    headModes = fetchTreeModes(options.seams, options.target, options.prOnce.headRefOid);
+    baseModes = fetchTreeModes(options.seams, options.target, options.prOnce.baseRefOid);
   } catch (error) {
-    if (error instanceof ToolError) {
-      return { name: "release unit-check", ok: false, lines: [...lines, `release unit-check: could not read the head commit's tree to check for a symlink or submodule (${redact(error.message)})`] };
+    if (error instanceof ToolError || error instanceof TreeTruncatedError) {
+      return { name: "release unit-check", ok: false, lines: [...lines, `release unit-check: could not read a commit's tree to check for a symlink or submodule (${redact(error.message)})`] };
     }
     throw error;
   }
   const insideUnit = changedFiles.filter((file): boolean => !report.outsideUnit.includes(file.path));
-  const badModePaths = insideUnit
-    .map((file): { readonly path: string; readonly mode: string | undefined } => ({ path: file.path, mode: modes.get(file.path) }))
-    .filter((entry): boolean => entry.mode === SYMLINK_MODE || entry.mode === SUBMODULE_MODE);
+  const modeLabel = (mode: string): string => (mode === SYMLINK_MODE ? "symlink" : "submodule");
+  const badModePaths: { readonly path: string; readonly mode: string }[] = [];
+  for (const file of insideUnit) {
+    const headMode = headModes.get(file.path);
+    if (headMode === SYMLINK_MODE || headMode === SUBMODULE_MODE) badModePaths.push({ path: file.path, mode: headMode });
+    const baseMode = baseModes.get(file.path);
+    if (baseMode === SYMLINK_MODE || baseMode === SUBMODULE_MODE) badModePaths.push({ path: file.path, mode: baseMode });
+    if (file.previousPath !== null) {
+      const previousBaseMode = baseModes.get(file.previousPath);
+      if (previousBaseMode === SYMLINK_MODE || previousBaseMode === SUBMODULE_MODE) {
+        badModePaths.push({ path: file.previousPath, mode: previousBaseMode });
+      }
+    }
+  }
   if (badModePaths.length > 0) {
     return {
       name: "release unit-check",
@@ -466,7 +501,7 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
         ...lines,
         ...badModePaths.map(
           (entry): string =>
-            `release unit-check: ${JSON.stringify(entry.path)} inside the release unit is a ${entry.mode === SYMLINK_MODE ? "symlink" : "submodule"} (mode ${entry.mode}), not an ordinary file -- refused.`,
+            `release unit-check: ${JSON.stringify(entry.path)} inside the release unit is a ${modeLabel(entry.mode)} (mode ${entry.mode}), not an ordinary file -- refused.`,
         ),
       ],
     };

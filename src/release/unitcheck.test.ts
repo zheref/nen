@@ -53,7 +53,7 @@ describe("fetchChangedFiles", () => {
   it("reads the file paths off gh api --paginate .../files (F2)", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
         result: { code: 0, stdout: JSON.stringify([{ filename: "src/a.ts" }, { filename: "docs/b.md" }]) },
       },
       {
@@ -68,10 +68,39 @@ describe("fetchChangedFiles", () => {
     ]);
   });
 
+  it("flattens two pages of --slurp output into one changed-file list (item 5)", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
+        // `--slurp` wraps each page's own JSON array inside one outer array
+        // -- this is what TWO pages of the underlying endpoint look like
+        // once `gh` has slurped them, as opposed to the un-slurped
+        // concatenation of two bare arrays back-to-back.
+        result: {
+          code: 0,
+          stdout: JSON.stringify([
+            [{ filename: "src/a.ts" }, { filename: "src/b.ts" }],
+            [{ filename: "docs/c.md" }],
+          ]),
+        },
+      },
+      {
+        match: "gh api repos/acme/widgets/pulls/9",
+        result: { code: 0, stdout: JSON.stringify({ changed_files: 3 }) },
+      },
+    ]);
+    const files = fetchChangedFiles(seams, { owner: "acme", repo: "widgets", slug: "acme/widgets" }, 9);
+    expect(files).toEqual([
+      { path: "src/a.ts", previousPath: null },
+      { path: "src/b.ts", previousPath: null },
+      { path: "docs/c.md", previousPath: null },
+    ]);
+  });
+
   it("reads previous_filename for a rename (F2)", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
         result: { code: 0, stdout: JSON.stringify([{ filename: "src/new.ts", previous_filename: "src/old.ts" }]) },
       },
       {
@@ -89,7 +118,7 @@ describe("fetchChangedFiles", () => {
   it("refuses when the PR's changed_files count disagrees with the files endpoint (F2)", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
         result: { code: 0, stdout: JSON.stringify([{ filename: "src/a.ts" }]) },
       },
       {
@@ -104,7 +133,7 @@ describe("fetchChangedFiles", () => {
     const many = Array.from({ length: 3000 }, (_unused, index): { filename: string } => ({ filename: `src/f${index}.ts` }));
     const seams = new ScriptedSeams([
       {
-        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
         result: { code: 0, stdout: JSON.stringify(many) },
       },
       {

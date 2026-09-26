@@ -602,7 +602,7 @@ describe("nen release unit-check -- CLI wiring", () => {
     const root = workflowRepo(["src/unit/**"]);
     const script: readonly ScriptedCall[] = [
       {
-        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
         result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }]) },
       },
       {
@@ -619,7 +619,7 @@ describe("nen release unit-check -- CLI wiring", () => {
     const root = workflowRepo(["src/unit/**"]);
     const script: readonly ScriptedCall[] = [
       {
-        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
         result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }, { filename: "src/other/b.ts" }]) },
       },
       {
@@ -637,7 +637,7 @@ describe("nen release unit-check -- CLI wiring", () => {
     const script: readonly ScriptedCall[] = [
       { match: "git remote get-url origin", result: { code: 0, stdout: "git@github.com:acme/widgets.git\n" } },
       {
-        match: "gh api --paginate repos/acme/widgets/pulls/9/files",
+        match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
         result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }]) },
       },
       {

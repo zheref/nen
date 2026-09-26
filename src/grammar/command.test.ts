@@ -251,9 +251,13 @@ describe("nen parse futon -- the advance-go gate on a skill chain", () => {
     const result = await capture(["parse", "futon", "KP@high then mugetsu", "--repo", root], script, { repoFlag: root, json: true });
     expect(result.code).toBe(0);
     const parsed = JSON.parse(result.out.join("\n")) as {
-      then: { steps: { skill: string; gate?: { allowed: boolean; kind: string } }[] };
+      then: { steps: { skill: string; gate?: { allowed: boolean; kind: string; reason: string } }[] };
     };
     expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "unknown", reason: expect.any(String) });
+    // item 10: a proper possessive ("zheref/KroApple's"), never the doubled
+    // apostrophe a literal-quoted slug used to produce ("...''s").
+    expect(parsed.then.steps[0]?.gate?.reason).toMatch(/^zheref\/KroApple's repo kind is unknown/);
+    expect(parsed.then.steps[0]?.gate?.reason).not.toContain("''s");
   });
 
   it("leaves an UNLISTED skill unannotated -- no 'gate' field at all", async () => {

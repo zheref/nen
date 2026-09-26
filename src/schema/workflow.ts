@@ -59,6 +59,7 @@ import {
 } from "./errors.js";
 import { requireEnum, withinOneEdit } from "./contract.js";
 import { readSchemaJson, resolveSchemaFile, type SchemaLocation } from "./source.js";
+import { matchesPattern } from "../report/patterns.js";
 
 /** Where the policy file lives inside the target repository. */
 export const WORKFLOW_FILE = "nen/workflow.json";
@@ -950,6 +951,39 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
  * loader states only what a caller may parse, never what the declared paths
  * mean for a repository's own release process.
  */
+/**
+ * A handful of repo-relative paths, deliberately varied in segment depth and
+ * shape, that a pattern must claim EVERY one of to be provably universal.
+ * This is not exhaustive proof for every conceivable glob, but it is the same
+ * kind of proof ../report/patterns.ts's own grammar admits: a pattern that
+ * fails to claim even one of these plainly ordinary paths is not a pattern
+ * that claims every path in the checkout, whatever it looks like on the page.
+ */
+const UNIVERSAL_PROBE_PATHS: readonly string[] = [
+  "a",
+  "a.ts",
+  "a/b",
+  "a/b/c",
+  ".hidden",
+  "very/deeply/nested/path/to/a/file.ts",
+];
+
+/**
+ * True only when `pattern` claims every one of `UNIVERSAL_PROBE_PATHS` under
+ * ../report/patterns.ts's own `matchesPattern` -- the SAME grammar `release.
+ * unitPaths` and `review.scopes` are both read by, so a pattern this function
+ * calls universal is universal by the one matcher this binary actually runs
+ * it through, never by a second, hand-maintained list of "the strings that
+ * mean everything" that could drift from what the matcher itself does.
+ *
+ * `*` (a single path segment) is NOT universal by this proof -- it fails to
+ * claim `a/b`, exactly as a real diff's multi-segment paths would not be
+ * claimed by it either.
+ */
+function isUniversalPattern(pattern: string): boolean {
+  return UNIVERSAL_PROBE_PATHS.every((probe): boolean => matchesPattern(probe, pattern));
+}
+
 function parseReleasePolicy(path: string, value: unknown): ReleasePolicy {
   const raw = block(path, "release", value, RELEASE_KEYS, "A release policy's one key is");
   const unitPathsRaw = raw["unitPaths"];
@@ -963,14 +997,31 @@ function parseReleasePolicy(path: string, value: unknown): ReleasePolicy {
         "is empty. An empty pattern matches nothing, so it is a path list entry that can never bound the release unit",
       );
     }
+    // A LEADING '/' IS AN INVALID ABSOLUTE PATTERN, refused with its own
+    // message rather than folded into the catch-all check below: every path
+    // this policy is ever compared against (../release/unitcheck.ts's
+    // changed-file paths) is already repository-relative, so '/**' does not
+    // claim every path -- under ../report/patterns.ts's own grammar it claims
+    // none, since no repo-relative path begins with '/'. That is not "bounds
+    // nothing" in the same useful sense a real catch-all is; it is a typo for
+    // '**' that would otherwise be preserved silently.
+    if (pattern.startsWith("/")) {
+      throw new SchemaError(
+        path,
+        `release.unitPaths[${index}]`,
+        `is '${pattern}', which begins with a leading '/'. Every path this policy is compared against is already repository-relative, so a pattern starting with '/' can never match anything -- drop the leading slash (write '**' for every path, or a bare prefix/glob for one directory).`,
+      );
+    }
     // FEI-3: a pattern that claims EVERY path is not a bounded release unit --
     // it is the same silent "everything passes" a null 'unitPaths' already
     // refuses (this function's own header), just spelled as a glob instead of
-    // an absent key. Refused by the four literal spellings that mean "every
-    // path" in ../report/patterns.ts's grammar, not by evaluating the pattern
-    // against a sample path: a repository is entitled to a refusal that names
-    // the exact entry, not a guess about what it would have matched.
-    if (pattern === "**" || pattern === "*" || pattern === "**/*" || pattern === "/**") {
+    // an absent key. Proven universal by actually running ../report/
+    // patterns.ts's own `matchesPattern` over a handful of representative
+    // paths (`isUniversalPattern` above), not by a fixed list of literal
+    // spellings -- '*' (one path segment) is deliberately NOT refused here:
+    // it claims a single top-level entry, never a multi-segment path, so it
+    // is a normal, bounded pattern under this same grammar.
+    if (isUniversalPattern(pattern)) {
       throw new SchemaError(
         path,
         `release.unitPaths[${index}]`,
@@ -1005,6 +1056,13 @@ function parseFutonPolicy(path: string, value: unknown): FutonPolicy {
   }
   const record = requireRecord(path, "futon.advanceGo", advanceGoRaw);
   const advanceGo = emptyRecord<readonly AdvanceGoKind[]>();
+  // Tracks each NORMALIZED name back to the first raw key that produced it,
+  // so a second key that normalizes to the same name is refused by pointer,
+  // naming both the key being read and the one it collides with -- 'mugetsu'
+  // and 'plugin:mugetsu' are the same gate under two spellings, and a second
+  // entry would otherwise silently overwrite the first with no signal that
+  // anything was lost.
+  const seenBy = new Map<string, string>();
   for (const [name, entry] of Object.entries(record)) {
     if (name.startsWith("$")) continue;
     const pointer = `futon.advanceGo.${name}`;
@@ -1015,6 +1073,15 @@ function parseFutonPolicy(path: string, value: unknown): FutonPolicy {
     // step can carry (../parse/futon.ts's SKILL_STEP grammar).
     const normalized = name.replace(/^[a-z0-9][a-z0-9-]*:/i, "").toLowerCase();
     requirePolicyName(path, pointer, normalized, "a skill name");
+    const firstKey = seenBy.get(normalized);
+    if (firstKey !== undefined) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `normalizes to '${normalized}', the same as 'futon.advanceGo.${firstKey}' -- a namespace prefix is not a different gate, so these two keys collide on the one skill they both name. Keep exactly one.`,
+      );
+    }
+    seenBy.set(normalized, name);
     const kindsRaw = requireArray(path, pointer, entry);
     if (kindsRaw.length === 0) {
       throw new SchemaError(

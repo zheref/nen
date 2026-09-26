@@ -117,23 +117,28 @@ function workflowContentsCall(unitPaths: readonly string[] | null = ["src/unit/*
 
 function changedFilesCall(files: readonly { filename: string; previous_filename?: string }[] = [{ filename: "src/unit/a.ts" }]): readonly ScriptedCall[] {
   return [
-    { match: "gh api --paginate repos/zheref/example/pulls/9/files", result: { code: 0, stdout: JSON.stringify(files) } },
+    { match: "gh api --paginate --slurp repos/zheref/example/pulls/9/files", result: { code: 0, stdout: JSON.stringify(files) } },
     { match: "gh api repos/zheref/example/pulls/9", result: { code: 0, stdout: JSON.stringify({ changed_files: files.length }) } },
   ];
 }
 
-function treeCall(entries: readonly { path: string; mode: string }[] = [{ path: "src/unit/a.ts", mode: "100644" }], head: string = HEAD): ScriptedCall {
+function treeCall(entries: readonly { path: string; mode: string }[] = [{ path: "src/unit/a.ts", mode: "100644" }], sha: string = HEAD): ScriptedCall {
   return {
-    match: `gh api repos/zheref/example/git/trees/${head}?recursive=1`,
+    match: `gh api repos/zheref/example/git/trees/${sha}?recursive=1`,
     result: { code: 0, stdout: JSON.stringify({ tree: entries }) },
   };
+}
+
+/** The base tree call: same shape as `treeCall`, keyed on `BASE` unless told otherwise. */
+function baseTreeCall(entries: readonly { path: string; mode: string }[] = [{ path: "src/unit/a.ts", mode: "100644" }], base: string = BASE): ScriptedCall {
+  return treeCall(entries, base);
 }
 
 const VIEWER_CALL: ScriptedCall = { match: "gh api user --jq .login", result: { code: 0, stdout: "someone\n" } };
 
 /** Every call a fully-passing run makes, in the order this module makes them. */
 function passingScript(): ScriptedCall[] {
-  return [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall(), VIEWER_CALL];
+  return [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall(), baseTreeCall(), VIEWER_CALL];
 }
 
 async function run(
@@ -227,6 +232,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       ...changedFilesCall(),
       workflowContentsCall(),
       treeCall(),
+      baseTreeCall(),
       VIEWER_CALL,
     ];
     const outcome = await run(root, script, { run: true }); // --run is IGNORED once a gate fails
@@ -240,7 +246,15 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
 
   it("reports every gate's failure even when 'pr ready' itself is unevaluated", async () => {
     const root = tmpRoot();
-    const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall([{ filename: "src/other/a.ts" }]), workflowContentsCall(), treeCall([{ path: "src/other/a.ts", mode: "100644" }]), VIEWER_CALL];
+    const script = [
+      ORIGIN_CALL,
+      prOnceCall(),
+      ...changedFilesCall([{ filename: "src/other/a.ts" }]),
+      workflowContentsCall(),
+      treeCall([{ path: "src/other/a.ts", mode: "100644" }]),
+      baseTreeCall([{ path: "src/other/a.ts", mode: "100644" }]),
+      VIEWER_CALL,
+    ];
     const outcome = await mergeUnit({
       typedRef: "zheref/example#9",
       repoFlag: root,
@@ -313,7 +327,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
           return { ...snapshot, pullRequest: { ...snapshot.pullRequest, headRefOid: "" } };
         },
       };
-      const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall(), VIEWER_CALL];
+      const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall(), baseTreeCall(), VIEWER_CALL];
       const outcome = await mergeUnit({
         typedRef: "zheref/example#9",
         repoFlag: root,
@@ -330,7 +344,15 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
 
     it("refuses when the pull request's head has moved past what 'pr ready' judged, naming both SHAs", async () => {
       const root = tmpRoot();
-      const script = [ORIGIN_CALL, prOnceCall({ headRefOid: "newsha000" }), ...changedFilesCall(), workflowContentsCall(), treeCall([{ path: "src/unit/a.ts", mode: "100644" }], "newsha000"), VIEWER_CALL];
+      const script = [
+        ORIGIN_CALL,
+        prOnceCall({ headRefOid: "newsha000" }),
+        ...changedFilesCall(),
+        workflowContentsCall(),
+        treeCall([{ path: "src/unit/a.ts", mode: "100644" }], "newsha000"),
+        baseTreeCall(),
+        VIEWER_CALL,
+      ];
       const outcome = await mergeUnit({
         typedRef: "zheref/example#9",
         repoFlag: root,
@@ -381,7 +403,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
   describe("FEI-8 -- a changed path inside the unit that is a symlink or submodule is refused", () => {
     it("refuses a symlink (mode 120000) inside the release unit", async () => {
       const root = tmpRoot();
-      const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall([{ path: "src/unit/a.ts", mode: "120000" }]), VIEWER_CALL];
+      const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall([{ path: "src/unit/a.ts", mode: "120000" }]), baseTreeCall([{ path: "src/unit/a.ts", mode: "120000" }]), VIEWER_CALL];
       const outcome = await run(root, script);
       expect(outcome.report.unitOk).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/is a symlink \(mode 120000\)/);
@@ -389,17 +411,64 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
 
     it("refuses a submodule (mode 160000) inside the release unit", async () => {
       const root = tmpRoot();
-      const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall([{ path: "src/unit/a.ts", mode: "160000" }]), VIEWER_CALL];
+      const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall(), workflowContentsCall(), treeCall([{ path: "src/unit/a.ts", mode: "160000" }]), baseTreeCall([{ path: "src/unit/a.ts", mode: "160000" }]), VIEWER_CALL];
       const outcome = await run(root, script);
       expect(outcome.report.unitOk).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/is a submodule \(mode 160000\)/);
+    });
+
+    it("refuses a PR that DELETES a symlink inside the unit (present only in the base tree)", async () => {
+      const root = tmpRoot();
+      const script = [
+        ORIGIN_CALL,
+        prOnceCall(),
+        ...changedFilesCall([{ filename: "src/unit/a.ts" }]),
+        workflowContentsCall(),
+        treeCall([]), // deleted -- absent from the head tree
+        baseTreeCall([{ path: "src/unit/a.ts", mode: "120000" }]),
+        VIEWER_CALL,
+      ];
+      const outcome = await run(root, script);
+      expect(outcome.report.unitOk).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/"src\/unit\/a\.ts" inside the release unit is a symlink \(mode 120000\)/);
+    });
+
+    it("refuses a rename whose PREVIOUS path was a submodule at the base", async () => {
+      const root = tmpRoot();
+      const script = [
+        ORIGIN_CALL,
+        prOnceCall(),
+        ...changedFilesCall([{ filename: "src/unit/b.ts", previous_filename: "src/unit/a.ts" }]),
+        workflowContentsCall(),
+        treeCall([{ path: "src/unit/b.ts", mode: "100644" }]),
+        baseTreeCall([{ path: "src/unit/a.ts", mode: "160000" }]),
+        VIEWER_CALL,
+      ];
+      const outcome = await run(root, script);
+      expect(outcome.report.unitOk).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/"src\/unit\/a\.ts" inside the release unit is a submodule \(mode 160000\)/);
+    });
+
+    it("refuses a truncated recursive tree rather than reporting it clean", async () => {
+      const root = tmpRoot();
+      const script = [
+        ORIGIN_CALL,
+        prOnceCall(),
+        ...changedFilesCall(),
+        workflowContentsCall(),
+        { match: `gh api repos/zheref/example/git/trees/${HEAD}?recursive=1`, result: { code: 0, stdout: JSON.stringify({ tree: [{ path: "src/unit/a.ts", mode: "100644" }], truncated: true }) } },
+        VIEWER_CALL,
+      ];
+      const outcome = await run(root, script);
+      expect(outcome.report.unitOk).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/truncated/);
     });
   });
 
   describe("FEI-4 -- whose pull request this is", () => {
     it("refuses a cross-repository (fork) pull request", async () => {
       const root = tmpRoot();
-      const script = [ORIGIN_CALL, prOnceCall({ isCrossRepository: true }), ...changedFilesCall(), workflowContentsCall(), treeCall(), VIEWER_CALL];
+      const script = [ORIGIN_CALL, prOnceCall({ isCrossRepository: true }), ...changedFilesCall(), workflowContentsCall(), treeCall(), baseTreeCall(), VIEWER_CALL];
       const outcome = await run(root, script);
       expect(outcome.report.wholeOk).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/whose pr: this pull request is cross-repository/);
@@ -407,7 +476,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
 
     it("refuses a pull request whose author is not the authenticated viewer", async () => {
       const root = tmpRoot();
-      const script = [ORIGIN_CALL, prOnceCall({ author: "someone-else" }), ...changedFilesCall(), workflowContentsCall(), treeCall(), VIEWER_CALL];
+      const script = [ORIGIN_CALL, prOnceCall({ author: "someone-else" }), ...changedFilesCall(), workflowContentsCall(), treeCall(), baseTreeCall(), VIEWER_CALL];
       const outcome = await run(root, script);
       expect(outcome.report.wholeOk).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/author is 'someone-else', but the viewer authenticated as 'someone'/);
