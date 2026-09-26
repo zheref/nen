@@ -582,9 +582,20 @@ export interface LaunchTarget {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/** What the repository says it IS, when its stacks cannot tell (`nen repo classify`). */
+export type DeclaredRepoKind = "product" | "process" | "library";
+export const DECLARED_REPO_KINDS: readonly DeclaredRepoKind[] = ["product", "process", "library"];
+
 export interface ProjectBlock {
   /** The review stack recorded for this repo, for cross-checking the registry. */
   readonly scenario: string | null;
+  /**
+   * `project.kind`, when declared: product, process (plugins, machinery) or
+   * library (reusable code shared across repositories, any stack). Absent
+   * means classify derives it from the lanes' stacks, which can never say
+   * "library" -- a library is the repository's word, not its stack's.
+   */
+  readonly kind?: DeclaredRepoKind | null;
   readonly lanes: Readonly<Record<string, Lane>>;
   /** `null` is legal and means `--lane` is required. */
   readonly defaultLane: string | null;
@@ -2033,8 +2044,14 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
   const defaultLaneRaw = raw["defaultLane"];
   const defaultLane = optionalString(path, "project.defaultLane", defaultLaneRaw);
   if (defaultLane !== null) requireDeclaredLane(path, "project.defaultLane", defaultLane, lanes);
+  const kindRaw = optionalString(path, "project.kind", raw["kind"]);
+  const kind = kindRaw === null ? null : DECLARED_REPO_KINDS.find((candidate): boolean => candidate === kindRaw);
+  if (kind === undefined) {
+    throw new SchemaError(path, "project.kind", `expected one of ${DECLARED_REPO_KINDS.join(", ")}, got '${kindRaw}'`);
+  }
   return {
     scenario: optionalString(path, "project.scenario", raw["scenario"]),
+    kind,
     lanes,
     defaultLane,
     verbs: parseVerbs(path, raw["verbs"], lanes),

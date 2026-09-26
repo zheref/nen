@@ -1,5 +1,8 @@
-// src/parse/futon.ts -- the futon invocation grammar: `<repo>@<severity>[+]
-// [then <terminal>]`, ported from the futon skill's §1.
+// src/parse/futon.ts -- the futon invocation grammar: `<repo>@<selector>[+]
+// [then <terminal>]`, ported from the futon skill's §1. The selector is a
+// severity (a band, `+` allowed) or any other label, matched exactly and
+// never expanded -- a backlog carrying no severity taxonomy is still
+// scoped by the maintainer's own word (zheref/hatsu futon, 2026-09-26).
 //
 // RESOLVE OR REFUSE, NEVER GUESS -- the skill states this as the one rule every
 // parsing decision below is an instance of. An unparseable invocation is
@@ -31,6 +34,38 @@ export const SEVERITY_ORDER: readonly Severity[] = ["critical", "high", "medium"
 
 export type Terminal = "tag" | "tag+fanout";
 
+/**
+ * What follows `then`. `tag`/`tag+fanout` are the built-in terminals (and
+ * keep the self-repo rule); one or more kebab skill tokens joined by `+`,
+ * each optionally `plugin:`-prefixed and optionally `@<target>`-suffixed
+ * (`getsuga+kagutsuchi@testflight+mugetsu@github`), are a skill chain run in
+ * order; anything else is prose, kept verbatim.
+ * Whether a named skill exists, and whether the step is allowed at all, is the
+ * calling skill's to decide -- nen names the shape, never the authority.
+ */
+export type FutonThen =
+  | { readonly kind: "terminal"; readonly terminal: Terminal }
+  | { readonly kind: "skills"; readonly steps: readonly FutonStep[] }
+  | { readonly kind: "prose"; readonly text: string };
+
+export interface FutonStep {
+  readonly skill: string;
+  /** The destination the step names after `@`, verbatim; `null` when none. */
+  readonly target: string | null;
+}
+
+const SKILL_STEP = /^((?:[a-z0-9][a-z0-9-]*:)?[a-z0-9][a-z0-9-]*)(?:@([A-Za-z0-9][A-Za-z0-9._\/-]*))?$/i;
+
+function parseSkillChain(text: string): readonly FutonStep[] | null {
+  const steps: FutonStep[] = [];
+  for (const part of text.split("+")) {
+    const match = SKILL_STEP.exec(part.trim());
+    if (match === null) return null;
+    steps.push({ skill: (match[1] ?? "").toLowerCase(), target: match[2] ?? null });
+  }
+  return steps;
+}
+
 export interface FutonBand {
   readonly severity: Severity;
   readonly plus: boolean;
@@ -41,8 +76,14 @@ export interface FutonBand {
 export interface FutonInvocation {
   /** `null` means "the repo you are standing in" -- no token was given. */
   readonly repoToken: string | null;
-  readonly band: FutonBand;
+  /** Set when the selector is a severity; `null` when it is a label. Exactly one of `band`/`label` is set. */
+  readonly band: FutonBand | null;
+  /** The literal label the run filters on when the selector is not a severity. */
+  readonly label: string | null;
+  /** The built-in terminal, when the `then` clause is one; `null` otherwise. */
   readonly terminal: Terminal | null;
+  /** The whole `then` clause, classified; `null` when there is none. */
+  readonly then: FutonThen | null;
 }
 
 export interface FutonParseError {
@@ -61,37 +102,140 @@ function expandBand(severity: Severity, plus: boolean): readonly Severity[] {
   return SEVERITY_ORDER.slice(0, index + 1);
 }
 
-// The terminal is read from the LAST whole-word `then`, so an issue title (or
-// a repo token) containing the word cannot be mistaken for the clause.
-const THEN_SPLIT = /\bthen\b/gi;
+// The clause starts at the FIRST `then` after the '@' that has whitespace on
+// both sides (or the string's end) -- 'nen@then-review' names a LABEL, not a
+// then clause, because nothing after the word is whitespace. Prose after a
+// real split may itself say "then" without splitting a second time.
+const THEN_SPLIT = /(?<=\s)then(?=\s|$)/gi;
+
+// Where a quoted selector right after '@' ends, so a "then" living INSIDE the
+// quotes (`nen@"ready then ship"`) is never mistaken for the clause split --
+// it returns `atIndex` itself (a no-op search boundary) when the selector
+// is not quoted.
+function quotedSelectorEnd(text: string, atIndex: number): number {
+  const afterAt = text.slice(atIndex + 1);
+  const opened = /^(\s*)(["'])/.exec(afterAt);
+  if (opened === null) return atIndex;
+  const quote = opened[2] as string;
+  const openPos = atIndex + 1 + opened[1]!.length;
+  const closePos = text.indexOf(quote, openPos + 1);
+  return closePos === -1 ? atIndex : closePos;
+}
+
+// The skill name a chain step names, ignoring its '@target' suffix and any
+// namespace prefix -- what F3's reserved-name rule and F4's near-miss check
+// both actually compare against.
+function stepName(part: string): string {
+  const withoutTarget = (part.trim().split("@")[0] ?? "");
+  return withoutTarget.replace(/^[a-z0-9][a-z0-9-]*:/i, "").toLowerCase();
+}
+
+function editDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp: number[][] = Array.from({ length: rows }, (): number[] => new Array(cols).fill(0));
+  for (let i = 0; i < rows; i++) dp[i]![0] = i;
+  for (let j = 0; j < cols; j++) dp[0]![j] = j;
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      dp[i]![j] = a[i - 1] === b[j - 1] ? dp[i - 1]![j - 1]! : 1 + Math.min(dp[i - 1]![j]!, dp[i]![j - 1]!, dp[i - 1]![j - 1]!);
+    }
+  }
+  return dp[rows - 1]![cols - 1]!;
+}
+
+// A near-miss of one of the two built-in terminals (edit distance <= 2),
+// checked against the WHOLE normalized then-clause -- 'tga' misses 'tag' by
+// one substitution, 'tag+fanuot' misses 'tag+fanout' by a two-character swap.
+function nearMissTerminal(lowered: string): Terminal | null {
+  if (lowered !== "tag" && editDistance(lowered, "tag") <= 2) return "tag";
+  if (lowered !== "tag+fanout" && editDistance(lowered, "tag+fanout") <= 2) return "tag+fanout";
+  return null;
+}
 
 export function parseFutonInvocation(raw: string): FutonParseResult {
   const trimmed = raw.trim();
   if (trimmed === "") {
     return {
       ok: false,
-      error: { message: "empty invocation. Expected '<repo>@<severity>[+] [then <terminal>]'.", correctedLine: null },
+      error: { message: "empty invocation. Expected '<repo>@<severity>[+] [then <terminal>]' or '<repo>@<label> [then <terminal>]'.", correctedLine: null },
     };
   }
 
-  const thenMatches = [...trimmed.matchAll(THEN_SPLIT)];
-  const lastThen = thenMatches.at(-1);
-  const head = lastThen === undefined ? trimmed : trimmed.slice(0, lastThen.index).trim();
-  const tail = lastThen === undefined ? null : trimmed.slice(lastThen.index + lastThen[0].length).trim();
+  const atIndex = trimmed.indexOf("@");
+  const thenSearchFrom = atIndex === -1 ? -1 : quotedSelectorEnd(trimmed, atIndex);
+  const firstThen = [...trimmed.matchAll(THEN_SPLIT)].find((match): boolean => match.index > thenSearchFrom);
+  const head = firstThen === undefined ? trimmed : trimmed.slice(0, firstThen.index).trim();
+  const tail = firstThen === undefined ? null : trimmed.slice(firstThen.index + firstThen[0].length).trim();
 
   let terminal: Terminal | null = null;
+  let then: FutonThen | null = null;
   if (tail !== null) {
-    const lowered = tail.toLowerCase();
-    if (lowered === "tag") terminal = "tag";
-    else if (lowered === "tag+fanout") terminal = "tag+fanout";
-    else {
+    if (tail === "") {
       return {
         ok: false,
         error: {
-          message: `'then ${tail}' is not a recognized terminal. Only 'then tag' and 'then tag+fanout' are accepted.`,
-          correctedLine: `${head} then tag`,
+          message: "'then' names nothing. Expected 'then tag', 'then tag+fanout', 'then <skill>' or 'then <what to do, in prose>'.",
+          correctedLine: head,
         },
       };
+    }
+    // F12: normalize spacing around the chain operator BEFORE classifying, so
+    // 'getsuga + mugetsu' reads as the chain 'getsuga+mugetsu' rather than
+    // falling through to prose merely because someone put spaces around '+'.
+    const normalized = tail.replace(/\s*\+\s*/g, "+");
+    const lowered = normalized.toLowerCase();
+    if (lowered === "tag" || lowered === "tag+fanout") {
+      terminal = lowered as Terminal;
+      then = { kind: "terminal", terminal };
+    } else if (!/\s/.test(normalized)) {
+      const parts = normalized.split("+");
+      if (parts.some((part): boolean => part.trim() === "")) {
+        return {
+          ok: false,
+          error: {
+            message: `'${tail}' is a malformed chain -- an empty step between '+'s. Expected '<skill>[@target][+<skill>[@target]...]'.`,
+            correctedLine: null,
+          },
+        };
+      }
+      // F4 checked BEFORE F3's reserved-name rule: a two-part typo like
+      // 'tag+fanuot' names 'tag' exactly, so the reserved-name rule would
+      // otherwise catch it first and report the wrong reason.
+      const nearMiss = nearMissTerminal(lowered);
+      if (nearMiss !== null) {
+        return {
+          ok: false,
+          error: {
+            message: `'${tail}' is not a recognized terminal (closest to 'then ${nearMiss}'). Expected 'then tag', 'then tag+fanout', 'then <skill>' or 'then <what to do, in prose>'.`,
+            correctedLine: `${head} then ${nearMiss}`,
+          },
+        };
+      }
+      const names = parts.map(stepName);
+      const hasTag = names.includes("tag");
+      const hasFanout = names.includes("fanout");
+      if (parts.length > 1 && (hasTag || hasFanout)) {
+        // F3: 'tag'/'fanout' are the terminal's own vocabulary and are
+        // reserved as step names -- a chain naming either alongside other
+        // steps escapes the terminal's self-repo rule.
+        const remaining = parts.filter((_part, index): boolean => names[index] !== "tag" && names[index] !== "fanout");
+        const suggestions: string[] = [];
+        if (hasTag && hasFanout) suggestions.push(`${head} then tag+fanout`);
+        else if (hasTag) suggestions.push(`${head} then tag`);
+        if (remaining.length > 0) suggestions.push(`${head} then ${remaining.join("+")}`);
+        return {
+          ok: false,
+          error: {
+            message: "'tag' and 'fanout' are reserved step names -- the terminal's own vocabulary -- and cannot appear inside a skill chain. Use 'then tag' or 'then tag+fanout' alone, or the chain without them.",
+            correctedLine: suggestions[0] ?? `${head} then tag`,
+          },
+        };
+      }
+      const steps = parseSkillChain(normalized);
+      then = steps === null ? { kind: "prose", text: tail } : { kind: "skills", steps };
+    } else {
+      then = { kind: "prose", text: tail };
     }
   }
 
@@ -100,23 +244,38 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
     return {
       ok: false,
       error: {
-        message: `'${head}' has no '@<severity>'. Expected '<repo>@<severity>[+]', or bare '@<severity>' to mean the repo you are standing in.`,
+        message: `'${head}' has no '@<severity>' or '@<label>'. Expected '<repo>@<severity>[+]' or '<repo>@<label>', or a bare '@...' to mean the repo you are standing in.`,
         correctedLine: null,
       },
     };
   }
   const repoPart = head.slice(0, at).trim();
-  const severityPart = head.slice(at + 1).trim();
-  const plus = severityPart.endsWith("+");
-  const severityRaw = (plus ? severityPart.slice(0, -1) : severityPart).toLowerCase();
-  const severity = SEVERITY_ORDER.find((candidate): boolean => candidate === severityRaw);
-  if (severity === undefined) {
+  const selectorPart = head.slice(at + 1).trim();
+  // F6: a trailing '+' is the band operator ONLY when the token in front of
+  // it is itself a severity -- otherwise it stays part of the label verbatim
+  // ('c++' is the label 'c++', not the label 'c' with a refused '+').
+  const plusCandidate = selectorPart.endsWith("+") ? stripQuotes(selectorPart.slice(0, -1).trim()) : null;
+  const plus = plusCandidate !== null && (SEVERITY_ORDER as readonly string[]).includes(plusCandidate.toLowerCase());
+  const selectorRaw = stripQuotes((plus ? (plusCandidate as string) : selectorPart).trim());
+  const suffix = tail === null ? "" : ` then ${tail}`;
+  const repoPrefix = repoPart === "" ? "@" : `${repoPart}@`;
+  if (selectorRaw === "") {
     return {
       ok: false,
       error: {
-        message: `'${severityPart || "(none)"}' is not a severity. Expected one of ${SEVERITY_ORDER.join(", ")}, optionally suffixed '+'.`,
-        correctedLine: `${repoPart === "" ? "" : `${repoPart}@`}${SEVERITY_ORDER[0]}${plus ? "+" : ""}${terminal === null ? "" : ` then ${terminal}`}`,
+        message: `no selector after '@'. Expected a severity (${SEVERITY_ORDER.join(", ")}, optionally suffixed '+') or a label.`,
+        correctedLine: `${repoPrefix}${SEVERITY_ORDER[0]}${suffix}`,
       },
+    };
+  }
+  const severity = SEVERITY_ORDER.find((candidate): boolean => candidate === selectorRaw.toLowerCase());
+  if (severity === undefined) {
+    // Any other token is a label, taken exactly as typed -- including one
+    // that ends in a literal '+' that failed F6's severity check above
+    // ('c++' is the label 'c++', not a refused severity-band operator).
+    return {
+      ok: true,
+      value: { repoToken: repoPart === "" ? null : repoPart, band: null, label: selectorRaw, terminal, then },
     };
   }
 
@@ -125,9 +284,28 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
     value: {
       repoToken: repoPart === "" ? null : repoPart,
       band: { severity, plus, severities: expandBand(severity, plus) },
+      label: null,
       terminal,
+      then,
     },
   };
+}
+
+/**
+ * Strips a matching pair of surrounding quotes. The unquoted branch returns
+ * `text` as given (the caller has already trimmed it); the quoted branch
+ * returns the interior VERBATIM -- boundary spaces inside the quotes are the
+ * label, e.g. `@" bug "` names the label `' bug '`, not `'bug'`.
+ */
+function stripQuotes(text: string): string {
+  const match = /^(["'])(.*)\1$/.exec(text);
+  return match === null ? text : (match[2] ?? "");
+}
+
+/** The selector as typed back: `high+`, `medium`, or a label. */
+export function formatFutonSelector(invocation: FutonInvocation): string {
+  if (invocation.band !== null) return `${invocation.band.severity}${invocation.band.plus ? "+" : ""}`;
+  return invocation.label ?? "";
 }
 
 export interface FutonResolvedRepo {

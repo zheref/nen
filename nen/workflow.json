@@ -27,5 +27,12 @@
       "note": "Cursor-native only; provider models there are reserved for Bugbot"
     },
     "roles": { "reviewer": "deep", "worker": "fast", "measurer": "fast", "orchestrator": "frontier" }
+  },
+  "review": {
+    "$comment": "Maintainer's ruling of 2026-09-26 (set up at mukai under missing-configuration): nen review scopes classifies the branch diff by these rows for hanten. code is Nobunaga's and claims every path; security is Feitan's on the merge, bootstrap, workflow and credential-shaped paths.",
+    "scopes": {
+      "code": { "persona": "nobunaga", "tier": "deep", "budget": 2, "paths": ["**"] },
+      "security": { "persona": "feitan", "tier": "deep", "budget": 1, "paths": ["src/pr/**", "bootstrap/**", ".github/workflows/**", "**/*auth*", "**/*secret*", "**/*credential*", "**/*token*"] }
+    }
   }
 }

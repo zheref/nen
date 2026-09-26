@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -96,6 +96,32 @@ describe("nen repo classify (zheref/nen#216)", () => {
     const doc = JSON.parse(result.out.join("\n")) as { kind: string; notes: string[] };
     expect(doc.kind).toBe("unknown");
     expect(doc.notes.join(" ")).toMatch(/no nen\/contract\.json/);
+  });
+
+  it("a declared project.kind wins -- the only way to read 'library' -- and names what the lanes alone read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-classify-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    copyFileSync(join(BANKAI_REPO, "nen", "repos.json"), join(root, "nen", "repos.json"));
+    const contract = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "contract.json"), "utf8")) as { project: Record<string, unknown> };
+    contract.project["kind"] = "library";
+    writeFileSync(join(root, "nen", "contract.json"), JSON.stringify(contract));
+    const result = await capture(["repo", "classify", "--target", "zheref/bankai-scaffold"], root, seams(ORIGIN_BANKAI), true);
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out.join("\n")) as { kind: string; sources: { kind: string } };
+    expect(doc.kind).toBe("library");
+    expect(doc.sources.kind).toMatch(/declared 'library'; the lanes alone read 'product'/);
+  });
+
+  it("refuses an undeclared project.kind value", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-classify-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    copyFileSync(join(BANKAI_REPO, "nen", "repos.json"), join(root, "nen", "repos.json"));
+    const contract = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "contract.json"), "utf8")) as { project: Record<string, unknown> };
+    contract.project["kind"] = "framework";
+    writeFileSync(join(root, "nen", "contract.json"), JSON.stringify(contract));
+    const result = await capture(["repo", "classify", "--target", "zheref/bankai-scaffold"], root, seams(ORIGIN_BANKAI), true);
+    expect(result.code).not.toBe(0);
+    expect(result.err.join("\n")).toMatch(/project\.kind/);
   });
 
   it("refuses a malformed --target at 2", async () => {

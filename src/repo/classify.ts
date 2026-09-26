@@ -8,10 +8,14 @@
 //             behave); one listed under `consumers` or `pending_onboarding`
 //             is a consumer; one the registry does not know is unregistered,
 //             and that is reported, not rounded to consumer.
-//   kind   -- product | process | unknown, from `nen/contract.json`'s lanes:
-//             a lane on an application stack makes the repository a product;
-//             lanes only on tooling stacks make it a process repository; no
-//             `project` block is unknown.
+//   kind   -- product | process | library | unknown, from `nen/contract.json`:
+//             a declared `project.kind` is the repository's own word and wins
+//             (the only way to be a library -- reusable code shared across
+//             repositories, whatever its stack); otherwise from the lanes: a
+//             lane on an application stack makes it a product, lanes only on
+//             tooling stacks a process repository (plugins, machinery); no
+//             `project` block is unknown. A declaration that disagrees with
+//             the stacks is kept and noted, never overruled.
 //   stack  -- the default lane's stack, or null.
 //   gate   -- G4 for canon, G2 otherwise (the maintainer's ruling of
 //             2026-09-18: the gate is the repository's ROLE, not the file's
@@ -31,7 +35,7 @@ import { ownerNameFromRemote } from "./resolve.js";
 export const CLASSIFY_CONTRACT = "nen.repo.classify/v0.1";
 
 export type RepoRole = "canon" | "consumer" | "unregistered";
-export type RepoKind = "product" | "process" | "unknown";
+export type RepoKind = "product" | "process" | "library" | "unknown";
 
 export interface RepoClassification {
   readonly contract: string;
@@ -104,6 +108,16 @@ function kindOf(contract: RepositoryContract | null, contractPath: string): { ki
   const defaultLane = project.defaultLane ?? lanes[0] ?? null;
   const stack = defaultLane === null ? null : (project.lanes[defaultLane]?.stack ?? null);
   const product = stacks.some((s): boolean => PRODUCT_STACKS.has(s));
+  const declared = project.kind ?? null;
+  if (declared !== null) {
+    const derived = lanes.length === 0 ? "unknown" : product ? "product" : "process";
+    return {
+      kind: declared,
+      stack,
+      lanes,
+      source: `${contractPath}: project.kind (declared '${declared}'; the lanes alone read '${derived}')`,
+    };
+  }
   return {
     kind: lanes.length === 0 ? "unknown" : product ? "product" : "process",
     stack,
