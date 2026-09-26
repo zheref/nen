@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -16,6 +16,7 @@ async function capture(
   // `null` is a real case here, not a default-filler: it is the invocation
   // that never typed --repo at all (zheref/nen#28's subject).
   repoFlag: string | null = BANKAI_REPO,
+  json = false,
 ): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
@@ -40,7 +41,7 @@ async function capture(
     },
     platform: "linux",
   };
-  const code = await runFamily(repoCommand, argv, repoFlag, false, io, seams);
+  const code = await runFamily(repoCommand, argv, repoFlag, json, io, seams);
   return { code, out, err };
 }
 
@@ -224,5 +225,53 @@ describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged 
 
   it("refuses an unknown subcommand", async () => {
     expect((await capture(["repo", "bogus"])).code).toBe(2);
+  });
+});
+
+describe("nen repo inventory|scenario -- rendering and the registry that will not load", () => {
+  it("inventory renders epics with children, integration branches and open PRs in plain text", async () => {
+    const replies: Record<string, string> = {
+      "issue list": JSON.stringify([{ number: 1, title: "epic", state: "OPEN", labels: [] }]),
+      "api repos/o/n/issues/1/sub_issues": JSON.stringify([
+        { number: 2, title: "child", state: "open", html_url: "https://x/2", labels: [{ name: "stage/building" }] },
+      ]),
+      "api repos/o/n/branches": "main\nintegration/epic-1\n",
+      "api repos/o/n/compare/main...integration/epic-1": JSON.stringify({ ahead_by: 3, behind_by: 1 }),
+      "pr list": JSON.stringify([{ number: 9, title: "wip", baseRefName: "main", url: "https://x/9", isDraft: true }]),
+    };
+    const run: Seams["run"] = (_bin, args): CommandResult => {
+      const joined = args.join(" ");
+      const key = Object.keys(replies).find((prefix): boolean => joined.startsWith(prefix));
+      if (key === undefined) throw new Error(`unexpected gh call: ${joined}`);
+      return { code: 0, stdout: replies[key] ?? "", stderr: "", spawnFailed: false };
+    };
+    const result = await capture(
+      ["repo", "inventory", "--target", "o/n", "--epic-label", "type:epic", "--integration-prefix", "integration/"],
+      run,
+    );
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      "epics: 1",
+      "  #1 epic -- 1 child(ren)",
+      "    #2 open  stage/building  child",
+      "integration branches: 1",
+      "  integration/epic-1  +3/-1 vs trunk",
+      "open PRs: 1",
+      "  #9 (draft) -> main  wip",
+    ]);
+  });
+
+  it("scenario --json carries an unrecorded repo's refusal and exits 1", async () => {
+    const result = await capture(["repo", "scenario", "--target", "zheref/nonexistent"], undefined, BANKAI_REPO, true);
+    expect(result.code).toBe(1);
+    expect((JSON.parse(result.out.join("\n")) as { ok: boolean }).ok).toBe(false);
+  });
+
+  it("a PRESENT but malformed registry is the verb's own failure, not a usage error", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-repo-malformed-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "repos.json"), "{ not json");
+    const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, root);
+    expect(result.code).toBe(1);
   });
 });
