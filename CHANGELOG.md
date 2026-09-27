@@ -2,6 +2,34 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.15.0 — 2026-09-27
+
+Release unit for `v0.14.3..v0.15.0`: [#265](https://github.com/zheref/nen/pull/265) (the delivery) and the release proposal.
+
+### Added
+
+- **parse** — `nen parse futon` takes **any label** as its selector: a token after `@` that is not a severity is matched exactly (case and spaces kept, surrounding quotes stripped, boundary spaces inside quotes kept, `c++` stays a label) and never expanded. `--json` carries `band: null, label` for it; a severity run is unchanged apart from the additive `label: null` and `then`.
+- **parse** — futon's `then` clause is one of three things. It is `tag`/`tag+fanout` (the self-repo rule unchanged), or a `+`-joined **skill chain** `skill[@target]` (`then: {kind: "skills", steps}`), or verbatim **prose**. The clause starts at the first whitespace-delimited `then` after `@`, and `tag`/`fanout` are reserved inside a chain. A near-miss terminal (`then tga`) is refused with the corrected line, and so is an empty chain part (`a++b`).
+- **parse** — the **advance-go gate**. Each chain step listed in the target's `nen/workflow.json` → `futon.advanceGo` (skill → allowed repo kinds, matched on the bare name with any plugin prefix stripped, duplicates after normalization refused) carries `gate: {allowed, kind, reason}` from `nen repo classify`. An `unknown` kind fails closed. A refused step does not fail the parse.
+- **repo** — `nen repo classify` reads a declared `nen/contract.json` → `project.kind` (`product | process | library`). A declaration wins over the stack derivation, `sources.kind` names what the lanes alone read, and it is the only way to read **`library`**.
+- **release** — `nen release unit-check --pr <ref> --repo <path>` compares a PR's changed paths (paginated files API with `--slurp`, rename `previous_filename` included, cross-checked against `changed_files`, refused at the 3000-file cap) against `nen/workflow.json` → `release.unitPaths`. `unitPaths` refuses catch-all and absolute patterns by pointer.
+- **pr** — `nen pr merge <ref> --release-unit --requirements-from <path> --repo <path> [--run]` is the one **bounded merge**. Every gate always runs and prints:
+  - `pr ready`, pinned to its `judgedHead`;
+  - one PR fetch whose head must match that head;
+  - `body-check` on the live body, with requirements validated before any `gh` call (exit 2);
+  - not a fork, and authored by the viewer;
+  - the release policy read from the PR's **base** commit, refusing a change to `nen/workflow.json` or `nen/gates.json`;
+  - unit-check, which also refuses symlink/submodule modes in the head or base tree and fails closed on a truncated tree.
+
+  After that it runs `gh pr merge --merge --match-head-commit <sha>`, never `--admin` or `--auto`. It reports merged vs queued, redacts `gh` stderr, and exits `5` when `gh` refuses and `6` when `gh` cannot run. Without `--release-unit` it refuses.
+- **workflow** — nen declares its own `review` scopes (Nobunaga `code` on every path; Feitan `security` on `src/pr/**`, bootstrap, workflows and credential-shaped paths).
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** Every new verb, flag and `--json` field is additive (`label`, `then`, `gate`, `project.kind`, `release.unitPaths`, `futon.advanceGo`, `release unit-check`, `pr merge`); no contract version is bumped. **Two `nen parse futon` behaviours change in place**, both for lines that used to be refused:
+  - the `then` clause is read from the FIRST whitespace-delimited `then` after `@` (it was the last whole-word `then`), so prose after it may itself say "then";
+  - a word after `then` that is not a terminal now parses as a skill chain or prose instead of exit `2`. A near-miss of `tag`/`tag+fanout` is still refused, with the corrected line.
+
 ## v0.14.3 — 2026-09-24
 
 Release unit for `v0.14.2..v0.14.3`: [#260](https://github.com/zheref/nen/pull/260), [#252](https://github.com/zheref/nen/pull/252), [#255](https://github.com/zheref/nen/pull/255), [#254](https://github.com/zheref/nen/pull/254) and [#253](https://github.com/zheref/nen/pull/253) (the deliveries, the p1 band of one futon run) and [#261](https://github.com/zheref/nen/pull/261) (the release proposal).
