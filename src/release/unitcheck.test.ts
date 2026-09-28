@@ -8,6 +8,7 @@ import {
   fetchChangedFiles,
   fetchJsonAtRef,
   fetchMergeBaseSha,
+  JsonParseError,
   MergeBaseError,
   outsideReleaseUnit,
   parseJsonPreservingNumbers,
@@ -349,6 +350,91 @@ describe("N1 -- the structural diff engine, every fail-open case from the review
   it("N16: two safe-range numbers with different formatting (1 vs 1.0) still compare equal", () => {
     const outcome = checkKeyScopedPath({ path: "p.json", keys: ["version"] }, "B", "H", (_p, ref): JValue => jvRaw(ref === "B" ? '{"n":1}' : '{"n":1.0}'));
     expect(outcome.ok).toBe(true);
+  });
+
+  // Copilot round, item 3: the exponent form is a SAFE-INTEGER spelling too
+  // -- excluding every exponent token outright (the previous rule) made '1'
+  // vs '1e0' at an undeclared key a false violation.
+  it("Copilot#3: 1 vs 1e0 at an undeclared key compares equal (both are the safe integer 1)", () => {
+    const outcome = checkKeyScopedPath({ path: "p.json", keys: ["version"] }, "B", "H", (_p, ref): JValue => jvRaw(ref === "B" ? '{"n":1}' : '{"n":1e0}'));
+    expect(outcome.ok).toBe(true);
+  });
+
+  it("Copilot#3: a big-integer edit past safe precision is STILL detected (unaffected by the exponent fix)", () => {
+    const outcome = checkKeyScopedPath(
+      { path: "p.json", keys: ["version"] },
+      "B",
+      "H",
+      (_p, ref): JValue => jvRaw(ref === "B" ? '{"n":12345678901234567890}' : '{"n":12345678901234567891}'),
+    );
+    expect(outcome.ok).toBe(false);
+    expect(outcome.offendingKeys).toEqual(["n"]);
+  });
+});
+
+describe("Copilot round, item 1 -- an unescaped control character in a JSON string fails the parse", () => {
+  it("refuses a raw (unescaped) newline inside a string", () => {
+    expect(() => parseJsonPreservingNumbers('{"a":"line1\nline2"}')).toThrow(JsonParseError);
+  });
+
+  it("refuses a raw NUL and other control characters below U+0020", () => {
+    expect(() => parseJsonPreservingNumbers('{"a":"\u0001"}')).toThrow(JsonParseError);
+    expect(() => parseJsonPreservingNumbers('{"a":"\u0000"}')).toThrow(JsonParseError);
+  });
+
+  it("a caller reading through fetchJsonAtRef sees this as null (fail closed), not a thrown error", () => {
+    const raw = Buffer.from('{"a":"bad\u0001char"}').toString("base64");
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/acme/widgets/contents/nen/contract.json?ref=abc123", result: { code: 0, stdout: JSON.stringify({ content: raw }) } },
+    ]);
+    expect(fetchJsonAtRef(seams, TARGET, "nen/contract.json", "abc123")).toBeNull();
+  });
+
+  it("still accepts the SAME control character when properly escaped (\\n, \\u0001)", () => {
+    expect(parseJsonPreservingNumbers('{"a":"line1\\nline2"}')).toEqual(jv({ a: "line1\nline2" }));
+    expect(parseJsonPreservingNumbers('{"a":"\\u0001"}')).toEqual(jv({ a: "\u0001" }));
+  });
+});
+
+describe("Copilot round, item 2 -- the number grammar refuses leading zeroes and other non-JSON spellings", () => {
+  it.each(["01", "-01", "00", "007"])("refuses a leading-zero integer '%s'", (bad) => {
+    expect(() => parseJsonPreservingNumbers(`{"n":${bad}}`)).toThrow(JsonParseError);
+  });
+
+  it("still accepts a bare '0' and '0.5' and '0e1'", () => {
+    expect(parseJsonPreservingNumbers('{"n":0}')).toEqual(jv({ n: 0 }));
+    expect(parseJsonPreservingNumbers('{"n":0.5}')).toEqual(jv({ n: 0.5 }));
+    expect(() => parseJsonPreservingNumbers('{"n":0e1}')).not.toThrow();
+  });
+
+  it.each(["1.", ".5", "+1", "1e"])("refuses the malformed number token '%s'", (bad) => {
+    expect(() => parseJsonPreservingNumbers(`{"n":${bad}}`)).toThrow(JsonParseError);
+  });
+});
+
+describe("Copilot round, item 4 -- fetchJsonAtRef validates base64 before decoding (fail closed)", () => {
+  function contentsCall(rawContent: string): { readonly match: string; readonly result: { readonly code: number; readonly stdout: string } } {
+    return {
+      match: "gh api repos/acme/widgets/contents/nen/contract.json?ref=abc123",
+      result: { code: 0, stdout: JSON.stringify({ content: rawContent }) },
+    };
+  }
+
+  it("is null when the content carries an illegal base64 character ('e30$')", () => {
+    const seams = new ScriptedSeams([contentsCall("e30$")]);
+    expect(fetchJsonAtRef(seams, TARGET, "nen/contract.json", "abc123")).toBeNull();
+  });
+
+  it("is null when the content's length is not a multiple of 4", () => {
+    const seams = new ScriptedSeams([contentsCall("e30")]); // "{}"  base64 is normally "e30=" (4 chars); this is 3.
+    expect(fetchJsonAtRef(seams, TARGET, "nen/contract.json", "abc123")).toBeNull();
+  });
+
+  it("still decodes a valid base64 payload, including one GitHub wrapped with newlines", () => {
+    const valid = Buffer.from(JSON.stringify({ version: "1" })).toString("base64");
+    const wrapped = `${valid.slice(0, 2)}\n${valid.slice(2)}`;
+    const seams = new ScriptedSeams([contentsCall(wrapped)]);
+    expect(fetchJsonAtRef(seams, TARGET, "nen/contract.json", "abc123")).toEqual(jv({ version: "1" }));
   });
 });
 

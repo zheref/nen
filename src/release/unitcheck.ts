@@ -317,6 +317,16 @@ export function parseJsonPreservingNumbers(text: string): JValue {
         i++;
         continue;
       }
+      // Copilot round, item 1: an UNESCAPED control character (< U+0020)
+      // inside a JSON string is not legal JSON -- RFC 8259 requires every
+      // one of them to be written as a `\uXXXX` (or the short) escape. A
+      // scanner that copies it verbatim would let a string leaf smuggle a
+      // raw newline/NUL/etc past this parser without ever failing closed,
+      // which is exactly the class of "reads as valid JSON when it is not"
+      // this content-scoped check exists to refuse.
+      if (c.charCodeAt(0) < 0x20) {
+        throw new JsonParseError(`unescaped control character (U+${c.charCodeAt(0).toString(16).padStart(4, "0")}) in string at offset ${i}`);
+      }
       out += c;
       i++;
     }
@@ -325,7 +335,19 @@ export function parseJsonPreservingNumbers(text: string): JValue {
     const start = i;
     if (text[i] === "-") i++;
     if (!isDigit(text[i])) throw new JsonParseError(`expected a digit at offset ${i}`);
-    while (isDigit(text[i])) i++;
+    // Copilot round, item 2: JSON's own integer-part grammar is `0 |
+    // [1-9][0-9]*` -- a LEADING ZERO followed by more digits ('01', '-01')
+    // is not a legal JSON number at all (every conforming parser, including
+    // `JSON.parse`, refuses it), so a bare digit-run here would silently
+    // accept a spelling `JSON.parse` never would and this reader would then
+    // treat as a genuinely different number than the plain `1` it was
+    // compared against. A single leading '0' is legal and stops the integer
+    // part immediately -- '0.5' and '0e1' are fine, '05' is not.
+    if (text[i] === "0") {
+      i++;
+    } else {
+      while (isDigit(text[i])) i++;
+    }
     if (text[i] === ".") {
       i++;
       if (!isDigit(text[i])) throw new JsonParseError(`expected a digit after '.' at offset ${i}`);
@@ -421,25 +443,30 @@ export function parseJsonPreservingNumbers(text: string): JValue {
   return result;
 }
 
-/** True when `raw`'s parsed value fits exactly in a JS safe integer -- the one range where a precision-lossless `Number()` round-trip is provable without re-parsing the digits by hand. */
-function isSafePrecision(raw: string, value: number): boolean {
-  return Number.isInteger(value) && Number.isSafeInteger(value) && !raw.includes("e") && !raw.includes("E");
-}
-
 /**
- * N16: two JSON numbers are equal when their raw text is IDENTICAL, or when
- * BOTH sides are within safe-integer precision and their parsed values are
- * equal (so `1` and `1.0`/`1e0` -- ordinary formatting variance within safe
- * range -- still compare equal). Outside safe-integer precision, a raw-text
- * mismatch is ALWAYS a difference, never resolved by comparing the
- * (possibly-identical, precision-lost) parsed doubles -- fail closed: this
- * is exactly the class of edit ('...67890' -> '...67891') a double-based
- * comparison cannot see at all.
+ * N16 (Copilot round, item 3): two JSON numbers are equal when their raw
+ * text is IDENTICAL, or when BOTH parsed values are SAFE INTEGERS and
+ * numerically equal -- `1` and `1.0`/`1e0` (ordinary formatting variance for
+ * the integer 1) compare equal under this rule regardless of which of the
+ * three spellings either side used, because `Number.isSafeInteger` is the
+ * one range where a precision-lossless `Number()` round-trip is provable
+ * without re-parsing the digits by hand; the exponent form is INCLUDED in
+ * that check (the earlier version excluded every exponent token outright,
+ * which made `1` vs `1e0` at an undeclared key a false violation). A
+ * NON-INTEGER value (`1.5`, `1.50`) is compared by raw text ONLY -- this is
+ * the deliberately simplest safe rule, not a canonicalized-decimal compare
+ * -- and any number whose value is NOT a safe integer (a big integer past
+ * `Number.MAX_SAFE_INTEGER`, in particular) likewise falls straight to the
+ * raw-text comparison: `12345678901234567890` vs `...67891` both round to
+ * the SAME double under `Number()`, so resolving them by parsed value would
+ * be exactly the precision loss this whole content-scoped check exists to
+ * catch -- fail closed, a raw-text mismatch outside safe-integer range is
+ * ALWAYS a difference.
  */
 function numbersEqual(a: { readonly raw: string; readonly value: number }, b: { readonly raw: string; readonly value: number }): boolean {
   if (a.raw === b.raw) return true;
-  if (!isSafePrecision(a.raw, a.value) || !isSafePrecision(b.raw, b.value)) return false;
-  return a.value === b.value;
+  if (Number.isSafeInteger(a.value) && Number.isSafeInteger(b.value)) return a.value === b.value;
+  return false;
 }
 
 function scalarEqual(a: JValue, b: JValue): boolean {
@@ -594,9 +621,21 @@ export function fetchJsonAtRef(seams: Seams, target: Target, path: string, ref: 
     return null;
   }
   if (contents.content === undefined) return null;
+  // Copilot round, item 4: `Buffer.from(str, "base64")` is LENIENT -- it
+  // silently DROPS any byte that is not a base64 alphabet character rather
+  // than refusing the string, so a corrupted or truncated payload (or one
+  // this reader misdecoded some other way) would still decode to SOMETHING
+  // rather than failing closed. GitHub's own contents API wraps its base64
+  // body at a fixed column with '\n', which is legitimate and stripped
+  // before validating; what remains must be the base64 alphabet, optionally
+  // padded with 0-2 trailing '=', and a length that is a multiple of 4 --
+  // anything else is refused (`null`) rather than handed to `Buffer.from`
+  // to quietly mangle.
+  const base64 = contents.content.replace(/\n/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 !== 0) return null;
   let text: string;
   try {
-    text = Buffer.from(contents.content, "base64").toString("utf8");
+    text = Buffer.from(base64, "base64").toString("utf8");
   } catch {
     return null;
   }
