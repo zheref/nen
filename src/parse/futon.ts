@@ -168,6 +168,53 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   const head = firstThen === undefined ? trimmed : trimmed.slice(0, firstThen.index).trim();
   const tail = firstThen === undefined ? null : trimmed.slice(firstThen.index + firstThen[0].length).trim();
 
+  // N7: THE SELECTOR IS CHECKED BEFORE ANY THEN-CLAUSE REFUSAL. A missing or
+  // malformed '@<selector>' is the more fundamental defect -- there is no
+  // repo/severity scope to even evaluate a chain against -- so it must be
+  // reported first regardless of what the 'then' clause contains, and
+  // 'correctedLine: null' (the empty-selector case just below) must never be
+  // shadowed by a chain-level refusal that DOES offer a corrected line (a
+  // near-miss terminal, a reserved step name, a duplicate step): '@ then
+  // mugetsu+mugetsu' is refused for its missing selector, never for the
+  // duplicate 'mugetsu' step the chain also happens to carry.
+  const at = head.indexOf("@");
+  if (at === -1) {
+    return {
+      ok: false,
+      error: {
+        message: `'${head}' has no '@<severity>' or '@<label>'. Expected '<repo>@<severity>[+]' or '<repo>@<label>', or a bare '@...' to mean the repo you are standing in.`,
+        correctedLine: null,
+      },
+    };
+  }
+  const repoPart = head.slice(0, at).trim();
+  const selectorPart = head.slice(at + 1).trim();
+  // F6: a trailing '+' is the band operator ONLY when the token in front of
+  // it is itself a severity -- otherwise it stays part of the label verbatim
+  // ('c++' is the label 'c++', not the label 'c' with a refused '+').
+  const plusCandidate = selectorPart.endsWith("+") ? stripQuotes(selectorPart.slice(0, -1).trim()) : null;
+  const plus = plusCandidate !== null && (SEVERITY_ORDER as readonly string[]).includes(plusCandidate.toLowerCase());
+  const selectorRaw = stripQuotes((plus ? (plusCandidate as string) : selectorPart).trim());
+  if (selectorRaw === "") {
+    // NEVER MANUFACTURE A SELECTOR. The maintainer's ruling (2026-09-28): a
+    // missing selector is a missing DECISION -- which severity or label this
+    // run scopes to is the one thing only a human (or a picker relaying a
+    // human's choice) may state for a chain that goes on to publish. Filling
+    // in `critical` here would hand a picker a COMPLETE, parseable line it
+    // could paste and run without ever having chosen a selector -- silently
+    // picking the most severe band on the caller's behalf. `correctedLine` is
+    // `null` so nothing downstream can mistake "the shape of a fix" for "the
+    // fix", the same distinction this module already draws for the two
+    // structural failures above (an unparseable head, a malformed chain).
+    return {
+      ok: false,
+      error: {
+        message: `no selector after '@'. Expected a severity (${SEVERITY_ORDER.join(", ")}, optionally suffixed '+') or a label -- nen will not guess one, because the selector is the scoping decision a chain that goes on to publish must never have silently picked for it.`,
+        correctedLine: null,
+      },
+    };
+  }
+
   let terminal: Terminal | null = null;
   let then: FutonThen | null = null;
   if (tail !== null) {
@@ -233,41 +280,51 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
         };
       }
       const steps = parseSkillChain(normalized);
+      if (steps !== null) {
+        // DUPLICATE STEP REFUSAL: the same skill against the same target
+        // twice is never a chain anybody meant to write -- 'mugetsu@a' run
+        // after 'mugetsu@a' either double-runs an advance-go against the
+        // same target (harmless at best, a double-publish at worst) or is a
+        // paste error, and nen cannot tell which without guessing. Compared
+        // on the BARE skill name (namespace prefix stripped, lower-cased --
+        // the same normalization ../schema/workflow.ts's futon.advanceGo
+        // keys read) and the target lower-cased too (N9 -- 'mugetsu@A' and
+        // 'mugetsu@a' name the same target under any spelling a caller
+        // types), because a genuinely DIFFERENT target is a different step:
+        // 'mugetsu@a+mugetsu@b' stays allowed, and this rule states no
+        // ordering requirement at all. N8: EVERY later repeat is collected,
+        // not just the first one found -- 'a+b+a+b' drops BOTH repeats in
+        // the corrected line, not only the first 'a'.
+        const seen = new Set<string>();
+        const duplicateIndices: number[] = [];
+        for (const [index, step] of steps.entries()) {
+          const bareSkill = step.skill.replace(/^[a-z0-9][a-z0-9-]*:/i, "").toLowerCase();
+          const key = `${bareSkill}@${(step.target ?? "").toLowerCase()}`;
+          if (seen.has(key)) {
+            duplicateIndices.push(index);
+            continue;
+          }
+          seen.add(key);
+        }
+        if (duplicateIndices.length > 0) {
+          const dupParts = normalized.split("+");
+          const corrected = dupParts.filter((_part, index): boolean => !duplicateIndices.includes(index));
+          const dupStep = steps[duplicateIndices[0]!]!;
+          return {
+            ok: false,
+            error: {
+              message: `'${dupStep.skill}${dupStep.target === null ? "" : `@${dupStep.target}`}' appears more than once in the chain '${tail}' -- the same skill against the same target twice is never a chain nen will run without asking: it is either a double-run of the same step or a paste error, and nen cannot tell which.`,
+              correctedLine: `${head} then ${corrected.join("+")}`,
+            },
+          };
+        }
+      }
       then = steps === null ? { kind: "prose", text: tail } : { kind: "skills", steps };
     } else {
       then = { kind: "prose", text: tail };
     }
   }
 
-  const at = head.indexOf("@");
-  if (at === -1) {
-    return {
-      ok: false,
-      error: {
-        message: `'${head}' has no '@<severity>' or '@<label>'. Expected '<repo>@<severity>[+]' or '<repo>@<label>', or a bare '@...' to mean the repo you are standing in.`,
-        correctedLine: null,
-      },
-    };
-  }
-  const repoPart = head.slice(0, at).trim();
-  const selectorPart = head.slice(at + 1).trim();
-  // F6: a trailing '+' is the band operator ONLY when the token in front of
-  // it is itself a severity -- otherwise it stays part of the label verbatim
-  // ('c++' is the label 'c++', not the label 'c' with a refused '+').
-  const plusCandidate = selectorPart.endsWith("+") ? stripQuotes(selectorPart.slice(0, -1).trim()) : null;
-  const plus = plusCandidate !== null && (SEVERITY_ORDER as readonly string[]).includes(plusCandidate.toLowerCase());
-  const selectorRaw = stripQuotes((plus ? (plusCandidate as string) : selectorPart).trim());
-  const suffix = tail === null ? "" : ` then ${tail}`;
-  const repoPrefix = repoPart === "" ? "@" : `${repoPart}@`;
-  if (selectorRaw === "") {
-    return {
-      ok: false,
-      error: {
-        message: `no selector after '@'. Expected a severity (${SEVERITY_ORDER.join(", ")}, optionally suffixed '+') or a label.`,
-        correctedLine: `${repoPrefix}${SEVERITY_ORDER[0]}${suffix}`,
-      },
-    };
-  }
   const severity = SEVERITY_ORDER.find((candidate): boolean => candidate === selectorRaw.toLowerCase());
   if (severity === undefined) {
     // Any other token is a label, taken exactly as typed -- including one

@@ -89,10 +89,19 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     }
   });
 
-  it("refuses an empty selector, offering a corrected line", () => {
+  it("refuses an empty selector, and never manufactures one to correct it with (maintainer's ruling, 2026-09-28)", () => {
     const result = parseFutonInvocation("bc@");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.correctedLine).toBe("bc@critical");
+    if (!result.ok) expect(result.error.correctedLine).toBeNull();
+  });
+
+  it("refuses an empty selector on a publishing chain without ever completing the line for a picker (example/app@ then getsuga+mugetsu)", () => {
+    const result = parseFutonInvocation("example/app@ then getsuga+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.correctedLine).toBeNull();
+      expect(result.error.message).toMatch(/no selector after '@'/);
+    }
   });
 
   it("classifies kebab tokens after 'then' as a skill chain", () => {
@@ -108,6 +117,74 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
           { skill: "mugetsu", target: "github" },
         ],
       });
+    }
+  });
+
+  // Duplicate step refusal: the same skill against the same target twice is
+  // never a chain anybody meant to write -- either a double-run or a paste
+  // error, and nen will not guess which.
+  it("refuses a chain naming the same skill AND the same target twice, with a corrected line removing the duplicate", () => {
+    const result = parseFutonInvocation("bc@high then getsuga+mugetsu+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/appears more than once/);
+      expect(result.error.correctedLine).toBe("bc@high then getsuga+mugetsu");
+    }
+  });
+
+  it("refuses a chain naming the same skill and same explicit target twice (mugetsu@a+mugetsu@a)", () => {
+    const result = parseFutonInvocation("bc@high then mugetsu@a+mugetsu@a");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/appears more than once/);
+      expect(result.error.correctedLine).toBe("bc@high then mugetsu@a");
+    }
+  });
+
+  it("allows the same skill against DIFFERENT targets (mugetsu@a+mugetsu@b), no ordering requirement implied", () => {
+    const result = parseFutonInvocation("bc@high then mugetsu@a+mugetsu@b");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.then).toEqual({
+        kind: "skills",
+        steps: [
+          { skill: "mugetsu", target: "a" },
+          { skill: "mugetsu", target: "b" },
+        ],
+      });
+    }
+  });
+
+  // N9: targets are compared case-insensitively -- 'mugetsu@A' and
+  // 'mugetsu@a' name the same target under any spelling a caller types.
+  it("N9: refuses a duplicate even when the target's case differs (mugetsu@A+mugetsu@a)", () => {
+    const result = parseFutonInvocation("bc@high then mugetsu@A+mugetsu@a");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/appears more than once/);
+      expect(result.error.correctedLine).toBe("bc@high then mugetsu@A");
+    }
+  });
+
+  // N8: EVERY later repeat is dropped from the corrected line, not just the
+  // first duplicate found.
+  it("N8: drops every later repeat, not only the first duplicate (getsuga+mugetsu+getsuga+mugetsu)", () => {
+    const result = parseFutonInvocation("bc@high then getsuga+mugetsu+getsuga+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.correctedLine).toBe("bc@high then getsuga+mugetsu");
+    }
+  });
+
+  // N7: the selector is checked BEFORE any then-clause refusal, so an empty
+  // selector is reported (correctedLine null) even when the chain after
+  // 'then' would ALSO be refused for its own reason (here, a duplicate step).
+  it("N7: an empty selector is refused with correctedLine null even when the chain also has a duplicate step (@ then mugetsu+mugetsu)", () => {
+    const result = parseFutonInvocation("@ then mugetsu+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/no selector after '@'/);
+      expect(result.error.correctedLine).toBeNull();
     }
   });
 

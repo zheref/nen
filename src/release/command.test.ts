@@ -580,7 +580,7 @@ describe("nen release self-check -- CLI wiring", () => {
 });
 
 describe("nen release unit-check -- CLI wiring", () => {
-  function workflowRepo(unitPaths: readonly string[] | undefined): string {
+  function workflowRepo(unitPaths: readonly unknown[] | undefined): string {
     const dir = mkdtempSync(join(tmpdir(), "nen-unit-check-"));
     mkdirSync(join(dir, "nen"), { recursive: true });
     const body = unitPaths === undefined ? {} : { release: { unitPaths } };
@@ -647,6 +647,93 @@ describe("nen release unit-check -- CLI wiring", () => {
     ];
     const result = await capture(["release", "unit-check", "--pr", "9"], root, new ScriptedSeams(script).run);
     expect(result.code).toBe(0);
+  });
+
+  // N3: scripted CLI tests for a content-scoped (object) unitPaths entry.
+  describe("a content-scoped {path, keys} entry", () => {
+    const MERGE_BASE = "mergebasesha";
+    function contractContentsCall(json: unknown, ref: string): ScriptedCall {
+      return {
+        match: `gh api repos/acme/widgets/contents/nen/contract.json?ref=${ref}`,
+        result: { code: 0, stdout: JSON.stringify({ content: Buffer.from(JSON.stringify(json)).toString("base64") }) },
+      };
+    }
+    function prRefsCall(): ScriptedCall {
+      return {
+        match: "gh pr view 9 --repo acme/widgets --json baseRefOid,headRefOid",
+        result: { code: 0, stdout: JSON.stringify({ baseRefOid: "BASE", headRefOid: "HEAD" }) },
+      };
+    }
+    function compareCall(): ScriptedCall {
+      return {
+        match: "gh api repos/acme/widgets/compare/BASE...HEAD",
+        result: { code: 0, stdout: JSON.stringify({ merge_base_commit: { sha: MERGE_BASE } }) },
+      };
+    }
+    function filesScript(files: readonly { filename: string }[]): readonly ScriptedCall[] {
+      return [
+        { match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files", result: { code: 0, stdout: JSON.stringify(files) } },
+        { match: "gh api repos/acme/widgets/pulls/9", result: { code: 0, stdout: JSON.stringify({ changed_files: files.length }) } },
+      ];
+    }
+
+    it("exits 0 when the changed file only touches its declared key", async () => {
+      const root = workflowRepo([{ path: "nen/contract.json", keys: ["version"] }]);
+      const script: readonly ScriptedCall[] = [
+        ...filesScript([{ filename: "nen/contract.json" }]),
+        prRefsCall(),
+        compareCall(),
+        contractContentsCall({ version: "1.0.0" }, MERGE_BASE),
+        contractContentsCall({ version: "1.0.1" }, "HEAD"),
+      ];
+      const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
+      expect(result.code).toBe(0);
+      expect(result.out.join("\n")).toMatch(/every changed path is inside the release unit/);
+    });
+
+    it("exits 1 with the 'outside (content-scoped)' line and keyScopedViolations in --json when an undeclared key changes", async () => {
+      const root = workflowRepo([{ path: "nen/contract.json", keys: ["version"] }]);
+      const script: readonly ScriptedCall[] = [
+        ...filesScript([{ filename: "nen/contract.json" }]),
+        prRefsCall(),
+        compareCall(),
+        contractContentsCall({ version: "1.0.0", description: "old" }, MERGE_BASE),
+        contractContentsCall({ version: "1.0.1", description: "new" }, "HEAD"),
+      ];
+      const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toMatch(/outside \(content-scoped\): "nen\/contract\.json" changed at "description"/);
+
+      const jsonResult = await capture(
+        ["release", "unit-check", "--pr", "acme/widgets#9", "--json"],
+        root,
+        new ScriptedSeams(script).run,
+      );
+      const report = JSON.parse(jsonResult.out.join("\n")) as { readonly keyScopedViolations: readonly { readonly path: string; readonly offendingKeys: readonly string[] }[] };
+      expect(report.keyScopedViolations).toEqual([{ path: "nen/contract.json", ok: false, offendingKeys: ["description"] }]);
+    });
+
+    it("exits 1 and names the failure when 'gh pr view' (the base/head refs fetch) fails", async () => {
+      const root = workflowRepo([{ path: "nen/contract.json", keys: ["version"] }]);
+      const script: readonly ScriptedCall[] = [
+        ...filesScript([{ filename: "nen/contract.json" }]),
+        { match: "gh pr view 9 --repo acme/widgets --json baseRefOid,headRefOid", result: { code: 1, stdout: "", stderr: "not found" } },
+      ];
+      const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
+      expect(result.code).not.toBe(0);
+    });
+
+    it("exits 1 naming the merge-base failure when the compare endpoint fails (N6)", async () => {
+      const root = workflowRepo([{ path: "nen/contract.json", keys: ["version"] }]);
+      const script: readonly ScriptedCall[] = [
+        ...filesScript([{ filename: "nen/contract.json" }]),
+        prRefsCall(),
+        { match: "gh api repos/acme/widgets/compare/BASE...HEAD", result: { code: 1, stdout: "", stderr: "not found" } },
+      ];
+      const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, new ScriptedSeams(script).run);
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).toMatch(/could not resolve the merge base/);
+    });
   });
 
   it("refuses an omitted --repo at the parser (exit 2), naming the flag", async () => {
