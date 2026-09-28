@@ -255,8 +255,29 @@ export const ADVANCE_GO_KINDS: readonly AdvanceGoKind[] = ["product", "process",
  * failure, "inside" by default) would be this binary inventing a boundary the
  * repository never drew.
  */
+/**
+ * ONE CONTENT-SCOPED ENTRY of `release.unitPaths`: an EXACT JSON file, bounded
+ * not to "the whole file" but to a set of its own LEAF keys -- a version file
+ * a release unit owns may bump `version` without the unit ever claiming
+ * `description` too. `path` is compared by EXACT EQUALITY against a changed
+ * file's path, never a pattern -- a content-scoped bound only ever makes
+ * sense for one named file, because "which keys may change" is a question
+ * with one answer per file, not per glob. `keys` is a JSON pointer
+ * (`/version`) or dotted (`version`) leaf path, normalized the same way by
+ * ../release/unitcheck.ts's own reader -- SHAPE validated here, never
+ * resolved against real file content, which is that module's own job once a
+ * pull request's base and head are known.
+ */
+export interface ReleaseUnitKeyedPath {
+  readonly path: string;
+  readonly keys: readonly string[];
+}
+
+/** One `release.unitPaths` entry: a whole-path pattern (string), or a content-scoped bound (`ReleaseUnitKeyedPath`). */
+export type ReleaseUnitEntry = string | ReleaseUnitKeyedPath;
+
 export interface ReleasePolicy {
-  readonly unitPaths: readonly string[] | null;
+  readonly unitPaths: readonly ReleaseUnitEntry[] | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -277,6 +298,32 @@ export interface FutonPolicy {
   readonly advanceGo: Readonly<Record<string, readonly AdvanceGoKind[]>>;
   readonly raw: Readonly<Record<string, unknown>>;
 }
+
+/**
+ * The advance-go gate a repository that DECLARES NO `futon.advanceGo` at all
+ * runs under -- the maintainer's ruling (2026-09-28): an absent key must
+ * never read as "no gate". `mugetsu`, `kagutsuchi` and `getsuga` are the
+ * three publishing/deploying skills a futon chain can name that carry real
+ * side effects outside the checkout, and this is the floor every repository
+ * gets before it has written a policy of its own -- exactly the same
+ * argument this file's header makes for `coverage`'s 80/85/90: a default for
+ * the SHAPE (there IS a gate) is not nen inventing a NAME, because these
+ * three skill names and the three repo kinds are already this ecosystem's
+ * own vocabulary, declared once in ../parse/futon.ts and ADVANCE_GO_KINDS
+ * above -- nothing here is invented for the occasion.
+ *
+ * A REPOSITORY THAT DECLARES `futon.advanceGo` AT ALL, EVEN PARTIALLY,
+ * REPLACES THIS ENTIRELY -- ../grammar/command.ts's futon() only reaches for
+ * this default when the declared map is empty (the key, or the whole file,
+ * is absent). A repository that declares a policy naming only `mugetsu` has
+ * made a real decision to leave `kagutsuchi` and `getsuga` ungated, and this
+ * default must not silently reinstate a gate that repository chose to drop.
+ */
+export const DEFAULT_ADVANCE_GO: Readonly<Record<string, readonly AdvanceGoKind[]>> = {
+  mugetsu: ["process", "library"],
+  kagutsuchi: ["product", "process", "library"],
+  getsuga: ["product", "process", "library"],
+};
 
 export interface NotificationsPolicy {
   readonly rungs: readonly string[];
@@ -984,11 +1031,70 @@ function isUniversalPattern(pattern: string): boolean {
   return UNIVERSAL_PROBE_PATHS.every((probe): boolean => matchesPattern(probe, pattern));
 }
 
+/** The two keys a content-scoped `release.unitPaths` entry may carry, in one place. */
+const UNIT_PATH_ENTRY_KEYS: readonly string[] = ["path", "keys"];
+
+/**
+ * One `release.unitPaths[i]` that arrived as an OBJECT rather than a string
+ * -- a content-scoped bound, validated for SHAPE only (the same discipline
+ * `review.scopes` and the plain-string branch below both already hold to):
+ * `path` is a repo-relative path to the ONE exact file this entry bounds
+ * (never a pattern -- see `ReleaseUnitKeyedPath`'s own doc comment), `keys`
+ * is a non-empty list of non-empty leaf-key strings. Whether the declared
+ * file actually IS JSON, and whether its changes stayed inside these keys,
+ * is ../release/unitcheck.ts's own question, asked against real base/head
+ * content this loader has never seen.
+ */
+function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Record<string, unknown>>): ReleaseUnitKeyedPath {
+  for (const key of Object.keys(value)) {
+    if (key.startsWith("$") || UNIT_PATH_ENTRY_KEYS.includes(key)) continue;
+    throw new SchemaError(
+      path,
+      `${pointer}.${key}`,
+      `is not a key a content-scoped release-unit entry can carry. The two are 'path' (the exact JSON file this entry bounds) and 'keys' (the leaf keys, JSON-pointer or dotted, that file may change at)`,
+    );
+  }
+  const filePath = requireString(path, `${pointer}.path`, value["path"]);
+  if (filePath.trim() === "" || filePath.startsWith("/") || filePath.split("/").includes("..")) {
+    throw new SchemaError(
+      path,
+      `${pointer}.path`,
+      `'${filePath}' is not a path this policy can act on. A content-scoped entry names the EXACT repo-relative file it bounds -- compared by equality against a changed file's own path, never as a pattern -- so it is repo-relative, has no leading '/' and no '..' segment`,
+    );
+  }
+  const keysRaw = requireArray(path, `${pointer}.keys`, value["keys"]);
+  if (keysRaw.length === 0) {
+    throw new SchemaError(
+      path,
+      `${pointer}.keys`,
+      `names no keys. A content-scoped entry with no allowed key would let '${filePath}' change at NOTHING, which is never what declaring the object form is meant to say -- name at least one JSON-pointer or dotted leaf key, or drop the object form and bound the whole file by its path string instead`,
+    );
+  }
+  const keys = keysRaw.map((item, index): string => {
+    const key = requireString(path, `${pointer}.keys[${index}]`, item);
+    if (key.trim() === "") {
+      throw new SchemaError(path, `${pointer}.keys[${index}]`, "is empty. An empty key names no leaf this file may change at");
+    }
+    return key;
+  });
+  return { path: filePath, keys };
+}
+
 function parseReleasePolicy(path: string, value: unknown): ReleasePolicy {
   const raw = block(path, "release", value, RELEASE_KEYS, "A release policy's one key is");
   const unitPathsRaw = raw["unitPaths"];
   if (unitPathsRaw === undefined || unitPathsRaw === null) return { unitPaths: null, raw };
-  const list = requireArray(path, "release.unitPaths", unitPathsRaw).map((entry, index): string => {
+  const list = requireArray(path, "release.unitPaths", unitPathsRaw).map((entry, index): ReleaseUnitEntry => {
+    const pointer = `release.unitPaths[${index}]`;
+    // AN OBJECT ENTRY IS THE CONTENT-SCOPED FORM -- routed to its own parser
+    // before the plain-string checks below, which is why this branch tests
+    // for "object, not array, not null" rather than falling through to
+    // `requireString`'s own type refusal (that refusal's wording is about a
+    // STRING, and would be the wrong sentence for an object that is simply
+    // missing its 'path'/'keys' keys).
+    if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
+      return parseUnitPathEntry(path, pointer, entry as Readonly<Record<string, unknown>>);
+    }
     const pattern = requireString(path, `release.unitPaths[${index}]`, entry);
     if (pattern.trim() === "") {
       throw new SchemaError(

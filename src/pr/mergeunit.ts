@@ -44,6 +44,7 @@ import { checkBody, type BodyRequirement } from "./bodycheck.js";
 import {
   assembleUnitCheck,
   fetchChangedFiles,
+  fetchJsonAtRef,
   renderUnitCheck,
   resolvePrRef,
   resolveUnitCheckTarget,
@@ -52,7 +53,7 @@ import {
   type ChangedFile,
   type ResolvedPrRef,
 } from "../release/unitcheck.js";
-import { parseWorkflow } from "../schema/workflow.js";
+import { parseWorkflow, type ReleaseUnitEntry } from "../schema/workflow.js";
 import { SchemaError } from "../schema/errors.js";
 import { GH, must, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import type { Io, PrReadyDeps, PrReadyInput } from "../verbs/pr_ready.js";
@@ -316,7 +317,7 @@ function fetchBaseReleasePolicy(
   seams: Seams,
   target: Target,
   baseRefOid: string,
-): { readonly ok: true; readonly unitPaths: readonly string[] } | { readonly ok: false; readonly message: string } {
+): { readonly ok: true; readonly unitPaths: readonly ReleaseUnitEntry[] } | { readonly ok: false; readonly message: string } {
   let response;
   try {
     response = must(seams, GH, ["api", `repos/${target.slug}/contents/nen/workflow.json?ref=${baseRefOid}`]);
@@ -456,7 +457,15 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
     };
   }
 
-  const report = assembleUnitCheck(options.target, options.prNumber, unitPaths, changedFiles);
+  // The PR's own base/head (from the ONE `gh pr view` fetch this module
+  // made, Feitan F7) -- a content-scoped entry's diff is read at exactly the
+  // same two commits every other gate in this composition judges, never a
+  // second, independent resolution of "the base" and "the head".
+  const report = assembleUnitCheck(options.target, options.prNumber, unitPaths, changedFiles, {
+    baseRef: options.prOnce.baseRefOid,
+    headRef: options.prOnce.headRefOid,
+    readJson: (filePath, ref): unknown => fetchJsonAtRef(options.seams, options.target, filePath, ref),
+  });
   const lines = renderUnitCheck(report).map((line): string => `release unit-check: ${line}`);
 
   // FEI-8: a changed path the unit claims by NAME may still be a symlink or a

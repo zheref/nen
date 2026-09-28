@@ -3,7 +3,10 @@
 import { describe, expect, it } from "vitest";
 import { ScriptedSeams } from "../seam/scripted.js";
 import {
+  assembleUnitCheck,
+  checkKeyScopedPath,
   fetchChangedFiles,
+  fetchJsonAtRef,
   outsideReleaseUnit,
   resolvePrRef,
   resolveUnitCheckTarget,
@@ -179,5 +182,132 @@ describe("outsideReleaseUnit -- the pure classification", () => {
   it("does not flag a rename that stays inside the unit on both ends (F2)", () => {
     const outside = outsideReleaseUnit([file("src/unit/renamed.ts", "src/unit/old-name.ts")], ["src/unit/**"]);
     expect(outside).toEqual([]);
+  });
+
+  it("claims a content-scoped (object) entry's path by exact equality, not as a pattern", () => {
+    const outside = outsideReleaseUnit(
+      [file("nen/contract.json")],
+      [{ path: "nen/contract.json", keys: ["version"] }],
+    );
+    expect(outside).toEqual([]);
+  });
+
+  it("a content-scoped entry's path does not claim a different file, even a sibling", () => {
+    const outside = outsideReleaseUnit(
+      [file("nen/other.json")],
+      [{ path: "nen/contract.json", keys: ["version"] }],
+    );
+    expect(outside).toEqual(["nen/other.json"]);
+  });
+});
+
+const TARGET = { owner: "acme", repo: "widgets", slug: "acme/widgets" };
+
+describe("fetchJsonAtRef -- reads and parses a repo file's content at one ref, fail-closed", () => {
+  function contentsCall(json: unknown): { readonly match: string; readonly result: { readonly code: number; readonly stdout: string } } {
+    return {
+      match: "gh api repos/acme/widgets/contents/nen/contract.json?ref=abc123",
+      result: { code: 0, stdout: JSON.stringify({ content: Buffer.from(JSON.stringify(json)).toString("base64") }) },
+    };
+  }
+
+  it("decodes base64 content and parses it as JSON", () => {
+    const seams = new ScriptedSeams([contentsCall({ version: "1.0.0" })]);
+    expect(fetchJsonAtRef(seams, TARGET, "nen/contract.json", "abc123")).toEqual({ version: "1.0.0" });
+  });
+
+  it("is null when gh itself refuses (missing file, bad ref, ...)", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/acme/widgets/contents/nen/contract.json?ref=abc123", result: { code: 1, stdout: "", stderr: "404" } },
+    ]);
+    expect(fetchJsonAtRef(seams, TARGET, "nen/contract.json", "abc123")).toBeNull();
+  });
+
+  it("is null when the decoded content is not valid JSON", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: "gh api repos/acme/widgets/contents/nen/contract.json?ref=abc123",
+        result: { code: 0, stdout: JSON.stringify({ content: Buffer.from("not json").toString("base64") }) },
+      },
+    ]);
+    expect(fetchJsonAtRef(seams, TARGET, "nen/contract.json", "abc123")).toBeNull();
+  });
+});
+
+describe("checkKeyScopedPath -- a content-scoped entry's own verdict", () => {
+  it("passes when the only leaves that differ are declared keys (dotted or JSON-pointer)", () => {
+    const outcome = checkKeyScopedPath(
+      { path: "nen/contract.json", keys: ["version", "/nested/allowed"] },
+      "base",
+      "head",
+      (path, ref): unknown =>
+        ref === "base"
+          ? { version: "1.0.0", nested: { allowed: "x" } }
+          : { version: "1.0.1", nested: { allowed: "y" } },
+    );
+    expect(outcome).toEqual({ path: "nen/contract.json", ok: true, offendingKeys: [] });
+  });
+
+  it("fails and names the offending key when an undeclared leaf changes too (version + description)", () => {
+    const outcome = checkKeyScopedPath(
+      { path: "nen/contract.json", keys: ["version"] },
+      "base",
+      "head",
+      (path, ref): unknown =>
+        ref === "base"
+          ? { version: "1.0.0", description: "old" }
+          : { version: "1.0.1", description: "new" },
+    );
+    expect(outcome.ok).toBe(false);
+    expect(outcome.offendingKeys).toEqual(["description"]);
+  });
+
+  it("fails closed when either side is unreadable/unparseable JSON", () => {
+    const outcome = checkKeyScopedPath({ path: "nen/contract.json", keys: ["version"] }, "base", "head", (): unknown => null);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.offendingKeys.length).toBeGreaterThan(0);
+  });
+});
+
+describe("assembleUnitCheck -- wired with a keyScoped context", () => {
+  it("reports ok:true when a plain unit is clean and a content-scoped entry only changed its declared key", () => {
+    const report = assembleUnitCheck(
+      TARGET,
+      42,
+      [{ path: "nen/contract.json", keys: ["version"] }],
+      [file("nen/contract.json")],
+      { baseRef: "base", headRef: "head", readJson: (path, ref): unknown => (ref === "base" ? { version: "1.0.0" } : { version: "1.0.1" }) },
+    );
+    expect(report.ok).toBe(true);
+    expect(report.keyScopedViolations).toEqual([]);
+  });
+
+  it("reports ok:false and names the offending key when the content-scoped entry changes outside its keys", () => {
+    const report = assembleUnitCheck(
+      TARGET,
+      42,
+      [{ path: "nen/contract.json", keys: ["version"] }],
+      [file("nen/contract.json")],
+      {
+        baseRef: "base",
+        headRef: "head",
+        readJson: (path, ref): unknown => (ref === "base" ? { version: "1.0.0", description: "old" } : { version: "1.0.1", description: "new" }),
+      },
+    );
+    expect(report.ok).toBe(false);
+    expect(report.keyScopedViolations).toEqual([{ path: "nen/contract.json", ok: false, offendingKeys: ["description"] }]);
+  });
+
+  it("skips the content read entirely for a keyed entry that was never changed", () => {
+    let reads = 0;
+    const report = assembleUnitCheck(
+      TARGET,
+      42,
+      [{ path: "nen/contract.json", keys: ["version"] }, "src/unit/**"],
+      [file("src/unit/a.ts")],
+      { baseRef: "base", headRef: "head", readJson: (): unknown => { reads += 1; return {}; } },
+    );
+    expect(reads).toBe(0);
+    expect(report.ok).toBe(true);
   });
 });

@@ -219,7 +219,7 @@ describe("nen parse futon -- the advance-go gate on a skill chain", () => {
       then: { kind: string; steps: { skill: string; gate?: { allowed: boolean; kind: string } }[] };
     };
     expect(parsed.then.kind).toBe("skills");
-    expect(parsed.then.steps).toEqual([{ skill: "mugetsu", target: null, gate: { allowed: true, kind: "process", reason: expect.any(String) } }]);
+    expect(parsed.then.steps).toEqual([{ skill: "mugetsu", target: null, gate: { allowed: true, kind: "process", reason: expect.any(String), source: "declared" } }]);
   });
 
   it("annotates a REFUSED step (repo kind is a declared product, skill allows only process/library) and still exits 0", async () => {
@@ -229,7 +229,7 @@ describe("nen parse futon -- the advance-go gate on a skill chain", () => {
     const parsed = JSON.parse(result.out.join("\n")) as {
       then: { steps: { skill: string; gate?: { allowed: boolean; kind: string; reason: string } }[] };
     };
-    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "product", reason: expect.any(String) });
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "product", reason: expect.any(String), source: "declared" });
 
     // The plain rendering prints a 'refused: <skill> (<reason>)' line, and the
     // exit code stays 0 -- a refused step does NOT fail the parse.
@@ -253,7 +253,7 @@ describe("nen parse futon -- the advance-go gate on a skill chain", () => {
     const parsed = JSON.parse(result.out.join("\n")) as {
       then: { steps: { skill: string; gate?: { allowed: boolean; kind: string; reason: string } }[] };
     };
-    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "unknown", reason: expect.any(String) });
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "unknown", reason: expect.any(String), source: "declared" });
     // item 10: a proper possessive ("zheref/KroApple's"), never the doubled
     // apostrophe a literal-quoted slug used to produce ("...''s").
     expect(parsed.then.steps[0]?.gate?.reason).toMatch(/^zheref\/KroApple's repo kind is unknown/);
@@ -285,7 +285,37 @@ describe("nen parse futon -- the advance-go gate on a skill chain", () => {
     const result = await capture(["parse", "futon", "@high then hatsu:mugetsu", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
     expect(result.code).toBe(0);
     const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { allowed: boolean; kind: string } }[] } };
-    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "product", reason: expect.any(String) });
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "product", reason: expect.any(String), source: "declared" });
+  });
+
+  // Maintainer's ruling, 2026-09-28: a repo that declares NO 'futon.advanceGo'
+  // at all never gets "no gate" -- it gets DEFAULT_ADVANCE_GO, source 'default'.
+  it("applies the built-in default policy when 'futon.advanceGo' is entirely absent, marking gate.source 'default'", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-futon-gate-default-"));
+    mkdirSync(join(dir, "nen"), { recursive: true });
+    copyFileSync(join(BANKAI_REPO, "nen", "repos.json"), join(dir, "nen", "repos.json"));
+    writeFileSync(
+      join(dir, "nen", "contract.json"),
+      JSON.stringify({ project: { kind: "product", lanes: { default: { stack: "generic", cwd: "." } }, verbs: { default: { build: { unsupported: "test fixture" } } } } }),
+    );
+    // No nen/workflow.json at all -- the absent-file case.
+    const result = await capture(["parse", "futon", "@high then mugetsu", "--repo", dir], ORIGIN_IS_SELF, { repoFlag: dir, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as {
+      then: { steps: { skill: string; gate?: { allowed: boolean; kind: string; source: string } }[] };
+    };
+    // DEFAULT_ADVANCE_GO.mugetsu is ["process", "library"] -- a 'product' repo is refused.
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: false, kind: "product", reason: expect.any(String), source: "default" });
+  });
+
+  it("applies the declared policy, source 'declared', when the repo states its own futon.advanceGo", async () => {
+    const root = gateRepo("product", { mugetsu: ["product"] });
+    const result = await capture(["parse", "futon", "@high then mugetsu", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as {
+      then: { steps: { skill: string; gate?: { allowed: boolean; kind: string; source: string } }[] };
+    };
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: true, kind: "product", reason: expect.any(String), source: "declared" });
   });
 });
 

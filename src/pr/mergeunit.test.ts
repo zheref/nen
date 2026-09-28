@@ -106,7 +106,10 @@ function prOnceCall(overrides: Partial<{ headRefOid: string; baseRefOid: string;
   };
 }
 
-function workflowContentsCall(unitPaths: readonly string[] | null = ["src/unit/**"], base: string = BASE): ScriptedCall {
+function workflowContentsCall(
+  unitPaths: readonly (string | { readonly path: string; readonly keys: readonly string[] })[] | null = ["src/unit/**"],
+  base: string = BASE,
+): ScriptedCall {
   const body = unitPaths === null ? {} : { release: { unitPaths } };
   const content = Buffer.from(JSON.stringify(body)).toString("base64");
   return {
@@ -397,6 +400,71 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       const outcome = await run(root, script);
       expect(outcome.report.unitOk).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/this pull request changes 'nen\/workflow\.json' or 'nen\/gates\.json'/);
+    });
+  });
+
+  describe("content-scoped release unit -- an object {path, keys} entry (item 4)", () => {
+    function contractContentsCall(json: unknown, ref: string): ScriptedCall {
+      return {
+        match: `gh api repos/zheref/example/contents/nen/contract.json?ref=${ref}`,
+        result: { code: 0, stdout: JSON.stringify({ content: Buffer.from(JSON.stringify(json)).toString("base64") }) },
+      };
+    }
+
+    it("passes when the changed file only touches its declared key (version-only)", async () => {
+      const root = tmpRoot();
+      const script = [
+        ORIGIN_CALL,
+        prOnceCall(),
+        ...changedFilesCall([{ filename: "nen/contract.json" }]),
+        workflowContentsCall([{ path: "nen/contract.json", keys: ["version"] }]),
+        treeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        baseTreeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        contractContentsCall({ version: "1.0.0", description: "same" }, BASE),
+        contractContentsCall({ version: "1.0.1", description: "same" }, HEAD),
+        VIEWER_CALL,
+      ];
+      const outcome = await run(root, script);
+      expect(outcome.report.unitOk).toBe(true);
+    });
+
+    it("fails and names 'description' when the changed file also touches an undeclared key (version + description)", async () => {
+      const root = tmpRoot();
+      const script = [
+        ORIGIN_CALL,
+        prOnceCall(),
+        ...changedFilesCall([{ filename: "nen/contract.json" }]),
+        workflowContentsCall([{ path: "nen/contract.json", keys: ["version"] }]),
+        treeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        baseTreeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        contractContentsCall({ version: "1.0.0", description: "old" }, BASE),
+        contractContentsCall({ version: "1.0.1", description: "new" }, HEAD),
+        VIEWER_CALL,
+      ];
+      const outcome = await run(root, script);
+      expect(outcome.report.unitOk).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/description/);
+    });
+
+    it("fails closed when the declared file is not valid JSON at one of the two refs", async () => {
+      const root = tmpRoot();
+      const script: ScriptedCall[] = [
+        ORIGIN_CALL,
+        prOnceCall(),
+        ...changedFilesCall([{ filename: "nen/contract.json" }]),
+        workflowContentsCall([{ path: "nen/contract.json", keys: ["version"] }]),
+        treeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        baseTreeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        {
+          match: `gh api repos/zheref/example/contents/nen/contract.json?ref=${BASE}`,
+          result: { code: 0, stdout: JSON.stringify({ content: Buffer.from("not json").toString("base64") }) },
+        },
+        contractContentsCall({ version: "1.0.1" }, HEAD),
+        VIEWER_CALL,
+      ];
+      const outcome = await run(root, script);
+      expect(outcome.report.unitOk).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/unreadable or not valid JSON/);
     });
   });
 

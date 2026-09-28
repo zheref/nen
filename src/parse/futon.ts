@@ -233,6 +233,41 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
         };
       }
       const steps = parseSkillChain(normalized);
+      if (steps !== null) {
+        // DUPLICATE STEP REFUSAL: the same skill against the same target
+        // twice is never a chain anybody meant to write -- 'mugetsu@a' run
+        // after 'mugetsu@a' either double-runs an advance-go against the
+        // same target (harmless at best, a double-publish at worst) or is a
+        // paste error, and nen cannot tell which without guessing. Compared
+        // on the BARE skill name (namespace prefix stripped, lower-cased --
+        // the same normalization ../schema/workflow.ts's futon.advanceGo
+        // keys read) and the target EXACTLY as typed, because a different
+        // target is a genuinely different step: 'mugetsu@a+mugetsu@b' stays
+        // allowed, and this rule states no ordering requirement at all.
+        const seen = new Set<string>();
+        let duplicateIndex = -1;
+        for (const [index, step] of steps.entries()) {
+          const bareSkill = step.skill.replace(/^[a-z0-9][a-z0-9-]*:/i, "").toLowerCase();
+          const key = `${bareSkill}@${step.target ?? ""}`;
+          if (seen.has(key)) {
+            duplicateIndex = index;
+            break;
+          }
+          seen.add(key);
+        }
+        if (duplicateIndex !== -1) {
+          const dupParts = normalized.split("+");
+          const corrected = dupParts.filter((_part, index): boolean => index !== duplicateIndex);
+          const dupStep = steps[duplicateIndex]!;
+          return {
+            ok: false,
+            error: {
+              message: `'${dupStep.skill}${dupStep.target === null ? "" : `@${dupStep.target}`}' appears more than once in the chain '${tail}' -- the same skill against the same target twice is never a chain nen will run without asking: it is either a double-run of the same step or a paste error, and nen cannot tell which.`,
+              correctedLine: `${head} then ${corrected.join("+")}`,
+            },
+          };
+        }
+      }
       then = steps === null ? { kind: "prose", text: tail } : { kind: "skills", steps };
     } else {
       then = { kind: "prose", text: tail };
@@ -257,14 +292,22 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   const plusCandidate = selectorPart.endsWith("+") ? stripQuotes(selectorPart.slice(0, -1).trim()) : null;
   const plus = plusCandidate !== null && (SEVERITY_ORDER as readonly string[]).includes(plusCandidate.toLowerCase());
   const selectorRaw = stripQuotes((plus ? (plusCandidate as string) : selectorPart).trim());
-  const suffix = tail === null ? "" : ` then ${tail}`;
-  const repoPrefix = repoPart === "" ? "@" : `${repoPart}@`;
   if (selectorRaw === "") {
+    // NEVER MANUFACTURE A SELECTOR. The maintainer's ruling (2026-09-28): a
+    // missing selector is a missing DECISION -- which severity or label this
+    // run scopes to is the one thing only a human (or a picker relaying a
+    // human's choice) may state for a chain that goes on to publish. Filling
+    // in `critical` here would hand a picker a COMPLETE, parseable line it
+    // could paste and run without ever having chosen a selector -- silently
+    // picking the most severe band on the caller's behalf. `correctedLine` is
+    // `null` so nothing downstream can mistake "the shape of a fix" for "the
+    // fix", the same distinction this module already draws for the two
+    // structural failures above (an unparseable head, a malformed chain).
     return {
       ok: false,
       error: {
-        message: `no selector after '@'. Expected a severity (${SEVERITY_ORDER.join(", ")}, optionally suffixed '+') or a label.`,
-        correctedLine: `${repoPrefix}${SEVERITY_ORDER[0]}${suffix}`,
+        message: `no selector after '@'. Expected a severity (${SEVERITY_ORDER.join(", ")}, optionally suffixed '+') or a label -- nen will not guess one, because the selector is the scoping decision a chain that goes on to publish must never have silently picked for it.`,
+        correctedLine: null,
       },
     };
   }

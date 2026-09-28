@@ -23,7 +23,7 @@ import { targetFromRemote } from "../github/target.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { classifyRepo } from "../repo/classify.js";
 import { loadRepoRegistry } from "../schema/repos.js";
-import { loadWorkflow } from "../schema/workflow.js";
+import { DEFAULT_ADVANCE_GO, loadWorkflow } from "../schema/workflow.js";
 import {
   emit,
   requireRepoFlag,
@@ -291,17 +291,30 @@ function futon(context: CommandContext, raw: string): number {
   // plain rendering) so the calling skill can act on it without nen ever
   // deciding whether the chain may proceed.
   const then = parsed.value.then;
+  // DECLARED-VS-DEFAULT (maintainer's ruling, 2026-09-28): a repository that
+  // states NO 'futon.advanceGo' at all (the key, or the whole workflow file,
+  // is absent -- loadWorkflow's default already answers that with an empty
+  // record) never gets "no gate" -- it gets DEFAULT_ADVANCE_GO, the built-in
+  // floor for the three skills that carry side effects outside the checkout.
+  // A repository that declares ANY entry of its own has made a real decision
+  // about which skills it gates, and that decision REPLACES the default
+  // wholesale rather than merging with it -- so the switch is on the whole
+  // map being empty, not on any one skill's absence from it.
+  const declaredAdvanceGo = loadWorkflow(root).workflow.futon.advanceGo;
+  const advanceGoDeclared = Object.keys(declaredAdvanceGo).length > 0;
+  const advanceGo = advanceGoDeclared ? declaredAdvanceGo : DEFAULT_ADVANCE_GO;
+  const gateSource: "declared" | "default" = advanceGoDeclared ? "declared" : "default";
   const gatedThen =
     then !== null && then.kind === "skills"
       ? {
           kind: "skills" as const,
-          steps: then.steps.map((step): FutonStep & { readonly gate?: { readonly allowed: boolean; readonly kind: string; readonly reason: string } } => {
+          steps: then.steps.map((step): FutonStep & { readonly gate?: { readonly allowed: boolean; readonly kind: string; readonly reason: string; readonly source: "declared" | "default" } } => {
             // Strip ANY namespace prefix, not just 'plugin:' -- a step like
             // 'hatsu:mugetsu' names the same skill as 'mugetsu' and must be
             // looked up under the same key parseFutonPolicy normalizes to,
             // or the gate fails open for every namespace but one.
             const bareSkill = step.skill.replace(/^[a-z0-9][a-z0-9-]*:/i, "");
-            const allowedKinds = loadWorkflow(root).workflow.futon.advanceGo[bareSkill];
+            const allowedKinds = advanceGo[bareSkill];
             if (allowedKinds === undefined) return step;
             const classification = classifyRepo({ seams: context.seams, root, target: resolved.slug });
             const kind = classification.kind;
@@ -312,7 +325,7 @@ function futon(context: CommandContext, raw: string): number {
                 : allowed
                   ? `'${kind}' is an allowed repo kind for '${bareSkill}'`
                   : `'${kind}' is not an allowed repo kind for '${bareSkill}' (allowed: ${allowedKinds.join(", ")})`;
-            return { ...step, gate: { allowed, kind, reason } };
+            return { ...step, gate: { allowed, kind, reason, source: gateSource } };
           }),
         }
       : then;
@@ -346,8 +359,8 @@ function futon(context: CommandContext, raw: string): number {
       if (step.gate === undefined) continue;
       context.io.out(
         step.gate.allowed
-          ? `  gate: ${step.skill} allowed (${step.gate.reason})`
-          : `  refused: ${step.skill} (${step.gate.reason})`,
+          ? `  gate: ${step.skill} allowed (${step.gate.reason}) [${step.gate.source}]`
+          : `  refused: ${step.skill} (${step.gate.reason}) [${step.gate.source}]`,
       );
     }
   }

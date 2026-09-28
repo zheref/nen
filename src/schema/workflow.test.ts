@@ -634,6 +634,50 @@ describe("release.unitPaths -- a bounded unit, never everything (FEI-3)", () => 
   });
 });
 
+describe("release.unitPaths -- the content-scoped (object) entry form", () => {
+  it("accepts a {path, keys} entry alongside a plain string pattern", () => {
+    const unitPaths = parseWorkflow("<doc>", {
+      release: { unitPaths: ["src/my-unit/**", { path: "nen/contract.json", keys: ["version"] }] },
+    }).release.unitPaths;
+    expect(unitPaths).toEqual(["src/my-unit/**", { path: "nen/contract.json", keys: ["version"] }]);
+  });
+
+  it("refuses an object entry with no 'keys'", () => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: "nen/contract.json" }] } })).toThrow(
+      SchemaError,
+    );
+  });
+
+  it("refuses an object entry with an empty 'keys' array", () => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: "nen/contract.json", keys: [] }] } })).toThrow(
+      /names no keys/,
+    );
+  });
+
+  it("refuses an object entry with no 'path'", () => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ keys: ["version"] }] } })).toThrow(SchemaError);
+  });
+
+  it("refuses an object entry's 'path' with a leading '/'", () => {
+    expect(() =>
+      parseWorkflow("<doc>", { release: { unitPaths: [{ path: "/nen/contract.json", keys: ["version"] }] } }),
+    ).toThrow(/not a path this policy can act on/);
+  });
+
+  it("refuses an object entry carrying an unknown key", () => {
+    expect(() =>
+      parseWorkflow("<doc>", { release: { unitPaths: [{ path: "nen/contract.json", keys: ["version"], extra: 1 }] } }),
+    ).toThrow(/is not a key a content-scoped release-unit entry can carry/);
+  });
+
+  it("accepts a JSON-pointer style key ('/version') as well as a dotted one", () => {
+    const unitPaths = parseWorkflow("<doc>", {
+      release: { unitPaths: [{ path: "nen/contract.json", keys: ["/version", "nested.field"] }] },
+    }).release.unitPaths;
+    expect(unitPaths).toEqual([{ path: "nen/contract.json", keys: ["/version", "nested.field"] }]);
+  });
+});
+
 describe("futon.advanceGo -- duplicate names after namespace normalization are refused (item 7)", () => {
   it("accepts distinct skill names", () => {
     const parsed = parseWorkflow("<doc>", { futon: { advanceGo: { mugetsu: ["product"], getsuga: ["product"] } } });

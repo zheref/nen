@@ -89,10 +89,19 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     }
   });
 
-  it("refuses an empty selector, offering a corrected line", () => {
+  it("refuses an empty selector, and never manufactures one to correct it with (maintainer's ruling, 2026-09-28)", () => {
     const result = parseFutonInvocation("bc@");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.correctedLine).toBe("bc@critical");
+    if (!result.ok) expect(result.error.correctedLine).toBeNull();
+  });
+
+  it("refuses an empty selector on a publishing chain without ever completing the line for a picker (example/app@ then getsuga+mugetsu)", () => {
+    const result = parseFutonInvocation("example/app@ then getsuga+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.correctedLine).toBeNull();
+      expect(result.error.message).toMatch(/no selector after '@'/);
+    }
   });
 
   it("classifies kebab tokens after 'then' as a skill chain", () => {
@@ -106,6 +115,41 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
           { skill: "hatsu:getsuga", target: null },
           { skill: "kagutsuchi", target: "testflight" },
           { skill: "mugetsu", target: "github" },
+        ],
+      });
+    }
+  });
+
+  // Duplicate step refusal: the same skill against the same target twice is
+  // never a chain anybody meant to write -- either a double-run or a paste
+  // error, and nen will not guess which.
+  it("refuses a chain naming the same skill AND the same target twice, with a corrected line removing the duplicate", () => {
+    const result = parseFutonInvocation("bc@high then getsuga+mugetsu+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/appears more than once/);
+      expect(result.error.correctedLine).toBe("bc@high then getsuga+mugetsu");
+    }
+  });
+
+  it("refuses a chain naming the same skill and same explicit target twice (mugetsu@a+mugetsu@a)", () => {
+    const result = parseFutonInvocation("bc@high then mugetsu@a+mugetsu@a");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/appears more than once/);
+      expect(result.error.correctedLine).toBe("bc@high then mugetsu@a");
+    }
+  });
+
+  it("allows the same skill against DIFFERENT targets (mugetsu@a+mugetsu@b), no ordering requirement implied", () => {
+    const result = parseFutonInvocation("bc@high then mugetsu@a+mugetsu@b");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.then).toEqual({
+        kind: "skills",
+        steps: [
+          { skill: "mugetsu", target: "a" },
+          { skill: "mugetsu", target: "b" },
         ],
       });
     }

@@ -450,7 +450,7 @@ back empty or `null`.
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
-| `release.unitPaths` | the repo-relative path set (a prefix or narrow glob, `src/report/patterns.ts`'s grammar) a release unit is bounded to. `null` (the key absent) means UNDECLARED, never "everything" or "nothing" — [`release unit-check`](#nen-release-unit-check) and [`nen pr merge`](#nen-pr-merge)'s own unit gate both refuse (naming the key) rather than guess a boundary the repository never drew. A pattern the shared matcher proves claims EVERY path (`**`, `**/*`, and any other pattern that matches a repo-relative path no matter its shape) is refused by pointer too: a release unit that bounds nothing is never what declaring this key is meant to say. `*` (one path segment) is NOT refused -- it claims a single top-level entry, never every path -- and a leading `/` (e.g. `/**`) is refused separately as an invalid absolute pattern, since every path this key is compared against is already repo-relative. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (read from the pull request's BASE commit, never this checkout's own file) |
+| `release.unitPaths` | the release-unit entry list a release unit is bounded to. Each entry is either a STRING (a repo-relative prefix or narrow glob, `src/report/patterns.ts`'s grammar) or an OBJECT `{"path": "<exact file>", "keys": ["<json pointer or dotted key>", ...]}` bounding one exact JSON file to a set of its own leaf keys rather than its whole content (item 4) — `path` matched by exact equality, never a pattern; `keys` a non-empty list of non-empty JSON-pointer or dotted leaf paths. `null` (the key absent) means UNDECLARED, never "everything" or "nothing" — [`release unit-check`](#nen-release-unit-check) and [`nen pr merge`](#nen-pr-merge)'s own unit gate both refuse (naming the key) rather than guess a boundary the repository never drew. A STRING pattern the shared matcher proves claims EVERY path (`**`, `**/*`, and any other pattern that matches a repo-relative path no matter its shape) is refused by pointer too: a release unit that bounds nothing is never what declaring this key is meant to say. `*` (one path segment) is NOT refused -- it claims a single top-level entry, never every path -- and a leading `/` (e.g. `/**`) is refused separately as an invalid absolute pattern, since every path this key is compared against is already repo-relative. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (read from the pull request's BASE commit, never this checkout's own file) |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this map does not name is UNGATED. No default | [`parse futon`](#nen-parse-futon) |
 
 **Unknown keys are preserved, and near-miss keys are refused *because* they
@@ -4051,6 +4051,29 @@ Each `outside:` path is printed via `JSON.stringify`, so a path carrying a
 quote, a control character, or a leading/trailing space is unambiguous in
 the rendering rather than blending into the line around it.
 
+**Content-scoped entries** (item 4, maintainer's ruling): a `release.unitPaths`
+entry may also be an OBJECT, `{"path": "<exact file>", "keys": ["<json
+pointer or dotted key>", ...]}`, bounding one exact JSON file to a set of its
+own LEAF keys rather than its whole content — a version file the unit owns
+may bump `version` without the unit claiming `description` too. `path` is
+matched by EXACT EQUALITY (never a pattern). When the declared file actually
+changed in the pull request, its content is read at base and head over `gh
+api repos/{slug}/contents/<path>?ref=<sha>` (base64-decoded, then
+JSON-parsed) and every leaf that differs is compared against the declared
+`keys` — `/version` and `version` name the same leaf. Any leaf that differs
+OUTSIDE the declared keys is reported as a content-scoped violation, naming
+the offending key path. A file this check cannot read as JSON at all at
+either ref (missing, not valid JSON, a fetch failure) is FAIL CLOSED —
+reported as a violation, never treated as passing by default. Both `nen
+release unit-check` and [`nen pr merge --release-unit`](#nen-pr-merge) run
+this same check; `unit-check` fetches the PR's `baseRefOid`/`headRefOid`
+itself (only when a keyed entry is declared at all), and `pr merge` reuses
+the one `gh pr view` fetch it already made.
+
+```json
+{"release": {"unitPaths": ["src/my-unit/**", {"path": "nen/contract.json", "keys": ["version"]}]}}
+```
+
 **Usage**
 
 ```text
@@ -4065,14 +4088,17 @@ nen release unit-check --pr <n|owner/name#n> --repo <path> [--json]
 | `--repo <path>` | **yes** | the checkout whose `nen/workflow.json` declares `release.unitPaths` | required, exit 2 if omitted (#28) |
 | `--json` | no | machine-readable result | — |
 
-**Output and exit codes** — Exit 0: every changed path is inside the unit.
-Exit 1: lists every path outside it (`outside: <path>` lines). Exit 2:
-usage, OR `--repo` declares no `release.unitPaths` — the refusal names the
-exact key to add (`{"release": {"unitPaths": ["src/my-unit/**"]}}`), because
-"every path is outside the unit" and "every path is inside it" are both a
-guess this verb refuses to make about a boundary the repository never drew.
-`--json`: `{ contract: "nen.release.unit-check/v0.1", target, pr, unitPaths,
-changedFiles, outsideUnit, ok }`.
+**Output and exit codes** — Exit 0: every changed path is inside the unit,
+and every content-scoped entry stayed inside its declared keys. Exit 1:
+lists every path outside it (`outside: <path>` lines) and every
+content-scoped violation (`outside (content-scoped): <path> changed at
+<key>` lines). Exit 2: usage, OR `--repo` declares no `release.unitPaths` —
+the refusal names the exact key to add
+(`{"release": {"unitPaths": ["src/my-unit/**"]}}`), because "every path is
+outside the unit" and "every path is inside it" are both a guess this verb
+refuses to make about a boundary the repository never drew. `--json`:
+`{ contract: "nen.release.unit-check/v0.1", target, pr, unitPaths,
+changedFiles, outsideUnit, keyScopedViolations, ok }`.
 
 **Example**
 
@@ -8091,20 +8117,35 @@ terminal: tag
 
 **The advance-go gate** (maintainer's ruling, 2026-09-26; the third of the
 "make it deterministic" trio). When the `then` clause classifies as a
-**skill chain**, every step whose skill is listed in `--repo`'s
-`nen/workflow.json` `futon.advanceGo` (skill name -> allowed repo kinds,
-from `product` | `process` | `library`) is annotated with `gate: {allowed,
-kind, reason}`. A step whose skill this map does **not** name gets no
-`gate` field at all -- exactly as `nen review scopes` raises a scope only
-for a path a declared pattern claims. The kind is [`nen repo
-classify`](#nen-repo-classify)'s own verdict for the RESOLVED band's repo,
-derivable only when that repo IS the checkout `--repo` names (its origin
-remote matches) -- otherwise `unknown`, and `unknown` FAILS CLOSED (never
-treated as allowed). A REFUSED step does **not** fail the parse: the exit
-code stays 0, and the plain rendering prints a `refused: <skill> (<reason>)`
-line for it. `'plugin:mugetsu'` and `'mugetsu'` are matched against the
-same map key -- the prefix is stripped on both the declaration and the
-step before comparison.
+**skill chain**, every step whose skill is listed in the ACTIVE advance-go
+policy (below) is annotated with `gate: {allowed, kind, reason, source}`. A
+step whose skill that policy does **not** name gets no `gate` field at all
+-- exactly as `nen review scopes` raises a scope only for a path a declared
+pattern claims. The kind is [`nen repo classify`](#nen-repo-classify)'s own
+verdict for the RESOLVED band's repo, derivable only when that repo IS the
+checkout `--repo` names (its origin remote matches) -- otherwise `unknown`,
+and `unknown` FAILS CLOSED (never treated as allowed). A REFUSED step does
+**not** fail the parse: the exit code stays 0, and the plain rendering
+prints a `refused: <skill> (<reason>) [<source>]` line for it.
+`'plugin:mugetsu'` and `'mugetsu'` are matched against the same map key --
+the prefix is stripped on both the declaration and the step before
+comparison.
+
+**`source` -- declared vs. default** (maintainer's ruling, 2026-09-28): an
+ABSENT key must never read as "no gate". When `--repo`'s `nen/workflow.json`
+declares no `futon.advanceGo` at all (the key, or the whole file, is
+absent), the gate falls back to a built-in default policy, and every gate
+this run annotates carries `source: "default"`:
+
+```json
+{"mugetsu": ["process", "library"], "kagutsuchi": ["product", "process", "library"], "getsuga": ["product", "process", "library"]}
+```
+
+A repository that declares `futon.advanceGo` at all -- even naming only one
+skill -- REPLACES this default wholesale rather than merging with it, and
+every gate it annotates carries `source: "declared"`: a repository that
+chose to leave `kagutsuchi` ungated must not have that choice silently
+reinstated.
 
 ```json
 {"futon": {"advanceGo": {"mugetsu": ["process", "library"], "kagutsuchi": ["product"]}}}
@@ -8115,7 +8156,7 @@ nen parse futon --repo <path> "@high then mugetsu"
 ```
 ```text
 then: skills mugetsu (existence and authority are the caller's to check)
-  refused: mugetsu (repo kind 'product' is not an allowed repo kind for 'mugetsu' (allowed: process, library))
+  refused: mugetsu (repo kind 'product' is not an allowed repo kind for 'mugetsu' (allowed: process, library)) [declared]
 ```
 (from `src/grammar/command.test.ts`'s advance-go gate suite)
 
@@ -8146,6 +8187,19 @@ then: skills mugetsu (existence and authority are the caller's to check)
 - **An empty chain part is refused.** `getsuga++mugetsu` and `+mugetsu` are
   refused by name ("a malformed chain — an empty step between `+`s") rather
   than silently dropping the empty step.
+- **A missing selector never manufactures one to correct itself with**
+  (maintainer's ruling, 2026-09-28). `bc@` and `example/app@ then
+  getsuga+mugetsu` are refused with `correctedLine: null` — never a filled-in
+  `bc@critical` — because the selector is the one scoping decision only a
+  human (or a picker relaying one) may state for a chain that goes on to
+  publish; nen will not pick the most severe band on the caller's behalf.
+- **A duplicate step (same skill, same target) is refused.** A chain naming
+  the same skill against the same target twice — `getsuga+mugetsu+mugetsu`,
+  or `mugetsu@a+mugetsu@a` — is refused with a corrected line that drops the
+  repeat, because it is either a double-run of the same step or a paste
+  error and nen will not guess which. The SAME skill against DIFFERENT
+  targets (`mugetsu@a+mugetsu@b`) stays allowed, and this rule states no
+  step-order requirement.
 
 ### `nen parse izanagi`
 

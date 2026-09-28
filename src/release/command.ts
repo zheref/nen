@@ -33,6 +33,8 @@ import { checkSelfEnumeration, SelfCheckError } from "./selfcheck.js";
 import {
   assembleUnitCheck,
   fetchChangedFiles,
+  fetchJsonAtRef,
+  fetchPrRefs,
   renderUnitCheck,
   resolvePrRef,
   resolveUnitCheckTarget,
@@ -404,7 +406,22 @@ function unitCheck(context: CommandContext): number {
     }
     throw error;
   }
-  const report = assembleUnitCheck(target, ref.number, unitPaths, changedFiles);
+  // A CONTENT-SCOPED ENTRY NEEDS THE PULL REQUEST'S OWN BASE/HEAD COMMITS
+  // (not this checkout's working tree) TO READ THE FILE'S CONTENT AT EACH
+  // -- fetched only when the declared unit actually names one, so a
+  // repository with no keyed entries pays no extra API call at all.
+  const hasKeyedEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
+  const keyScoped = hasKeyedEntry
+    ? ((): { readonly baseRef: string; readonly headRef: string; readonly readJson: (filePath: string, ref_: string) => unknown } => {
+        const refs = fetchPrRefs(context.seams, target, ref.number);
+        return {
+          baseRef: refs.baseRefOid,
+          headRef: refs.headRefOid,
+          readJson: (filePath: string, ref_: string): unknown => fetchJsonAtRef(context.seams, target, filePath, ref_),
+        };
+      })()
+    : undefined;
+  const report = assembleUnitCheck(target, ref.number, unitPaths, changedFiles, keyScoped);
   emit(context.io, context.json, report, renderUnitCheck(report));
   return report.ok ? 0 : 1;
 }
