@@ -451,7 +451,7 @@ back empty or `null`.
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 | `release.unitPaths` | the release-unit entry list a release unit is bounded to. Each entry is either a STRING (a repo-relative prefix or narrow glob, `src/report/patterns.ts`'s grammar) or an OBJECT `{"path": "<exact file>", "keys": ["<json pointer or dotted key>", ...]}` bounding one exact JSON file to a set of its own leaf keys rather than its whole content (item 4) — `path` matched by exact equality, never a pattern; `keys` a non-empty list of non-empty JSON-pointer or dotted leaf paths. `null` (the key absent) means UNDECLARED, never "everything" or "nothing" — [`release unit-check`](#nen-release-unit-check) and [`nen pr merge`](#nen-pr-merge)'s own unit gate both refuse (naming the key) rather than guess a boundary the repository never drew. A STRING pattern the shared matcher proves claims EVERY path (`**`, `**/*`, and any other pattern that matches a repo-relative path no matter its shape) is refused by pointer too: a release unit that bounds nothing is never what declaring this key is meant to say. `*` (one path segment) is NOT refused -- it claims a single top-level entry, never every path -- and a leading `/` (e.g. `/**`) is refused separately as an invalid absolute pattern, since every path this key is compared against is already repo-relative. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (read from the pull request's BASE commit, never this checkout's own file) |
-| `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this map does not name is UNGATED. No default | [`parse futon`](#nen-parse-futon) |
+| `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
 
 **Unknown keys are preserved, and near-miss keys are refused *because* they
 are.** A key nen has never heard of survives a round trip untouched — the file
@@ -1635,6 +1635,15 @@ standalone verb would print:
    editing). Refused outright when the pull request changes
    `nen/workflow.json` or `nen/gates.json`, or when a changed path inside
    the unit is a symlink or a submodule (git tree mode `120000`/`160000`).
+   A content-scoped (object) entry is checked too: the declared file's
+   content is read at the MERGE BASE of base/head (never `baseRefOid`
+   directly — see [`nen release unit-check`](#nen-release-unit-check)'s
+   own "content-scoped entries" section) and at head, over the same `gh api
+   repos/{slug}/contents/<path>?ref=<sha>` calls that verb makes, and any
+   leaf outside its declared `keys` sets `unitOk: false` with a
+   `release unit-check: outside (content-scoped): "<path>" changed at
+   "<key>"` line quoted verbatim, exactly as the standalone verb would print
+   it.
 5. **whose pr** — refused when the pull request is cross-repository (a
    fork's branch), or its author is not the viewer authenticated to `gh`.
    No branch-name rule.
@@ -4056,19 +4065,47 @@ entry may also be an OBJECT, `{"path": "<exact file>", "keys": ["<json
 pointer or dotted key>", ...]}`, bounding one exact JSON file to a set of its
 own LEAF keys rather than its whole content — a version file the unit owns
 may bump `version` without the unit claiming `description` too. `path` is
-matched by EXACT EQUALITY (never a pattern). When the declared file actually
-changed in the pull request, its content is read at base and head over `gh
-api repos/{slug}/contents/<path>?ref=<sha>` (base64-decoded, then
-JSON-parsed) and every leaf that differs is compared against the declared
-`keys` — `/version` and `version` name the same leaf. Any leaf that differs
-OUTSIDE the declared keys is reported as a content-scoped violation, naming
-the offending key path. A file this check cannot read as JSON at all at
-either ref (missing, not valid JSON, a fetch failure) is FAIL CLOSED —
-reported as a violation, never treated as passing by default. Both `nen
+matched by EXACT EQUALITY (never a pattern), and is refused at schema load if
+it carries a `#`, `?` or `%` (N2 — each of those would change what the
+contents API URL means once the path is interpolated into it).
+
+**The diff is STRUCTURAL, not string-based** (N1): both files are parsed into
+a tree that keeps every container's own type (object / array / scalar) and
+every key's own segment — never flattened into a dotted string — so a
+literal key that happens to contain a dot (`"scripts.test"`) can never
+collide with a truly nested path (`scripts` → `test`), and an array
+rewritten into an object with equal-looking numeric keys (`[5]` → `{"0":
+5}`) is caught as a container TYPE change rather than read as "no change".
+A declared key (dotted `version`, or an RFC 6901 JSON pointer `/version`
+with `~1`→`/` and `~0`→`~` decoding) allows a change AT or BENEATH its own
+segment path only — a type change at an ANCESTOR of a declared key is still
+a violation, reported at the ancestor. Two JSON numbers compare by their RAW
+SOURCE TEXT once either is past `Number.MAX_SAFE_INTEGER` (N16) — `12345678901234567890`
+editing to `...67891` is detected even though both round to the identical
+IEEE-754 double under an ordinary parse; within safe-integer range, `1` and
+`1.0` still compare equal (ordinary formatting variance).
+
+When the declared file actually changed in the pull request, its content is
+read at the MERGE BASE of the pull request's base/head (N6 — `gh api
+repos/{slug}/compare/{base}...{head}`'s own `merge_base_commit.sha`, never
+`baseRefOid` directly, because `baseRefOid` drifts forward as the target
+branch moves and would otherwise show an unrelated later commit as "this
+branch's own change") and at head, over `gh api
+repos/{slug}/contents/<path>?ref=<sha>` — each path SEGMENT
+percent-encoded (N2) — base64-decoded, then parsed with a bespoke
+precision-preserving JSON parser (never `JSON.parse`, for N16's reason).
+Any leaf that differs OUTSIDE the declared keys is reported as a
+content-scoped violation, naming the offending segment path. A file this
+check cannot read as JSON at all at either ref (missing, not valid JSON, a
+fetch failure) is FAIL CLOSED — reported as a violation, never treated as
+passing by default, and (N4) a keyed entry that DID change but has no way
+to read base/head content at all (no `keyScoped` context) is ALSO reported
+as a violation ("content not read"), never silently skipped. Both `nen
 release unit-check` and [`nen pr merge --release-unit`](#nen-pr-merge) run
-this same check; `unit-check` fetches the PR's `baseRefOid`/`headRefOid`
-itself (only when a keyed entry is declared at all), and `pr merge` reuses
-the one `gh pr view` fetch it already made.
+this same check; `unit-check` fetches the PR's `baseRefOid`/`headRefOid` and
+resolves the merge base itself (only when a keyed entry is declared at
+all), and `pr merge` reuses the one `gh pr view` fetch it already made,
+resolving the merge base from the same base/head it read there.
 
 ```json
 {"release": {"unitPaths": ["src/my-unit/**", {"path": "nen/contract.json", "keys": ["version"]}]}}
@@ -4098,7 +4135,11 @@ the refusal names the exact key to add
 outside the unit" and "every path is inside it" are both a guess this verb
 refuses to make about a boundary the repository never drew. `--json`:
 `{ contract: "nen.release.unit-check/v0.1", target, pr, unitPaths,
-changedFiles, outsideUnit, keyScopedViolations, ok }`.
+keyedPaths, changedFiles, outsideUnit, keyScopedViolations, ok }` — N15:
+`unitPaths` stays the STRING (whole-path pattern) entries only, exactly the
+shape it had before content-scoped entries existed; the OBJECT
+(content-scoped) entries are carried in their own `keyedPaths` field rather
+than widening `unitPaths`'s own type.
 
 **Example**
 
@@ -8133,9 +8174,11 @@ comparison.
 
 **`source` -- declared vs. default** (maintainer's ruling, 2026-09-28): an
 ABSENT key must never read as "no gate". When `--repo`'s `nen/workflow.json`
-declares no `futon.advanceGo` at all (the key, or the whole file, is
-absent), the gate falls back to a built-in default policy, and every gate
-this run annotates carries `source: "default"`:
+declares no `futon.advanceGo` at all -- the key absent, the whole file
+absent, `"futon": {}` , an explicit `"advanceGo": {}`, or `"advanceGo"`
+carrying ONLY `$`-prefixed metadata keys (a `$comment`, say -- none of which
+is a declared skill) -- the gate falls back to a built-in default policy,
+and every gate this run annotates carries `source: "default"`:
 
 ```json
 {"mugetsu": ["process", "library"], "kagutsuchi": ["product", "process", "library"], "getsuga": ["product", "process", "library"]}

@@ -155,6 +155,39 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     }
   });
 
+  // N9: targets are compared case-insensitively -- 'mugetsu@A' and
+  // 'mugetsu@a' name the same target under any spelling a caller types.
+  it("N9: refuses a duplicate even when the target's case differs (mugetsu@A+mugetsu@a)", () => {
+    const result = parseFutonInvocation("bc@high then mugetsu@A+mugetsu@a");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/appears more than once/);
+      expect(result.error.correctedLine).toBe("bc@high then mugetsu@A");
+    }
+  });
+
+  // N8: EVERY later repeat is dropped from the corrected line, not just the
+  // first duplicate found.
+  it("N8: drops every later repeat, not only the first duplicate (getsuga+mugetsu+getsuga+mugetsu)", () => {
+    const result = parseFutonInvocation("bc@high then getsuga+mugetsu+getsuga+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.correctedLine).toBe("bc@high then getsuga+mugetsu");
+    }
+  });
+
+  // N7: the selector is checked BEFORE any then-clause refusal, so an empty
+  // selector is reported (correctedLine null) even when the chain after
+  // 'then' would ALSO be refused for its own reason (here, a duplicate step).
+  it("N7: an empty selector is refused with correctedLine null even when the chain also has a duplicate step (@ then mugetsu+mugetsu)", () => {
+    const result = parseFutonInvocation("@ then mugetsu+mugetsu");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/no selector after '@'/);
+      expect(result.error.correctedLine).toBeNull();
+    }
+  });
+
   // F3: 'tag'/'fanout' are the terminal's own vocabulary and are reserved as
   // chain step names -- a chain naming either alongside other steps escapes
   // the terminal's self-repo rule and must be refused, not silently chained.

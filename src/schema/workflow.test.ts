@@ -664,6 +664,18 @@ describe("release.unitPaths -- the content-scoped (object) entry form", () => {
     ).toThrow(/not a path this policy can act on/);
   });
 
+  // N2: '#', '?' and '%' would change what the contents API URL means once
+  // this path is interpolated into it (a fragment, a second query string, a
+  // percent-escape) -- refused at load rather than at the misrouted request.
+  it.each(["nen/contract#a.json", "nen/contract?a.json", "nen/contract%2F.json"])(
+    "refuses a 'path' carrying '%s' (N2)",
+    (badPath) => {
+      expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: badPath, keys: ["version"] }] } })).toThrow(
+        /carries a '#', '\?' or '%'/,
+      );
+    },
+  );
+
   it("refuses an object entry carrying an unknown key", () => {
     expect(() =>
       parseWorkflow("<doc>", { release: { unitPaths: [{ path: "nen/contract.json", keys: ["version"], extra: 1 }] } }),

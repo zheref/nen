@@ -25,7 +25,7 @@ import {
   extractMergedPrNumbers,
 } from "../changelog/completeness.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
-import { GH, GIT, must, outputLines, type CommandResult } from "../seam/exec.js";
+import { GH, GIT, must, outputLines, ToolError, type CommandResult } from "../seam/exec.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflight.js";
 import { resolveReleaseTarget, ResolveTargetError } from "./target.js";
@@ -34,12 +34,15 @@ import {
   assembleUnitCheck,
   fetchChangedFiles,
   fetchJsonAtRef,
+  fetchMergeBaseSha,
   fetchPrRefs,
+  MergeBaseError,
   renderUnitCheck,
   resolvePrRef,
   resolveUnitCheckTarget,
   UnitCheckRefError,
   UnitCheckTruncatedError,
+  type JValue,
 } from "./unitcheck.js";
 
 /**
@@ -409,18 +412,29 @@ function unitCheck(context: CommandContext): number {
   // A CONTENT-SCOPED ENTRY NEEDS THE PULL REQUEST'S OWN BASE/HEAD COMMITS
   // (not this checkout's working tree) TO READ THE FILE'S CONTENT AT EACH
   // -- fetched only when the declared unit actually names one, so a
-  // repository with no keyed entries pays no extra API call at all.
+  // repository with no keyed entries pays no extra API call at all. N6: the
+  // content is compared against the MERGE BASE of base/head, not
+  // `baseRefOid` directly -- see ../release/unitcheck.ts's `fetchMergeBaseSha`.
   const hasKeyedEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
-  const keyScoped = hasKeyedEntry
-    ? ((): { readonly baseRef: string; readonly headRef: string; readonly readJson: (filePath: string, ref_: string) => unknown } => {
-        const refs = fetchPrRefs(context.seams, target, ref.number);
-        return {
-          baseRef: refs.baseRefOid,
-          headRef: refs.headRefOid,
-          readJson: (filePath: string, ref_: string): unknown => fetchJsonAtRef(context.seams, target, filePath, ref_),
-        };
-      })()
-    : undefined;
+  let keyScoped: { readonly baseRef: string; readonly headRef: string; readonly readJson: (filePath: string, ref_: string) => JValue | null } | undefined;
+  if (hasKeyedEntry) {
+    const refs = fetchPrRefs(context.seams, target, ref.number);
+    let mergeBaseSha: string;
+    try {
+      mergeBaseSha = fetchMergeBaseSha(context.seams, target, refs.baseRefOid, refs.headRefOid);
+    } catch (error) {
+      if (error instanceof ToolError || error instanceof MergeBaseError) {
+        context.io.err(`nen: could not resolve the merge base for the content-scoped check (${error.message})`);
+        return 1;
+      }
+      throw error;
+    }
+    keyScoped = {
+      baseRef: mergeBaseSha,
+      headRef: refs.headRefOid,
+      readJson: (filePath: string, ref_: string): JValue | null => fetchJsonAtRef(context.seams, target, filePath, ref_),
+    };
+  }
   const report = assembleUnitCheck(target, ref.number, unitPaths, changedFiles, keyScoped);
   emit(context.io, context.json, report, renderUnitCheck(report));
   return report.ok ? 0 : 1;

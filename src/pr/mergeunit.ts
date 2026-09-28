@@ -45,12 +45,15 @@ import {
   assembleUnitCheck,
   fetchChangedFiles,
   fetchJsonAtRef,
+  fetchMergeBaseSha,
+  MergeBaseError,
   renderUnitCheck,
   resolvePrRef,
   resolveUnitCheckTarget,
   UnitCheckRefError,
   UnitCheckTruncatedError,
   type ChangedFile,
+  type JValue,
   type ResolvedPrRef,
 } from "../release/unitcheck.js";
 import { parseWorkflow, type ReleaseUnitEntry } from "../schema/workflow.js";
@@ -457,15 +460,33 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
     };
   }
 
-  // The PR's own base/head (from the ONE `gh pr view` fetch this module
-  // made, Feitan F7) -- a content-scoped entry's diff is read at exactly the
-  // same two commits every other gate in this composition judges, never a
-  // second, independent resolution of "the base" and "the head".
-  const report = assembleUnitCheck(options.target, options.prNumber, unitPaths, changedFiles, {
-    baseRef: options.prOnce.baseRefOid,
-    headRef: options.prOnce.headRefOid,
-    readJson: (filePath, ref): unknown => fetchJsonAtRef(options.seams, options.target, filePath, ref),
-  });
+  // N6: a content-scoped diff compares against the MERGE BASE of base/head,
+  // never `baseRefOid` directly -- `baseRefOid` is the target branch's tip at
+  // the moment GitHub last recomputed it, which drifts forward as that
+  // branch moves, so an unrelated commit landing on it after this branch
+  // forked would otherwise show up as a "change" this branch never made.
+  // Fetched only when a keyed entry exists at all, and only a ToolError
+  // aborts THIS gate (F8(a) -- every other gate in the composition still
+  // reports).
+  const hasKeyedEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
+  let keyScoped: { readonly baseRef: string; readonly headRef: string; readonly readJson: (filePath: string, ref: string) => JValue | null } | undefined;
+  if (hasKeyedEntry) {
+    let mergeBaseSha: string;
+    try {
+      mergeBaseSha = fetchMergeBaseSha(options.seams, options.target, options.prOnce.baseRefOid, options.prOnce.headRefOid);
+    } catch (error) {
+      if (error instanceof ToolError || error instanceof MergeBaseError) {
+        return { name: "release unit-check", ok: false, lines: [`release unit-check: could not resolve the merge base for the content-scoped check (${redact(error.message)})`] };
+      }
+      throw error;
+    }
+    keyScoped = {
+      baseRef: mergeBaseSha,
+      headRef: options.prOnce.headRefOid,
+      readJson: (filePath, ref): JValue | null => fetchJsonAtRef(options.seams, options.target, filePath, ref),
+    };
+  }
+  const report = assembleUnitCheck(options.target, options.prNumber, unitPaths, changedFiles, keyScoped);
   const lines = renderUnitCheck(report).map((line): string => `release unit-check: ${line}`);
 
   // FEI-8: a changed path the unit claims by NAME may still be a symlink or a

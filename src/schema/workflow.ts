@@ -243,19 +243,6 @@ export type AdvanceGoKind = "product" | "process" | "library";
 export const ADVANCE_GO_KINDS: readonly AdvanceGoKind[] = ["product", "process", "library"];
 
 /**
- * `release.unitPaths` -- the repo-relative path set (a prefix or a narrow glob,
- * ../report/patterns.ts's own grammar -- the same one `review.scopes` above
- * reads, so a maintainer who writes `hooks/**` in one table is entitled to
- * have it claim the same files in the other) a release unit is bounded to.
- *
- * `null` MEANS UNDECLARED, NOT "EVERYTHING" OR "NOTHING". `nen release
- * unit-check` REFUSES (exit 2) when this is null, naming the key to add: a
- * repository that never declared a unit has stated no boundary at all, and
- * reporting every changed path as "outside the unit" (or the other silent
- * failure, "inside" by default) would be this binary inventing a boundary the
- * repository never drew.
- */
-/**
  * ONE CONTENT-SCOPED ENTRY of `release.unitPaths`: an EXACT JSON file, bounded
  * not to "the whole file" but to a set of its own LEAF keys -- a version file
  * a release unit owns may bump `version` without the unit ever claiming
@@ -276,6 +263,19 @@ export interface ReleaseUnitKeyedPath {
 /** One `release.unitPaths` entry: a whole-path pattern (string), or a content-scoped bound (`ReleaseUnitKeyedPath`). */
 export type ReleaseUnitEntry = string | ReleaseUnitKeyedPath;
 
+/**
+ * `release.unitPaths` -- the repo-relative path set (a prefix or a narrow glob,
+ * ../report/patterns.ts's own grammar -- the same one `review.scopes` above
+ * reads, so a maintainer who writes `hooks/**` in one table is entitled to
+ * have it claim the same files in the other) a release unit is bounded to.
+ *
+ * `null` MEANS UNDECLARED, NOT "EVERYTHING" OR "NOTHING". `nen release
+ * unit-check` REFUSES (exit 2) when this is null, naming the key to add: a
+ * repository that never declared a unit has stated no boundary at all, and
+ * reporting every changed path as "outside the unit" (or the other silent
+ * failure, "inside" by default) would be this binary inventing a boundary the
+ * repository never drew.
+ */
 export interface ReleasePolicy {
   readonly unitPaths: readonly ReleaseUnitEntry[] | null;
   readonly raw: Readonly<Record<string, unknown>>;
@@ -1062,6 +1062,22 @@ function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Recor
       `'${filePath}' is not a path this policy can act on. A content-scoped entry names the EXACT repo-relative file it bounds -- compared by equality against a changed file's own path, never as a pattern -- so it is repo-relative, has no leading '/' and no '..' segment`,
     );
   }
+  // N2: '#', '?' and '%' are refused too -- this path is interpolated
+  // segment-by-segment into 'repos/{slug}/contents/<path>?ref=<sha>'
+  // (../release/unitcheck.ts's `fetchJsonAtRef`). '#' truncates the request
+  // path at the URL fragment, '?' opens a second query string ahead of
+  // '?ref=', and '%' either starts a percent-escape this reader never
+  // intended or, doubly so once ../release/unitcheck.ts itself
+  // percent-encodes each segment, reads back as something other than the
+  // literal byte this file named -- refused at load, where the fix is a
+  // one-line rename, rather than as a misrouted GitHub API call.
+  if (/[#?%]/.test(filePath)) {
+    throw new SchemaError(
+      path,
+      `${pointer}.path`,
+      `'${filePath}' carries a '#', '?' or '%' -- refused. This path is interpolated into a GitHub contents API URL (repos/{slug}/contents/<path>?ref=<sha>), and any of the three would change what that URL means (a fragment, a second query string, or a percent-escape) rather than naming the file verbatim. Rename the file, or point this entry at a path that does not need one`,
+    );
+  }
   const keysRaw = requireArray(path, `${pointer}.keys`, value["keys"]);
   if (keysRaw.length === 0) {
     throw new SchemaError(
@@ -1193,7 +1209,7 @@ function parseFutonPolicy(path: string, value: unknown): FutonPolicy {
       throw new SchemaError(
         path,
         pointer,
-        `names no repo kind. A skill listed here with nothing allowed is a gate that always refuses every target -- drop the key entirely to leave '${normalized}' ungated`,
+        `names no repo kind. A skill listed here with nothing allowed is a gate that always refuses every target -- drop the '${normalized}' entry to leave it ungated under THIS declared policy. Note that dropping every entry (leaving 'futon.advanceGo' empty, or the key absent entirely) does not mean "ungated": an empty declared map is read as UNDECLARED, and DEFAULT_ADVANCE_GO (../grammar/command.ts) applies instead -- to truly leave '${normalized}' ungated while keeping other skills declared, omit only its own entry, not the whole map`,
       );
     }
     const kinds = kindsRaw.map((item, index): AdvanceGoKind => {

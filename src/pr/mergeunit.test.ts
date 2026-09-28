@@ -404,6 +404,14 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
   });
 
   describe("content-scoped release unit -- an object {path, keys} entry (item 4)", () => {
+    // N6: content is read at the MERGE BASE of base/head, never `baseRefOid`
+    // directly -- a distinct sha proves the fetch went to the right commit.
+    const MERGE_BASE = "mergebasesha";
+    const compareCall: ScriptedCall = {
+      match: `gh api repos/zheref/example/compare/${BASE}...${HEAD}`,
+      result: { code: 0, stdout: JSON.stringify({ merge_base_commit: { sha: MERGE_BASE } }) },
+    };
+
     function contractContentsCall(json: unknown, ref: string): ScriptedCall {
       return {
         match: `gh api repos/zheref/example/contents/nen/contract.json?ref=${ref}`,
@@ -420,7 +428,8 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
         workflowContentsCall([{ path: "nen/contract.json", keys: ["version"] }]),
         treeCall([{ path: "nen/contract.json", mode: "100644" }]),
         baseTreeCall([{ path: "nen/contract.json", mode: "100644" }]),
-        contractContentsCall({ version: "1.0.0", description: "same" }, BASE),
+        compareCall,
+        contractContentsCall({ version: "1.0.0", description: "same" }, MERGE_BASE),
         contractContentsCall({ version: "1.0.1", description: "same" }, HEAD),
         VIEWER_CALL,
       ];
@@ -437,7 +446,8 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
         workflowContentsCall([{ path: "nen/contract.json", keys: ["version"] }]),
         treeCall([{ path: "nen/contract.json", mode: "100644" }]),
         baseTreeCall([{ path: "nen/contract.json", mode: "100644" }]),
-        contractContentsCall({ version: "1.0.0", description: "old" }, BASE),
+        compareCall,
+        contractContentsCall({ version: "1.0.0", description: "old" }, MERGE_BASE),
         contractContentsCall({ version: "1.0.1", description: "new" }, HEAD),
         VIEWER_CALL,
       ];
@@ -455,8 +465,9 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
         workflowContentsCall([{ path: "nen/contract.json", keys: ["version"] }]),
         treeCall([{ path: "nen/contract.json", mode: "100644" }]),
         baseTreeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        compareCall,
         {
-          match: `gh api repos/zheref/example/contents/nen/contract.json?ref=${BASE}`,
+          match: `gh api repos/zheref/example/contents/nen/contract.json?ref=${MERGE_BASE}`,
           result: { code: 0, stdout: JSON.stringify({ content: Buffer.from("not json").toString("base64") }) },
         },
         contractContentsCall({ version: "1.0.1" }, HEAD),
@@ -465,6 +476,23 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       const outcome = await run(root, script);
       expect(outcome.report.unitOk).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/unreadable or not valid JSON/);
+    });
+
+    it("N6: fails the gate (never crashes the run) when the compare endpoint cannot resolve a merge base", async () => {
+      const root = tmpRoot();
+      const script: ScriptedCall[] = [
+        ORIGIN_CALL,
+        prOnceCall(),
+        ...changedFilesCall([{ filename: "nen/contract.json" }]),
+        workflowContentsCall([{ path: "nen/contract.json", keys: ["version"] }]),
+        treeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        baseTreeCall([{ path: "nen/contract.json", mode: "100644" }]),
+        { match: `gh api repos/zheref/example/compare/${BASE}...${HEAD}`, result: { code: 1, stdout: "", stderr: "not found" } },
+        VIEWER_CALL,
+      ];
+      const outcome = await run(root, script);
+      expect(outcome.report.unitOk).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/could not resolve the merge base/);
     });
   });
 

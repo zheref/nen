@@ -194,7 +194,8 @@ describe("nen parse futon -- CLI wiring (verbs/4-remainders, merged into this fa
 // 'zheref/bankai-core' so the resolved repo (via the bare '@severity' form) IS
 // the checkout -- ../repo/classify.ts derives a kind only then, which is
 // exactly the condition this gate is proving.
-function gateRepo(kind: "product" | "process" | "library", advanceGo: Readonly<Record<string, readonly string[]>>): string {
+/** A repo fixture whose 'nen/workflow.json' is written VERBATIM -- lets N17's tests state a bare 'futon' block, an explicit '{}' advanceGo, or no workflow.json at all, none of which `gateRepo` below can express. */
+function gateRepoRaw(kind: "product" | "process" | "library", workflowJson: Record<string, unknown> | null): string {
   const dir = mkdtempSync(join(tmpdir(), "nen-futon-gate-"));
   mkdirSync(join(dir, "nen"), { recursive: true });
   copyFileSync(join(BANKAI_REPO, "nen", "repos.json"), join(dir, "nen", "repos.json"));
@@ -202,8 +203,12 @@ function gateRepo(kind: "product" | "process" | "library", advanceGo: Readonly<R
     join(dir, "nen", "contract.json"),
     JSON.stringify({ project: { kind, lanes: { default: { stack: "generic", cwd: "." } }, verbs: { default: { build: { unsupported: "test fixture" } } } } }),
   );
-  writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ futon: { advanceGo } }));
+  if (workflowJson !== null) writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify(workflowJson));
   return dir;
+}
+
+function gateRepo(kind: "product" | "process" | "library", advanceGo: Readonly<Record<string, readonly string[]>>): string {
+  return gateRepoRaw(kind, { futon: { advanceGo } });
 }
 
 const ORIGIN_IS_SELF: readonly ScriptedCall[] = [
@@ -316,6 +321,73 @@ describe("nen parse futon -- the advance-go gate on a skill chain", () => {
       then: { steps: { skill: string; gate?: { allowed: boolean; kind: string; source: string } }[] };
     };
     expect(parsed.then.steps[0]?.gate).toEqual({ allowed: true, kind: "product", reason: expect.any(String), source: "declared" });
+  });
+
+  // N17: no 'nen/workflow.json' at all -- distinct from an explicit '{}' or
+  // an explicit-but-empty 'futon' block below, and every one of them must
+  // read as UNDECLARED (source 'default'), never "declared but ungated".
+  it("N17: no nen/workflow.json at all -> default policy applies", async () => {
+    const root = gateRepoRaw("process", null);
+    const result = await capture(["parse", "futon", "@high then mugetsu", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { source: string } }[] } };
+    expect(parsed.then.steps[0]?.gate?.source).toBe("default");
+  });
+
+  it("N17: an explicit '{}' workflow document (no 'futon' block at all) -> default policy applies", async () => {
+    const root = gateRepoRaw("process", {});
+    const result = await capture(["parse", "futon", "@high then mugetsu", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { source: string } }[] } };
+    expect(parsed.then.steps[0]?.gate?.source).toBe("default");
+  });
+
+  it("N17: 'futon.advanceGo' declared as an explicit empty object -> default policy applies", async () => {
+    const root = gateRepoRaw("process", { futon: { advanceGo: {} } });
+    const result = await capture(["parse", "futon", "@high then mugetsu", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { source: string } }[] } };
+    expect(parsed.then.steps[0]?.gate?.source).toBe("default");
+  });
+
+  it("N17: 'futon.advanceGo' declared with only a $-prefixed metadata key -> default policy applies (a $-key is not a declared skill)", async () => {
+    const root = gateRepoRaw("process", { futon: { advanceGo: { $comment: "note to self" } } });
+    const result = await capture(["parse", "futon", "@high then mugetsu", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { source: string } }[] } };
+    expect(parsed.then.steps[0]?.gate?.source).toBe("default");
+  });
+
+  // N17: a declared map naming ONLY mugetsu replaces the default WHOLESALE
+  // -- getsuga, which the default would have gated, is left UNANNOTATED.
+  it("N17: a declared map naming only mugetsu leaves getsuga entirely ungated (no 'gate' field), never falling back to the default for it", async () => {
+    const root = gateRepo("product", { mugetsu: ["process", "library"] });
+    const result = await capture(["parse", "futon", "@high then mugetsu+getsuga", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: unknown }[] } };
+    expect(parsed.then.steps[0]?.skill).toBe("mugetsu");
+    expect(parsed.then.steps[0]?.gate).toBeDefined();
+    expect(parsed.then.steps[1]?.skill).toBe("getsuga");
+    expect(parsed.then.steps[1]?.gate).toBeUndefined();
+  });
+
+  // N17: kagutsuchi and getsuga both sit under the built-in default too, not
+  // only mugetsu.
+  it("N17: kagutsuchi sits under the built-in default policy too", async () => {
+    const root = gateRepoRaw("process", null);
+    const result = await capture(["parse", "futon", "@high then kagutsuchi", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { allowed: boolean; source: string } }[] } };
+    // DEFAULT_ADVANCE_GO.kagutsuchi allows product/process/library -- 'process' is allowed.
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: true, kind: "process", reason: expect.any(String), source: "default" });
+  });
+
+  it("N17: getsuga sits under the built-in default policy too", async () => {
+    const root = gateRepoRaw("process", null);
+    const result = await capture(["parse", "futon", "@high then getsuga", "--repo", root], ORIGIN_IS_SELF, { repoFlag: root, json: true });
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as { then: { steps: { skill: string; gate?: { allowed: boolean; source: string } }[] } };
+    expect(parsed.then.steps[0]?.gate).toEqual({ allowed: true, kind: "process", reason: expect.any(String), source: "default" });
   });
 });
 
