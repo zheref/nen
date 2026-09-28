@@ -2,6 +2,24 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.15.1 — 2026-09-28
+
+Release unit for `v0.15.0..v0.15.1`: [#267](https://github.com/zheref/nen/pull/267) (the delivery) and [#268](https://github.com/zheref/nen/pull/268) (the release proposal).
+
+### Fixed
+
+- **parse** — the futon advance-go gate **fails closed**. When the target's `nen/workflow.json` has no `futon.advanceGo`, or declares it empty, a built-in default policy applies: `mugetsu` → `process`/`library`; `kagutsuchi`, `getsuga` → any kind. Each `gate` gains `source: "declared" | "default"`, rendered as `[declared]`/`[default]`. A declared non-empty map replaces the default wholesale. Before, a repository without the key got no gate at all.
+- **parse** — `nen parse futon` checks the selector before any `then`-clause refusal, and never fills one in. An empty selector is refused with `correctedLine: null`, so no corrected line can carry a publishing chain on the maintainer's behalf.
+- **parse** — a chain naming the same skill with the same target twice is refused. Targets are compared case-insensitively, and the corrected line drops every later repeat. Different targets stay allowed, and there is no step-order rule.
+- **release** — `release.unitPaths` entries may be `{path, keys}`: that exact JSON file may change **only at those keys**, written as dotted paths or RFC 6901 pointers. The file is read at the **merge base** and the head, with the path percent-encoded; `#`, `?` and `%` are refused in a keyed path. Both copies are parsed strictly (control characters, leading-zero numbers and invalid base64 read as unreadable) into a number-preserving tree, then diffed by segment path with container types and key sets. That catches added or removed keys, type changes (including at an ancestor of an allowed key) and precision loss. Unreadable content, or a keyed file with no content context, fails closed. Used by `release unit-check` and `pr merge --release-unit`. `release unit-check --json` keeps `unitPaths` as strings and adds `keyedPaths` and `keyScopedViolations`.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** `gate.source`, `keyedPaths` and `keyScopedViolations` are additive, and no contract version is bumped. **Three `nen parse futon` behaviours change in place, each toward refusal:**
+  - a repository with no `futon.advanceGo` now gets gated steps under the default policy;
+  - a duplicated chain step exits `2` where it exited `0`;
+  - an empty selector's `correctedLine` is `null` where it was a string naming `critical`.
+
 ## v0.15.0 — 2026-09-27
 
 Release unit for `v0.14.3..v0.15.0`: [#265](https://github.com/zheref/nen/pull/265) (the delivery) and [#266](https://github.com/zheref/nen/pull/266) (the release proposal).
