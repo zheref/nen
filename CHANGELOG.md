@@ -2,6 +2,66 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.17.0 — 2026-09-29
+
+Release unit for `v0.16.0..v0.17.0`, the `hatsu:futon nen@bug` run:
+- the deliveries: [#279](https://github.com/zheref/nen/pull/279), [#282](https://github.com/zheref/nen/pull/282), [#283](https://github.com/zheref/nen/pull/283), [#284](https://github.com/zheref/nen/pull/284), [#285](https://github.com/zheref/nen/pull/285) and [#289](https://github.com/zheref/nen/pull/289), which close every open `bug` issue;
+- [#287](https://github.com/zheref/nen/pull/287), the maintainer's review-gate ruling;
+- the release proposal.
+
+The compatibility floor moves to `0.17`.
+
+### Added
+
+- **gates** — `nen/gates.json` takes an optional `round_quorum: { any_of, minimum }`. CON-32(b)'s rounds-owed row fails when fewer than `minimum` of those reviewers have a round. It only adds that failure; it never excuses a round that is otherwise owed.
+  - `--json` carries an additive `conjuncts[].roundQuorum` on that row.
+  - `nen pr next-blocker` checks the quorum too, on the head only, and says so.
+  - This repository declares Copilot `bounded_policy_exempt`, Cursor Bugbot as `bugbot`, and a one-of-two quorum. That follows the maintainer's ruling of 2026-09-29: "at least one round of reviews from both Copilot OR Cursor (or both) as applicable".
+- **commit** — `nen commit format` and `nen commit write` apply the target repository's commitlint `subject-case` rule and give commitlint's own verdict.
+  - Level 2 is refused at exit 2; level 1 prints a warning. The implementation ports `@commitlint/ensure` 21.2.3 and adds no dependency.
+  - The config is read from a data config in commitlint's own search order. For a config that is code, unreadable or absent, the rule comes from the new `nen/workflow.json` key `commits.subjectCase`, which is `"config-conventional"` or a rule tuple.
+  - nen never executes a JavaScript config.
+- **changelog** — the CON-33(c) **release-PR allowance**: the range's terminal PR merge is excused from citing itself when its own merge introduced the dated section being cut. At most one PR can be excused.
+  - `changelog completeness` and `release preflight` now share one reconciliation (`src/changelog/reconcile.ts`).
+  - `--json` gains `releasePrAllowance`.
+- **pr** — `pr request-reviews --json` carries `unrecordedBots`.
+- **pr** — `--exclude-check` on `pr ready` may repeat. It splits only on commas outside brackets, so a matrix check such as `check (Windows, [...])` can be excluded.
+- **pr** / **release** — `pr merge` and `release unit-check --pr` accept `<CODE>#<n>`, resolved through `pr ready`'s own registry lookup.
+- **repo** — `nen/repos.json` `maintained_tools[]` and `pending_onboarding[]` rows may carry `scenario`, read by `repo scenario` and `canon resolve`.
+- **surface** — `surface mirror generate` re-aims every relative link in a mirrored body for the depth its copy lands at. `--json` gains `linkRoot`, `linksRewritten` and `linksVerbatim`, and `--repo` bounds the tree a link may reach.
+
+### Fixed
+
+- **repo** ([#219](https://github.com/zheref/nen/issues/219)) — a repository recorded under `maintained_tools[]` could never carry a scenario, so neither tool repository could resolve a pinned handbook. The refusal's remedy also told the caller to misfile it as a consumer; it now names the section the target is really in.
+- **changelog** ([#229](https://github.com/zheref/nen/issues/229)) — every release cost a follow-up "reconcile" PR, because the release PR had to cite a number that did not exist yet.
+  - A heading marked `— unreleased` no longer counts as dated.
+  - A release section carried in by any merge, local merges included, is detected.
+  - An option-shaped `--range` is refused before any tool runs.
+- **pr** ([#277](https://github.com/zheref/nen/issues/277)) — `pr request-reviews` reported `ok` for a bot request GitHub accepted but never recorded. It now exits 9 and names the bot.
+- **pr** ([#243](https://github.com/zheref/nen/issues/243)) — `pr ready --exclude-check` could not name a check whose name contains a comma.
+- **pr** ([#269](https://github.com/zheref/nen/issues/269)) — `pr merge` accepted `<CODE>#<N>` in its grammar and then refused it as an `owner/name`.
+- **commit** ([#263](https://github.com/zheref/nen/issues/263)) — `nen commit format` did not enforce the target repository's commitlint `subject-case` rule.
+- **surface** ([#270](https://github.com/zheref/nen/issues/270)) — relative links in generated mirrors dangled at every depth: 408 of 2701 in zheref/hatsu's mirrors, 0 after regeneration.
+- **wc** ([#271](https://github.com/zheref/nen/issues/271)) — `wc publish` pushed onto a differently named upstream branch. A stacked effort's commit landed on its base branch's PR.
+
+### Breaking / consumer notes
+
+- **Repin: `"0.7"` → `"0.17"`, and `v0.16.0` → `v0.17.0`.** The maintainer moved the floor for this release. A repository whose `dependency.minimum` is below `0.17` is refused by this build at exit 5 and must raise its minimum and repin. zheref/hatsu declares `0.15`, pinned `v0.15.1`.
+- **wc** — a bare `nen wc publish` on a branch whose upstream names another branch, the trunk included, now exits 2 instead of pushing.
+  - Pass `--set-upstream`. It publishes to `<remote>/<own name>` and retracks, taking the remote from `--remote`, else `origin`, else the upstream's own.
+  - `nen shu warmup` cuts branches with `--no-track`, so a new branch tracks nothing until its first publish.
+- **gates** — a round check (`round_check_pattern`) now counts only on a SUCCESS conclusion. A cancelled or neutral run is no longer a round. Under `bounded`, an earlier-head run counts only if GitHub lists it against this pull request.
+- **commit** — `nen/workflow.json` is read on every `commit format`/`write` run, not only with `--trailer`.
+  - A malformed file, or a malformed `commits.subjectCase`, is now exit 1.
+  - A nonexistent `--repo` is now exit 2.
+  - `nen: warning:` and `nen: note:` lines can appear on stderr at exit 0.
+- **pr** — `pr request-reviews`: a new exit 9 for an unrecorded bot, and a response with no `reviewRequests` list is exit 1, where it was 0.
+- **pr** — `pr ready --exclude-check`: a value with an unclosed opener and a later comma is exit 2.
+- **pr** — a product code that matches registry keys differing only by case is refused at exit 2 by `pr ready`, `pr merge` and `unit-check`.
+- **repo** — a non-string `scenario` on a `maintained_tools[]` or `pending_onboarding[]` row now stops the registry loading. It used to be ignored.
+- **surface** — `surface mirror check` reports a mirror generated by an older build as `stale` until it is regenerated.
+- **changelog** — `changelog completeness` and `release preflight` exit 0, where they exited 1, on a range whose only uncited PR is the qualifying release PR.
+
 ## v0.16.0 — 2026-09-29
 
 Release unit for `v0.15.1..v0.16.0`: [#272](https://github.com/zheref/nen/pull/272) and [#274](https://github.com/zheref/nen/pull/274) (the delivery), [#278](https://github.com/zheref/nen/pull/278) (the landing — #274 was stacked and its merge never reached `main`), and [#281](https://github.com/zheref/nen/pull/281) (the release proposal).

@@ -828,10 +828,14 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
       { script: [{ match: "nen --version", result: { stdout: `${VERSION}\n`, code: 0 } }] },
     );
     expect(result.code).toBe(5);
+    // THIS BUILD'S floor, read from the constant rather than spelled: the row is
+    // produced by the real dispatch, so it names whatever floor this build ships,
+    // and a release that moves the floor must not have to edit this test.
+    const floor = COMPATIBLE_MINOR_FLOOR.replace(/\./g, "\\.");
     expect(result.out.join("\n")).toMatch(
-      /minimum '0\.1' is below this build's compatibility floor '0\.7'/,
+      new RegExp(`minimum '0\\.1' is below this build's compatibility floor '${floor}'`),
     );
-    expect(result.out.join("\n")).toMatch(/Repin to '0\.7'/);
+    expect(result.out.join("\n")).toMatch(new RegExp(`Repin to '${floor}'`));
   });
 
   it("reports a nen that will not start as missing, and never tries to install it", async () => {
