@@ -7,7 +7,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 Release unit for `v0.16.0..v0.17.0`, the `hatsu:futon nen@bug` run:
 - the deliveries: [#279](https://github.com/zheref/nen/pull/279), [#282](https://github.com/zheref/nen/pull/282), [#283](https://github.com/zheref/nen/pull/283), [#284](https://github.com/zheref/nen/pull/284), [#285](https://github.com/zheref/nen/pull/285) and [#289](https://github.com/zheref/nen/pull/289), which close every open `bug` issue;
 - [#287](https://github.com/zheref/nen/pull/287), the maintainer's review-gate ruling;
-- the release proposal.
+- [#295](https://github.com/zheref/nen/pull/295), the release proposal.
 
 The compatibility floor moves to `0.17`.
 
