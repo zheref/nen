@@ -7,7 +7,7 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
-import { isTrunk, trackedBranchName, trunkDestinationRefusal } from "./publish.js";
+import { foreignUpstreamRefusal, isTrunk, trackedBranchName, trunkDestinationRefusal } from "./publish.js";
 
 async function capture(
   argv: readonly string[],
@@ -786,6 +786,8 @@ const PUSH_WORK_U = "git push -u origin -- refs/heads/feature/work:refs/heads/fe
 const NO_TRACKING = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { code: 128 } };
 const TRACKING = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "origin/feature/work\n" } };
 const FETCH_WORK = { match: "git fetch --end-of-options origin refs/heads/feature/work:refs/remotes/origin/feature/work", result: { code: 0 } };
+/** `git remote`, which the replace route (--set-upstream over an upstream of another name) reads to find origin -- rule 3 of ./publish.ts's header. */
+const REMOTES_O = { match: "git remote", result: { stdout: "origin\n" } };
 
 describe("nen wc publish -- push the current branch to origin, never a force, never the trunk", () => {
   it("pushes with -u on --set-upstream when there is no upstream yet, reporting the nen.wc.publish/v0.1 document", async () => {
@@ -808,42 +810,51 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
     expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: "origin/feature/work", ahead: 3, needsForce: false, pushed: true });
   });
 
-  it("a local branch tracking a DIFFERENTLY NAMED upstream is pushed AS that name: the ref the preflight compared is the ref the push moves (Copilot round 3 on zheref/nen#231, T9)", async () => {
+  it("a local branch tracking a DIFFERENTLY NAMED upstream on a NON-origin remote: bare refuses naming the route, --set-upstream publishes under its own name to origin -- or to --remote -- never to the upstream's branch (zheref/nen#271; Nobunaga F1)", async () => {
     const TRACKING_TOPIC = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "fork/topic\n" } };
     const TOPIC_OK = { match: "git check-ref-format --branch topic", result: { code: 0 } };
-    const FETCH_TOPIC = "git fetch --end-of-options fork refs/heads/topic:refs/remotes/fork/topic";
-    const PUSH_AS_TOPIC = "git push fork -- refs/heads/feature/work:refs/heads/topic";
-    const result = await captureJson(["wc", "publish"], [
-      ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK,
-      { match: FETCH_TOPIC, result: { code: 0 } },
-      { match: "git merge-base --is-ancestor fork/topic HEAD", result: { code: 0 } },
-      { match: "git rev-list --count fork/topic..HEAD", result: { stdout: "2\n" } },
-      { match: PUSH_AS_TOPIC, result: { code: 0 } },
-    ]);
-    expect(result.code).toBe(0);
-    expect(result.doc).toMatchObject({ branch: "feature/work", remote: "fork", destination: "topic", upstreamBefore: "fork/topic", ahead: 2, pushed: true });
-    const calls = gitCalls(result.seams);
-    expect(calls).toContain(FETCH_TOPIC);
-    expect(calls).toContain(PUSH_AS_TOPIC);
-    // Never the same-named sibling: nothing here spells refs/heads/feature/work on the remote side.
-    expect(calls.some((call): boolean => call.endsWith(":refs/heads/feature/work"))).toBe(false);
-    // The text says both names, and --dry-run prints the same refspec.
-    const text = await capture(["wc", "publish"], [
-      ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK,
-      { match: FETCH_TOPIC, result: { code: 0 } },
-      { match: "git merge-base --is-ancestor fork/topic HEAD", result: { code: 0 } },
-      { match: "git rev-list --count fork/topic..HEAD", result: { stdout: "2\n" } },
-      { match: PUSH_AS_TOPIC, result: { code: 0 } },
-    ]);
-    expect(text.out).toEqual(["pushed 'feature/work' to fork as 'topic' -- 2 commit(s) ahead of fork/topic"]);
-    const dry = await capture(["wc", "publish", "--dry-run"], [
-      ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK,
-      { match: FETCH_TOPIC, result: { code: 0 } },
-      { match: "git merge-base --is-ancestor fork/topic HEAD", result: { code: 0 } },
-      { match: "git rev-list --count fork/topic..HEAD", result: { stdout: "2\n" } },
-    ]);
-    expect(dry.out).toEqual([`would run: ${PUSH_AS_TOPIC}  (2 ahead of fork/topic)`]);
-    expect(gitCalls(dry.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+    const BOTH = { match: "git remote", result: { stdout: "origin\nfork\n" } };
+    const FETCH_TOPIC = { match: "git fetch --end-of-options fork refs/heads/topic:refs/remotes/fork/topic", result: { code: 0 } };
+    const AHEAD_OF_TOPIC = { match: "git rev-list --count fork/topic..HEAD", result: { stdout: "2\n" } };
+    const pushTo = (remote: string): string => `git push -u ${remote} -- refs/heads/feature/work:refs/heads/feature/work`;
+    const probeOn = (remote: string): ScriptedCall => ({ match: `git ls-remote --exit-code ${remote} refs/heads/feature/work`, result: { code: 2 } });
+
+    // Bare: refused before any fetch, naming the route --set-upstream would take -- origin, by rule 3.
+    const refused = await capture(["wc", "publish"], [ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK, BOTH]);
+    expect(refused.code).toBe(2);
+    expect(refused.out).toEqual([]);
+    expect(refused.err.join("\n")).toMatch(/'feature\/work' tracks 'fork\/topic', whose branch 'topic' is not 'feature\/work'/);
+    expect(refused.err.join("\n")).toMatch(/Pass --set-upstream to publish 'feature\/work' to 'origin\/feature\/work'/);
+    expect(gitCalls(refused.seams).some((call): boolean => call.startsWith("git fetch") || call.startsWith("git push") || call.startsWith("git ls-remote"))).toBe(false);
+    // Bare with --remote: the refusal names THAT remote as the route.
+    const named = await capture(["wc", "publish", "--remote", "fork"], [ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK, BOTH]);
+    expect(named.code).toBe(2);
+    expect(named.err.join("\n")).toMatch(/Pass --set-upstream to publish 'feature\/work' to 'fork\/feature\/work'/);
+
+    // --set-upstream WITHOUT --remote: origin, the fork workflow's own remote -- never the remote the branch was cut from.
+    for (const argv of [["wc", "publish", "--set-upstream"], ["wc", "publish", "--set-upstream", "--remote", "origin"]]) {
+      const result = await captureJson(argv, [ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK, BOTH, FETCH_TOPIC, probeOn("origin"), AHEAD_OF_TOPIC, { match: pushTo("origin"), result: { code: 0 } }]);
+      expect(result.code, argv.join(" ")).toBe(0);
+      expect(result.doc).toMatchObject({ branch: "feature/work", remote: "origin", destination: "feature/work", upstreamBefore: "fork/topic", ahead: 2, pushed: true, retargetedUpstream: true });
+      const calls = gitCalls(result.seams);
+      expect(calls).toContain(pushTo("origin"));
+      expect(calls.some((call): boolean => call.startsWith("git push") && (call.endsWith(":refs/heads/topic") || call.includes(" fork "))), argv.join(" ")).toBe(false);
+      // No fast-forward judged against a ref this push does not move.
+      expect(calls.some((call): boolean => call.startsWith("git merge-base"))).toBe(false);
+    }
+    // --set-upstream --remote fork: the named remote, validated and honoured.
+    const toFork = await captureJson(["wc", "publish", "--set-upstream", "--remote", "fork"], [ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK, BOTH, FETCH_TOPIC, probeOn("fork"), AHEAD_OF_TOPIC, { match: pushTo("fork"), result: { code: 0 } }]);
+    expect(toFork.code).toBe(0);
+    expect(toFork.doc).toMatchObject({ remote: "fork", destination: "feature/work", retargetedUpstream: true });
+    // No origin at all: the upstream's own remote is the last resort.
+    const noOrigin = await captureJson(["wc", "publish", "--set-upstream"], [ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK, { match: "git remote", result: { stdout: "fork\n" } }, FETCH_TOPIC, probeOn("fork"), AHEAD_OF_TOPIC, { match: pushTo("fork"), result: { code: 0 } }]);
+    expect(noOrigin.code).toBe(0);
+    expect(noOrigin.doc).toMatchObject({ remote: "fork", retargetedUpstream: true });
+    // A --remote this repository does not have is refused, exactly as on the no-upstream route.
+    const unknown = await capture(["wc", "publish", "--set-upstream", "--remote", "nosuch"], [ON_WORK, WORK_OK, TRACKING_TOPIC, TOPIC_OK, BOTH]);
+    expect(unknown.code).toBe(2);
+    expect(unknown.err.join("\n")).toMatch(/no remote named 'nosuch' \(it has: origin, fork\)/);
+    expect(gitCalls(unknown.seams).some((call): boolean => call.startsWith("git fetch") || call.startsWith("git push"))).toBe(false);
   });
 
   it("--dry-run prints the push line and pushes nothing", async () => {
@@ -918,7 +929,7 @@ describe("nen wc publish -- push the current branch to origin, never a force, ne
 
 // ── nen wc publish: the trunk is refused as a DESTINATION (zheref/nen#234) ──
 
-describe("nen wc publish -- a branch tracking the trunk is pushed under its own name, and the trunk is never a destination", () => {
+describe("nen wc publish -- a branch tracking the trunk is published under its own name only with --set-upstream, and the trunk is never a destination", () => {
   const TRACKING_MAIN = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "origin/main\n" } };
   const MAIN_OK = { match: "git check-ref-format --branch main", result: { code: 0 } };
   const FETCH_MAIN = { match: "git fetch --end-of-options origin refs/heads/main:refs/remotes/origin/main", result: { code: 0 } };
@@ -927,7 +938,7 @@ describe("nen wc publish -- a branch tracking the trunk is pushed under its own 
 
   it("--set-upstream on a branch tracking origin/main pushes refs/heads/<own>:refs/heads/<own> with -u, and reports the retarget", async () => {
     const result = await captureJson(["wc", "publish", "--set-upstream"], [
-      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O, FETCH_MAIN,
       { match: PROBE_OWN, result: { code: 2 } },
       AHEAD_OF_MAIN,
       { match: PUSH_WORK_U, result: { code: 0 } },
@@ -940,38 +951,48 @@ describe("nen wc publish -- a branch tracking the trunk is pushed under its own 
     expect(calls.some((call): boolean => call.startsWith("git push") && /:refs\/heads\/main$/.test(call))).toBe(false);
     expect(calls.some((call): boolean => call.startsWith("git merge-base"))).toBe(false);
     const text = await capture(["wc", "publish", "--set-upstream"], [
-      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O, FETCH_MAIN,
       { match: PROBE_OWN, result: { code: 2 } },
       AHEAD_OF_MAIN,
       { match: PUSH_WORK_U, result: { code: 0 } },
     ]);
-    expect(text.out).toEqual(["pushed 'feature/work' to origin (upstream set) -- 8 commit(s) ahead of origin/main -- its upstream 'origin/main' named the trunk, so it went under its own name and now tracks origin/feature/work"]);
+    expect(text.out).toEqual(["pushed 'feature/work' to origin (upstream set) -- 8 commit(s) ahead of origin/main -- its upstream 'origin/main' named the trunk, so it went to origin under its own name and now tracks origin/feature/work"]);
   });
 
-  it("without --set-upstream the push still goes to the branch's own name, the upstream is left as it was, and the text says it still names the trunk", async () => {
-    const result = await captureJson(["wc", "publish"], [
-      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
-      { match: PROBE_OWN, result: { code: 2 } },
-      AHEAD_OF_MAIN,
-      { match: PUSH_WORK, result: { code: 0 } },
-    ]);
-    expect(result.code).toBe(0);
-    expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: "origin/main", pushed: true, retargetedUpstream: false });
-    expect(gitCalls(result.seams)).toContain(PUSH_WORK);
-    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push -u"))).toBe(false);
-    const dry = await capture(["wc", "publish", "--dry-run"], [
-      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+  it("without --set-upstream a branch tracking the trunk is REFUSED at exit 2 before any fetch, naming both names and the trunk -- no longer pushed with the upstream left behind (zheref/nen#271, superseding #234's bare path)", async () => {
+    for (const argv of [["wc", "publish"], ["wc", "publish", "--dry-run"]]) {
+      const result = await capture(argv, [ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O]);
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.out).toEqual([]);
+      expect(result.err.join("\n")).toMatch(/'feature\/work' tracks 'origin\/main', whose branch 'main' is not 'feature\/work', the trunk \(nen\/workflow.json's branch.base\) -- which is never a destination either/);
+      // The trunk drops the "publish that branch instead" alternative: this verb never publishes it.
+      expect(result.err.join("\n")).not.toMatch(/really belong on 'main'/);
+      expect(result.err.join("\n")).toMatch(/Pass --set-upstream to publish 'feature\/work' to 'origin\/feature\/work' and retrack it there, replacing 'origin\/main' \(add --remote <name> to publish it to another remote\)\. Nothing was fetched or pushed/);
+      expect(result.err.join("\n")).toMatch(/Nothing was fetched or pushed/);
+      expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git fetch") || call.startsWith("git push") || call.startsWith("git ls-remote"))).toBe(false);
+    }
+  });
+
+  it("--dry-run --set-upstream predicts the retarget: the push line, and where the upstream would go", async () => {
+    const dry = await capture(["wc", "publish", "--set-upstream", "--dry-run"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O, FETCH_MAIN,
       { match: PROBE_OWN, result: { code: 2 } },
       AHEAD_OF_MAIN,
     ]);
     expect(dry.code).toBe(0);
-    expect(dry.out).toEqual([`would run: ${PUSH_WORK}  (8 ahead of origin/main) -- its upstream 'origin/main' names the trunk, so it went under its own name; the upstream still names the trunk (pass --set-upstream to retrack it to origin/feature/work)`]);
+    expect(dry.out).toEqual([`would run: ${PUSH_WORK_U}  (8 ahead of origin/main) -- its upstream 'origin/main' names the trunk, so it would go to origin under its own name and then track origin/feature/work`]);
     expect(gitCalls(dry.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+    const doc = await captureJson(["wc", "publish", "--set-upstream", "--dry-run"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O, FETCH_MAIN,
+      { match: PROBE_OWN, result: { code: 2 } },
+      AHEAD_OF_MAIN,
+    ]);
+    expect(doc.doc).toMatchObject({ destination: "feature/work", upstreamBefore: "origin/main", pushed: false, dryRun: true, retargetedUpstream: true });
   });
 
-  it("the fast-forward is judged against origin/<own> when the remote already has it -- never against the trunk", async () => {
-    const diverged = await captureJson(["wc", "publish"], [
-      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+  it("the fast-forward is judged against origin/<own> when the remote already has it -- never against the trunk -- and a needsForce retargets nothing", async () => {
+    const diverged = await captureJson(["wc", "publish", "--set-upstream"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O, FETCH_MAIN,
       { match: PROBE_OWN, result: { code: 0, stdout: "abc123\trefs/heads/feature/work\n" } },
       FETCH_WORK,
       { match: "git merge-base --is-ancestor origin/feature/work HEAD", result: { code: 1 } },
@@ -980,17 +1001,18 @@ describe("nen wc publish -- a branch tracking the trunk is pushed under its own 
     expect(diverged.code).toBe(1);
     expect(diverged.doc).toMatchObject({ destination: "feature/work", needsForce: true, pushed: false, retargetedUpstream: false });
     expect(gitCalls(diverged.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
-    const text = await capture(["wc", "publish"], [
-      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+    const text = await capture(["wc", "publish", "--set-upstream"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O, FETCH_MAIN,
       { match: PROBE_OWN, result: { code: 0, stdout: "abc123\trefs/heads/feature/work\n" } },
       FETCH_WORK,
       { match: "git merge-base --is-ancestor origin/feature/work HEAD", result: { code: 1 } },
       AHEAD_OF_MAIN,
     ]);
     expect(text.out.join("\n")).toMatch(/not a fast-forward of 'origin\/feature\/work', the ref this push updates/);
+    expect(text.out.join("\n")).toMatch(/Its upstream still names 'origin\/main': nothing was retracked either/);
     // A probe that failed for any reason but "no such ref" is a git failure, not a green light.
-    const broken = await capture(["wc", "publish"], [
-      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, FETCH_MAIN,
+    const broken = await capture(["wc", "publish", "--set-upstream"], [
+      ON_WORK, WORK_OK, TRACKING_MAIN, MAIN_OK, REMOTES_O, FETCH_MAIN,
       { match: PROBE_OWN, result: { code: 128, stderr: "fatal: unable to access" } },
     ]);
     expect(broken.code).toBe(1);
@@ -1000,17 +1022,20 @@ describe("nen wc publish -- a branch tracking the trunk is pushed under its own 
 
   it("the same holds for master as the tracked name", async () => {
     const trunk = "master";
-    const result = await captureJson(["wc", "publish"], [
-      ON_WORK, WORK_OK,
-      { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: `origin/${trunk}\n` } },
-      { match: `git check-ref-format --branch ${trunk}`, result: { code: 0 } },
+    const tracking = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: `origin/${trunk}\n` } };
+    const trunkOk = { match: `git check-ref-format --branch ${trunk}`, result: { code: 0 } };
+    const bare = await capture(["wc", "publish"], [ON_WORK, WORK_OK, tracking, trunkOk, REMOTES_O]);
+    expect(bare.code).toBe(2);
+    expect(bare.err.join("\n")).toMatch(/whose branch 'master' is not 'feature\/work', the trunk/);
+    const result = await captureJson(["wc", "publish", "--set-upstream"], [
+      ON_WORK, WORK_OK, tracking, trunkOk, REMOTES_O,
       { match: `git fetch --end-of-options origin refs/heads/${trunk}:refs/remotes/origin/${trunk}`, result: { code: 0 } },
       { match: PROBE_OWN, result: { code: 2 } },
       { match: `git rev-list --count origin/${trunk}..HEAD`, result: { stdout: "1\n" } },
-      { match: PUSH_WORK, result: { code: 0 } },
+      { match: PUSH_WORK_U, result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: `origin/${trunk}` });
+    expect(result.doc).toMatchObject({ destination: "feature/work", upstreamBefore: `origin/${trunk}`, retargetedUpstream: true });
     expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git push") && call.endsWith(`:refs/heads/${trunk}`))).toBe(false);
   });
 
@@ -1023,18 +1048,171 @@ describe("nen wc publish -- a branch tracking the trunk is pushed under its own 
     expect(trackedBranchName("refs/tags/v1")).toBe("refs/tags/v1");
   });
 
-  it("trunkDestinationRefusal: the belt under the retarget -- a destination that is the trunk is refused naming the destination and the upstream", () => {
-    expect(trunkDestinationRefusal("feature/work", "feature/work", "origin/main", "main")).toBeNull();
+  it("trunkDestinationRefusal: a defensive belt -- a destination that is the trunk is refused naming it, with no stale claim about the upstream routing the push (Nobunaga F3)", () => {
+    expect(trunkDestinationRefusal("feature/work", "feature/work", "main")).toBeNull();
     for (const destination of ["main", "master", "refs/heads/main", "+main", "develop"]) {
-      const refusal = trunkDestinationRefusal("feature/work", destination, "origin/main", "develop");
-      expect(refusal, destination).toMatch(new RegExp(`the push destination '${destination.replace("+", "\\+")}' is the trunk`));
-      expect(refusal).toMatch(/'feature\/work' tracks 'origin\/main'/);
-      expect(refusal).toMatch(/Nothing was pushed/);
+      const refusal = trunkDestinationRefusal("feature/work", destination, "develop");
+      expect(refusal, destination).toMatch(new RegExp(`the push destination '${destination.replace("+", "\\+")}' for 'feature/work' is the trunk`));
+      expect(refusal).toMatch(/Cut a branch for this work\. Nothing was pushed\.$/);
+      // The routing this clause used to describe is gone: no upstream is named, and no retrack at a ref that may not exist is recommended.
+      expect(refusal).not.toMatch(/tracks|upstream|set-upstream-to/);
     }
-    expect(trunkDestinationRefusal("feature/work", "develop", "origin/develop", "develop")).toMatch(/\(nen\/workflow.json's branch.base\)/);
-    expect(trunkDestinationRefusal("feature/work", "main", null, "develop")).not.toMatch(/tracks/);
+    expect(trunkDestinationRefusal("feature/work", "develop", "develop")).toMatch(/\(nen\/workflow.json's branch.base\)/);
     expect(isTrunk("refs/heads/master", "develop")).toBe(true);
     expect(isTrunk("feature/main", "develop")).toBe(false);
+  });
+});
+
+// ── nen wc publish: an upstream of another name is reported, never followed (zheref/nen#271) ──
+//
+// The incident's own shape: a stacked effort cut with `shu warmup --from
+// <another effort's branch>` tracked that branch, and a publish pushed the
+// stacked commit onto it -- and onto the pull request open from it.
+
+describe("nen wc publish -- a stacked branch tracking ANOTHER effort's branch is never pushed onto it (zheref/nen#271)", () => {
+  const STACKED = { match: "git symbolic-ref --short HEAD", result: { stdout: "fable/kurapika/bump-and-link-guards\n" } };
+  const STACKED_OK = { match: "git check-ref-format --branch fable/kurapika/bump-and-link-guards", result: { code: 0 } };
+  const TRACKING_BASE = { match: "git rev-parse --abbrev-ref fable/kurapika/bump-and-link-guards@{upstream}", result: { stdout: "origin/fable/kurapika/ten-installed-surface\n" } };
+  const BASE_OK = { match: "git check-ref-format --branch fable/kurapika/ten-installed-surface", result: { code: 0 } };
+  const FETCH_BASE = { match: "git fetch --end-of-options origin refs/heads/fable/kurapika/ten-installed-surface:refs/remotes/origin/fable/kurapika/ten-installed-surface", result: { code: 0 } };
+  const PROBE_STACKED = "git ls-remote --exit-code origin refs/heads/fable/kurapika/bump-and-link-guards";
+  const AHEAD_OF_BASE = { match: "git rev-list --count origin/fable/kurapika/ten-installed-surface..HEAD", result: { stdout: "1\n" } };
+  const PUSH_STACKED_U = "git push -u origin -- refs/heads/fable/kurapika/bump-and-link-guards:refs/heads/fable/kurapika/bump-and-link-guards";
+
+  it("a bare publish refuses at exit 2, naming the branch, the upstream and --set-upstream -- before any fetch, in every form", async () => {
+    for (const argv of [["wc", "publish"], ["wc", "publish", "--dry-run"], ["wc", "publish", "--remote", "origin"]]) {
+      const result = await capture(argv, [STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O]);
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.out).toEqual([]);
+      const said = result.err.join("\n");
+      expect(said).toMatch(/'fable\/kurapika\/bump-and-link-guards' tracks 'origin\/fable\/kurapika\/ten-installed-surface', whose branch 'fable\/kurapika\/ten-installed-surface' is not 'fable\/kurapika\/bump-and-link-guards'/);
+      expect(said).toMatch(/never follows an upstream onto another one/);
+      expect(said).toMatch(/Pass --set-upstream to publish 'fable\/kurapika\/bump-and-link-guards' to 'origin\/fable\/kurapika\/bump-and-link-guards'/);
+      expect(said).not.toMatch(/the trunk/);
+      expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git fetch") || call.startsWith("git push") || call.startsWith("git ls-remote"))).toBe(false);
+    }
+  });
+
+  it("--json on the refusal prints no document: stdout stays empty and the reason is on stderr", async () => {
+    const result = await captureJson(["wc", "publish"], [STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O]);
+    expect(result.code).toBe(2);
+    expect(result.doc).toEqual({});
+    expect(result.err.join("\n")).toMatch(/Nothing was fetched or pushed/);
+  });
+
+  it("--set-upstream pushes refs/heads/<own>:refs/heads/<own> with -u, never to the base, and reports retargetedUpstream", async () => {
+    const script = [
+      STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O, FETCH_BASE,
+      { match: PROBE_STACKED, result: { code: 2 } },
+      AHEAD_OF_BASE,
+      { match: PUSH_STACKED_U, result: { code: 0 } },
+    ];
+    const result = await captureJson(["wc", "publish", "--set-upstream"], script);
+    expect(result.code).toBe(0);
+    expect(result.doc).toEqual({
+      contract: "nen.wc.publish/v0.1",
+      branch: "fable/kurapika/bump-and-link-guards",
+      remote: "origin",
+      destination: "fable/kurapika/bump-and-link-guards",
+      upstreamBefore: "origin/fable/kurapika/ten-installed-surface",
+      ahead: 1,
+      needsForce: false,
+      pushed: true,
+      dryRun: false,
+      retargetedUpstream: true,
+    });
+    const calls = gitCalls(result.seams);
+    expect(calls).toContain(PUSH_STACKED_U);
+    expect(calls.some((call): boolean => call.startsWith("git push") && call.endsWith(":refs/heads/fable/kurapika/ten-installed-surface"))).toBe(false);
+    // The base is fetched (ahead is counted against it) but never compared as the ref this push moves.
+    expect(calls.some((call): boolean => call.startsWith("git merge-base"))).toBe(false);
+    const text = await capture(["wc", "publish", "--set-upstream"], script);
+    expect(text.out).toEqual([
+      "pushed 'fable/kurapika/bump-and-link-guards' to origin (upstream set) -- 1 commit(s) ahead of origin/fable/kurapika/ten-installed-surface -- its upstream 'origin/fable/kurapika/ten-installed-surface' named another branch, so it went to origin under its own name and now tracks origin/fable/kurapika/bump-and-link-guards",
+    ]);
+  });
+
+  it("--set-upstream judges the fast-forward against origin/<own> when the remote already has it, and pushes when it is one", async () => {
+    const result = await captureJson(["wc", "publish", "--set-upstream"], [
+      STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O, FETCH_BASE,
+      { match: PROBE_STACKED, result: { code: 0, stdout: "abc123\trefs/heads/fable/kurapika/bump-and-link-guards\n" } },
+      { match: "git fetch --end-of-options origin refs/heads/fable/kurapika/bump-and-link-guards:refs/remotes/origin/fable/kurapika/bump-and-link-guards", result: { code: 0 } },
+      { match: "git merge-base --is-ancestor origin/fable/kurapika/bump-and-link-guards HEAD", result: { code: 0 } },
+      AHEAD_OF_BASE,
+      { match: PUSH_STACKED_U, result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ needsForce: false, pushed: true, retargetedUpstream: true });
+    // An own ref that could not be fetched is a git failure at exit 1, never a push.
+    const failed = await capture(["wc", "publish", "--set-upstream"], [
+      STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O, FETCH_BASE,
+      { match: PROBE_STACKED, result: { code: 0, stdout: "abc123\trefs/heads/fable/kurapika/bump-and-link-guards\n" } },
+      { match: "git fetch --end-of-options origin refs/heads/fable/kurapika/bump-and-link-guards:refs/remotes/origin/fable/kurapika/bump-and-link-guards", result: { code: 128, stderr: "fatal: remote hung up" } },
+    ]);
+    expect(failed.code).toBe(1);
+    expect(failed.err.join("\n")).toMatch(/could not fetch 'origin\/fable\/kurapika\/bump-and-link-guards', the ref this push updates/);
+    expect(gitCalls(failed.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+  });
+
+  it("an upstream that names the branch's OWN name on another remote is not a mismatch: no refusal, no retarget", async () => {
+    const result = await captureJson(["wc", "publish"], [
+      ON_WORK, WORK_OK,
+      { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "fork/feature/work\n" } },
+      WORK_OK,
+      { match: "git fetch --end-of-options fork refs/heads/feature/work:refs/remotes/fork/feature/work", result: { code: 0 } },
+      { match: "git merge-base --is-ancestor fork/feature/work HEAD", result: { code: 0 } },
+      { match: "git rev-list --count fork/feature/work..HEAD", result: { stdout: "1\n" } },
+      { match: "git push fork -- refs/heads/feature/work:refs/heads/feature/work", result: { code: 0 } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ remote: "fork", destination: "feature/work", retargetedUpstream: false });
+  });
+
+  it("F2: under --set-upstream an upstream GONE from its remote ('couldn't find remote ref') is ahead: null and said so -- not an exit 1 blocking the one route the refusal names; any other fetch failure is still exit 1 (Nobunaga F2)", async () => {
+    const GONE = { match: FETCH_BASE.match, result: { code: 128, stderr: "fatal: couldn't find remote ref refs/heads/fable/kurapika/ten-installed-surface" } };
+    const script = [
+      STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O, GONE,
+      { match: PROBE_STACKED, result: { code: 2 } },
+      { match: PUSH_STACKED_U, result: { code: 0 } },
+    ];
+    const result = await captureJson(["wc", "publish", "--set-upstream"], script);
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ upstreamBefore: "origin/fable/kurapika/ten-installed-surface", ahead: null, needsForce: false, pushed: true, retargetedUpstream: true });
+    // Nothing was counted against a ref the remote no longer has.
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git rev-list --count"))).toBe(false);
+    const text = await capture(["wc", "publish", "--set-upstream"], script);
+    expect(text.out).toEqual([
+      "pushed 'fable/kurapika/bump-and-link-guards' to origin (upstream set) -- nothing counted: 'origin/fable/kurapika/ten-installed-surface' is gone from origin -- its upstream 'origin/fable/kurapika/ten-installed-surface' named another branch, so it went to origin under its own name and now tracks origin/fable/kurapika/bump-and-link-guards",
+    ]);
+    const dry = await capture(["wc", "publish", "--set-upstream", "--dry-run"], script);
+    expect(dry.out[0]).toMatch(/\(nothing counted: 'origin\/fable\/kurapika\/ten-installed-surface' is gone from origin\)/);
+    // Any OTHER failure of that same fetch is still the exit-1 git failure it is.
+    const unreachable = await capture(["wc", "publish", "--set-upstream"], [
+      STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O,
+      { match: FETCH_BASE.match, result: { code: 128, stderr: "fatal: unable to access 'https://example.invalid/': Could not resolve host" } },
+    ]);
+    expect(unreachable.code).toBe(1);
+    expect(unreachable.err.join("\n")).toMatch(/could not fetch the upstream 'origin\/fable\/kurapika\/ten-installed-surface'/);
+    expect(gitCalls(unreachable.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
+    // And without --set-upstream a gone upstream never reaches the fetch: the mismatch refusal comes first.
+    const bare = await capture(["wc", "publish"], [STACKED, STACKED_OK, TRACKING_BASE, BASE_OK, REMOTES_O, GONE]);
+    expect(bare.code).toBe(2);
+    expect(gitCalls(bare.seams).some((call): boolean => call.startsWith("git fetch"))).toBe(false);
+  });
+
+  it("foreignUpstreamRefusal: null when the names agree; otherwise both names, the fix, and the trunk said when it is one", () => {
+    expect(foreignUpstreamRefusal("feature/work", "origin/feature/work", "origin", "feature/work", "main")).toBeNull();
+    const stacked = foreignUpstreamRefusal("b", "origin/a", "origin", "a", "main");
+    expect(stacked).toMatch(/^'b' tracks 'origin\/a', whose branch 'a' is not 'b'\. /);
+    expect(stacked).toMatch(/Pass --set-upstream to publish 'b' to 'origin\/b' and retrack it there, replacing 'origin\/a' \(add --remote <name> to publish it to another remote\); if the commits really belong on 'a', check that branch out and publish it instead\. Nothing was fetched or pushed\.$/);
+    // The route named is the remote rule 3 resolved, whatever it is.
+    expect(foreignUpstreamRefusal("b", "upstream/main", "fork", "main", "main")).toMatch(/Pass --set-upstream to publish 'b' to 'fork\/b'/);
+    expect(stacked).not.toMatch(/trunk/);
+    expect(foreignUpstreamRefusal("b", "origin/develop", "origin", "develop", "develop")).toMatch(/the trunk \(nen\/workflow.json's branch.base\) -- which is never a destination either/);
+    expect(foreignUpstreamRefusal("b", "origin/master", "origin", "master", "develop")).toMatch(/'master' is not 'b', the trunk -- which/);
+    expect(foreignUpstreamRefusal("b", "origin/master", "origin", "master", "develop")).toMatch(/replacing 'origin\/master' \(add --remote <name> to publish it to another remote\)\. Nothing was fetched or pushed\.$/);
+    // Names compare exactly, as git compares refs: a case difference is another branch.
+    expect(foreignUpstreamRefusal("Feature", "origin/feature", "origin", "feature", "main")).not.toBeNull();
   });
 });
 
@@ -1091,11 +1269,40 @@ describe("nen wc publish -- the remote pushed to is the one the upstream names",
     expect(gitCalls(unknown.seams).some((call): boolean => call.startsWith("git push"))).toBe(false);
   });
 
-  it("--remote that contradicts an existing upstream is refused at exit 2 before any fetch", async () => {
-    const result = await capture(["wc", "publish", "--remote", "origin"], [ON_WORK, WORK_OK, TRACKING_FORK]);
+  it("--remote that contradicts a same-name upstream is refused at exit 2 before any fetch, naming --set-upstream --remote -- never a --set-upstream-to at a ref the remote may not have (Nobunaga F1)", async () => {
+    const BOTH = { match: "git remote", result: { stdout: "origin\nfork\n" } };
+    const result = await capture(["wc", "publish", "--remote", "origin"], [ON_WORK, WORK_OK, TRACKING_FORK, BOTH]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/tracks 'fork\/feature\/work', so it is pushed to 'fork' -- --remote 'origin' names a different one/);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/tracks 'fork\/feature\/work', so without --set-upstream it is pushed to 'fork' -- --remote 'origin' names a different one/);
+    expect(said).toMatch(/pass --set-upstream --remote origin to publish it to 'origin\/feature\/work' and track that instead/);
+    expect(said).not.toMatch(/set-upstream-to/);
     expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git fetch"))).toBe(false);
+    // ...and the route it names works: --set-upstream --remote origin publishes to origin and retracks there.
+    const moved = await captureJson(["wc", "publish", "--set-upstream", "--remote", "origin"], [
+      ON_WORK, WORK_OK, TRACKING_FORK, BOTH,
+      { match: FETCH_FORK, result: { code: 0 } },
+      { match: "git ls-remote --exit-code origin refs/heads/feature/work", result: { code: 2 } },
+      { match: "git rev-list --count fork/feature/work..HEAD", result: { stdout: "1\n" } },
+      { match: PUSH_WORK_U, result: { code: 0 } },
+    ]);
+    expect(moved.code).toBe(0);
+    expect(moved.doc).toMatchObject({ remote: "origin", destination: "feature/work", upstreamBefore: "fork/feature/work", pushed: true, retargetedUpstream: true });
+    // A same-name upstream with --set-upstream and NO --remote keeps its remote: nothing is replaced.
+    const kept = await captureJson(["wc", "publish", "--set-upstream"], [
+      ON_WORK, WORK_OK, TRACKING_FORK,
+      { match: FETCH_FORK, result: { code: 0 } },
+      { match: "git merge-base --is-ancestor fork/feature/work HEAD", result: { code: 0 } },
+      { match: "git rev-list --count fork/feature/work..HEAD", result: { stdout: "1\n" } },
+      { match: "git push -u fork -- refs/heads/feature/work:refs/heads/feature/work", result: { code: 0 } },
+    ]);
+    expect(kept.code).toBe(0);
+    expect(kept.doc).toMatchObject({ remote: "fork", retargetedUpstream: false });
+    expect(gitCalls(kept.seams)).not.toContain("git remote");
+    // A --remote the repository does not have is refused as that, first.
+    const unknown = await capture(["wc", "publish", "--remote", "nosuch"], [ON_WORK, WORK_OK, TRACKING_FORK, BOTH]);
+    expect(unknown.code).toBe(2);
+    expect(unknown.err.join("\n")).toMatch(/no remote named 'nosuch'/);
     // The same --remote as the upstream's is simply agreed with.
     const agreed = await captureJson(["wc", "publish", "--remote", "origin", "--dry-run"], [
       ON_WORK, WORK_OK, TRACKING, WORK_OK, FETCH_WORK,

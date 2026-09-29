@@ -3,47 +3,87 @@
 // somebody else's history (zheref/nen#227; Hatsu's `aka` skill hand-rolled
 // this).
 //
-// THE REMOTE IS THE UPSTREAM'S, AND SO IS THE BRANCH NAME (Copilot review on
-// zheref/nen#231, and its round 3, T9). A branch that tracks `fork/topic` is
-// pushed to `fork`, AS `topic`: the refspec is `refs/heads/<local>:refs/heads/
-// <tracked>`, so the ref the fast-forward check below was made against -- the
-// one the push will move -- is the one the push names, never a same-named
-// sibling on that remote while the check looked at another. A branch with no
-// upstream yet goes to `origin`, or to `--remote <name>` when the caller
-// names one, under its own name; a `--remote` that disagrees with an existing
-// upstream is refused, because the branch already says where it goes.
+// THE BRANCH NAME IS ALWAYS THE BRANCH'S OWN (zheref/nen#271): the refspec
+// is `refs/heads/<b>:refs/heads/<b>`, and nothing else. WHICH REMOTE it goes
+// to is decided in this order, and nowhere else:
 //
-// EXCEPT WHEN THE UPSTREAM NAMES THE TRUNK (zheref/nen#234). `git worktree
-// add -b x origin/main` leaves `x` tracking `origin/main`, and under the rule
-// above that made the destination `main`: on 2026-09-21 this verb pushed
-// `refs/heads/x:refs/heads/main` and fast-forwarded the trunk with no pull
-// request -- the one thing its header says it never does. So the trunk is
-// refused as a DESTINATION, not only as the local name: the branch name the
-// push would update is computed first, and when it is `branch.base`, `main`
-// or `master` (or `refs/heads/` of those) the answer is exit 2 naming the
-// destination and the upstream. A branch that TRACKS the trunk -- the
-// worktree convention, not a mistake -- is published under its OWN name
-// instead (`refs/heads/x:refs/heads/x`), its fast-forward judged against
-// `<remote>/x` when that exists, and `--set-upstream` retracks it to
-// `<remote>/x` (`retargetedUpstream: true`); without `--set-upstream` the
-// push still goes to `x`, and the text says the upstream still names the
-// trunk. The destination check runs again on the final refspec, right
-// before the push, whatever route computed it.
+//   1. NO UPSTREAM: `--remote <name>` when given (it must be one `git remote`
+//      lists), else `origin`.
+//   2. AN UPSTREAM OF THE SAME NAME (`fork/<b>`), without `--set-upstream`
+//      or with it and no `--remote`: the upstream's remote. The branch
+//      already says where it goes, so a `--remote` that disagrees is refused
+//      -- and the refusal names `--set-upstream --remote <name>`, the one
+//      route that moves it, never a `git branch --set-upstream-to` at a ref
+//      the remote does not have yet.
+//   3. `--set-upstream` REPLACING THE UPSTREAM -- one of another name, or one
+//      of the same name with a `--remote` that names another remote:
+//      `--remote <name>` when given (validated against `git remote` exactly as
+//      in 1), else `origin` when this repository has one -- #271's own
+//      "origin/<current branch name>" -- else the upstream's own remote. A
+//      branch cut from `upstream/main` in a fork workflow is published to
+//      `origin`, the fork, never to the canonical repository it was cut from
+//      (Nobunaga F1 on the #271 change).
 //
-// FOUR REFUSALS BEFORE ANY WRITE, all at exit 2, because each is a mistake in
+// IT USED TO FOLLOW THE UPSTREAM'S NAME, and that is the defect #271 records.
+// Until then a local `feature` tracking `fork/topic` was pushed AS `topic`
+// (Copilot review on zheref/nen#231, round 3, T9), so that the ref the
+// fast-forward check looked at was the ref the push moved. That consistency
+// was real, and it was bought at the price of pushing somewhere the caller
+// never named: on 2026-09-28 a stacked effort cut with `shu warmup --from
+// <another effort's branch>` tracked that other branch, and `wc publish
+// --set-upstream` put its commit on the other branch -- and on the pull
+// request open from it. A mismatched upstream is a FACT TO REPORT, never a
+// destination to follow.
+//
+// SO A MISMATCHED UPSTREAM IS REFUSED, AT EXIT 2, UNLESS `--set-upstream`.
+// When the upstream's branch name differs from the current branch's -- a
+// stacked branch tracking its base, `git worktree add -b x origin/main`
+// tracking the trunk, a local name tracking a remote of another name -- a
+// bare publish refuses before any fetch, naming the branch, the upstream and
+// the fix. `--set-upstream` is the fix: it publishes to `<remote>/<own name>`
+// (the remote chosen by rule 3 above) and `-u` retracks the branch there,
+// replacing the mismatched upstream (`retargetedUpstream: true`). The
+// fast-forward is then judged against `<remote>/<own name>` when the remote
+// already has that ref, and against nothing when it does not (nothing is
+// there for a push to rewrite) -- never against the upstream's branch, which
+// this push does not move.
+//
+// AN UPSTREAM BEING REPLACED MAY ALREADY BE GONE (Nobunaga F2). A stacked
+// branch whose base was merged and deleted still names it; its fetch answers
+// "couldn't find remote ref". That fetch only feeds `ahead`, so on this route
+// -- and only this one -- the answer is `ahead: null` and a sentence saying
+// the upstream is gone, never an exit 1 that blocks the one route the refusal
+// above names. Any other fetch failure is still exit 1.
+//
+// THE TRUNK IS NEVER A DESTINATION (zheref/nen#234), and that promise is
+// older than #271 and survives it unchanged. On 2026-09-21 a branch tracking
+// `origin/main` was pushed as `refs/heads/x:refs/heads/main` and fast-forwarded
+// the trunk with no pull request. #234 stopped that by publishing a
+// trunk-tracking branch under its own name even without `--set-upstream`;
+// #271 folds that case into the general one, so it now refuses without
+// `--set-upstream` like every other mismatch -- which is also what git's own
+// `push.default=simple` answers for it. A trunk DESTINATION is still checked
+// on the final refspec, right before the push, but only as a defensive belt:
+// the destination is the local name, and a local name that is the trunk was
+// refused first, so the belt cannot fire unless a later change reintroduces a
+// second route to the destination.
+//
+// FIVE REFUSALS BEFORE ANY WRITE, all at exit 2, because each is a mistake in
 // the invocation rather than a fact about the remote: a DETACHED HEAD (there
 // is no branch to push); the TRUNK -- the workflow's `branch.base`, and
 // `main`/`master` whatever the policy says -- because nothing here ever
 // pushes the trunk directly; anything that LOOKS LIKE A REFSPEC OR A FORCE
 // (a positional, a `+`, a `:`, a `--force` -- the last is already unknown to
-// the parser); and a `--remote` this repository does not have, or one that
-// contradicts the upstream.
+// the parser); a `--remote` this repository does not have, or one that
+// contradicts a same-name upstream without `--set-upstream` (rule 2); and an
+// UPSTREAM OF ANOTHER NAME without `--set-upstream` (above). Every one of
+// them is decided before the fetch -- `git remote` is a local read.
 //
-// THE FIFTH IS A FACT ABOUT THE REMOTE, AND EXIT 1: an upstream that exists
-// and is NOT an ancestor of the local branch is a push git would refuse
-// without `--force`, and `needsForce: true` is the whole of what this verb
-// says about it. What to do -- catch up, or decide the rewrite is wanted and
-// do it by hand -- is not decided here.
+// ONE MORE IS A FACT ABOUT THE REMOTE, AND EXIT 1: a ref this push would move
+// that exists and is NOT an ancestor of the local branch is a push git would
+// refuse without `--force`, and `needsForce: true` is the whole of what this
+// verb says about it. What to do -- catch up, or decide the rewrite is wanted
+// and do it by hand -- is not decided here.
 //
 // THE NAME IS VALIDATED BEFORE IT IS USED IN AN ARGV (Feitan S1). A branch git
 // will happily hold -- `+main` passes `git check-ref-format --branch` -- is a
@@ -79,19 +119,30 @@ export interface PublishReport {
   readonly contract: string;
   /** The local branch pushed: the source half of the refspec. */
   readonly branch: string;
-  /** The remote pushed to: the upstream's own, or `--remote`/`origin` when the branch has no upstream. */
+  /** The remote pushed to, by the header's three rules: `--remote`/`origin` with no upstream; the upstream's own when it is kept; `--remote`, else `origin`, else the upstream's own when `--set-upstream` replaces it. */
   readonly remote: string;
-  /** The branch name on the remote the push updates: the upstream's branch when one exists, else `branch`. */
+  /**
+   * The branch name on the remote the push updates. Always `branch` since
+   * zheref/nen#271 -- a push never follows an upstream onto another name --
+   * and kept so that a reader of the v0.1 contract has nothing to change.
+   */
   readonly destination: string;
   /** The `<remote>/<branch>` the branch tracked before this call, or null. */
   readonly upstreamBefore: string | null;
-  /** Commits on the branch not on its upstream; null when there is no upstream to count against. */
+  /** Commits on the branch not on `upstreamBefore`; null when there is no upstream to count against, or when the upstream `--set-upstream` replaces is gone from its remote (Nobunaga F2). */
   readonly ahead: number | null;
-  /** True when the upstream exists and the local branch is not a fast-forward of it. Nothing was pushed. */
+  /** True when the ref this push moves exists and the local branch is not a fast-forward of it. Nothing was pushed. */
   readonly needsForce: boolean;
   readonly pushed: boolean;
   readonly dryRun: boolean;
-  /** True when the upstream named the trunk and `--set-upstream` retracked the branch to `<remote>/<branch>` (zheref/nen#234). */
+  /**
+   * True when `--set-upstream` replaced the upstream -- one of ANOTHER name,
+   * or one on another remote than `--remote` names -- with `<remote>/<branch>`;
+   * or, on `--dry-run`, would. False
+   * whenever nothing was (or would be) pushed, `needsForce` included: the
+   * upstream is only rewritten by the `-u` of a push that lands
+   * (zheref/nen#234, zheref/nen#271).
+   */
   readonly retargetedUpstream: boolean;
 }
 
@@ -104,7 +155,7 @@ export interface PublishOptions {
   readonly base: string;
   readonly setUpstream: boolean;
   readonly dryRun: boolean;
-  /** `--remote <name>`: where a branch with NO upstream goes; null means `origin`. */
+  /** `--remote <name>`: where a branch with NO upstream goes, and where `--set-upstream` takes one whose upstream it replaces; null means the header's defaults. */
   readonly remote?: string | null;
 }
 
@@ -161,15 +212,50 @@ export function isTrunk(name: string, base: string): boolean {
  * The exit-2 refusal for a push whose DESTINATION -- the branch name on the
  * remote the refspec would update -- is the trunk, or null when it is not
  * (zheref/nen#234). Compared normalized, so `refs/heads/main` and `+main` are
- * the trunk too. This is the last check before the push argv is built, and
- * it runs whatever route computed the destination: the local-name refusal
- * stays as the first test, this one is the belt under it.
+ * the trunk too.
+ *
+ * A DEFENSIVE BELT THAT CANNOT FIRE TODAY, and kept on purpose. Since
+ * zheref/nen#271 the destination is the local name, and a local name that is
+ * the trunk is refused before anything else runs -- so this check only
+ * matters the day a change reintroduces a second route to the destination.
+ * It runs right before the push argv is built so that such a change meets it
+ * without anybody having to remember it exists. (It used to name the
+ * upstream as the route the push would take; that route is gone, and so is
+ * the clause -- Nobunaga F3.)
  */
-export function trunkDestinationRefusal(branch: string, destination: string, upstreamBefore: string | null, base: string): string | null {
+export function trunkDestinationRefusal(branch: string, destination: string, base: string): string | null {
   if (!isTrunk(destination, base)) return null;
   const why = normalizeBranchName(destination) === base ? " (nen/workflow.json's branch.base)" : "";
-  const via = upstreamBefore === null ? "" : ` -- '${branch}' tracks '${upstreamBefore}', and the upstream's branch is where the push would land`;
-  return `the push destination '${destination}' is the trunk${why}${via}, and this verb never pushes the trunk directly: the trunk moves by merging a pull request. Retrack the branch under its own name ('git branch --set-upstream-to <remote>/${branch}') or cut a branch for this work. Nothing was pushed.`;
+  return `the push destination '${destination}' for '${branch}' is the trunk${why}, and this verb never pushes the trunk directly: the trunk moves by merging a pull request. Cut a branch for this work. Nothing was pushed.`;
+}
+
+/**
+ * The exit-2 refusal for a bare publish of a branch whose upstream names a
+ * branch of ANOTHER name (zheref/nen#271), or null when the names agree.
+ *
+ * BOTH NAMES ARE SAID, AND SO IS THE ONE FIX THIS VERB OFFERS. The upstream is
+ * never followed -- that is how one effort's commit landed on another's pull
+ * request -- and it is never silently ignored either, because a push under the
+ * branch's own name that left the upstream where it was would leave every
+ * later reader of `@{upstream}` (`wc squash`'s published-commit guard,
+ * `wc catch-up`'s auto strategy, `pr open`'s is-it-pushed check) reasoning
+ * against a branch this one was never published to. `--set-upstream` pushes
+ * to `<remote>/<branch>` and rewrites the upstream in the same act.
+ *
+ * `tracked` is the upstream's branch with one `refs/heads/` taken off, as
+ * trackedBranchName gives it; the names are compared exactly, because git
+ * compares ref names exactly. `remote` is where `--set-upstream` would take
+ * it -- rule 3 of this file's header, already resolved by the caller -- so the
+ * route the refusal names is the route the verb would take.
+ */
+export function foreignUpstreamRefusal(branch: string, upstreamBefore: string, remote: string, tracked: string, base: string): string | null {
+  if (tracked === branch) return null;
+  // The trunk is said by name, and it drops the "publish that branch instead"
+  // alternative: the trunk is never published by this verb at all.
+  const trunk = isTrunk(tracked, base);
+  const named = trunk ? `, the trunk${normalizeBranchName(tracked) === base ? " (nen/workflow.json's branch.base)" : ""} -- which is never a destination either` : "";
+  const otherwise = trunk ? "" : `; if the commits really belong on '${tracked}', check that branch out and publish it instead`;
+  return `'${branch}' tracks '${upstreamBefore}', whose branch '${tracked}' is not '${branch}'${named}. This verb pushes a branch only under its own name, and never follows an upstream onto another one: that is how one effort's commits land on another branch and on the pull request open from it (zheref/nen#271). Pass --set-upstream to publish '${branch}' to '${remote}/${branch}' and retrack it there, replacing '${upstreamBefore}' (add --remote <name> to publish it to another remote)${otherwise}. Nothing was fetched or pushed.`;
 }
 
 /**
@@ -206,6 +292,17 @@ export function endOfOptionsRefusal(seams: Seams, cwd: string, fetchArgs: readon
   const version = runGit(seams, cwd, ["--version"]);
   const named = version.code === 0 ? version.stdout.trim() : "git (version unknown)";
   return `${named} rejected '--end-of-options' on fetch ('git ${fetchArgs.join(" ")}' answered: ${fetch.error}). 'wc publish' and 'wc catch-up' need git >= ${MIN_GIT_FOR_END_OF_OPTIONS}, and the flag is never dropped to make the fetch go through: it is what keeps a branch name from being read as an option. Upgrade git. Nothing was fetched or pushed.`;
+}
+
+/**
+ * True when a failed fetch said the remote has no such ref -- git's own
+ * "couldn't find remote ref" -- and nothing else. Only an upstream this call
+ * is REPLACING may be read that way (Nobunaga F2): its fetch feeds `ahead`
+ * and nothing more. Every other failure, and this one on any other route,
+ * stays the exit-1 git failure it is.
+ */
+export function isMissingRemoteRef(fetch: GitCall): boolean {
+  return !fetch.spawnFailed && /couldn't find remote ref/i.test(fetch.error);
 }
 
 /** The `<remote>/<branch>` an upstream names, split at the first '/', the way ../pr/open.ts splits it. */
@@ -245,52 +342,100 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
   let ahead: number | null = null;
   let needsForce = false;
   let remote: string;
-  // Where the push lands on the remote: the branch the upstream names when
-  // there is one -- a local `feature` tracking `fork/topic` updates `topic`,
-  // the ref the checks below look at -- and the local name otherwise.
-  let destination = branch;
-  // The upstream names the trunk (`git worktree add -b x origin/main`): the
-  // push goes under the branch's OWN name, never to the trunk (zheref/nen#234).
-  let trunkTracked = false;
-  let retargetedUpstream = false;
+  // Where the push lands on the remote: the branch's OWN name, whatever the
+  // upstream says (zheref/nen#271). A `const`, so no route below can move it.
+  const destination = branch;
+  // The upstream's branch and remote, once there is one; whether its branch
+  // is another name than this branch's (a stacked branch tracking its base, a
+  // worktree branch tracking `origin/main`); and whether this call REPLACES
+  // the upstream -- rule 3 of this file's header -- which only
+  // `--set-upstream` ever does.
+  let tracked: string | null = null;
+  let upstreamRemote: string | null = null;
+  let foreignUpstream = false;
+  let replacing = false;
+  // True when the upstream being replaced no longer exists on its remote
+  // (Nobunaga F2): `ahead` is then null, and the text says why.
+  let upstreamGone = false;
+  // `git remote`, read at most once, and only on a route that needs it.
+  let remotes: readonly string[] | null = null;
+  const listRemotes = (): readonly string[] => {
+    if (remotes === null) {
+      const known = runGit(seams, cwd, ["remote"]);
+      if (known.code !== 0) throw new SquashStateError(`could not list this repository's remotes ('git remote' failed: ${known.error}).`);
+      remotes = outputLines(known.stdout);
+    }
+    return remotes;
+  };
+  // A NAMED REMOTE MUST EXIST, asked of git: `git push nosuch` fails late
+  // and loudly, and the refusal here names the mistake instead. The same
+  // check on every route that honours `--remote`.
+  const unknownRemote = (name: string): string | null => {
+    const names = listRemotes();
+    return names.includes(name) ? null : `this repository has no remote named '${name}' (it has: ${names.join(", ") || "none"}). Nothing was fetched or pushed.`;
+  };
   if (upstreamBefore !== null) {
     const upstream = splitUpstream(upstreamBefore);
-    remote = upstream.remote;
-    const tracked = trackedBranchName(upstream.branch);
-    trunkTracked = isTrunk(tracked, options.base);
-    destination = trunkTracked ? branch : tracked;
-    retargetedUpstream = trunkTracked && options.setUpstream;
-    if (looksLikeRefspecOrForce(remote)) {
-      return { kind: "refused", reason: `the upstream's remote '${remote}' looks like an option or a refspec (a leading '+' or '-', or a ':'), and this verb never lets a name change what a push or fetch does. Nothing was fetched or pushed.` };
-    }
-    if (asked !== null && asked !== remote) {
-      return {
-        kind: "refused",
-        reason: `'${branch}' tracks '${upstreamBefore}', so it is pushed to '${remote}' -- --remote '${asked}' names a different one. This verb pushes where the branch's upstream says: drop --remote, or retrack the branch ('git branch --set-upstream-to ${asked}/${branch}') first. Nothing was fetched or pushed.`,
-      };
+    const from = upstream.remote;
+    upstreamRemote = from;
+    tracked = trackedBranchName(upstream.branch);
+    if (looksLikeRefspecOrForce(from)) {
+      return { kind: "refused", reason: `the upstream's remote '${from}' looks like an option or a refspec (a leading '+' or '-', or a ':'), and this verb never lets a name change what a push or fetch does. Nothing was fetched or pushed.` };
     }
     const badTracked = refuseBranchName(seams, cwd, tracked, `the upstream's branch`);
     if (badTracked !== null) return { kind: "refused", reason: badTracked };
-    // FETCH FIRST, FROM THE REMOTE THE PUSH GOES TO: a fast-forward decided
-    // against a stale remote-tracking ref is a decision about yesterday's
-    // remote, and the push would still be refused -- or, worse, accepted by a
-    // `--force` somebody typed next.
-    const fetchArgs = fetchArgv(remote, tracked);
+    foreignUpstream = tracked !== branch;
+    if (asked !== null && asked !== from) {
+      const unknown = unknownRemote(asked);
+      if (unknown !== null) return { kind: "refused", reason: unknown };
+      // RULE 2: a same-name upstream already says where the branch goes, and
+      // only --set-upstream moves it. The refusal names THAT route -- never
+      // `git branch --set-upstream-to <asked>/<branch>`, which git refuses
+      // outright while the remote has no such branch, i.e. on exactly the
+      // first publish this would be (Nobunaga F1).
+      if (!options.setUpstream && !foreignUpstream) {
+        return {
+          kind: "refused",
+          reason: `'${branch}' tracks '${upstreamBefore}', so without --set-upstream it is pushed to '${from}' -- --remote '${asked}' names a different one. Drop --remote to publish to '${from}', or pass --set-upstream --remote ${asked} to publish it to '${asked}/${branch}' and track that instead. Nothing was fetched or pushed.`,
+        };
+      }
+    }
+    // RULE 3: the remote a replacing publish goes to -- --remote, else origin
+    // when this repository has one, else the upstream's own. Resolved BEFORE
+    // the refusal below, so the route it names is the route the verb takes.
+    const retracks = foreignUpstream || (options.setUpstream && asked !== null && asked !== from);
+    remote = retracks ? (asked ?? (listRemotes().includes(REMOTE) ? REMOTE : from)) : from;
+    // A MISMATCHED UPSTREAM IS REPORTED, NEVER FOLLOWED (zheref/nen#271). A
+    // bare publish refuses here, before the fetch, naming both names; with
+    // --set-upstream the push goes to `<remote>/<branch>` and its `-u`
+    // replaces the upstream.
+    if (!options.setUpstream) {
+      const mismatched = foreignUpstreamRefusal(branch, upstreamBefore, remote, tracked, options.base);
+      if (mismatched !== null) return { kind: "refused", reason: mismatched };
+    }
+    replacing = retracks;
+    // FETCH FIRST: a fast-forward decided against a stale remote-tracking ref
+    // is a decision about yesterday's remote, and the push would still be
+    // refused -- or, worse, accepted by a `--force` somebody typed next. The
+    // upstream is fetched even when it is being replaced, because `ahead` is
+    // counted against it -- and on that route alone a branch the remote no
+    // longer has is an answer (`ahead: null`), not a failure (F2).
+    const fetchArgs = fetchArgv(from, tracked);
     const fetch = runGit(seams, cwd, fetchArgs);
     if (fetch.code !== 0) {
       const tooOld = endOfOptionsRefusal(seams, cwd, fetchArgs, fetch);
       if (tooOld !== null) return { kind: "refused", reason: tooOld };
-      throw new SquashStateError(`could not fetch the upstream '${upstreamBefore}' ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
+      if (replacing && isMissingRemoteRef(fetch)) upstreamGone = true;
+      else throw new SquashStateError(`could not fetch the upstream '${upstreamBefore}' ('git ${fetchArgs.join(" ")}' failed: ${fetch.error}).`);
     }
     // THE FAST-FORWARD IS JUDGED AGAINST THE REF THE PUSH MOVES. That is the
-    // upstream's branch -- except when the upstream is the trunk, where the
-    // push goes to `<remote>/<branch>` instead: that ref is fetched and
+    // upstream itself when this call keeps it -- and `<remote>/<branch>` when
+    // it replaces it, where the push goes instead: that ref is fetched and
     // compared when the remote has it, and when the remote does not (asked
     // with `ls-remote --exit-code`, exit 2 = no such ref) there is nothing a
     // push could rewrite, so no force is possible.
-    let moved: string | null = upstreamBefore;
-    if (trunkTracked) {
-      moved = null;
+    let moved: string | null = replacing ? null : upstreamBefore;
+    if (replacing) {
       const probe = runGit(seams, cwd, ["ls-remote", "--exit-code", remote, `refs/heads/${branch}`]);
       if (probe.code === 0) {
         const ownArgs = fetchArgv(remote, branch);
@@ -308,34 +453,38 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
       }
       needsForce = ancestor.code !== 0;
     }
-    const count = runGit(seams, cwd, ["rev-list", "--count", `${upstreamBefore}..HEAD`]);
-    if (count.code !== 0 || !/^\d+$/.test(count.stdout.trim())) {
-      throw new SquashStateError(`could not count the commits ahead of '${upstreamBefore}' ('git rev-list --count ${upstreamBefore}..HEAD' failed: ${count.error}).`);
+    if (!upstreamGone) {
+      const count = runGit(seams, cwd, ["rev-list", "--count", `${upstreamBefore}..HEAD`]);
+      if (count.code !== 0 || !/^\d+$/.test(count.stdout.trim())) {
+        throw new SquashStateError(`could not count the commits ahead of '${upstreamBefore}' ('git rev-list --count ${upstreamBefore}..HEAD' failed: ${count.error}).`);
+      }
+      ahead = Number(count.stdout.trim());
     }
-    ahead = Number(count.stdout.trim());
   } else {
+    // RULE 1: no upstream -- --remote when given, else origin.
     remote = asked ?? REMOTE;
     if (asked !== null) {
-      // A NAMED REMOTE MUST EXIST, asked of git: `git push nosuch` fails late
-      // and loudly, and the refusal here names the mistake instead.
-      const known = runGit(seams, cwd, ["remote"]);
-      if (known.code !== 0) throw new SquashStateError(`could not list this repository's remotes ('git remote' failed: ${known.error}).`);
-      const names = outputLines(known.stdout);
-      if (!names.includes(asked)) {
-        return { kind: "refused", reason: `this repository has no remote named '${asked}' (it has: ${names.join(", ") || "none"}). Nothing was fetched or pushed.` };
-      }
+      const unknown = unknownRemote(asked);
+      if (unknown !== null) return { kind: "refused", reason: unknown };
     }
   }
 
-  // THE DESTINATION IS NEVER THE TRUNK, whichever route named it: checked on
-  // the name the refspec will carry, right before the argv exists (zheref/nen#234).
-  const trunkDestination = trunkDestinationRefusal(branch, destination, upstreamBefore, options.base);
+  // THE DESTINATION IS NEVER THE TRUNK -- a defensive belt that cannot fire
+  // while the destination is the local name (a local trunk was refused
+  // first); it is here for the day a second route to the destination is
+  // added (zheref/nen#234, Nobunaga F3).
+  const trunkDestination = trunkDestinationRefusal(branch, destination, options.base);
   if (trunkDestination !== null) return { kind: "refused", reason: trunkDestination };
 
-  // THE REFSPEC IN FULL, behind `--`: `refs/heads/<local>:refs/heads/<dest>`
-  // is a plain update of that one ref whatever either name looks like.
+  // THE UPSTREAM IS REWRITTEN ONLY BY THE `-u` OF A PUSH THAT LANDS: a
+  // needsForce answer pushes nothing, so it retargets nothing, and the report
+  // says so rather than announcing a retrack that did not happen. On
+  // --dry-run it is the prediction, as `destination` is.
+  const retargetedUpstream = replacing && !needsForce;
+
+  // THE REFSPEC IN FULL, behind `--`: `refs/heads/<b>:refs/heads/<b>` is a
+  // plain update of that one ref whatever the name looks like.
   const argv = ["push", ...(options.setUpstream ? ["-u"] : []), remote, "--", `refs/heads/${branch}:refs/heads/${destination}`];
-  const as = destination === branch ? "" : ` as '${destination}'`;
   const report = (pushed: boolean): PublishReport => ({
     contract: PUBLISH_CONTRACT,
     branch,
@@ -348,30 +497,48 @@ export function publish(seams: Seams, cwd: string, options: PublishOptions): Pub
     dryRun: options.dryRun,
     retargetedUpstream,
   });
-  // What the text says about a trunk-tracking branch: where it went instead, and where its upstream is now.
-  const trunkNote = !trunkTracked
-    ? ""
-    : retargetedUpstream
-      ? ` -- its upstream '${upstreamBefore}' named the trunk, so it went under its own name and now tracks ${remote}/${branch}`
-      : ` -- its upstream '${upstreamBefore}' names the trunk, so it went under its own name; the upstream still names the trunk (pass --set-upstream to retrack it to ${remote}/${branch})`;
+  // What the text says about an upstream this call replaces: what it named,
+  // where the branch went instead, and where its upstream is (or would be)
+  // now. Only --set-upstream reaches here with one -- a bare publish refused
+  // above.
+  const replaced = !foreignUpstream
+    ? `another remote ('${upstreamRemote ?? ""}')`
+    : tracked !== null && isTrunk(tracked, options.base)
+      ? "the trunk"
+      : "another branch";
   if (needsForce) {
-    const against = trunkTracked ? `'${remote}/${branch}', the ref this push updates` : `its upstream '${upstreamBefore}'`;
+    const against = replacing ? `'${remote}/${branch}', the ref this push updates` : `its upstream '${upstreamBefore}'`;
+    const kept = replacing ? ` Its upstream still names '${upstreamBefore}': nothing was retracked either.` : "";
     return {
       kind: "done",
       report: report(false),
       lines: [
-        `'${branch}' is not a fast-forward of ${against}: the push would need --force, and this verb never forces. Nothing was pushed. Catch the branch up first ('nen wc catch-up --base <ref>'), or decide the rewrite is wanted and do it by hand.`,
+        `'${branch}' is not a fast-forward of ${against}: the push would need --force, and this verb never forces. Nothing was pushed.${kept} Catch the branch up first ('nen wc catch-up --base <ref>'), or decide the rewrite is wanted and do it by hand.`,
       ],
     };
   }
   if (options.dryRun) {
-    return { kind: "done", report: report(false), lines: [`would run: git ${argv.join(" ")}${upstreamBefore === null ? "  (no upstream yet)" : `  (${ahead} ahead of ${upstreamBefore})`}${trunkNote}`] };
+    const counted =
+      upstreamBefore === null
+        ? "  (no upstream yet)"
+        : ahead === null
+          ? `  (nothing counted: '${upstreamBefore}' is gone from ${upstreamRemote ?? ""})`
+          : `  (${ahead} ahead of ${upstreamBefore})`;
+    const retrack = !retargetedUpstream ? "" : ` -- its upstream '${upstreamBefore}' names ${replaced}, so it would go to ${remote} under its own name and then track ${remote}/${branch}`;
+    return { kind: "done", report: report(false), lines: [`would run: git ${argv.join(" ")}${counted}${retrack}`] };
   }
   const push = runGit(seams, cwd, argv);
   if (push.code !== 0) throw new SquashStateError(`could not push '${branch}' ('git ${argv.join(" ")}' failed: ${push.error}).`);
+  const counted =
+    ahead !== null
+      ? ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`
+      : upstreamGone
+        ? ` -- nothing counted: '${upstreamBefore}' is gone from ${upstreamRemote ?? ""}`
+        : "";
+  const retracked = !retargetedUpstream ? "" : ` -- its upstream '${upstreamBefore}' named ${replaced}, so it went to ${remote} under its own name and now tracks ${remote}/${branch}`;
   return {
     kind: "done",
     report: report(true),
-    lines: [`pushed '${branch}' to ${remote}${as}${options.setUpstream ? " (upstream set)" : ""}${ahead === null ? "" : ` -- ${ahead} commit(s) ahead of ${upstreamBefore}`}${trunkNote}`],
+    lines: [`pushed '${branch}' to ${remote}${options.setUpstream ? " (upstream set)" : ""}${counted}${retracked}`],
   };
 }

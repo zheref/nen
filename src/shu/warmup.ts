@@ -117,9 +117,9 @@ export const DEFAULT_TRUNK = "main";
  * own worktree beside it -- so the failure was never an edge case, and it
  * landed AFTER the fetch with the branch not yet cut (zheref/nen#168).
  *
- * THE LOCAL FAST-FORWARD IS NOT NEEDED FOR THE CUT. `git switch -c <branch>
- * <remote>/<trunk>` reads the remote-tracking ref this run has just fetched and
- * never looks at the local branch at all -- so when the trunk is held
+ * THE LOCAL FAST-FORWARD IS NOT NEEDED FOR THE CUT. `git switch --no-track
+ * -c <branch> <remote>/<trunk>` reads the remote-tracking ref this run has just
+ * fetched and never looks at the local branch at all -- so when the trunk is held
  * elsewhere, the move is to SKIP the local update, say which worktree holds it,
  * and cut from the fetched tip exactly as every other path already does.
  */
@@ -478,6 +478,30 @@ function WORKTREE_NOTE(trunk: string): string {
 /** The decision, when another worktree holds the trunk. */
 function heldByWorktree(path: string, trunk: string): string {
   return `trunk held by worktree ${path}; cutting from ${WARMUP_REMOTE}/${trunk} directly. The local '${trunk}' is left exactly where it is -- moving it is git's to refuse, and nothing here needs it moved`;
+}
+
+/**
+ * The cut, as ONE argv both forms of the verb print and the real run runs.
+ *
+ * `--no-track` IS EXPLICIT, AND IT IS THE POINT (zheref/nen#271). `git switch
+ * -c <branch> origin/<trunk>` starts from a remote-tracking ref, and under
+ * git's DEFAULT `branch.autoSetupMerge` (true) that makes the new branch
+ * TRACK `origin/<trunk>` -- the trunk without `--from`, and another effort's
+ * branch with `--from <that branch>`. An upstream of another name is what
+ * `nen wc publish` followed on 2026-09-28, onto the base effort's branch and
+ * its pull request. So the branch is cut tracking NOTHING, whatever the
+ * host's `branch.autoSetupMerge` says: the flag decides it, not whoever
+ * configured this machine. Its first `nen wc publish --set-upstream` pushes
+ * it to `origin/<branch>` and tracks that -- its own name, and the only
+ * upstream it should ever have.
+ */
+function switchArgv(branch: string, trunk: string): string[] {
+  return ["switch", "--no-track", "-c", branch, `${WARMUP_REMOTE}/${trunk}`];
+}
+
+/** What the cut leaves the new branch tracking, said by both forms: nothing. */
+function UPSTREAM_NOTE(branch: string, trunk: string): string {
+  return `upstream: none -- --no-track leaves '${branch}' tracking nothing, never ${WARMUP_REMOTE}/${trunk}, whatever branch.autoSetupMerge says. Its first 'nen wc publish --set-upstream' pushes it to ${WARMUP_REMOTE}/${branch} and tracks that`;
 }
 
 /** The decision, when this working tree is the one standing on the trunk. */
@@ -944,7 +968,7 @@ async function planWarmup(
     ["ls-remote", "--heads", WARMUP_REMOTE, `refs/heads/${options.branch}`],
     `refuses at exit 2 when that name is already a branch on ${WARMUP_REMOTE}. The ref is spelled in full because ls-remote matches a bare name against the TAIL of every ref on slash boundaries, so '${options.branch}' alone would also match a 'feat/${options.branch}' that is already there`,
   );
-  plan(["switch", "-c", options.branch, `${WARMUP_REMOTE}/${trunk}`], null);
+  plan(switchArgv(options.branch, trunk), UPSTREAM_NOTE(options.branch, trunk));
 
   let exitCode = 0;
   if (lane !== null) {
@@ -1485,13 +1509,14 @@ async function performWarmup(
   }
   git.annotate(`no branch '${options.branch}' on ${WARMUP_REMOTE} either -- the name is free on both sides`);
 
+  const cut = switchArgv(options.branch, trunk);
   const created = git.run(
-    ["switch", "-c", options.branch, `${WARMUP_REMOTE}/${trunk}`],
-    `cut from ${WARMUP_REMOTE}/${trunk}, the tip this run just fetched`,
+    cut,
+    `cut from ${WARMUP_REMOTE}/${trunk}, the tip this run just fetched\n${UPSTREAM_NOTE(options.branch, trunk)}`,
   );
   if (created.code !== 0) {
     return failedStep(
-      `git switch -c ${options.branch} ${WARMUP_REMOTE}/${trunk}`,
+      `git ${cut.join(" ")}`,
       created,
       `The trunk is current; no branch was created.`,
     );

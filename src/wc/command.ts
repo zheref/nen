@@ -41,7 +41,7 @@ const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 const USAGE = `nen wc classify -- where the current working copy sits, tensho's own table.
 nen wc squash -- fold every commit on this branch since --onto into ONE.
 nen wc catch-up -- bring this branch up to date with its base; stop on a conflict.
-nen wc publish -- push this branch to its upstream's remote; never a force, never the trunk.
+nen wc publish -- push this branch, under its own name, to its upstream's remote; never a force, never the trunk.
 nen wc worktrees -- every checkout of this project: branch, dirt, distance, last commit.
 nen wc swap -- bring a worktree's committed tree into the core checkout, and put core back.
 
@@ -166,33 +166,58 @@ publish:
   nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run]
                  [--json]
 
-  --set-upstream    push with -u, so the branch tracks <remote>/<branch>.
-  --remote <name>   where a branch with NO upstream goes (default origin);
-                    refused when the branch already tracks another remote.
+  --set-upstream    push with -u, so the branch tracks <remote>/<branch>
+                    afterwards -- REPLACING an upstream of another name
+                    (the only way past the refusal below), or one on
+                    another remote than --remote names.
+  --remote <name>   where a branch with NO upstream goes (default origin),
+                    and where --set-upstream takes a branch whose upstream
+                    it replaces (default origin when this repository has
+                    one, else the upstream's remote). Must be a remote 'git
+                    remote' lists. Without --set-upstream it is refused when
+                    a same-name upstream names another remote, and the
+                    refusal names '--set-upstream --remote <name>'.
   --dry-run         print the push line; push nothing.
 
-Pushes the CURRENT branch to the remote its upstream names, AS the branch
-the upstream names -- a local 'feature' tracking fork/topic goes to fork as
-'topic', and the fast-forward check below is made against fork/topic, the
-ref the push moves -- or to origin (or --remote) under its own name when it
-tracks nothing yet: 'git push [-u] <remote> --
-refs/heads/<branch>:refs/heads/<destination>', the refspec in full so no
-branch NAME can change what the push does. Refused at exit 2: a
-detached HEAD; the trunk (${WORKFLOW_FILE}'s branch.base, and main/master
-regardless, compared with a leading '+' and 'refs/heads/' taken off); a
-branch name 'git check-ref-format --branch' rejects, or one shaped like a
-refspec or a force even where git accepts it ('+main' is a branch git will
-hold and a force push once it sits in an argv); any argument that looks like
-a refspec or a force (a positional, '+', ':', --force); a --remote this
-repository does not have. A git that rejects '--end-of-options' on the
+Pushes the CURRENT branch, UNDER ITS OWN NAME: 'git push [-u] <remote> --
+refs/heads/<branch>:refs/heads/<branch>', the refspec in full so no branch
+NAME can change what the push does. The destination is ALWAYS the branch's
+own name (zheref/nen#271): an upstream that names ANOTHER branch -- a
+stacked branch tracking its base, a branch cut from origin/main that still
+tracks it -- is a fact to report, never a place to push. Without
+--set-upstream it is refused at exit 2 before any fetch, naming the branch,
+the upstream and the route; with --set-upstream the push goes to
+<remote>/<branch>, its fast-forward judged against that ref when the remote
+has it, and -u replaces the upstream (retargetedUpstream: true).
+
+The remote, in this order: no upstream -- --remote, else origin; a
+same-name upstream kept -- the upstream's remote; --set-upstream replacing
+the upstream -- --remote, else origin when it exists, else the upstream's
+remote (a branch cut from upstream/main in a fork goes to origin, the fork).
+An upstream being replaced that is gone from its remote ('couldn't find
+remote ref') is ahead: null and said so, not a failure; any other fetch
+failure is exit 1.
+
+Refused at exit 2 as well: a detached HEAD; the trunk
+(${WORKFLOW_FILE}'s branch.base, and main/master regardless, compared with
+a leading '+' and 'refs/heads/' taken off); a branch name 'git
+check-ref-format --branch' rejects, or one shaped like a refspec or a
+force even where git accepts it ('+main' is a branch git will hold and a
+force push once it sits in an argv); any argument that looks like a
+refspec or a force (a positional, '+', ':', --force); a --remote this
+repository does not have, or one that contradicts a same-name upstream
+without --set-upstream. A git that rejects '--end-of-options' on the
 fetch (older than 2.24) is refused at exit 2 naming its version -- the
-guard is never dropped. When the upstream exists and the local branch is
-not a fast-forward of it the push would need a force, and this verb never
-forces: needsForce: true, nothing pushed, exit 1.
+guard is never dropped. When the ref the push moves exists and the local
+branch is not a fast-forward of it the push would need a force, and this
+verb never forces: needsForce: true, nothing pushed, nothing retracked,
+exit 1.
 
 --json's contract is '${PUBLISH_CONTRACT}': { contract, branch, remote,
-destination, upstreamBefore, ahead, needsForce, pushed, dryRun } --
-destination is the upstream's branch when one exists, else branch.
+destination, upstreamBefore, ahead, needsForce, pushed, dryRun,
+retargetedUpstream } -- destination is always branch; retargetedUpstream
+is true only when --set-upstream replaced the upstream with
+<remote>/<branch> (on --dry-run, would).
 
 worktrees:
   nen wc worktrees --repo <path> [--base main] [--json]

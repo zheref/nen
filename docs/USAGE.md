@@ -649,7 +649,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
-| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names, as the branch it names (origin, or `--remote`, under its own name when it has none), refusing a detached HEAD, the trunk as local name **or as destination** (a branch tracking `origin/main` is pushed under its own name and `-u` retracks it), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
+| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
@@ -2142,40 +2142,80 @@ would run: git rebase origin/main  (2 ahead, 3 behind)
 
 ### `nen wc publish`
 
-Pushes the **current branch** to **the remote its upstream names** and nothing
-else (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push
-[-u] <remote> -- refs/heads/<branch>:refs/heads/<destination>`, the refspec
-spelled in full behind `--` so that no branch *name* can change what the push
-does. A branch tracking `fork/feature` is pushed to `fork`, and the
-fast-forward check below is made against `fork/feature` — the ref the push
-moves — never against `origin` while pushing somewhere else (Copilot review on
-[#231](https://github.com/zheref/nen/pull/231)). **The destination is the
-branch the upstream names**: a local `feature` tracking `fork/topic` is pushed
-as `refs/heads/feature:refs/heads/topic`, so the ref the preflight fetched and
-compared is the ref the push updates, never a same-named `fork/feature` the
-check never looked at (Copilot round 3 on #231). A branch with **no upstream**
-goes to `origin`, or to `--remote <name>` when one is given, under its own
-name (`--set-upstream` then tracks `<remote>/<branch>`). Everything that
-could rewrite somebody else's history is refused before the push.
+Pushes the **current branch**, **under its own name**, and nothing else
+(v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push [-u]
+<remote> -- refs/heads/<branch>:refs/heads/<branch>`, the refspec spelled in
+full behind `--` so that no branch *name* can change what the push does.
+Everything that could rewrite somebody else's history is refused before the
+push. **Which remote** it goes to is decided in this order, and nowhere else:
+
+1. **No upstream:** `--remote <name>` when given (it must be one `git remote`
+   lists), else `origin`; `--set-upstream` then tracks `<remote>/<branch>`.
+2. **An upstream of the same name** (`fork/feature` for `feature`), kept — no
+   `--set-upstream`, or `--set-upstream` without `--remote`: the upstream's
+   remote, with the fast-forward check made against `fork/feature`, the ref
+   the push moves (Copilot review on
+   [#231](https://github.com/zheref/nen/pull/231)). A `--remote` that names
+   another remote is refused at exit 2 **without `--set-upstream`**, and the
+   refusal names `--set-upstream --remote <name>` as the route — never `git
+   branch --set-upstream-to <name>/<branch>`, which git itself refuses while
+   that remote has no such branch, i.e. on a first publish.
+3. **`--set-upstream` replacing the upstream** — one of another name (below),
+   or one of the same name with a `--remote` naming another remote:
+   `--remote <name>` when given (validated against `git remote` exactly as in
+   1), else **`origin`** when this repository has one, else the upstream's own
+   remote. A branch cut from `upstream/main` in a fork workflow, whose `origin`
+   is the fork, is published to `origin` — never created on the canonical
+   repository it was cut from.
+
+**The destination is always the branch's own name**
+([#271](https://github.com/zheref/nen/issues/271)). An upstream whose
+branch name differs from the current branch's — a stacked branch tracking the
+effort it was cut from, a branch cut from `origin/main` that still tracks it,
+a local `feature` tracking `fork/topic` — is a fact to report, **never a
+destination to follow**. Until #271 the push followed it (`feature` tracking
+`fork/topic` went out as `refs/heads/feature:refs/heads/topic`, Copilot round 3
+on #231), and on 2026-09-28 that put a stacked effort's commit on its base
+branch and on the pull request open from it. Now:
+
+- **Without `--set-upstream`** such a branch is **refused at exit 2**, before
+  any fetch, naming the branch, the upstream and the upstream's branch, and
+  naming `--set-upstream` as the way through. `--dry-run` reaches the same
+  refusal; nothing is fetched or pushed and no document is printed.
+- **With `--set-upstream`** the push goes to `<remote>/<branch>` — the remote
+  rule 3 above resolves, the branch's own name — and its `-u` **replaces** the
+  mismatched upstream: the report says `retargetedUpstream: true`, with
+  `upstreamBefore` still naming what it tracked before and `destination` equal
+  to `branch`. The fast-forward is judged against `<remote>/<branch>` when the
+  remote already has it (`git ls-remote --exit-code`; exit 2 means no such
+  ref, so there is nothing a push could rewrite) and **never** against the
+  upstream's branch, which this push does not move. When it is not a
+  fast-forward the answer is `needsForce: true` at exit 1: nothing is pushed
+  and **nothing is retracked** (`retargetedUpstream: false`).
+- **An upstream being replaced may already be gone** — a stacked branch whose
+  base was merged and deleted still names it. Its fetch only feeds `ahead`, so
+  on this route alone git's `couldn't find remote ref` is an answer, not a
+  failure: `ahead: null`, and the text says `nothing counted: '<upstream>' is
+  gone from <remote>`. Any other failure of that fetch, and the same answer on
+  any other route, is still exit 1.
+- An upstream naming the branch's **own** name on another remote
+  (`fork/feature` for `feature`) is not a mismatch: it publishes to that
+  remote as before (rule 2).
 
 **The destination is never the trunk** (v0.13.1,
 [#234](https://github.com/zheref/nen/issues/234)). `git worktree add -b x
-origin/main` leaves `x` tracking `origin/main`, and under the rule above the
-destination would be `main` — on 2026-09-21 that pushed
-`refs/heads/x:refs/heads/main` and fast-forwarded the trunk with no pull
-request. So the branch name the push would update is computed first, and
-when it is `branch.base`, `main` or `master` (or `refs/heads/` of those,
-compared normalized) the answer is exit 2 naming the destination and the
-upstream. A branch that **tracks** the trunk is the worktree convention, not
-a mistake: it is published under its **own** name
-(`refs/heads/x:refs/heads/x`), its fast-forward judged against `<remote>/x`
-when the remote already has it (`git ls-remote --exit-code`; exit 2 means no
-such ref, so there is nothing a push could rewrite) and never against the
-trunk. With `--set-upstream` the `-u` retracks the branch to `<remote>/x`
-— never left on the trunk — and the report says `retargetedUpstream: true`
-with `upstreamBefore: "origin/main"` and `destination: "x"`; without it the
-push still goes to `x`, the upstream stays where it was, and the text says
-so and names `--set-upstream` as the retrack.
+origin/main` leaves `x` tracking `origin/main`; on 2026-09-21 a push that
+followed it went out as `refs/heads/x:refs/heads/main` and fast-forwarded the
+trunk with no pull request. A branch that tracks the trunk is one more
+upstream of another name: since #271 a bare publish of it **refuses** (the
+refusal says the upstream is the trunk) where v0.13.1–v0.15.1 pushed it under
+its own name and left the upstream on the trunk — the same answer git's own
+`push.default=simple` gives — and `--set-upstream` publishes it as `x` and
+retracks it to `<remote>/x`. A trunk **destination** (`main`, `master` or
+`branch.base`, compared normalized) is still checked on the final refspec,
+right before the push, as a **defensive belt only**: while the destination is
+the local name it cannot fire, because a local name that is the trunk was
+refused first.
 
 **Usage**
 
@@ -2186,8 +2226,8 @@ nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run] [--j
 | Flag | Required | Meaning |
 |---|---|---|
 | `--repo <path>` | **yes** | the working tree whose current branch is pushed |
-| `--set-upstream` | no | push with `-u`, so the branch tracks `<remote>/<branch>` afterwards |
-| `--remote <name>` | no | where a branch with **no upstream** goes (default `origin`); must be a remote `git remote` lists, and is refused at exit 2 when the branch already tracks a *different* remote — the branch says where it goes; `--remote` on any other `wc` subcommand is refused rather than ignored |
+| `--set-upstream` | no | push with `-u`, so the branch tracks `<remote>/<branch>` afterwards — **replacing** an upstream of another name, which is the only way past that refusal ([#271](https://github.com/zheref/nen/issues/271)), or one on another remote than `--remote` names |
+| `--remote <name>` | no | where a branch with **no upstream** goes (default `origin`), and where `--set-upstream` takes a branch whose upstream it replaces (default `origin` when it exists, else the upstream's remote) — rules 1 and 3 above; must be a remote `git remote` lists. Without `--set-upstream` it is refused at exit 2 when a same-name upstream names a *different* remote, naming `--set-upstream --remote <name>` as the route (rule 2); `--remote` on any other `wc` subcommand is refused rather than ignored |
 | `--dry-run` | no | print the push line; push nothing (the upstream is still fetched — a read) |
 | `--json` | no | `nen.wc.publish/v0.1` — see below |
 
@@ -2212,33 +2252,41 @@ and `git push origin +main` is a force push of `main`; and anything that
 looks like a refspec or a force on the command line: a positional, a `+`, a
 `:`, and `--force`, which the strict parser already refuses as an unknown
 option; a `--remote` shaped like an option, a refspec or a path, one `git
-remote` does not list, or one that contradicts the upstream. The branch the
+remote` does not list, or one that contradicts a same-name upstream without
+`--set-upstream` (rule 2); and an upstream whose branch name is not the
+current branch's, without `--set-upstream` (#271, above). The branch the
 upstream tracks passes the same two checks before it is fetched, and the
 fetch is `git fetch --end-of-options <remote>
 refs/heads/<branch>:refs/remotes/<remote>/<branch>`, from the upstream's own
 remote. **Exit 1, nothing
-pushed:** the upstream exists and the local branch is not a fast-forward of
-it (fetched first, then `git merge-base --is-ancestor <upstream> HEAD`) — the
-push would need `--force`, and this verb never forces; the report says
-`needsForce: true` and the text names [`wc catch-up`](#nen-wc-catch-up) as
-the repair.
+pushed:** any other fetch failure, including a missing ref on a kept upstream;
+and the ref the push moves exists and the local branch is not a
+fast-forward of it (fetched first, then `git merge-base --is-ancestor <ref>
+HEAD` — the upstream, or `<remote>/<branch>` when `--set-upstream` is
+replacing the upstream) — the push would need `--force`, and
+this verb never forces; the report says `needsForce: true` and the text names
+[`wc catch-up`](#nen-wc-catch-up) as the repair.
 
 **`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
 destination, upstreamBefore, ahead, needsForce, pushed, dryRun,
 retargetedUpstream }`. `branch`
 is the local branch, the source half of the refspec; `remote` is the one
-pushed to — the upstream's, or `origin`/`--remote` when there was none;
-`destination` is the branch name on that remote the push updates — the
-upstream's branch when one exists, else `branch`; `upstreamBefore` is `null`
-and `ahead` is `null` when the branch tracked nothing before this call;
-`retargetedUpstream` is `true` only when the upstream named the trunk and
-`--set-upstream` retracked the branch to `<remote>/<branch>`. The
-text line says `pushed '<branch>' to <remote> as '<destination>'` when the two
-names differ, and appends `-- its upstream 'origin/main' named the trunk, so
-it went under its own name and now tracks origin/<branch>` (or, without
-`--set-upstream`, `... the upstream still names the trunk (pass
---set-upstream to retrack it to origin/<branch>)`) for a trunk-tracking
-branch.
+pushed to, by rules 1–3 above; `destination` is the branch name on that remote the push updates — **always
+`branch`** since #271, kept so a reader of the v0.1 contract has nothing to
+change; `upstreamBefore` is `null` and `ahead` is `null` when the branch
+tracked nothing before this call — or when the upstream `--set-upstream`
+replaces is gone from its remote — and otherwise `ahead` counts the commits
+not on `upstreamBefore`; `retargetedUpstream` is `true` only when `--set-upstream` replaced the
+upstream — one of another name, or one on another remote than `--remote`
+names — with `<remote>/<branch>` (on `--dry-run`, would replace it), and `false` whenever
+nothing is (or would be) pushed, `needsForce` included. The refusals above are
+exit 2 with the reason on stderr and **no** document. The text line is
+`pushed '<branch>' to <remote>[ (upstream set)][ -- <n> commit(s) ahead of
+<upstream>]` (or `-- nothing counted: '<upstream>' is gone from <remote>`),
+and a retarget appends `-- its upstream '<upstreamBefore>' named another
+branch` (or `the trunk`, or `another remote ('<name>')`) `, so it went to
+<remote> under its own name and now tracks <remote>/<branch>`; `--dry-run`
+says `would go` / `then track`.
 
 **Example**
 
@@ -7613,13 +7661,28 @@ nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard | --car
 |---|---|---|---|
 | `--repo <path>` | **yes** | The working copy to warm. | No default, unlike every other `shu` verb: a verb that fetches into a repository, moves a branch ref and checks out a new branch must never do it to "wherever this process happens to be". |
 | `--branch <name>` | **yes** | The branch to cut from the freshly-fetched trunk. | Nen never invents one. Validated with git's own `check-ref-format --branch`, and refused at 2 if it already exists **locally or on `origin`** — never reused, reset or force-moved. A name beginning with `-` is refused before git can read it as an option. |
-| `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
+| `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`) — **never what it tracks**: the cut is `--no-track` ([#271](https://github.com/zheref/nen/issues/271)). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
 | `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). **Never together with `--carry`** — exit 2, naming both. |
 | `--carry` | no | The **third door**: preserve uncommitted work (tracked **and** untracked) across the warm-up instead of refusing it or throwing it away. | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"` runs where `--discard`'s reset/clean would — after every free question and before the fetch — and `git stash list --format=%H%x09%s` right afterwards finds **that message** and reads its SHA (never `refs/stash`, which names whatever was pushed last by anybody; a message matched by zero or several entries refuses without popping). That SHA is this run's own **identity** for the entry, carried in `carry.stashed` and named in every message from here to the end. On an already-clean tree it is a no-op: no stash command runs at all. Once the branch is cut and the declared build (and, with `--tests`, the declared test) has answered — pass **or** fail — `git stash apply <sha>` restores it **by the object itself**, which no other stash push can shift; only the drop that follows needs a `stash@{n}` ref, and that ref is re-resolved with `git stash list --format=%H%x09%gd`, checked with `git rev-parse --verify` immediately before `git stash drop`, and confirmed by a second list afterwards — a drop that took a foreign entry (a push landing in between) is put back with `git stash store` and named. Nothing runs `git stash pop`, whose restore-and-drop by stack index is the race. **Never together with `--discard`** — exit 2, naming both. See [what `--carry` does and does not restore](#what---carry-restores). |
 | `--tests` | no | Also run the lane's declared `test` after the build. | Off by default — a test suite is the slow half and a warm-up is the fast one. The test is skipped when the build did not pass. |
 | `--lane <name>` | no | Which lane the build/test verification runs on. | Defaults to `project.defaultLane`. An unknown lane is refused at 2 **before a single git call** — a caller who mistyped it must not have their working copy cleaned to find out. The lane is then **resolved again** from the declaration on the branch this verb cut, which is the tree the build actually runs in. |
 | `--dry-run` | no | Print every command, in order, and **mutate nothing**. | It performs exactly **one** command and the list is closed: `git worktree list --porcelain`, the one question the plan cannot honestly guess at (see above). Not the fetch, not the status, not a probe. That row carries its real exit code and is labelled `ran:`; every other row is labelled `would run:`, and `dryRun` on the report says which form this is. Two lines still say what a real run would decide differently: that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
 | `--json` | no | The report as one object. | See below. |
+
+<a id="the-new-branch-tracks-nothing"></a>
+
+**The new branch tracks nothing** ([#271](https://github.com/zheref/nen/issues/271)). `git switch -c
+<name> origin/<trunk>` starts from a remote-tracking ref, and under git's **default**
+`branch.autoSetupMerge` that makes `<name>` *track* `origin/<trunk>` — the trunk without `--from`, and
+another effort's branch with `--from <that branch>`. An upstream of another name is exactly what
+[`wc publish`](#nen-wc-publish) used to follow: on 2026-09-28 a stacked effort cut with `--from` its
+base pushed its commit onto the base branch and its pull request. So the cut is **`git switch
+--no-track`**, an explicit flag rather than a reliance on the host's configuration, and the new branch
+has **no upstream** until its first `nen wc publish --set-upstream` gives it its own name on `origin`.
+The cut's row says so in both forms, on the report's `steps[].note` (and so in `--json` too):
+`upstream: none -- --no-track leaves '<name>' tracking nothing, never origin/<trunk>, whatever
+branch.autoSetupMerge says. …`. A branch cut by an older warmup still tracks what it was cut from, and
+`wc publish` refuses it at exit 2 until `--set-upstream` retracks it.
 
 **The remote is `origin`, and only `origin`.** There is no `--remote`: a flag like that would have to
 answer "and what does it mean when the trunk exists on two of them" the day somebody used it, and a
@@ -7651,7 +7714,7 @@ that is not a local branch, a name git will not accept, a name that is already a
 | 8 | `git merge-base --is-ancestor <trunk> origin/<trunk>` | the local trunk has **diverged** (exit 2). A code *above* 1 is git failing to answer and is reported as that, never as "diverged" |
 | 9 | `git merge --ff-only origin/<trunk>` *(this checkout is on the trunk)*, `git branch --force <trunk> origin/<trunk>` *(no worktree holds it)*, or **nothing at all** *(another worktree holds it)* | it fails. Three shapes because git has three: a checked-out branch cannot be moved by `branch --force`, one that is not checked out cannot be advanced by `merge`, and one checked out in **another** worktree cannot be moved from here at all — so it is skipped, named, and step 11 cuts from the fetched ref regardless |
 | 10 | `git ls-remote --heads origin refs/heads/<name>` | the name is already on `origin` (exit 2) — **or the look-up itself failed**, which is never read as "absent". The ref is spelled in **full**: `ls-remote` matches a bare pattern against the *tail* of every ref on slash boundaries, so `--branch x` asked as a bare `x` would match an existing `refs/heads/feat/x` and refuse a name that is free |
-| 11 | `git switch -c <name> origin/<trunk>` | it fails |
+| 11 | `git switch --no-track -c <name> origin/<trunk>` | it fails. **`--no-track` is explicit**: the new branch tracks nothing, whatever `branch.autoSetupMerge` says — see [below](#the-new-branch-tracks-nothing) |
 | 12 | the lane's declared `build`, then (with `--tests`) its `test` | see the exit codes below |
 | 12a | `git stash apply <sha>`, then `git stash list --format=%H%x09%gd`, `git rev-parse --verify --quiet <stash@{n}>`, `git stash drop <stash@{n}>`, `git stash list --format=%H` | only with `--carry`, and only when step 6b actually stashed something. Runs **after** step 12, whether it passed or failed — `--carry`'s promise is that the work comes back, not that it comes back only when the build does. The apply restores by the object step 6b recorded, so nothing else's stash push can shift it; the four lines after it resolve, check, drop and confirm the entry's ref. An entry already gone from the list is reported and the work is restored all the same. A conflict or a failure on the apply does **not** drop the stash: see [below](#what---carry-restores) |
 
@@ -7806,7 +7869,7 @@ would run:     git fetch origin
 would run:     git merge-base --is-ancestor main origin/main
 would run:     git branch --force main origin/main
 would run:     git ls-remote --heads origin refs/heads/my-idea
-would run:     git switch -c my-idea origin/main
+would run:     git switch --no-track -c my-idea origin/main
 would run:     pnpm turbo run build
 ```
 
@@ -7850,8 +7913,9 @@ ran:           git show-ref --verify --quiet refs/heads/my-idea  -- exit 1 in 12
 ran:           git fetch origin  -- exit 0 in 30ms
 ran:           git merge-base --is-ancestor main origin/main  -- exit 0 in 11ms
 ran:           git ls-remote --heads origin refs/heads/my-idea  -- exit 0 in 18ms
-ran:           git switch -c my-idea origin/main  -- exit 0 in 16ms
+ran:           git switch --no-track -c my-idea origin/main  -- exit 0 in 16ms
                cut from origin/main, the tip this run just fetched
+               upstream: none -- --no-track leaves 'my-idea' tracking nothing, never origin/main, whatever branch.autoSetupMerge says. Its first 'nen wc publish --set-upstream' pushes it to origin/my-idea and tracks that
 ```
 
 (exit 0; there is **no** `git branch --force` row at all, and the same run under `--dry-run` prints the
