@@ -5111,7 +5111,9 @@ post-steps (nen does NOT run these):
 
 **`nen canon`**
 
-Resolves which handbooks a target repository loads, and keeps a canonical-rule mirror in sync with a `canon-values.yml`. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and substitutes/diffs a rule mirror the way `scripts/sync_canon.py` did.
+Resolves which handbooks a target repository loads, and keeps a canonical-rule mirror in sync with a `canon-values.yml`. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and substitutes/diffs a rule mirror the way the reference implementation's `scripts/sync_canon.py` did.
+
+**Where the canon lives.** The single canonical source of every handbook and rule set is the public [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks) repository (`CON-13`): `handbooks/INDEX.md` is its manifest -- the always-load set plus exactly one `stacks/<scenario>/` handbook per scenario, each stack carrying its operational `rules/` set. Every path flag on this family (`--always-load`, `--stack-dir`, `--rules-dir`) names a location inside a **checkout of that repository at the tag the consumer pins**; nen fetches nothing and knows no repository by name. The scenario-to-stack mapping is derived, not looked up: the recorded scenario IS the directory name under `--stack-dir`, so a stack added to the canon needs no change here. The reference implementation these verbs were ported from is frozen; nothing in this family reads it.
 
 ### `nen canon resolve`
 
@@ -5132,15 +5134,15 @@ nen canon resolve --repo <path> --target <owner/name>
 | `--repo <path>` | yes | The checkout whose `nen/repos.json` maps `--target` to a scenario. | Listed unbracketed: omitted, exits 2 by name. |
 | `--target <owner/name>` | yes | The consumer repository being resolved. | Refused (exit 1) if unrecorded, or recorded but not a consumer (`nen/repos.json`'s `consumers[]`). |
 | `--always-load <path,path,...>` | yes | The repository's own unconditional-load manifest. | An empty list is refused -- there is no meaningful "loads nothing" empty form. |
-| `--stack-dir <dir>` | yes | Directory the one stack handbook is resolved under. | |
-| `--leaf <file>` | no | The stack handbook's filename. | Defaults to `architecture.md`. |
+| `--stack-dir <dir>` | yes | Directory the one stack handbook is resolved under. | The `handbooks/stacks` directory of a `bankai-handbooks` checkout at the pinned tag; the stack path is `<stack-dir>/<scenario>/<leaf>`. |
+| `--leaf <file>` | no | The stack handbook's filename. | Defaults to `architecture.md`. `--leaf rules` resolves the stack's operational rule directory, which is what [`canon mirror generate`](#nen-canon-mirror-generate) takes as `--rules-dir`. |
 
 **Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line even under `--json`. Exit 0 on a resolved scenario; exit 1 on an unrecorded/non-consumer target or an invalid scenario shape.
 
-**Example**
+**Example** -- for a consumer whose `consumers[]` entry records `swiftui-tca-uzf-v2` (`owner/name` and `/path/to/repo` are placeholders):
 
 ```bash
-nen canon resolve --repo src/schema/fixtures/bankai-repo --target zheref/KroApple \
+nen canon resolve --repo /path/to/repo --target owner/name \
   --always-load handbooks/uzf-core.md,handbooks/security-baseline.md --stack-dir handbooks/stacks
 ```
 ```text
@@ -5148,7 +5150,6 @@ scenario: swiftui-tca-uzf-v2
 always load: handbooks/uzf-core.md, handbooks/security-baseline.md
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
-(run for real against the bundled fixture repo)
 
 ### `nen canon mirror generate`
 
