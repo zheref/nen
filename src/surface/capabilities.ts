@@ -216,7 +216,7 @@ export function renderCapabilities(row: SurfaceCapabilities): string[] {
     `  permissions shape: ${row.permissionsShape ?? "none"}`,
     `  agent model key:  ${row.agentModelKey ?? "none"}`,
     `  hook events:      ${row.hookEvents.join(", ")}`,
-    `  rules file:       ${row.rulesFile ?? "none"}${row.rulesLimit === null ? "" : ` (limit ${row.rulesLimit} chars)`}`,
+    `  rules file:       ${row.rulesFile ?? "none"}${row.rulesLimit === null ? "" : ` (limit ${row.rulesLimit} bytes)`}`,
     `  description budget: ${row.descriptionBudget === null ? "none" : `${row.descriptionBudget} chars (${row.descriptionBudgetSource ?? ""})`}`,
     `  source:           ${row.source}`,
     ...(row.caveat === null ? [] : [`  caveat:           ${row.caveat}`]),

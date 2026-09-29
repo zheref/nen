@@ -317,6 +317,7 @@ describe("rules", () => {
     expect(doc.entries.map((entry): string => entry.lines.join("\n"))).toEqual(["trigger: always_on", "description: rules"]);
     expect(doc.body.startsWith(`<!-- ${MARKER} -->\n# House rules`)).toBe(true);
     expect(rendered.chars).toBe(rendered.content.length);
+    expect(rendered.bytes).toBe(Buffer.byteLength(rendered.content, "utf8"));
   });
 
   it("prepends cursor's own frontmatter with the stem as the description", () => {
@@ -329,7 +330,7 @@ describe("rules", () => {
 
   it("REFUSES a rendering over the documented limit, naming both numbers, and never truncates", () => {
     const long = { stem: "long", text: "x".repeat(24_000) };
-    expect(() => renderRules(must(row("antigravity").rules), long, MARKER)).toThrow(/over the 24000-character limit/);
+    expect(() => renderRules(must(row("antigravity").rules), long, MARKER)).toThrow(/over the 24000-byte limit/);
     // The same text is fine where the row documents no limit.
     expect(renderRules(must(row("cursor").rules), long, MARKER).chars).toBeGreaterThan(24_000);
   });
@@ -442,5 +443,17 @@ describe("toml strings", () => {
   it("carries a body line for line in a multi-line string, breaking a triple quote", () => {
     expect(tomlMultiline('one\ntwo """ three\\')).toBe('"""\none\ntwo ""\\" three\\\\\n"""');
     expect(tomlMultiline("ends with newline\n")).toBe('"""\nends with newline\n"""');
+  });
+});
+
+describe("rules -- the limit is compared in bytes, the unit the page states it in (Copilot, PR #274)", () => {
+  it("refuses a multibyte rules file that is under the limit in characters but over it in bytes", () => {
+    // 12,001 two-byte characters: 12,001 chars, 24,002 bytes -- a character
+    // comparison would write it, and the surface would cut it.
+    const multibyte = { stem: "dashes", text: "é".repeat(12_001) };
+    expect(() => renderRules(must(row("antigravity").rules), multibyte, MARKER)).toThrow(/renders to \d+ bytes .* over the 24000-byte limit/);
+    const rendered = renderRules(must(row("cursor").rules), multibyte, MARKER);
+    expect(rendered.chars).toBeLessThan(24_000);
+    expect(rendered.bytes).toBeGreaterThan(24_000);
   });
 });

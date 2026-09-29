@@ -5221,12 +5221,12 @@ nen canon mirror generate --repo <consumer> --rules-dir <dir> --canon-values <pa
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The CONSUMER repository the mirror is rendered into. | Listed unbracketed: omitted, exits 2 by name. This verb writes into the consumer's tree, and a cwd default would render a mirror into whatever directory the shell was standing in. `--rules-dir`, `--canon-values` and `--markdown-out` resolve against it; an absolute value is used as-is ([#100](https://github.com/zheref/nen/issues/100)). |
-| `--rules-dir <dir>` | yes | The stack's `rules/` directory in a checkout of the canonical handbooks repository at `--ref`. | Refused (exit 2) if unreadable, if it holds no rule file (an empty rendering would delete every mirrored file as orphaned), or if it resolves inside a declared surface's own rules location (the mirror would be rendered from itself). |
+| `--rules-dir <dir>` | yes | The stack's `rules/` directory in a checkout of the canonical handbooks repository at `--ref`. | Refused (exit 2) if unreadable, if it holds no rule file (an empty rendering would delete every mirrored file as orphaned), if a rule file's name is not one a marker can carry and read back (letters, digits, `.`, `_`, `-`, ending `.md` -- no whitespace, no separator; list such a file under `--not-mirrored` or rename it upstream), or if it resolves inside a declared surface's own rules location (the mirror would be rendered from itself). |
 | `--canon-values <path>` | yes | The consumer's `{{TOKEN}}` bindings, plus its `scenario:` and `surfaces:`. | `surfaces:` is an inline comma list (`claude-code, codex`) or a `- name` block list. An unbound token refuses the run naming the file and the token (exit 2). |
 | `--source <owner/name>` | no, when the registry pins it | The canonical handbooks repository, as the marker cites it. | Defaults to the one pinned `maintained_tools` entry in the consumer's `nen/repos.json`; required when none or several are pinned. Refused unless it is an `owner/name` slug. |
 | `--ref <tag>` | no, when the registry pins it | The tag of `--source` the mirror is rendered from, as the marker cites it. | Defaults to `--source`'s recorded `pinned` tag. Refused unless tag-shaped (`v<major>.<minor>[.<patch>][-pre]`), whichever way it arrived. |
 | `--surfaces <a,b,...>` | one of the two | The surfaces to render into; overrides the file's `surfaces:`. | Neither given, or an empty list, is refused (exit 2) naming the known surfaces; so is a name that is not a row. "Every supported surface" is deliberately not a default. |
-| `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2). |
+| `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2); so is a value that is not the plain token [`canon resolve`](#nen-canon-resolve) requires (no `/`, no whitespace, no leading or trailing `.`/`_`/`-`), because it is written into every marker and read back by `check`. |
 | `--not-mirrored <a,b>` | no | Files in `--rules-dir` that are never mirrored. | The canon directory's own meta files (`README.md,placeholders.md`). Default: none. |
 | `--dry-run` | no | Report every write, deletion and foreign file; write nothing. | |
 
@@ -9217,7 +9217,7 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "undocumentedAliases": ["illumi: flash_lite"],
   "modelMapped": [],
   "hooks": "written",
-  "rules": { "path": "rules/rules.md", "chars": 4257, "limit": 24000 },
+  "rules": { "path": "rules/rules.md", "chars": 4257, "bytes": 4301, "limit": 24000 },
   "permissions": "not supported",
   "manifest": "none",
   "notes": [],
@@ -9259,7 +9259,7 @@ v0.13.0 `hookEvents[]` (every event the surface documents, in its own spelling),
 states the number and "documented" with the page where one does), `permissionsShape` (the pack shape
 `nen surface mirror generate --permissions` writes: `claude-settings`, `codex-toml`, `cursor-cli-json`, or
 null where it writes none), then `source` and a `caveat`. In text the new facts render as `permissions
-shape:`, `hook events:`, `rules file: … (limit N chars)` and `description budget: N chars (source)`.
+shape:`, `hook events:`, `rules file: … (limit N bytes)` and `description budget: N chars (source)`.
 
 **`--json`** — one surface: `{ contract: "nen.surface.capabilities/v0.1", surface, ask, subagent, hooks, worktreeIsolation,
 sandboxExtraRoots, artifact, notify, permissionsFile, agentModelKey, hookEvents, rulesFile, rulesLimit, descriptionBudget,

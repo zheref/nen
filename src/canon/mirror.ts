@@ -287,10 +287,26 @@ export function canonFilenames(rulesDir: string, notMirrored: ReadonlySet<string
       `--rules-dir '${rulesDir}' could not be read: ${(error as NodeJS.ErrnoException).code ?? String(error)}. It is the stack's rules/ directory inside a checkout of the canonical handbooks repository at the pinned tag.`,
     );
   }
-  return entries
+  const files = entries
     .filter((name): boolean => name.endsWith(".md") && !notMirrored.has(name) && statSync(join(rulesDir, name)).isFile())
     .sort();
+  // A canon filename is written into every marker (`<scenario>/<file>`, and a
+  // block's `<!-- canon: <file> -->` section line) and read back by a pattern
+  // that stops at whitespace. A name the pattern cannot read back would render
+  // fine and then check as hand-edited forever, so it is refused HERE, before
+  // anything is rendered (Copilot, PR #274). The allowed shape is the one
+  // every canon rule file already has.
+  const unreadable = files.filter((name): boolean => !CANON_FILENAME.test(name));
+  if (unreadable.length > 0) {
+    throw new CanonMirrorError(
+      `--rules-dir '${rulesDir}' holds ${unreadable.length === 1 ? "a rule file whose name" : "rule files whose names"} cannot be written into a marker and read back: ${unreadable.map((name): string => `'${name}'`).join(", ")}. A canon filename is letters, digits, '.', '_' and '-' (no whitespace, no path separator), ending in .md -- rename it upstream, or list it under --not-mirrored.`,
+    );
+  }
+  return files;
 }
+
+/** The filename shape a marker can carry: no whitespace, no separator, `.md`. */
+const CANON_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 
 /**
  * Every canon rule file, read and bound.

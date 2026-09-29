@@ -549,3 +549,21 @@ describe("nen canon mirror check -- CLI wiring", () => {
     expect((await capture(mirrorArgs("check", fx, ["--surfaces", ALL]), fx.root)).code).toBe(0);
   });
 });
+
+describe("nen canon mirror -- the scenario is held to the plain-token rule the markers depend on (Copilot, PR #274)", () => {
+  it("refuses a scenario with a path separator or whitespace at exit 2, writing nothing", async () => {
+    const fx = fixture();
+    for (const scenario of ["foo/bar", "two words", "..", ".hidden"]) {
+      const result = await capture(mirrorArgs("generate", fx, ["--scenario", scenario]), fx.root);
+      expect(result.code, scenario).toBe(2);
+      expect(result.err.join("\n"), scenario).toMatch(/scenario '.*' is not a plain token .* written into every mirror file's marker/);
+    }
+    expect(existsSync(join(fx.root, "AGENTS.md"))).toBe(false);
+  });
+
+  it("accepts the interior dots, underscores and hyphens real scenarios carry", async () => {
+    const fx = fixture();
+    const result = await capture(mirrorArgs("generate", fx, ["--scenario", "swiftui_tca.v2-beta", "--dry-run", "--surfaces", "codex"]), fx.root);
+    expect(result.code, result.err.join("\n")).toBe(0);
+  });
+});

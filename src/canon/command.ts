@@ -38,7 +38,7 @@ import { isContained } from "../repo/contain.js";
 import { parseTarget } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
-import { resolveCanon } from "./resolve.js";
+import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
 import {
   CanonMirrorError,
   checkSurface,
@@ -427,6 +427,16 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
   const scenario = context.args.values["scenario"] ?? values.scenario;
   if (scenario === null || scenario === undefined || scenario.trim() === "") {
     throw new VerbUsageError("--scenario not given and the canon-values file has no 'scenario:' field.");
+  }
+  // THE SAME RULE `canon resolve` APPLIES, for a second reason on top of its
+  // path-safety one: the scenario is written into every marker and read back
+  // by a pattern that stops at whitespace and '/', so a scenario either could
+  // not be read back -- and every generated file would check as hand-edited,
+  // then be refused as unowned on the next generate (Copilot, PR #274).
+  if (!SCENARIO_TOKEN.test(scenario)) {
+    throw new VerbUsageError(
+      `scenario '${scenario}' is not ${SCENARIO_TOKEN_RULE}. It names the stack directory under the canon and is written into every mirror file's marker, so anything else could not be read back by 'check'.`,
+    );
   }
 
   const surfacesFlag = context.args.values["surfaces"];

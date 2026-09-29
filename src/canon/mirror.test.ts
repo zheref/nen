@@ -458,3 +458,21 @@ describe("renderReportMarkdown", () => {
     expect(renderReportMarkdown([{ ...empty, surface: "codex", ok: ["a.md"] }])).toMatch(/^No drift/);
   });
 });
+
+describe("what a marker can carry -- refused before anything is rendered (Copilot, PR #274)", () => {
+  it("refuses a canon filename with whitespace, naming it and the shape a marker can read back", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "fine\n");
+    writeFileSync(join(dir, "team rules.md"), "not readable back from a marker\n");
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(CanonMirrorError);
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(/rule file whose name cannot be written into a marker and read back: 'team rules\.md'/);
+    // Listing it under --not-mirrored is the other way out.
+    expect(readCanonSources(dir, {}, new Set(["team rules.md"])).map((source): string => source.file)).toEqual(["01-a.md"]);
+  });
+
+  it("accepts every shape the canon actually uses: digits, dots, underscores and hyphens", () => {
+    const dir = tempDir();
+    for (const name of ["00-overview.md", "05-page-and-screen.md", "v2.notes_final.md", "A.md"]) writeFileSync(join(dir, name), "x\n");
+    expect(readCanonSources(dir, {}, NOT_MIRRORED).map((source): string => source.file)).toEqual(["00-overview.md", "05-page-and-screen.md", "A.md", "v2.notes_final.md"]);
+  });
+});

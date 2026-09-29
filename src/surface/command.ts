@@ -392,7 +392,7 @@ function runGenerate(context: CommandContext): number {
   const rulesLine =
     typeof report.rules === "string"
       ? report.rules
-      : `${report.rules.path} (${report.rules.chars} chars${report.rules.limit === null ? "" : ` of ${report.rules.limit}`})`;
+      : `${report.rules.path} (${report.rules.chars} chars, ${report.rules.bytes} bytes${report.rules.limit === null ? "" : ` of ${report.rules.limit}`})`;
   emit(
     context.io,
     context.json,
