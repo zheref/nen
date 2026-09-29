@@ -229,11 +229,16 @@ verbs:
   warmup      Warm a WORKING COPY for iteration, in this order: check it is
               clean, fetch, fast-forward the trunk, cut the branch you name
               from its fresh tip, then verify the declared build (and, with
-              --tests, the declared tests). IN A LINKED WORKTREE the trunk is
-              usually checked out in ANOTHER worktree, where git refuses to
-              force-move it: the local fast-forward is then SKIPPED, the
-              worktree holding it is named, and --branch is cut from
-              ${WARMUP_REMOTE}/<trunk> exactly as it always was. THE ONLY VERB IN THIS FAMILY THAT
+              --tests, the declared tests). THE CUT IS --no-track: the new
+              branch has NO upstream -- never ${WARMUP_REMOTE}/<trunk>, never
+              --from's branch, whatever branch.autoSetupMerge says -- until
+              'nen wc publish --set-upstream' gives it its own name on
+              ${WARMUP_REMOTE}; the cut's row in the report says so. IN A
+              LINKED WORKTREE the trunk is usually checked out in ANOTHER
+              worktree, where git refuses to force-move it: the local
+              fast-forward is then SKIPPED, the worktree holding it is named,
+              and --branch is cut from ${WARMUP_REMOTE}/<trunk> exactly as it
+              always was. THE ONLY VERB IN THIS FAMILY THAT
               MUTATES GIT STATE, so --repo is required and every step refuses
               rather than guessing: a dirty tree, an operation half-finished, a
               detached HEAD carrying commits nothing else reaches, an absent
@@ -523,7 +528,9 @@ flags:
                    --branch' and refused at 2 if it already exists locally or on
                    ${WARMUP_REMOTE} -- never reused, reset or force-moved.
   --from <trunk>   'warmup' only. The LOCAL trunk to fast-forward, and what
-                   --branch is cut from (as ${WARMUP_REMOTE}/<trunk>). Defaults to
+                   --branch is cut from (as ${WARMUP_REMOTE}/<trunk>) -- never
+                   what it tracks: the cut is --no-track, so a branch stacked
+                   on another effort's never pushes onto it. Defaults to
                    '${DEFAULT_TRUNK}' WHEN THAT LOCAL BRANCH EXISTS, and refuses at 2
                    naming this flag when it does not -- nen infers a trunk from
                    no remote HEAD and from no lone branch.

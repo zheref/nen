@@ -483,9 +483,87 @@ describe.skipIf(!HAVE_GIT)("nen shu warmup, against the real git", () => {
     const printed = result.out.join("\n");
     expect(printed).toMatch(/trunk held by worktree .*; cutting from origin\/main directly/);
     expect(printed).not.toContain("git branch --force main origin/main");
-    expect(printed).toMatch(/^would run: {5}git switch -c never-cut origin\/main$/m);
+    expect(printed).toMatch(/^would run: {5}git switch --no-track -c never-cut origin\/main$/m);
     // Still a dry run: the one command it performed moved nothing.
     expect(mustGit(linked, ["for-each-ref", "--format=%(refname) %(objectname)"])).toBe(before);
+  });
+
+  // ── the cut tracks nothing (zheref/nen#271) ───────────────────────────────
+  //
+  // THE CLAIM ONLY GIT CAN ANSWER: `git switch --no-track -c <b> origin/<x>`
+  // really leaves <b> with no upstream, where the same start point WITHOUT the
+  // flag makes it track origin/<x> under git's default `branch.autoSetupMerge`.
+  // The default is made real for the length of the test through an EMPTY
+  // global config this test wrote itself (the same device the CRLF test below
+  // uses) plus GIT_CONFIG_NOSYSTEM, so a developer's own `autoSetupMerge`
+  // cannot make this pass or fail. The control branch shows the hazard is live
+  // under that default, so the assertion after it is not vacuous.
+  it("cuts the branch with NO upstream -- not origin/main, and not origin/<from> for a stacked --from -- with branch.autoSetupMerge at git's default", async () => {
+    const home = join(root, "default-global");
+    mkdirSync(home, { recursive: true });
+    const config = join(home, "gitconfig");
+    writeFileSync(config, "");
+    // A stacked base with a commit of its own, so "cut from origin/<from>" is a different tip than the trunk's.
+    mustGit(upstream, ["switch", "--quiet", "-c", "stack-base-271"]);
+    writeFileSync(join(upstream, "base-271.txt"), "the base effort\n");
+    mustGit(upstream, ["add", "base-271.txt"]);
+    mustGit(upstream, [...WHO, "commit", "--quiet", "-m", "the base effort"]);
+    mustGit(upstream, ["switch", "--quiet", "main"]);
+
+    const previousGlobal = process.env["GIT_CONFIG_GLOBAL"];
+    const previousNoSystem = process.env["GIT_CONFIG_NOSYSTEM"];
+    process.env["GIT_CONFIG_GLOBAL"] = config;
+    process.env["GIT_CONFIG_NOSYSTEM"] = "1";
+    try {
+      // Unset everywhere git would look: this is git's own default, not a value somebody chose.
+      expect(git(root, ["config", "--get", "branch.autoSetupMerge"]).code).toBe(1);
+      const clone = join(root, "no-track");
+      mustGit(root, [...PINNED, "clone", "--quiet", upstream, clone]);
+      pinLineEndings(clone);
+      // The control: the same start point without the flag DOES track, under this default.
+      mustGit(clone, ["branch", "control-271", "origin/main"]);
+      expect(mustGit(clone, ["rev-parse", "--abbrev-ref", "control-271@{upstream}"])).toBe("origin/main");
+
+      // Without --from: cut from origin/main, tracking nothing.
+      const plain = await warmup(["warmup", "--repo", clone, "--branch", "no-track-plain"]);
+      expect(plain.code).toBe(0);
+      expect(mustGit(clone, ["branch", "--show-current"])).toBe("no-track-plain");
+      expect(mustGit(clone, ["rev-parse", "HEAD"])).toBe(mustGit(clone, ["rev-parse", "origin/main"]));
+      expect(git(clone, ["rev-parse", "--abbrev-ref", "no-track-plain@{upstream}"]).code).not.toBe(0);
+      expect(git(clone, ["config", "--get", "branch.no-track-plain.merge"]).code).toBe(1);
+      expect(git(clone, ["config", "--get", "branch.no-track-plain.remote"]).code).toBe(1);
+      expect(plain.out.join("\n")).toContain("ran:           git switch --no-track -c no-track-plain origin/main");
+      expect(plain.out.join("\n")).toMatch(/upstream: none -- --no-track leaves 'no-track-plain' tracking nothing, never origin\/main/);
+
+      // With --from <a non-trunk branch>: the stacked effort of 2026-09-28 -- cut from its base, tracking NOT the base.
+      mustGit(clone, ["branch", "--no-track", "stack-base-271", "origin/stack-base-271"]);
+      const stacked = await warmup(["warmup", "--repo", clone, "--branch", "stacked-271", "--from", "stack-base-271"]);
+      expect(stacked.code).toBe(0);
+      expect(mustGit(clone, ["branch", "--show-current"])).toBe("stacked-271");
+      expect(mustGit(clone, ["rev-parse", "HEAD"])).toBe(mustGit(clone, ["rev-parse", "origin/stack-base-271"]));
+      expect(mustGit(clone, ["rev-parse", "HEAD"])).not.toBe(mustGit(clone, ["rev-parse", "origin/main"]));
+      expect(git(clone, ["rev-parse", "--abbrev-ref", "stacked-271@{upstream}"]).code).not.toBe(0);
+      expect(git(clone, ["config", "--get", "branch.stacked-271.merge"]).code).toBe(1);
+      expect(stacked.out.join("\n")).toMatch(/upstream: none -- --no-track leaves 'stacked-271' tracking nothing, never origin\/stack-base-271/);
+    } finally {
+      if (previousGlobal === undefined) delete process.env["GIT_CONFIG_GLOBAL"];
+      else process.env["GIT_CONFIG_GLOBAL"] = previousGlobal;
+      if (previousNoSystem === undefined) delete process.env["GIT_CONFIG_NOSYSTEM"];
+      else process.env["GIT_CONFIG_NOSYSTEM"] = previousNoSystem;
+    }
+  });
+
+  it("the explicit flag beats host config: --no-track holds where this repository says branch.autoSetupMerge=always", async () => {
+    const clone = join(root, "always-track");
+    mustGit(root, [...PINNED, "clone", "--quiet", upstream, clone]);
+    pinLineEndings(clone);
+    mustGit(clone, ["config", "branch.autoSetupMerge", "always"]);
+    // Under 'always' even a LOCAL start point would track; the flag is what decides, not the machine.
+    const result = await warmup(["warmup", "--repo", clone, "--branch", "always-271"]);
+    expect(result.code).toBe(0);
+    expect(mustGit(clone, ["branch", "--show-current"])).toBe("always-271");
+    expect(git(clone, ["config", "--get", "branch.always-271.merge"]).code).toBe(1);
+    expect(git(clone, ["rev-parse", "--abbrev-ref", "always-271@{upstream}"]).code).not.toBe(0);
   });
 
   // ── the win32 line-ending trap, simulated ─────────────────────────────────

@@ -287,7 +287,8 @@ describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
     // Asking for origin while the branch tracks fork is refused, and nothing moves.
     const contradicted = await wc(["publish", "--repo", work, "--remote", "origin"], false);
     expect(contradicted.code).toBe(2);
-    expect(contradicted.err.join("\n")).toMatch(/tracks 'fork\/to-fork', so it is pushed to 'fork'/);
+    expect(contradicted.err.join("\n")).toMatch(/tracks 'fork\/to-fork', so without --set-upstream it is pushed to 'fork'/);
+    expect(contradicted.err.join("\n")).toMatch(/pass --set-upstream --remote origin/);
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/to-fork"])).toBe("");
     // A fresh branch with no upstream goes where --remote says.
     mustGit(work, ["switch", "--quiet", "-c", "to-fork-fresh"]);
@@ -298,70 +299,152 @@ describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/to-fork-fresh"])).toBe("");
   });
 
-  it("a local branch tracking a differently named upstream is pushed AS that name, and the same-named remote ref is never created (zheref/nen#231, T9)", async () => {
-    const work = branchWith("local-name", { "topic.txt": "topic\n" });
-    // Publish once under the REMOTE's name, then track it from the local one.
-    mustGit(work, [...PINNED, "push", "--quiet", "origin", "refs/heads/local-name:refs/heads/remote-topic"]);
-    mustGit(work, ["branch", "--set-upstream-to", "origin/remote-topic"]);
-    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "local-name@{upstream}"])).toBe("origin/remote-topic");
-    writeFileSync(join(work, "topic.txt"), "topic more\n");
+  it("the #271 fixture: a stacked branch cut with a FOREIGN upstream is refused, then --set-upstream publishes it under its own name and rewrites the upstream -- the base branch never moves", async () => {
+    // The base effort, published: the branch whose pull request the stacked commit must never reach.
+    const base = branchWith("stack-base", { "base.txt": "base\n" });
+    mustGit(base, [...PINNED, "push", "--quiet", "-u", "origin", "stack-base"]);
+    const baseSha = mustGit(base, ["ls-remote", "origin", "refs/heads/stack-base"]).split(/\s+/)[0];
+    // The stacked effort, cut the way `shu warmup --from stack-base` cut it before #271: TRACKING the base.
+    const work = join(root, "stacked");
+    mustGit(root, [...PINNED, "clone", "--quiet", origin, work]);
+    pin(work);
+    mustGit(work, ["switch", "--quiet", "-c", "stacked", "--track", "origin/stack-base"]);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "stacked@{upstream}"])).toBe("origin/stack-base");
+    writeFileSync(join(work, "stacked.txt"), "stacked\n");
     mustGit(work, ["add", "-A"]);
-    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: more on the topic"]);
-    const result = await wc(["publish", "--repo", work]);
-    expect(result.code).toBe(0);
-    expect(result.doc).toMatchObject({ branch: "local-name", remote: "origin", destination: "remote-topic", upstreamBefore: "origin/remote-topic", ahead: 1, pushed: true, needsForce: false });
-    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/remote-topic"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
-    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/local-name"])).toBe("");
-    // And the upstream's ref having moved past us is judged against remote-topic, not a local-name that does not exist there.
-    const elsewhere = mkdtempSync(join(tmpdir(), "nen-topic-elsewhere-"));
-    mustGit(root, [...PINNED, "clone", "--quiet", "--branch", "remote-topic", origin, elsewhere]);
-    pin(elsewhere);
-    writeFileSync(join(elsewhere, "other.txt"), "other\n");
-    mustGit(elsewhere, ["add", "-A"]);
-    mustGit(elsewhere, [...WHO, "commit", "--quiet", "-m", "feat: from elsewhere"]);
-    mustGit(elsewhere, [...PINNED, "push", "--quiet", "origin", "remote-topic"]);
-    writeFileSync(join(work, "topic.txt"), "topic diverged\n");
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: the stacked effort"]);
+
+    // A bare publish -- and its dry run -- refuse at exit 2, naming both names; nothing moves anywhere.
+    for (const argv of [["publish", "--repo", work], ["publish", "--repo", work, "--dry-run"]]) {
+      const refused = await wc(argv, false);
+      expect(refused.code, argv.join(" ")).toBe(2);
+      expect(refused.out).toEqual([]);
+      expect(refused.err.join("\n")).toMatch(/'stacked' tracks 'origin\/stack-base', whose branch 'stack-base' is not 'stacked'/);
+      expect(refused.err.join("\n")).toMatch(/Pass --set-upstream to publish 'stacked' to 'origin\/stacked'/);
+    }
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/stack-base"]).split(/\s+/)[0]).toBe(baseSha);
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/stacked"])).toBe("");
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "stacked@{upstream}"])).toBe("origin/stack-base");
+
+    // --set-upstream: published under its OWN name, the upstream rewritten, the base untouched.
+    const published = await wc(["publish", "--repo", work, "--set-upstream"]);
+    expect(published.code).toBe(0);
+    expect(published.doc).toMatchObject({ branch: "stacked", remote: "origin", destination: "stacked", upstreamBefore: "origin/stack-base", ahead: 1, needsForce: false, pushed: true, retargetedUpstream: true });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/stacked"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/stack-base"]).split(/\s+/)[0]).toBe(baseSha);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "stacked@{upstream}"])).toBe("origin/stacked");
+
+    // From here a bare publish is an ordinary one: its upstream is its own name.
+    writeFileSync(join(work, "stacked.txt"), "stacked more\n");
     mustGit(work, ["add", "-A"]);
-    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: diverged"]);
-    const diverged = await wc(["publish", "--repo", work]);
-    expect(diverged.code).toBe(1);
-    expect(diverged.doc).toMatchObject({ destination: "remote-topic", needsForce: true, pushed: false });
-    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/local-name"])).toBe("");
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: more on the stacked effort"]);
+    const again = await wc(["publish", "--repo", work]);
+    expect(again.code).toBe(0);
+    expect(again.doc).toMatchObject({ destination: "stacked", upstreamBefore: "origin/stacked", ahead: 1, pushed: true, retargetedUpstream: false });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/stack-base"]).split(/\s+/)[0]).toBe(baseSha);
   });
 
-  it("a branch tracking origin/main -- `git worktree add -b x origin/main` -- never moves main: it is pushed under its own name, and -u retracks it to origin/<own> (zheref/nen#234)", async () => {
+  it("a branch tracking origin/main -- `git worktree add -b x origin/main` -- never moves main: a bare publish refuses, and --set-upstream pushes under its own name and retracks it to origin/<own> (zheref/nen#234, #271)", async () => {
     const work = branchWith("tracks-trunk", { "trunk.txt": "not main\n" });
     mustGit(work, ["branch", "--set-upstream-to", "origin/main"]);
     expect(mustGit(work, ["rev-parse", "--abbrev-ref", "tracks-trunk@{upstream}"])).toBe("origin/main");
     const mainBefore = mustGit(work, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0];
     const sha = mustGit(work, ["rev-parse", "HEAD"]);
-    // Without -u: the push lands on refs/heads/tracks-trunk, main does not move, the upstream is untouched.
-    const plain = await wc(["publish", "--repo", work]);
-    expect(plain.code).toBe(0);
-    expect(plain.doc).toMatchObject({ branch: "tracks-trunk", remote: "origin", destination: "tracks-trunk", upstreamBefore: "origin/main", ahead: 1, needsForce: false, pushed: true, retargetedUpstream: false });
+    // Without -u: refused at exit 2, naming the trunk; nothing is pushed anywhere and the upstream is untouched.
+    const plain = await wc(["publish", "--repo", work], false);
+    expect(plain.code).toBe(2);
+    expect(plain.err.join("\n")).toMatch(/'tracks-trunk' tracks 'origin\/main', whose branch 'main' is not 'tracks-trunk', the trunk/);
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0]).toBe(mainBefore);
-    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/tracks-trunk"]).split(/\s+/)[0]).toBe(sha);
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/tracks-trunk"])).toBe("");
     expect(mustGit(work, ["rev-parse", "--abbrev-ref", "tracks-trunk@{upstream}"])).toBe("origin/main");
-    // With -u, on a second commit: the remote ref now exists, so the fast-forward is judged against it; main still does not move; the upstream is retargeted.
-    writeFileSync(join(work, "trunk.txt"), "still not main\n");
-    mustGit(work, ["add", "-A"]);
-    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: more, still tracking the trunk"]);
+    // With -u: the push lands on refs/heads/tracks-trunk, main does not move, the upstream is retargeted.
     const retargeted = await wc(["publish", "--repo", work, "--set-upstream"]);
     expect(retargeted.code).toBe(0);
-    expect(retargeted.doc).toMatchObject({ destination: "tracks-trunk", upstreamBefore: "origin/main", ahead: 2, needsForce: false, pushed: true, retargetedUpstream: true });
+    expect(retargeted.doc).toMatchObject({ branch: "tracks-trunk", remote: "origin", destination: "tracks-trunk", upstreamBefore: "origin/main", ahead: 1, needsForce: false, pushed: true, retargetedUpstream: true });
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0]).toBe(mainBefore);
-    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/tracks-trunk"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/tracks-trunk"]).split(/\s+/)[0]).toBe(sha);
     expect(mustGit(work, ["rev-parse", "--abbrev-ref", "tracks-trunk@{upstream}"])).toBe("origin/tracks-trunk");
-    // And a rewritten branch that still tracks the trunk is judged against origin/<own>, not against main: needsForce, nothing pushed, main untouched.
+    // A rewritten branch that tracks the trunk while its OWN name is already on the remote is judged against origin/<own>,
+    // not against main: needsForce, nothing pushed, nothing retracked (retargetedUpstream: false), main untouched.
     const rewritten = branchWith("tracks-trunk-rewrite", { "rw.txt": "one\n" });
     mustGit(rewritten, [...PINNED, "push", "--quiet", "origin", "refs/heads/tracks-trunk-rewrite:refs/heads/tracks-trunk-rewrite"]);
     mustGit(rewritten, ["branch", "--set-upstream-to", "origin/main"]);
     mustGit(rewritten, [...WHO, "commit", "--quiet", "--amend", "--no-edit", "-m", "feat: rewritten"]);
     const diverged = await wc(["publish", "--repo", rewritten, "--set-upstream"]);
     expect(diverged.code).toBe(1);
-    expect(diverged.doc).toMatchObject({ destination: "tracks-trunk-rewrite", needsForce: true, pushed: false, retargetedUpstream: true });
+    expect(diverged.doc).toMatchObject({ destination: "tracks-trunk-rewrite", needsForce: true, pushed: false, retargetedUpstream: false });
     expect(mustGit(rewritten, ["ls-remote", "origin", "refs/heads/main"]).split(/\s+/)[0]).toBe(mainBefore);
     expect(mustGit(rewritten, ["rev-parse", "--abbrev-ref", "tracks-trunk-rewrite@{upstream}"])).toBe("origin/main");
+  });
+
+  it("F1, the fork workflow: a branch cut from upstream/main in a clone whose origin is the fork is published to origin -- never created on upstream -- and --set-upstream --remote moves a same-name upstream (Nobunaga F1)", async () => {
+    // canon.git is the canonical repository; this clone's `origin` is the fork, and `upstream` is canon.
+    const canon = join(root, "canon.git");
+    mustGit(root, [...PINNED, "clone", "--quiet", "--bare", origin, canon]);
+    const work = join(root, "fork-workflow");
+    mustGit(root, [...PINNED, "clone", "--quiet", origin, work]);
+    pin(work);
+    mustGit(work, ["remote", "add", "upstream", canon]);
+    mustGit(work, [...PINNED, "fetch", "--quiet", "upstream"]);
+    mustGit(work, ["switch", "--quiet", "-c", "feat", "--track", "upstream/main"]);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "feat@{upstream}"])).toBe("upstream/main");
+    writeFileSync(join(work, "feat.txt"), "feat\n");
+    mustGit(work, ["add", "-A"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: in the fork"]);
+    const canonMain = mustGit(work, ["ls-remote", "upstream", "refs/heads/main"]).split(/\s+/)[0];
+
+    const refused = await wc(["publish", "--repo", work], false);
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toMatch(/Pass --set-upstream to publish 'feat' to 'origin\/feat'/);
+
+    const published = await wc(["publish", "--repo", work, "--set-upstream"]);
+    expect(published.code).toBe(0);
+    expect(published.doc).toMatchObject({ branch: "feat", remote: "origin", destination: "feat", upstreamBefore: "upstream/main", pushed: true, retargetedUpstream: true });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/feat"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
+    expect(mustGit(work, ["ls-remote", "upstream", "refs/heads/feat"])).toBe("");
+    expect(mustGit(work, ["ls-remote", "upstream", "refs/heads/main"]).split(/\s+/)[0]).toBe(canonMain);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "feat@{upstream}"])).toBe("origin/feat");
+
+    // A same-name upstream on the canonical remote: --remote origin alone is refused and names --set-upstream --remote,
+    // which is not the `git branch --set-upstream-to origin/<b>` git itself refuses on a first publish.
+    mustGit(work, ["switch", "--quiet", "-c", "same-name"]);
+    mustGit(work, [...PINNED, "push", "--quiet", "-u", "upstream", "same-name"]);
+    expect(git(work, ["branch", "--set-upstream-to", "origin/same-name"]).code).not.toBe(0);
+    const contradicted = await wc(["publish", "--repo", work, "--remote", "origin"], false);
+    expect(contradicted.code).toBe(2);
+    expect(contradicted.err.join("\n")).toMatch(/pass --set-upstream --remote origin to publish it to 'origin\/same-name'/);
+    const moved = await wc(["publish", "--repo", work, "--set-upstream", "--remote", "origin"]);
+    expect(moved.code).toBe(0);
+    expect(moved.doc).toMatchObject({ remote: "origin", destination: "same-name", upstreamBefore: "upstream/same-name", retargetedUpstream: true });
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "same-name@{upstream}"])).toBe("origin/same-name");
+  });
+
+  it("F2: a stacked branch whose base was DELETED on the remote still publishes under --set-upstream -- ahead: null, said so -- while a bare publish still refuses (Nobunaga F2)", async () => {
+    const base = branchWith("gone-base", { "gone.txt": "base\n" });
+    mustGit(base, [...PINNED, "push", "--quiet", "-u", "origin", "gone-base"]);
+    const work = join(root, "orphaned-stack");
+    mustGit(root, [...PINNED, "clone", "--quiet", origin, work]);
+    pin(work);
+    mustGit(work, ["switch", "--quiet", "-c", "orphaned", "--track", "origin/gone-base"]);
+    writeFileSync(join(work, "orphaned.txt"), "stacked\n");
+    mustGit(work, ["add", "-A"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "feat: stacked on a base that is about to go"]);
+    // The base is merged and deleted on the remote; this clone still names it (no prune).
+    mustGit(base, [...PINNED, "push", "--quiet", "origin", "--delete", "gone-base"]);
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "orphaned@{upstream}"])).toBe("origin/gone-base");
+    // The real git's own words for it -- what the F2 route recognises.
+    const probe = git(work, ["fetch", "--end-of-options", "origin", "refs/heads/gone-base:refs/remotes/origin/gone-base"]);
+    expect(probe.code).not.toBe(0);
+    expect(probe.stderr).toMatch(/couldn't find remote ref/);
+
+    const bare = await wc(["publish", "--repo", work], false);
+    expect(bare.code).toBe(2);
+    const published = await wc(["publish", "--repo", work, "--set-upstream"]);
+    expect(published.code).toBe(0);
+    expect(published.doc).toMatchObject({ branch: "orphaned", remote: "origin", upstreamBefore: "origin/gone-base", ahead: null, pushed: true, retargetedUpstream: true });
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/orphaned"]).split(/\s+/)[0]).toBe(mustGit(work, ["rev-parse", "HEAD"]));
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/gone-base"])).toBe("");
+    expect(mustGit(work, ["rev-parse", "--abbrev-ref", "orphaned@{upstream}"])).toBe("origin/orphaned");
   });
 
   it("the real git accepts `git fetch --end-of-options` (2.24+): a publish with an upstream fetches through it and pushes", async () => {
