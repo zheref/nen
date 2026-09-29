@@ -2,6 +2,35 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.16.0 — 2026-09-29
+
+Release unit for `v0.15.1..v0.16.0`: [#272](https://github.com/zheref/nen/pull/272) and [#274](https://github.com/zheref/nen/pull/274) (the delivery), [#278](https://github.com/zheref/nen/pull/278) (the landing — #274 was stacked and its merge never reached `main`), and [#PROPOSAL](https://github.com/zheref/nen/pull/PROPOSAL) (the release proposal).
+
+### Added
+
+- **canon** — `nen canon mirror generate|check` render a canon set into **every surface the consumer declares**, not one hard-coded rules directory. `--surfaces` (or the canon-values file's own `surfaces:` key) names them, and each surface's location is its own documented one: `codex` → `AGENTS.md` as **one managed block**, `cursor` → `.cursor/rules/*.mdc`, `antigravity` → `.agents/rules/*.md`, `claude-code` → `.claude/rules/*.md`. A document surface keeps the consumer's own prose outside the block byte for byte; a per-file surface gets one file per canon file. Only changed bytes are written, and a marked file whose canon source is gone is deleted as an orphan.
+- **canon** — **the marker is the ownership claim.** A destination that exists and carries no generated-from marker was written by hand, so the whole run is refused (exit 2) **before the first byte is written on any surface** — a half-mirrored consumer is worse than an unmirrored one. An unmarked file with no canon source is the consumer's own: never deleted, reported `foreign`, and never drift.
+- **canon** — `mirror check` is the CI half: it renders in memory and diffs each surface's committed copy, classifying every file `ok`, `MISSING`, `EXTRA`, `STALE` (the marker names another source, ref or scenario — generated once, never regenerated after the pin moved), `HAND-EDITED`, or `FOREIGN`. Exit 1 iff any surface has drift; `--markdown-out` also writes it as a `Surface | File | Issue` table.
+- **canon** — `nen canon pin --repo <consumer>` reads the canonical handbooks repository and the **tag** it is pinned to out of the consumer's own `nen/repos.json` — the `pinned` field on its `maintained_tools` entry. It exists so a sync can check the canon out at that tag before rendering, and so `mirror check` has a pin to hold the mirror to. Exit 1 when no pin is recorded (naming the field to record it in), when several tools are pinned and `--source` does not disambiguate, or when the recorded pin is not tag-shaped.
+- **schema** — `nen/repos.json` `maintained_tools[]` entries may carry `pinned`, surfaced as the registry's `toolPins`. This is the one exception to "only the slug is modelled": CON-13's canon pin has to be **data** a sync and a drift check can read, not prose in a `$comment`. It lives on `maintained_tools` because that is the list whose entries classify as canon, and it reuses the spelling `consumers[]` already uses, so one word means one idea.
+- **surface** — the rules rendering refuses a set that will not fit where it is going, **at generate time rather than at read time**: Antigravity's 24,000-byte rules limit, and Codex's `project_doc_max_bytes` (32 KiB by default, set in `.codex/config.toml`). A limit discovered by a surface silently truncating is a limit discovered too late.
+- **surface** — `AGENTS.md` carries a documented double-load caveat: Cursor and Antigravity read it at any level, and Claude Code (v2.1.277+) reads it when the consumer has no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` at or above the root — so a consumer rendering another surface beside Codex loads the canon twice unless it keeps a `CLAUDE.md`. The Claude Code setting that reads both is honoured in user and managed scope only and cannot ship in a repository.
+
+### Changed
+
+- **docs** — the canon family is redirected off the frozen reference implementation. `README.md`, `docs/USAGE.md`, `docs/STACK-MATRIX.md` and the Gradle/Android profile now name the canonical handbooks repository rather than `bankai-core`, which is no longer where a consumer's handbooks come from.
+
+### Fixed
+
+- **parse** — `nen canon pin` was in no `NEN_VERB_TABLE` row, so izanami fail-closed it as unclassified. A caller that classifies before it runs would refuse the one verb whose whole job is to read a pin. Classified `RO`: it reads the consumer's registry and writes nothing. In the same row `canon mirror generate` was `MUT` and its text named `--out-dir`, a flag the verb no longer takes — it is `DRY`, because `--dry-run` reports every write and performs none, so the dry form is a read and belongs inside a watch.
+- **canon** — a canon body containing a **bare section-marker line** is refused when the sources are read. The document surface delimits its sections with that exact shape and cannot match it first-line-only the way the filename guard does, because one block carries many bodies in sequence — so such a body would be written by `generate` and read back as split by the very next `check`, the block failing against itself. The refusal names file and line and gives the three ways out (indent it, fence it, or list the file under `--not-mirrored`). An indented or fenced occurrence is untouched.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.7`.** Everything here is additive — new verbs, a new optional registry field, and new refusals on inputs that previously produced a broken mirror. No existing pin is refused by this release, and nothing that worked stops working.
+
+  A consumer that wants **the new verbs** must still pin to `v0.16.0` deliberately: `canon pin` and `canon mirror generate|check --surfaces` exist in no earlier tag, so a caller pinned below this one refuses them as unknown rather than failing oddly. That is why this tag is cut now rather than at the next convenient moment — `hatsu:limbo` calls exactly those verbs and cannot run until a release carries them.
+
 ## v0.15.1 — 2026-09-28
 
 Release unit for `v0.15.0..v0.15.1`: [#267](https://github.com/zheref/nen/pull/267) (the delivery) and [#268](https://github.com/zheref/nen/pull/268) (the release proposal).
