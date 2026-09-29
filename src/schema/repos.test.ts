@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
 import { loadRepoRegistry, parseRepoRegistry } from "./repos.js";
+import { checkTaxonomy, type SchemaCheck } from "./taxonomy.js";
 
 describe("loadRepoRegistry -- reads the TARGET repository", () => {
   it("reads whichever registry the target repo carries", () => {
@@ -182,5 +186,95 @@ describe("parseRepoRegistry -- validation", () => {
     expect(() =>
       parseRepoRegistry(at, { consumers: [], maintained_tools: [{ role: "tool" }] }),
     ).toThrow(/maintained_tools\[0\]\.repo/);
+  });
+});
+
+// zheref/nen#219: a registry's own tool repositories consume nothing, so a
+// `scenario` that only a consumers[] entry could carry was one they could
+// never have. Both non-consumer sections now carry it, validated as a
+// consumer's is.
+describe("parseRepoRegistry -- a scenario on maintained_tools[]/pending_onboarding[] rows (zheref/nen#219)", () => {
+  const at = "/fake/nen/repos.json";
+
+  it("reads the scenario each listed row states, keeping the slug lists exactly as they were", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [],
+      maintained_tools: [
+        { repo: "zheref/hatsu", role: "Hatsu workflow and skill prose", scenario: "hatsu-plugin" },
+        { repo: "zheref/nen", role: "Shared deterministic machinery" },
+      ],
+      pending_onboarding: [{ repo: "zheref/KroCloud", status: "not-a-consumer", scenario: null }],
+    });
+    expect(registry.listed).toEqual([
+      { repo: "zheref/hatsu", section: "maintained_tools", scenario: "hatsu-plugin" },
+      { repo: "zheref/nen", section: "maintained_tools", scenario: null },
+      { repo: "zheref/KroCloud", section: "pending_onboarding", scenario: null },
+    ]);
+    // Every reader that wants only the slugs gets precisely what it got before.
+    expect(registry.maintainedTools).toEqual(["zheref/hatsu", "zheref/nen"]);
+    expect(registry.pendingOnboarding).toEqual(["zheref/KroCloud"]);
+  });
+
+  it("sets `listed` on every registry the loader returns -- empty when neither section is present", () => {
+    expect(parseRepoRegistry(at, { consumers: [] }).listed).toEqual([]);
+    expect(loadRepoRegistry(BANKAI_REPO).listed).toEqual([
+      { repo: "zheref/bankai-scaffold", section: "maintained_tools", scenario: null },
+      { repo: "zheref/KroCloud", section: "pending_onboarding", scenario: null },
+    ]);
+  });
+
+  // Validated EXACTLY as a consumer's scenario is: optional, a string when
+  // present. The same refusal text, at the listed row's own pointer.
+  it("refuses a non-string scenario on a listed row, by pointer, in the words a consumer's gets", () => {
+    expect(() =>
+      parseRepoRegistry(at, { consumers: [{ repo: "a/b", consumes: [], scenario: 7 }] }),
+    ).toThrow(/at consumers\[0\]\.scenario, expected a string or nothing, got number \(7\)/);
+    expect(() =>
+      parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "a/b", scenario: 7 }] }),
+    ).toThrow(/at maintained_tools\[0\]\.scenario, expected a string or nothing, got number \(7\)/);
+    expect(() =>
+      parseRepoRegistry(at, { consumers: [], pending_onboarding: [{ repo: "a/b", scenario: ["x"] }] }),
+    ).toThrow(/at pending_onboarding\[0\]\.scenario, expected a string or nothing, got/);
+  });
+});
+
+// A checkout carrying exactly `registry` as its nen/repos.json, and nothing
+// else under nen/ -- the repos row is the only one this suite reads.
+function checkoutWith(registry: unknown): string {
+  const root = mkdtempSync(join(tmpdir(), "nen-schema-repos-"));
+  mkdirSync(join(root, "nen"), { recursive: true });
+  writeFileSync(join(root, "nen", "repos.json"), JSON.stringify(registry));
+  return root;
+}
+
+function reposRow(root: string): SchemaCheck | undefined {
+  return checkTaxonomy({ repoFlag: root }).checks.find(
+    (check): boolean => check.file === "nen/repos.json",
+  );
+}
+
+// zheref/nen#219 criterion 4, through `nen schema check`'s own report.
+describe("checkTaxonomy -- the nen/repos.json row with listed scenarios (zheref/nen#219)", () => {
+  it("accepts maintained_tools[] rows that carry a scenario, and still reports the row", () => {
+    const row = reposRow(
+      checkoutWith({
+        consumers: [],
+        maintained_tools: [
+          { repo: "zheref/hatsu", role: "Hatsu workflow and skill prose", scenario: "hatsu-plugin" },
+          { repo: "zheref/nen", role: "Shared deterministic machinery", scenario: "bun-cli" },
+        ],
+        pending_onboarding: [{ repo: "zheref/KroCloud", scenario: "cloud-functions" }],
+        product_codes: { HA: "zheref/hatsu", NN: "zheref/nen" },
+      }),
+    );
+    expect(row?.ok).toBe(true);
+    expect(row?.required).toBe(true);
+    expect(row?.detail).toBe("0 consumers, 2 product codes, latest (unrecorded)");
+  });
+
+  it("fails the repos row on a malformed listed scenario, naming its pointer", () => {
+    const row = reposRow(checkoutWith({ consumers: [], maintained_tools: [{ repo: "zheref/nen", scenario: 1 }] }));
+    expect(row?.ok).toBe(false);
+    expect(row?.detail).toMatch(/at maintained_tools\[0\]\.scenario, expected a string or nothing/);
   });
 });

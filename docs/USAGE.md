@@ -3694,6 +3694,25 @@ value `canon resolve`/quality-tooling lookups read elsewhere in this CLI. `--rep
 never defaulted to cwd here specifically because a cwd default previously surfaced whatever unrelated
 registry happened to be there instead of the forgotten flag (issue #28).
 
+**Which sections carry `scenario`.** A `scenario` string on a row of **`consumers[]`,
+`maintained_tools[]` or `pending_onboarding[]`** — whichever section is true of the repository,
+never one chosen to hold the field. Through `v0.15.1` only a `consumers[]` entry carried it, so a
+registry's own tool repositories, which consume nothing, could never have one, and the refusal told
+the caller to re-file them as consumers ([#219](https://github.com/zheref/nen/issues/219)). A
+`product_codes` value is a name, not a row, and carries none. The field is validated alike in all three
+sections — optional, a string when present — so a non-string one is refused by pointer
+(`at maintained_tools[0].scenario, expected a string or nothing`) by this verb and by
+[`schema check`](#nen-schema-check), where it fails the `nen/repos.json` row. A repository recorded in
+more than one section (a maintained tool that is also a consumer) has **one** scenario: a value on any
+of its rows is read, the same value on several is fine, and rows stating **different** values are
+refused, naming each.
+
+```json
+"maintained_tools": [
+  { "repo": "zheref/nen", "role": "Shared deterministic machinery", "scenario": "<scenario>" }
+]
+```
+
 **Usage**
 
 ```text
@@ -3705,13 +3724,17 @@ nen repo scenario --repo <path> --target <owner/name>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The checkout whose `nen/repos.json` records `--target`'s scenario. | Listed unbracketed; omitting it is refused BY NAME at exit 2, never silently defaulted. |
-| `--target <owner/name>` | yes | The repository whose scenario is read back. | Missing -> exit 1 (same inconsistency as above). |
+| `--target <owner/name>` | yes | The repository whose scenario is read back. | Missing or malformed -> exit 2, by name. |
 
 **Output and exit codes** — human rendering is the bare scenario string on success, or `"nen: <reason>"`
-on stderr otherwise. `--json` prints `{ ok, scenario }` or `{ ok, reason }`. Exit 0 when a scenario was
-found; exit 1 with a DISTINCT reason for each of: `--repo` carries no `nen/repos.json`, `--target`
-is not recorded anywhere in it, or it is recorded but carries no `scenario` field; exit 2 when `--repo`
-is omitted.
+on stderr otherwise. `--json` prints `{ ok, scenario }` or `{ ok, reason }`, unchanged by #219. Exit 0
+when a scenario was found. Exit 1 with a DISTINCT reason for each of: `--target` is not recorded
+anywhere in the registry; it is recorded on a row that carries no `scenario` (the remedy names the
+section it is **already** in — *"Add one to its maintained_tools[] row"* — never a move to another
+section); it is recorded only as a `product_codes` value (the remedy lays out what each section is for,
+so the new row goes where it is true); or its rows state different scenarios. Exit 1 too when the
+registry is present but malformed. Exit 2 when `--repo` is omitted, or carries no `nen/repos.json` at
+all (the same precondition [`repo resolve`](#nen-repo-resolve) refuses the same way).
 
 **Example**
 
@@ -5132,12 +5155,12 @@ nen canon resolve --repo <path> --target <owner/name>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The checkout whose `nen/repos.json` maps `--target` to a scenario. | Listed unbracketed: omitted, exits 2 by name. |
-| `--target <owner/name>` | yes | The consumer repository being resolved. | Refused (exit 1) if unrecorded, or recorded but not a consumer (`nen/repos.json`'s `consumers[]`). |
+| `--target <owner/name>` | yes | The repository being resolved -- a consumer, a maintained tool or a pending onboarding. | Its scenario is read exactly as [`repo scenario`](#nen-repo-scenario) reads it, off its `consumers[]`, `maintained_tools[]` or `pending_onboarding[]` row ([#219](https://github.com/zheref/nen/issues/219)). Refused (exit 1) if unrecorded, recorded on no row that states a scenario, or recorded with conflicting ones -- each with `repo scenario`'s own reason. |
 | `--always-load <path,path,...>` | yes | The repository's own unconditional-load manifest. | An empty list is refused -- there is no meaningful "loads nothing" empty form. |
 | `--stack-dir <dir>` | yes | Directory the one stack handbook is resolved under. | The `handbooks/stacks` directory of a `bankai-handbooks` checkout at the pinned tag; the stack path is `<stack-dir>/<scenario>/<leaf>`. |
 | `--leaf <file>` | no | The stack handbook's filename. | Defaults to `architecture.md`. `--leaf rules` resolves the stack's operational rule directory, which is what [`canon mirror generate`](#nen-canon-mirror-generate) takes as `--rules-dir`. |
 
-**Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line even under `--json`. Exit 0 on a resolved scenario; exit 1 on an unrecorded/non-consumer target or an invalid scenario shape.
+**Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line even under `--json`. Exit 0 on a resolved scenario; exit 1 on an unrecorded target, one with no (or conflicting) recorded scenario, or an invalid scenario shape.
 
 **Example** -- for a consumer whose `consumers[]` entry records `swiftui-tca-uzf-v2` (`owner/name` and `/path/to/repo` are placeholders), passing the five always-load baselines `handbooks/INDEX.md` names at `v0.6.0`:
 

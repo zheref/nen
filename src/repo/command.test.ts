@@ -204,11 +204,12 @@ describe("nen repo inventory|scenario -- CLI wiring (verbs/4-remainders, merged 
 
   // Cause 3: the registry plainly records the repo (here under
   // pending_onboarding -- #27's widened resolution), just not with a scenario.
+  // Since zheref/nen#219 that row can carry one, so the remedy is that row.
   it("scenario tells a recorded non-consumer apart from an unknown repo (exit 1)", async () => {
     const result = await capture(["repo", "scenario", "--target", "zheref/KroCloud"]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/is recorded in .*under 'pending_onboarding'/);
-    expect(result.err.join("\n")).toMatch(/only a consumers\[\] entry carries a 'scenario'/);
+    expect(result.err.join("\n")).toMatch(/Add one to its pending_onboarding\[\] row/);
   });
 
   // zheref/nen#28's second finding: this is a NAME-HALF match against a bare
@@ -273,5 +274,107 @@ describe("nen repo inventory|scenario -- rendering and the registry that will no
     writeFileSync(join(root, "nen", "repos.json"), "{ not json");
     const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, root);
     expect(result.code).toBe(1);
+  });
+});
+
+// A checkout carrying exactly `registry` as its nen/repos.json.
+function checkoutWith(registry: unknown): string {
+  const root = mkdtempSync(join(tmpdir(), "nen-repo-scenario-"));
+  mkdirSync(join(root, "nen"), { recursive: true });
+  writeFileSync(join(root, "nen", "repos.json"), JSON.stringify(registry));
+  return root;
+}
+
+// The registry zheref/nen#219 was verified against -- the two tool
+// repositories' own, `"consumers": []` -- with each tool now stating the
+// scenario its maintained_tools[] row may carry.
+const TOOL_REGISTRY = {
+  consumers: [],
+  maintained_tools: [
+    { repo: "zheref/hatsu", role: "Hatsu workflow and skill prose", scenario: "hatsu-plugin" },
+    { repo: "zheref/nen", role: "Shared deterministic machinery", scenario: "bun-cli" },
+  ],
+  pending_onboarding: [{ repo: "zheref/KroCloud", scenario: "cloud-functions" }],
+  product_codes: { HA: "zheref/hatsu", NN: "zheref/nen" },
+};
+
+describe("nen repo scenario -- maintained_tools[] and pending_onboarding[] carry a scenario (zheref/nen#219)", () => {
+  // Criterion 1, in the exact invocation the issue quotes as refusing.
+  it("returns a maintained tool's scenario at exit 0", async () => {
+    const root = checkoutWith(TOOL_REGISTRY);
+    const hatsu = await capture(["repo", "scenario", "--target", "zheref/hatsu"], undefined, root);
+    expect(hatsu).toEqual({ code: 0, out: ["hatsu-plugin"], err: [] });
+    const nen = await capture(["repo", "scenario", "--target", "zheref/nen"], undefined, root);
+    expect(nen).toEqual({ code: 0, out: ["bun-cli"], err: [] });
+  });
+
+  it("carries a maintained tool's scenario under --json in the unchanged { ok, scenario } shape", async () => {
+    const result = await capture(["repo", "scenario", "--target", "zheref/nen"], undefined, checkoutWith(TOOL_REGISTRY), true);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ ok: true, scenario: "bun-cli" });
+  });
+
+  // Criterion 2.
+  it("returns a pending onboarding's scenario at exit 0", async () => {
+    const result = await capture(["repo", "scenario", "--target", "zheref/KroCloud"], undefined, checkoutWith(TOOL_REGISTRY));
+    expect(result).toEqual({ code: 0, out: ["cloud-functions"], err: [] });
+  });
+
+  // Criterion 3, against the registry exactly as the issue found it: both
+  // tools listed, neither stating a scenario.
+  it("refuses a maintained tool with no scenario at exit 1, naming the section it is in -- never sending it to consumers[]", async () => {
+    const root = checkoutWith({
+      consumers: [],
+      maintained_tools: [{ repo: "zheref/hatsu", role: "Hatsu workflow and skill prose" }],
+      product_codes: { HA: "zheref/hatsu" },
+    });
+    const result = await capture(["repo", "scenario", "--target", "zheref/hatsu"], undefined, root);
+    expect(result.code).toBe(1);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/'zheref\/hatsu' is recorded in .*\(under 'maintained_tools'\)/);
+    expect(err).toMatch(/Add one to its maintained_tools\[\] row/);
+    expect(err).not.toMatch(/record it under consumers/);
+    expect(err).not.toMatch(/only a consumers\[\] entry carries/);
+  });
+
+  it("refuses rows that state different scenarios at exit 1, naming both", async () => {
+    const root = checkoutWith({
+      consumers: [{ repo: "zheref/bankai-scaffold", consumes: [], scenario: "scaffold" }],
+      maintained_tools: [{ repo: "zheref/bankai-scaffold", scenario: "tooling" }],
+    });
+    const result = await capture(["repo", "scenario", "--target", "zheref/bankai-scaffold"], undefined, root);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/with more than one scenario -- 'scaffold' \(its consumers\[\] entry\), 'tooling' \(its maintained_tools\[\] row\)/);
+  });
+
+  // Criterion 4's refusal half: validated as a consumer's is, so a
+  // non-string is the registry's own defect -- exit 1, by pointer -- rather
+  // than read as "no scenario".
+  it("a maintained_tools[] row whose scenario is not a string is the registry's defect (exit 1), named by pointer", async () => {
+    const root = checkoutWith({ consumers: [], maintained_tools: [{ repo: "zheref/nen", scenario: 7 }] });
+    const result = await capture(["repo", "scenario", "--target", "zheref/nen"], undefined, root);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/maintained_tools\[0\]\.scenario/);
+  });
+
+  // Criterion 6: the consumer path and the absent-registry refusal are the
+  // ones above, unchanged; this pins the consumer half against a registry
+  // that now ALSO carries listed scenarios.
+  it("a consumer's own scenario reads exactly as before beside listed rows that carry theirs", async () => {
+    const root = checkoutWith({
+      ...TOOL_REGISTRY,
+      consumers: [{ repo: "zheref/KroApple", consumes: [], scenario: "swiftui-tca-uzf-v2" }],
+    });
+    const result = await capture(["repo", "scenario", "--target", "zheref/KroApple"], undefined, root);
+    expect(result).toEqual({ code: 0, out: ["swiftui-tca-uzf-v2"], err: [] });
+  });
+
+  // Criteria 2 and 5: the help says which sections carry the field.
+  it("'nen repo --help' names every section that carries a scenario, and the one that cannot", async () => {
+    const result = await capture(["repo", "--help"]);
+    expect(result.code).toBe(0);
+    const help = result.out.join("\n");
+    expect(help).toMatch(/WHICH SECTIONS CARRY IT: a 'scenario' field on a consumers\[\],\s+maintained_tools\[\] or pending_onboarding\[\] row, validated alike/);
+    expect(help).toMatch(/A product_codes value is a name, not a row, and\s+carries none/);
   });
 });

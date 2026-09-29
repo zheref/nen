@@ -203,8 +203,9 @@ would sync: bankai:stage/idea (#ededed) -- Raw idea awaiting research
 would sync: bankai:epic (#5319e7) -- An epic, delivered on an integration branch
 ```
 
-Resolve which handbooks it loads. `--target` must name a consumer the
-registry under `--repo` records with a `scenario`; `--always-load` and
+Resolve which handbooks it loads. `--target` must name a repository the
+registry under `--repo` records with a `scenario` -- on its `consumers[]`,
+`maintained_tools[]` or `pending_onboarding[]` row; `--always-load` and
 `--stack-dir` are paths inside a checkout of the canonical handbooks
 repository, [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks)
 (its `handbooks/INDEX.md` names the always-load set -- five baselines at

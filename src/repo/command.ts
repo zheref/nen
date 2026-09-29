@@ -116,16 +116,29 @@ inventory:
 
 scenario:
   The scenario recorded for --target in --repo's nen/repos.json --
-  the value canon-resolve/quality-tooling lookups read. --repo is
-  REQUIRED (exit 2), never defaulted to the current directory: a cwd
-  default surfaced as whatever registry happened to be there, not as the
-  forgotten flag (zheref/nen#28). Exits 2 when --repo carries NEITHER
-  nen/repos.json NOR the legacy schemas/repos.json -- there is no
-  registry to read at all, the same precondition 'repo resolve' refuses
-  the same way. Exits 1 with a DISTINCT reason when the registry IS
-  present and --target is not recorded in it at all, or is recorded but
-  carries no scenario -- those are the target repository's own data, not
-  the invocation.`;
+  the value canon-resolve/quality-tooling lookups read.
+
+  WHICH SECTIONS CARRY IT: a 'scenario' field on a consumers[],
+  maintained_tools[] or pending_onboarding[] row, validated alike -- the
+  section is whichever one is TRUE of the repository, never one chosen
+  to hold the field. A registry's own tool repositories consume nothing,
+  so while only consumers[] carried it they could never have one
+  (zheref/nen#219). A product_codes value is a name, not a row, and
+  carries none. A repository recorded in more than one of those sections
+  has ONE scenario: a value on any of its rows is read, and rows that
+  state different values are refused, naming each.
+
+  --repo is REQUIRED (exit 2), never defaulted to the current directory:
+  a cwd default surfaced as whatever registry happened to be there, not
+  as the forgotten flag (zheref/nen#28). Exits 2 when --repo carries
+  NEITHER nen/repos.json NOR the legacy schemas/repos.json -- there is
+  no registry to read at all, the same precondition 'repo resolve'
+  refuses the same way. Exits 1 with a DISTINCT reason when the registry
+  IS present and --target is not recorded in it at all; is recorded on a
+  row that carries no scenario (the remedy names the section it is
+  already in); is recorded only as a product_codes value; or has rows
+  that disagree -- those are the target repository's own data, not the
+  invocation.`;
 
 function render(resolution: Resolution): string[] {
   const lines: string[] = [];
