@@ -88,7 +88,14 @@
 // shell's own `unresolved_thread_count` makes, which is transcribed with its
 // reasoning below because it is a COUNT, not a readiness call.
 
-import { defaultReviewers, type RoundPolicy } from "../gates/predicates.js";
+import {
+  defaultReviewers,
+  latestChecks,
+  normalizeReviewers,
+  roundCheckState,
+  type EarlierHeadCheck,
+  type RoundPolicy,
+} from "../gates/predicates.js";
 import { parseCheckRollup } from "./parse.js";
 import type { GateIdentities, ReviewerIdentity } from "../schema/gates.js";
 import {
@@ -132,6 +139,24 @@ export interface PrStateSource {
    * own comment.
    */
   reviewRequestsPage(repo: PrRef, prNumber: number, cursor: string): Promise<ReviewRequestsPage>;
+  /**
+   * The pull request's commits, oldest first, raw (REST `pulls/{n}/commits`,
+   * whose `sha` is all this module reads). OPTIONAL: it exists for the
+   * bounded earlier-head round-check read (`readEarlierRoundChecks`, below),
+   * and a source without it simply reads no history -- which can only ever
+   * mean "not counted", the head-only reading every source had before.
+   */
+  pullRequestCommits?(repo: PrRef, prNumber: number): Promise<unknown[]>;
+  /**
+   * One commit's check runs, the RAW REST payload of `commits/{sha}/check-runs`
+   * for one page -- `{ total_count, check_runs: [...] }`, each run carrying
+   * `name`, `status`, `conclusion` and `pull_requests`. Raw so the walk can see
+   * `total_count` (a truncated page is an undercount it warns about) and each
+   * run's `pull_requests` (a run made for another PR is not this PR's round).
+   * OPTIONAL, for the same reason and with the same fail-closed absence as
+   * `pullRequestCommits`.
+   */
+  commitCheckRuns?(repo: PrRef, sha: string): Promise<unknown>;
 }
 
 export interface FetchStateOptions {
@@ -163,7 +188,30 @@ export interface FetchStateOptions {
    * rarely if ever leave page one.
    */
   readonly maxReviewRequestPages: number;
+  /**
+   * The most EARLIER commits `readEarlierRoundChecks` reads check runs for,
+   * per evaluation. OPTIONAL; `EARLIER_COMMIT_READS_DEFAULT` when omitted.
+   * A budget, not a correctness bound: hitting it means "not counted", with a
+   * warning, never a round nobody saw.
+   */
+  readonly maxEarlierCommitReads?: number;
 }
+
+/**
+ * How many earlier commits one evaluation may read check runs for. The walk
+ * is newest-first and stops at the first qualifying run per reviewer, so the
+ * common shape -- a round-check reviewer that ran on the head before the last
+ * push -- costs ONE read; 20 is headroom for a pull request pushed to many
+ * times since, and small enough that a token which can list commits but not
+ * read their checks cannot spend a rate-limit budget finding that out.
+ */
+export const EARLIER_COMMIT_READS_DEFAULT = 20;
+
+/**
+ * GitHub's ceiling on REST `pulls/{n}/commits`: the listing never returns more
+ * than 250 commits, so a listing that long may have left older ones out (L1).
+ */
+export const PULL_REQUEST_COMMITS_CAP = 250;
 
 /**
  * `unevaluated` carries a REMEDY, always.
@@ -574,6 +622,317 @@ function timestampOf(event: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/** One round-check reviewer the earlier-head read is looking for. */
+export interface EarlierRoundCheckWanted {
+  readonly reviewer: string;
+  readonly pattern: RegExp;
+}
+
+/**
+ * BOUNDED, EARLIER-HEAD ROUND CHECKS (maintainer ruling 2026-09-29, option B).
+ *
+ * `bounded` (zheref/nen#214, the default) accepts a reviewer's REVIEW posted
+ * at any earlier head of the pull request. For a reviewer whose CHECK IS ITS
+ * ROUND -- it posts a review only when it has findings -- the same fact is a
+ * definitive-SUCCESS run of that check on an earlier commit THAT GITHUB LISTS
+ * AGAINST THIS pull request, and the head rollup cannot show it: Cursor Bugbot
+ * runs once per pull request here (zheref/nen#279 ran it on 2851d2e, then 7cee8a5 was
+ * pushed; zheref/nen#278 ran it on 0a77992, then faaa4ff). This reads it.
+ *
+ * WHAT QUALIFIES -- the three filters, each from a finding in Nobunaga's
+ * review of E7, each confirmed live:
+ *   * SUCCESS ONLY (C1). Bugbot's NEUTRAL is "found N issues" OR "cancelled
+ *     because a newer commit was pushed" -- zheref/nen#281 had no review and
+ *     its cancelled NEUTRAL on cc7a948 read as a round. Findings always come
+ *     with a posted review, which the review limb counts; a non-SUCCESS run
+ *     is skipped and the walk KEEPS LOOKING, so a newest cancelled run cannot
+ *     hide an older clean one.
+ *   * A RUN GITHUB LISTS AGAINST THIS PULL REQUEST (H1, F4). Stacked pull
+ *     requests share commits -- #278's commit list carries #274's four -- so a
+ *     run is counted only when one of its REST `pull_requests[]` entries is
+ *     THIS pull request: its `number` AND its base repository (2851d2e's lists
+ *     #279 of zheref/nen). A number alone is not an identity -- #7 of another
+ *     base repository is another pull request. A run naming only OTHER pull requests is skipped silently: it is
+ *     correctly not this PR's round. A run naming NONE (GitHub leaves the list
+ *     empty for a fork's pull request, and once a pull request is merged) is
+ *     not counted either, with a warning, because nothing attributes it.
+ *   * A COMPLETED, name-matched run of a WANTED reviewer's pattern.
+ *
+ * THE CALL BUDGET, stated because it is the point:
+ *   * ZERO calls unless the caller hands it at least one wanted reviewer --
+ *     and `fetchPrState` wants one only under `bounded`, only for a declared
+ *     round-check reviewer that is configured for this PR or a `round_quorum`
+ *     member (the latter only while the quorum is not already met by rounds
+ *     known without history), has posted no review, and is NOT already
+ *     settled at head (its latest head run neither a SUCCESS nor in flight).
+ *   * ONE commit listing (octokit-paginated; GitHub serves at most 250).
+ *   * Then ONE check-run read per earlier commit (one page of 100), NEWEST
+ *     FIRST -- the run sought is most often on the head before the last push
+ *     -- STOPPING the moment every wanted reviewer has a qualifying run, and
+ *     in any case after `maxCommitReads` commits.
+ *
+ * FAILS CLOSED, and closed means NOT COUNTED. A thrown listing, a thrown or
+ * unreadable check-run read, and a walk cut off by the budget each end the
+ * walk with a warning naming what happened; the runs found BEFORE that point
+ * are kept, because each is real evidence read in full, and no failure can
+ * manufacture one. The two page limits (L1) are UNDERCOUNTS, so they warn and
+ * carry on rather than refuse: a listing of 250 commits may be GitHub's cap
+ * (older commits unread), and a commit whose `total_count` exceeds the runs
+ * one page carried may hold an unread run. Nothing here can make a reviewer
+ * have a round it did not have -- the predicates re-check every run.
+ */
+export async function readEarlierRoundChecks(
+  source: PrStateSource,
+  repo: PrRef,
+  prNumber: number,
+  headSha: string,
+  wanted: readonly EarlierRoundCheckWanted[],
+  maxCommitReads: number,
+): Promise<{
+  readonly checks: readonly EarlierHeadCheck[];
+  readonly warnings: readonly string[];
+  readonly commitReads: number;
+}> {
+  const none = { checks: [], warnings: [], commitReads: 0 };
+  if (wanted.length === 0 || headSha === "") return none;
+  const at = `${repo.owner}/${repo.repo}#${prNumber}`;
+  const names = wanted.map((entry): string => entry.reviewer).join(", ");
+  const listCommits = source.pullRequestCommits;
+  const readRuns = source.commitCheckRuns;
+  if (listCommits === undefined || readRuns === undefined) {
+    return {
+      ...none,
+      warnings: [
+        `earlier-head round checks for ${names} were not read on ${at}: this GitHub source cannot list a pull request's commits, so only the head's checks were weighed`,
+      ],
+    };
+  }
+
+  let commits: unknown[];
+  try {
+    commits = await listCommits.call(source, repo, prNumber);
+  } catch (error) {
+    return {
+      ...none,
+      warnings: [
+        `earlier-head round checks for ${names} were not read on ${at}: listing the pull request's commits failed (${error instanceof Error ? error.message : String(error)}), so none were counted`,
+      ],
+    };
+  }
+  const warnings: string[] = [];
+  const listed = Array.isArray(commits) ? commits : [];
+  if (listed.length >= PULL_REQUEST_COMMITS_CAP) {
+    warnings.push(
+      `earlier-head round checks: ${at} listed ${listed.length} commits, GitHub's cap for this listing; any older commit was not read, so a run on one is not counted`,
+    );
+  }
+  const shas: string[] = [];
+  for (const commit of listed) {
+    const sha = digPath(commit, "sha");
+    if (typeof sha === "string" && sha !== "" && sha !== headSha && !shas.includes(sha)) shas.push(sha);
+  }
+  shas.reverse(); // REST lists oldest first; the run sought is most often recent.
+
+  const remaining = [...wanted];
+  const found: EarlierHeadCheck[] = [];
+  let commitReads = 0;
+  for (const sha of shas) {
+    if (remaining.length === 0) break;
+    if (commitReads >= maxCommitReads) {
+      warnings.push(
+        `earlier-head round checks: stopped after ${maxCommitReads} earlier commit(s) of ${at} without a qualifying run for ${remaining.map((entry): string => entry.reviewer).join(", ")}; not counted`,
+      );
+      break;
+    }
+    commitReads += 1;
+    let payload: unknown;
+    try {
+      payload = await readRuns.call(source, repo, sha);
+    } catch (error) {
+      warnings.push(
+        `earlier-head round checks: reading the check runs of ${sha.slice(0, 7)} on ${at} failed (${error instanceof Error ? error.message : String(error)}); the walk stopped and nothing further was counted`,
+      );
+      break;
+    }
+    const runs = digPath(payload, "check_runs");
+    if (!Array.isArray(runs)) {
+      warnings.push(
+        `earlier-head round checks: the check runs of ${sha.slice(0, 7)} on ${at} came back unreadable; the walk stopped and nothing further was counted`,
+      );
+      break;
+    }
+    const total = digPath(payload, "total_count");
+    if (typeof total === "number" && total > runs.length) {
+      warnings.push(
+        `earlier-head round checks: ${sha.slice(0, 7)} on ${at} has ${total} check runs and one page carried ${runs.length}; a run on the rest was not read, so it is not counted`,
+      );
+    }
+    for (const entry of [...remaining]) {
+      let unattributed = false;
+      const run = runs.find((candidate): boolean => {
+        const name = digPath(candidate, "name");
+        const status = digPath(candidate, "status");
+        const conclusion = digPath(candidate, "conclusion");
+        if (
+          typeof name !== "string" ||
+          !entry.pattern.test(name) ||
+          typeof status !== "string" ||
+          status.toUpperCase() !== "COMPLETED" ||
+          typeof conclusion !== "string" ||
+          conclusion.toUpperCase() !== "SUCCESS"
+        ) {
+          return false;
+        }
+        const listed = runPullRequests(candidate);
+        if (listed.length === 0) {
+          unattributed = true;
+          return false;
+        }
+        return listed.some((pull): boolean => pull.number === prNumber && isRepository(pull.baseRepoUrl, pull.baseRepoName, repo));
+      });
+      if (run === undefined) {
+        if (unattributed) {
+          warnings.push(
+            `earlier-head round checks: a successful run for ${entry.reviewer} on ${sha.slice(0, 7)} of ${at} names no pull request (a fork's pull request, or one already merged), so it cannot be attributed to this one and is not counted`,
+          );
+        }
+        continue;
+      }
+      found.push({
+        sha,
+        name: digPath(run, "name") as string,
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+      });
+      remaining.splice(remaining.indexOf(entry), 1);
+    }
+  }
+  return { checks: found, warnings, commitReads };
+}
+
+/**
+ * A REST check run's `pull_requests[]` -- each entry's `number` and its BASE
+ * repository -- dropping any entry with no readable number. `[]` when the
+ * list is absent or unreadable.
+ */
+function runPullRequests(
+  run: unknown,
+): { readonly number: number; readonly baseRepoUrl: unknown; readonly baseRepoName: unknown }[] {
+  const list = digPath(run, "pull_requests");
+  if (!Array.isArray(list)) return [];
+  const pulls: { number: number; baseRepoUrl: unknown; baseRepoName: unknown }[] = [];
+  for (const pull of list) {
+    const number = digPath(pull, "number");
+    if (typeof number !== "number") continue;
+    pulls.push({
+      number,
+      baseRepoUrl: digPath(pull, "base", "repo", "url"),
+      baseRepoName: digPath(pull, "base", "repo", "name"),
+    });
+  }
+  return pulls;
+}
+
+/**
+ * Is a `pull_requests[]` entry's base repository THIS pull request's
+ * repository? (Nobunaga's delta review of E7, finding F4.) A pull request
+ * NUMBER alone is not an identity: a check run lists pull requests by their
+ * base repository, and #7 in a fork's or another repository's list is a
+ * different pull request. REST carries the base repository as `{ id, name,
+ * url }` with no owner field -- `url` is `https://api.github.com/repos/<owner>
+ * /<name>` (or a GHES host's `.../api/v3/repos/...`) -- so the owner and name
+ * are read from that path's `/repos/{owner}/{name}` suffix and `name` must
+ * agree with it. Compared case-insensitively, as GitHub names are. Anything
+ * unreadable is NOT this repository: the entry fails closed, i.e. not counted.
+ */
+function isRepository(url: unknown, name: unknown, repo: PrRef): boolean {
+  if (typeof url !== "string" || typeof name !== "string") return false;
+  const match = /\/repos\/([^/]+)\/([^/]+?)\/?$/.exec(url);
+  if (match === null) return false;
+  const owner = (match[1] ?? "").toLowerCase();
+  const path = (match[2] ?? "").toLowerCase();
+  const wanted = repo.repo.toLowerCase();
+  return owner === repo.owner.toLowerCase() && path === wanted && name.toLowerCase() === wanted;
+}
+
+/**
+ * Which round-check reviewers the earlier-head read is worth making for --
+ * the narrowing that keeps `readEarlierRoundChecks` at zero calls on almost
+ * every evaluation. `[]` under `strict` (only the head counts there), and for
+ * each declared reviewer with a `round_check_pattern`, it is wanted only when
+ * ALL of these hold:
+ *   * it can matter: it is in the configured reviewer set, or a member of the
+ *     file's `round_quorum`;
+ *   * the head does not already settle it: its latest head run is neither a
+ *     definitive SUCCESS (already a round) nor in flight (work in progress
+ *     supersedes history, and keeps an enrolled reviewer owed) -- a SKIPPED
+ *     or unsuccessful head run leaves it unsettled;
+ *   * it has posted no review this pull request, which under `bounded` is
+ *     already its round -- a read that could only confirm what is known;
+ *   * if it matters ONLY as a quorum member (it is not configured), the
+ *     quorum is not already met by members whose round is known without
+ *     history -- a posted review, or a completed run at head. Only a
+ *     configured reviewer can be OWED; a quorum-only member is sought solely
+ *     to reach `minimum`, and once that is reached its history changes no
+ *     verdict (zheref/nen#274: Copilot's review met the quorum, and three
+ *     reads chasing Bugbot's history found nothing that mattered).
+ * All but the first are read-AVOIDANCE, not verdicts: getting one wrong could
+ * only skip a read, i.e. count nothing. The known-round count leaves out a
+ * CON-40 delivery-holistic-pass member, whose review alone is not always its
+ * round, so it can only ever undercount -- which means one more read, never a
+ * skipped one that mattered.
+ */
+export function earlierRoundCheckWanted(
+  identities: GateIdentities,
+  policy: RoundPolicy,
+  configured: readonly string[],
+  headChecks: readonly unknown[],
+  reviews: readonly unknown[],
+): EarlierRoundCheckWanted[] {
+  if (policy !== "bounded") return [];
+  const parsed = parseCheckRollup(headChecks, "$.checks");
+  if (!parsed.ok) return [];
+  const latest = latestChecks(parsed.value);
+  const quorum = identities.roundQuorum ?? null;
+  const members = quorum?.anyOf ?? [];
+  const posted = (reviewer: ReviewerIdentity): boolean =>
+    reviews.some((review): boolean => {
+      const author = digPath(review, "author");
+      return (
+        typeof author === "string" &&
+        reviewer.loginPattern.test(author) &&
+        digPath(review, "state") !== "PENDING" &&
+        typeof digPath(review, "commit_id") === "string"
+      );
+    });
+  const completedAtHead = (reviewer: ReviewerIdentity): boolean =>
+    reviewer.roundCheckPattern !== null &&
+    roundCheckState(latest, reviewer.roundCheckPattern).state === "completed";
+  const knownRounds = members.filter((name): boolean => {
+    const reviewer = identities.reviewer(name);
+    return (
+      reviewer !== undefined &&
+      !reviewer.deliveryHolisticPass &&
+      (posted(reviewer) || completedAtHead(reviewer))
+    );
+  }).length;
+  const quorumAlreadyMet = quorum !== null && knownRounds >= quorum.minimum;
+
+  const wanted: EarlierRoundCheckWanted[] = [];
+  for (const reviewer of identities.reviewers) {
+    const pattern = reviewer.roundCheckPattern;
+    if (pattern === null) continue;
+    const isConfigured = configured.includes(reviewer.name);
+    if (!isConfigured && !members.includes(reviewer.name)) continue;
+    if (!isConfigured && quorumAlreadyMet) continue;
+    const atHead = roundCheckState(latest, pattern).state;
+    if (atHead === "completed" || atHead === "pending") continue;
+    if (posted(reviewer)) continue;
+    wanted.push({ reviewer: reviewer.name, pattern });
+  }
+  return wanted;
+}
+
 /** `(.login // .name // "")` -- gh's own flattening of a review request. */
 function requestLogin(entry: unknown): string {
   if (typeof entry === "string") return entry;
@@ -780,9 +1139,29 @@ export async function fetchPrState(
     stallRequestedAt = await requestedAt(source, repo, prNumber, exempt.loginPattern);
   }
 
+  // Option B of the 2026-09-29 ruling: under `bounded`, a round-check
+  // reviewer's completed run on an EARLIER commit of this pull request. A
+  // SEPARATE field -- `checks` stays the head's rollup, byte for byte, for
+  // CON-32(a), enrolment and every other reader -- and zero calls on every
+  // evaluation the narrowing above rules out (see readEarlierRoundChecks).
+  const earlier = await readEarlierRoundChecks(
+    source,
+    repo,
+    prNumber,
+    head,
+    earlierRoundCheckWanted(
+      options.identities,
+      options.policy,
+      normalizeReviewers(reviewers),
+      checkRollupNodes,
+      reviews,
+    ),
+    options.maxEarlierCommitReads ?? EARLIER_COMMIT_READS_DEFAULT,
+  );
+
   return {
     ok: true,
-    warnings: threads.warnings,
+    warnings: [...threads.warnings, ...earlier.warnings],
     state: {
       mergeable,
       head_sha: head,
@@ -796,6 +1175,9 @@ export async function fetchPrState(
       round_policy: options.policy,
       stall_requested_at: stallRequestedAt === "" ? null : stallRequestedAt,
       exclude_run_id: options.excludeRun === "" ? null : options.excludeRun,
+      // Earlier-head round-check runs (option B, 2026-09-29), `[]` when none
+      // were wanted, none were found, or the read failed closed.
+      earlier_round_checks: earlier.checks,
       // The CON-40 delivery evidence. EVERY absent field reads as "not a
       // delivery PR" rather than as unreadable -- isDeliveryPr() requires
       // author, base_ref and default_branch NON-EMPTY -- so a degraded read

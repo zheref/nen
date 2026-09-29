@@ -25,8 +25,10 @@ import {
   defaultReviewers,
   latestChecks,
   pendingRounds,
+  roundQuorum,
   type RoundPolicy,
 } from "../gates/predicates.js";
+import { describeQuorum } from "../gates/ready.js";
 import { rollupEntryLabel, rollupEntryStatus } from "../github/types.js";
 import type { GateIdentities } from "../schema/gates.js";
 import type { PrSnapshot } from "./fetch.js";
@@ -84,19 +86,79 @@ export function nextBlocker(
     options.reviewers === undefined || options.reviewers.length === 0
       ? defaultReviewers(identities, snapshot.checks)
       : options.reviewers;
+  // ONE input set for both CON-32(b) questions, so they are asked of the
+  // same evidence. It carries NO `earlierChecks`, deliberately: the snapshot
+  // this module is handed (./fetch.ts, a `gh pr view` read) holds the head's
+  // rollup and nothing earlier, and reading history here would be a second,
+  // gh-side copy of ../github/pr_state.ts's bounded earlier-head walk. So this
+  // module reads the HEAD ONLY -- under `bounded` it can call a round OWED
+  // that `nen pr ready` counts through a run on an earlier commit, i.e. it is
+  // STRICTER than `pr ready` there, never looser, which is the safe side for a
+  // "what blocks this next" answer -- and the quorum clause below says so
+  // wherever that can be the difference.
+  const roundInputs = {
+    reviewRequests: snapshot.reviewRequests,
+    checks: snapshot.checks,
+    reviews: snapshot.reviews,
+  };
+  const policy = options.policy ?? "bounded";
+  const deliveryPr = options.deliveryPr ?? false;
   const owed = pendingRounds(
     identities,
-    { reviewRequests: snapshot.reviewRequests, checks: snapshot.checks, reviews: snapshot.reviews },
+    roundInputs,
     snapshot.pr.headSha,
     reviewers,
-    options.policy ?? "bounded",
-    options.deliveryPr ?? false,
+    policy,
+    deliveryPr,
   );
+  // `round_quorum` (maintainer ruling 2026-09-29; Nobunaga's review of E7,
+  // finding H2): the file's floor on how many of a group HAVE a round. Asked
+  // AFTER pendingRounds and of the same inputs, and it only ever ADDS: before
+  // it was asked here, this repository's own gates.json (copilot exempt,
+  // bugbot enrolled only by its check) let an unreviewed pull request answer
+  // `none` while `nen pr ready` refused it on the quorum. `null` when the file
+  // declares none, and then nothing below changes.
+  const quorum = roundQuorum(identities, roundInputs, snapshot.pr.headSha, policy, deliveryPr);
+  // HEAD ONLY, AND SAID SO (Nobunaga's delta review of E7, finding F2). Under
+  // `bounded`, `nen pr ready` also counts a round-check member's SUCCESS run
+  // on an EARLIER commit of this pull request -- Cursor Bugbot runs once per
+  // pull request, so that is the common shape (zheref/nen#279: ready through
+  // 2851d2e, while this verb said "no 'Cursor Bugbot' check"). This verb's
+  // snapshot carries the head only: its caller (./command.ts) hands
+  // ./fetch.ts no identities and no policy, so the fetch cannot know which
+  // patterns to seek, and reading every earlier commit's runs on every call
+  // would cost up to 21 `gh` calls where the head usually settles it. So
+  // where the two verbs CAN differ -- the quorum is unmet and a round-check
+  // member has no SUCCESS and nothing in flight at head -- the clause says
+  // that this answer is the head's, and where to get the fuller one. It
+  // changes no verdict: this verb stays STRICTER than `pr ready`, never
+  // looser.
+  const headOnly =
+    quorum !== null &&
+    !quorum.met &&
+    policy === "bounded" &&
+    quorum.members.some(
+      (member): boolean =>
+        member.round === null &&
+        member.roundCheck !== null &&
+        (member.roundCheck.state === "absent" ||
+          member.roundCheck.state === "skipped" ||
+          member.roundCheck.state === "unsuccessful"),
+    );
+  const quorumClause =
+    quorum !== null && !quorum.met
+      ? describeQuorum(quorum) +
+        (headOnly ? " (head only — `nen pr ready` also reads earlier commits of this PR)" : "")
+      : null;
   if (owed.length > 0) {
+    const detail = owed.map((round): string => `${round.reviewer} (${round.reason})`).join(", ");
     return {
       kind: "owed-round",
-      detail: owed.map((round): string => `${round.reviewer} (${round.reason})`).join(", "),
+      detail: quorumClause === null ? detail : `${detail} — and ${quorumClause}`,
     };
+  }
+  if (quorumClause !== null) {
+    return { kind: "owed-round", detail: quorumClause };
   }
 
   // snapshot.reviewThreads is now a full, paginated read (../pr/fetch.ts's
