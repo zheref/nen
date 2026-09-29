@@ -184,3 +184,32 @@ describe("parseRepoRegistry -- validation", () => {
     ).toThrow(/maintained_tools\[0\]\.repo/);
   });
 });
+
+describe("toolPins -- the canon pin is data on the maintained_tools entry (CON-13)", () => {
+  const at = "nen/repos.json";
+
+  it("reads a maintained tool's pinned tag, keyed by its slug, and leaves unpinned tools out", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [],
+      maintained_tools: [
+        { repo: "owner/handbooks", role: "canonical handbooks", pinned: "v0.6.0" },
+        { repo: "owner/tool", role: "a tool" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({ "owner/handbooks": "v0.6.0" });
+    // The slug list is unchanged by the pin: both tools are still recorded.
+    expect(registry.maintainedTools).toEqual(["owner/handbooks", "owner/tool"]);
+  });
+
+  it("is empty when no maintained tool is pinned, or the list is absent", () => {
+    expect(parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "owner/tool" }] }).toolPins).toEqual({});
+    expect(parseRepoRegistry(at, { consumers: [] }).toolPins).toEqual({});
+    expect(loadRepoRegistry(BANKAI_REPO).toolPins).toEqual({});
+  });
+
+  it("refuses a pinned that is not a string, by pointer", () => {
+    expect(() =>
+      parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: 6 }] }),
+    ).toThrow(/maintained_tools\[0\]\.pinned/);
+  });
+});

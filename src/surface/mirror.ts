@@ -312,7 +312,7 @@ export interface GenerateReport {
   readonly modelMapped: readonly string[];
   /** `written`, `not supported` (the row has no manifest), or `none` (no --hooks). */
   readonly hooks: "written" | "not supported" | "none";
-  readonly rules: { readonly path: string; readonly chars: number; readonly limit: number | null } | "not supported" | "none";
+  readonly rules: { readonly path: string; readonly chars: number; readonly bytes: number; readonly limit: number | null } | "not supported" | "none";
   readonly permissions: "written" | "not supported" | "none";
   /** Rows transcribed verbatim from the source's `surfaces.<surface>` block, after the shared ones. */
   readonly permissionSurfaceRows: number;
@@ -608,7 +608,7 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     else {
       const rendered = renderRules(row.rules, options.rules, markerText(row.surface, stamp));
       files.push({ path: rendered.path, content: rendered.content });
-      rules = { path: rendered.path, chars: rendered.chars, limit: row.rules.limit };
+      rules = { path: rendered.path, chars: rendered.chars, bytes: rendered.bytes, limit: row.rules.limit };
       if (row.rules.lineGuidance !== null && rendered.lines > row.rules.lineGuidance) {
         notes.push(
           `${rendered.path} is ${rendered.lines} lines; the surface advises under ${row.rules.lineGuidance} (${row.rules.source})`,

@@ -623,6 +623,8 @@ export interface RenderedRules {
   readonly path: string;
   readonly content: string;
   readonly chars: number;
+  /** UTF-8 bytes -- the unit the one documented limit (antigravity's) is stated in. */
+  readonly bytes: number;
   readonly lines: number;
 }
 
@@ -631,18 +633,25 @@ export interface RenderedRules {
  * one) then marker then the source verbatim. Over the row's `limit` it is
  * REFUSED with the two numbers: the surface would truncate it silently, and
  * a rules file whose tail the surface never reads is a rule nobody enforces.
+ *
+ * THE LIMIT IS COMPARED IN BYTES. The page states it in bytes ("truncates
+ * any single rule file that exceeds 24,000 bytes"), and a character count
+ * under-reads a multibyte file -- a rules document full of em dashes and
+ * arrows could pass a character comparison and still be cut by the surface
+ * (Copilot, PR #274). `chars` is still reported, beside `bytes`.
  */
 export function renderRules(rule: RulesRule, source: RulesSource, marker: string): RenderedRules {
   const front = rule.frontmatter === null ? "" : rule.frontmatter.replace("{name}", source.stem);
   const content = `${front}<!-- ${marker} -->\n${source.text}`;
   const chars = content.length;
+  const bytes = Buffer.byteLength(content, "utf8");
   const path = `${rule.dir}/${source.stem}${rule.extension}`;
-  if (rule.limit !== null && chars > rule.limit) {
+  if (rule.limit !== null && bytes > rule.limit) {
     throw new SurfacePackError(
-      `--rules '${source.stem}' renders to ${chars} characters at ${path}, over the ${rule.limit}-character limit the surface documents (${rule.source}). The surface would truncate it silently; shorten the source instead -- nen never cuts a rules file.`,
+      `--rules '${source.stem}' renders to ${bytes} bytes at ${path}, over the ${rule.limit}-byte limit the surface documents (${rule.source}). The surface would truncate it silently; shorten the source instead -- nen never cuts a rules file.`,
     );
   }
-  return { path, content, chars, lines: content.split("\n").length };
+  return { path, content, chars, bytes, lines: content.split("\n").length };
 }
 
 // ---------------------------------------------------------------------------

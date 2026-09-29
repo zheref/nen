@@ -1,35 +1,74 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { findSurface, type CanonMirrorRule, type SurfaceRow } from "../surface/rules.js";
+import { splitDocument } from "../surface/frontmatter.js";
 import {
+  BLOCK_END,
+  blockBegin,
+  CanonMirrorError,
   canonFilenames,
-  checkMirror,
-  generateMirror,
+  checkSurface,
+  fileMarker,
+  guardSurface,
   MissingTokenError,
-  mirrorReportOk,
   parseCanonValues,
+  readCanonSources,
+  readFileMarker,
   renderReportMarkdown,
-  writeMirror,
-  type HeaderTemplate,
+  renderSurface,
+  sectionMarker,
+  surfaceReportOk,
+  writeSurface,
+  type CanonPin,
+  type CanonSource,
 } from "./mirror.js";
 
-const HEADER: HeaderTemplate = {
-  template: "<!-- GENERATED from {ref}/{scenario}/{file} -- DO NOT EDIT. -->\n",
-  pattern: /^<!-- GENERATED from (?<ref>\S+)\/(?<scenario>[^/]+)\/(?<file>\S+) -- DO NOT EDIT\. -->\n/,
-};
+const PIN: CanonPin = { source: "owner/handbooks", ref: "v1.2.0", scenario: "scenario-x" };
+const MOVED: CanonPin = { ...PIN, ref: "v1.3.0" };
 const NOT_MIRRORED = new Set(["README.md", "placeholders.md"]);
+const VALUES = { NAME: "World" };
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "nen-canon-"));
 }
 
-describe("parseCanonValues -- a flat TOKEN: value reader", () => {
+/** A rules directory of two canon files plus the two meta files a stack directory keeps beside them. */
+function rulesDir(): string {
+  const dir = tempDir();
+  writeFileSync(join(dir, "01-a.md"), "# A\n\nHello {{NAME}}.\n");
+  writeFileSync(join(dir, "02-b.md"), "# B\n\nSecond rule.\n");
+  writeFileSync(join(dir, "README.md"), "index -- never mirrored");
+  writeFileSync(join(dir, "placeholders.md"), "| {{NAME}} | ... |");
+  writeFileSync(join(dir, "notes.txt"), "not markdown");
+  return dir;
+}
+
+function row(name: string): SurfaceRow {
+  const found = findSurface(name);
+  if (found === undefined) throw new Error(`no row for ${name}`);
+  return found;
+}
+
+/** `row` with its canon rule's fields overridden -- for the limits no shipped row hits with a two-line fixture. */
+function withCanon(base: SurfaceRow, overrides: Partial<CanonMirrorRule>): SurfaceRow {
+  const rule = base.canonMirror;
+  if (rule === null) throw new Error(`${base.surface} has no canon rule`);
+  return { ...base, canonMirror: { ...rule, ...overrides } as CanonMirrorRule };
+}
+
+function sources(dir = rulesDir()): readonly CanonSource[] {
+  return readCanonSources(dir, VALUES, NOT_MIRRORED);
+}
+
+describe("parseCanonValues -- a flat reader for scenario:, surfaces: and the values block", () => {
   it("parses a scenario field and a values block", () => {
     const text = "scenario: swiftui-tca-uzf-v2\nvalues:\n  APP_NAME: MyApp\n  BUNDLE_ID: com.example.app\n";
     const result = parseCanonValues(text);
     expect(result.scenario).toBe("swiftui-tca-uzf-v2");
     expect(result.values).toEqual({ APP_NAME: "MyApp", BUNDLE_ID: "com.example.app" });
+    expect(result.surfaces).toBeNull();
   });
 
   it("strips a trailing comment and surrounding quotes", () => {
@@ -42,175 +81,417 @@ describe("parseCanonValues -- a flat TOKEN: value reader", () => {
     expect(parseCanonValues(text).values).toEqual({ X: "1" });
   });
 
-  it("returns a null scenario and empty values for an empty file", () => {
-    expect(parseCanonValues("")).toEqual({ scenario: null, values: {} });
+  it("returns a null scenario, null surfaces and empty values for an empty file", () => {
+    expect(parseCanonValues("")).toEqual({ scenario: null, surfaces: null, values: {} });
+  });
+
+  it("reads an inline comma list of surfaces, brackets and quotes tolerated", () => {
+    expect(parseCanonValues("surfaces: claude-code, codex\n").surfaces).toEqual(["claude-code", "codex"]);
+    expect(parseCanonValues("surfaces: [cursor, 'antigravity']\n").surfaces).toEqual(["cursor", "antigravity"]);
+  });
+
+  it("reads a block list of surfaces, and a values block after it still parses", () => {
+    const text = "surfaces:\n  - claude-code\n  - \"codex\"\nvalues:\n  NAME: World\n";
+    const result = parseCanonValues(text);
+    expect(result.surfaces).toEqual(["claude-code", "codex"]);
+    expect(result.values).toEqual({ NAME: "World" });
+  });
+
+  it("tells a stated-but-empty surfaces key ([]) from an absent one (null)", () => {
+    expect(parseCanonValues("surfaces:\nvalues:\n").surfaces).toEqual([]);
+    expect(parseCanonValues("values:\n").surfaces).toBeNull();
+  });
+
+  it("reads a CRLF file the same as an LF one", () => {
+    expect(parseCanonValues("scenario: s\r\nsurfaces:\r\n  - codex\r\nvalues:\r\n  A: 1\r\n")).toEqual({
+      scenario: "s",
+      surfaces: ["codex"],
+      values: { A: "1" },
+    });
   });
 });
 
-describe("canonFilenames -- .md files minus the not-mirrored set", () => {
-  it("excludes README.md and placeholders.md, sorted", () => {
-    const dir = tempDir();
-    writeFileSync(join(dir, "02-b.md"), "");
-    writeFileSync(join(dir, "01-a.md"), "");
-    writeFileSync(join(dir, "README.md"), "");
-    writeFileSync(join(dir, "notes.txt"), "");
+describe("the per-file marker", () => {
+  it("round-trips the pin and the canon file through readFileMarker", () => {
+    const marker = fileMarker(PIN, "07-testing.md");
+    expect(marker).toBe(
+      "<!-- GENERATED by nen canon mirror from owner/handbooks@v1.2.0: scenario-x/07-testing.md -- do not edit; change the canon and regenerate -->",
+    );
+    expect(readFileMarker(`${marker}\n# body\n`)).toEqual({ ...PIN, file: "07-testing.md" });
+  });
+
+  it("is read from the first MARKDOWN line -- under a frontmatter fence when there is one", () => {
+    const text = `---\ndescription: x\nalwaysApply: true\n---\n${fileMarker(PIN, "a.md")}\n# A\n`;
+    expect(readFileMarker(text)?.file).toBe("a.md");
+  });
+
+  it("returns null for a hand-written file, and for a marker-shaped line anywhere but the first", () => {
+    expect(readFileMarker("# Hand-written rule\n")).toBeNull();
+    expect(readFileMarker(`# Hand-written rule\n\nQuoting: ${fileMarker(PIN, "a.md")}\n`)).toBeNull();
+  });
+
+  it("tolerates a CRLF first line", () => {
+    expect(readFileMarker(`${fileMarker(PIN, "a.md")}\r\nbody\r\n`)?.ref).toBe("v1.2.0");
+  });
+});
+
+describe("canonFilenames and readCanonSources", () => {
+  it("lists the .md files minus the never-mirrored set, sorted, and skips non-markdown", () => {
+    const dir = rulesDir();
     expect(canonFilenames(dir, NOT_MIRRORED)).toEqual(["01-a.md", "02-b.md"]);
   });
-});
 
-describe("generateMirror -- substitutes {{TOKEN}} and prepends the header", () => {
-  it("substitutes a bound token", () => {
-    const dir = tempDir();
-    writeFileSync(join(dir, "01-a.md"), "Hello {{NAME}}.\n");
-    const generated = generateMirror(dir, { NAME: "World" }, "v1.0.0", "scenario-x", HEADER, NOT_MIRRORED);
-    expect(generated.get("01-a.md")).toBe(
-      "<!-- GENERATED from v1.0.0/scenario-x/01-a.md -- DO NOT EDIT. -->\nHello World.\n",
-    );
+  it("refuses an unreadable --rules-dir by name", () => {
+    expect(() => canonFilenames(join(tempDir(), "nowhere"), NOT_MIRRORED)).toThrow(CanonMirrorError);
+    expect(() => canonFilenames(join(tempDir(), "nowhere"), NOT_MIRRORED)).toThrow(/--rules-dir .* could not be read: ENOENT/);
   });
 
-  it("throws MissingTokenError, naming the file and the token, for an unbound one", () => {
+  it("binds every {{TOKEN}}, normalises CRLF, and ends every body with one newline", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "Hello {{NAME}}.\r\nAnd {{NAME}} again");
+    const [only] = readCanonSources(dir, VALUES, NOT_MIRRORED);
+    expect(only).toEqual({ file: "01-a.md", stem: "01-a", body: "Hello World.\nAnd World again\n" });
+  });
+
+  it("refuses an unbound token, naming the file and the token", () => {
     const dir = tempDir();
     writeFileSync(join(dir, "01-a.md"), "{{UNBOUND}}");
-    expect(() => generateMirror(dir, {}, "v1", "s", HEADER, NOT_MIRRORED)).toThrow(MissingTokenError);
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(MissingTokenError);
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(/01-a\.md: \{\{UNBOUND\}\} has no canon-values binding/);
+  });
+
+  it("refuses a rules directory with no rule file rather than rendering an empty mirror", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "README.md"), "only the index");
+    expect(() => readCanonSources(dir, VALUES, NOT_MIRRORED)).toThrow(/holds no rule file/);
   });
 });
 
-describe("writeMirror -- writes only what changed, deletes orphans", () => {
-  it("writes new content and reports unchanged files as such", () => {
-    const outDir = tempDir();
-    writeFileSync(join(outDir, "01-a.md"), "old content");
-    const generated = new Map([
-      ["01-a.md", "new content"],
-      ["02-b.md", "b content"],
+describe("renderSurface -- one rendering per surface, from the row", () => {
+  it("renders a directory surface with no frontmatter as marker + body, one file per canon file", () => {
+    const rendering = renderSurface(row("claude-code"), sources(), PIN);
+    expect(rendering.location).toBe(".claude/rules/");
+    expect(rendering.block).toBeNull();
+    expect(rendering.files.map((file): string => file.path)).toEqual([".claude/rules/01-a.md", ".claude/rules/02-b.md"]);
+    expect(rendering.files[0]?.content).toBe(`${fileMarker(PIN, "01-a.md")}\n# A\n\nHello World.\n`);
+  });
+
+  it("prepends the surface's own frontmatter with the stem as {name}, and its extension", () => {
+    const cursor = renderSurface(row("cursor"), sources(), PIN);
+    expect(cursor.files[0]?.path).toBe(".cursor/rules/01-a.mdc");
+    const doc = splitDocument(cursor.files[0]?.content ?? "");
+    expect(doc.entries.map((entry): string => entry.lines.join("\n"))).toEqual(["description: 01-a", "alwaysApply: true"]);
+    expect(doc.body.split("\n")[0]).toBe(fileMarker(PIN, "01-a.md"));
+
+    const antigravity = renderSurface(row("antigravity"), sources(), PIN);
+    expect(antigravity.files[0]?.path).toBe(".agents/rules/01-a.md");
+    expect(splitDocument(antigravity.files[0]?.content ?? "").entries.map((entry): string => entry.lines[0] ?? "")).toEqual([
+      "trigger: always_on",
+      "description: 01-a",
     ]);
-    const result = writeMirror(outDir, generated, NOT_MIRRORED);
-    expect([...result.written].sort()).toEqual(["01-a.md", "02-b.md"]);
-    expect(readFileSync(join(outDir, "01-a.md"), "utf8")).toBe("new content");
-
-    const second = writeMirror(outDir, generated, NOT_MIRRORED);
-    expect(second.written).toEqual([]);
-    expect([...second.unchanged].sort()).toEqual(["01-a.md", "02-b.md"]);
   });
 
-  it("deletes an orphaned mirror file whose canon source is gone", () => {
-    const outDir = tempDir();
-    writeFileSync(join(outDir, "orphan.md"), "stale");
-    const result = writeMirror(outDir, new Map([["01-a.md", "content"]]), NOT_MIRRORED);
-    expect(result.deleted).toEqual(["orphan.md"]);
+  it("REFUSES a file over the surface's documented byte limit, naming the bytes, the limit and the page, and never truncates", () => {
+    const tight = withCanon(row("antigravity"), { limitBytes: 100 });
+    expect(() => renderSurface(tight, sources(), PIN)).toThrow(CanonMirrorError);
+    expect(() => renderSurface(tight, sources(), PIN)).toThrow(/01-a\.md renders to \d+ bytes at \.agents\/rules\/01-a\.md for 'antigravity', over the 100-byte limit .*antigravity\.google/);
   });
 
-  it("never touches README.md or placeholders.md, or a non-.md file", () => {
-    const outDir = tempDir();
-    writeFileSync(join(outDir, "README.md"), "keep me");
-    writeFileSync(join(outDir, "notes.txt"), "keep me too");
-    const result = writeMirror(outDir, new Map([["01-a.md", "content"]]), NOT_MIRRORED);
-    expect(result.deleted).toEqual([]);
-    expect(readFileSync(join(outDir, "README.md"), "utf8")).toBe("keep me");
+  it("counts BYTES, not characters, against the limit", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "é".repeat(50)); // 50 chars, 100 bytes
+    const marker = fileMarker(PIN, "01-a.md").length + 1;
+    const justUnder = withCanon(row("claude-code"), { limitBytes: marker + 101 });
+    const justOver = withCanon(row("claude-code"), { limitBytes: marker + 99 });
+    expect(() => renderSurface(justUnder, readCanonSources(dir, {}, NOT_MIRRORED), PIN)).not.toThrow();
+    expect(() => renderSurface(justOver, readCanonSources(dir, {}, NOT_MIRRORED), PIN)).toThrow(/over the \d+-byte limit/);
   });
 
-  it("creates out-dir if it does not exist yet", () => {
-    const outDir = join(tempDir(), "nested", "out");
-    const result = writeMirror(outDir, new Map([["01-a.md", "content"]]), NOT_MIRRORED);
-    expect(result.written).toEqual(["01-a.md"]);
+  it("notes, and does not refuse, a file past the surface's line advice", () => {
+    const chatty = withCanon(row("cursor"), { lineGuidance: 2 });
+    const rendering = renderSurface(chatty, sources(), PIN);
+    expect(rendering.notes.some((note): boolean => /\.cursor\/rules\/01-a\.mdc is \d+ lines; the surface advises under 2/.test(note))).toBe(true);
+    expect(rendering.files.length).toBe(2);
+  });
+
+  it("renders a document surface as ONE block: BEGIN, a section per canon file, END", () => {
+    const rendering = renderSurface(row("codex"), sources(), PIN);
+    expect(rendering.location).toBe("AGENTS.md");
+    expect(rendering.files).toEqual([]);
+    expect(rendering.block).toBe(
+      [
+        blockBegin(PIN),
+        sectionMarker("01-a.md"),
+        "# A",
+        "",
+        "Hello World.",
+        sectionMarker("02-b.md"),
+        "# B",
+        "",
+        "Second rule.",
+        BLOCK_END,
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("notes a block past the surface's documented read limit, naming the setting, and writes it whole", () => {
+    const small = withCanon(row("codex"), { warnBytes: 10 });
+    const rendering = renderSurface(small, sources(), PIN);
+    expect(rendering.notes.join("\n")).toMatch(/AGENTS\.md's canon block is \d+ bytes; 'codex' documents that it stops reading project documents at 10 bytes \(project_doc_max_bytes/);
+    expect(rendering.block?.length ?? 0).toBeGreaterThan(10);
+  });
+
+  it("refuses a row that documents no rules location", () => {
+    const silent: SurfaceRow = { ...row("codex"), canonMirror: null };
+    expect(() => renderSurface(silent, sources(), PIN)).toThrow(/documents no rules location/);
   });
 });
 
-describe("checkMirror -- ok/missing/extra/stale/handEdited", () => {
-  function setup(): { rulesDir: string; mirrorDir: string } {
-    const rulesDir = tempDir();
-    writeFileSync(join(rulesDir, "01-a.md"), "Hello {{NAME}}.\n");
-    const mirrorDir = tempDir();
-    return { rulesDir, mirrorDir };
-  }
-
-  it("reports OK for a byte-identical fresh generation", () => {
-    const { rulesDir, mirrorDir } = setup();
-    const generated = generateMirror(rulesDir, { NAME: "World" }, "v1", "s", HEADER, NOT_MIRRORED);
-    for (const [name, content] of generated) writeFileSync(join(mirrorDir, name), content);
-    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1", "s", HEADER, NOT_MIRRORED);
-    expect(report.ok).toEqual(["01-a.md"]);
-    expect(mirrorReportOk(report)).toBe(true);
+describe("a directory surface on disk -- guard, write, check", () => {
+  it("writes every file, creating the directory; a second run is all unchanged", () => {
+    const root = tempDir();
+    const rendering = renderSurface(row("claude-code"), sources(), PIN);
+    const first = writeSurface(root, rendering);
+    expect(first.written).toEqual([".claude/rules/01-a.md", ".claude/rules/02-b.md"]);
+    expect(readFileSync(join(root, ".claude", "rules", "01-a.md"), "utf8")).toBe(rendering.files[0]?.content);
+    const second = writeSurface(root, rendering);
+    expect(second.written).toEqual([]);
+    expect(second.unchanged).toEqual([".claude/rules/01-a.md", ".claude/rules/02-b.md"]);
   });
 
-  it("reports MISSING when the mirror has no file at all", () => {
-    const { rulesDir, mirrorDir } = setup();
-    mkdirSync(mirrorDir, { recursive: true });
-    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1", "s", HEADER, NOT_MIRRORED);
-    expect(report.missing).toEqual(["01-a.md"]);
+  it("deletes a MARKED orphan, leaves an UNMARKED sourceless file alone and lists it as foreign, and ignores subdirectories and other extensions", () => {
+    const root = tempDir();
+    const dir = join(root, ".claude", "rules");
+    mkdirSync(join(dir, "local"), { recursive: true });
+    writeFileSync(join(dir, "99-gone.md"), `${fileMarker(PIN, "99-gone.md")}\nremoved upstream\n`);
+    writeFileSync(join(dir, "house-style.md"), "# The consumer's own rule\n");
+    writeFileSync(join(dir, "notes.txt"), "not a rules file");
+    writeFileSync(join(dir, "local", "team.md"), "# nested, the consumer's\n");
+    const result = writeSurface(root, renderSurface(row("claude-code"), sources(), PIN));
+    expect(result.deleted).toEqual([".claude/rules/99-gone.md"]);
+    expect(result.foreign).toEqual([".claude/rules/house-style.md"]);
+    expect(readdirSync(dir).sort()).toEqual(["01-a.md", "02-b.md", "house-style.md", "local", "notes.txt"]);
+    expect(readFileSync(join(dir, "local", "team.md"), "utf8")).toBe("# nested, the consumer's\n");
   });
 
-  it("reports STALE when the header ref lags the pinned ref", () => {
-    const { rulesDir, mirrorDir } = setup();
-    const generated = generateMirror(rulesDir, { NAME: "World" }, "v0.9.0", "s", HEADER, NOT_MIRRORED);
-    for (const [name, content] of generated) writeFileSync(join(mirrorDir, name), content);
-    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1.0.0", "s", HEADER, NOT_MIRRORED);
-    expect(report.stale).toEqual(["01-a.md"]);
+  it("with dryRun reports the same lists and writes nothing", () => {
+    const root = tempDir();
+    const result = writeSurface(root, renderSurface(row("cursor"), sources(), PIN), true);
+    expect(result.written).toEqual([".cursor/rules/01-a.mdc", ".cursor/rules/02-b.mdc"]);
+    expect(readdirSync(root)).toEqual([]);
   });
 
-  it("reports HAND_EDITED when the header ref matches but content differs", () => {
-    const { rulesDir, mirrorDir } = setup();
-    const generated = generateMirror(rulesDir, { NAME: "World" }, "v1", "s", HEADER, NOT_MIRRORED);
-    writeFileSync(join(mirrorDir, "01-a.md"), `${generated.get("01-a.md") ?? ""}\nextra hand-added line`);
-    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1", "s", HEADER, NOT_MIRRORED);
+  it("guards a destination that carries no marker -- somebody's own file -- naming it, and accepts a marked one", () => {
+    const root = tempDir();
+    const dir = join(root, ".claude", "rules");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "01-a.md"), "# I wrote this by hand\n");
+    writeFileSync(join(dir, "02-b.md"), `${fileMarker(MOVED, "02-b.md")}\nold rendering\n`);
+    const refusals = guardSurface(root, renderSurface(row("claude-code"), sources(), PIN));
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toMatch(/^\.claude\/rules\/01-a\.md exists and carries no '<!-- GENERATED by nen canon mirror from \.\.\.' line/);
+  });
+
+  it("guards a symbolic link at a destination, and a rules location that is a file", () => {
+    const root = tempDir();
+    const dir = join(root, ".claude", "rules");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(root, "elsewhere.md"), "target");
+    symlinkSync(join(root, "elsewhere.md"), join(dir, "01-a.md"));
+    expect(guardSurface(root, renderSurface(row("claude-code"), sources(), PIN))[0]).toMatch(/01-a\.md is a symbolic link/);
+
+    const flat = tempDir();
+    mkdirSync(join(flat, ".cursor"));
+    writeFileSync(join(flat, ".cursor", "rules"), "a file where a directory goes");
+    expect(guardSurface(flat, renderSurface(row("cursor"), sources(), PIN))[0]).toMatch(/\.cursor\/rules exists and is not a directory/);
+  });
+
+  it("checks ok right after a write, including the consumer's foreign file, and reads an absent directory as all missing", () => {
+    const root = tempDir();
+    const rendering = renderSurface(row("claude-code"), sources(), PIN);
+    expect(checkSurface(root, rendering, PIN, sources()).missing).toEqual([".claude/rules/01-a.md", ".claude/rules/02-b.md"]);
+    writeSurface(root, rendering);
+    writeFileSync(join(root, ".claude", "rules", "mine.md"), "# mine\n");
+    const report = checkSurface(root, rendering, PIN, sources());
+    expect(report.ok).toEqual([".claude/rules/01-a.md", ".claude/rules/02-b.md"]);
+    expect(report.foreign).toEqual([".claude/rules/mine.md"]);
+    expect(surfaceReportOk(report)).toBe(true);
+  });
+
+  it("tells STALE (another pin) from HAND-EDITED (this pin, other bytes; or no marker) from EXTRA (a marked orphan)", () => {
+    const root = tempDir();
+    const src = rulesDir();
+    writeSurface(root, renderSurface(row("claude-code"), sources(src), PIN));
+    const dir = join(root, ".claude", "rules");
+    // 01-a: regenerated for the moved pin -- stale under PIN.
+    writeFileSync(join(dir, "01-a.md"), `${fileMarker(MOVED, "01-a.md")}\n# A\n\nHello World.\n`);
+    // 02-b: this pin, an extra line -- hand-edited.
+    writeFileSync(join(dir, "02-b.md"), `${fileMarker(PIN, "02-b.md")}\n# B\n\nSecond rule.\nand a line somebody added\n`);
+    // A third canon file whose mirror lost its marker -- hand-edited, never stale.
+    writeFileSync(join(src, "03-c.md"), "# C\n");
+    writeFileSync(join(dir, "03-c.md"), `# C\n\nPreviously: ${fileMarker(MOVED, "03-c.md")}\n`);
+    // A marked file canon no longer has -- extra.
+    writeFileSync(join(dir, "99-gone.md"), `${fileMarker(PIN, "99-gone.md")}\ngone\n`);
+    const fresh = sources(src);
+    const report = checkSurface(root, renderSurface(row("claude-code"), fresh, PIN), PIN, fresh);
+    expect(report.stale).toEqual([".claude/rules/01-a.md"]);
+    expect(report.handEdited).toEqual([".claude/rules/02-b.md", ".claude/rules/03-c.md"]);
+    expect(report.extra).toEqual([".claude/rules/99-gone.md"]);
+    expect(report.ok).toEqual([]);
+    expect(surfaceReportOk(report)).toBe(false);
+  });
+
+  it("reads a CRLF checkout of the mirror as ok, not hand-edited", () => {
+    const root = tempDir();
+    const rendering = renderSurface(row("claude-code"), sources(), PIN);
+    writeSurface(root, rendering);
+    const path = join(root, ".claude", "rules", "01-a.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace(/\n/g, "\r\n"));
+    expect(checkSurface(root, rendering, PIN, sources()).ok).toContain(".claude/rules/01-a.md");
+    expect(writeSurface(root, rendering).unchanged).toContain(".claude/rules/01-a.md");
+  });
+});
+
+describe("a document surface on disk -- the managed block inside AGENTS.md", () => {
+  const codex = row("codex");
+
+  it("creates the document with the block alone when there is none", () => {
+    const root = tempDir();
+    const rendering = renderSurface(codex, sources(), PIN);
+    expect(writeSurface(root, rendering).written).toEqual(["AGENTS.md"]);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe(rendering.block);
+  });
+
+  it("appends the block after the consumer's own prose, one blank line between, and preserves that prose byte for byte", () => {
+    const root = tempDir();
+    writeFileSync(join(root, "AGENTS.md"), "# My project\n\nHand-written instructions.");
+    const rendering = renderSurface(codex, sources(), PIN);
+    writeSurface(root, rendering);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe(`# My project\n\nHand-written instructions.\n\n${rendering.block}`);
+  });
+
+  it("replaces only the block on a regenerate, keeping prose before AND after it; a second run is unchanged", () => {
+    const root = tempDir();
+    const src = rulesDir();
+    const first = renderSurface(codex, sources(src), PIN);
+    writeFileSync(join(root, "AGENTS.md"), `# Before\n\n${first.block}\n## After\n\nMore of mine.\n`);
+    writeFileSync(join(src, "01-a.md"), "# A\n\nHello {{NAME}}, changed.\n");
+    const second = renderSurface(codex, sources(src), MOVED);
+    expect(writeSurface(root, second).written).toEqual(["AGENTS.md"]);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe(`# Before\n\n${second.block}\n## After\n\nMore of mine.\n`);
+    expect(writeSurface(root, second).unchanged).toEqual(["AGENTS.md"]);
+  });
+
+  it("guards a broken marker pair rather than guessing where the prose resumes, and a symlinked document", () => {
+    const root = tempDir();
+    const rendering = renderSurface(codex, sources(), PIN);
+    writeFileSync(join(root, "AGENTS.md"), `${blockBegin(PIN)}\nsomething\n`);
+    expect(guardSurface(root, rendering)[0]).toMatch(/AGENTS\.md has a BEGIN marker with no END marker after it/);
+    writeFileSync(join(root, "AGENTS.md"), `prose\n${BLOCK_END}\n`);
+    expect(guardSurface(root, rendering)[0]).toMatch(/carries an END marker with no BEGIN marker/);
+    writeFileSync(join(root, "AGENTS.md"), `${blockBegin(PIN)}\n${BLOCK_END}\n${blockBegin(PIN)}\n${BLOCK_END}\n`);
+    expect(guardSurface(root, rendering)[0]).toMatch(/carries 2 BEGIN markers/);
+
+    const linked = tempDir();
+    writeFileSync(join(linked, "real.md"), "");
+    symlinkSync(join(linked, "real.md"), join(linked, "AGENTS.md"));
+    expect(guardSurface(linked, rendering)[0]).toMatch(/AGENTS\.md is a symbolic link/);
+    expect(guardSurface(tempDir(), rendering)).toEqual([]);
+  });
+
+  it("checks ok after a write; missing with no document or no block; stale when the pin moved", () => {
+    const root = tempDir();
+    const rendering = renderSurface(codex, sources(), PIN);
+    expect(checkSurface(root, rendering, PIN, sources()).missing).toEqual(["01-a.md", "02-b.md"]);
+    writeFileSync(join(root, "AGENTS.md"), "# prose only\n");
+    expect(checkSurface(root, rendering, PIN, sources()).missing).toEqual(["01-a.md", "02-b.md"]);
+    writeSurface(root, rendering);
+    expect(checkSurface(root, rendering, PIN, sources()).ok).toEqual(["01-a.md", "02-b.md"]);
+    const moved = renderSurface(codex, sources(), MOVED);
+    expect(checkSurface(root, moved, MOVED, sources()).stale).toEqual(["01-a.md", "02-b.md"]);
+  });
+
+  it("classifies the block one canon file at a time: an edited section, a section canon dropped, a missing one, stray text", () => {
+    const root = tempDir();
+    const src = rulesDir();
+    writeSurface(root, renderSurface(codex, sources(src), PIN));
+    // Canon dropped 02-b and gained 03-c since the block was written.
+    writeFileSync(join(src, "03-c.md"), "# C\n");
+    rmSync(join(src, "02-b.md"));
+    let text = readFileSync(join(root, "AGENTS.md"), "utf8");
+    text = text.replace("Hello World.", "Hello World, edited by hand.");
+    text = text.replace(`${blockBegin(PIN)}\n`, `${blockBegin(PIN)}\nstray line\n`);
+    writeFileSync(join(root, "AGENTS.md"), text);
+    const fresh = sources(src);
+    const report = checkSurface(root, renderSurface(codex, fresh, PIN), PIN, fresh);
     expect(report.handEdited).toEqual(["01-a.md"]);
-  });
-
-  it("reports HAND_EDITED when there is no generated header at all", () => {
-    const { rulesDir, mirrorDir } = setup();
-    writeFileSync(join(mirrorDir, "01-a.md"), "Hello World, hand-written.");
-    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1", "s", HEADER, NOT_MIRRORED);
-    expect(report.handEdited).toEqual(["01-a.md"]);
-  });
-
-  // Review finding #16: header.pattern.exec was unanchored, so an UNANCHORED
-  // caller pattern (the port dropped the original's implicit ^-anchoring)
-  // would match a header-shaped line ANYWHERE in the file. The category this
-  // actually flips (not just "not ok", but the WRONG not-ok reason a caller
-  // would route differently) is stale vs. handEdited: a hand-written file
-  // that happens to quote an OLD ref somewhere below (a changelog entry, a
-  // worked example) has no real header at all -- correctly HAND_EDITED -- but
-  // an unanchored whole-file search finds that quoted old ref, sees it does
-  // not match --ref, and reports STALE ("just needs regenerating") instead,
-  // which sends a caller who trusts that category to the wrong remediation.
-  it("reports HAND_EDITED, never STALE, when the real header is gone but an OLD-ref-shaped line survives further down, even with an UNANCHORED caller pattern", () => {
-    const { rulesDir, mirrorDir } = setup();
-    // Deliberately unanchored -- no leading ^ -- exactly the caller mistake
-    // the finding describes (--header-pattern has no requirement to anchor).
-    const unanchored: HeaderTemplate = {
-      template: HEADER.template,
-      pattern: /<!-- GENERATED from (?<ref>\S+)\/(?<scenario>[^/]+)\/(?<file>\S+) -- DO NOT EDIT\. -->\n/,
-    };
-    writeFileSync(
-      join(mirrorDir, "01-a.md"),
-      // No generated header on line 1 -- a human wrote this by hand -- but a
-      // header-shaped line quoting an OLD ref (v0.9.0, not the v1 pinned
-      // below) appears further down, e.g. a changelog note.
-      `Hello World, hand-written.\n\nPreviously:\n<!-- GENERATED from v0.9.0/s/01-a.md -- DO NOT EDIT. -->\n`,
-    );
-    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1", "s", unanchored, NOT_MIRRORED);
-    expect(report.handEdited).toEqual(["01-a.md"]);
-    expect(report.stale).toEqual([]);
+    expect(report.missing).toEqual(["03-c.md"]);
+    expect(report.extra).toEqual(["02-b.md", "(text inside the block before its first canon section)"]);
     expect(report.ok).toEqual([]);
   });
 
-  it("reports EXTRA for a mirror file with no canon source", () => {
-    const { rulesDir, mirrorDir } = setup();
-    const generated = generateMirror(rulesDir, { NAME: "World" }, "v1", "s", HEADER, NOT_MIRRORED);
-    for (const [name, content] of generated) writeFileSync(join(mirrorDir, name), content);
-    writeFileSync(join(mirrorDir, "orphan.md"), "orphaned");
-    const report = checkMirror(rulesDir, { NAME: "World" }, mirrorDir, "v1", "s", HEADER, NOT_MIRRORED);
-    expect(report.extra).toEqual(["orphan.md"]);
-    expect(mirrorReportOk(report)).toBe(false);
+  it("reads a block whose END marker was deleted as hand-edited whole", () => {
+    const root = tempDir();
+    const rendering = renderSurface(codex, sources(), PIN);
+    writeSurface(root, rendering);
+    writeFileSync(join(root, "AGENTS.md"), readFileSync(join(root, "AGENTS.md"), "utf8").replace(`${BLOCK_END}\n`, ""));
+    expect(checkSurface(root, rendering, PIN, sources()).handEdited).toEqual(["01-a.md", "02-b.md"]);
   });
 });
 
 describe("renderReportMarkdown", () => {
-  it("renders a table row per non-OK entry", () => {
-    const markdown = renderReportMarkdown({ ok: [], missing: ["a.md"], extra: [], stale: [], handEdited: [] });
-    expect(markdown).toContain("| `a.md` |");
+  const empty = { location: "x", ok: [], missing: [], extra: [], stale: [], handEdited: [], foreign: [] };
+
+  it("renders one row per drift entry, naming the surface, and no row for ok or foreign", () => {
+    const markdown = renderReportMarkdown([
+      { ...empty, surface: "claude-code", missing: ["a.md"], foreign: ["mine.md"], ok: ["b.md"] },
+      { ...empty, surface: "codex", stale: ["a.md"] },
+    ]);
+    expect(markdown).toContain("| `claude-code` | `a.md` | missing from the mirror |");
+    expect(markdown).toContain("| `codex` | `a.md` | stale (generated for another pin) |");
+    expect(markdown).not.toContain("mine.md");
+    expect(markdown).not.toContain("b.md");
   });
 
-  it("reports no drift when everything is OK", () => {
-    expect(renderReportMarkdown({ ok: ["a.md"], missing: [], extra: [], stale: [], handEdited: [] })).toMatch(/No drift/);
+  it("reports no drift when every surface is clean", () => {
+    expect(renderReportMarkdown([{ ...empty, surface: "codex", ok: ["a.md"] }])).toMatch(/^No drift/);
+  });
+});
+
+describe("what a marker can carry -- refused before anything is rendered (Copilot, PR #274)", () => {
+  it("refuses a canon filename with whitespace, naming it and the shape a marker can read back", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "fine\n");
+    writeFileSync(join(dir, "team rules.md"), "not readable back from a marker\n");
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(CanonMirrorError);
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(/rule file whose name cannot be written into a marker and read back: 'team rules\.md'/);
+    // Listing it under --not-mirrored is the other way out.
+    expect(readCanonSources(dir, {}, new Set(["team rules.md"])).map((source): string => source.file)).toEqual(["01-a.md"]);
+  });
+
+  it("refuses a canon body carrying a line that IS a section marker, before anything renders", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "fine\n");
+    // The document surface splits on this exact shape wherever it appears, so a
+    // body containing it would be written by generate and read as split by the
+    // very next check (Bugbot, PR #278).
+    writeFileSync(join(dir, "02-b.md"), "before\n<!-- canon: 01-a.md -->\nafter\n");
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(CanonMirrorError);
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(/a canon body that carries a line which IS a section marker: '02-b\.md' line 2/);
+    // Listing it under --not-mirrored is the way out, exactly as for a bad name.
+    expect(readCanonSources(dir, {}, new Set(["02-b.md"])).map((source): string => source.file)).toEqual(["01-a.md"]);
+  });
+
+  it("leaves an INDENTED or fenced section-marker shape alone -- only a bare line splits", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "text\n    <!-- canon: x.md -->\nmore\n");
+    expect(readCanonSources(dir, {}, NOT_MIRRORED).map((source): string => source.file)).toEqual(["01-a.md"]);
+  });
+
+  it("accepts every shape the canon actually uses: digits, dots, underscores and hyphens", () => {
+    const dir = tempDir();
+    for (const name of ["00-overview.md", "05-page-and-screen.md", "v2.notes_final.md", "A.md"]) writeFileSync(join(dir, name), "x\n");
+    expect(readCanonSources(dir, {}, NOT_MIRRORED).map((source): string => source.file)).toEqual(["00-overview.md", "05-page-and-screen.md", "A.md", "v2.notes_final.md"]);
   });
 });

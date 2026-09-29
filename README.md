@@ -218,6 +218,26 @@ always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
+Then keep the consumer's mirror of that stack's rule set current on **every
+agent surface it declares** (`CON-13`) -- `.claude/rules/` for Claude Code, a
+managed block in `AGENTS.md` for Codex, `.cursor/rules/` for Cursor,
+`.agents/rules/` for Antigravity; the surface set is a row table, the consumer
+names which rows in its `canon-values.yml` (`surfaces:`), and every rendered
+file carries a marker naming the tag it came from. That tag is data in the
+consumer's own `nen/repos.json` -- the `pinned` field on the canonical
+repository's `maintained_tools` entry, read back by `nen canon pin` -- and
+`--source`/`--ref` default to it. A hand-written file where canon must land
+refuses the whole run before anything is written; `check` is the CI half and
+fails on a mirror that is missing, orphaned, stale or hand-edited on any
+surface:
+
+```bash
+nen canon mirror generate --repo /path/to/repo --rules-dir ../handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules \
+  --canon-values .claude/canon-values.yml --source owner/handbooks --ref v0.6.0 --not-mirrored README.md,placeholders.md
+nen canon mirror check    --repo /path/to/repo --rules-dir ../handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules \
+  --canon-values .claude/canon-values.yml --source owner/handbooks --ref v0.6.0 --not-mirrored README.md,placeholders.md
+```
+
 ### Use it every day
 
 **Is this pull request ready to merge, before you look any further?**
@@ -326,7 +346,7 @@ that repository's `nen/` directory at the path given by `--repo`
 | File | What it holds |
 |---|---|
 | `nen/labels.json` | The label set — names, colors, descriptions |
-| `nen/repos.json` | The repository registry — product codes, consumers |
+| `nen/repos.json` | The repository registry — product codes, consumers, and the canon pin (the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry) |
 | `nen/colors.yml` | The status-color precedence for board rendering |
 | `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check |
 | `nen/contract.json` | Optional. What this repository needs *from* Nen (`dependency`), and the stack declaration Nen reads *about* it (`project`). Parsed, validated and reported; nothing acts on it yet |
@@ -389,7 +409,7 @@ offline or saturated, its job queues; there is no hosted fallback.
 `nen --help` lists every command family (40); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-110 verbs outside the binary — each one's purpose, arguments, exit codes and
+111 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 

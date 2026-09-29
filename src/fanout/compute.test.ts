@@ -10,6 +10,7 @@ function registryOf(consumers: RepoRegistry["consumers"]): RepoRegistry {
     productCodes: {},
     maintainedTools: [],
     pendingOnboarding: [],
+    toolPins: {},
     byRepo: (): undefined => undefined,
     byCode: (): undefined => undefined,
     affectedBy: (): readonly [] => [],
