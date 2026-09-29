@@ -168,9 +168,11 @@ validator, never a second copy of it).
   this repository's policy forbids; where a policy admits it, pass it as
   --trailer "Signed-off-by: Name <email>" like any other trailer.
 
-Refused, in this order: the message or a --trailer failing the shape (exit 2,
-every reason named); the proof, when required (exit 1); an empty index (exit
-1, 'nothing staged'). Then 'git commit -F ${COMMIT_MESSAGE_PATH}' -- the
+Refused, in this order: a ${WORKFLOW_FILE} or .commitlintrc nen cannot read
+(exit 1, every broken file named, then any shape fault the message still has
+-- exactly as 'format' reports them); the message or a --trailer failing the
+shape (exit 2, every reason named); the proof, when required (exit 1); an
+empty index (exit 1, 'nothing staged'). Then 'git commit -F ${COMMIT_MESSAGE_PATH}' -- the
 composed message is written there and removed afterwards. --json's contract is
 '${WRITE_CONTRACT}': { contract, sha (null on a dry run), subject, trailers:
 [{ key, value }], dryRun }.`;
@@ -238,25 +240,22 @@ function runWrite(context: CommandContext): number {
   });
   const messageFilePath = requireValue(context.args, "message-file", "The file holding the commit's whole message.");
   const messageText = readTextFile(messageFilePath, root, "It is the message this commit will carry -- 'commit write' reads no other source for it.");
-  let outcome;
-  try {
-    outcome = write(context.seams, root, {
-      messageText,
-      trailerFlags: context.args.lists["trailer"] ?? [],
-      requireProof: context.args.values["require-proof"] ?? null,
-      dryRun: context.args.booleans.has("dry-run"),
-      warn: (warning): void => context.io.err(`nen: warning: ${warning}`),
-      note: (note): void => context.io.err(`nen: note: ${note}`),
-    });
-  } catch (error) {
-    if (error instanceof CommitlintConfigError) {
-      context.io.err(commitlintFailure(error));
-      return 1;
+  const outcome = write(context.seams, root, {
+    messageText,
+    trailerFlags: context.args.lists["trailer"] ?? [],
+    requireProof: context.args.values["require-proof"] ?? null,
+    dryRun: context.args.booleans.has("dry-run"),
+    warn: (warning): void => context.io.err(`nen: warning: ${warning}`),
+    note: (note): void => context.io.err(`nen: note: ${note}`),
+  });
+  if (outcome.kind === "broken") {
+    // A CONFIG THAT WILL NOT LOAD IS EXIT 1, NOT 2, and reported exactly as
+    // `format` reports it: every broken file first, then whatever the
+    // message's own shape still said.
+    for (const failure of outcome.failures) {
+      context.io.err(failure instanceof CommitlintConfigError ? commitlintFailure(failure) : policyFailure(failure, "commit"));
     }
-    // A POLICY THAT WILL NOT LOAD IS EXIT 1, NOT 2, exactly as `format`'s own
-    // read of the same file.
-    if (!(error instanceof SchemaError)) throw error;
-    context.io.err(policyFailure(error, "commit"));
+    for (const reason of outcome.reasons) context.io.err(`nen: ${reason}`);
     return 1;
   }
   if (outcome.kind === "usage") {
@@ -347,8 +346,13 @@ export const commitCommand: Command = {
       if (!(error instanceof CommitlintConfigError)) throw error;
       failures.push(commitlintFailure(error));
     }
+    // A BROKEN CONFIG IS REPORTED FIRST, AND THE EXIT IS 1: the repository's
+    // files are what is wrong. The shape refusals this run could still
+    // establish are printed after them rather than dropped -- one pass, every
+    // problem -- exactly as `write` reports the same failures.
     if (failures.length > 0) {
       for (const failure of failures) context.io.err(failure);
+      for (const refusal of refusals) context.io.err(`nen: ${refusal}`);
       return 1;
     }
     if (refusals.length > 0) {

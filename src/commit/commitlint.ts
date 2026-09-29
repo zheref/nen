@@ -322,7 +322,7 @@ function resolveRule(file: string, config: unknown): SubjectCaseRule {
     return {
       kind: "unreadable",
       file,
-      reason: `${file} pulls part of itself in through cosmiconfig's '$import', which nen does not follow`,
+      reason: `${file} pulls part of itself in through cosmiconfig's '$import', which nen does not follow -- declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
       cause: `${file} uses cosmiconfig's '$import', which nen does not follow`,
     };
   }
@@ -345,7 +345,7 @@ function resolveRule(file: string, config: unknown): SubjectCaseRule {
     return {
       kind: "unreadable",
       file,
-      reason: `${file} extends '${unresolved}', a shareable config nen cannot resolve (it is a JavaScript package, and nen does not execute one), and it may set the rule. Stating 'subject-case' under the file's own 'rules' makes it decisive, and nen then checks it`,
+      reason: `${file} extends '${unresolved}', a shareable config nen cannot resolve (it is a JavaScript package, and nen does not execute one), and it may set the rule. Stating 'subject-case' under the file's own 'rules' makes it decisive, and nen then checks it -- or declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
       cause: `${file} extends '${unresolved}', which nen cannot resolve`,
     };
   }
@@ -381,7 +381,7 @@ export function readSubjectCaseRule(root: string): SubjectCaseRule {
       return {
         kind: "unreadable",
         file,
-        reason: `${file} carries a 'commitlint' key, but nen could not parse the file (${loaded.reason}), so it could not read the rule there`,
+        reason: `${file} carries a 'commitlint' key, but nen could not parse the file (${loaded.reason}), so it could not read the rule there -- fix the file, or declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
         cause: `${file} carries a 'commitlint' key but will not parse`,
       };
     }
@@ -429,11 +429,56 @@ function fixFor(when: Condition, verdict: CaseVerdict): string {
   return `recase the subject to ${verdict.reported.length === 1 ? list : `one of ${list}`} -- ${exempt}`;
 }
 
+/** A rule as the tuple a config would state it: `[0]` when it is off, `[level, when, cases]` otherwise. */
+function renderSpec(spec: SubjectCaseSpec): string {
+  if (spec.level === 0) return "[0]";
+  const cases = spec.checks.map((check: CaseCheck): unknown => (check.when === "never" ? { case: check.case, when: "never" } : check.case));
+  return JSON.stringify([spec.level, spec.when, cases]);
+}
+
 /** A declared rule as the tuple a reader would write, for the line that names it. */
 function describeDeclared(rule: DeclaredSubjectCase): string {
   if (rule.form === "config-conventional") return `'config-conventional' (${CONFIG_CONVENTIONAL}'s default)`;
-  const cases = rule.checks.map((check: CaseCheck): unknown => (check.when === "never" ? { case: check.case, when: "never" } : check.case));
-  return `the rule ${JSON.stringify(rule.level === 0 && cases.length === 0 ? [0] : [rule.level, rule.when, cases])}`;
+  return `the rule ${renderSpec(rule)}`;
+}
+
+/**
+ * Whether two rules give every subject the same verdict at the same level:
+ * both off (no rule, or level 0), or the same level, condition and case list
+ * in the same order. Compared as stated, so an alias (`uppercase` for
+ * `upper-case`) or a reordered list reads as a difference -- the note then
+ * shows both tuples, which is a reader's cue rather than a wrong claim.
+ */
+function sameRule(effective: SubjectCaseSpec | null, declared: SubjectCaseSpec): boolean {
+  const effectiveOff = effective === null || effective.level === 0;
+  const declaredOff = declared.level === 0;
+  if (effectiveOff || declaredOff) return effectiveOff && declaredOff;
+  return (
+    effective.level === declared.level &&
+    effective.when === declared.when &&
+    effective.checks.length === declared.checks.length &&
+    effective.checks.every((check, index): boolean => check.case === declared.checks[index]?.case && check.when === declared.checks[index]?.when)
+  );
+}
+
+/**
+ * PRECEDENCE 1's note: the declaration is not applied, and whether that
+ * matters. A declaration that AGREES with the readable config is merely
+ * redundant; one that DIFFERS is a second answer the repository wrote down,
+ * and saying only "redundant" would hide exactly the disagreement a reader
+ * needs to see -- so both tuples are named, and which one nen followed.
+ */
+function shadowNote(declared: DeclaredRule, rule: Extract<SubjectCaseRule, { kind: "none" | "rule" }>): string {
+  const effective = rule.kind === "none" ? null : rule;
+  if (sameRule(effective, declared.rule)) {
+    return `commits.subjectCase in ${declared.file} is not applied: ${rule.file} states the commitlint config as data, and that config is the gate commitlint runs, so nen reads the rule there. The declaration agrees with it: redundant here -- remove it, or keep it in step`;
+  }
+  const stated =
+    effective === null
+      ? "no subject-case rule"
+      : `${renderSpec(effective)}${effective.origin === "extends" ? ` (${CONFIG_CONVENTIONAL}'s default, through extends)` : ""}`;
+  const declaredText = declared.rule.form === "config-conventional" ? `'config-conventional' = ${renderSpec(declared.rule)}` : renderSpec(declared.rule);
+  return `commits.subjectCase in ${declared.file} is not applied, and it DIFFERS: ${rule.file} states ${stated}, the declaration states ${declaredText}; nen follows ${rule.file}, which is what commitlint runs -- align the declaration with it, or remove it`;
 }
 
 /**
@@ -505,13 +550,9 @@ export function subjectCaseFindings(root: string, header: string, declared: Decl
     };
   }
   // PRECEDENCE 1: a readable commitlint config is the real gate. A declaration
-  // beside it is said to be unapplied, never silently dropped.
-  const shadowed: readonly string[] =
-    declared === null
-      ? []
-      : [
-          `commits.subjectCase in ${declared.file} is not applied: ${rule.file} states the commitlint config as data, and that config is the gate commitlint runs, so nen reads the rule there. The declaration is redundant here -- remove it, or keep it in step`,
-        ];
+  // beside it is said to be unapplied -- and whether it agrees -- never
+  // silently dropped.
+  const shadowed: readonly string[] = declared === null ? [] : [shadowNote(declared, rule)];
   if (rule.kind === "none" || rule.level === 0) return { ...NO_FINDINGS, notes: shadowed };
   const subject = commitlintSubject(header, rule.grammar);
   if (subject === null) {

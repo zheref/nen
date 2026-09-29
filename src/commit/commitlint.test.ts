@@ -423,7 +423,7 @@ describe("commits.subjectCase -- the rule declared in nen/workflow.json, and its
     const off = repo({ ".commitlintrc.json": explicit([0], { extends: [CONFIG_CONVENTIONAL] }) });
     const offFound = subjectCaseFindings(off, "fix: Start the timer", declare(off, "config-conventional"));
     expect(offFound.refusals).toEqual([]);
-    expect(offFound.notes).toEqual([expect.stringMatching(/^commits\.subjectCase in .*nen\/workflow\.json is not applied: .*\.commitlintrc\.json states the commitlint config as data, and that config is the gate commitlint runs/)]);
+    expect(offFound.notes).toEqual([expect.stringMatching(/^commits\.subjectCase in .*nen\/workflow\.json is not applied, and it DIFFERS/)]);
     // The data config refuses; the declaration would allow. Still the data config.
     const lower = repo({ ".commitlintrc.json": explicit([2, "always", "upper-case"]) });
     const lowerFound = subjectCaseFindings(lower, "fix: start the timer", declare(lower, [2, "always", "lower-case"]));
@@ -434,6 +434,63 @@ describe("commits.subjectCase -- the rule declared in nen/workflow.json, and its
     const noneFound = subjectCaseFindings(none, "fix: Start the timer", declare(none, "config-conventional"));
     expect(noneFound.refusals).toEqual([]);
     expect(noneFound.notes).toHaveLength(1);
+  });
+
+  describe("the not-applied note says whether the declaration AGREES or DIFFERS -- never 'redundant' for a contradiction", () => {
+    const CONVENTIONAL_TUPLE = '[2,"never",["sentence-case","start-case","pascal-case","upper-case"]]';
+
+    it("A: extends config-conventional, declared [2,'always',['upper-case']] -- DIFFERS, both tuples named", () => {
+      const root = repo({ ".commitlintrc.json": conventional });
+      const workflow = join(root, "nen", "workflow.json");
+      const found = subjectCaseFindings(root, "fix: start the timer", declare(root, [2, "always", ["upper-case"]]));
+      expect(found.notes).toEqual([
+        `commits.subjectCase in ${workflow} is not applied, and it DIFFERS: ${join(root, ".commitlintrc.json")} states ${CONVENTIONAL_TUPLE} (@commitlint/config-conventional's default, through extends), the declaration states [2,"always",["upper-case"]]; nen follows ${join(root, ".commitlintrc.json")}, which is what commitlint runs -- align the declaration with it, or remove it`,
+      ]);
+    });
+
+    it("B: rules {} and 'config-conventional' -- DIFFERS from 'no subject-case rule'", () => {
+      const root = repo({ ".commitlintrc.json": JSON.stringify({ rules: {} }) });
+      const found = subjectCaseFindings(root, "fix: Start the timer", declare(root, "config-conventional"));
+      expect(found.notes).toEqual([
+        `commits.subjectCase in ${join(root, "nen", "workflow.json")} is not applied, and it DIFFERS: ${join(root, ".commitlintrc.json")} states no subject-case rule, the declaration states 'config-conventional' = ${CONVENTIONAL_TUPLE}; nen follows ${join(root, ".commitlintrc.json")}, which is what commitlint runs -- align the declaration with it, or remove it`,
+      ]);
+    });
+
+    it("H: rules subject-case [0] and 'config-conventional' -- DIFFERS, the config's rule is off", () => {
+      const root = repo({ ".commitlintrc.json": explicit([0]) });
+      const found = subjectCaseFindings(root, "fix: Start the timer", declare(root, "config-conventional"));
+      expect(found.notes).toEqual([expect.stringContaining(`states [0], the declaration states 'config-conventional' = ${CONVENTIONAL_TUPLE}`)]);
+    });
+
+    it("says it AGREES -- redundant -- only when the declared rule is the same rule", () => {
+      const agreeing: readonly (readonly [string, unknown])[] = [
+        [conventional, "config-conventional"],
+        [conventional, [2, "never", ["sentence-case", "start-case", "pascal-case", "upper-case"]]],
+        [explicit([2, "always", "lower-case"]), [2, "always", ["lower-case"]]],
+        [explicit([0]), [0]],
+        [JSON.stringify({ rules: {} }), [0, "never", ["upper-case"]]],
+      ];
+      for (const [config, subjectCase] of agreeing) {
+        const root = repo({ ".commitlintrc.json": config });
+        const found = subjectCaseFindings(root, "fix: start the timer", declare(root, subjectCase));
+        expect(found.notes, JSON.stringify(subjectCase)).toEqual([
+          `commits.subjectCase in ${join(root, "nen", "workflow.json")} is not applied: ${join(root, ".commitlintrc.json")} states the commitlint config as data, and that config is the gate commitlint runs, so nen reads the rule there. The declaration agrees with it: redundant here -- remove it, or keep it in step`,
+        ]);
+      }
+    });
+
+    it("reads a different level, condition or case list -- even a reordered one -- as a difference", () => {
+      for (const subjectCase of [
+        [1, "never", ["sentence-case", "start-case", "pascal-case", "upper-case"]],
+        [2, "always", ["sentence-case", "start-case", "pascal-case", "upper-case"]],
+        [2, "never", ["start-case", "sentence-case", "pascal-case", "upper-case"]],
+        [2, "never", ["sentence-case"]],
+        [0],
+      ]) {
+        const root = repo({ ".commitlintrc.json": conventional });
+        expect(subjectCaseFindings(root, "fix: start the timer", declare(root, subjectCase)).notes[0], JSON.stringify(subjectCase)).toContain("DIFFERS");
+      }
+    });
   });
 
   it("applies an explicit tuple, naming it: level 2 refuses, level 1 warns, level 0 turns it off", () => {

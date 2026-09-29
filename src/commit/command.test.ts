@@ -449,7 +449,14 @@ describe("nen commit format -- commits.subjectCase in nen/workflow.json, the rul
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "start the timer"], false, root);
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["fix: start the timer"]);
-    expect(result.err).toEqual([expect.stringMatching(/^nen: note: commits\.subjectCase in .*nen\/workflow\.json is not applied: .*\.commitlintrc\.json states the commitlint config as data/)]);
+    expect(result.err).toEqual([
+      expect.stringMatching(/^nen: note: commits\.subjectCase in .*nen\/workflow\.json is not applied, and it DIFFERS: .*\.commitlintrc\.json states .*, the declaration states \[2,"always",\["upper-case"\]\]; nen follows .*\.commitlintrc\.json, which is what commitlint runs/),
+    ]);
+    // An agreeing declaration is only redundant, and says so.
+    const agreeing = repoWithCommitlint(CONVENTIONAL_RC, { subjectCase: "config-conventional" });
+    const same = await capture(["commit", "format", "--type", "fix", "--subject", "start the timer"], false, agreeing);
+    expect(same.code).toBe(0);
+    expect(same.err).toEqual([expect.stringMatching(/^nen: note: .* is not applied: .*The declaration agrees with it: redundant here/)]);
   });
 
   it("applies where there is no commitlint config at all", async () => {
@@ -474,5 +481,30 @@ describe("nen commit format -- commits.subjectCase in nen/workflow.json, the rul
   it("leaves a repository with no key and no commitlint config unchanged", async () => {
     const root = repoWithCommitlint({}, { allowedAttributionTrailers: [] });
     expect(await capture(["commit", "format", "--type", "fix", "--subject", "Start the timer"], false, root)).toMatchObject({ code: 0, out: ["fix: Start the timer"], err: [] });
+  });
+});
+
+describe("nen commit format -- declared-rule outcomes at the verb: exit code and line prefix (zheref/nen#263)", () => {
+  const KRO_PWA = { "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" };
+  it.each([
+    ["no commitlint config + 'config-conventional'", {}, "config-conventional", 2, /^nen: subject 'Start the timer' breaks the subject-case rule this repository declares.*because no commitlint config was found/, false],
+    ["an unresolved preset + 'config-conventional'", { ".commitlintrc.json": JSON.stringify({ extends: ["@acme/commitlint-config"] }) }, "config-conventional", 2, /^nen: subject 'Start the timer' breaks .*extends '@acme\/commitlint-config', which nen cannot resolve/, false],
+    ["a code config + a level-1 declaration", KRO_PWA, [1, "never", ["sentence-case"]], 0, /^nen: warning: subject 'Start the timer' breaks the subject-case rule this repository declares.*declared at level 1, so nen only warns/, true],
+    ["a code config + a level-0 declaration", KRO_PWA, [0], 0, /^nen: note: subject-case is off: commits\.subjectCase in .*the rule \[0\] disables it/, true],
+  ] as const)("%s", async (_name, files, subjectCase, code, line, printed) => {
+    const root = repoWithCommitlint(files, { subjectCase });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "Start the timer"], false, root);
+    expect(result.code).toBe(code);
+    expect(result.err).toEqual([expect.stringMatching(line)]);
+    expect(result.out).toEqual(printed ? ["fix: Start the timer"] : []);
+  });
+
+  it("names a malformed nen/workflow.json first and the message's own shape fault after it, at exit 1", async () => {
+    const root = repoWithCommitlint({}, { allowedAttributionTrailers: [] });
+    writeFileSync(join(root, "nen", "workflow.json"), "{ not json");
+    const result = await capture(["commit", "format", "--type", "bogus", "--subject", "start the timer"], false, root);
+    expect(result.code).toBe(1);
+    expect(result.err[0]).toMatch(/nen\/workflow\.json.*nen will not shape a message under a policy it could not read/);
+    expect(result.err.slice(1)).toEqual([expect.stringMatching(/^nen: type 'bogus' is not one of/)]);
   });
 });
