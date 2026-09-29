@@ -4,7 +4,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 ## v0.16.0 — 2026-09-29
 
-Release unit for `v0.15.1..v0.16.0`: [#272](https://github.com/zheref/nen/pull/272) and [#274](https://github.com/zheref/nen/pull/274) (the delivery), [#278](https://github.com/zheref/nen/pull/278) (the landing — #274 was stacked and its merge never reached `main`), and [#PROPOSAL](https://github.com/zheref/nen/pull/PROPOSAL) (the release proposal).
+Release unit for `v0.15.1..v0.16.0`: [#272](https://github.com/zheref/nen/pull/272) and [#274](https://github.com/zheref/nen/pull/274) (the delivery), [#278](https://github.com/zheref/nen/pull/278) (the landing — #274 was stacked and its merge never reached `main`), and [#281](https://github.com/zheref/nen/pull/281) (the release proposal).
 
 ### Added
 
