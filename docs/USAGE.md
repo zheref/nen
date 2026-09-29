@@ -5139,15 +5139,16 @@ nen canon resolve --repo <path> --target <owner/name>
 
 **Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line even under `--json`. Exit 0 on a resolved scenario; exit 1 on an unrecorded/non-consumer target or an invalid scenario shape.
 
-**Example** -- for a consumer whose `consumers[]` entry records `swiftui-tca-uzf-v2` (`owner/name` and `/path/to/repo` are placeholders):
+**Example** -- for a consumer whose `consumers[]` entry records `swiftui-tca-uzf-v2` (`owner/name` and `/path/to/repo` are placeholders), passing the five always-load baselines `handbooks/INDEX.md` names at `v0.6.0`:
 
 ```bash
 nen canon resolve --repo /path/to/repo --target owner/name \
-  --always-load handbooks/uzf-core.md,handbooks/security-baseline.md --stack-dir handbooks/stacks
+  --always-load handbooks/uzf-core.md,handbooks/security-baseline.md,handbooks/ux-baseline.md,handbooks/release-policy.md,handbooks/quality-baseline.md \
+  --stack-dir handbooks/stacks
 ```
 ```text
 scenario: swiftui-tca-uzf-v2
-always load: handbooks/uzf-core.md, handbooks/security-baseline.md
+always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux-baseline.md, handbooks/release-policy.md, handbooks/quality-baseline.md
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 

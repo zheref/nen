@@ -207,13 +207,14 @@ Resolve which handbooks it loads. `--target` must name a consumer the
 registry under `--repo` records with a `scenario`; `--always-load` and
 `--stack-dir` are paths inside a checkout of the canonical handbooks
 repository, [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks)
-(its `handbooks/INDEX.md` names the always-load set), at the tag the consumer
-pins. For a consumer recorded as `swiftui-tca-uzf-v2`:
+(its `handbooks/INDEX.md` names the always-load set -- five baselines at
+`v0.6.0`), at the tag the consumer pins. For a consumer recorded as
+`swiftui-tca-uzf-v2`:
 
 ```
-$ nen canon resolve --repo /path/to/repo --target owner/name --always-load handbooks/uzf-core.md,handbooks/security-baseline.md --stack-dir handbooks/stacks
+$ nen canon resolve --repo /path/to/repo --target owner/name --always-load handbooks/uzf-core.md,handbooks/security-baseline.md,handbooks/ux-baseline.md,handbooks/release-policy.md,handbooks/quality-baseline.md --stack-dir handbooks/stacks
 scenario: swiftui-tca-uzf-v2
-always load: handbooks/uzf-core.md, handbooks/security-baseline.md
+always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux-baseline.md, handbooks/release-policy.md, handbooks/quality-baseline.md
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
