@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
 import { loadGateIdentities, parseGateIdentities } from "./gates.js";
+import { SchemaError } from "./errors.js";
 
 describe("loadGateIdentities -- reads the TARGET repository", () => {
   it("reads whichever reviewers the target repo declares", () => {
@@ -405,5 +406,191 @@ describe("parseGateIdentities -- validation", () => {
     expect(() =>
       parseGateIdentities(at, { ...minimal, delivery: { head_ref_prefixes: ["x/"] } }),
     ).toThrow(/delivery\.author_pattern[\s\S]*required/);
+  });
+});
+
+// ── round_quorum (maintainer ruling 2026-09-29) ─────────────────────────────
+//
+// "Copilot credits are exhausted. Expect Cursor instead. Let's make it canon on
+// the repo so that we solve at least one round of reviews from both Copilot OR
+// Cursor (or both) as applicable." The quorum is OPTIONAL and additive; what is
+// proved here is that a malformed one is refused AT LOAD, BY POINTER, and never
+// reaches a verdict as a rule that silently means something else.
+describe("parseGateIdentities -- round_quorum", () => {
+  const at = "/fake/nen/gates.json";
+  const twoReviewers = {
+    version: 1,
+    reviewers: [
+      { name: "copilot", login_pattern: { pattern: "^copilot$", ignoreCase: true } },
+      {
+        name: "bugbot",
+        login_pattern: { pattern: "^(cursor|bugbot)(\\[bot\\])?$", ignoreCase: true },
+        round_check_pattern: { pattern: "^Cursor Bugbot$", ignoreCase: true },
+      },
+    ],
+    approval_policy: "review-round-only",
+    default_approvers: [],
+    base_reviewers: ["copilot"],
+    delivery: {
+      author_pattern: { pattern: "^maintainer$", ignoreCase: true },
+      head_ref_prefixes: ["codex/"],
+    },
+  };
+  const withQuorum = (quorum: unknown): Record<string, unknown> => ({
+    ...twoReviewers,
+    round_quorum: quorum,
+  });
+
+  /** The refusal a malformed quorum produces -- a SchemaError, never a pass. */
+  function refusal(quorum: unknown): SchemaError {
+    try {
+      parseGateIdentities(at, withQuorum(quorum));
+    } catch (error) {
+      if (error instanceof SchemaError) return error;
+      throw error;
+    }
+    throw new Error("expected a SchemaError, but the file was accepted");
+  }
+
+  it("is null when the file declares none -- the gate is then exactly what it was", () => {
+    expect(parseGateIdentities(at, twoReviewers).roundQuorum).toBeNull();
+    expect(parseGateIdentities(at, withQuorum(null)).roundQuorum).toBeNull();
+  });
+
+  it("reads a valid quorum, in the file's order, with its $comment ignored", () => {
+    const identities = parseGateIdentities(
+      at,
+      withQuorum({ $comment: "why", any_of: ["bugbot", "copilot"], minimum: 1 }),
+    );
+    expect(identities.roundQuorum).toEqual({ anyOf: ["bugbot", "copilot"], minimum: 1 });
+  });
+
+  it("accepts minimum equal to the group's size -- 'all of them' is a legitimate quorum", () => {
+    const identities = parseGateIdentities(at, withQuorum({ any_of: ["copilot", "bugbot"], minimum: 2 }));
+    expect(identities.roundQuorum?.minimum).toBe(2);
+  });
+
+  it("REFUSES a quorum that is not an object", () => {
+    expect(refusal(["copilot"]).pointer).toBe("round_quorum");
+    expect(refusal("copilot").pointer).toBe("round_quorum");
+  });
+
+  it("REFUSES a missing or non-array any_of, by pointer", () => {
+    const missing = refusal({ minimum: 1 });
+    expect(missing.pointer).toBe("round_quorum.any_of");
+    expect(missing.message).toMatch(/is required/);
+    expect(refusal({ any_of: "copilot", minimum: 1 }).pointer).toBe("round_quorum.any_of");
+  });
+
+  it("REFUSES an EMPTY any_of -- a quorum over nobody has no path out", () => {
+    const error = refusal({ any_of: [], minimum: 1 });
+    expect(error.pointer).toBe("round_quorum.any_of");
+    expect(error.message).toMatch(/is empty/);
+  });
+
+  it("REFUSES a member that is not a non-empty string, at that member's pointer", () => {
+    expect(refusal({ any_of: ["copilot", 7], minimum: 1 }).pointer).toBe("round_quorum.any_of[1]");
+    expect(refusal({ any_of: [""], minimum: 1 }).pointer).toBe("round_quorum.any_of[0]");
+  });
+
+  it("REFUSES a member that is not a declared reviewer, naming the declared set", () => {
+    const error = refusal({ any_of: ["copilot", "ghost"], minimum: 1 });
+    expect(error.pointer).toBe("round_quorum.any_of[1]");
+    expect(error.message).toMatch(/'ghost', which is not declared in 'reviewers'/);
+    expect(error.message).toMatch(/Declared: copilot, bugbot/);
+  });
+
+  it("REFUSES a DUPLICATE member -- one round would count twice toward the minimum", () => {
+    const error = refusal({ any_of: ["bugbot", "copilot", "bugbot"], minimum: 2 });
+    expect(error.pointer).toBe("round_quorum.any_of[2]");
+    expect(error.message).toMatch(/duplicates round_quorum\.any_of\[0\] \('bugbot'\)/);
+  });
+
+  it("REFUSES a missing or non-integer minimum -- it is stated, never defaulted", () => {
+    for (const minimum of [undefined, null, "1", 1.5, Number.NaN, Number.POSITIVE_INFINITY, true]) {
+      const error = refusal({ any_of: ["copilot", "bugbot"], minimum });
+      expect(error.pointer).toBe("round_quorum.minimum");
+      expect(error.message).toMatch(/must be an integer/);
+    }
+  });
+
+  it("REFUSES a minimum below 1 -- met by nobody having reviewed", () => {
+    for (const minimum of [0, -1]) {
+      const error = refusal({ any_of: ["copilot", "bugbot"], minimum });
+      expect(error.pointer).toBe("round_quorum.minimum");
+      expect(error.message).toMatch(/below 1 is met by nobody having reviewed/);
+    }
+  });
+
+  it("REFUSES a minimum above the group's size -- met by no set of rounds", () => {
+    const error = refusal({ any_of: ["copilot", "bugbot"], minimum: 3 });
+    expect(error.pointer).toBe("round_quorum.minimum");
+    expect(error.message).toMatch(/names only 2 reviewer\(s\)/);
+  });
+
+  it("refuses AT LOAD, so the error names the file as well as the pointer", () => {
+    expect(refusal({ any_of: ["ghost"], minimum: 1 }).message).toMatch(
+      /^\/fake\/nen\/gates\.json: at round_quorum\.any_of\[0\], /,
+    );
+  });
+});
+
+describe("loadGateIdentities -- THIS repository's own nen/gates.json (ruling 2026-09-29)", () => {
+  // vitest's cwd is the repository root (see ./fixtures/paths.ts), so this is
+  // the file the maintainer's gate actually reads -- not a fixture of it.
+  const own = loadGateIdentities(process.cwd());
+
+  it("declares copilot and bugbot, copilot exempt, base set copilot, rounds-only approval", () => {
+    expect(own.reviewers.map((r): string => r.name)).toEqual(["copilot", "bugbot"]);
+    expect(own.reviewer("copilot")?.boundedPolicyExempt).toBe(true);
+    expect(own.reviewer("bugbot")?.boundedPolicyExempt).toBe(false);
+    expect(own.baseReviewers).toEqual(["copilot"]);
+    expect(own.approvalPolicy).toBe("review-round-only");
+    expect(own.defaultApprovers).toEqual([]);
+  });
+
+  it("declares the quorum: at least one of copilot, bugbot", () => {
+    expect(own.roundQuorum).toEqual({ anyOf: ["copilot", "bugbot"], minimum: 1 });
+  });
+
+  it("matches Cursor Bugbot's BOT logins, anchored -- REST's cursor[bot], GraphQL's cursor, and bugbot[bot]", () => {
+    const login = own.reviewer("bugbot")?.loginPattern;
+    for (const author of ["cursor", "cursor[bot]", "bugbot[bot]", "Cursor[bot]", "BugBot[bot]"]) {
+      expect(login?.test(author), author).toBe(true);
+    }
+    for (const author of ["cursor-evil", "evilcursor", "cursor[bot]x", "copilot", "", "cursorbugbot"]) {
+      expect(login?.test(author), author).toBe(false);
+    }
+  });
+
+  it("M2: does NOT match the bare 'bugbot' -- a HUMAN GitHub account (User 7030920) on a public repository", () => {
+    // `gh api users/bugbot` answers `BugBot`, type User. With the earlier
+    // `^(cursor|bugbot)(\[bot\])?$` and ignoreCase, a review that account
+    // posted would have been Cursor Bugbot's round.
+    const login = own.reviewer("bugbot")?.loginPattern;
+    for (const author of ["bugbot", "BugBot", "BUGBOT"]) {
+      expect(login?.test(author), author).toBe(false);
+    }
+  });
+
+  it("keeps copilot's login pattern, and the two never match each other's logins", () => {
+    const copilot = own.reviewer("copilot")?.loginPattern;
+    const bugbot = own.reviewer("bugbot")?.loginPattern;
+    for (const author of ["copilot-pull-request-reviewer[bot]", "copilot-pull-request-reviewer", "Copilot"]) {
+      expect(copilot?.test(author)).toBe(true);
+      expect(bugbot?.test(author)).toBe(false);
+    }
+    expect(copilot?.test("cursor[bot]")).toBe(false);
+  });
+
+  it("enrols and rounds bugbot on exactly the 'Cursor Bugbot' check, case-insensitively", () => {
+    const bugbot = own.reviewer("bugbot");
+    for (const pattern of [bugbot?.roundCheckPattern, bugbot?.enrolmentCheckPattern]) {
+      expect(pattern?.flags).toBe("i");
+      expect(pattern?.test("Cursor Bugbot")).toBe(true);
+      expect(pattern?.test("cursor bugbot")).toBe(true);
+      expect(pattern?.test("Cursor Bugbot / probe")).toBe(false);
+      expect(pattern?.test("Bugbot")).toBe(false);
+    }
   });
 });
