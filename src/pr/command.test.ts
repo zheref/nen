@@ -612,14 +612,17 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     stdout: JSON.stringify({ data: { repository: { collaborators: { nodes: [{ login, id }] } } } }),
   });
   const COLLABORATOR_NONE = { stdout: JSON.stringify({ data: { repository: { collaborators: { nodes: [] } } } }) };
-  const botMutationOk = (logins: readonly string[]): Partial<{ stdout: string }> => ({
+  // `ids` defaults to BOT_1, BOT_2, ... by position. Since zheref/nen#277 the
+  // ids MATTER -- a requested id the response does not carry is reported as
+  // not recorded -- so a test whose request is not BOT_1-first states them.
+  const botMutationOk = (logins: readonly string[], ids?: readonly string[]): Partial<{ stdout: string }> => ({
     stdout: JSON.stringify({
       data: {
         requestReviews: {
           pullRequest: {
             reviewRequests: {
               nodes: logins.map((login, index): unknown => ({
-                requestedReviewer: { __typename: "Bot", login, id: `BOT_${index + 1}` },
+                requestedReviewer: { __typename: "Bot", login, id: ids?.[index] ?? `BOT_${index + 1}` },
               })),
             },
           },
@@ -737,7 +740,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("--add-bots routes a node id straight to botIds, with no --add-reviewers resolution at all", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
-      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`, result: botMutationOk(["some-other-bot"]) },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`, result: botMutationOk(["some-other-bot"], ["BOT_2"]) },
     ];
     const result = await capture(
       ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2"],
@@ -746,6 +749,120 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     );
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toMatch(/some-other-bot/);
+  });
+
+  // zheref/nen#277: the call zheref/hatsu#123, #128 and #130 made on
+  // 2026-09-29 -- accepted, answered, and recording nothing. It used to exit 0
+  // with "(none reported back)" while no review was ever coming.
+  const BOT_MUTATION_RECORDS_NOTHING = {
+    stdout: JSON.stringify({ data: { requestReviews: { pullRequest: { reviewRequests: { nodes: [] } } } } }),
+  };
+
+  it("exits 9 naming the bot when GitHub accepts an --add-bots request but records no pending review for it (zheref/nen#277)", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_kgDOCnlnWA"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(9);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/did not record it for BOT_kgDOCnlnWA/);
+    expect(out).not.toMatch(/none reported back/);
+  });
+
+  it("--json carries the same fact: ok false, unrecordedBots naming the bot, under exit 9", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_kgDOCnlnWA", "--json"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(9);
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string; routing: unknown };
+    expect(report.ok).toBe(false);
+    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report.message).toMatch(/did not record it for BOT_kgDOCnlnWA/);
+    expect(report.routing).toEqual([{ name: "BOT_kgDOCnlnWA", via: "add-bots", route: "bot", id: "BOT_kgDOCnlnWA" }]);
+  });
+
+  it("names an unrecorded bot by the login it was requested under, when it came in through --add-reviewers", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "copilot-pull-request-reviewer", "--json"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(9);
+    const report = JSON.parse(result.out.join("\n")) as { unrecordedBots: unknown };
+    expect(report.unrecordedBots).toEqual([{ id: "BOT_1", login: "copilot-pull-request-reviewer" }]);
+  });
+
+  it("a route whose gh call FAILED outranks an unrecorded bot: exit 1, and --json still names the bot", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+      { match: `gh ${requestReviewsArgv(KNOWN_BOTS_TARGET, 9, ["sasuke"]).join(" ")}`, result: { code: 1, stderr: "could not add reviewer" } },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
+    ];
+    const result = await capture(
+      [
+        "pr",
+        "request-reviews",
+        "--target",
+        "zheref/nen",
+        "--pr",
+        "9",
+        "--add-reviewers",
+        "sasuke",
+        "--add-bots",
+        "BOT_kgDOCnlnWA",
+        "--json",
+      ],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown };
+    expect(report.ok).toBe(false);
+    expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+  });
+
+  it("a recorded request exits 0 and --json carries an EMPTY unrecordedBots, never an absent key", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`, result: botMutationOk(["some-other-bot"], ["BOT_2"]) },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2", "--json"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown };
+    expect(report.ok).toBe(true);
+    expect(report.unrecordedBots).toEqual([]);
+  });
+
+  it("--help documents exit 9 and the unrecordedBots field under request-reviews", async () => {
+    const result = await capture(["pr", "--help"], null);
+    const help = result.out.join("\n");
+    const start = help.indexOf("request-reviews:");
+    const end = help.indexOf("edit-body:");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const section = help.slice(start, end);
+    expect(section).toMatch(/\b9 every\s+call was ACCEPTED/);
+    expect(section).toMatch(/unrecordedBots/);
   });
 
   it("folds an --add-bots id resolved from --add-reviewers AND an explicit --add-bots id into ONE mutation call", async () => {
@@ -1063,9 +1180,55 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/nen pr merge only merges a release unit/);
   });
 
-  it("requires a pull-request reference", async () => {
+  it("requires a pull-request reference, and the refusal names all three forms", async () => {
     const result = await capture(["pr", "merge", "--release-unit", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
     expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/'pr merge <CODE>#<n> --release-unit \.\.\.'/);
+  });
+
+  // zheref/nen#269, at the CLI: a <CODE>#<n> is read as a product code and
+  // resolved through --repo's registry -- never refused as "not an owner/name
+  // slug" -- and one --repo's registry does not list is a usage error (exit 2)
+  // reached before any tool runs.
+  it("reads <CODE>#<n> as a product code: an unknown one is exit 2 naming the known codes, not an owner/name refusal", async () => {
+    const root = unitRepo();
+    writeFileSync(join(root, "nen", "repos.json"), JSON.stringify({ consumers: [{ repo: "zheref/example", consumes: [], code: "EX" }] }));
+    const result = await capture(
+      ["pr", "merge", "ZZ#9", "--release-unit", "--requirements-from", REQUIREMENTS_FILE],
+      root,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/'ZZ' is not a product code/);
+    expect(err).toMatch(/Known codes: EX/);
+    expect(err).not.toMatch(/owner\/name repository slug/);
+  });
+
+  it("refuses (exit 2) a <CODE>#<n> that resolves to a repository other than --repo's origin", async () => {
+    const root = unitRepo();
+    writeFileSync(
+      join(root, "nen", "repos.json"),
+      JSON.stringify({ consumers: [{ repo: "zheref/example", consumes: [], code: "EX" }, { repo: "zheref/other", consumes: [], code: "OT" }] }),
+    );
+    const result = await capture(
+      ["pr", "merge", "OT#9", "--release-unit", "--requirements-from", REQUIREMENTS_FILE, "--run"],
+      root,
+      new ScriptedSeams([{ match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } }]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/nen pr merge never merges a repository --repo does not name/);
+  });
+
+  it("'nen pr --help' states the CODE#n form on merge's usage line and the deliberate '#'-required narrowing", async () => {
+    const result = await capture(["pr", "--help"], null);
+    const help = result.out.join("\n");
+    expect(help).toMatch(/nen pr merge <n\|owner\/name#n\|CODE#n> --release-unit/);
+    const start = help.indexOf("\nmerge:");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const section = help.slice(start);
+    expect(section).toMatch(/SAME lookup\s+'pr ready <CODE>#<N>' uses/);
+    expect(section).toMatch(/NARROWER\s+THAN 'pr ready', DELIBERATELY: the '#' is\s+required/);
   });
 
   it("requires --requirements-from", async () => {

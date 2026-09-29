@@ -643,7 +643,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
-| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json | yes |
+| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -680,7 +680,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
-| [`release`](#family-release) | [`nen release unit-check`](#nen-release-unit-check) | whether a pull request's changed files stay inside `--repo`'s declared `release.unitPaths` | github (`gh api --paginate --slurp repos/{owner}/{repo}/pulls/{n}/files`), nen/workflow.json | yes |
+| [`release`](#family-release) | [`nen release unit-check`](#nen-release-unit-check) | whether a pull request's changed files stay inside `--repo`'s declared `release.unitPaths` | github (`gh api --paginate --slurp repos/{owner}/{repo}/pulls/{n}/files`), nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)) | git log --merges, CHANGELOG.md, changelog.d/ | yes |
@@ -897,7 +897,7 @@ commit. Three things make that visible:
 **Usage**
 
 ```text
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>[,<name>...]] [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 ```
 
 **Arguments**
@@ -911,7 +911,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
 | `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded`; see above |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
-| `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | comma-joined for more than one name; this CLI's flag reader refuses a *repeated* occurrence of the same flag, so `--exclude-check a,b` is the form, not `--exclude-check a --exclude-check b` |
+| `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | **repeatable**, one name per occurrence ([zheref/nen#243](https://github.com/zheref/nen/issues/243)); one value may also join names with commas, and a comma inside `()`/`[]`/`{}` is part of the name — see below |
 | `--gates <path>` | no | read reviewer identities from this file instead of `nen/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
 | `--require-head <sha>` | no | judge only this commit: 7–40 hex digits, a case-insensitive prefix of GitHub's head | any other head is exit `8` (`head-mismatch`), both SHAs printed, no verdict; malformed is exit `2` |
@@ -938,9 +938,39 @@ are reported in `--explain` and in `--json`'s `meta.excludedChecks`. A name
 that matches **no** entry in the rollup is never a silent no-op: it is
 reported as a `meta.warnings` entry (`--exclude-check '<name>' matched no
 check in the rollup`), printed under `--explain`, and the rollup is otherwise
-left intact. Because the flag is comma-joined, a check name that itself
-contains a comma cannot be expressed and every name is trimmed of
-surrounding whitespace before matching.
+left intact. Every name is trimmed of surrounding whitespace before
+matching, and a name given twice is applied (and warned about) once.
+
+**Naming a check whose name contains a comma (zheref/nen#243).** A GitHub
+Actions matrix job is named `<job> (<v1>, <v2>, ...)` — this repository's own
+CI reports `check (Windows, ["self-hosted","Windows","X64"])` — and through
+v0.15.x `--exclude-check` split its one value on every comma, so such a name
+fragmented into pieces that matched nothing and the verdict stayed
+`not-ready` on a job the maintainer had ruled out
+([zheref/nen#242](https://github.com/zheref/nen/pull/242)). The flag now
+**repeats** — `--exclude-check readiness --exclude-check 'check (Windows,
+["self-hosted","Windows","X64"])'` is two names — and within one occurrence a
+comma separates names **only outside brackets**: `(`, `[` and `{` open a
+group, the matching closer ends it, and a comma inside a group belongs to the
+name. So `--exclude-check a,b` is still two names, exactly as before, and a
+matrix name is one name with or without the repeat:
+
+```bash
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'check (Windows, ["self-hosted","Windows","X64"])'
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'compile,check (Windows, ["self-hosted","Windows","X64"])'
+```
+
+Two shapes are stated rather than guessed. A value with an opener that is
+**never closed and a comma after it** (`--exclude-check 'lint (,build'`) has
+two readings — the comma separates `lint (` from `build`, or belongs to one
+name — and is **refused at exit `2`**, naming the character; give each check
+its own occurrence instead. (An unclosed opener with no comma after it, such
+as `lint (`, is not ambiguous and is kept as typed; a closer with no opener
+is an ordinary character.) And a name with a comma **outside every bracket**
+(`lint, format`) still splits and cannot be named by this flag — no Actions
+matrix name is shaped that way; a declared, pattern-capable exclusion is
+[zheref/nen#249](https://github.com/zheref/nen/issues/249)'s. The grammar is
+`src/pr/excludecheck.ts`'s header.
 
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
@@ -1002,8 +1032,11 @@ line for each failing row after the first, and one `warning:` line for each warn
 Exit 0 only on `verdict: ready`.
 Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
 "cleared" (SKILL.md §4's "absence is never a pass").
-Exit 2 on a malformed ref, an unresolvable code, a malformed `--require-head`, or no
-reviewer-identity source at all. That is a usage problem, never a verdict.
+Exit 2 on a malformed ref, an unresolvable code (unknown, or matching two registry keys
+that differ only by letter case), a malformed `--require-head`, a non-numeric
+`--exclude-run`, an ambiguous `--exclude-check` value (an opener never closed, with a
+comma after it), or no reviewer-identity source at all. That is a usage problem, never a
+verdict.
 Exit **8** on `head-mismatch`: `--require-head` named a commit that is not GitHub's head, and no verdict was
 decided.
 
@@ -1353,7 +1386,7 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 | `--add-reviewers <a,b>` | one of this or `--add-bots` | comma-separated reviewer logins, resolved one by one (see above) | a login that resolves to NEITHER a known bot nor a collaborator is refused at exit 2, naming it and pointing at `--add-bots` |
 | `--add-bots <id,id>` | one of this or `--add-reviewers` | comma-separated Bot **node ids** (GraphQL global ids), routed straight to the mutation's `botIds` | the one way to request a bot this pull request has never seen — nothing short of the id resolves one |
 | `--dry-run` | no | resolves every `--add-reviewers` login (still reads GitHub) and prints which route each name or id would go to, then requests nothing | not network-free — see the `--dry-run` discipline table above |
-| `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) alongside `ok`/`message` |
+| `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) and an `unrecordedBots` array (`{ id, login }` per requested bot GitHub did not record — see exit `9`) alongside `ok`/`message` |
 
 Both flags absent (or both empty) is refused at exit 1, naming both:
 `no reviewers named -- --add-reviewers takes a comma-separated list of
@@ -1374,9 +1407,46 @@ echo of what this verb sent — see `src/pr/bots.ts`'s header for why:
 the identical mutation call has been observed answering `NOT_FOUND` for a
 botId under one token and succeeding under another, so success is reported
 from GitHub's answer, never assumed from an exit code alone); `--json`
-top-level keys: `ok`, `message`, `routing`. Exit 0 on success (or a
+top-level keys: `ok`, `message`, `routing`, `unrecordedBots` (a `--dry-run`
+carries `ok`, `dryRun`, `routing`, `message`). Exit 0 on success (or a
 `--dry-run`), exit 1 when no reviewers were named or a route's `gh` call
-failed, exit 2 on a missing `--pr` or an unresolved `--add-reviewers` login.
+failed or answered something unreadable, exit 2 on a missing `--pr` or an
+unresolved `--add-reviewers` login, and **exit `9` when every call was
+accepted but GitHub did not record at least one requested bot**.
+
+**Exit `9` — a bot request GitHub accepted and never recorded
+([zheref/nen#277](https://github.com/zheref/nen/issues/277)).** On
+zheref/hatsu#123, #128 and #130 (2026-09-29) the `requestReviews` mutation
+for Copilot's node id exited 0 and answered, but its own `reviewRequests`
+listed no pending request from that bot, GitHub recorded no
+`ReviewRequestedEvent`, and no review arrived — while this verb reported
+`ok: true`, "pending review requests now include bot(s): (none reported
+back)". Every requested bot is now looked for in the mutation's response **by
+node id**, and one that is absent fails the call:
+
+```text
+zheref/hatsu#130: GitHub accepted the bot review request but did not record it for BOT_kgDOCnlnWA -- the mutation's own response lists no pending review request from that bot, so no review round should be expected from it. Pending bot review requests it does list: (none).
+```
+
+The bot is named `login (id)` where this pull request already knows it (its
+own `reviewRequests` or `timelineItems`) and by id alone otherwise; `--json`
+carries the same fact as `ok: false` and `unrecordedBots: [{ id, login }]`
+(`login` `null` for a bot the pull request has never seen), and
+`unrecordedBots` is `[]` on success. A caller should read `9` as **no review
+round to expect from that bot**, not as a failure to retry: nothing on the call
+itself failed. One limit, stated rather than hidden: the response's
+`reviewRequests` is read as a single `first:100` page, so on a pull request with
+more than 100 pending review requests a bot that *did* land can fall past it and
+be reported here — a false refusal, never a false success, which is the
+direction this verdict is allowed to err in. When one
+route's `gh` call failed outright in the same invocation, exit `1` wins and
+`unrecordedBots` still names the bot; a response with no `reviewRequests` list
+at all is exit `1` too (nothing was read that could say which bot landed). The
+code was chosen, like [`pr ready`](#nen-pr-ready)'s `8`, because it collides
+with nothing else this CLI or its bootstrap returns. The PR timeline's
+`ReviewRequestedEvent` is deliberately **not** read: telling this request's
+event from an earlier request's needs a clock window, and the mutation's own
+response is the same transaction's answer.
 
 **Example — a login this pull request already knows as a bot**
 
@@ -1651,19 +1721,52 @@ standalone verb would print:
 **Usage**
 
 ```text
-nen pr merge <n|owner/name#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
+nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `<n\|owner/name#n>` | **yes** | the pull request to merge | positional; a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` must name the SAME repository `--repo`'s `origin` does, or exit 2 |
+| `<n\|owner/name#n\|CODE#n>` | **yes** | the pull request to merge | positional; a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` and `CODE#n` must name the SAME repository `--repo`'s `origin` does, or exit 2 — see *The ref* below |
 | `--release-unit` | **yes** | says explicitly that this is a bounded release-unit merge | omitted: exit 2, "nen pr merge only merges a release unit" — there is no general-purpose merge here |
 | `--requirements-from <path>` | **yes** | the same `{ name, pattern }` JSON array `pr body-check` takes | validated (exists, non-empty, parseable) BEFORE any `gh` call; checked against the pull request's CURRENT body, read live over `gh` — never a `--body-from` file, which could have drifted from what GitHub will merge |
 | `--repo <path>` | **yes** | the checkout whose `origin` remote and `nen/gates.json` this merge is judged against | required, exit 2 if omitted; `release.unitPaths` itself is read from the PULL REQUEST'S BASE, not this checkout |
 | `--run` | no | execute the merge once every gate passes | omit to see the plan only |
 | `--json` | no | machine-readable result | — |
+
+**The ref, and why it is narrower than `pr ready`'s
+([zheref/nen#269](https://github.com/zheref/nen/issues/269)).** `pr merge`
+and [`release unit-check`](#nen-release-unit-check) share one ref grammar:
+`<n>`, `<owner/name>#<n>`, or `<CODE>#<n>`. Through v0.15.x that grammar
+*matched* `HA#117` and then handed `HA` to the `owner/name` parser, which
+refused it — `--target takes an owner/name repository slug and 'HA' is not
+one` — so a ref that `pr ready HA#117` had just accepted was refused here.
+The prefix is now told apart by shape: a `/` makes it an `owner/name` slug, a
+code's shape (a letter, then letters and digits) makes it a **product code**,
+resolved through `--repo`'s own `nen/repos.json` by **the same lookup `pr
+ready <CODE>#<N>` uses** (`consumers[].code` first, then `product_codes`,
+case-insensitive over ASCII letters only), and anything else is refused naming
+the three forms. An unknown code (the refusal lists the known ones and the file
+it read), a code that matches two registry keys differing only by letter case
+(the refusal names every key and the repository each names — nen never picks
+one), or a registry that cannot be read is exit 2. Case is folded for `A`–`Z`
+alone, never by Unicode's rules, so a non-ASCII key (one spelled with U+212A
+KELVIN SIGN, which Unicode lowercases to `k`) never answers a typed `K`; a
+refusal prints such a key as `\u{212a}`. A code that resolves to any
+repository **other than `--repo`'s origin** is refused at exit 2 before any
+gate runs — a registry legitimately lists other repositories' codes, and this
+verb never merges a repository `--repo` does not name:
+
+```text
+nen pr: 'HA#130' resolves 'HA' to 'zheref/hatsu' through --repo's own registry, but '--repo' at '/path/to/nen' has an origin of 'zheref/nen' -- these must be the same repository, and nen pr merge never merges a repository --repo does not name. Point --repo at a checkout of 'zheref/hatsu', or write the ref as a bare <n> to merge in 'zheref/nen'.
+```
+
+**The `#` is required — a deliberate narrowing.** `pr ready` also accepts
+the no-`#` shorthand (`HA117`), whose split is a stated rule (the number is
+the longest trailing digit run), not a delimiter; that is a fair trade for a
+read-only verdict, and not one a verb that merges takes. `HA117` is refused
+at exit 2 naming the `<CODE>#<n>` form.
 
 **Without `--run`:** prints the plan only (every verdict line, plus the
 exact `gh pr merge` argv that WOULD run, carrying `--match-head-commit`)
@@ -1678,8 +1781,10 @@ GitHub's own `MERGED` state is reported as `merged:`; anything else prints
 
 **Exit codes:** 0 merged, or a passing plan printed without `--run`; 1 at
 least one gate did not pass; 2 usage (missing `--release-unit`, a bad ref,
+an unknown product code or an unreadable `nen/repos.json`,
 missing/empty/unparseable `--requirements-from`, `--repo`'s origin naming a
-different repository than the ref, or an unknown flag such as
+different repository than the ref or its code resolves to, or an unknown
+flag such as
 `--admin`/`--auto`); 5 `gh` REFUSED the merge (branch protection, a
 required review, …) — its stderr and the exact command are printed for a
 human to run once the refusal is resolved; 6 `gh` could not be RUN at all
@@ -4114,14 +4219,14 @@ resolving the merge base from the same base/head it read there.
 **Usage**
 
 ```text
-nen release unit-check --pr <n|owner/name#n> --repo <path> [--json]
+nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--pr <n\|owner/name#n>` | **yes** | the pull request to check | a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` names the repository explicitly |
+| `--pr <n\|owner/name#n\|CODE#n>` | **yes** | the pull request to check | a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` names the repository explicitly; `CODE#n` ([zheref/nen#269](https://github.com/zheref/nen/issues/269)) resolves a product code through `--repo`'s `nen/repos.json` by the same lookup `pr ready <CODE>#<N>` uses — an unknown code, a code matching two registry keys that differ only by letter case (see [`pr merge`](#nen-pr-merge)'s *The ref*), or an unreadable registry is exit 2. Like `owner/name#n`, a code may name a repository other than `--repo`'s origin: this verb only reads (`pr merge`, which shares the grammar, refuses that). The `#` is required; the no-`#` shorthand `pr ready` also accepts is not |
 | `--repo <path>` | **yes** | the checkout whose `nen/workflow.json` declares `release.unitPaths` | required, exit 2 if omitted (#28) |
 | `--json` | no | machine-readable result | — |
 

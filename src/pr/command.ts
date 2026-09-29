@@ -48,7 +48,14 @@ import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
-import { fetchPrAndKnownBots, isCollaborator, requestBotReviews, type PrAndKnownBots } from "./bots.js";
+import {
+  EXIT_BOT_REQUEST_UNRECORDED,
+  fetchPrAndKnownBots,
+  isCollaborator,
+  requestBotReviews,
+  type PrAndKnownBots,
+  type UnrecordedBot,
+} from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 import { OPEN_CONTRACT, openPullRequest } from "./open.js";
 import {
@@ -83,7 +90,7 @@ function requirePr(context: CommandContext): number {
   return number;
 }
 
-const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <a,b>] [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> --requirements-from <path>
 nen pr fetch --target <owner/name> --pr <n>
@@ -94,7 +101,7 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
-nen pr merge <n|owner/name#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
+nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict and every
@@ -123,11 +130,20 @@ ready:
   --round-policy <p>          strict | bounded. Default bounded.
   --exclude-run <id>          Drop one Actions run's own checks (CON-36 clause
                               3; pass it only from inside that run's own job).
-  --exclude-check <a,b>       Drop checks BY NAME from CON-32(a) (zheref/nen#216): a repository whose only reporting
+  --exclude-check <name>      Drop checks BY EXACT NAME from CON-32(a) (zheref/nen#216): a repository whose only reporting
                               check is its own readiness run would otherwise
                               read a false ready off that prior check. An
                               EMPTY rollup after exclusion is 'not-ready: no
-                              checks reported', never ready. Comma-separated.
+                              checks reported', never ready. REPEATABLE, one
+                              name per occurrence (zheref/nen#243); one value
+                              may also join names with commas, and a comma
+                              inside ()/[]/{} is part of the name, so a
+                              matrix job such as 'check (Windows,
+                              ["self-hosted","Windows","X64"])' is one name.
+                              An opener never closed with a comma after it is
+                              refused (exit 2) -- repeat the flag instead. A
+                              name with a comma outside every bracket cannot
+                              be named.
   --gates <path>              Read reviewer identities from this gates file
                               instead of the target repo's nen/gates.json.
                               A RELATIVE path is resolved against the --repo
@@ -216,6 +232,20 @@ request-reviews:
                          network-free even here) but nothing is
                          requested; prints which route -- bot, user or
                          team -- each name or id went to instead.
+  A bot is reported as requested only when the mutation's OWN response
+  lists it, by node id, as pending review (zheref/nen#277): GitHub has
+  been seen to accept the call and record nothing, and no review then
+  arrives. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
+  named, or a route's gh call failed or answered something unreadable;
+  2 usage (a missing --pr, an unresolved --add-reviewers login); 9 every
+  call was ACCEPTED but at least one requested bot is not pending review
+  -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
+  }], login null for a bot this pull request has never seen). No review
+  round should be expected from such a bot (the response is read off a
+  first:100 page, so a PR with more pending requests than that can report
+  a landed bot here). When a call also failed outright, 1 wins and
+  'unrecordedBots' still names the bot. --json: '{ ok, routing, message,
+  unrecordedBots }'.
 
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
@@ -308,6 +338,20 @@ merge:
   pull request's state is re-read, and 'merged' is reported only when
   GitHub's own state is MERGED -- otherwise this prints "queued (auto-merge
   or merge queue)", naming the state read back.
+  <ref>                       <n> -- --repo's own origin; owner/name#<n>;
+                              or <CODE>#<n> -- the code resolved through
+                              --repo's nen/repos.json by the SAME lookup
+                              'pr ready <CODE>#<N>' uses (zheref/nen#269),
+                              case-insensitive over A-Z only; a code that
+                              matches two keys differing only by case is
+                              refused (exit 2), naming both, never picked.
+                              Every form must name --repo's origin: a slug
+                              or a code resolving to any other repository
+                              is refused (exit 2), never merged. NARROWER
+                              THAN 'pr ready', DELIBERATELY: the '#' is
+                              required -- the no-'#' shorthand (AB123)
+                              splits by a rule, not a delimiter, and a verb
+                              that merges takes only the unambiguous form.
   --requirements-from <path>  The same '{ name, pattern }' JSON array
                               'pr body-check' takes, validated (exists,
                               non-empty, parseable) before ANY gh call.
@@ -315,8 +359,9 @@ merge:
                               Omit it to see the plan only.
   Exit codes: 0 merged, or a passing plan printed without --run; 1 at
   least one gate did not pass; 2 usage (missing --release-unit, a bad ref,
-  missing --requirements-from, --repo's origin naming a different
-  repository than the ref, or an unknown flag such as --admin/--auto);
+  an unknown or unreadable product code, missing --requirements-from,
+  --repo's origin naming a different repository than the ref or the code
+  resolves to, or an unknown flag such as --admin/--auto);
   5 gh REFUSED the merge (branch protection, a required review, ...) --
   its stderr and the exact command are printed for a human; 6 gh could
   not be RUN at all (not on PATH, no permission) -- distinct from 5,
@@ -444,6 +489,7 @@ function ready(context: CommandContext): Promise<number> {
       positionals: context.args.positionals,
       values: context.args.values,
       booleans,
+      lists: context.args.lists,
       repoFlag: context.repoFlag,
     },
     context.io,
@@ -479,6 +525,9 @@ export const prCommand: Command = {
       "head",
     ],
     booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft", "release-unit", "run"],
+    // `ready`'s repeatable `--exclude-check` (zheref/nen#243) -- declared as a
+    // LIST so a second occurrence is kept, not refused as a repeated value.
+    lists: [...PR_READY_FLAGS.lists],
   },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("pr", context.args, [
@@ -867,7 +916,7 @@ function doRequestReviews(context: CommandContext): number {
     return 0;
   }
 
-  const results: Array<{ readonly ok: boolean; readonly message: string }> = [];
+  const results: Array<{ readonly ok: boolean; readonly message: string; readonly unrecordedBots?: readonly UnrecordedBot[] }> = [];
   if (userLogins.length > 0) {
     results.push(requestReviews(context.seams, target, prNumber, userLogins));
   }
@@ -875,20 +924,32 @@ function doRequestReviews(context: CommandContext): number {
     // `known` is already populated whenever any --add-reviewers login
     // resolved to a bot; a caller who named bots ONLY via --add-bots never
     // triggered that read, so the pull request's own node id -- the
-    // mutation's pullRequestId -- is fetched here instead.
-    const pullRequestId = known?.pullRequestId ?? fetchPrAndKnownBots(context.seams, target, prNumber).pullRequestId;
-    results.push(requestBotReviews(context.seams, target, prNumber, pullRequestId, botIds));
+    // mutation's pullRequestId -- is fetched here instead. The same read's
+    // bot list rides along so an unrecorded bot (zheref/nen#277) is named by
+    // its login where this pull request already knows it, not only by id.
+    const knownBots = known ?? fetchPrAndKnownBots(context.seams, target, prNumber);
+    results.push(requestBotReviews(context.seams, target, prNumber, knownBots.pullRequestId, botIds, knownBots.bots));
   }
 
   const ok = results.every((result): boolean => result.ok);
+  const unrecordedBots = results.flatMap((result): readonly UnrecordedBot[] => result.unrecordedBots ?? []);
+  // A FAILED CALL OUTRANKS AN UNRECORDED BOT (zheref/nen#277). When one route's
+  // `gh` call failed outright (exit 1's meaning) and, in the same invocation,
+  // the bot route was accepted but not recorded, the code says the louder
+  // fact -- something needs fixing before anything is retried -- and
+  // `unrecordedBots` in --json still carries the bot half. EXIT 9 therefore
+  // means exactly one thing: every call this verb made was accepted, and at
+  // least one requested bot is not pending review.
+  const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
+  const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
   const lines = results.map((result): string => result.message);
   // JOINED WITH A NEWLINE, matching the human rendering line for line
   // (Copilot review, PR #174) -- both routes running in the same call
   // prints two lines to the terminal, and `--json`'s `message` field
   // silently collapsing them with a space would be a fact the human
   // rendering states plainly and the JSON rendering blurs.
-  emit(context.io, context.json, { ok, routing: routes, message: lines.join("\n") }, lines);
-  return ok ? 0 : 1;
+  emit(context.io, context.json, { ok, routing: routes, message: lines.join("\n"), unrecordedBots }, lines);
+  return code;
 }
 
 /**
@@ -1216,7 +1277,9 @@ async function doMerge(context: CommandContext): Promise<number> {
   }
   const typedRef = context.args.positionals[2];
   if (typedRef === undefined) {
-    throw new VerbUsageError("'pr merge' requires a pull-request reference. Try 'pr merge <n> --release-unit ...' or 'pr merge owner/name#<n> --release-unit ...'.");
+    throw new VerbUsageError(
+      "'pr merge' requires a pull-request reference. Try 'pr merge <n> --release-unit ...', 'pr merge owner/name#<n> --release-unit ...' or 'pr merge <CODE>#<n> --release-unit ...'.",
+    );
   }
   const requirementsPath = requireValue(
     context.args,

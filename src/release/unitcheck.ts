@@ -26,6 +26,9 @@ import { matchesPattern } from "../report/patterns.js";
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { GH, must, mustJson, ToolError, type Seams } from "../seam/exec.js";
 import type { ReleaseUnitEntry, ReleaseUnitKeyedPath } from "../schema/workflow.js";
+import { loadRepoRegistry } from "../schema/repos.js";
+import { SchemaError } from "../schema/errors.js";
+import { RefError, resolveProductCode } from "../verbs/pr_ready.js";
 
 export type { ReleaseUnitEntry, ReleaseUnitKeyedPath } from "../schema/workflow.js";
 
@@ -38,45 +41,119 @@ export class UnitCheckRefError extends Error {
   }
 }
 
-/** `<n>` or `<owner/name>#<n>` -- the two forms `--pr` accepts. */
+/** `<n>`, `<owner/name>#<n>` or `<CODE>#<n>` -- the three forms a ref here accepts. */
 const PR_REF = /^(?:([^\s#]+)#)?([0-9]{1,9})$/;
 
+/**
+ * A product code, spelled exactly as `pr ready`'s own `<CODE>#<N>` spells one
+ * (../verbs/pr_ready.ts's HASH_REF code group): a letter, then letters and
+ * digits. A prefix with a `/` is an `owner/name` slug instead; a prefix that
+ * is neither is refused by name rather than handed to either reader.
+ */
+const PRODUCT_CODE = /^[A-Za-z][A-Za-z0-9]*$/;
+
 export interface ResolvedPrRef {
-  /** `null` means "this checkout's own origin". */
+  /** The typed `owner/name`, or `null`. At most one of `slug` and `code` is set; neither means "this checkout's own origin". */
   readonly slug: string | null;
+  /** The typed product code (`<CODE>#<n>`, zheref/nen#269), or `null`. Resolved by `resolveUnitCheckTarget`, never here -- this function reads no file. */
+  readonly code: string | null;
   readonly number: number;
 }
 
 /**
- * `--pr <n|owner/name#n>`, resolved to a slug (or none) and a number.
+ * A ref -- `--pr` on `release unit-check`, the positional on `pr merge` --
+ * resolved to a slug, a product code, or neither, and a number.
+ *
+ * THREE FORMS, ONE DELIMITER (zheref/nen#269). `<n>` names this checkout's own
+ * origin; `<owner/name>#<n>` names a repository outright; `<CODE>#<n>` names
+ * one through the target repository's registry, exactly as `pr ready
+ * <CODE>#<N>` does. Before #269 the regex below already MATCHED `HA#117` --
+ * and then fed `HA` to the `owner/name` parser, which refused it as "not an
+ * owner/name slug": a ref that looked like `pr ready`'s shorthand and meant
+ * something narrower. The prefix is now told apart by its shape: a `/` makes
+ * it a slug, a code's shape makes it a code, anything else is refused.
+ *
+ * THE '#' IS REQUIRED HERE, DELIBERATELY NARROWER THAN `pr ready`. `pr ready`
+ * also accepts the no-'#' shorthand (`HA117`), whose split is a stated rule
+ * rather than a delimiter -- the number is the longest trailing digit run, so
+ * a code that ends in a digit cannot be written that way at all. That is a
+ * fair trade for a read-only verdict; `pr merge` merges, and a ref whose
+ * meaning rests on a split rule is not one it takes. The refusal names the
+ * `#` form.
  *
  * REFUSED, NEVER GUESSED, exactly like every other ref grammar in this binary
  * (../verbs/pr_ready.ts's `resolveRef`, ../pr/command.ts's `requirePrStrict`):
- * an unparseable token is a usage error naming the two forms, not an attempt
- * to salvage a reading from it.
+ * an unparseable token is a usage error naming the three forms, not an
+ * attempt to salvage a reading from it.
  */
 export function resolvePrRef(raw: string): ResolvedPrRef {
   const trimmed = raw.trim();
   const match = PR_REF.exec(trimmed);
+  const forms = "<n> (this checkout's own repository), <owner/name>#<n>, or <CODE>#<n> (a product code in --repo's nen/repos.json, the '#' required)";
   if (match === null) {
-    throw new UnitCheckRefError(
-      `'${raw}' is not a pull-request reference. Write --pr <n> (this checkout's own repository) or --pr <owner/name>#<n>.`,
-    );
+    throw new UnitCheckRefError(`'${raw}' is not a pull-request reference. Write ${forms}.`);
   }
   const parsed = Number.parseInt(match[2] ?? "", 10);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new UnitCheckRefError(`'${raw}' names no positive pull-request number.`);
   }
-  return { slug: match[1] ?? null, number: parsed };
+  const prefix = match[1];
+  if (prefix === undefined) return { slug: null, code: null, number: parsed };
+  if (prefix.includes("/")) return { slug: prefix, code: null, number: parsed };
+  if (PRODUCT_CODE.test(prefix)) return { slug: null, code: prefix, number: parsed };
+  throw new UnitCheckRefError(
+    `'${raw}': '${prefix}' is neither an owner/name slug (it has no '/') nor a product code (a letter, then letters and digits). Write ${forms}.`,
+  );
 }
 
-/** Resolves the ref's target: the named slug, or this checkout's own origin. */
+/**
+ * Resolves the ref's target: the named slug, the product code through
+ * `repoRoot`'s own registry, or this checkout's own origin.
+ *
+ * A CODE IS RESOLVED BY `pr ready`'S OWN LOOKUP (../verbs/pr_ready.ts's
+ * `resolveProductCode`), against the registry of the checkout `--repo` names
+ * -- the same file `pr ready <CODE>#<N>` reads when run from that checkout. A
+ * missing or malformed registry, and a code it does not list, are usage
+ * errors (`UnitCheckRefError`, exit 2) that name the file or the known codes.
+ * Whether the code may name a repository OTHER than this checkout's origin is
+ * the caller's rule, not this function's: `release unit-check` only reads and
+ * allows it, exactly as it allows an explicit `owner/name#n`; `pr merge`
+ * refuses it (../pr/mergeunit.ts's `resolveTargetForMerge`).
+ */
 export function resolveUnitCheckTarget(seams: Seams, repoRoot: string, ref: ResolvedPrRef): Target {
+  if (ref.code !== null) return resolveCodeTarget(repoRoot, ref.code);
   if (ref.slug === null) return targetFromRemote(seams, repoRoot);
   try {
     return parseTarget(ref.slug);
   } catch (error) {
     if (error instanceof TargetError) throw new UnitCheckRefError(error.message);
+    throw error;
+  }
+}
+
+function resolveCodeTarget(repoRoot: string, code: string): Target {
+  let registry;
+  try {
+    registry = loadRepoRegistry(repoRoot);
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      throw new UnitCheckRefError(
+        `'${code}#<n>' is resolved through --repo's own registry, and it could not be read: ${error.message}`,
+      );
+    }
+    throw error;
+  }
+  let resolved;
+  try {
+    resolved = resolveProductCode(code, registry, { explicitForm: (name): string => `owner/${name}#<n>` });
+  } catch (error) {
+    if (error instanceof RefError) throw new UnitCheckRefError(`${error.message} (read from '${registry.path}')`);
+    throw error;
+  }
+  try {
+    return parseTarget(`${resolved.owner}/${resolved.repo}`);
+  } catch (error) {
+    if (error instanceof TargetError) throw new UnitCheckRefError(`'${code}' resolves through '${registry.path}' to something that is not a repository slug: ${error.message}`);
     throw error;
   }
 }

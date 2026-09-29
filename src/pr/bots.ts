@@ -57,6 +57,31 @@
 // the pull request's OWN reviewRequests afterwards, and the human/`--json`
 // message is built by reading who is actually pending review there -- never
 // by echoing the ids this module sent.
+//
+// AND AN ABSENT BOT IS A REFUSAL, NOT A SUCCESS WITH AN EMPTY LIST
+// (zheref/nen#277). Reading the response was only half of the rule above:
+// until #277 a response that listed NONE of the requested bots still came
+// back `ok: true`, rendered as "pending review requests now include bot(s):
+// (none reported back)" -- on zheref/hatsu#123, #128 and #130 (2026-09-29)
+// exactly that answer came back for Copilot's node id, GitHub recorded no
+// `ReviewRequestedEvent`, and no review ever arrived, while a caller reading
+// exit 0 waited on a round that was never coming. So every requested id is now
+// looked for in the response BY ID, and one that is not there fails the call
+// with its own exit code (`EXIT_BOT_REQUEST_UNRECORDED`, below), naming the
+// bot. "GitHub accepted the call" and "GitHub recorded the request" are two
+// facts, and only the second one means a review is coming.
+//
+// WHY NOT ALSO READ THE TIMELINE FOR THE `ReviewRequestedEvent` (#277's
+// optional ask). It would be one more `gh api graphql` call through the same
+// seam, so it is testable -- but it is not small in what it would have to
+// decide. The mutation's response is the same transaction's own answer; a
+// timeline read is a second, later read of a connection GitHub fills
+// asynchronously, so an event missing from it can be lag rather than
+// refusal, and an event present in it can be an EARLIER request's (a bot
+// requested at 03:00Z and again at 12:32Z leaves one event per request) --
+// telling this call's event from an older one needs a clock window, which is
+// a heuristic, and a heuristic is exactly what this verdict must not rest on.
+// The response-by-id check decides; the timeline is left out on purpose.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
@@ -243,8 +268,10 @@ export function isCollaborator(seams: Seams, target: Target, login: string): boo
 
 // `... on Bot{login id}`, BOTH FIELDS -- not `login` alone -- so the response
 // reads through the SAME `readBot()` the two queries above use, rather than a
-// second reader that only checks `login`. `id` is otherwise unused here, but
-// a reader that silently accepted a Bot fragment missing it would be a second,
+// second reader that only checks `login`. `id` is also how the response is
+// matched back to the `botIds` this call sent (zheref/nen#277) -- a requested
+// id that no pending Bot node carries is reported as not recorded -- and a
+// reader that silently accepted a Bot fragment missing it would be a second,
 // looser definition of "this is a bot" living beside the first.
 const REQUEST_BOT_REVIEWS_MUTATION =
   "mutation($prId:ID!,$botIds:[ID!]!){requestReviews(input:{pullRequestId:$prId,botIds:$botIds,union:true}){pullRequest{" +
@@ -264,11 +291,65 @@ export function requestBotReviewsArgv(pullRequestId: string, botIds: readonly st
   ];
 }
 
+/**
+ * `nen pr request-reviews`' exit code when GitHub ACCEPTED a bot review
+ * request (the mutation exited 0 and answered JSON) but its own response does
+ * not record every bot that was asked for (zheref/nen#277).
+ *
+ * WHY A CODE OF ITS OWN, NOT `1`. The verb's table was `0` requested, `1` a
+ * route's `gh` call failed (or nothing was named), `2` usage. A failed call is
+ * loud -- GitHub said no, with a reason on stderr -- and a caller may fix a
+ * token and retry it. This is the silent case: the call succeeded and the
+ * request simply did not land, so the one thing a caller (hatsu:sharingan)
+ * must do differently is stop expecting a review round from that bot rather
+ * than wait on one. Folding it into `1` would make that caller parse the
+ * message to tell the two apart. ("Should not be expected", never "will not
+ * arrive": the response is read off a `first:100` page -- see
+ * `requestBotReviews` -- so a bot that DID land past it is reported here
+ * too, and the wording claims no more than the page proves.)
+ *
+ * WHY `9`. The same family's precedent: `pr ready`'s `8` (head-mismatch) was
+ * chosen because it collides with nothing else this CLI or its bootstrap
+ * returns -- `1`/`2` are every verb's, `3`-`6` are taken by `shu`, `wc`, `pr
+ * threads` and `pr merge`, `3`-`7` by the bootstrap script and its wrapper,
+ * `8` by `pr ready`. A caller that drives several `pr` verbs from one
+ * loop can then branch on the number alone, without first asking which verb
+ * returned it. `9` is the next code with that property.
+ */
+export const EXIT_BOT_REQUEST_UNRECORDED = 9;
+
+/** A requested bot the mutation's own response did not record (zheref/nen#277). */
+export interface UnrecordedBot {
+  /** The node id that was sent in `botIds`. */
+  readonly id: string;
+  /**
+   * The bot's login when this pull request already knows it (its own
+   * `reviewRequests` or `timelineItems` -- `parsePrAndKnownBots`), `null` for a
+   * bot named only by node id that this pull request has never seen. Never
+   * guessed from the id.
+   */
+  readonly login: string | null;
+}
+
 export interface RequestBotReviewsResult {
   readonly ok: boolean;
   readonly message: string;
   /** The bot logins `gh`'s OWN response says are now pending review -- see the module header. */
   readonly pendingBotLogins: readonly string[];
+  /**
+   * Every requested bot the mutation's own response does NOT list as pending
+   * (zheref/nen#277). Non-empty exactly when the call was accepted but did not
+   * land for at least one bot -- `ok` is then `false`. EMPTY when the call
+   * itself failed or its response could not be read: those are `ok: false`
+   * for their own reason, and nothing was read that could say which bot
+   * landed and which did not.
+   */
+  readonly unrecordedBots: readonly UnrecordedBot[];
+}
+
+/** `login (id)` when the login is known, the bare id otherwise -- the name a human reads first. */
+function describeBot(bot: UnrecordedBot): string {
+  return bot.login === null ? bot.id : `${bot.login} (${bot.id})`;
 }
 
 /**
@@ -276,7 +357,19 @@ export interface RequestBotReviewsResult {
  * own response rather than assumed. See the module header for why: the
  * identical call has been observed answering `NOT_FOUND` for a botId under
  * one token and succeeding under another, so an exit-0 result is trusted
- * only as far as the mutation's own `reviewRequests` says it went.
+ * only as far as the mutation's own `reviewRequests` says it went -- and
+ * (zheref/nen#277) a requested id that response does not carry is reported
+ * as NOT recorded, `ok: false`, never as a success with an empty list.
+ *
+ * `knownBots` is only for NAMING an unrecorded bot (its login, when this pull
+ * request has already seen it); it never decides whether one was recorded --
+ * that is the response's id alone.
+ *
+ * `first:100` on the response's `reviewRequests` (see the module header): a
+ * pull request with more than 100 pending review requests could push a bot
+ * that DID land off the page, and it would be reported as unrecorded. That
+ * failure direction is a false refusal, never a false success, which is the
+ * direction this verdict is allowed to err in.
  */
 export function requestBotReviews(
   seams: Seams,
@@ -284,6 +377,7 @@ export function requestBotReviews(
   prNumber: number,
   pullRequestId: string,
   botIds: readonly string[],
+  knownBots: readonly KnownBot[] = [],
 ): RequestBotReviewsResult {
   const result = seams.run(GH, [...requestBotReviewsArgv(pullRequestId, botIds)]);
   if (result.code !== 0) {
@@ -293,6 +387,7 @@ export function requestBotReviews(
         outputLines(result.stderr).join(" ") || `exit ${result.code}`
       }`,
       pendingBotLogins: [],
+      unrecordedBots: [],
     };
   }
   let parsed: {
@@ -307,24 +402,58 @@ export function requestBotReviews(
       ok: false,
       message: `${target.slug}#${prNumber}: gh api graphql exited 0 but did not return JSON (${String(error)})`,
       pendingBotLogins: [],
+      unrecordedBots: [],
     };
   }
   const nodes = parsed.data?.requestReviews?.pullRequest?.reviewRequests?.nodes;
-  const pendingBotLogins = Array.isArray(nodes)
-    ? nodes
-        .map((node): string | null => {
-          const bot = readBot(
-            typeof node === "object" && node !== null ? (node as Record<string, unknown>)["requestedReviewer"] : null,
-          );
-          return bot?.login ?? null;
-        })
-        .filter((login): login is string => login !== null)
-    : [];
+  // NO LIST AT ALL IS "COULD NOT READ", NOT "READ, AND THE BOT IS ABSENT".
+  // A response with no `reviewRequests.nodes` array (a null `requestReviews`,
+  // a missing pull request) says nothing about which bot landed, so it is the
+  // same class of failure as the not-JSON branch above -- exit 1 -- rather
+  // than EXIT_BOT_REQUEST_UNRECORDED, whose meaning is that GitHub's own
+  // answer was read and positively lacks the bot.
+  if (!Array.isArray(nodes)) {
+    return {
+      ok: false,
+      message: `${target.slug}#${prNumber}: gh api graphql exited 0 but its response carries no reviewRequests list, so whether the bot review request landed cannot be read from it`,
+      pendingBotLogins: [],
+      unrecordedBots: [],
+    };
+  }
+  const pending = nodes
+    .map((node): KnownBot | null =>
+      readBot(typeof node === "object" && node !== null ? (node as Record<string, unknown>)["requestedReviewer"] : null),
+    )
+    .filter((bot): bot is KnownBot => bot !== null);
+  const pendingBotLogins = pending.map((bot): string => bot.login);
+  const pendingIds = new Set(pending.map((bot): string => bot.id));
+  // BY ID, THE ONE THING BOTH SIDES CARRY. A login is not sent (a bot named by
+  // --add-bots has none this module knows) and is not unique across renames;
+  // the node id is what the mutation was given and what the response echoes.
+  const unrecordedBots = [...new Set(botIds)]
+    .filter((id): boolean => !pendingIds.has(id))
+    .map((id): UnrecordedBot => ({ id, login: knownBots.find((bot): boolean => bot.id === id)?.login ?? null }));
+  if (unrecordedBots.length > 0) {
+    const plural = unrecordedBots.length > 1;
+    return {
+      ok: false,
+      message: `${target.slug}#${prNumber}: GitHub accepted the bot review request but did not record it for ${unrecordedBots
+        .map(describeBot)
+        .join(", ")} -- the mutation's own response lists no pending review request from ${
+        plural ? "those bots" : "that bot"
+      }, so no review round should be expected from ${plural ? "them" : "it"}. Pending bot review requests it does list: ${
+        pendingBotLogins.length > 0 ? pendingBotLogins.join(", ") : "(none)"
+      }.`,
+      pendingBotLogins,
+      unrecordedBots,
+    };
+  }
   return {
     ok: true,
     message: `${target.slug}#${prNumber}'s pending review requests now include bot(s): ${
       pendingBotLogins.length > 0 ? pendingBotLogins.join(", ") : "(none reported back)"
     }`,
     pendingBotLogins,
+    unrecordedBots: [],
   };
 }

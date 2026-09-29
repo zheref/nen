@@ -747,6 +747,96 @@ describe("nen release unit-check -- CLI wiring", () => {
     const result = await capture(["release", "unit-check", "--pr", "not-a-ref"], root, new ScriptedSeams([]).run);
     expect(result.code).toBe(2);
   });
+
+  // zheref/nen#269: 'pr merge' shares this verb's ref grammar, so --pr gains
+  // <CODE>#<n> too -- resolved through --repo's own nen/repos.json by 'pr
+  // ready's own lookup. This verb only READS, so a code naming a repository
+  // other than --repo's origin is allowed, exactly as an explicit
+  // owner/name#n always was: no origin read is scripted below, and none runs.
+  describe("--pr <CODE>#<n> (zheref/nen#269)", () => {
+    function codedWorkflowRepo(): string {
+      const root = workflowRepo(["src/unit/**"]);
+      writeFileSync(
+        join(root, "nen", "repos.json"),
+        JSON.stringify({ consumers: [{ repo: "acme/widgets", consumes: [], code: "AW" }] }),
+      );
+      return root;
+    }
+
+    it("resolves the code through --repo's registry and checks that repository's pull request", async () => {
+      const script: readonly ScriptedCall[] = [
+        {
+          match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files",
+          result: { code: 0, stdout: JSON.stringify([{ filename: "src/unit/a.ts" }]) },
+        },
+        { match: "gh api repos/acme/widgets/pulls/9", result: { code: 0, stdout: JSON.stringify({ changed_files: 1 }) } },
+      ];
+      const result = await capture(
+        ["release", "unit-check", "--pr", "AW#9", "--json"],
+        codedWorkflowRepo(),
+        new ScriptedSeams(script).run,
+      );
+      expect(result.code).toBe(0);
+      const report = JSON.parse(result.out.join("\n")) as { target: string; pr: number; ok: boolean };
+      expect(report).toMatchObject({ target: "acme/widgets", pr: 9, ok: true });
+    });
+
+    it("refuses an unknown code at exit 2, naming the known codes", async () => {
+      const result = await capture(["release", "unit-check", "--pr", "ZZ#9"], codedWorkflowRepo(), new ScriptedSeams([]).run);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/'ZZ' is not a product code .*Known codes: AW/);
+    });
+
+    // Feitan (E3 review): this verb allows a code naming another repository,
+    // so a lookup that silently picked one of two case-variant keys -- or
+    // folded a KELVIN SIGN key onto 'K' -- read the WRONG repository's pull
+    // request. Both are refused at exit 2 before any gh call.
+    it("refuses (exit 2, no gh call) a code that matches two keys differing only by case, naming both repositories", async () => {
+      const root = workflowRepo(["src/unit/**"]);
+      writeFileSync(
+        join(root, "nen", "repos.json"),
+        JSON.stringify({
+          consumers: [
+            { repo: "acme/widgets", consumes: [], code: "AW" },
+            { repo: "evil/widgets", consumes: [], code: "aw" },
+          ],
+        }),
+      );
+      const seams = new ScriptedSeams([]);
+      const result = await capture(["release", "unit-check", "--pr", "Aw#9"], root, seams.run);
+      expect(result.code).toBe(2);
+      const err = result.err.join("\n");
+      expect(err).toMatch(/'Aw' matches 2 differently-spelled product codes/);
+      expect(err).toContain("'AW' -> 'acme/widgets'");
+      expect(err).toContain("'aw' -> 'evil/widgets'");
+      expect(seams.calls).toEqual([]);
+    });
+
+    it("refuses (exit 2, no gh call) 'K#9' when the only matching key is a KELVIN SIGN", async () => {
+      const root = workflowRepo(["src/unit/**"]);
+      writeFileSync(join(root, "nen", "repos.json"), JSON.stringify({ consumers: [{ repo: "evil/kelvin", consumes: [], code: "\u212A" }] }));
+      const seams = new ScriptedSeams([]);
+      const result = await capture(["release", "unit-check", "--pr", "K#9"], root, seams.run);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/'K' is not a product code/);
+      expect(seams.calls).toEqual([]);
+    });
+
+    it("refuses a code at exit 2 when --repo carries no registry, naming the file", async () => {
+      const root = workflowRepo(["src/unit/**"]);
+      const result = await capture(["release", "unit-check", "--pr", "AW#9"], root, new ScriptedSeams([]).run);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/resolved through --repo's own registry, and it could not be read/);
+    });
+
+    it("--help names the CODE#n form, the shared lookup, and that the '#' is required", async () => {
+      const result = await capture(["release", "--help"], null, new ScriptedSeams([]).run);
+      const help = result.out.join("\n");
+      expect(help).toMatch(/nen release unit-check --pr <n\|owner\/name#n\|CODE#n> --repo <path>/);
+      expect(help).toMatch(/SAME lookup 'pr ready\s+<CODE>#<N>' uses/);
+      expect(help).toMatch(/The '#' is required/);
+    });
+  });
 });
 
 describe("nen release -- refuses an unknown subcommand", () => {
