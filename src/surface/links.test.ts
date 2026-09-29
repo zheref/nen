@@ -319,6 +319,49 @@ describe("LinkRewriter, on strings", () => {
     expect(rewriter.rewritten).toBe(10);
   });
 
+  it("reads a destination and a title the way CommonMark does -- parentheses included (Cursor Bugbot on #285)", () => {
+    // From a persona one level deeper in the copy than in the source: every
+    // form below must reach the rewrite, or it dangles at the copy's depth.
+    const rewriter = cursorLike();
+    const written = [
+      // A quoted title may hold parentheses.
+      '[x](../../docs/a.md "title (with parens)")',
+      "[x](../../docs/a.md 'single (quoted)')",
+      // A title may itself be parenthesised.
+      "[x](../../docs/a.md (a parenthesised title))",
+      // A bracketed destination may hold spaces and parentheses.
+      "[x](<../../docs/a (b).md>)",
+      // A bare destination may hold BALANCED parentheses, nested too.
+      "[x](../../docs/a(b).md)",
+      "[x](../../docs/a((b)).md#frag)",
+    ];
+    expect(rewriter.rewrite(written.join("\n"), LEAD, "agents/lead.md")).toBe(written.map((line): string => line.replace("../../docs/", "../../../docs/")).join("\n"));
+    expect(rewriter.rewritten).toBe(written.length);
+  });
+
+  it("still refuses what CommonMark does not read as a link, and every code-sample protection holds", () => {
+    const rewriter = cursorLike();
+    const carried = [
+      // Unbalanced parentheses in a bare destination: not a link.
+      "[x](../../docs/a(b.md)",
+      // A title that never closes, or a parenthesised title holding a `(`.
+      '[x](../../docs/a.md "never closed)',
+      "[x](../../docs/a.md (nested (paren)))",
+      // A title must be separated from the destination by whitespace.
+      "[x](../../docs/a.md\"glued\")",
+      // A bracketed destination may not hold `<` or cross a line.
+      "[x](<../../docs/a<b.md>)",
+      "[x](<../../docs/a\nb.md>)",
+      // The code-sample protections (Nobunaga, the #270 review).
+      "handlers[name](event(1));",
+      "f(a)[i](b(c).md)",
+      "`[x](../../docs/a(b).md)`",
+      "```text\n[warn]: deprecated (see log)\n```",
+    ].join("\n");
+    expect(rewriter.rewrite(carried, LEAD, "agents/lead.md")).toBe(carried);
+    expect(rewriter.rewritten).toBe(0);
+  });
+
   it("does not let a label run across a blank line", () => {
     const rewriter = new LinkRewriter({ root: R, outDir: at("surfaces", "antigravity"), items: new Map() });
     const text = "an [unclosed label\n\nthen](../../../docs/guide.md)";

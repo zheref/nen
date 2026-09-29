@@ -67,10 +67,18 @@
 // written as prose are not markdown links, and nothing here guesses which
 // prose is a path. A footnote definition (`[^n]: text`) is not a link
 // definition. A target carrying a character no portable path spelling uses --
-// whitespace (outside `<...>`), `[ ] { } ( ) ^ * | $ < > " '`, a backtick or a
+// whitespace (outside `<...>`), `[ ] { } ^ * | $ < > " '`, a backtick or a
 // backslash -- is a regex or a template placeholder inside an example, not a
 // path; and a "target" followed by anything but a title (`](a b)`) is not a
 // link at all. Each is carried exactly as written.
+//
+// DESTINATIONS AND TITLES ARE READ BY COMMONMARK'S RULES, NOT A PATTERN
+// (Cursor Bugbot on #285). A bare destination may hold BALANCED parentheses
+// (`a(b).md`), a `<...>` one anything but `<`, `>` or a line break
+// (`<a (b).md>`), and a title -- `"..."`, `'...'` or `(...)` -- parentheses of
+// its own. A `[^)]*` capture stopped at the first `)` of any of them and the
+// link never reached the rewrite; unbalanced parentheses are still not a
+// link, and are carried as written.
 //
 // THE CODE-SPAN RULE IS COMMONMARK'S BACKTICK-STRING RULE: a run of N
 // backticks opens a span only when a run of exactly N closes it within the
@@ -160,21 +168,38 @@ export function headingAnchor(heading: string): string {
 }
 
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
-/** A bare target carrying one of these is not a path (see the header). */
-const NOT_A_PATH = /[\s[\]{}()^*|$<>"'`\\]/;
+/**
+ * A bare target carrying one of these is not a path (see the header).
+ * Parentheses are NOT on the list: CommonMark lets a bare destination hold
+ * balanced ones (`a(b).md`), and the reader below only hands over a
+ * destination whose parentheses balance.
+ */
+const NOT_A_PATH = /[\s[\]{}^*|$<>"'`\\]/;
 /** Inside `<...>` whitespace and parentheses are legal path characters. */
 const NOT_A_BRACKETED_PATH = /[[\]{}^*|$<>"'`\\\n]/;
-/** What may follow a target and still leave a link: nothing, or a quoted title. */
-const TITLE = /^(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*$/;
+/**
+ * What may follow a reference definition's target and still leave one:
+ * nothing, or a title -- `"..."`, `'...'` or `(...)`, a backslash escaping its
+ * own delimiter, parentheses free inside the quoted two.
+ */
+const TITLE = /^(?:\s+(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\((?:[^()\\\n]|\\.)*\)))?\s*$/;
+/** A bare destination ends at whitespace or an ASCII control character. */
+const DESTINATION_END = /[\s\u0000-\u001f\u007f]/;
+/** CommonMark's nesting limit for balanced parentheses in a bare destination. */
+const MAX_PAREN_DEPTH = 32;
 /** A label character: anything but a bracket, a newline only where it does not end the paragraph. */
 const LABEL_CHAR = String.raw`(?:[^\[\]\n]|\n(?![ \t\r]*(?:\n|$)))`;
 /**
- * The inline form `[label](inside)`. The label may wrap lines and hold one
- * level of nested brackets (`[![img](a.png)](b.md)`, `` [`code`](x) ``); the
- * inside never spans a newline. The lookbehind is the header's CODE THAT ONLY
- * LOOKS LIKE A LINK rule.
+ * The OPENING of the inline form, `[label](`. The label may wrap lines and
+ * hold one level of nested brackets (`[![img](a.png)](b.md)`,
+ * `` [`code`](x) ``). The lookbehind is the header's CODE THAT ONLY LOOKS LIKE
+ * A LINK rule. What follows the `(` -- destination, title, closing `)` -- is
+ * read by `readInside`, not by a pattern: a destination may hold balanced
+ * parentheses and a title parentheses of its own (Cursor Bugbot on #285), and
+ * a `[^)]*` stops at the first of either, leaving the link at its source
+ * spelling to dangle at the copy's depth.
  */
-const INLINE = new RegExp(String.raw`(?<![\w\])\\])\[((?:${LABEL_CHAR}|\[${LABEL_CHAR}*\])*)\]\(([^)\n]*)\)`, "g");
+const INLINE_OPEN = String.raw`(?<![\w\])\\])\[((?:${LABEL_CHAR}|\[${LABEL_CHAR}*\])*)\]\(`;
 /** The reference definition; a label starting `^` is a footnote and is not matched. */
 const DEFINITION = /^([ \t]*\[(?!\^)[^\]\n]+\]:[ \t]*)(<[^>\n]*>|[^\s<>]+)([^\n]*)$/gm;
 /** A fence's opening or closing line: three or more backticks or tildes, indented or not. */
@@ -280,18 +305,111 @@ function within(spans: readonly (readonly [number, number])[], at: number): bool
   return spans.some(([start, end]): boolean => at >= start && at < end);
 }
 
-/** An inline link's inside, as its target and whatever follows it -- or null when it is not a link. */
-function splitInside(rest: string): { raw: string; bracketed: boolean; tail: string } | null {
-  if (rest.startsWith("<")) {
-    const close = rest.indexOf(">");
-    if (close < 0) return null;
-    const tail = rest.slice(close + 1);
-    return TITLE.test(tail) ? { raw: rest.slice(1, close), bracketed: true, tail } : null;
+/** An inline link's inside, read from just after its `(`. */
+interface Inside {
+  /** Whitespace before the destination, kept as written. */
+  readonly lead: string;
+  /** The destination, without its `<...>`. */
+  readonly raw: string;
+  readonly bracketed: boolean;
+  /** Everything between the destination and the closing `)` -- whitespace and a title -- kept as written. */
+  readonly tail: string;
+  /** The index just past the closing `)`. */
+  readonly end: number;
+}
+
+/** True for a space or a tab -- the only whitespace an inside may hold, since it never spans a line. */
+function blank(char: string): boolean {
+  return char === " " || char === "\t";
+}
+
+/**
+ * The inside of an inline link that opened just before `start`, read by
+ * CommonMark's rules, or null when what follows the `(` is not one:
+ *
+ * - a DESTINATION: `<...>` holding anything but `<`, `>` or a line break (a
+ *   backslash escaping the next character), or a bare run with no whitespace
+ *   or control character whose unescaped parentheses BALANCE, nested at most
+ *   32 deep; an empty one is allowed;
+ * - then, after at least one space or tab, an optional TITLE: `"..."` or
+ *   `'...'`, which may hold parentheses, or `(...)`, which may not hold an
+ *   unescaped `(`; a backslash escapes the next character in all three;
+ * - then optional spaces or tabs, and the closing `)`.
+ *
+ * Deliberately ONE LINE: CommonMark lets a line break stand between the
+ * destination and the title, and lets a title wrap, but the consumer guard
+ * this rewrite answers to reads links a line at a time, and a link it cannot
+ * read is one neither side can check.
+ */
+function readInside(text: string, start: number): Inside | null {
+  let at = start;
+  while (blank(text.charAt(at))) at += 1;
+  const lead = text.slice(start, at);
+  let raw: string;
+  let bracketed = false;
+  if (text.charAt(at) === "<") {
+    let scan = at + 1;
+    while (scan < text.length && text.charAt(scan) !== ">") {
+      const char = text.charAt(scan);
+      if (char === "<" || char === "\n") return null;
+      scan += char === "\\" ? 2 : 1;
+    }
+    if (text.charAt(scan) !== ">") return null;
+    raw = text.slice(at + 1, scan);
+    bracketed = true;
+    at = scan + 1;
+  } else {
+    let scan = at;
+    let depth = 0;
+    while (scan < text.length) {
+      const char = text.charAt(scan);
+      if (char === "\\") {
+        scan += 2;
+        continue;
+      }
+      if (DESTINATION_END.test(char)) break;
+      if (char === "(") {
+        depth += 1;
+        if (depth > MAX_PAREN_DEPTH) return null;
+      } else if (char === ")") {
+        if (depth === 0) break;
+        depth -= 1;
+      }
+      scan += 1;
+    }
+    if (depth !== 0) return null;
+    raw = text.slice(at, scan);
+    at = scan;
   }
-  const end = rest.search(/\s/);
-  const raw = end < 0 ? rest : rest.slice(0, end);
-  const tail = end < 0 ? "" : rest.slice(end);
-  return TITLE.test(tail) ? { raw, bracketed: false, tail } : null;
+  const destinationEnd = at;
+  while (blank(text.charAt(at))) at += 1;
+  const open = text.charAt(at);
+  if (at > destinationEnd && (open === '"' || open === "'" || open === "(")) {
+    const close = open === "(" ? ")" : open;
+    let scan = at + 1;
+    while (scan < text.length && text.charAt(scan) !== close) {
+      const char = text.charAt(scan);
+      if (char === "\n" || (open === "(" && char === "(")) return null;
+      scan += char === "\\" ? 2 : 1;
+    }
+    if (text.charAt(scan) !== close) return null;
+    at = scan + 1;
+    while (blank(text.charAt(at))) at += 1;
+  }
+  if (text.charAt(at) !== ")") return null;
+  return { lead, raw, bracketed, tail: text.slice(destinationEnd, at), end: at + 1 };
+}
+
+/** True when `token`'s unescaped parentheses balance -- a reference definition's bare destination obeys the inline rule. */
+function balanced(token: string): boolean {
+  let depth = 0;
+  for (let at = 0; at < token.length; at += 1) {
+    const char = token.charAt(at);
+    if (char === "\\") at += 1;
+    else if (char === "(") depth += 1;
+    else if (char === ")" && --depth < 0) return false;
+  }
+  return depth === 0;
 }
 
 /** A replaced target in the form it came in; a bare one that now holds whitespace is bracketed, or it would stop being a link. */
@@ -302,17 +420,32 @@ function spell(aimed: string, bracketed: boolean): string {
 /** Every inline link in `text`, its target through `aim` and its label read the same way (an image inside a link). */
 function inlineLinks(text: string, aim: Aim, readSpans: boolean): string {
   const spans = readSpans ? codeSpans(text) : [];
-  return text.replace(INLINE, (whole: string, label: string, inside: string, offset: number): string => {
+  // A fresh pattern per call: the label recursion below re-enters this
+  // function, and a shared global pattern's lastIndex would be clobbered.
+  const opener = new RegExp(INLINE_OPEN, "g");
+  let result = "";
+  let copied = 0;
+  for (let match = opener.exec(text); match !== null; match = opener.exec(text)) {
+    const start = match.index;
+    const label = match[1] ?? "";
     // Both the `[` and the `](` must be outside every code span: a link
     // written inside one is code, and so is a span that swallows the `](`.
-    if (within(spans, offset) || within(spans, offset + 1 + label.length)) return whole;
+    const inside = within(spans, start) || within(spans, start + 1 + label.length) ? null : readInside(text, start + match[0].length);
+    if (inside === null) {
+      // Not a link from this `[`; one may still open inside its label (an
+      // image in a link whose own destination is not one).
+      opener.lastIndex = start + 1;
+      continue;
+    }
     const relabelled = inlineLinks(label, aim, readSpans);
-    const lead = /^\s*/.exec(inside)?.[0] ?? "";
-    const target = splitInside(inside.slice(lead.length));
-    const aimed = target === null ? null : aim(target.raw, target.bracketed);
-    if (target === null || aimed === null) return `[${relabelled}](${inside})`;
-    return `[${relabelled}](${lead}${spell(aimed, target.bracketed)}${target.tail})`;
-  });
+    const aimed = aim(inside.raw, inside.bracketed);
+    const destination =
+      aimed === null ? text.slice(start + match[0].length + inside.lead.length, inside.end - 1 - inside.tail.length) : spell(aimed, inside.bracketed);
+    result += `${text.slice(copied, start)}[${relabelled}](${inside.lead}${destination}${inside.tail})`;
+    copied = inside.end;
+    opener.lastIndex = inside.end;
+  }
+  return result + text.slice(copied);
 }
 
 /** Every reference definition in `text` (no fence in it) that does not start inside a code span. */
@@ -321,6 +454,7 @@ function definitions(text: string, aim: Aim): string {
   return text.replace(DEFINITION, (whole: string, prefix: string, token: string, tail: string, offset: number): string => {
     if (within(spans, offset) || !TITLE.test(tail)) return whole;
     const bracketed = token.startsWith("<");
+    if (!bracketed && !balanced(token)) return whole;
     const aimed = aim(bracketed ? token.slice(1, -1) : token, bracketed);
     return aimed === null ? whole : `${prefix}${spell(aimed, bracketed)}${tail}`;
   });
