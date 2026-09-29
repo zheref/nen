@@ -11,14 +11,20 @@
 // shell used to hard-code a persona for.
 
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   CAVEATS,
   deliveryEvidence,
+  earlierRoundChecks,
   evaluateReady,
   minutesSince,
+  type Conjunct,
   type ConjunctId,
 } from "./ready.js";
 import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
+import { parseCheckRollup } from "../github/parse.js";
+import { defaultReviewers } from "./predicates.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 // The same fixture identities ./predicates.test.ts runs the ported bats cases
@@ -731,8 +737,12 @@ describe("evaluateReady -- CON-32(b), the approve-at-head split", () => {
       IDENTITIES,
       readyState({
         reviewers: "sasuke,tenma,bisky",
-        checks: [greenCheck(), { name: "bisky / review", status: "COMPLETED", conclusion: "NEUTRAL" }],
+        checks: [greenCheck(), { name: "bisky / review", status: "COMPLETED", conclusion: "SUCCESS" }],
         // bisky posts nothing; its round check alone satisfies rounds-owed.
+        // SUCCESS, not the NEUTRAL this case once carried: since E7's finding
+        // C1 only a definitive SUCCESS is a round-check round (a NEUTRAL may be
+        // a run cancelled by the next push). The approver-set property this
+        // case is about is unchanged by the conclusion.
       }),
       OPTIONS,
     );
@@ -752,7 +762,11 @@ describe("evaluateReady -- CON-32(b), the approve-at-head split", () => {
       IDENTITIES,
       readyState({
         reviewers: "sasuke,tenma,bisky",
-        checks: [greenCheck(), { name: "bisky / review", status: "COMPLETED", conclusion: "NEUTRAL" }],
+        // SUCCESS, so the comment above is TRUE: since E7's finding C1 only a
+        // SUCCESS run is a round-check round. With the NEUTRAL this case once
+        // carried it still passed, but only because bisky's stale-commit review
+        // is itself a round under `bounded` (Nobunaga's delta review, nit N1).
+        checks: [greenCheck(), { name: "bisky / review", status: "COMPLETED", conclusion: "SUCCESS" }],
         reviews: [
           approvedAtHead("sasuke"),
           approvedAtHead("tenma"),
@@ -813,5 +827,447 @@ describe("CAVEATS -- the fixed 'what the gate does not decide' set", () => {
     for (const caveat of CAVEATS) {
       expect(caveat.text).not.toMatch(/\bbisky\b/i);
     }
+  });
+});
+
+// ── round_quorum, on THIS repository's own nen/gates.json (ruling 2026-09-29) ──
+//
+// "Copilot credits are exhausted. Expect Cursor instead. Let's make it canon on
+// the repo so that we solve at least one round of reviews from both Copilot OR
+// Cursor (or both) as applicable." Everything below reads the file the
+// maintainer's gate actually reads (vitest's cwd is the repository root), not a
+// fixture of it -- so a later edit to that file that changes these verdicts
+// fails here, where it can be read, rather than on a pull request.
+describe("evaluateReady -- round_quorum on this repository's nen/gates.json (ruling 2026-09-29)", () => {
+  const OWN = loadGateIdentities(process.cwd());
+  const OWN_RAW = JSON.parse(
+    readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8"),
+  ) as Record<string, unknown>;
+  // THE PRE-QUORUM READING: every nen release before the one that ships
+  // `round_quorum` (v0.15.1 and v0.16.0 verified) ignores the key and applies
+  // the rest of the file. Parsing the file with the key removed IS that
+  // reading -- the only field such a reader drops is this one.
+  const DECLARATION_ALONE = parseGateIdentities(
+    "/as-read-by-a-pre-quorum-release/nen/gates.json",
+    Object.fromEntries(Object.entries(OWN_RAW).filter(([key]): boolean => key !== "round_quorum")),
+  );
+
+  type BugbotCheck = "absent" | "in-progress" | "completed" | "skipped" | "neutral";
+  interface Combo {
+    readonly copilotReview: boolean;
+    readonly bugbotReview: boolean;
+    readonly copilotRequested: boolean;
+    readonly bugbotCheck: BugbotCheck;
+    /**
+     * A clean `Cursor Bugbot` run on an EARLIER commit of this PR (option B of
+     * the 2026-09-29 ruling), as ../github/pr_state.ts hands it over in
+     * `earlier_round_checks`. Optional so the named single cases below read
+     * as they did; the matrix states it for every case.
+     */
+    readonly bugbotEarlierRun?: boolean;
+  }
+
+  const CHECK_SHAPES: Readonly<Record<BugbotCheck, Record<string, unknown> | null>> = {
+    absent: null,
+    "in-progress": { name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null },
+    completed: { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" },
+    skipped: { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SKIPPED" },
+    // Finding C1: completed, but not SUCCESS -- Bugbot's NEUTRAL may be a run
+    // cancelled by the next push. It enrols (non-SKIPPED) and is not a round.
+    neutral: { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "NEUTRAL" },
+  };
+
+  /**
+   * The state the transport would assemble. `reviewers` is derived exactly as
+   * ../github/pr_state.ts derives it when no `--reviewers` is given --
+   * `defaultReviewers` over the rollup -- so enrolment is the real rule, not a
+   * value this test chose. Every round is COMMENTED at an EARLIER head: a
+   * bounded any-head round, the shape Copilot and Bugbot actually leave.
+   */
+  function stateFor(combo: Combo): Record<string, unknown> {
+    const bugbotCheck = CHECK_SHAPES[combo.bugbotCheck];
+    const checks = bugbotCheck === null ? [greenCheck()] : [greenCheck(), bugbotCheck];
+    const parsed = parseCheckRollup(checks, "$.checks");
+    if (!parsed.ok) throw new Error("fixture rollup did not parse");
+    const reviews: Record<string, unknown>[] = [];
+    if (combo.copilotReview) {
+      reviews.push({ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW });
+    }
+    if (combo.bugbotReview) {
+      reviews.push({ author: "cursor", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW });
+    }
+    return readyState({
+      checks,
+      reviews,
+      review_requests: combo.copilotRequested ? [{ login: "Copilot" }] : [],
+      reviewers: defaultReviewers(OWN, parsed.value).join(","),
+      earlier_round_checks:
+        combo.bugbotEarlierRun === true
+          ? [{ sha: "r0sha", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" }]
+          : [],
+    });
+  }
+
+  const COMBOS: Combo[] = [];
+  for (const copilotReview of [false, true]) {
+    for (const bugbotReview of [false, true]) {
+      for (const copilotRequested of [false, true]) {
+        for (const bugbotCheck of ["absent", "in-progress", "completed", "skipped", "neutral"] as const) {
+          for (const bugbotEarlierRun of [false, true]) {
+            COMBOS.push({ copilotReview, bugbotReview, copilotRequested, bugbotCheck, bugbotEarlierRun });
+          }
+        }
+      }
+    }
+  }
+
+  const label = (c: Combo): string =>
+    `copilot ${c.copilotReview ? "reviewed" : "silent"}${c.copilotRequested ? " + requested" : ""}, ` +
+    `bugbot ${c.bugbotReview ? "reviewed" : "silent"}, 'Cursor Bugbot' check ${c.bugbotCheck} at head` +
+    `${c.bugbotEarlierRun === true ? ", clean at an earlier head" : ""}`;
+
+  const rowOf = (evaluation: ReturnType<typeof evaluateReady>, id: ConjunctId): Conjunct => {
+    const row = evaluation.conjuncts.find((conjunct): boolean => conjunct.id === id);
+    if (row === undefined) throw new Error(`no ${id} row`);
+    return row;
+  };
+
+  it("covers all 80 combinations", () => {
+    expect(COMBOS).toHaveLength(80);
+  });
+
+  it.each(COMBOS.map((combo): [string, Combo] => [label(combo), combo]))(
+    "%s",
+    (_name, combo) => {
+      // Expected, from first principles rather than from the code under test:
+      // Enrolment is any non-SKIPPED run at head -- a NEUTRAL one included.
+      const enrolled =
+        combo.bugbotCheck === "in-progress" || combo.bugbotCheck === "completed" || combo.bugbotCheck === "neutral";
+      const copilotOwed = combo.copilotRequested; // exempt: owed only while requested
+      const copilotHas = combo.copilotReview;
+      // Option B under `bounded`: a clean earlier-head run is a round, unless a
+      // run is IN FLIGHT at head -- work in progress supersedes history.
+      const bugbotEarlierRound = combo.bugbotEarlierRun === true && combo.bugbotCheck !== "in-progress";
+      const bugbotHas = combo.bugbotReview || combo.bugbotCheck === "completed" || bugbotEarlierRound;
+      const bugbotOwed = enrolled && !bugbotHas;
+      const quorumMet = copilotHas || bugbotHas;
+
+      const evaluation = evaluateReady(OWN, stateFor(combo), OPTIONS);
+      expect(evaluation.context.reviewers).toEqual(enrolled ? ["copilot", "bugbot"] : ["copilot"]);
+      const owedRow = rowOf(evaluation, "rounds-owed");
+      expect(owedRow.status).toBe(!copilotOwed && !bugbotOwed && quorumMet ? "ready" : "failed");
+
+      // The quorum is carried on the row whatever its outcome.
+      expect(owedRow.roundQuorum).toMatchObject({
+        anyOf: ["copilot", "bugbot"],
+        minimum: 1,
+        count: Number(copilotHas) + Number(bugbotHas),
+        met: quorumMet,
+      });
+
+      // Each failure is named, and nothing that did not fail is.
+      const reason = owedRow.reason ?? "";
+      expect(reason.includes("copilot (review requested, not yet posted)")).toBe(copilotOwed);
+      expect(reason.includes("bugbot (no round at head)")).toBe(bugbotOwed);
+      expect(reason.includes("round quorum not met")).toBe(!quorumMet);
+      if (!quorumMet) {
+        const lack = {
+          absent: "bugbot (no round, no 'Cursor Bugbot' check)",
+          "in-progress": "bugbot (no round, 'Cursor Bugbot' check not yet completed)",
+          skipped: "bugbot (no round, 'Cursor Bugbot' check SKIPPED)",
+          neutral: "bugbot (no round, 'Cursor Bugbot' check concluded NEUTRAL, not SUCCESS)",
+          completed: "unreachable: a completed check is a round",
+        }[combo.bugbotCheck];
+        expect(reason).toContain(lack);
+        expect(reason).toContain(
+          combo.copilotRequested ? "copilot (no round, review requested, not yet posted)" : "copilot (no round)",
+        );
+      }
+      if (owedRow.status === "ready") expect(owedRow.note).toMatch(/^round quorum met \(/);
+
+      // THE PRE-QUORUM READING -- the declaration alone -- is the per-reviewer
+      // verdict, and the quorum only ever ADDS to it: whatever the declaration
+      // refuses, the quorum-carrying file refuses too.
+      const alone = rowOf(evaluateReady(DECLARATION_ALONE, stateFor(combo), OPTIONS), "rounds-owed");
+      expect(alone.status).toBe(!copilotOwed && !bugbotOwed ? "ready" : "failed");
+      expect(alone).not.toHaveProperty("roundQuorum");
+      if (alone.status === "failed") expect(owedRow.status).toBe("failed");
+      if (owedRow.status === "ready") expect(alone.status).toBe("ready");
+    },
+  );
+
+  it("NOBODY reviewed: the line is the quorum's, word for word, and it is the only failing row", () => {
+    // No review, no run at head, and no run on any earlier head either -- a
+    // pull request no reviewer has touched. A pre-quorum release, which ignores
+    // the quorum, reads this `ready`.
+    const evaluation = evaluateReady(
+      OWN,
+      stateFor({ copilotReview: false, bugbotReview: false, copilotRequested: false, bugbotCheck: "absent" }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(
+      "not-ready: round quorum not met (0 of 2 with a round, 1 required, CON-32b): " +
+        "copilot (no round), bugbot (no round, no 'Cursor Bugbot' check)",
+    );
+    expect(evaluation.failing).toEqual(["rounds-owed"]);
+    expect(
+      evaluateReady(
+        DECLARATION_ALONE,
+        stateFor({ copilotReview: false, bugbotReview: false, copilotRequested: false, bugbotCheck: "absent" }),
+        OPTIONS,
+      ).line,
+    ).toBe("ready");
+  });
+
+  it("zheref/nen#281's shape (C1): NO review, and Bugbot's only run was CANCELLED (NEUTRAL) -- the quorum is NOT met", () => {
+    // cc7a948 carried a NEUTRAL `Cursor Bugbot` run cancelled by the push of
+    // 322a492, and nobody posted a review. Nothing about that is a round,
+    // whether the run is at head or on an earlier commit.
+    for (const state of [
+      readyState({ reviews: [], reviewers: "copilot,bugbot", checks: [greenCheck(), CHECK_SHAPES.neutral] }),
+      readyState({
+        reviews: [],
+        reviewers: "copilot",
+        earlier_round_checks: [{ sha: "cc7a948", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "NEUTRAL" }],
+      }),
+    ]) {
+      const row = rowOf(evaluateReady(OWN, state, OPTIONS), "rounds-owed");
+      expect(row.status).toBe("failed");
+      expect(row.reason).toContain("round quorum not met (0 of 2 with a round");
+      expect(row.roundQuorum?.met).toBe(false);
+    }
+  });
+
+  it("zheref/nen#279's shape: Bugbot ran ONCE, clean, at an EARLIER head -- under BOUNDED that is its round", () => {
+    // 2851d2e carried the clean `Cursor Bugbot` run; 7cee8a5 was pushed after
+    // and Bugbot never re-ran. The head rollup has no run, and no review was
+    // posted -- the evidence is the earlier run, and option B counts it.
+    const state = readyState({
+      head_sha: "7cee8a59bb43b3859de705bbdf4ff5eaf278fddc",
+      reviews: [],
+      reviewers: "copilot",
+      earlier_round_checks: [
+        { sha: "2851d2ec9cae06fc0d4718a27afd085577014b53", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+    });
+    const bounded = evaluateReady(OWN, state, OPTIONS);
+    expect(bounded.ready).toBe(true);
+    const row = rowOf(bounded, "rounds-owed");
+    expect(row.note).toBe(
+      "round quorum met (1 of 2 with a round, 1 required, CON-32b): " +
+        "copilot (no round), bugbot (round: 'Cursor Bugbot' check completed at earlier head 2851d2e)",
+    );
+    expect(row.roundQuorum?.members[1]).toMatchObject({
+      round: "round-check-earlier-head",
+      roundCheck: { from: "earlier-head", sha: "2851d2ec9cae06fc0d4718a27afd085577014b53" },
+    });
+
+    // ...and under STRICT only the head counts, so the same blob is not-ready.
+    const strict = evaluateReady(OWN, state, { ...OPTIONS, roundPolicyDefault: "strict" });
+    expect(rowOf(strict, "rounds-owed").reason).toContain("bugbot (no round at head, no 'Cursor Bugbot' check)");
+  });
+
+  it("an owed round AND an unmet quorum: the owed sentence leads, byte for byte, and the quorum follows it", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      stateFor({ copilotReview: false, bugbotReview: false, copilotRequested: true, bugbotCheck: "absent" }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
+        "copilot (review requested, not yet posted)" +
+        " — and round quorum not met (0 of 2 with a round, 1 required, CON-32b): " +
+        "copilot (no round, review requested, not yet posted), bugbot (no round, no 'Cursor Bugbot' check)",
+    );
+  });
+
+  it("a clean Cursor Bugbot run at head reads ready, and --explain's note says which member met the floor", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      stateFor({ copilotReview: false, bugbotReview: false, copilotRequested: false, bugbotCheck: "completed" }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(rowOf(evaluation, "rounds-owed").note).toBe(
+      "round quorum met (1 of 2 with a round, 1 required, CON-32b): " +
+        "copilot (no round), bugbot (round: 'Cursor Bugbot' check completed)",
+    );
+  });
+
+  it("a met quorum never excuses an owed round: Copilot requested, Bugbot's round had, still not-ready", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      stateFor({ copilotReview: false, bugbotReview: true, copilotRequested: true, bugbotCheck: "absent" }),
+      OPTIONS,
+    );
+    expect(rowOf(evaluation, "rounds-owed").roundQuorum?.met).toBe(true);
+    expect(evaluation.line).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
+        "copilot (review requested, not yet posted)",
+    );
+  });
+
+  it("a Cursor Bugbot check still RUNNING keeps bugbot owed even though Copilot's round meets the quorum", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      stateFor({ copilotReview: true, bugbotReview: false, copilotRequested: false, bugbotCheck: "in-progress" }),
+      OPTIONS,
+    );
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(row.roundQuorum?.met).toBe(true);
+    expect(row.reason).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
+    );
+  });
+
+  it("the stall bound is unchanged: a stalled Copilot request is row 3's line; row 4 carries owed AND quorum", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      {
+        ...stateFor({ copilotReview: false, bugbotReview: false, copilotRequested: true, bugbotCheck: "absent" }),
+        stall_requested_at: "2025-06-01T11:00:00Z",
+      },
+      OPTIONS,
+    );
+    expect(evaluation.firstFailing).toBe("round-stalled");
+    expect(evaluation.line).toBe(
+      "not-ready: copilot round stalled — requested 60 min ago and never posted (CON-32b; re-request it, a user token is required)",
+    );
+    expect(rowOf(evaluation, "rounds-owed").reason).toContain("— and round quorum not met");
+  });
+
+  describe("--reviewers given explicitly: the quorum is the FILE's policy and still applies", () => {
+    it("--reviewers copilot, nobody reviewed: not-ready on the quorum alone", () => {
+      const evaluation = evaluateReady(OWN, readyState({ reviews: [], reviewers: "copilot" }), OPTIONS);
+      expect(evaluation.firstFailing).toBe("rounds-owed");
+      expect(evaluation.line).toMatch(/^not-ready: round quorum not met \(0 of 2/);
+    });
+
+    it("--reviewers copilot, Bugbot reviewed though never named: the floor counts it and the row passes", () => {
+      const evaluation = evaluateReady(
+        OWN,
+        readyState({
+          reviews: [{ author: "cursor", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+          reviewers: "copilot",
+        }),
+        OPTIONS,
+      );
+      expect(evaluation.ready).toBe(true);
+    });
+
+    it("--reviewers bugbot with only Copilot's round: bugbot is owed; the met quorum does not excuse it", () => {
+      const evaluation = evaluateReady(
+        OWN,
+        readyState({
+          reviews: [{ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+          reviewers: "bugbot",
+        }),
+        OPTIONS,
+      );
+      const row = rowOf(evaluation, "rounds-owed");
+      expect(row.roundQuorum?.met).toBe(true);
+      expect(row.reason).toBe(
+        "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
+      );
+    });
+  });
+
+  it("under STRICT an earlier-head review no longer meets the floor, and the member says 'at head'", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      stateFor({ copilotReview: true, bugbotReview: false, copilotRequested: false, bugbotCheck: "absent" }),
+      { ...OPTIONS, roundPolicyDefault: "strict" },
+    );
+    expect(evaluation.line).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (no round at head)" +
+        " — and round quorum not met (0 of 2 with a round, 1 required, CON-32b): " +
+        "copilot (no round at head), bugbot (no round at head, no 'Cursor Bugbot' check)",
+    );
+  });
+
+  it("an unreadable reviews array fails row 4 with the parse error and carries NO quorum -- nothing was counted", () => {
+    const evaluation = evaluateReady(OWN, readyState({ reviews: "not-an-array" }), OPTIONS);
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(row.reason).toMatch(/the PR state could not be read/);
+    expect(row).not.toHaveProperty("roundQuorum");
+  });
+
+  it("no head SHA: row 4 is unknown and carries NO quorum", () => {
+    const row = rowOf(evaluateReady(OWN, readyState({ head_sha: "" }), OPTIONS), "rounds-owed");
+    expect(row.status).toBe("unevaluated");
+    expect(row).not.toHaveProperty("roundQuorum");
+  });
+
+  it("only row 4 ever carries the quorum, and it serialises there in --json", () => {
+    const evaluation = evaluateReady(OWN, readyState({ reviews: [] }), OPTIONS);
+    for (const conjunct of evaluation.conjuncts) {
+      expect(Object.prototype.hasOwnProperty.call(conjunct, "roundQuorum")).toBe(conjunct.id === "rounds-owed");
+    }
+    const json = JSON.parse(JSON.stringify(evaluation.conjuncts)) as Record<string, unknown>[];
+    expect(json[3]?.["roundQuorum"]).toMatchObject({ anyOf: ["copilot", "bugbot"], minimum: 1, met: false });
+  });
+});
+
+describe("earlierRoundChecks -- the tolerant reader of `earlier_round_checks`", () => {
+  it("reads well-formed runs and DROPS everything else -- a dropped run can only go uncounted", () => {
+    expect(
+      earlierRoundChecks({
+        earlier_round_checks: [
+          { sha: "a1", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" },
+          { sha: "", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" },
+          { sha: "b2", name: 7, status: "COMPLETED", conclusion: "SUCCESS" },
+          { sha: "c3", name: "Cursor Bugbot", status: 1, conclusion: null },
+          "not a run",
+          null,
+          ["a", "b"],
+        ],
+      }),
+    ).toEqual([
+      { sha: "a1", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" },
+      { sha: "c3", name: "Cursor Bugbot", status: null, conclusion: null },
+    ]);
+  });
+
+  it("reads absent, null and non-array as NONE -- every older blob and replay keeps its head-only reading", () => {
+    expect(earlierRoundChecks({})).toEqual([]);
+    expect(earlierRoundChecks({ earlier_round_checks: null })).toEqual([]);
+    expect(earlierRoundChecks({ earlier_round_checks: "a1" })).toEqual([]);
+  });
+});
+
+describe("evaluateReady -- round_quorum is ADDITIVE for a repository that declares none", () => {
+  it("no row carries the key, row 4's note stays null, and the serialised table never mentions it", () => {
+    // IDENTITIES is the bankai fixture, which declares no quorum: its report
+    // must be byte-for-byte what it was before the key existed.
+    const evaluation = evaluateReady(IDENTITIES, readyState(), OPTIONS);
+    for (const conjunct of evaluation.conjuncts) {
+      expect(conjunct).not.toHaveProperty("roundQuorum");
+    }
+    expect(evaluation.conjuncts.find((c) => c.id === "rounds-owed")?.note).toBeNull();
+    expect(JSON.stringify(evaluation)).not.toContain("roundQuorum");
+    expect(JSON.stringify(evaluation)).not.toContain("round quorum");
+  });
+
+  it("CON-30's carve-out satisfies the quorum's row too: the shim stands in for review rounds, all of them", () => {
+    const raw = JSON.parse(
+      readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
+    ) as Record<string, unknown>;
+    const withQuorum = parseGateIdentities("/fixture/nen/gates.json", {
+      ...raw,
+      round_quorum: { any_of: ["copilot", "bugbot"], minimum: 1 },
+    });
+    const evaluation = evaluateReady(
+      withQuorum,
+      readyState({
+        author: "dependabot[bot]",
+        checks: [greenCheck(), greenCheck("sasuke / audit"), greenCheck("tenma / review")],
+        reviews: [],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    const row = evaluation.conjuncts.find((c) => c.id === "rounds-owed");
+    expect(row?.note).toMatch(/^satisfied by dependabot_carve_out/);
+    expect(row).not.toHaveProperty("roundQuorum");
   });
 });

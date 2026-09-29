@@ -248,6 +248,40 @@ export class GitHubClient {
     );
   }
 
+  // The pull request's COMMITS, oldest first, paginated, raw (GitHub serves at
+  // most 250). Read by ../github/pr_state.ts's readEarlierRoundChecks() only:
+  // under the `bounded` round policy a round-check reviewer's completed run on
+  // an EARLIER commit of the pull request counts as its round (maintainer
+  // ruling 2026-09-29, option B), and the head's rollup cannot show one.
+  // Raw, like timeline(): which commits matter and what an unreadable list
+  // means are the caller's readings, not this module's.
+  async pullRequestCommits(repo: RepoRef, prNumber: number): Promise<unknown[]> {
+    return await this.octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/commits", {
+      owner: repo.owner,
+      repo: repo.repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+  }
+
+  // ONE commit's check runs, one page of 100, as the RAW payload
+  // `{ total_count, check_runs }` -- the per-commit read of the same walk. ONE
+  // page on purpose: the walk's budget is one request per commit, and a run
+  // this page did not carry can only go uncounted, never be counted wrongly;
+  // `total_count` is passed through so the walk can say when that happened.
+  // Each run carries `pull_requests`, which is how the walk tells this pull
+  // request's run from a stacked one's. Needs `checks:read`, the grant the
+  // head rollup already needs.
+  async commitCheckRuns(repo: RepoRef, sha: string): Promise<unknown> {
+    const response = await this.octokit.request("GET /repos/{owner}/{repo}/commits/{ref}/check-runs", {
+      owner: repo.owner,
+      repo: repo.repo,
+      ref: sha,
+      per_page: 100,
+    });
+    return response.data;
+  }
+
   // The issue TIMELINE, paginated, raw.
   //
   // IT HAS TO EXIST, and REST is the only place it does. `reviewRequests`

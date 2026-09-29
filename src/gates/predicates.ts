@@ -18,9 +18,15 @@
 // `labels.includes("bankai:epic")` test and the `["sasuke", "tenma",
 // "copilot"]` default set were all names written into a binary.
 //
-// THE LOGIC IS UNCHANGED, and that is the property under test. Every branch,
-// every ordering, every asymmetry and every conservative direction is exactly
-// as it was; only the VALUES the branches compare against arrive from outside.
+// THE LOGIC IS UNCHANGED, and that is the property under test -- WITH ONE
+// RECORDED EXCEPTION: a round-check reviewer is cleared only by a SUCCESS run
+// (at head, or under `bounded` on an earlier commit GitHub lists against this
+// pull request), where the original accepted any completed non-SKIPPED run.
+// It is stricter and fail-safe, and it is ../gates/ready.ts's divergence (10),
+// recorded at `reviewerRound` below (Nobunaga's review of E7, finding C1).
+// Otherwise every branch, every ordering, every asymmetry and every
+// conservative direction is exactly as it was; only the VALUES the branches
+// compare against arrive from outside.
 // The ported companion suite runs against a fixture that states this system's
 // own identities, so any behavioural divergence from the original shows up as a
 // failing assertion rather than as a difference nobody looked for -- and it runs
@@ -783,9 +789,11 @@ export function unapprovedApprovers(
 //        zheref/nen#214), a review at ANY head of this pull request in ANY
 //        state -- see the ANY-HEAD comment at the call site below for why. For
 //        BISKY and BUGBOT a review (at head under `strict`, at any head under
-//        `bounded`) OR a COMPLETED, non-SKIPPED check at head (`bisky /
-//        review`, `Cursor Bugbot` -- the rollup is at head by construction)
-//        satisfies it either way. Both post a review only when they have
+//        `bounded`) OR a COMPLETED check at head (`bisky / review`,
+//        `Cursor Bugbot` -- the rollup is at head by construction) satisfies
+//        it either way -- in this port, a definitive-SUCCESS one only, and
+//        under `bounded` one on an earlier commit of this PR too; see
+//        reviewerRound()'s C1 and option-B notes.) Both post a review only when they have
 //        findings and otherwise conclude their check silently, so for them the
 //        CHECK IS THE ROUND.
 //
@@ -844,6 +852,28 @@ export interface RoundInputs {
   readonly reviewRequests: readonly ReviewRequest[];
   readonly checks: readonly RollupEntry[];
   readonly reviews: readonly Review[];
+  /**
+   * Completed round-check runs found on EARLIER commits of this pull request
+   * (maintainer ruling 2026-09-29, option B) -- read by ../github/pr_state.ts
+   * only under `bounded`, only for a round-check reviewer the head does not
+   * already settle, and never on a read it could not complete. OPTIONAL and
+   * empty by default: a caller that reads no history (`nen pr next-blocker`,
+   * every replayed blob) gets exactly the head-only reading it always had.
+   */
+  readonly earlierChecks?: readonly EarlierHeadCheck[];
+}
+
+/**
+ * One check run on an EARLIER commit of the pull request -- the evidence
+ * `reviewerRound`'s bounded earlier-head limb reads. `status`/`conclusion` are
+ * GraphQL-spelled (upper case); the transport normalises REST's lower case.
+ */
+export interface EarlierHeadCheck {
+  /** The earlier commit the run is attached to -- never the current head. */
+  readonly sha: string;
+  readonly name: string;
+  readonly status: string | null;
+  readonly conclusion: string | null;
 }
 
 // The four reasons are the four branches that already exist in
@@ -879,21 +909,6 @@ function hasDefinitiveSuccessCheck(
       pattern.test(name) &&
       lifecycleStatus(entry) === "COMPLETED" &&
       rollupEntryStatus(entry) === "SUCCESS"
-    );
-  });
-}
-
-function hasCompletedNonSkippedCheck(
-  checks: readonly RollupEntry[],
-  pattern: RegExp,
-): boolean {
-  return checks.some((entry): boolean => {
-    const name = rollupEntryCheckName(entry);
-    return (
-      name !== null &&
-      pattern.test(name) &&
-      lifecycleStatus(entry) === "COMPLETED" &&
-      checkRunConclusion(entry) !== "SKIPPED"
     );
   });
 }
@@ -943,119 +958,450 @@ export function pendingRounds(
     // reviewer participates, not a fact about its name.
     if (identity?.boundedPolicyExempt === true && policy === "bounded") continue;
 
-    // BOUNDED ROUND POLICY, ANY-HEAD LIMB (zheref/nen#214). `strict` keeps the
-    // ORIGINAL rule exactly: a round only counts at the CURRENT head, so a
-    // remediation push re-opens the owed limb until the reviewer shows up
-    // again. `bounded` (the default) instead accepts a round posted at ANY
-    // earlier head of THIS pull request -- the reviewer already showed up once,
-    // and #214's observed failure is that a later head which does nothing but
-    // fix that round's own findings could never again satisfy a "round at THIS
-    // exact SHA" test, making a third round structurally required forever
-    // (Hatsu's En caps requests at two). This limb answers only "did the
-    // reviewer show up for this PR at all"; it does NOT decide whether the
-    // round's findings were addressed -- CON-32(d)'s unresolved-thread conjunct
-    // (a later, separate row in ../gates/ready.ts, unaffected by this policy)
-    // still fails the whole gate while a thread from that round stays open, and
-    // limb (i) just above still re-opens this one the moment a FRESH review
-    // request for the same reviewer is pending. Reproduced here rather than
-    // simplified into the exempt-only branch above: `bounded_policy_exempt`
-    // is a STRONGER, opt-in exemption ("never wait on this reviewer once
-    // nothing is pending") that some reviewers may still want; this is the
-    // ORDINARY reading every reviewer gets under `bounded` once a round has
-    // been posted at least once.
-    //
-    // EXCEPT a CON-40 delivery-holistic-pass reviewer ON a delivery PR: that
-    // combination has its OWN "any commit" reading two branches down --
-    // "the one holistic pass POSTED on this PR (a review at ANY commit)" --
-    // which is gated on the abstain-green review check ALSO being a
-    // definitive SUCCESS at head, precisely because that reviewer never
-    // re-reviews after `opened`. Applying this limb's bare any-head test to
-    // it FIRST would let the holistic pass alone `continue` the loop and skip
-    // that check entirely -- satisfying CON-40's round with no green abstain
-    // check at head, which is the exact gap CON-40 exists to close. So the
-    // ordinary bounded leniency here is scoped to reviewers that limb does not
-    // own.
-    // THE BOUNDED RULE, STATED PRECISELY (CON-32(b)): under `bounded` (the
-    // default) a reviewer's posted round at ANY earlier head satisfies
-    // CON-32(b) unless a review request naming that reviewer is pending;
-    // whether the new head's diff was reviewed is the CALLER's
-    // responsibility -- the driving agent requests a fresh round after every
-    // substantive push (which makes a request pending, so the gate holds
-    // until it posts), and CON-32(d) still requires every thread resolved.
-    // `strict` keeps the current-head requirement. A delivery-holistic-pass
-    // reviewer keeps the current-head reading under both policies.
-    const isDeliveryHolisticPass = deliveryPr && identity?.deliveryHolisticPass === true;
-    // A POSTED round only: a `PENDING` record is a review somebody started
-    // and never submitted, and it can carry `commitId: null` -- counting it
-    // would satisfy CON-32(b) on a PR nobody has reviewed (Copilot review on
-    // zheref/nen#217). `roundAtCurrentHead` already excludes it, since a
-    // null commitId never equals a head SHA.
-    const roundAtAnyHead = (): boolean =>
-      inputs.reviews.some(
-        (review): boolean =>
-          loginPattern.test(review.author) && review.state !== "PENDING" && review.commitId !== null,
-      );
-    const roundAtCurrentHead = (): boolean =>
-      inputs.reviews.some(
-        (review): boolean =>
-          loginPattern.test(review.author) && review.commitId === headSha,
-      );
-    if (
-      (policy === "bounded" && !isDeliveryHolisticPass)
-        ? roundAtAnyHead()
-        : roundAtCurrentHead()
-    ) {
-      continue;
-    }
-
-    // PORT CHANGE (§3): the two names -> `delivery_holistic_pass`.
-    if (deliveryPr && identity?.deliveryHolisticPass === true) {
-      // CON-40's abstain-green round (bankai-core#720). Only reached once the
-      // reviewer has NO review at head -- which on a delivery PR is the DESIGNED
-      // state from the first `synchronize` onwards.
-      const checkPattern = identity.reviewCheckPattern;
-      if (
-        checkPattern === null ||
-        !hasDefinitiveSuccessCheck(checks, checkPattern)
-      ) {
-        owed.push({
-          reviewer: name,
-          reason: "delivery-no-definitive-success-review-check",
-        });
-        continue;
-      }
-      // An abstain-green check cannot stand in for a review that never happened
-      // -- KP-PR-#460 exactly: Tenma's `opened` pass was concurrency-cancelled by
-      // the synchronize that followed it, so Tenma abstained green having never
-      // reviewed at all.
-      if (
-        inputs.reviews.some((review): boolean => loginPattern.test(review.author))
-      ) {
-        continue;
-      }
-      owed.push({
-        reviewer: name,
-        reason: "delivery-holistic-pass-never-posted",
-      });
-      continue;
-    }
-
-    // PORT CHANGE (§3): `name === "bisky" || name === "bugbot"` -> "the file
-    // declares a `round_check_pattern` for this reviewer", i.e. a reviewer whose
-    // CHECK IS THE ROUND because it posts a review only when it has findings.
-    // The two patterns move with it, and their asymmetry moves intact: one is
-    // anchored so a sibling probe job cannot clear a review round, the other an
-    // unanchored substring because that check's name varies with the
-    // installation. Both are stated by the file, per pattern, including
-    // case-sensitivity -- see ../schema/gates.ts.
-    if (identity?.roundCheckPattern != null) {
-      if (hasCompletedNonSkippedCheck(checks, identity.roundCheckPattern)) continue;
-    }
-
-    owed.push({ reviewer: name, reason: "no-round-at-head" });
+    // Everything past the two limbs above -- "is a request pending" and "is
+    // this reviewer exempt" -- is the question "does this reviewer HAVE a
+    // round", and it lives in `reviewerRound` below, UNCHANGED, so that
+    // `roundQuorum` (maintainer ruling 2026-09-29) answers it by the very same
+    // branches rather than by a second copy that could drift from this one.
+    // Moved, not rewritten: every branch, its order and its comment went with
+    // it, and the owed reasons it returns are the ones this loop used to push.
+    const outcome = reviewerRound(
+      identity,
+      loginPattern,
+      inputs.reviews,
+      checks,
+      inputs.earlierChecks ?? [],
+      headSha,
+      policy,
+      deliveryPr,
+    );
+    if (!outcome.had) owed.push({ reviewer: name, reason: outcome.reason });
   }
 
   return owed;
+}
+
+/** Which branch of `reviewerRound` found a reviewer's round. */
+export type RoundVia =
+  | "review"
+  | "round-check"
+  | "round-check-earlier-head"
+  | "delivery-holistic-pass";
+
+type RoundOutcome =
+  | {
+      readonly had: true;
+      readonly via: RoundVia;
+      /** The earlier-head run, when `via` is `round-check-earlier-head`. */
+      readonly earlier?: EarlierHeadCheck;
+    }
+  | {
+      readonly had: false;
+      readonly reason: Exclude<OwedRoundReason, "review-requested-not-yet-posted">;
+    };
+
+// --- reviewerRound -------------------------------------------------------------
+// Does ONE reviewer HAVE a round -- the part of `pendingRounds` after its two
+// leading limbs (a pending request; the bounded exemption), extracted verbatim
+// so `roundQuorum` can ask the same question of a reviewer that is NOT in the
+// configured set, or IS exempt, without a second implementation of the rules.
+//
+// `checks` MUST already be reduced by latestChecks(), exactly as
+// `pendingRounds` reduces it before its loop (the bankai-core#577 note there).
+function reviewerRound(
+  identity: ReviewerIdentity | undefined,
+  loginPattern: RegExp,
+  reviews: readonly Review[],
+  checks: readonly RollupEntry[],
+  earlierChecks: readonly EarlierHeadCheck[],
+  headSha: string,
+  policy: RoundPolicy,
+  deliveryPr: boolean,
+): RoundOutcome {
+  // BOUNDED ROUND POLICY, ANY-HEAD LIMB (zheref/nen#214). `strict` keeps the
+  // ORIGINAL rule exactly: a round only counts at the CURRENT head, so a
+  // remediation push re-opens the owed limb until the reviewer shows up
+  // again. `bounded` (the default) instead accepts a round posted at ANY
+  // earlier head of THIS pull request -- the reviewer already showed up once,
+  // and #214's observed failure is that a later head which does nothing but
+  // fix that round's own findings could never again satisfy a "round at THIS
+  // exact SHA" test, making a third round structurally required forever
+  // (Hatsu's En caps requests at two). This limb answers only "did the
+  // reviewer show up for this PR at all"; it does NOT decide whether the
+  // round's findings were addressed -- CON-32(d)'s unresolved-thread conjunct
+  // (a later, separate row in ../gates/ready.ts, unaffected by this policy)
+  // still fails the whole gate while a thread from that round stays open, and
+  // limb (i) in `pendingRounds` still re-opens this one the moment a FRESH
+  // review request for the same reviewer is pending. Reproduced here rather
+  // than simplified into `pendingRounds`' exempt-only branch:
+  // `bounded_policy_exempt` is a STRONGER, opt-in exemption ("never wait on
+  // this reviewer once nothing is pending") that some reviewers may still
+  // want; this is the ORDINARY reading every reviewer gets under `bounded`
+  // once a round has been posted at least once.
+  //
+  // EXCEPT a CON-40 delivery-holistic-pass reviewer ON a delivery PR: that
+  // combination has its OWN "any commit" reading two branches down --
+  // "the one holistic pass POSTED on this PR (a review at ANY commit)" --
+  // which is gated on the abstain-green review check ALSO being a
+  // definitive SUCCESS at head, precisely because that reviewer never
+  // re-reviews after `opened`. Applying this limb's bare any-head test to
+  // it FIRST would let the holistic pass alone count as the round and skip
+  // that check entirely -- satisfying CON-40's round with no green abstain
+  // check at head, which is the exact gap CON-40 exists to close. So the
+  // ordinary bounded leniency here is scoped to reviewers that limb does not
+  // own.
+  // THE BOUNDED RULE, STATED PRECISELY (CON-32(b)): under `bounded` (the
+  // default) a reviewer's posted round at ANY earlier head satisfies
+  // CON-32(b) unless a review request naming that reviewer is pending;
+  // whether the new head's diff was reviewed is the CALLER's
+  // responsibility -- the driving agent requests a fresh round after every
+  // substantive push (which makes a request pending, so the gate holds
+  // until it posts), and CON-32(d) still requires every thread resolved.
+  // `strict` keeps the current-head requirement. A delivery-holistic-pass
+  // reviewer keeps the current-head reading under both policies.
+  const isDeliveryHolisticPass = deliveryPr && identity?.deliveryHolisticPass === true;
+  // A POSTED round only: a `PENDING` record is a review somebody started
+  // and never submitted, and it can carry `commitId: null` -- counting it
+  // would satisfy CON-32(b) on a PR nobody has reviewed (Copilot review on
+  // zheref/nen#217). `roundAtCurrentHead` already excludes it, since a
+  // null commitId never equals a head SHA.
+  const roundAtAnyHead = (): boolean =>
+    reviews.some(
+      (review): boolean =>
+        loginPattern.test(review.author) && review.state !== "PENDING" && review.commitId !== null,
+    );
+  const roundAtCurrentHead = (): boolean =>
+    reviews.some(
+      (review): boolean =>
+        loginPattern.test(review.author) && review.commitId === headSha,
+    );
+  if (
+    (policy === "bounded" && !isDeliveryHolisticPass)
+      ? roundAtAnyHead()
+      : roundAtCurrentHead()
+  ) {
+    return { had: true, via: "review" };
+  }
+
+  // PORT CHANGE (§3): the two names -> `delivery_holistic_pass`.
+  if (deliveryPr && identity?.deliveryHolisticPass === true) {
+    // CON-40's abstain-green round (bankai-core#720). Only reached once the
+    // reviewer has NO review at head -- which on a delivery PR is the DESIGNED
+    // state from the first `synchronize` onwards.
+    const checkPattern = identity.reviewCheckPattern;
+    if (
+      checkPattern === null ||
+      !hasDefinitiveSuccessCheck(checks, checkPattern)
+    ) {
+      return { had: false, reason: "delivery-no-definitive-success-review-check" };
+    }
+    // An abstain-green check cannot stand in for a review that never happened
+    // -- KP-PR-#460 exactly: Tenma's `opened` pass was concurrency-cancelled by
+    // the synchronize that followed it, so Tenma abstained green having never
+    // reviewed at all.
+    if (
+      reviews.some((review): boolean => loginPattern.test(review.author))
+    ) {
+      return { had: true, via: "delivery-holistic-pass" };
+    }
+    return { had: false, reason: "delivery-holistic-pass-never-posted" };
+  }
+
+  // PORT CHANGE (§3): `name === "bisky" || name === "bugbot"` -> "the file
+  // declares a `round_check_pattern` for this reviewer", i.e. a reviewer whose
+  // CHECK IS THE ROUND because it posts a review only when it has findings.
+  // The two patterns move with it, and their asymmetry moves intact: one is
+  // anchored so a sibling probe job cannot clear a review round, the other an
+  // unanchored substring because that check's name varies with the
+  // installation. Both are stated by the file, per pattern, including
+  // case-sensitivity -- see ../schema/gates.ts.
+  //
+  // ONLY A DEFINITIVE SUCCESS IS A ROUND -- a DIVERGENCE from the original,
+  // which accepted any COMPLETED non-SKIPPED run, and a deliberate narrowing
+  // (Nobunaga's review of E7, finding C1, confirmed live). Cursor Bugbot's
+  // `NEUTRAL` conclusion means EITHER "found N issues" OR "run cancelled
+  // because a newer commit was pushed" -- and the second is a round nobody
+  // held: zheref/nen#281 has NO reviews, yet its cancelled NEUTRAL run on
+  // cc7a948 read as Bugbot's round and met the quorum. The first case needs
+  // no check at all: a reviewer whose check is its round posts a REVIEW when it
+  // has findings (`cursor[bot]` COMMENTED on #278 and #285), and the review
+  // limb above already counts that at any head under `bounded`. So SUCCESS --
+  // the same `hasDefinitiveSuccessCheck` CON-40's abstain reads -- is the only
+  // conclusion that proves a clean round was held. FAILURE, NEUTRAL,
+  // CANCELLED, TIMED_OUT and the rest are not. The direction is fail-safe: a
+  // repository's round-check reviewer can only become owed where it used to be
+  // cleared, never the reverse.
+  if (identity?.roundCheckPattern != null) {
+    const pattern = identity.roundCheckPattern;
+    if (hasDefinitiveSuccessCheck(checks, pattern)) {
+      return { had: true, via: "round-check" };
+    }
+    // BOUNDED, EARLIER-HEAD LIMB FOR A ROUND CHECK (maintainer ruling
+    // 2026-09-29, option B). Not a new policy: it is zheref/nen#214's
+    // `bounded` reading, applied to the reviewer whose CHECK IS ITS ROUND.
+    // `bounded` already accepts that reviewer's REVIEW posted at any earlier
+    // head of this pull request; a definitive-SUCCESS run of its round check
+    // on an earlier commit that GitHub lists against THIS pull request
+    // (../github/pr_state.ts keeps only runs whose `pull_requests` carry this
+    // PR's number AND base repository -- stacked PRs share commits) is the
+    // same fact -- the reviewer showed up for this PR. Without it a reviewer
+    // that posts only when it has findings was rewarded for finding
+    // something: a run with
+    // findings left a review that counted at every later head, and a clean
+    // run left only a check that no later head could see (Cursor Bugbot on
+    // zheref/nen#279: clean on 2851d2e, then 7cee8a5 pushed, never re-run).
+    //
+    // `strict` is untouched: there, as for a review, only the current head
+    // counts. And a run IN FLIGHT at head supersedes any earlier one, for
+    // latestChecks()' own reason -- "work is happening now and the gate must
+    // wait for it" -- so an enrolled reviewer whose check is still running is
+    // still owed, exactly as before.
+    if (policy === "bounded" && !hasInFlightCheck(checks, pattern)) {
+      const earlier = earlierRoundCheck(earlierChecks, pattern, headSha);
+      if (earlier !== null) return { had: true, via: "round-check-earlier-head", earlier };
+    }
+  }
+
+  return { had: false, reason: "no-round-at-head" };
+}
+
+// A run of this pattern at head that has not COMPLETED -- queued or in
+// progress. Read by NAME only, as hasDefinitiveSuccessCheck() reads it, on a
+// rollup already reduced by latestChecks().
+function hasInFlightCheck(checks: readonly RollupEntry[], pattern: RegExp): boolean {
+  return checks.some((entry): boolean => {
+    const name = rollupEntryCheckName(entry);
+    return name !== null && pattern.test(name) && lifecycleStatus(entry) !== "COMPLETED";
+  });
+}
+
+// The first qualifying earlier-head run: never the head itself (that is the
+// head limb's to read), COMPLETED, and concluded SUCCESS -- the head limb's own
+// rule (C1 above): a NEUTRAL may be a run cancelled by the next push, and a
+// missing conclusion says nothing. Attribution to THIS pull request is the
+// transport's filter (`pull_requests`), since the blob carries no PR number.
+function earlierRoundCheck(
+  earlierChecks: readonly EarlierHeadCheck[],
+  pattern: RegExp,
+  headSha: string,
+): EarlierHeadCheck | null {
+  return (
+    earlierChecks.find(
+      (check): boolean =>
+        check.sha !== "" &&
+        check.sha !== headSha &&
+        pattern.test(check.name) &&
+        check.status === "COMPLETED" &&
+        check.conclusion === "SUCCESS",
+    ) ?? null
+  );
+}
+
+// --- roundQuorum ---------------------------------------------------------------
+// `round_quorum` (maintainer ruling 2026-09-29): do at least `minimum` of the
+// reviewers named in `any_of` HAVE a round?
+//
+// WHY IT EXISTS. The ruling, in the maintainer's words: "Copilot credits are
+// exhausted. Expect Cursor instead. Let's make it canon on the repo so that we
+// solve at least one round of reviews from both Copilot OR Cursor (or both) as
+// applicable." `pendingRounds` judges every configured reviewer on its own, so
+// before this a file could only owe BOTH rounds (one exhausted reviewer holds
+// every pull request shut) or owe NEITHER unless requested or enrolled (a pull
+// request nobody reviewed reads ready). The quorum is the floor between them.
+//
+// WHAT IT COUNTS, exactly: `reviewerRound` -- the same function, not a copy --
+// asked of EVERY member, whether or not the member is in the configured set and
+// whether or not it is `bounded_policy_exempt`. Those two facts decide whether
+// a reviewer is OWED; they do not decide whether it HAS a round, and the quorum
+// is a question about the second. So an exempt reviewer's any-head review
+// counts, a reviewer that was never enrolled still counts once it has posted,
+// and a round-check reviewer counts once its check concluded SUCCESS (at head,
+// or under `bounded` on an earlier commit that GitHub lists against this PR).
+//
+// A PENDING REQUEST IS REPORTED, NEVER COUNTED EITHER WAY. It is not a round
+// and it does not un-have one: whether a requested reviewer is OWED is
+// `pendingRounds`' limb (i), which is unchanged and still fails the row for any
+// configured reviewer a request names. `requested` is carried so a reader of
+// an unmet quorum sees that one of its members is already on its way.
+//
+// IT ONLY EVER ADDS A REQUIREMENT. This predicate reports; the caller fails the
+// rounds-owed row when `met` is false, IN ADDITION to every owed round
+// `pendingRounds` returns. Nothing here can remove an owed round, which is the
+// property that makes a file carrying `round_quorum` safe to read by an older
+// nen that ignores the key (see ../schema/gates.ts's header).
+//
+// `null` when the file declares no quorum -- the gate is then exactly what it
+// was before the key existed.
+
+/**
+ * Where a quorum member's round check stands on the LATEST run per name.
+ * `completed` is a definitive SUCCESS -- a round. `unsuccessful` completed with
+ * any other conclusion (NEUTRAL, FAILURE, CANCELLED, ...) and is NOT a round
+ * (finding C1: a NEUTRAL may be a run cancelled by the next push).
+ */
+export type RoundCheckState = "absent" | "pending" | "skipped" | "unsuccessful" | "completed";
+
+export interface QuorumMember {
+  readonly reviewer: string;
+  /** How the member's round was had, or `null` when it has none. */
+  readonly round: RoundVia | null;
+  /**
+   * The reading the member's review was judged by: `any-head` under the
+   * bounded policy, `current-head` under strict and for a CON-40
+   * delivery-holistic-pass reviewer on a delivery PR -- `reviewerRound`'s own
+   * choice, surfaced so a reader knows which "no round" this is.
+   */
+  readonly reading: "any-head" | "current-head";
+  /** A review request naming this member is pending. Reported, never counted. */
+  readonly requested: boolean;
+  /**
+   * The member's `round_check_pattern` check, when it declares one; `null`
+   * when it declares none. `name` is the matching check's own name, `null`
+   * when no check matches (`absent`). `from` and `sha` say WHICH HEAD the
+   * reported run is on: `head` (the judged head), `earlier-head` (an earlier
+   * commit of this pull request, counted under `bounded` only -- option B of
+   * the 2026-09-29 ruling), or `null` with `sha: null` when there is none.
+   */
+  readonly roundCheck: {
+    readonly pattern: string;
+    readonly name: string | null;
+    readonly state: RoundCheckState;
+    /** The run's own conclusion, when it completed; `null` otherwise. */
+    readonly conclusion: string | null;
+    readonly from: "head" | "earlier-head" | null;
+    readonly sha: string | null;
+  } | null;
+}
+
+export interface QuorumResult {
+  /** The file's `any_of`, in its order. */
+  readonly anyOf: readonly string[];
+  /** The file's `minimum`. */
+  readonly minimum: number;
+  /** How many members HAVE a round. */
+  readonly count: number;
+  /** `count >= minimum`. */
+  readonly met: boolean;
+  /** One entry per `anyOf` name, in the same order. */
+  readonly members: readonly QuorumMember[];
+}
+
+// The state of a round-check reviewer's check AT HEAD, read the way
+// `hasDefinitiveSuccessCheck` reads it -- the check-run NAME only, so a legacy
+// StatusContext can never be a reviewer's round -- on a rollup already reduced
+// to the latest run per name. When an unanchored pattern matches more than one
+// name, the most-advanced state wins: a SUCCESS is the round, an in-flight run
+// the next best fact, then a run that completed without success, and a SKIPPED
+// one only if nothing else is.
+//
+// EXPORTED for ../github/pr_state.ts, which reads it to decide whether an
+// earlier-head read is needed at all: `completed` and `pending` at head settle
+// the reviewer (a round, or work in progress that supersedes history), so only
+// `absent`, `skipped` and `unsuccessful` ever send it looking at earlier
+// commits.
+export function roundCheckState(
+  checks: readonly RollupEntry[],
+  pattern: RegExp,
+): { readonly name: string | null; readonly state: RoundCheckState; readonly conclusion: string | null } {
+  let pending: string | null = null;
+  let unsuccessful: { name: string; conclusion: string | null } | null = null;
+  let skipped: string | null = null;
+  for (const entry of checks) {
+    const name = rollupEntryCheckName(entry);
+    if (name === null || !pattern.test(name)) continue;
+    if (lifecycleStatus(entry) !== "COMPLETED") {
+      pending ??= name;
+      continue;
+    }
+    const conclusion = rollupEntryStatus(entry);
+    if (conclusion === "SUCCESS") return { name, state: "completed", conclusion };
+    if (checkRunConclusion(entry) === "SKIPPED") {
+      skipped ??= name;
+      continue;
+    }
+    unsuccessful ??= { name, conclusion };
+  }
+  if (pending !== null) return { name: pending, state: "pending", conclusion: null };
+  if (unsuccessful !== null) return { name: unsuccessful.name, state: "unsuccessful", conclusion: unsuccessful.conclusion };
+  if (skipped !== null) return { name: skipped, state: "skipped", conclusion: "SKIPPED" };
+  return { name: null, state: "absent", conclusion: null };
+}
+
+export function roundQuorum(
+  identities: GateIdentities,
+  inputs: RoundInputs,
+  headSha: string,
+  policy: RoundPolicy,
+  deliveryPr = false,
+): QuorumResult | null {
+  const quorum = identities.roundQuorum ?? null;
+  if (quorum === null) return null;
+  // The same reduction `pendingRounds` applies before its loop, for the same
+  // reason (bankai-core#577): a superseded run must not decide a round.
+  const checks = latestChecks(inputs.checks);
+
+  const members = quorum.anyOf.map((name): QuorumMember => {
+    // The loader refuses a member that is not a declared reviewer, so this is
+    // always found for a parsed file; a hand-built identity set that names an
+    // undeclared member gets `pendingRounds`' own default -- the name matches
+    // itself -- and no round check, which can only count it as "no round".
+    const identity = identities.reviewer(name);
+    const loginPattern = identity?.loginPattern ?? safePattern(name);
+    const outcome = reviewerRound(
+      identity,
+      loginPattern,
+      inputs.reviews,
+      checks,
+      inputs.earlierChecks ?? [],
+      headSha,
+      policy,
+      deliveryPr,
+    );
+    const currentHead =
+      policy !== "bounded" || (deliveryPr && identity?.deliveryHolisticPass === true);
+    const roundCheckPattern = identity?.roundCheckPattern ?? null;
+    const earlier = outcome.had ? outcome.earlier : undefined;
+    let roundCheck: QuorumMember["roundCheck"] = null;
+    if (roundCheckPattern !== null) {
+      if (earlier !== undefined) {
+        // The round came from an earlier head: report THAT run, not the
+        // head's absence or skip, so the reader sees what was counted.
+        roundCheck = {
+          pattern: roundCheckPattern.source,
+          name: earlier.name,
+          state: "completed",
+          conclusion: earlier.conclusion,
+          from: "earlier-head",
+          sha: earlier.sha,
+        };
+      } else {
+        const atHead = roundCheckState(checks, roundCheckPattern);
+        roundCheck = {
+          pattern: roundCheckPattern.source,
+          ...atHead,
+          from: atHead.name === null ? null : "head",
+          sha: atHead.name === null ? null : headSha,
+        };
+      }
+    }
+    return {
+      reviewer: name,
+      round: outcome.had ? outcome.via : null,
+      reading: currentHead ? "current-head" : "any-head",
+      requested: inputs.reviewRequests.some((request): boolean =>
+        requestMatches(request, loginPattern),
+      ),
+      roundCheck,
+    };
+  });
+  const count = members.filter((member): boolean => member.round !== null).length;
+  return {
+    anyOf: quorum.anyOf,
+    minimum: quorum.minimum,
+    count,
+    met: count >= quorum.minimum,
+    members,
+  };
 }
 
 // --- cancelledLatestReport ---------------------------------------------------
@@ -1224,9 +1570,17 @@ export function isDeliveryPr(
 // THE `!= SKIPPED` FILTER IS NOT OPTIONAL, and it is the whole reason this
 // function has a test (Sasuke, bankai-core#577). Enrolling bugbot on a SKIPPED
 // check created a gate that could NEVER be satisfied: pendingRounds() accepts
-// only a COMPLETED, non-SKIPPED check as bugbot's round, so a SKIPPED Bugbot
-// check enrolled a reviewer and then never cleared it -- no review ever posts,
-// the check never un-skips, and the PR is not-ready forever with no path out.
+// only a COMPLETED check as bugbot's round (a definitive SUCCESS one, since
+// E7's finding C1), so a SKIPPED Bugbot check enrolled a reviewer and then
+// never cleared it -- no review ever posts, the check never un-skips, and the
+// PR is not-ready forever with no path out.
+//
+// A run that COMPLETED WITHOUT SUCCESS (NEUTRAL, FAILURE, CANCELLED) still
+// enrols, deliberately, and since C1 no longer clears: the reviewer IS
+// configured for this PR, and its run did not show a clean round. That is not
+// the #577 trap -- it has a path out, because a re-run that succeeds or a
+// review the reviewer posts clears it -- so it stays on the conservative side
+// rather than silently dropping a configured reviewer.
 // That is the exact failure class this gate exists to eliminate, and it sat on
 // the DEFAULT production path: copilot-sweeper.yml calls the gate with no
 // --reviewers, so this branch always runs.
