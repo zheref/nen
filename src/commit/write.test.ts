@@ -205,3 +205,209 @@ describe("nen commit write -- the write", () => {
     expect(out.join("\n")).toBe("feat: x\n\nA: 1\nB: 2\nC: 3");
   });
 });
+
+describe("nen commit write -- the repository's commitlint subject-case rule, through the check 'commit format' runs (zheref/nen#263)", () => {
+  /** A checkout root (it has a `.git` entry) holding message.txt and these commitlint files. */
+  function commitlintRepo(message: string, files: Record<string, string>): string {
+    const root = repo({ message });
+    mkdirSync(join(root, ".git"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, name), text, "utf8");
+    return root;
+  }
+  const CONVENTIONAL = { ".commitlintrc.json": JSON.stringify({ extends: ["@commitlint/config-conventional"] }) };
+
+  it("refuses a level-2 break at exit 2 as a shape reason, before any git call", async () => {
+    const root = commitlintRepo("fix(ui): Escape key closes the modal\n", CONVENTIONAL);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/the message does not have the shape 'nen commit format' enforces/);
+    expect(err).toContain("subject 'Escape key closes the modal' breaks this repository's commitlint rule 'subject-case'");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("gives the same verdict 'commit format' gives -- one check, not two", async () => {
+    const root = commitlintRepo("fix: Start the timer\n", CONVENTIONAL);
+    const written = await capture(root, ["--message-file", "message.txt"]);
+    const err: string[] = [];
+    const io: Io = { out: (): void => {}, err: (line): void => void err.push(line) };
+    const formatted = await runFamily(commitCommand, ["commit", "format", "--type", "fix", "--subject", "Start the timer"], root, false, io, new ScriptedSeams([]));
+    expect(written.code).toBe(2);
+    expect(formatted).toBe(2);
+    const reason = err.join("\n").replace(/^nen: /, "");
+    expect(written.err.join("\n")).toContain(reason);
+  });
+
+  it("names a subject-case break together with a shape violation", async () => {
+    const root = commitlintRepo(`bogus: Start the timer\n`, CONVENTIONAL);
+    const result = await capture(root, ["--message-file", "message.txt"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/not one of/);
+    expect(result.err.join("\n")).toContain("subject must not be sentence-case");
+  });
+
+  it("commits a lower-case subject as before, and says nothing extra", async () => {
+    const root = commitlintRepo("fix: start the timer\n", CONVENTIONAL);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["committed newsha00: fix: start the timer"]);
+    expect(result.err).toEqual([]);
+  });
+
+  it("prints a level-1 break as a warning and still commits", async () => {
+    const root = commitlintRepo("fix: Start the timer\n", { ".commitlintrc.json": JSON.stringify({ rules: { "subject-case": [1, "always", "lower-case"] } }) });
+    const result = await capture(root, ["--message-file", "message.txt", "--dry-run"], [STAGED]);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: warning: subject 'Start the timer' breaks .*level 1/)]);
+    expect(result.out[0]).toBe(`would run: git commit -F ${COMMIT_MESSAGE_PATH}`);
+  });
+
+  it("prints the 'NOT checked' warning for a JavaScript config even when the repository's own hook then refuses the commit", async () => {
+    const root = commitlintRepo("fix: Start the timer\n", { "commitlint.config.js": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "subject must not be sentence-case [subject-case]" } }]);
+    expect(result.code).toBe(1);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/nen: warning: subject-case NOT checked: .*commitlint\.config\.js/);
+    expect(err).toMatch(/For reference only/);
+    expect(err).toMatch(/subject-case\]/);
+  });
+
+  it("exits 1 on a .commitlintrc it cannot read, naming the file, and commits nothing", async () => {
+    const root = commitlintRepo("fix: start the timer\n", { ".commitlintrc.yaml": "rules: [unclosed\n" });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain(join(root, ".commitlintrc.yaml"));
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("is not stopped by a package manifest in a repository with no commitlint -- the commit lands, and nothing is said", async () => {
+    const manifests: readonly Record<string, string>[] = [{ "package.json": '{ "name": "x", ' }, { "package.yaml": "defaults: &d\n  node: 20\nengines: *d\n" }];
+    for (const files of manifests) {
+      const root = commitlintRepo("fix: Start the timer\n", files);
+      const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+      expect(result.code).toBe(0);
+      expect(result.out).toEqual(["committed newsha00: fix: Start the timer"]);
+      expect(result.err).toEqual([]);
+    }
+  });
+
+  it("judges the header the file carries, as commitlint's parser splits it", async () => {
+    // Greedy scope: commitlint's subject here is 'bar', which is lower-case.
+    const greedy = commitlintRepo("fix(a): Foo (b): bar\n", CONVENTIONAL);
+    expect((await capture(greedy, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD])).code).toBe(0);
+    // A '!' header under a rules-only config: commitlint's default parser gives it no verdict.
+    const bang = commitlintRepo("feat!: Foo bar\n", { ".commitlintrc.json": JSON.stringify({ rules: { "subject-case": [2, "never", ["sentence-case"]] } }) });
+    const result = await capture(bang, ["--message-file", "message.txt", "--dry-run"], [STAGED]);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: warning: subject-case NOT checked: .*default parser/)]);
+  });
+});
+
+describe("nen commit write -- commits.subjectCase in nen/workflow.json, agreeing with 'commit format' (zheref/nen#263)", () => {
+  const KRO_PWA = "module.exports = { extends: ['@commitlint/config-conventional'] }\n";
+  /** A checkout root holding message.txt, a code commitlint config, and the given commits block. */
+  function declaredRepo(message: string, commits: unknown, files: Record<string, string> = { "commitlint.config.cjs": KRO_PWA }): string {
+    const root = repo({ message, policy: { commits } });
+    mkdirSync(join(root, ".git"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, name), text, "utf8");
+    return root;
+  }
+
+  it("refuses 'Escape closes it' at exit 2 before any git call, naming nen/workflow.json -- the same verdict 'commit format' gives", async () => {
+    const root = declaredRepo("fix: Escape closes it\n", { subjectCase: "config-conventional" });
+    const written = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(written.code).toBe(2);
+    expect(written.seams.calls).toEqual([]);
+    expect(written.err.join("\n")).toMatch(/subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen\/workflow\.json/);
+    const err: string[] = [];
+    const io: Io = { out: (): void => {}, err: (line): void => void err.push(line) };
+    const formatted = await runFamily(commitCommand, ["commit", "format", "--type", "fix", "--subject", "Escape closes it"], root, false, io, new ScriptedSeams([]));
+    expect(formatted).toBe(2);
+    expect(written.err.join("\n")).toContain(err.join("\n").replace(/^nen: /, ""));
+  });
+
+  it("commits a subject the declared rule passes, with the note saying where the rule came from", async () => {
+    const root = declaredRepo("fix: escape closes it\n", { subjectCase: [2, "always", "lower-case"] });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["committed newsha00: fix: escape closes it"]);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: subject-case checked against commits\.subjectCase in .*the rule \[2,"always",\["lower-case"\]\]/)]);
+  });
+
+  it("lets a readable data commitlint config win, noting the declaration was not applied", async () => {
+    const root = declaredRepo("fix: start the timer\n", { subjectCase: [2, "always", "upper-case"] }, { ".commitlintrc.json": JSON.stringify({ extends: ["@commitlint/config-conventional"] }) });
+    const result = await capture(root, ["--message-file", "message.txt", "--dry-run"], [STAGED]);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: commits\.subjectCase in .* is not applied/)]);
+  });
+
+  it("refuses a malformed commits.subjectCase at exit 1 by pointer, even with no --trailer, and commits nothing", async () => {
+    const root = declaredRepo("fix: start the timer\n", { subjectCase: [2, "sometimes", "lower-case"] });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("commits.subjectCase[1]");
+    expect(result.err.join("\n")).toMatch(/nen will not commit under a policy it could not read/);
+    expect(result.seams.calls).toEqual([]);
+  });
+});
+
+describe("nen commit write -- a broken config is reported first and whole, as 'commit format' reports it (zheref/nen#263)", () => {
+  /** A checkout root holding message.txt and exactly these files (a `nen/` path creates the directory). */
+  function brokenRepo(message: string, files: Record<string, string>): string {
+    const root = repo({ message });
+    mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, ...name.split("/")), text, "utf8");
+    return root;
+  }
+
+  it("names a malformed nen/workflow.json AND the message's own shape fault, policy first, at exit 1, before any git call", async () => {
+    const root = brokenRepo(`bogus: ${"x".repeat(80)}\n`, { "nen/workflow.json": "{ not json" });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(1);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err[0]).toMatch(/nen\/workflow\.json.*nen will not commit under a policy it could not read/);
+    expect(result.err.slice(1).join("\n")).toMatch(/not one of/);
+    expect(result.err.slice(1).join("\n")).toMatch(/72-character/);
+  });
+
+  it("names BOTH a malformed nen/workflow.json and a malformed .commitlintrc -- one does not hide the other", async () => {
+    const root = brokenRepo("fix: start the timer\n", { "nen/workflow.json": "{ not json", ".commitlintrc.json": "{ nope" });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(1);
+    expect(result.seams.calls).toEqual([]);
+    expect(result.err).toEqual([
+      expect.stringMatching(/nen\/workflow\.json.*nen will not commit under a policy it could not read/),
+      expect.stringMatching(/\.commitlintrc\.json could not be read for its commitlint 'subject-case' rule/),
+    ]);
+  });
+
+  it("agrees with 'commit format' on the same two broken files: the same lines, the same exit", async () => {
+    const root = brokenRepo("fix: start the timer\n", { "nen/workflow.json": "{ not json", ".commitlintrc.json": "{ nope" });
+    const written = await capture(root, ["--message-file", "message.txt"]);
+    const err: string[] = [];
+    const io: Io = { out: (): void => {}, err: (line): void => void err.push(line) };
+    const formatted = await runFamily(commitCommand, ["commit", "format", "--type", "fix", "--subject", "start the timer"], root, false, io, new ScriptedSeams([]));
+    expect(formatted).toBe(written.code);
+    expect(err.map((line): string => line.replace("shape a message", "commit"))).toEqual(written.err);
+  });
+});
+
+describe("nen commit write -- declared-rule outcomes at the verb: exit code, line prefix, and whether git ran (zheref/nen#263)", () => {
+  const KRO_PWA = "module.exports = { extends: ['@commitlint/config-conventional'] }\n";
+  it.each([
+    ["no commitlint config + 'config-conventional'", {}, "config-conventional", 2, /^nen commit: the message does not have the shape[\s\S]*subject 'Start the timer' breaks the subject-case rule this repository declares.*because no commitlint config was found/, false],
+    ["an unresolved preset + 'config-conventional'", { ".commitlintrc.json": JSON.stringify({ extends: ["@acme/commitlint-config"] }) }, "config-conventional", 2, /^nen commit: the message does not have the shape[\s\S]*extends '@acme\/commitlint-config', which nen cannot resolve/, false],
+    ["a code config + a level-1 declaration", { "commitlint.config.cjs": KRO_PWA }, [1, "never", ["sentence-case"]], 0, /^nen: warning: subject 'Start the timer' breaks the subject-case rule this repository declares.*declared at level 1, so nen only warns/, true],
+    ["a code config + a level-0 declaration", { "commitlint.config.cjs": KRO_PWA }, [0], 0, /^nen: note: subject-case is off: commits\.subjectCase in .*the rule \[0\] disables it/, true],
+  ] as const)("%s", async (_name, files, subjectCase, code, line, gitRan) => {
+    const root = repo({ message: "fix: Start the timer\n", policy: { commits: { subjectCase } } });
+    mkdirSync(join(root, ".git"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, name), text as string, "utf8");
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(code);
+    expect(result.err.join("\n")).toMatch(line);
+    expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git commit"))).toBe(gitRan);
+    if (gitRan) expect(result.out).toEqual(["committed newsha00: fix: Start the timer"]);
+  });
+});

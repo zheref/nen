@@ -3,22 +3,50 @@
 // proof, and commit the index with it (zheref/nen#227; Hatsu's `kokusen`
 // hand-rolled the `git commit`).
 //
-// ONE VALIDATOR, NOT A SECOND COPY OF ITS RULES. The file is parsed by
-// ../wc/messagefile.ts -- the reader `wc squash` already uses -- and every
-// `--trailer` is APPENDED TO THE TEXT before that read, so the composed
-// message is validated whole: Conventional Commits shape through
-// ../commit/format.ts's `validateCommitMessage`, the attribution-trailer
-// policy through ../schema/workflow.ts's `attributionRefusalMessages`. A
-// trailer this verb accepted that `commit format` would refuse is the drift
-// that sharing prevents.
+// ONE SET OF VALIDATORS, NOT A SECOND COPY OF THEIR RULES. The file is parsed
+// by ../wc/messagefile.ts's `parseCommitMessageFile` -- the reader `wc
+// squash` already uses -- and every `--trailer` is APPENDED TO THE TEXT
+// before that read, so the composed message is validated whole: Conventional
+// Commits shape through ../commit/format.ts's `validateCommitMessage`, the
+// attribution-trailer policy through ../schema/workflow.ts's
+// `attributionRefusalMessages`. Those are the two validators
+// `messageFileRefusals` composes for `wc squash`; this verb composes them
+// itself, with the ONE nen/workflow.json it has already loaded, because it
+// needs that file for `commits.subjectCase` too -- asking
+// `messageFileRefusals` would load it a second time, and a broken one would
+// then throw before the message's own shape was ever reported. A trailer
+// this verb accepted that `commit format` would refuse is the drift sharing
+// the validators prevents.
+//
+// AND THE REPOSITORY'S `subject-case` RULE (zheref/nen#263) -- commitlint's
+// own, or the one nen/workflow.json's `commits.subjectCase` declares, under
+// the precedence ./commitlint.ts's header states -- through
+// `subjectCaseFindings`, the one function `commit format` calls too, on the
+// composed message's header exactly as it will be committed. The policy file
+// is therefore read on every run here too, not only when a trailer could
+// trip it. A level-2 break joins the shape reasons (exit 2); a level-1 break,
+// a rule nen could not check, and the note saying which rule applied are
+// handed to the caller's `warn` / `note` the moment they are known, so they
+// are printed whether the commit then lands, is refused, or fails in git. It
+// is asked here rather than in ../wc/messagefile.ts because that reader is
+// `wc squash`'s too, and this change is scoped to the two `commit` verbs.
+//
+// A BROKEN CONFIG IS REPORTED FIRST, AND WHOLE, EXACTLY AS `commit format`
+// REPORTS IT. A nen/workflow.json that will not load and a .commitlintrc
+// nen cannot read are both named -- one does not hide the other -- and
+// whatever the message's own shape still says is reported after them; the
+// exit is 1, because the repository's files are what is wrong. Only with
+// both configs readable does a shape refusal decide the exit, at 2.
 //
 // THE PROOF GATE IS `commit check`'s OWN VERDICT (./check.ts's
 // `proofVerdict`), asked and then acted on: `--require-proof <lane>` refuses
 // the commit at exit 1 when the proof is absent, for another lane, or for a
 // tree that has since moved. Without the flag nothing about proofs is read.
 //
-// THE ORDER IS REFUSE, THEN REFUSE, THEN WRITE: the message (exit 2, a fact
-// about the invocation), the proof (exit 1, a fact about the tree), an empty
+// THE ORDER IS REFUSE, THEN REFUSE, THEN WRITE: a broken config (exit 1, a
+// fact about the repository's files, with any shape reason alongside), the
+// message (exit 2, a fact about the invocation), the proof (exit 1, a fact
+// about the tree), an empty
 // index (exit 1, `nothing staged`), and only then `git commit -F` on a file
 // nen writes under `.nen/` and removes afterwards -- a deterministic path so
 // a test can name it, under the dot-prefixed directory so it is never
@@ -27,9 +55,12 @@
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
-import { messageFileRefusals, parseCommitMessageFile } from "../wc/messagefile.js";
-import type { Trailer } from "./format.js";
+import { parseCommitMessageFile } from "../wc/messagefile.js";
+import { validateCommitMessage, type Trailer } from "./format.js";
 import { proofVerdict } from "./check.js";
+import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
+import { SchemaError } from "../schema/errors.js";
+import { attributionRefusalMessages, loadWorkflow, type LoadedWorkflow } from "../schema/workflow.js";
 
 export const WRITE_CONTRACT = "nen.commit.write/v0.1";
 
@@ -50,7 +81,12 @@ export interface WriteReport {
   readonly dryRun: boolean;
 }
 
+/** A config the repository carries that nen could not read: its nen/workflow.json, or its .commitlintrc. */
+export type ConfigFailure = SchemaError | CommitlintConfigError;
+
 export type WriteOutcome =
+  /** A config nen could not read (every one, named), and whatever the message's shape still said. Exit 1. */
+  | { readonly kind: "broken"; readonly failures: readonly ConfigFailure[]; readonly reasons: readonly string[] }
   | { readonly kind: "usage"; readonly reasons: readonly string[] }
   | { readonly kind: "refused"; readonly reason: string }
   | { readonly kind: "done"; readonly report: WriteReport; readonly lines: readonly string[]; readonly message: string };
@@ -62,6 +98,16 @@ export interface WriteOptions {
   readonly trailerFlags: readonly string[];
   readonly requireProof: string | null;
   readonly dryRun: boolean;
+  /**
+   * Called once per subject-case line that does not refuse -- a level-1
+   * rule, or a rule nen could not read -- AS SOON AS IT IS KNOWN, before the
+   * proof, the index or git is asked anything. A callback rather than a field
+   * on the outcome because the path that most needs the line is the one with
+   * no outcome: a `git commit` the repository's own hook refused, which throws.
+   */
+  readonly warn: (warning: string) => void;
+  /** The same, for a line that is neither: which rule a verdict came from, or which declaration was not applied. */
+  readonly note: (note: string) => void;
 }
 
 /** Each `--trailer` parsed, or the reasons the shape refused. */
@@ -98,15 +144,43 @@ function gitError(stderr: string, code: number): string {
 }
 
 export function write(seams: Seams, root: string, options: WriteOptions): WriteOutcome {
-  // 1. THE MESSAGE, WHOLE: the flags' shape, then the composed text under the
-  // one validator. Exit 2 -- the invocation is what is wrong.
+  // 1. THE CONFIGS AND THE MESSAGE, WHOLE: the flags' shape, then the
+  // composed text under the shared validators, the one loaded policy, and the
+  // subject-case check `commit format` runs. A broken config is exit 1 with
+  // every fault named; otherwise a shape reason is exit 2.
   const { trailers: appended, reasons: flagReasons } = parseTrailerFlags(options.trailerFlags);
   if (flagReasons.length > 0) return { kind: "usage", reasons: flagReasons };
   const message = composeMessage(options.messageText, appended);
-  const shapeReasons = messageFileRefusals(root, message); // throws SchemaError on a malformed policy
-  if (shapeReasons.length > 0) return { kind: "usage", reasons: shapeReasons };
   const parsed = parseCommitMessageFile(message);
-  /* c8 ignore next -- messageFileRefusals has just proved the message parses */
+  const reasons: string[] = parsed.ok ? [...validateCommitMessage(parsed.value.input)] : [...parsed.reasons];
+  const failures: ConfigFailure[] = [];
+  let loaded: LoadedWorkflow | null = null;
+  try {
+    loaded = loadWorkflow(root);
+  } catch (error) {
+    if (!(error instanceof SchemaError)) throw error;
+    failures.push(error);
+  }
+  try {
+    if (loaded === null || !parsed.ok) {
+      // No verdict is possible -- the declaration could not be read, or the
+      // header has no subject -- but a broken .commitlintrc is still named
+      // beside everything else, as `commit format` names it.
+      readSubjectCaseRule(root);
+    } else {
+      reasons.push(...attributionRefusalMessages(loaded, parsed.value.input.trailers.map((trailer): string => trailer.key)));
+      const found = subjectCaseFindings(root, message.split("\n")[0] ?? "", declaredSubjectCase(loaded));
+      for (const warning of found.warnings) options.warn(warning);
+      for (const note of found.notes) options.note(note);
+      reasons.push(...found.refusals);
+    }
+  } catch (error) {
+    if (!(error instanceof CommitlintConfigError)) throw error;
+    failures.push(error);
+  }
+  if (failures.length > 0) return { kind: "broken", failures, reasons };
+  if (reasons.length > 0) return { kind: "usage", reasons };
+  /* c8 ignore next -- a message that did not parse has its parse reasons above */
   if (!parsed.ok) return { kind: "usage", reasons: parsed.reasons };
   const subject = message.split("\n")[0] ?? "";
   const trailers = parsed.value.input.trailers;
