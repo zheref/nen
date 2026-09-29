@@ -1,11 +1,29 @@
 {
   "version": 1,
-  "$comment": "Maintainer ruling 2026-09-12: Copilot supplies the sole automated review round. A separate APPROVED review is not required; the maintainer's human merge decision remains outside this automated readiness verdict.",
+  "$comment": "Maintainer ruling 2026-09-29, verbatim: \"Copilot credits are exhausted. Expect Cursor instead. Let's make it canon on the repo so that we solve at least one round of reviews from both Copilot OR Cursor (or both) as applicable.\" It supersedes the 2026-09-12 clause that made Copilot the sole automated review round; that ruling's other half stands: approval_policy stays review-round-only, a separate APPROVED review is not required, and the maintainer's human merge decision remains outside this automated readiness verdict. What each part does: (1) copilot is bounded_policy_exempt, so under the default bounded round policy it is owed a round only while a review request for it is PENDING (and a pending request still stalls loudly after round_policy's bound); under --round-policy strict the exemption does not apply and Copilot is owed a round AT HEAD, which with its credits gone holds every pull request, so strict is not a policy to run this repository under; (2) bugbot is Cursor Bugbot: enrolled on a pull request by its 'Cursor Bugbot' check, and while enrolled it is owed until that check concludes SUCCESS (the check IS its round; it posts a review when it has findings) or it posts a review; (3) round_quorum requires at least one of the two to HAVE a round (a posted review under its login, or a 'Cursor Bugbot' run that concluded SUCCESS, at head or, under the default bounded policy, on an earlier commit that GitHub lists against this pull request, since Bugbot runs once per PR rather than on every push), whether or not it was requested or enrolled, so a pull request neither reviewer touched is never ready. Only SUCCESS counts: Bugbot's NEUTRAL may be a run cancelled by the next push. The quorum only ADDS a requirement and never excuses a reviewer (1) or (2) owes. Every nen release before the one that ships round_quorum (through v0.16.0) ignores the key and applies (1) and (2) alone: still valid, and still owing every requested or enrolled round, but without the one-reviewer floor.",
   "reviewers": [
     {
+      "$comment": "Posts as copilot-pull-request-reviewer[bot] (GraphQL: copilot-pull-request-reviewer; a request reads Copilot). Exempt under the default bounded policy only: owed only while a request is pending. Under strict it is owed at head. Its any-head review still counts toward round_quorum.",
       "name": "copilot",
       "login_pattern": {
         "pattern": "^(copilot|copilot-pull-request-reviewer(\\[bot\\])?)$",
+        "ignoreCase": true
+      },
+      "bounded_policy_exempt": true
+    },
+    {
+      "$comment": "Cursor Bugbot. Reviews post as cursor[bot] over REST (a Bot; GraphQL spells it cursor), verified on zheref/nen#278 and #285; bugbot[bot] is the other installation's login. The pattern names the BOT logins only: the bare 'bugbot' is a human GitHub User account (id 7030920) and this repository is public, so it must never be able to post Bugbot's round. The bare 'cursor' is kept for the GraphQL spelling of the bot; on GitHub it is an Organization, which cannot author a review. The check named exactly 'Cursor Bugbot' is both its enrolment evidence and its round: it concludes SUCCESS when it has no findings. Anchored, so no other check can enrol it or clear its round.",
+      "name": "bugbot",
+      "login_pattern": {
+        "pattern": "^(cursor(\\[bot\\])?|bugbot\\[bot\\])$",
+        "ignoreCase": true
+      },
+      "round_check_pattern": {
+        "pattern": "^Cursor Bugbot$",
+        "ignoreCase": true
+      },
+      "enrolment_check_pattern": {
+        "pattern": "^Cursor Bugbot$",
         "ignoreCase": true
       }
     }
@@ -15,6 +33,14 @@
   "base_reviewers": [
     "copilot"
   ],
+  "round_quorum": {
+    "$comment": "At least `minimum` of `any_of` must HAVE a round: the 2026-09-29 ruling's 'Copilot OR Cursor (or both)'. Read by the nen release that ships round_quorum and later; every release before it (through v0.16.0) ignores the key.",
+    "any_of": [
+      "copilot",
+      "bugbot"
+    ],
+    "minimum": 1
+  },
   "delivery": {
     "$comment": "Current local delivery branches use the Codex prefix and the maintainer credentials.",
     "author_pattern": {
