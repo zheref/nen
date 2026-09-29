@@ -49,7 +49,11 @@ export type ResolveCanonResult =
 // construction: no '/' or '\' can appear at all, and a run of only '.'
 // characters -- '.' or '..' -- can never satisfy "starts and ends with a
 // letter or digit".
-const SCENARIO_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+export const SCENARIO_TOKEN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
+/** The rule above, in words, for every refusal that applies it (here and in ./command.ts's mirror verbs). */
+export const SCENARIO_TOKEN_RULE =
+  "a plain token (letters/digits, with '.', '_' or '-' only in the interior -- never as the first or last character, and never '/' or '\\')";
 
 export function resolveCanon(options: ResolveCanonOptions): ResolveCanonResult {
   // ALWAYS-LOAD IS REQUIRED, NEVER DEFAULTED TO EMPTY. The module header
@@ -67,7 +71,7 @@ export function resolveCanon(options: ResolveCanonOptions): ResolveCanonResult {
   if (!SCENARIO_TOKEN.test(options.scenario)) {
     return {
       ok: false,
-      reason: `scenario '${options.scenario}' is not a plain token (letters/digits, with '.', '_' or '-' only in the interior -- never as the first or last character, and never '/' or '\\') -- the stack handbook path is derived directly from it ('<stackDir>/<scenario>/<leaf>'), so anything else, including an empty value, '.', '..', or either path separator, could resolve outside --stack-dir instead of refusing.`,
+      reason: `scenario '${options.scenario}' is not ${SCENARIO_TOKEN_RULE} -- the stack handbook path is derived directly from it ('<stackDir>/<scenario>/<leaf>'), so anything else, including an empty value, '.', '..', or either path separator, could resolve outside --stack-dir instead of refusing.`,
     };
   }
   const leaf = options.leaf ?? "architecture.md";

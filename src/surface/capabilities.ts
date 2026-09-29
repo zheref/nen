@@ -176,12 +176,16 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     agentModelKey: "model (inherit|flash|pro)",
     hookEvents: ["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"],
     rulesFile: ".agents/rules/<name>.md",
-    rulesLimit: 12_000,
+    // Re-read 2026-09-28 from https://antigravity.google/docs/rules: "truncates
+    // any single rule file that exceeds 24,000 bytes" (the 2026-09-20 page
+    // said 12,000 characters), and every rules file must open with frontmatter
+    // declaring a `trigger` or is silently discarded.
+    rulesLimit: 24_000,
     descriptionBudget: null,
     descriptionBudgetSource: null,
     permissionsShape: null,
     source: "https://antigravity.google/docs/hooks",
-    caveat: "a rules file is limited to 12,000 characters; personas live in .agents/agents/ and skills in .agents/skills/ (.agent/ is the back-compatibility spelling); workflows are deprecated (retired 2026-11-01); no permission pack is written because commandExecutionPolicy: auto would approve arbitrary commands",
+    caveat: "a rules file is truncated past 24,000 bytes and must open with frontmatter declaring a trigger (always_on | model_decision | glob | manual) or is silently discarded; personas live in .agents/agents/ and skills in .agents/skills/ (.agent/ is the back-compatibility spelling); workflows are deprecated (retired 2026-11-01); no permission pack is written because commandExecutionPolicy: auto would approve arbitrary commands",
   },
 ];
 
@@ -212,7 +216,7 @@ export function renderCapabilities(row: SurfaceCapabilities): string[] {
     `  permissions shape: ${row.permissionsShape ?? "none"}`,
     `  agent model key:  ${row.agentModelKey ?? "none"}`,
     `  hook events:      ${row.hookEvents.join(", ")}`,
-    `  rules file:       ${row.rulesFile ?? "none"}${row.rulesLimit === null ? "" : ` (limit ${row.rulesLimit} chars)`}`,
+    `  rules file:       ${row.rulesFile ?? "none"}${row.rulesLimit === null ? "" : ` (limit ${row.rulesLimit} bytes)`}`,
     `  description budget: ${row.descriptionBudget === null ? "none" : `${row.descriptionBudget} chars (${row.descriptionBudgetSource ?? ""})`}`,
     `  source:           ${row.source}`,
     ...(row.caveat === null ? [] : [`  caveat:           ${row.caveat}`]),

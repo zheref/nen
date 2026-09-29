@@ -2,7 +2,67 @@
 // true about are checked HERE rather than trusted at every read site.
 
 import { describe, expect, it } from "vitest";
-import { findSurface, invocationFor, SURFACES, surfaceNames, type SurfaceRow } from "./rules.js";
+import {
+  canonLocation,
+  canonSurfaceNames,
+  canonSurfaces,
+  findSurface,
+  invocationFor,
+  SURFACES,
+  surfaceNames,
+  type SurfaceRow,
+} from "./rules.js";
+
+describe("the canon-mirror block of every row (CON-13's per-surface mirror)", () => {
+  it("is present on every row this release ships, each with a citation and a caveat", () => {
+    expect(canonSurfaceNames()).toEqual(["codex", "cursor", "antigravity", "claude-code"]);
+    for (const row of canonSurfaces()) {
+      const rule = row.canonMirror;
+      if (rule === null) throw new Error("filtered");
+      expect(rule.source, `${row.surface} has no canon source URL`).toMatch(/^https:\/\//);
+      expect(rule.caveat.length, `${row.surface} has an empty canon caveat`).toBeGreaterThan(0);
+    }
+  });
+
+  it("names a repository-relative directory with an extension, or a repository-relative file -- never an absolute path", () => {
+    for (const row of canonSurfaces()) {
+      const rule = row.canonMirror;
+      if (rule === null) throw new Error("filtered");
+      if (rule.kind === "directory") {
+        expect(rule.dir, row.surface).toMatch(/^[^/].*[^/]$/);
+        expect(rule.extension.startsWith("."), row.surface).toBe(true);
+        if (rule.frontmatter !== null) expect(rule.frontmatter, row.surface).toContain("{name}");
+        if (rule.limitBytes !== null) expect(rule.limitBytes, row.surface).toBeGreaterThan(0);
+        expect(canonLocation(rule)).toBe(`${rule.dir}/`);
+      } else {
+        expect(rule.file, row.surface).toMatch(/^[^/].*\.md$/);
+        expect(canonLocation(rule)).toBe(rule.file);
+      }
+    }
+  });
+
+  it("gives the two surfaces that discard an unfrontmattered file a frontmatter, and the one that documents a byte ceiling that ceiling", () => {
+    const rule = (name: string): SurfaceRow["canonMirror"] => findSurface(name)?.canonMirror ?? null;
+    expect(rule("cursor")).toMatchObject({ kind: "directory", dir: ".cursor/rules", extension: ".mdc" });
+    expect((rule("cursor") as { frontmatter: string }).frontmatter).toContain("alwaysApply: true");
+    expect(rule("antigravity")).toMatchObject({ kind: "directory", dir: ".agents/rules", extension: ".md", limitBytes: 24_000 });
+    expect((rule("antigravity") as { frontmatter: string }).frontmatter).toContain("trigger: always_on");
+    expect(rule("claude-code")).toMatchObject({ kind: "directory", dir: ".claude/rules", extension: ".md", frontmatter: null, limitBytes: null });
+    expect(rule("codex")).toMatchObject({ kind: "document", file: "AGENTS.md", warnBytes: 32_768 });
+  });
+
+  it("agrees with the staged-mirror rules block where a surface has both", () => {
+    // The two blocks describe the same surface's rules reader from two
+    // vantage points (a staged plugin tree vs. the consumer's root), so the
+    // extension and the frontmatter must not disagree.
+    for (const row of canonSurfaces()) {
+      if (row.rules === null || row.canonMirror === null || row.canonMirror.kind !== "directory") continue;
+      expect(row.canonMirror.extension, row.surface).toBe(row.rules.extension);
+      expect(row.canonMirror.frontmatter, row.surface).toBe(row.rules.frontmatter);
+      expect(row.canonMirror.limitBytes, row.surface).toBe(row.rules.limit);
+    }
+  });
+});
 
 describe("the surface table", () => {
   it("names every surface exactly once", () => {

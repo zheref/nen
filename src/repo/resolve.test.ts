@@ -17,6 +17,7 @@ function registry(overrides: Partial<RepoRegistry> = {}): RepoRegistry {
     productCodes,
     maintainedTools: [],
     pendingOnboarding: [],
+    toolPins: {},
     byRepo: (repo): (typeof consumers)[number] | undefined => consumers.find((c): boolean => c.repo === repo),
     byCode: (code): (typeof consumers)[number] | undefined => consumers.find((c): boolean => c.code === code),
     affectedBy: (): readonly [] => [],

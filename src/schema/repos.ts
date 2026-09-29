@@ -69,15 +69,29 @@ export interface RepoRegistry {
    * which is how five independent skill ports each rediscovered that the
    * registry's own source repo "is not in this registry" (zheref/nen#27).
    *
-   * ONLY THE SLUG IS MODELLED. Each entry carries more (`role`, `status`,
-   * `reason`, ...), and that prose is the target repository's business, on the
-   * same discipline that keeps `callerPins` raw: the slug is the one fact
-   * token resolution needs, and modelling the rest would be this binary
-   * learning another repository's onboarding vocabulary.
+   * ONLY THE SLUG IS MODELLED -- with the one exception `toolPins` states.
+   * Each entry carries more (`role`, `status`, `reason`, ...), and that prose
+   * is the target repository's business, on the same discipline that keeps
+   * `callerPins` raw: the slug is the one fact token resolution needs, and
+   * modelling the rest would be this binary learning another repository's
+   * onboarding vocabulary.
    */
   readonly maintainedTools: readonly string[];
   /** `owner/name` slugs listed under `pending_onboarding`, in file order. See `maintainedTools`. */
   readonly pendingOnboarding: readonly string[];
+  /**
+   * `owner/name` -> the tag a `maintained_tools` entry records as `pinned`,
+   * for the entries that record one. THE CANON PIN (CON-13): a consumer
+   * repository mirrors the canonical handbooks repository at a TAG, and that
+   * tag has to be data a sync (`nen canon mirror`) and a drift check can
+   * read, not prose in a `$comment`. It lives on the `maintained_tools` entry
+   * because that is where a canon repository is recorded: a `consumers[]`
+   * entry classifies as a consumer at G2 (../repo/classify.ts), a canon
+   * repository stands at G4, and `maintained_tools` is the list whose entries
+   * classify as canon. The same `pinned` spelling `consumers[]` uses, so a
+   * reader meets one word for one idea.
+   */
+  readonly toolPins: Readonly<Record<string, string>>;
   byRepo(repo: string): ConsumerEntry | undefined;
   byCode(code: string): ConsumerEntry | undefined;
   /** Consumers whose `consumes` intersects `changed`. Order is the file's. */
@@ -93,9 +107,15 @@ const CALLER_PIN_SUFFIX = "_pinned";
 // same reason a consumer must: an entry without one records nothing a
 // resolution (or a reader) can act on, and these lists exist to record exactly
 // the owner that `product_codes`' bare values omit.
-function parseListedRepos(path: string, field: string, raw: unknown): readonly string[] {
+interface ListedRepo {
+  readonly repo: string;
+  /** The entry's `pinned` tag, when it records one (a canon pin -- see `RepoRegistry.toolPins`). */
+  readonly pinned: string | null;
+}
+
+function parseListedRepos(path: string, field: string, raw: unknown): readonly ListedRepo[] {
   if (raw === undefined || raw === null) return [];
-  return requireArray(path, field, raw).map((entry, index): string => {
+  return requireArray(path, field, raw).map((entry, index): ListedRepo => {
     const pointer = `${field}[${index}]`;
     const record = requireRecord(path, pointer, entry);
     const repo = requireString(path, `${pointer}.repo`, record["repo"]);
@@ -106,7 +126,7 @@ function parseListedRepos(path: string, field: string, raw: unknown): readonly s
         `expected an 'owner/name' slug, got '${repo}'`,
       );
     }
-    return repo;
+    return { repo, pinned: optionalString(path, `${pointer}.pinned`, record["pinned"]) };
   });
 }
 
@@ -209,13 +229,18 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     byCodeIndex.set(entry.code, entry);
   }
 
+  const maintained = parseListedRepos(path, "maintained_tools", root["maintained_tools"]);
+  const toolPins: Record<string, string> = {};
+  for (const tool of maintained) if (tool.pinned !== null) toolPins[tool.repo] = tool.pinned;
+
   return {
     path,
     latest,
     consumers,
     productCodes,
-    maintainedTools: parseListedRepos(path, "maintained_tools", root["maintained_tools"]),
-    pendingOnboarding: parseListedRepos(path, "pending_onboarding", root["pending_onboarding"]),
+    maintainedTools: maintained.map((tool): string => tool.repo),
+    pendingOnboarding: parseListedRepos(path, "pending_onboarding", root["pending_onboarding"]).map((tool): string => tool.repo),
+    toolPins,
     byRepo: (repo): ConsumerEntry | undefined => byRepoIndex.get(repo),
     byCode: (code): ConsumerEntry | undefined => byCodeIndex.get(code),
     affectedBy: (changed): readonly ConsumerEntry[] => {

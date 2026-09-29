@@ -55,7 +55,7 @@ describe("nen surface capabilities (zheref/nen#216)", () => {
     };
     expect(doc.hookEvents).toEqual(["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"]);
     expect(doc.rulesFile).toBe(".agents/rules/<name>.md");
-    expect(doc.rulesLimit).toBe(12_000);
+    expect(doc.rulesLimit).toBe(24_000);
     expect(doc.permissionsShape).toBeNull();
     for (const row of SURFACES) {
       const facts = CAPABILITIES.find((c): boolean => c.surface === row.surface);

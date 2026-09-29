@@ -978,7 +978,18 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   canon: {
     subcommands: {
       resolve: RO("resolves a repo's handbook set from the registry"),
-      "mirror generate": MUT("writes and deletes mirror files under --out-dir"),
+      // Reads the canon pin off the consumer's own registry and prints it. No
+      // write of any kind, so it is watchable -- and it has to be classified at
+      // all, or a caller that classifies before running (the limbo path) refuses
+      // it as unclassified rather than reading the pin it exists to read.
+      pin: RO("reads the canon pin from the consumer's registry; writes nothing"),
+      // DRY, not MUT: --dry-run reports every write and performs none, so the
+      // dry form is a read and belongs inside a watch. The old row also named
+      // --out-dir, a flag this verb no longer takes -- it writes into the
+      // consumer's own declared surfaces, resolved from --repo.
+      "mirror generate": DRY(
+        "writes and deletes mirror files in the consumer's declared surfaces unless --dry-run is given",
+      ),
       "mirror check": GATED(["--markdown-out"], "writes the drift report to --markdown-out"),
     },
   },
