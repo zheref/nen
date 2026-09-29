@@ -12,6 +12,16 @@
 // trailer this verb accepted that `commit format` would refuse is the drift
 // that sharing prevents.
 //
+// AND THE REPOSITORY'S OWN COMMITLINT `subject-case` RULE (part of
+// zheref/nen#263), through ./commitlint.ts's `subjectCaseFindings` -- the one
+// function `commit format` calls too -- on the composed message's header
+// exactly as it will be committed. A level-2 break joins the shape reasons (exit 2); a level-1
+// break, or a config nen cannot read the rule from, is handed to the
+// caller's `warn` the moment it is known, so it is printed whether the commit
+// then lands, is refused, or fails in git. It is asked here rather than in
+// ../wc/messagefile.ts because that reader is `wc squash`'s too, and this fix
+// is scoped to the two `commit` verbs.
+//
 // THE PROOF GATE IS `commit check`'s OWN VERDICT (./check.ts's
 // `proofVerdict`), asked and then acted on: `--require-proof <lane>` refuses
 // the commit at exit 1 when the proof is absent, for another lane, or for a
@@ -30,6 +40,7 @@ import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { messageFileRefusals, parseCommitMessageFile } from "../wc/messagefile.js";
 import type { Trailer } from "./format.js";
 import { proofVerdict } from "./check.js";
+import { NO_FINDINGS, subjectCaseFindings } from "./commitlint.js";
 
 export const WRITE_CONTRACT = "nen.commit.write/v0.1";
 
@@ -62,6 +73,14 @@ export interface WriteOptions {
   readonly trailerFlags: readonly string[];
   readonly requireProof: string | null;
   readonly dryRun: boolean;
+  /**
+   * Called once per subject-case line that does not refuse -- a level-1
+   * rule, or a rule nen could not read -- AS SOON AS IT IS KNOWN, before the
+   * proof, the index or git is asked anything. A callback rather than a field
+   * on the outcome because the path that most needs the line is the one with
+   * no outcome: a `git commit` the repository's own hook refused, which throws.
+   */
+  readonly warn: (warning: string) => void;
 }
 
 /** Each `--trailer` parsed, or the reasons the shape refused. */
@@ -104,8 +123,15 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
   if (flagReasons.length > 0) return { kind: "usage", reasons: flagReasons };
   const message = composeMessage(options.messageText, appended);
   const shapeReasons = messageFileRefusals(root, message); // throws SchemaError on a malformed policy
-  if (shapeReasons.length > 0) return { kind: "usage", reasons: shapeReasons };
   const parsed = parseCommitMessageFile(message);
+  // The subject-case rule is asked even when the shape already failed, so
+  // one run names every reason -- and only of a header that parsed, since an
+  // unparsed one has no subject to judge. Throws CommitlintConfigError on a
+  // data config nen could not read; ./command.ts turns that into exit 1.
+  const subjectCase = parsed.ok ? subjectCaseFindings(root, message.split("\n")[0] ?? "") : NO_FINDINGS;
+  for (const warning of subjectCase.warnings) options.warn(warning);
+  const reasons = [...shapeReasons, ...subjectCase.refusals];
+  if (reasons.length > 0) return { kind: "usage", reasons };
   /* c8 ignore next -- messageFileRefusals has just proved the message parses */
   if (!parsed.ok) return { kind: "usage", reasons: parsed.reasons };
   const subject = message.split("\n")[0] ?? "";

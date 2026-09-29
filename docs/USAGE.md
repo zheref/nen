@@ -714,9 +714,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
-| [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) -- never its content | nen/workflow.json under --repo, and only when the invocation carries a --trailer: the attribution-trailer policy | yes |
+| [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) and the repository's own commitlint `subject-case` rule when that config is data -- never its content | nen/workflow.json under --repo, and only when the invocation carries a --trailer: the attribution-trailer policy; on every run, the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed, so only warned about) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
-| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse) | yes |
+| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy), the commitlint config at --repo's root (`subject-case`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -5431,7 +5431,7 @@ OK -- method block is complete.
 
 **`nen commit`**
 
-Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. `format` reads and writes nothing on disk or over the network beyond the trailer policy; `check` reads one build proof and asks git for a tree hash, and writes nothing at all.
+Validates the SHAPE of a Conventional Commits message -- a declared type, a non-empty subject under 72 characters, no trailing sentence punctuation -- and never its content; what changed and why stays the author's to write. `format` reads and writes nothing on disk or over the network beyond the trailer policy and the repository's commitlint config; `check` reads one build proof and asks git for a tree hash, and writes nothing at all.
 
 ### `nen commit format`
 
@@ -5441,12 +5441,24 @@ Builds and validates one Conventional Commits header (`type(scope)!: subject`) p
 
 **With no workflow file, nothing is refused and this verb behaves exactly as it always has.** The list is never nen's: `commits.allowedAttributionTrailers` is the repository's, and a guard that fired without the repository having asked for it would be this verb deciding somebody's commit convention for them. The policy is read **only when the invocation carries at least one `--trailer`** — a message that could not have violated it never touches the filesystem. A workflow file that is present and **malformed** is exit **1**, naming the pointer: the invocation was correct, and nen will not shape a message under a policy it could not read.
 
+**The repository's own commitlint `subject-case` rule is checked too — when the repository states it as data** (part of [#263](https://github.com/zheref/nen/issues/263)). A subject `nen commit format` passed used to meet commitlint's commit-msg hook afterwards and be refused there (`Start…`, `Escape…`) — an amend and a recommit. Now, for a commitlint config nen can read as data, the rule the repository itself states is read and the subject gets commitlint's own verdict first. Only `subject-case`: nen's other shape rules are unchanged and are not reconciled with the repository's other commitlint rules.
+
+> **Not covered: a commitlint config that is code.** A repository whose commitlint config is `commitlint.config.{js,cjs,mjs,ts,cts,mts}` or `.commitlintrc.{js,cjs,mjs,ts,cts,mts}` **still meets a `subject-case` refusal from commitlint after the commit exists**: nen does not execute the file, so it only warns that the rule was NOT checked and gives `@commitlint/config-conventional`'s verdict for reference, at exit **0**. A caller that gates on the exit code alone is not protected there. Declaring the rule where nen can read it as data is a new policy surface and is the maintainer's open decision.
+
+- **Where it is read.** The config commitlint would load from `--repo`'s root, in commitlint's own order (`@commitlint/load`'s search places): `package.json` (its `commitlint` key), `package.yaml` (the same key), `.commitlintrc`, `.commitlintrc.json`, `.commitlintrc.yaml`, `.commitlintrc.yml`, then `.commitlintrc.{js,cjs,mjs}`, `commitlint.config.{js,cjs,mjs}`, `.commitlintrc.{ts,cts,mts}`, `commitlint.config.{ts,cts,mts}`. The first that holds a config wins; a blank file and a file holding `null` are stepped past, as commitlint steps past them. Read on **every** invocation — every subject can break it — and never from a parent directory, commitlint's global config directory, or a `--config` path a hook passes. commitlint itself also looks in parent directories, so when nothing is found and `--repo` (the cwd by default) has no `.git` entry — a subdirectory, most likely — the verb says so: `nen: warning: subject-case NOT checked: no commitlint config at <root>, and commitlint also looks in parent directories -- pass --repo <checkout root>`, exit 0.
+- **A package manifest is commitlint's only through its key.** A `package.json` or `package.yaml` whose text carries no `commitlint` key is stepped past **unparsed** — a repository without commitlint is never stopped by its manifest, however it is written (an anchored `package.yaml`, a malformed `package.json`). One that carries the key but will not parse is a `NOT checked` warning at exit 0, not a failure.
+- **Which rule.** An explicit `rules["subject-case"]` is decisive. Without one, `extends: ["@commitlint/config-conventional"]` (a string or in a list) means that preset's published default, `[2, "never", ["sentence-case", "start-case", "pascal-case", "upper-case"]]`. No rule and no config-conventional means commitlint checks nothing, and so does nen.
+- **The subject is the one commitlint's parser finds in the header.** With config-conventional extended or any `parserPreset` named, the header is split with `conventional-changelog-conventionalcommits`' grammar — greedy about the scope, so `fix(a): Foo (b): bar` has the subject `bar`. With neither, and no preset extended that could supply one, commitlint uses its default parser (`conventional-changelog-angular`'s), which does not parse a `!` header: `feat!: Foo bar` gets no subject-case verdict from commitlint, and nen gives none either, saying so in a `NOT checked` warning. A `parserPreset` other than conventionalcommits, or one a preset extended beside an explicit rule may supply, is read with the conventionalcommits grammar — not mirrored.
+- **The verdict is commitlint's.** The semantics are ported from `@commitlint/rules` and `@commitlint/ensure` 21.2.3: a subject that does not open with a letter is not checked; quoted (`'…'`, `"…"`) and backticked spans are deleted before the check, so `` `Escape` key closes the modal `` passes; an empty or digit-leading remainder passes; `never` fails when any listed case matches, `always` when none does. Level **2** is refused at exit **2** with the other shape violations, naming the rule, the file and the fix; level **1** is a `nen: warning:` line and exit 0 (commitlint warns and still commits, unless the hook runs it with `--strict`); level **0** and no config change nothing.
+- **Code is never executed.** A JavaScript or TypeScript config can only be read by running it, which a message formatter does not do: it is a `nen: warning: subject-case NOT checked:` line naming the file, exit 0 — never a silent pass, and never protection either (see the note above). So is a preset other than config-conventional that comes after it in `extends` (it may set the rule; state `subject-case` under the file's own `rules` and nen checks it), and a config using cosmiconfig's `$import`. The warning adds, labelled *for reference only*, what config-conventional's default would say of the subject.
+- **A `.commitlintrc` nen cannot read is exit 1**, naming the file and the fault: invalid JSON or YAML (the YAML reader is the strict one — anchors, aliases, tags and merge keys are refused), a config that is not an object, or a `subject-case` rule commitlint itself would reject (a level other than 0, 1 or 2, a condition other than `always`/`never`, a length other than 2–3, an unknown case name). The same holds for a package manifest's `commitlint` key that parses into such a config. nen will not call a subject well-formed under a subject-case rule it could not read.
+
 **Usage**
 
 ```text
 nen commit format --type feat --subject "a short imperative subject"
                   [--scope <scope>] [--breaking] [--body "paragraph one"]
-                  [--trailer key=value,key2=value2]
+                  [--trailer key=value,key2=value2] [--repo <path>]
 ```
 
 **Arguments**
@@ -5459,9 +5471,9 @@ nen commit format --type feat --subject "a short imperative subject"
 | `--breaking` | no | Adds the `!` marker after type/scope. | |
 | `--body "paragraph"` | no | ONE paragraph. | This parser does not support repeating `--body`; pass one paragraph and use blank lines inside it for multiple, if the shell allows a multi-line value. |
 | `--trailer key=value,key2=value2` | no | Comma-separated `key=value` pairs. | A key containing `:` or empty is refused. An attribution-shaped key the repository's `nen/workflow.json` does not admit is refused too — see above. |
-| `--repo <path>` | no | The repository whose `nen/workflow.json` states the trailer policy. | Defaults to the cwd, and is opened **only** when this invocation carries a `--trailer`. |
+| `--repo <path>` | no | The repository whose `nen/workflow.json` states the trailer policy and whose commitlint config states `subject-case`. | Defaults to the cwd. `nen/workflow.json` is opened **only** when this invocation carries a `--trailer`; the commitlint config is looked for on every run, so a `--repo` that does not exist is exit 2. |
 
-**Output and exit codes** -- prints the formatted message. `--json`: `{ message }`. All shape violations and policy refusals print as plain `nen:` lines even under `--json`, and **every** one of them is printed, not just the first -- a shape violation and a refused trailer in the same invocation are two problems reported together. Exit 0 on a valid shape; exit 2 on any shape violation or trailer-policy refusal; exit **1** in exactly one case, a `nen/workflow.json` that is present and could not be read.
+**Output and exit codes** -- prints the formatted message. `--json`: `{ message }` -- unchanged; no key was added for `subject-case`. All shape violations, policy refusals and `subject-case` refusals and warnings print as plain `nen:` lines on stderr even under `--json`, and **every** one of them is printed, not just the first -- a shape violation, a refused trailer and a capitalized subject in the same invocation are three problems reported together. Exit 0 on a valid shape (a `nen: warning:` line may accompany it — including every `subject-case NOT checked` case, so exit 0 is **not** a subject-case verdict in a repository whose commitlint config is code); exit 2 on any shape violation, trailer-policy refusal or level-2 `subject-case` break; exit **1** when a `nen/workflow.json` or a `.commitlintrc` is present and could not be read (both are reported when both are).
 
 ```bash
 nen commit format --type fix --subject "stop dropping the last row" --trailer "Co-Authored-By=A" --repo .
@@ -5470,6 +5482,18 @@ nen commit format --type fix --subject "stop dropping the last row" --trailer "C
 nen: trailer key 'Co-Authored-By' is an attribution trailer this repository refuses. '/tmp/site/nen/workflow.json' admits 'Akatsuki-Agent', 'Akatsuki-Run' under commits.allowedAttributionTrailers, and 'Co-Authored-By' is not one of them. Drop the trailer, or add its key to that list
 ```
 exit 2. (from a real run against a scratch repository scaffolded by `nen scaffold init`; the absolute path is elided to `/tmp/site`)
+
+```bash
+nen commit format --type fix --scope ui --subject "Escape key closes the modal" --repo .
+```
+```text
+nen: subject 'Escape key closes the modal' breaks this repository's commitlint rule 'subject-case' (@commitlint/config-conventional's default, which /tmp/site/.commitlintrc.json extends): subject must not be sentence-case. commitlint refuses this message at commit time, so nen refuses it now: start the subject with a lower-case word -- a quoted or backticked span is not checked, so a proper name can stay as it is inside `backticks`.
+```
+exit 2 -- and ``--subject "`Escape` key closes the modal"`` prints `` fix(ui): `Escape` key closes the modal `` at exit 0. With `commitlint.config.cjs` in place of the `.commitlintrc.json`, the same subject formats at exit **0** under a warning — and commitlint then refuses the commit after it exists, which is the limit noted above:
+```text
+nen: warning: subject-case NOT checked: /tmp/site/commitlint.config.cjs is a JavaScript/TypeScript commitlint config, and nen does not execute a repository's code to read one. A data config (.commitlintrc.json, .commitlintrc.yaml, or package.json's 'commitlint' key) is one nen can check. commitlint still applies whatever rule the file states when the commit is made, after the commit exists. For reference only: under @commitlint/config-conventional's default -- the preset most commitlint configs extend -- this subject would be refused (subject must not be sentence-case).
+```
+(both from real runs against scratch checkouts whose only files are `.git/` and that config, `{ "extends": ["@commitlint/config-conventional"] }` or its `module.exports` form; the absolute path is elided to `/tmp/site`)
 
 **Example**
 
@@ -5555,7 +5579,15 @@ Commits the index with a message file (v0.13.0,
 [`commit format`](#nen-commit-format) applies: the Conventional Commits shape
 and this repository's attribution-trailer policy, through the one validator
 [`wc squash`](#nen-wc-squash) already reads with (`src/wc/messagefile.ts`),
-never a second copy of it.
+never a second copy of it — and the repository's own commitlint
+`subject-case` rule (part of [#263](https://github.com/zheref/nen/issues/263)),
+through the one check `commit format` runs (`src/commit/commitlint.ts`), on
+the subject commitlint's parser finds in the file's header. Its warnings (a
+level-1 rule, or a rule nen did not check — a commitlint config that is code
+among them, which commitlint then enforces after the commit exists, see
+[`commit format`](#nen-commit-format)) print as `nen: warning:` lines the
+moment they are known, so they appear even when the repository's own hook
+then refuses the commit. `wc squash` does not apply `subject-case`.
 
 **Usage**
 
@@ -5573,12 +5605,13 @@ nen commit write --repo <path> --message-file <path> [--trailer <Key: value>]...
 | `--dry-run` | no | print the git line and the composed message; commit nothing, write no file |
 | `--json` | no | `nen.commit.write/v0.1` — see below |
 
-**Order of refusals.** The message or a `--trailer` failing the shape — exit
-**2**, every reason named, before any git call; the proof, when required —
-exit **1** (absent, for another lane, or the tree has moved since the
-build); an empty index — exit **1**, `nothing staged`. A malformed
-`nen/workflow.json` is exit 1 naming the pointer, as `format`'s own policy
-read. Only then `git commit -F .nen/commit/message.txt`: the composed message
+**Order of refusals.** The message or a `--trailer` failing the shape — a
+level-2 `subject-case` break among them — exit **2**, every reason named,
+before any git call; the proof, when required — exit **1** (absent, for
+another lane, or the tree has moved since the build); an empty index — exit
+**1**, `nothing staged`. A malformed `nen/workflow.json` is exit 1 naming the
+pointer, as `format`'s own policy read, and so is a `.commitlintrc` nen
+cannot read, naming the file. Only then `git commit -F .nen/commit/message.txt`: the composed message
 is written there (a deterministic path under the generated-output directory)
 and removed afterwards whatever git answered, and the `.nen/commit/`
 directory with it when the message was its only occupant.

@@ -1,7 +1,18 @@
 // src/commit/command.ts -- `nen commit format`, `nen commit check` and --
 // zheref/nen#227 -- `nen commit write` (./write.ts).
 //
-// THE ONE THING THIS VERB READS FROM A REPOSITORY, AND WHY IT IS NOT A LITERAL.
+// THE TWO THINGS THIS VERB READS FROM A REPOSITORY, AND WHY NEITHER IS A
+// LITERAL. The first is the trailer policy, below. The second
+// (part of zheref/nen#263) is the repository's own commitlint `subject-case`
+// rule, read by ./commitlint.ts from where commitlint reads it: when the
+// config is DATA, a subject commitlint's commit-msg hook would refuse is
+// refused HERE, at the same exit as every other shape violation, before the
+// commit exists; when it is CODE, nen only warns that it did not check, and
+// commitlint still refuses after the commit exists (./commitlint.ts's header
+// states that limit). With no commitlint config the verb is unchanged. Unlike
+// the trailer policy it is read on EVERY invocation, because every subject
+// can break it.
+//
 // ./format.ts's header is explicit that a trailer KEY is the caller's data and
 // never a name baked in here. That rule is unchanged; what is added is the
 // other half of it -- a repository may now say which ATTRIBUTION trailers it
@@ -25,6 +36,7 @@ import { PROGRAM } from "../version.js";
 import { proofRelativePath } from "../shu/proof.js";
 import { readTextFile } from "../cli/inputs.js";
 import { runCheck } from "./check.js";
+import { CommitlintConfigError, subjectCaseFindings } from "./commitlint.js";
 import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
 import {
   COMMIT_TYPES,
@@ -67,13 +79,36 @@ usage:
   --trailer   comma-separated key=value pairs, e.g. 'Closes=#12'. Trailer KEYS
               are the caller's data, never a literal baked in here -- see
               src/commit/format.ts's header for why.
-  --repo      the repository whose ${WORKFLOW_FILE} states the trailer policy.
-              Defaults to the current directory, and is read only when this
-              invocation carries at least one --trailer.
+  --repo      the repository whose ${WORKFLOW_FILE} states the trailer policy
+              (read only when this invocation carries at least one --trailer)
+              and whose commitlint config states 'subject-case' (read on
+              every invocation). Defaults to the current directory.
 
 Validates shape (a declared type, a non-empty subject under 72 characters, no
 trailing punctuation) -- never content. What changed and why stays yours to
 write. Exits 2 on a shape violation.
+
+COMMITLINT'S 'subject-case', WHEN THE REPOSITORY CONFIGURES IT. The config
+commitlint itself would load from --repo's root -- the first of package.json
+('commitlint' key), package.yaml, .commitlintrc, .commitlintrc.json/.yaml/.yml,
+then the .js/.cjs/.mjs/.ts/.cts/.mts forms -- is read for its 'subject-case'
+rule: an explicit rules['subject-case'], or @commitlint/config-conventional's
+default ('never' sentence-, start-, pascal-, upper-case) when it is extended.
+The subject commitlint's parser would find in the header gets commitlint's
+own verdict (quoted and backticked spans are not checked): a break at level 2
+is refused at exit 2 with the rest; level 1 is a 'warning:' line at exit 0;
+level 0 and no config change nothing. A JavaScript or TypeScript config is
+NEVER executed: nen prints a warning naming the file and saying the rule was
+NOT checked, with config-conventional's verdict for reference only, at exit 0
+-- so a repository whose commitlint config is code still meets a subject-case
+refusal from commitlint AFTER the commit exists. The same warning covers a
+preset other than config-conventional that may set the rule, a package.json or
+package.yaml whose 'commitlint' key will not parse, and a '!' header under a
+config with no parserPreset (commitlint's default parser does not read it). A
+.commitlintrc that is present and malformed is exit 1: nen will not judge a
+subject under a rule it could not read. Parent directories, commitlint's
+global config and a hook's --config are not read; with no config found and no
+.git entry under --repo, a warning says so and names --repo.
 
 TRAILER POLICY, WHEN THE REPOSITORY STATES ONE. If ${WORKFLOW_FILE} is present
 under --repo, a --trailer whose key is ATTRIBUTION-shaped and is not listed in
@@ -103,8 +138,9 @@ It READS AND DECIDES NOTHING ELSE: no commit is refused, no file is written, no
 ref moves. Read the code and decide, as with 'shu coverage --threshold'.
 
 'write' COMMITS THE INDEX with a message file, validated whole under the SAME
-rules 'format' applies (the Conventional Commits shape, and this repository's
-attribution-trailer policy -- one validator, never a second copy of it).
+rules 'format' applies (the Conventional Commits shape, this repository's
+attribution-trailer policy, and its commitlint 'subject-case' rule -- one
+validator, never a second copy of it).
 
   --message-file <path>   the message; relative paths resolve against --repo.
   --trailer <Key: value>  appended to the message's trailer block, in order;
@@ -184,6 +220,18 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
   );
 }
 
+/**
+ * The exit-1 line for a commitlint config nen could not read the rule from,
+ * shared by `format` and `write` so the two say the same thing. Exit 1 and not
+ * 2 on the trailer policy's own argument: the invocation was correct, the
+ * repository's file is not, and a subject judged under a rule nen could not
+ * read is a subject nobody judged. It names the file and the fault and claims
+ * nothing more about it -- ./commitlint.ts decides which files can raise it.
+ */
+function commitlintFailure(error: CommitlintConfigError): string {
+  return `nen: ${error.message}. nen will not call a subject well-formed under a subject-case rule it could not read: fix the file, then run this again.`;
+}
+
 function runWrite(context: CommandContext): number {
   // --repo unbracketed: this verb COMMITS whatever index it is pointed at
   // (zheref/nen#28's rule).
@@ -199,8 +247,13 @@ function runWrite(context: CommandContext): number {
       trailerFlags: context.args.lists["trailer"] ?? [],
       requireProof: context.args.values["require-proof"] ?? null,
       dryRun: context.args.booleans.has("dry-run"),
+      warn: (warning): void => context.io.err(`nen: warning: ${warning}`),
     });
   } catch (error) {
+    if (error instanceof CommitlintConfigError) {
+      context.io.err(commitlintFailure(error));
+      return 1;
+    }
     // A POLICY THAT WILL NOT LOAD IS EXIT 1, NOT 2, exactly as `format`'s own
     // trailer-policy read: a message shaped under a policy nen could not read
     // is a message nobody actually checked.
@@ -249,12 +302,13 @@ export const commitCommand: Command = {
       trailers: parseTrailers(context.args.lists["trailer"]),
     };
 
-    // SHAPE FIRST, POLICY SECOND, AND BOTH ARE REPORTED TOGETHER when both have
-    // something to say: a message with a 90-character header AND a refused
-    // trailer is one invocation with two problems, and naming one of them is
-    // the round trip this CLI reports whole runs to avoid.
+    // SHAPE FIRST, POLICY SECOND, SUBJECT-CASE THIRD, AND ALL ARE REPORTED
+    // TOGETHER when more than one has something to say: a message with a
+    // 90-character header AND a refused trailer AND a capitalized subject is
+    // one invocation with three problems, and naming one of them is the round
+    // trip this CLI reports whole runs to avoid.
     const refusals = [...validateCommitMessage(input)];
-    let policyFailure: SchemaError | null = null;
+    const failures: string[] = [];
     try {
       refusals.push(...policyRefusals(context, input.trailers));
     } catch (error) {
@@ -264,12 +318,27 @@ export const commitCommand: Command = {
       // something this verb may format AROUND -- a message shaped under a
       // policy nen could not read is a message nobody checked.
       if (!(error instanceof SchemaError)) throw error;
-      policyFailure = error;
-    }
-    if (policyFailure !== null) {
-      context.io.err(
-        `nen: ${policyFailure.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry, and nen will not shape a message under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`,
+      failures.push(
+        `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry, and nen will not shape a message under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`,
       );
+    }
+    try {
+      // The header exactly as it will be committed -- the first line of the
+      // formatted message -- because commitlint's parser finds the subject
+      // in the header, not in the flag. An --repo that does not exist is a
+      // RepoRootError, exit 2, exactly as it is for the trailer policy.
+      const header = formatCommitMessage(input).split("\n")[0] ?? "";
+      const found = subjectCaseFindings(assertRepoRoot({ repoFlag: context.repoFlag }), header);
+      refusals.push(...found.refusals);
+      // Warnings print whatever else happens: they are facts about the
+      // subject, not about whether this run succeeded.
+      for (const warning of found.warnings) context.io.err(`nen: warning: ${warning}`);
+    } catch (error) {
+      if (!(error instanceof CommitlintConfigError)) throw error;
+      failures.push(commitlintFailure(error));
+    }
+    if (failures.length > 0) {
+      for (const failure of failures) context.io.err(failure);
       return 1;
     }
     if (refusals.length > 0) {
