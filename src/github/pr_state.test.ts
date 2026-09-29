@@ -6,8 +6,12 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  EARLIER_COMMIT_READS_DEFAULT,
+  PULL_REQUEST_COMMITS_CAP,
+  earlierRoundCheckWanted,
   fetchPrState,
   fullCheckRollup,
+  readEarlierRoundChecks,
   fullReviewRequests,
   requestedAt,
   unresolvedThreadCount,
@@ -15,7 +19,7 @@ import {
   type PrRef,
   type PrStateSource,
 } from "./pr_state.js";
-import { loadGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type {
   CheckRollupPage,
@@ -62,6 +66,24 @@ function snapshot(overrides: Partial<PullRequestSnapshot> = {}): PullRequestSnap
     reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
     ...overrides,
   };
+}
+
+/**
+ * One REST check run's `pull_requests[]` entry: a number AND its base
+ * repository, spelled as REST spells it -- `{ id, name, url }` with no owner
+ * field (finding F4: a number alone is not a pull request's identity).
+ */
+function listed(number: number, owner = "zheref", name = "example"): Record<string, unknown> {
+  return {
+    number,
+    url: `https://api.github.com/repos/${owner}/${name}/pulls/${number}`,
+    base: { ref: "main", repo: { id: 1, name, url: `https://api.github.com/repos/${owner}/${name}` } },
+  };
+}
+
+/** One REST `commits/{sha}/check-runs` page: the raw payload the client hands back. */
+function page(runs: readonly unknown[], totalCount = runs.length): unknown {
+  return { total_count: totalCount, check_runs: runs };
 }
 
 /** A source whose every method is independently overridable, none of them reaching a network. */
@@ -809,5 +831,453 @@ describe("requestedAt", () => {
       },
     });
     expect(await requestedAt(failing, REPO, 7, /copilot/i)).toBe("");
+  });
+});
+
+// ── BOUNDED earlier-head round checks (maintainer ruling 2026-09-29, option B) ──
+//
+// Under `bounded`, a round-check reviewer's completed run on an EARLIER commit
+// of the pull request is its round, as an earlier review already is. What is
+// proved here is the TRANSPORT's half: the call budget (zero unless needed,
+// then one listing plus one read per commit, newest first, stopping early and
+// at a cap), and that every failure fails CLOSED -- not counted, never counted.
+describe("readEarlierRoundChecks -- the call budget and the fail-closed walk", () => {
+  const BUGBOT = { reviewer: "bugbot", pattern: /^Cursor Bugbot$/i };
+  // A REST check run MADE FOR this pull request (#7): finding H1 counts an
+  // earlier-head run only when its `pull_requests` names this PR.
+  const clean = { name: "Cursor Bugbot", status: "completed", conclusion: "success", pull_requests: [listed(7)] };
+
+  /** A source that records every earlier-commit call it serves. */
+  function walkSource(
+    commits: readonly string[],
+    runsBySha: Readonly<Record<string, unknown>>,
+  ): { source: PrStateSource; calls: string[] } {
+    const calls: string[] = [];
+    const source = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => {
+        calls.push("commits");
+        return commits.map((sha) => ({ sha }));
+      },
+      commitCheckRuns: async (_repo, sha): Promise<unknown> => {
+        calls.push(sha);
+        const runs = runsBySha[sha];
+        if (runs instanceof Error) throw runs;
+        // An array is a page of runs; anything else is handed back RAW, so a
+        // case can serve a malformed payload.
+        return Array.isArray(runs) ? page(runs) : (runs ?? page([]));
+      },
+    });
+    return { source, calls };
+  }
+
+  it("makes ZERO calls when nothing is wanted", async () => {
+    const { source, calls } = walkSource(["a1", "b2", "head"], {});
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [], 20);
+    expect(calls).toEqual([]);
+    expect(result).toEqual({ checks: [], warnings: [], commitReads: 0 });
+  });
+
+  it("lists commits ONCE, walks NEWEST FIRST past the head, and STOPS at the first qualifying run", async () => {
+    const { source, calls } = walkSource(["c1", "c2", "c3", "c4", "head"], {
+      c3: [clean],
+      c1: [clean],
+    });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["commits", "c4", "c3"]);
+    expect(result.commitReads).toBe(2);
+    expect(result.checks).toEqual([{ sha: "c3", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" }]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("does not count a SKIPPED or unfinished earlier run -- it keeps walking past it", async () => {
+    const { source, calls } = walkSource(["c1", "c2", "c3", "head"], {
+      c3: [{ name: "Cursor Bugbot", status: "completed", conclusion: "skipped" }],
+      c2: [{ name: "Cursor Bugbot", status: "in_progress", conclusion: null }],
+    });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["commits", "c3", "c2", "c1"]);
+    expect(result.checks).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("a READ ERROR on an earlier commit counts NOTHING from it, stops the walk, and says so", async () => {
+    const { source, calls } = walkSource(["c1", "c2", "head"], {
+      c2: new Error("403 resource not accessible"),
+      c1: [clean],
+    });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["commits", "c2"]);
+    expect(result.checks).toEqual([]);
+    expect(result.warnings).toEqual([
+      "earlier-head round checks: reading the check runs of c2 on zheref/example#7 failed (403 resource not accessible); the walk stopped and nothing further was counted",
+    ]);
+  });
+
+  it("an UNREADABLE check-run page fails closed exactly like a thrown one", async () => {
+    const { source } = walkSource(["c1", "head"], { c1: { not: "an array" } });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT], 20);
+    expect(result.checks).toEqual([]);
+    expect(result.warnings[0]).toMatch(/came back unreadable; the walk stopped/);
+  });
+
+  it("keeps a run found BEFORE a later failure -- it was read in full and is real evidence", async () => {
+    const other = { reviewer: "bisky", pattern: /^bisky \/ review$/ };
+    const { source } = walkSource(["c1", "c2", "head"], {
+      c2: [clean],
+      c1: new Error("rate limited"),
+    });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT, other], 20);
+    expect(result.checks.map((check) => check.sha)).toEqual(["c2"]);
+    expect(result.warnings[0]).toMatch(/failed \(rate limited\)/);
+  });
+
+  it("a FAILED listing counts nothing and makes no per-commit read", async () => {
+    const calls: string[] = [];
+    const source = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => {
+        throw new Error("boom");
+      },
+      commitCheckRuns: async (): Promise<unknown> => {
+        calls.push("runs");
+        return page([clean]);
+      },
+    });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual([]);
+    expect(result.checks).toEqual([]);
+    expect(result.warnings[0]).toMatch(/listing the pull request's commits failed \(boom\), so none were counted/);
+  });
+
+  it("stops at the BUDGET with a warning, never reading past it", async () => {
+    const commits = ["c1", "c2", "c3", "c4", "c5", "head"];
+    const { source, calls } = walkSource(commits, { c1: [clean] });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT], 2);
+    expect(calls).toEqual(["commits", "c5", "c4"]);
+    expect(result.checks).toEqual([]);
+    expect(result.warnings).toEqual([
+      "earlier-head round checks: stopped after 2 earlier commit(s) of zheref/example#7 without a qualifying run for bugbot; not counted",
+    ]);
+  });
+
+  it("a source without the two optional methods reads nothing and says so -- never a guess", async () => {
+    const result = await readEarlierRoundChecks(stubSource(), REPO, 7, "head", [BUGBOT], 20);
+    expect(result.checks).toEqual([]);
+    expect(result.warnings[0]).toMatch(/cannot list a pull request's commits/);
+  });
+
+  it("never reads the head itself, and skips a commit entry with no sha", async () => {
+    const calls: string[] = [];
+    const source = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => [{ sha: "c1" }, { nope: true }, { sha: "head" }],
+      commitCheckRuns: async (_repo, sha): Promise<unknown> => {
+        calls.push(sha);
+        return page([clean]);
+      },
+    });
+    const result = await readEarlierRoundChecks(source, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["c1"]);
+    expect(result.checks[0]?.sha).toBe("c1");
+  });
+});
+
+describe("readEarlierRoundChecks -- what qualifies (review of E7: C1, H1, L1)", () => {
+  const BUGBOT = { reviewer: "bugbot", pattern: /^Cursor Bugbot$/i };
+  const run = (fields: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: "Cursor Bugbot",
+    status: "completed",
+    conclusion: "success",
+    pull_requests: [listed(7)],
+    ...fields,
+  });
+  function source(
+    commits: readonly string[],
+    pages: Readonly<Record<string, unknown>>,
+  ): { source: PrStateSource; calls: string[] } {
+    const calls: string[] = [];
+    return {
+      calls,
+      source: stubSource({
+        pullRequestCommits: async (): Promise<unknown[]> => {
+          calls.push("commits");
+          return commits.map((sha) => ({ sha }));
+        },
+        commitCheckRuns: async (_repo, sha): Promise<unknown> => {
+          calls.push(sha);
+          return pages[sha] ?? page([]);
+        },
+      }),
+    };
+  }
+
+  it("C1: skips a NEWER cancelled (NEUTRAL) run and walks on to an OLDER SUCCESS", async () => {
+    const { source: s, calls } = source(["old", "new", "head"], {
+      new: page([run({ conclusion: "neutral" })]),
+      old: page([run()]),
+    });
+    const result = await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["commits", "new", "old"]);
+    expect(result.checks).toEqual([{ sha: "old", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" }]);
+  });
+
+  it("C1: a FAILURE, CANCELLED or TIMED_OUT run is never counted", async () => {
+    for (const conclusion of ["failure", "cancelled", "timed_out", "neutral"]) {
+      const { source: s } = source(["c1", "head"], { c1: page([run({ conclusion })]) });
+      expect((await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20)).checks, conclusion).toEqual([]);
+    }
+  });
+
+  it("H1: a run made for ANOTHER pull request on a shared commit is skipped, silently, and the walk finds this PR's own", async () => {
+    // Stacked PRs share commits: #278's list carries #274's four. A clean run
+    // made for #274 is #274's round, not this PR's.
+    const { source: s, calls } = source(["mine", "shared", "head"], {
+      shared: page([run({ pull_requests: [listed(274)] })]),
+      mine: page([run({ pull_requests: [listed(274), listed(7)] })]),
+    });
+    const result = await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["commits", "shared", "mine"]);
+    expect(result.checks.map((check) => check.sha)).toEqual(["mine"]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("H1: a run naming NO pull request (a fork's PR, or a merged one) is not counted, with a warning", async () => {
+    for (const pulls of [[], undefined, "not-a-list"]) {
+      const { source: s } = source(["c1", "head"], { c1: page([run({ pull_requests: pulls })]) });
+      const result = await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20);
+      expect(result.checks).toEqual([]);
+      expect(result.warnings).toEqual([
+        "earlier-head round checks: a successful run for bugbot on c1 of zheref/example#7 names no pull request (a fork's pull request, or one already merged), so it cannot be attributed to this one and is not counted",
+      ]);
+    }
+  });
+
+  it("F4: the SAME NUMBER in another base repository is another pull request -- not counted, and the walk goes on", async () => {
+    const { source: s, calls } = source(["mine", "fork", "head"], {
+      fork: page([run({ pull_requests: [listed(7, "someone-else", "example")] })]),
+      mine: page([run({ pull_requests: [listed(7)] })]),
+    });
+    const result = await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["commits", "fork", "mine"]);
+    expect(result.checks.map((check) => check.sha)).toEqual(["mine"]);
+    // A list that names a pull request is not "unattributed" -- it names the
+    // wrong one, which is a correct non-count, not a warning.
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("F4: a different repository NAME under the same owner is another pull request too", async () => {
+    const { source: s } = source(["c1", "head"], { c1: page([run({ pull_requests: [listed(7, "zheref", "other")] })]) });
+    expect((await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20)).checks).toEqual([]);
+  });
+
+  it("F4: the base repository is matched case-insensitively, and through a GitHub Enterprise API path", async () => {
+    for (const url of [
+      "https://api.github.com/repos/ZheRef/Example",
+      "https://ghe.example.test/api/v3/repos/zheref/example",
+      "https://api.github.com/repos/zheref/example/",
+    ]) {
+      const entry = { number: 7, base: { repo: { id: 1, name: "Example", url } } };
+      const { source: s } = source(["c1", "head"], { c1: page([run({ pull_requests: [entry] })]) });
+      expect((await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20)).checks, url).toHaveLength(1);
+    }
+  });
+
+  it("F4: an entry whose base repository cannot be read -- or disagrees with itself -- fails CLOSED", async () => {
+    for (const entry of [
+      { number: 7 },
+      { number: 7, base: {} },
+      { number: 7, base: { repo: { name: "example" } } },
+      { number: 7, base: { repo: { url: "https://api.github.com/repos/zheref/example" } } },
+      { number: 7, base: { repo: { name: "other", url: "https://api.github.com/repos/zheref/example" } } },
+      { number: 7, base: { repo: { name: "example", url: "not a repository url" } } },
+    ]) {
+      const { source: s } = source(["c1", "head"], { c1: page([run({ pull_requests: [entry] })]) });
+      expect((await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20)).checks, JSON.stringify(entry)).toEqual([]);
+    }
+  });
+
+  it("L1: a listing of 250 commits -- GitHub's cap -- warns that older commits were not read, and still walks", async () => {
+    const shas = Array.from({ length: PULL_REQUEST_COMMITS_CAP }, (_unused, index) => `c${index}`);
+    const { source: s } = source(shas, { [`c${PULL_REQUEST_COMMITS_CAP - 2}`]: page([run()]) });
+    const result = await readEarlierRoundChecks(s, REPO, 7, `c${PULL_REQUEST_COMMITS_CAP - 1}`, [BUGBOT], 20);
+    expect(result.checks.map((check) => check.sha)).toEqual([`c${PULL_REQUEST_COMMITS_CAP - 2}`]);
+    expect(result.warnings).toEqual([
+      "earlier-head round checks: zheref/example#7 listed 250 commits, GitHub's cap for this listing; any older commit was not read, so a run on one is not counted",
+    ]);
+  });
+
+  it("L1: a listing under the cap does not warn", async () => {
+    const shas = Array.from({ length: PULL_REQUEST_COMMITS_CAP - 1 }, (_unused, index) => `c${index}`);
+    const { source: s } = source(shas, {});
+    const result = await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 1);
+    expect(result.warnings.some((warning) => warning.includes("GitHub's cap"))).toBe(false);
+  });
+
+  it("L1: a page carrying fewer runs than total_count warns of the unread rest, and the walk carries on", async () => {
+    const { source: s, calls } = source(["c1", "c2", "head"], {
+      c2: page([run({ name: "ci / build" })], 140),
+      c1: page([run()]),
+    });
+    const result = await readEarlierRoundChecks(s, REPO, 7, "head", [BUGBOT], 20);
+    expect(calls).toEqual(["commits", "c2", "c1"]);
+    expect(result.checks.map((check) => check.sha)).toEqual(["c1"]);
+    expect(result.warnings).toEqual([
+      "earlier-head round checks: c2 on zheref/example#7 has 140 check runs and one page carried 1; a run on the rest was not read, so it is not counted",
+    ]);
+  });
+});
+
+describe("earlierRoundCheckWanted -- the narrowing that keeps the walk at zero calls", () => {
+  const OWN = loadGateIdentities(process.cwd()); // copilot (exempt) + bugbot + round_quorum
+  const headClean = { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" };
+  const reviewBy = (author: string): Record<string, unknown> => ({
+    author,
+    state: "COMMENTED",
+    commit_id: "old",
+    submitted_at: "2026-09-29T00:00:00Z",
+  });
+
+  it("wants nothing under STRICT", () => {
+    expect(earlierRoundCheckWanted(OWN, "strict", ["copilot"], [], [])).toEqual([]);
+  });
+
+  it("wants nothing when no declared reviewer has a round_check_pattern", () => {
+    const plain = parseGateIdentities("/f/nen/gates.json", {
+      version: 1,
+      reviewers: [{ name: "a", login_pattern: { pattern: "^a$", ignoreCase: true } }],
+      default_approvers: ["a"],
+      base_reviewers: ["a"],
+      delivery: { author_pattern: { pattern: "^x$", ignoreCase: true }, head_ref_prefixes: ["x/"] },
+    });
+    expect(earlierRoundCheckWanted(plain, "bounded", ["a"], [], [])).toEqual([]);
+  });
+
+  it("wants a quorum member with no head run and no review, under BOUNDED", () => {
+    expect(earlierRoundCheckWanted(OWN, "bounded", ["copilot"], [], []).map((w) => w.reviewer)).toEqual(["bugbot"]);
+  });
+
+  it("does not want it once the head settles it: completed or IN FLIGHT at head", () => {
+    expect(earlierRoundCheckWanted(OWN, "bounded", ["copilot"], [headClean], [])).toEqual([]);
+    const running = { name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null };
+    expect(earlierRoundCheckWanted(OWN, "bounded", ["copilot", "bugbot"], [running], [])).toEqual([]);
+  });
+
+  it("C1: still wants it when its head run completed WITHOUT SUCCESS -- a NEUTRAL may be a cancelled run", () => {
+    const neutral = { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "NEUTRAL" };
+    expect(earlierRoundCheckWanted(OWN, "bounded", ["copilot"], [neutral], []).map((w) => w.reviewer)).toEqual(["bugbot"]);
+  });
+
+  it("still wants it when its head run was SKIPPED -- a skip is not a round", () => {
+    const skipped = { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SKIPPED" };
+    expect(earlierRoundCheckWanted(OWN, "bounded", ["copilot"], [skipped], []).map((w) => w.reviewer)).toEqual(["bugbot"]);
+  });
+
+  it("does not want it once it has POSTED a review -- under bounded that is already its round", () => {
+    expect(earlierRoundCheckWanted(OWN, "bounded", ["copilot"], [], [reviewBy("cursor")])).toEqual([]);
+  });
+
+  it("does not chase a QUORUM-ONLY member once the quorum is met by known rounds (zheref/nen#274)", () => {
+    expect(earlierRoundCheckWanted(OWN, "bounded", ["copilot"], [], [reviewBy("copilot-pull-request-reviewer")])).toEqual([]);
+  });
+
+  it("still wants a CONFIGURED member when the quorum is met -- it can be owed, the quorum cannot excuse it", () => {
+    const wanted = earlierRoundCheckWanted(OWN, "bounded", ["copilot", "bugbot"], [], [reviewBy("copilot-pull-request-reviewer")]);
+    expect(wanted.map((w) => w.reviewer)).toEqual(["bugbot"]);
+  });
+
+  it("does not want a round-check reviewer that is neither configured nor a quorum member", () => {
+    // The bankai fixture declares no quorum; bisky and bugbot are enrolled only by a head check.
+    expect(earlierRoundCheckWanted(IDENTITIES, "bounded", ["sasuke", "tenma", "copilot"], [], [])).toEqual([]);
+  });
+});
+
+describe("fetchPrState -- earlier-head round checks are wired in, bounded, and fail closed", () => {
+  const OWN = loadGateIdentities(process.cwd());
+  const ownOptions = (overrides: Partial<FetchStateOptions> = {}): FetchStateOptions =>
+    baseOptions({ identities: OWN, ...overrides });
+  const refuseEarlierReads = {
+    pullRequestCommits: async (): Promise<unknown[]> => {
+      throw new Error("pullRequestCommits must not be called");
+    },
+    commitCheckRuns: async (): Promise<unknown> => {
+      throw new Error("commitCheckRuns must not be called");
+    },
+  };
+
+  it("zheref/nen#279's shape: reads the earlier run into `earlier_round_checks` and leaves `checks` head-only", async () => {
+    const calls: string[] = [];
+    const source = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => {
+        calls.push("commits");
+        return [{ sha: "55b9ed2" }, { sha: "2851d2e" }, { sha: "deadbeef" }];
+      },
+      commitCheckRuns: async (_repo, sha): Promise<unknown> => {
+        calls.push(sha);
+        // 2851d2e's run names [279], as `gh api repos/zheref/nen/commits/2851d2e/check-runs` does.
+        return page(
+          sha === "2851d2e"
+            ? [{ name: "Cursor Bugbot", status: "completed", conclusion: "success", pull_requests: [listed(279)] }]
+            : [],
+        );
+      },
+    });
+    const result = await fetchPrState(source, REPO, 279, ownOptions());
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(calls).toEqual(["commits", "2851d2e"]);
+    expect(result.state["earlier_round_checks"]).toEqual([
+      { sha: "2851d2e", name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" },
+    ]);
+    expect(result.state["checks"]).toEqual([{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("makes NO earlier-commit call under STRICT", async () => {
+    const result = await fetchPrState(stubSource(refuseEarlierReads), REPO, 279, ownOptions({ policy: "strict" }));
+    expect(result.ok && result.state["earlier_round_checks"]).toEqual([]);
+  });
+
+  it("makes NO earlier-commit call when no reviewer declares a round_check_pattern that matters", async () => {
+    const result = await fetchPrState(stubSource(refuseEarlierReads), REPO, 7, baseOptions());
+    expect(result.ok && result.state["earlier_round_checks"]).toEqual([]);
+  });
+
+  it("a read error surfaces as a warning and counts nothing -- the state is still read", async () => {
+    const source = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => [{ sha: "c1" }, { sha: "deadbeef" }],
+      commitCheckRuns: async (): Promise<unknown> => {
+        throw new Error("403");
+      },
+    });
+    const result = await fetchPrState(source, REPO, 7, ownOptions());
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.state["earlier_round_checks"]).toEqual([]);
+    expect(result.warnings.some((warning) => warning.includes("the walk stopped and nothing further was counted"))).toBe(true);
+  });
+
+  it("honours a caller's maxEarlierCommitReads", async () => {
+    const calls: string[] = [];
+    const source = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => [{ sha: "c1" }, { sha: "c2" }, { sha: "c3" }, { sha: "deadbeef" }],
+      commitCheckRuns: async (_repo, sha): Promise<unknown> => {
+        calls.push(sha);
+        return page([]);
+      },
+    });
+    await fetchPrState(source, REPO, 7, ownOptions({ maxEarlierCommitReads: 1 }));
+    expect(calls).toEqual(["c3"]);
+  });
+
+  it("defaults the budget to EARLIER_COMMIT_READS_DEFAULT", async () => {
+    const shas = Array.from({ length: EARLIER_COMMIT_READS_DEFAULT + 5 }, (_unused, index) => ({ sha: `c${index}` }));
+    let reads = 0;
+    const source = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => [...shas, { sha: "deadbeef" }],
+      commitCheckRuns: async (): Promise<unknown> => {
+        reads += 1;
+        return page([]);
+      },
+    });
+    await fetchPrState(source, REPO, 7, ownOptions());
+    expect(reads).toBe(EARLIER_COMMIT_READS_DEFAULT);
   });
 });

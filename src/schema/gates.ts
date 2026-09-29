@@ -64,6 +64,48 @@
 // reader to protect against here. The first release that ships is the first
 // version anyone can be behind.
 //
+// ── `round_quorum`, AND WHY IT DID NOT BUMP THE VERSION ────────────────────
+//
+// The maintainer's ruling of 2026-09-29, in their own words: "Copilot credits
+// are exhausted. Expect Cursor instead. Let's make it canon on the repo so that
+// we solve at least one round of reviews from both Copilot OR Cursor (or both)
+// as applicable." Nothing above could say "at least one OF these reviewers":
+// every reviewer is judged independently, so a file could either owe BOTH
+// rounds (neither is exempt -- one exhausted reviewer then holds every pull
+// request shut) or owe NEITHER unless requested or enrolled (both exempt -- a
+// pull request nobody reviewed reads ready). `round_quorum` is the missing
+// third shape:
+//
+//   "round_quorum": { "any_of": ["copilot", "bugbot"], "minimum": 1 }
+//
+// read by ../gates/predicates.ts's `roundQuorum` and enforced on the
+// rounds-owed row by ../gates/ready.ts. ONE OBJECT, NOT A LIST OF GROUPS, and
+// the choice is forward-compatible rather than final: the ruling names one
+// group, and a later build that wants several can accept an ARRAY of these
+// objects at the same key while still accepting every file written as one
+// object today. The opposite order (a list now, "simplified" to an object
+// later) would break every file that shipped in between.
+//
+// THE VERSION STAYS 1, DELIBERATELY, AND THE COST IS STATED. Every nen release
+// before the one that ships this key reads a file carrying `round_quorum` by
+// IGNORING it (verified live against v0.15.1, the pinned build, and against
+// the v0.16.0 tag, whose source never names the key), i.e. it applies the
+// per-reviewer declaration ALONE -- which is the
+// "subset of a newer file's reviewer rules" the version exists to refuse. It is
+// accepted here because (1) the maintainer required the declaration to stay
+// VALID under the pinned v0.15.1, which a version bump would break outright for
+// every consumer on that pin; (2) the quorum only ever ADDS a requirement, so
+// the subset an older reader applies is the declaration's own per-reviewer
+// verdict -- never a reviewer excused that the file's per-reviewer rules owe;
+// and (3) the file is written so that declaration is meaningful on its own
+// (see this repository's own `nen/gates.json` `$comment`). What an older reader
+// misses is exactly the quorum's floor -- "somebody reviewed". Making that
+// omission LOUD on an older reader would take a schema version bump: a build
+// that reads `version: 2`, and a file that states it, which every older pin
+// then refuses outright. This build reads version 1 only, so that is not a
+// file-side switch today; it is a maintainer call about the schema, not this
+// loader's.
+//
 // A REPOSITORY WITHOUT THE FILE GETS AN ERROR, NOT A DEFAULT SET. There is no
 // built-in reviewer table, not even the one this code was ported from: a
 // fallback would make `nen` judge readiness against another repository's
@@ -197,6 +239,25 @@ export interface DependabotCarveOut {
   readonly satisfiedByContext: readonly string[];
 }
 
+/**
+ * `round_quorum` -- at least `minimum` of the reviewers named in `anyOf` must
+ * HAVE a round (maintainer ruling 2026-09-29; the header's `round_quorum`
+ * section). A requirement ADDED to CON-32(b)'s rounds-owed row, never an
+ * exemption: it excuses no reviewer the per-reviewer rules owe.
+ *
+ * "Has a round" is decided by EXACTLY the rules that already satisfy one
+ * reviewer (the round policy, a posted review under `login_pattern`, a
+ * definitive-SUCCESS `round_check_pattern` run, CON-40's delivery reading), and it is counted for every member whether or not that member is
+ * in the configured reviewer set or is `bounded_policy_exempt` -- the group is
+ * the repository's declared policy, not a subset of whoever was enrolled.
+ */
+export interface RoundQuorum {
+  /** The group, in the file's order. Every name is a declared reviewer; none repeats. */
+  readonly anyOf: readonly string[];
+  /** How many of `anyOf` must have a round: an integer, `1 <= minimum <= anyOf.length`. */
+  readonly minimum: number;
+}
+
 export interface GateIdentities {
   readonly path: string;
   /** Always `GATES_SCHEMA_VERSION`; an unknown version is refused at load. */
@@ -222,6 +283,17 @@ export interface GateIdentities {
   readonly delivery: DeliveryIdentity;
   /** CON-30's carve-out, or `null` when the file declares none. */
   readonly dependabotCarveOut: DependabotCarveOut | null;
+  /**
+   * `round_quorum`, or `null` when the file declares none -- in which case
+   * the gate behaves exactly as it did before the key existed.
+   *
+   * OPTIONAL in the type (absent reads as `null`) because not every
+   * `GateIdentities` comes from a file: the `--reviewers` identity path builds
+   * one from a bare name list, names no file, and so declares no quorum --
+   * the same reasoning that gives it no `dependabot_carve_out`. Optional keeps
+   * that builder, and every other caller-built identity set, valid unchanged.
+   */
+  readonly roundQuorum?: RoundQuorum | null;
   reviewer(name: string): ReviewerIdentity | undefined;
 }
 
@@ -457,6 +529,8 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     "An empty base set means no reviewer is configured on any pull request unless a check enrols one, so nothing owes a round by default.",
   );
 
+  const roundQuorum = readRoundQuorum(path, root["round_quorum"], declared);
+
   // `round_policy.stallMinutes` -- OPTIONAL (zheref/nen#214 item 2). A
   // repository that does not declare it gets the caller's own fixed default,
   // which is why `null` -- not a number -- is what "the file said nothing"
@@ -570,8 +644,104 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     stallMinutes,
     delivery,
     dependabotCarveOut,
+    roundQuorum,
     reviewer: (name): ReviewerIdentity | undefined => byName.get(name),
   };
+}
+
+/**
+ * `round_quorum` -- OPTIONAL, and REFUSED BY POINTER at load when malformed.
+ *
+ * Every refusal below is a quorum that would silently mean something other
+ * than what it says, and each is named for the direction it would fail in:
+ *
+ *   * a name that is not a declared reviewer has no login pattern and no round
+ *     check, so it can never have a round -- it would pad the group with a
+ *     member that only ever counts as "no round";
+ *   * a DUPLICATE name would count one reviewer's one round twice toward the
+ *     minimum -- `any_of: [a, a], minimum: 2` reads "two reviewers" and is met
+ *     by one;
+ *   * `minimum` below 1 is met by nobody having reviewed -- no requirement at
+ *     all, dressed as one;
+ *   * `minimum` above the group's size is met by NO set of rounds -- every pull
+ *     request not-ready forever, with no path out;
+ *   * a non-integer `minimum` has no count of reviewers it could equal.
+ *
+ * `minimum` is REQUIRED rather than defaulted to 1, for the reason
+ * `ignoreCase` is: "at least one" and "all of them" are both plausible
+ * readings of a group, and a file that leaves it out has not said which.
+ */
+function readRoundQuorum(
+  path: string,
+  raw: unknown,
+  declared: ReadonlySet<string>,
+): RoundQuorum | null {
+  if (raw === undefined || raw === null) return null;
+  const record = requireRecord(path, "round_quorum", raw);
+  const declaredList = [...declared].join(", ");
+
+  const rawAnyOf = record["any_of"];
+  if (rawAnyOf === undefined || rawAnyOf === null) {
+    throw new SchemaError(
+      path,
+      "round_quorum.any_of",
+      `is required and must name the declared reviewers the quorum is counted over. Declared reviewers: ${declaredList}.`,
+    );
+  }
+  const anyOf: string[] = [];
+  const seenAt = new Map<string, number>();
+  requireArray(path, "round_quorum.any_of", rawAnyOf).forEach((item, index): void => {
+    const pointer = `round_quorum.any_of[${index}]`;
+    const name = requireString(path, pointer, item);
+    if (!declared.has(name)) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `names '${name}', which is not declared in 'reviewers'. An undeclared member has no login pattern and no round check, so it could never have a round. Declared: ${declaredList}.`,
+      );
+    }
+    const previous = seenAt.get(name);
+    if (previous !== undefined) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `duplicates round_quorum.any_of[${previous}] ('${name}'); a reviewer named twice would count its one round twice toward the minimum`,
+      );
+    }
+    seenAt.set(name, index);
+    anyOf.push(name);
+  });
+  if (anyOf.length === 0) {
+    throw new SchemaError(
+      path,
+      "round_quorum.any_of",
+      "is empty. A quorum over nobody can never be met, so every pull request would be held not-ready with no path out. Name the reviewers, or delete the block.",
+    );
+  }
+
+  const rawMinimum = record["minimum"];
+  if (typeof rawMinimum !== "number" || !Number.isInteger(rawMinimum)) {
+    throw new SchemaError(
+      path,
+      "round_quorum.minimum",
+      `is required and must be an integer count of reviewers (1 to ${anyOf.length} for this any_of). It is stated rather than defaulted: "at least one" and "all of them" are both plausible readings of a group. Got ${describeValue(rawMinimum)}`,
+    );
+  }
+  if (rawMinimum < 1) {
+    throw new SchemaError(
+      path,
+      "round_quorum.minimum",
+      `is ${rawMinimum}. A quorum below 1 is met by nobody having reviewed, which is no requirement at all; delete the block if none is meant.`,
+    );
+  }
+  if (rawMinimum > anyOf.length) {
+    throw new SchemaError(
+      path,
+      "round_quorum.minimum",
+      `is ${rawMinimum}, but round_quorum.any_of names only ${anyOf.length} reviewer(s). No set of rounds could meet it, so every pull request would be held not-ready with no path out.`,
+    );
+  }
+  return { anyOf, minimum: rawMinimum };
 }
 
 export function loadGateIdentities(repoRoot: string): GateIdentities {

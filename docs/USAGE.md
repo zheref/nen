@@ -908,7 +908,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `<ref>` | yes | `<CODE>#<N>` (the `#` optional) or a bare `<N>` with `--gh-repo` | the shorthand splits at the LONGEST trailing digit run; a code ending in a digit needs the `#` |
 | `--gh-repo <owner/name>` | no | the repository, when `<ref>` is a bare number | wins over a code if both are given |
 | `--explain` | no | print the full conjunct table plus what the gate does not decide | suppressed by `--json` (the JSON already carries the table) |
-| `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates` |
+| `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies |
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
 | `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded`; see above |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
@@ -1005,6 +1005,259 @@ An empty `satisfied_by_context` is refused at load: a carve-out satisfied by no
 context is satisfied by nothing, and would clear the review rounds for that
 author on no evidence at all.
 
+**`round_quorum`: at least N of a group must have a round (maintainer ruling
+2026-09-29).** The maintainer's words: *"Copilot credits are exhausted. Expect
+Cursor instead. Let's make it canon on the repo so that we solve at least one
+round of reviews from both Copilot OR Cursor (or both) as applicable."* Without
+this key every reviewer is judged on its own. A file can then owe both rounds
+(neither reviewer exempt, so one exhausted reviewer holds every pull request
+shut). Or it can owe neither unless one is requested or enrolled (both exempt,
+so a pull request nobody reviewed reads `ready`). It cannot say "Copilot or
+Cursor Bugbot". `round_quorum` says it:
+
+```json
+"round_quorum": { "any_of": ["copilot", "bugbot"], "minimum": 1 }
+```
+
+- **What counts as a round** is decided by exactly the rules that already
+  clear one reviewer, through the same code. A posted, non-`PENDING` review
+  under the member's `login_pattern` counts, at any earlier head under
+  `bounded` and at the current head under `strict` (and for a CON-40
+  delivery-holistic-pass member on a delivery PR). A `round_check_pattern`
+  run that concluded **`SUCCESS`** counts too, on the same terms: at the
+  current head under either policy, and **on an earlier commit that GitHub
+  lists against this pull request, under `bounded`** (see *Round checks at an earlier head*
+  below). No other conclusion is a round (see *Consumer note: a round check
+  must conclude `SUCCESS`* below). So does CON-40's holistic pass. Each member is
+  counted **whether or not it is in the configured reviewer set** (base set,
+  enrolled by its check, or `--reviewers`) and **whether or not it is
+  `bounded_policy_exempt`**. Those two facts decide who is *owed* a round, not
+  who *has* one. A pending review request is reported beside the member, and it
+  is never counted either way.
+- **It only adds a requirement.** Fewer than `minimum` members with a round
+  fails row 4 (`rounds-owed`, CON-32(b)). Every per-reviewer owed round is
+  judged exactly as before and is never excused by a met quorum. A member with
+  a pending request is still owed, and an enrolled `Cursor Bugbot` whose check
+  is still running is still owed. The quorum is on row 4 rather than a row of
+  its own because `conjuncts` stays the six rows of `nen.pr.ready/v0.1`, and a
+  seventh would change what the table means for every consumer.
+- **The reason names every member.** With nothing owed, the row reads
+  `not-ready: round quorum not met (0 of 2 with a round, 1 required, CON-32b):
+  copilot (no round), bugbot (no round, no 'Cursor Bugbot' check)`. A member
+  without a round says which reading judged it (`no round` or `no round at
+  head`), whether a request for it is pending (`review requested, not yet
+  posted`), and where its round check stands: `no '<check>' check`, `'<check>'
+  check not yet completed`, `'<check>' check SKIPPED`, or `'<check>' check
+  concluded <CONCLUSION>, not SUCCESS`. When a round is also
+  owed, the owed sentence comes first, unchanged, and the quorum clause follows
+  after ` — and `.
+- **`--explain` and `--json`.** A met quorum is stated in row 4's note
+  (`round quorum met (1 of 2 with a round, 1 required, CON-32b): …`). Row 4
+  also carries `conjuncts[].roundQuorum`: `anyOf`, `minimum`, `count`, `met`,
+  and `members[]` with `reviewer`, `round`
+  (`review`\|`round-check`\|`round-check-earlier-head`\|`delivery-holistic-pass`\|`null`),
+  `reading` (`any-head`\|`current-head`, the policy's reading), `requested`,
+  and `roundCheck` (`null`, or `{ pattern, name, state, conclusion, from, sha }`
+  with `state` `absent`\|`pending`\|`skipped`\|`unsuccessful`\|`completed`,
+  where `completed` means a `SUCCESS` and `unsuccessful` any other completed
+  conclusion, carried in `conclusion`, and `from`
+  `head`\|`earlier-head`\|`null` naming the commit, `sha`, that the reported
+  run is on). The field is **absent**, not
+  `null`, on every other row. It is also absent when the file declares no
+  quorum, when CON-30's carve-out satisfied the row, and when the row could not
+  be computed. A repository without the key therefore gets a byte-identical
+  report. The field is additive, so the contract stays `nen.pr.ready/v0.1`.
+- **`--reviewers` does not switch it off.** When identities come from a file
+  (the in-repo `nen/gates.json` or `--gates`), the quorum applies whatever
+  `--reviewers` names. The configured set decides who is owed a round, while the
+  quorum is the repository's declared floor on who has reviewed. The
+  `--reviewers`-only identity path (no file at all) declares no quorum, just as
+  it declares no carve-out.
+- **CON-30's carve-out satisfies row 4 whole**, quorum included. The review
+  shim stands in for review rounds, all of them.
+- **Refused at load, by pointer.** Each of the following names its pointer:
+  - `round_quorum` is not an object.
+  - `round_quorum.any_of` is missing, is not an array, or is empty.
+  - `round_quorum.any_of[i]` is not a non-empty string, names a reviewer not
+    declared in `reviewers`, or duplicates an earlier member (one round would
+    count twice).
+  - `round_quorum.minimum` is missing or not an integer. It is stated and never
+    defaulted, because "at least one" and "all of them" are both plausible.
+  - `round_quorum.minimum` is below 1, which nobody reviewing would meet.
+  - `round_quorum.minimum` is above the size of `any_of`, which no set of rounds
+    could meet.
+- **Older nen.** The schema stays at `version: 1`. **Every nen release before
+  the one that ships `round_quorum`** (v0.15.1 and v0.16.0 verified) ignores
+  the key and applies the rest of the file. The file is still valid, and every
+  requested or enrolled round is still owed, but there is no one-reviewer
+  floor.
+
+**Consumer note: a round check must conclude `SUCCESS` (review of E7, finding
+C1).** Until this change, any `round_check_pattern` run that completed with a
+conclusion other than `SKIPPED` cleared that reviewer's round. Now only
+`SUCCESS` does, at head and on an earlier commit alike. This applies to
+**every repository that declares `round_check_pattern`**, not only one with a
+`round_quorum`. The reason is Cursor Bugbot's `NEUTRAL`, which means either
+"found N issues" or "run cancelled because a newer commit was pushed".
+zheref/nen#281 has no review at all, and its cancelled `NEUTRAL` run on
+`cc7a948` read as Bugbot's round. The findings case loses nothing, because a
+reviewer whose check is its round posts a review when it has findings
+(`cursor[bot]` did on zheref/nen#278 and #285), and the review counts on its
+own. The direction is fail-safe: a round-check reviewer can only become owed
+where it used to be cleared, never the reverse.
+- A run that completed without success still **enrols** the reviewer (it is
+  configured for the pull request) and does not clear it.
+- Unlike a `SKIPPED` run, that state has a way out: a re-run that succeeds, or
+  a review, clears it. The next paragraph says how.
+
+**The way out of an owed Bugbot round (Nobunaga's delta review of E7, finding
+F3).** On this repository Cursor Bugbot runs once per pull request and does not
+re-run by itself. A Bugbot round that is owed, or a quorum it would meet, stays
+unmet until something changes. There are two remedies:
+- **Re-trigger Bugbot** by commenting `bugbot run` on the pull request.
+  Cursor's documented trigger is `bugbot run` or `cursor review`, and each
+  re-run needs a new comment ([Cursor Docs: Bugbot](https://cursor.com/help/ai-features/bugbot)).
+  A run that concludes `SUCCESS` is Bugbot's round. A run with findings posts a
+  review, which is its round too.
+- **When Bugbot cannot succeed and Copilot already has a round**, run
+  `nen pr ready <ref> --reviewers copilot` (the reviewers other than Bugbot).
+  `--reviewers` sets who is *owed* a round, so Bugbot stops being owed. The
+  quorum is the repository's declared floor and still counts Copilot's round,
+  so the pull request is not waved through on nobody's review.
+
+**Worked example: this repository's own `nen/gates.json`.** Copilot is kept but
+exempt under `bounded`, Cursor Bugbot is added, and the quorum asks for at least
+one of the two:
+
+```json
+"reviewers": [
+  { "name": "copilot",
+    "login_pattern": { "pattern": "^(copilot|copilot-pull-request-reviewer(\\[bot\\])?)$", "ignoreCase": true },
+    "bounded_policy_exempt": true },
+  { "name": "bugbot",
+    "login_pattern": { "pattern": "^(cursor(\\[bot\\])?|bugbot\\[bot\\])$", "ignoreCase": true },
+    "round_check_pattern": { "pattern": "^Cursor Bugbot$", "ignoreCase": true },
+    "enrolment_check_pattern": { "pattern": "^Cursor Bugbot$", "ignoreCase": true } }
+],
+"approval_policy": "review-round-only",
+"default_approvers": [],
+"base_reviewers": ["copilot"],
+"round_quorum": { "any_of": ["copilot", "bugbot"], "minimum": 1 }
+```
+
+| The pull request, under `bounded` | Row 4 (`rounds-owed`) |
+|---|---|
+| Nobody reviewed, no `Cursor Bugbot` check at head | FAILED: `round quorum not met (0 of 2 with a round, 1 required, CON-32b): copilot (no round), bugbot (no round, no 'Cursor Bugbot' check)` |
+| No review, and Bugbot's run at head concluded `NEUTRAL` (for example, cancelled) | FAILED: `round quorum not met …`, naming `bugbot (no round, 'Cursor Bugbot' check concluded NEUTRAL, not SUCCESS)` |
+| No review, and Bugbot's only run was cancelled (`NEUTRAL`) on an **earlier** commit | FAILED. The earlier run is not a round, so the member reads as if no run were there. zheref/nen#281 (the cancelled run on `cc7a948`, head `322a492`) reads `round quorum not met (0 of 2 with a round, 1 required, CON-32b): copilot (no round), bugbot (no round, no 'Cursor Bugbot' check)` |
+| `Cursor Bugbot` concluded `SUCCESS` at head (no findings) | ready, noted `round quorum met (1 of 2 …): copilot (no round), bugbot (round: 'Cursor Bugbot' check completed)` |
+| Bugbot posted a review (as `cursor[bot]`) at any earlier head | ready |
+| Bugbot's run concluded `SUCCESS` on an earlier commit that GitHub lists against this PR, nothing at head, no review | ready under `bounded`, noted `bugbot (round: 'Cursor Bugbot' check completed at earlier head <sha>)`. FAILED under `strict` |
+| Copilot posted a review at any earlier head | ready |
+| `Cursor Bugbot` still running, Copilot reviewed earlier | FAILED: `bugbot (no round at head)`. It is enrolled and owed until its run concludes `SUCCESS` or it posts a review. See *The way out of an owed Bugbot round* below |
+| Copilot re-requested and not yet posted, Bugbot reviewed | FAILED: `copilot (review requested, not yet posted)` |
+
+Under a release that predates `round_quorum` (through v0.16.0), the first three
+rows read `ready`: no reviewer is owed, and those releases ignore the floor.
+Those releases never read a run on an earlier commit, and they still count a
+`NEUTRAL` run at head as Bugbot's round. Every other row reads the same under
+both.
+
+- **Why the bot logins only (review of E7, finding M2).** The pattern names
+  `cursor[bot]` and `bugbot[bot]`, plus the bare `cursor`, which is how
+  GraphQL spells the bot's login. On GitHub `cursor` is an Organization, and an
+  Organization cannot author a review. It does **not** match the bare `bugbot`,
+  which is a human GitHub `User` account (`gh api users/bugbot`), because on a
+  public repository that account could otherwise post Bugbot's round.
+  Requiring the REST `user.type` of `Bot` would be stronger still. That needs
+  the review record to carry the type (`src/github/types.ts` and `parse.ts`),
+  and it is not in this change.
+- **Why `strict` is not a policy for this repository (review of E7, finding
+  L2).** Copilot's exemption applies under the default `bounded` policy only.
+  Under `--round-policy strict`, Copilot is owed a round at head like any other
+  base reviewer. With Copilot's credits gone, that holds every pull request.
+
+**Round checks at an earlier head (the same maintainer ruling of 2026-09-29, option B).**
+Under `bounded`, a run of a reviewer's `round_check_pattern` check counts as
+that reviewer's round when all three of these hold:
+- it concluded **`SUCCESS`**;
+- it is on an **earlier commit of this pull request**;
+- GitHub lists it **against this pull request**.
+
+This is no new policy. It is zheref/nen#214's
+`bounded` reading, which already accepts a review posted at any earlier head,
+applied to a reviewer whose check is its round. Without it, a reviewer that
+posts only when it has findings was rewarded for finding something. A run with
+findings leaves a review that counts at every later head, while a clean run
+leaves only a check that no later head's rollup shows. On this repository
+Cursor Bugbot runs **once per pull request**, not on every push: on
+zheref/nen#279 it ran on `2851d2e` and not on the later `7cee8a5`. That PR now
+reads the quorum met through that run.
+
+- **`strict` is unchanged.** Only a run at the current head counts, exactly as
+  only a review at the current head does.
+- **A run in flight at head supersedes history.** A reviewer whose check is
+  queued or running at head has no round from an earlier run, so an enrolled
+  `Cursor Bugbot` whose check is still running is still owed.
+- **Enrolment still keys on the head's checks only.** An earlier run proves the
+  reviewer showed up, not that it is configured for this pull request now.
+  Under `bounded` the same run would satisfy the very reviewer it enrolled, so
+  enrolling on it could add nothing except making a pending request owed.
+- **`SUCCESS` only, and the walk keeps looking (finding C1).** A newer
+  cancelled (`NEUTRAL`) or failed run is skipped. The read carries on to an
+  older commit, so it cannot hide an older clean run.
+- **A run GitHub lists against this pull request (review of E7, findings H1
+  and F4).** Stacked pull requests share commits: zheref/nen#278's commit list
+  carries #274's four. A run therefore counts only when one of its REST
+  `pull_requests[]` entries is this pull request, meaning its `number` **and**
+  its base repository match. `gh api repos/zheref/nen/commits/2851d2e/check-runs`
+  lists #279 with base `zheref/nen`.
+  - A number alone is not an identity: #7 of a fork's or another repository's
+    list is a different pull request.
+  - REST gives the base repository as `{ id, name, url }` with no owner field.
+    The owner and name are read from the URL's `/repos/{owner}/{name}` suffix,
+    which also covers a GitHub Enterprise `…/api/v3/repos/…` URL, and `name`
+    must agree with it. Both are compared case-insensitively.
+  - An entry whose base repository cannot be read fails closed and is not
+    counted.
+  - A run listed against another pull request only is skipped silently,
+    since it is correctly not this one's round.
+  - A run that names **no** pull request is not counted, and the read adds a
+    `meta.warnings` entry, because nothing attributes it. GitHub leaves the
+    list empty for a pull request from a fork, and once a pull request is
+    merged.
+- **It fails closed.** The state is read into a separate
+  `earlier_round_checks` field, so `checks` stays the head's rollup for
+  CON-32(a) and every other reader. Every failure ends the read with a
+  `meta.warnings` entry and counts nothing further: a failed commit listing, a
+  failed or unreadable check-run read, or reaching the budget. A run already
+  read in full before the failure is kept.
+- **Page limits are warned, not refused (finding L1).** Both limits can only
+  leave a run uncounted, so both add a warning and the read carries on:
+  - `pulls/{n}/commits` lists at most 250 commits, and a listing that long says
+    older commits were not read.
+  - A commit's check runs are read one page of 100 at a time, and a page
+    carrying fewer than the commit's `total_count` says the rest were not
+    read.
+- **The call budget.** The read makes **zero** extra calls unless all of these
+  hold:
+  - the policy is `bounded`;
+  - some declared reviewer with a `round_check_pattern` is configured for the
+    pull request, or is a `round_quorum` member while the quorum is not already
+    met by posted reviews or `SUCCESS` head runs;
+  - that reviewer has posted no review;
+  - that reviewer's latest head run neither concluded `SUCCESS` nor is in
+    flight.
+
+  When it does read, it lists the pull request's commits once. It then reads
+  one page of check runs per earlier commit, **newest first**, and stops as
+  soon as every wanted reviewer has a qualifying run. It never reads more than
+  20 commits. Measured live: zheref/nen#279 cost 2 extra calls (the listing
+  and `2851d2e`). zheref/nen#278 (Bugbot posted a review) and zheref/nen#274
+  (Copilot's review met the quorum) cost none. With `--round-policy strict`
+  the read makes no extra calls at all. The read needs `checks:read`, the
+  grant the head rollup already needs.
+
 **Provenance — which binary decided it.** Every report says which `nen`
 produced it: `meta.generator` carries `program`, `version` and `executable`
 (the resolved path of the running process), and `--explain` renders them as a
@@ -1027,9 +1280,11 @@ line for each failing row after the first, and one `warning:` line for each warn
 `failing rows (<n>):` summary. The `--json` top-level keys are `contract`,
 `verdict` (`ready`\|`not-ready`\|`unevaluated`), `gateLine`, `firstFailing`,
 `failing[]`, `judgedHead`, `localHead`, `conjuncts[]` (each row has `id`, `order`,
-`clause`, `title`, `status`, `reason`, `note` and `missing`), `caveats[]`, `remedy` and `meta`
+`clause`, `title`, `status`, `reason`, `note` and `missing`, and the `rounds-owed` row also
+carries `roundQuorum` when the file declares a `round_quorum`), `caveats[]`, `remedy` and `meta`
 (`meta.requiredHead` included). `failing`, `judgedHead`, `localHead`,
-`conjuncts[].missing` and `meta.requiredHead` are additive to `nen.pr.ready/v0.1`.
+`conjuncts[].missing`, `conjuncts[].roundQuorum` and `meta.requiredHead` are additive to
+`nen.pr.ready/v0.1`.
 Exit 0 only on `verdict: ready`.
 Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
 "cleared" (SKILL.md §4's "absence is never a pass").
@@ -1196,6 +1451,37 @@ requirement (`## How to verify`, CON-17). It does not re-derive the CON-32
 predicates; it composes the ported, tested gate engine over one fetched
 snapshot. The changelog.d/ fragment half of CON-33(a) is diff-shaped and not
 checked here.
+
+**`round_quorum`, and the head only (review of E7, finding H2).** When the
+`gates.json` declares a `round_quorum`, the owed-round step asks it too. It
+uses the same inputs as the per-reviewer rounds and the wording `nen pr ready`
+uses.
+- A quorum that is not met is an `owed-round` blocker, whose `detail` is the
+  quorum clause, for example `round quorum not met (0 of 2 with a round, 1
+  required, CON-32b): copilot (no round), bugbot (no round, no 'Cursor Bugbot'
+  check)`.
+- When a reviewer is also owed, the owed list comes first and the clause
+  follows after ` — and `.
+- Before this, this repository's own `gates.json` let an unreviewed pull
+  request answer `none` while `nen pr ready` refused it.
+
+This verb reads the **head only**: its snapshot carries no earlier-commit check
+runs. So it does not count a round-check run on an earlier commit, which
+`nen pr ready` does under `bounded`. Where the two differ, `next-blocker` calls
+the round owed. It is stricter than `pr ready` there, never looser.
+
+The quorum clause **says so wherever it can matter** (Nobunaga's delta review
+of E7, finding F2). That is when the quorum is unmet under `bounded` and a
+round-check member has no run, a `SKIPPED` run, or an unsuccessful run at head.
+The clause then ends with `(head only — \`nen pr ready\` also reads earlier
+commits of this PR)`. zheref/nen#279 is the common shape, since Bugbot runs
+once per pull request: `pr ready` reads the quorum met through the run on
+`2851d2e`, while this verb reads it unmet with that note.
+
+It carries no earlier-commit runs because the fetch is not told which to look
+for. Its caller does not pass the reviewer identities or the policy, so reading
+the history here would mean reading every earlier commit's check runs, up to 21
+extra `gh` calls, on every call. The head usually settles it.
 
 **Usage**
 
