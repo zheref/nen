@@ -9099,7 +9099,7 @@ resolved against **its source file's own directory** and then:
   it is;
 
 either way relative to the **destination** file's directory, the `#fragment`
-kept, the form kept (`](<target>)` stays bracketed, a `"title"` stays, a
+kept, the form kept (`](<target>)` stays bracketed, a `"title"`, `'title'` or `(title)` stays, a
 reference definition `[label]: target` is re-aimed in place). An inline link
 inside a **fenced** block is still re-aimed — a reader copies a path out of a
 fence, and a copied dangling path dangles the same — but a reference
@@ -9148,9 +9148,15 @@ code sample) are carried too; the code-span reading does not model raw HTML or
 an autolink that CommonMark would let win over a backtick, nor an indented
 (four-space) code block; a footnote definition (`[^n]: text`) is not a
 link definition; a target carrying a character no portable path spelling uses
-(whitespace outside `<…>`, `[ ] { } ( ) ^ * | $ < > " '`, a backtick, a
+(whitespace outside `<…>`, `[ ] { } ^ * | $ < > " '`, a backtick, a
 backslash) is a regex or a placeholder inside an example; and a "target"
-followed by anything but a title (`](a b)`) is not a link. On **codex** the
+followed by anything but a title (`](a b)`) is not a link. Destinations and
+titles are read by CommonMark's rules, not a pattern: a bare destination may
+hold **balanced** parentheses (`a(b).md`), a `<…>` one spaces and parentheses
+(`<a (b).md>`), and a title parentheses of its own — so all three are
+re-aimed; unbalanced parentheses are not a link, and a link whose destination
+and title are split across lines (which CommonMark allows) is read as none,
+because the consumer's guard reads a link a line at a time. On **codex** the
 heading anchor is the renderer's slug of the persona's name; a heading with
 the same text *earlier* in `AGENTS.md` would move that anchor to `-1`, which
 nen does not compute — a repository keeps its persona names unique. The
