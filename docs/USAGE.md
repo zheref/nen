@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 40 command
-families, 110 verbs, every flag checked against the binary this repository
+families, 111 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -83,7 +83,7 @@ the root `--repo` names — `--rows-from`, `--board-from`, `--gates`,
 `--requirements-from`, `--ledger`, `--questions-from`, `--answers-from`,
 `--tiers`, `--template`, `--data`, `--out`, `--body-file`, `--input`,
 `--efforts`, `--original`, `--branches`, `--table`, `--rules-dir`,
-`--canon-values`, `--out-dir`, `--mirror-dir`, `--markdown-out`, and every
+`--canon-values`, `--markdown-out`, and every
 taxonomy file a verb opens for itself. `--repo` itself defaults to the process's
 current directory, so a caller standing in the repository sees no difference
 between the two.
@@ -300,7 +300,7 @@ verb does by default:
 | [`wake fire`](#nen-wake-fire) | yes | `--run` | every line is prefixed `(dry run)` without it |
 | [`changelog collate`](#nen-changelog-collate) | yes | `--write` | without it, nothing is rewritten and no fragment is deleted |
 | [`tag cut`](#nen-tag-cut) | yes | `--push` | the tag is created locally; a tag is never auto-pushed |
-| [`canon mirror generate`](#nen-canon-mirror-generate) | no | — | use [`canon mirror check`](#nen-canon-mirror-check), which writes nothing |
+| [`canon mirror generate`](#nen-canon-mirror-generate) | no | `--dry-run` | writes into every declared surface's rules location under `--repo`; the dry form reports every write, deletion and foreign file and performs none. [`canon mirror check`](#nen-canon-mirror-check) writes nothing at all and refuses `--dry-run` |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
@@ -325,7 +325,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | File | What it holds | What reads it |
 |---|---|---|
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
-| `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) |
+| `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
@@ -624,7 +624,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 110 verbs, grouped as the README groups them. **Reads** is what a
+All 111 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -708,8 +708,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
-| [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | substitute every {{TOKEN}} in each canonical rule file into a mirror directory, writing only changed files and deleting orphans | caller-named --rules-dir + --canon-values file; writes --out-dir; no git/gh | yes |
-| [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | regenerate the mirror in memory and diff it against the committed --mirror-dir: missing / extra / stale / hand-edited | caller-named --rules-dir + --canon-values + --mirror-dir; no git/gh | yes |
+| [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to | nen/repos.json | yes |
+| [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | caller-named --rules-dir (a handbooks checkout at the pinned tag) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no git/gh | yes |
+| [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | caller-named --rules-dir + --canon-values; the surface table; reads under --repo; no git/gh | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
@@ -5140,7 +5141,7 @@ post-steps (nen does NOT run these):
 
 **`nen canon`**
 
-Resolves which handbooks a target repository loads, and keeps a canonical-rule mirror in sync with a `canon-values.yml`. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and substitutes/diffs a rule mirror the way the reference implementation's `scripts/sync_canon.py` did.
+Resolves which handbooks a target repository loads, reads the canon pin its registry records, and keeps a canonical-rule mirror in sync with a `canon-values.yml` -- in the rules location of **every agent surface the consumer declares**, not one directory. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and renders/diffs the stack's rule set into each surface's own location, the way the reference implementation's `scripts/sync_canon.py` did for one.
 
 **Where the canon lives.** The single canonical source of every handbook and rule set is the public [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks) repository (`CON-13`): `handbooks/INDEX.md` is its manifest -- the always-load set plus exactly one `stacks/<scenario>/` handbook per scenario, each stack carrying its operational `rules/` set. Every path flag on this family (`--always-load`, `--stack-dir`, `--rules-dir`) names a location inside a **checkout of that repository at the tag the consumer pins**; nen fetches nothing and knows no repository by name. The scenario-to-stack mapping is derived, not looked up: the recorded scenario IS the directory name under `--stack-dir`, so a stack added to the canon needs no change here. The reference implementation these verbs were ported from is frozen; nothing in this family reads it.
 
@@ -5181,96 +5182,181 @@ always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
-### `nen canon mirror generate`
+### `nen canon pin`
 
-Ported from `scripts/sync_canon.py`: substitutes every `{{TOKEN}}` in each canonical rule file (every `.md` in `--rules-dir` except `--not-mirrored`) using the parsed `--canon-values`, prepends a generated-file header, and writes only the files whose content actually changed -- deleting an orphaned mirror file whose canon source is gone. `--header-template` is caller data (the header text/convention belongs to the target repository, never a literal shipped here).
+Answers "which canonical handbooks repository does this consumer mirror, and at which tag" from the consumer's **own** `nen/repos.json`: the `pinned` field on that repository's `maintained_tools` entry. The pin is data there for two reasons this family depends on: a sync has to know the tag **before** it can check the canon out and render, and [`canon mirror check`](#nen-canon-mirror-check) has to know it to hold the mirror to it -- a mirror that cannot name the tag it was rendered from cannot be checked for drift against it. It lives on `maintained_tools`, not `consumers[]`, because [`repo classify`](#nen-repo-classify) reads a `consumers` entry as a consumer at G2 while a canon repository stands at G4, and `maintained_tools` is the list whose entries classify as canon. [`schema check`](#nen-schema-check) reports the same pin on its `nen/repos.json` row.
 
 **Usage**
 
 ```text
-nen canon mirror generate --rules-dir <dir> --canon-values <path>
-                          --out-dir <dir> --ref <ref>
-                          --header-template <template> --not-mirrored <a,b>
-                          [--scenario <name>]
+nen canon pin --repo <consumer> [--source <owner/name>] [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--rules-dir <dir>` | yes | Directory of canonical `.md` rule files. | |
-| `--canon-values <path>` | yes | The values file substituted into every `{{TOKEN}}`. | Must carry a `scenario:` field, unless `--scenario` is given. |
-| `--out-dir <dir>` | yes | Where the mirror is written. | |
-| `--ref <ref>` | yes | Recorded in the generated header. | |
-| `--header-template <template>` | yes | `{ref}`/`{scenario}`/`{file}` placeholders. | Caller's own convention. |
-| `--not-mirrored a,b` | yes (may be empty) | Rule files excluded from mirroring. | |
-| `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2). |
-| `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values` and `--out-dir` resolve against this root, not the process's directory; an absolute value is used as-is. It used to say "not used", which was true before that change and is the sentence a caller passing relative paths from outside the repository would have been misled by. |
+| `--repo <path>` | yes | The consumer whose registry records the pin. | Listed unbracketed: omitted, exits 2 by name. |
+| `--source <owner/name>` | no | Which pinned tool is the canon, when the registry pins more than one. | Refused (exit 1) when the registry records no `pinned` for it. |
 
-**Output and exit codes** -- prints `written: <list>`, `unchanged: <list>`, `deleted (orphaned): <list>` (each `(none)` when empty). `--json`: `{ written, unchanged, deleted }`. Exit 0 always on a completed run (there is no "drift" concept here, only "wrote/didn't write"); exit **2** on an unreadable `--canon-values` — the shared reader's named refusal, `could not read '<resolved path>' (ENOENT). --canon-values names the vocabulary every mirrored rule is keyed by, ...`, where it used to be a raw errno at exit 1 ([#101](https://github.com/zheref/nen/issues/101)); exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a rules-dir generation error.
+**Output and exit codes** -- prints `source: <owner/name>`, `ref: <tag>`, `recorded in: <path> (maintained_tools[].pinned)`. `--json`: `{ contract: "nen.canon.pin/v0.1", source, ref, tagShaped, recordedIn }`. Exit 0 when exactly one pin answers. Exit **1**, with a distinct reason naming `maintained_tools[].pinned` as the field to record, when `--repo` has no `nen/repos.json`, when no maintained tool is pinned, when several are and `--source` does not say which, or when `--source` names a tool the registry does not pin. A recorded pin that is not tag-shaped (`main`, a SHA) is printed and then **exits 1** too: a canon mirror is rendered from a tag, never a floating branch (`CON-13`). Exit 2 on an omitted `--repo` or an empty `--source`.
 
 **Example**
 
 ```bash
-nen canon mirror generate --rules-dir handbooks/rules --canon-values .claude/canon-values.yml \
-  --out-dir .claude/mirror --ref v0.2.0 \
-  --header-template "<!-- GENERATED from {file} at {ref} for {scenario}; do not edit -->" \
-  --not-mirrored README.md
+nen canon pin --repo /path/to/consumer --json
+```
+```json
+{
+  "contract": "nen.canon.pin/v0.1",
+  "source": "owner/handbooks",
+  "ref": "v0.6.0",
+  "tagShaped": true,
+  "recordedIn": "nen/repos.json (maintained_tools[].pinned)"
+}
+```
+(for a registry whose `maintained_tools` carries `{ "repo": "owner/handbooks", "role": "canonical handbooks", "pinned": "v0.6.0" }`; shape from `src/canon/command.test.ts`)
+
+### `nen canon mirror generate`
+
+Renders the stack's canonical rule set -- every `.md` in `--rules-dir` except `--not-mirrored` (the canon directory's own `README.md` and `placeholders.md`), with every `{{TOKEN}}` bound from `--canon-values` -- into the rules location of **each agent surface the consumer declares**, under the consumer's own root (`--repo`). The location, the file extension, the frontmatter the surface needs and its size limit are the surface's **row** in `src/surface/rules.ts` (its `canonMirror` block, each fact cited to the page it was read from); adding a surface is adding a row, never a change to this verb. Only files whose bytes changed are written; a mirror file whose canon source is gone is deleted as an orphan.
+
+| Surface | Where the canon lands | Shape |
+|---|---|---|
+| `claude-code` | `.claude/rules/<stem>.md` | one file per canon file, no frontmatter ([docs](https://code.claude.com/docs/en/memory)) |
+| `codex` | `AGENTS.md` | **one managed block** between a `BEGIN` and an `END` marker, one `<!-- canon: <file> -->` section per canon file; the consumer's own prose outside the block is preserved byte for byte, and a document with no block gets one appended ([docs](https://learn.chatgpt.com/docs/agent-configuration/agents-md)) |
+| `cursor` | `.cursor/rules/<stem>.mdc` | one file per canon file with `description: <stem>` / `alwaysApply: true` frontmatter -- a plain `.md` there is ignored ([docs](https://cursor.com/docs/context/rules)) |
+| `antigravity` | `.agents/rules/<stem>.md` | one file per canon file with `trigger: always_on` / `description: <stem>` frontmatter -- a file without one is silently discarded; **24,000-byte limit per file**, over it the run is refused ([docs](https://antigravity.google/docs/rules)) |
+
+**Every file carries a generated-from marker** as its first *markdown* line (under the frontmatter fence where the surface needs one): `<!-- GENERATED by nen canon mirror from <source>@<ref>: <scenario>/<file> -- do not edit; change the canon and regenerate -->`. It is nen's own, not a template: `--source`, `--ref` and the scenario are the caller's, and `check` reads the same line back to tell stale from hand-edited. A document surface's block opens with `<!-- BEGIN GENERATED by nen canon mirror from <source>@<ref>: <scenario> -- ... -->` and closes with `<!-- END GENERATED by nen canon mirror -->`.
+
+**The marker is the ownership claim -- the collision rule.** nen owns exactly the files that carry its marker. A destination that exists and carries none was written by hand: the **whole run is refused (exit 2) before the first byte is written on any surface**, naming the file -- move or rename the consumer's own rule, or delete it in favour of the canon one. An unmarked file in a rules directory with no canon source is the consumer's own (CON-13 leaves repo-specific, non-canon config to the consumer): never deleted, listed as **foreign**, never drift. Only a directory's *immediate* children are the mirror's, so a consumer's own rules can live in a subdirectory (`.claude/rules/local/`, say) untouched. A marked file with no canon source is an orphan and is deleted. A symbolic link at a destination is refused. A document whose block has lost its `END` marker (or gained a second `BEGIN`) is refused, because nen cannot tell where the hand-written prose resumes.
+
+**The pin is data, and the flags default to it.** `--source` and `--ref` may be omitted: they then come from the consumer's own `nen/repos.json` -- the `pinned` tag on the canonical repository's `maintained_tools` entry, the same fact [`canon pin`](#nen-canon-pin) reads -- when exactly one maintained tool is pinned, or the one `--source` names. Given, a flag overrides the recorded pin. Neither given nor recorded is refused by name, saying both ways to supply it. **Pin discipline is enforced** either way: the ref must be tag-shaped (`v1.2`, `v1.2.3`, `v0.6.0-rc1`) -- a canon mirror is rendered from a **tag** of the canonical repository, never a branch or a bare commit -- and the incident `CON-13` records is a consumer pinned to a tag that predated the canon, whose next regen wiped its mirror from an empty source. Cut the tag first, then pin. `--rules-dir` names the stack's `rules/` directory inside a checkout of that repository **at that tag** (`nen canon resolve --leaf rules` derives the path); nen fetches nothing and checks nothing out.
+
+**AGENTS.md is read by more than Codex** -- Cursor and Antigravity read it as plain prose, and Claude Code (v2.1.277+) reads it **only when the consumer has no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` at or above the root** (`~/.claude/CLAUDE.md`, a managed `CLAUDE.md` and `.claude/rules/` do not count and keep loading beside it). So rendering `claude-code` and `codex` into one consumer is safe -- the two coexist -- but a consumer that renders both keeps a `CLAUDE.md` (its project-specifics header) so each surface reads the canon once; the Claude Code setting that reads both files (`claude-md-and-agents-md`) is honoured in **user and managed scope only**, is ignored in a repository's settings files, and is therefore not part of this design. The portable single-file pattern, where a consumer wants one shared file, is a `CLAUDE.md` containing `@AGENTS.md` -- never double-loaded on any version or setting. Each surface's caveat, including this one, prints on stderr as `nen: note: <surface>: ...` and is never acted on.
+
+**Usage**
+
+```text
+nen canon mirror generate --repo <consumer> --rules-dir <dir> --canon-values <path>
+                          [--source <owner/name>] [--ref <tag>]
+                          [--surfaces <a,b,...>] [--scenario <name>]
+                          [--not-mirrored <a,b>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The CONSUMER repository the mirror is rendered into. | Listed unbracketed: omitted, exits 2 by name. This verb writes into the consumer's tree, and a cwd default would render a mirror into whatever directory the shell was standing in. `--rules-dir`, `--canon-values` and `--markdown-out` resolve against it; an absolute value is used as-is ([#100](https://github.com/zheref/nen/issues/100)). |
+| `--rules-dir <dir>` | yes | The stack's `rules/` directory in a checkout of the canonical handbooks repository at `--ref`. | Refused (exit 2) if unreadable, if it holds no rule file (an empty rendering would delete every mirrored file as orphaned), if a rule file's name is not one a marker can carry and read back (letters, digits, `.`, `_`, `-`, ending `.md` -- no whitespace, no separator; list such a file under `--not-mirrored` or rename it upstream), or if it resolves inside a declared surface's own rules location (the mirror would be rendered from itself). |
+| `--canon-values <path>` | yes | The consumer's `{{TOKEN}}` bindings, plus its `scenario:` and `surfaces:`. | `surfaces:` is an inline comma list (`claude-code, codex`) or a `- name` block list. An unbound token refuses the run naming the file and the token (exit 2). |
+| `--source <owner/name>` | no, when the registry pins it | The canonical handbooks repository, as the marker cites it. | Defaults to the one pinned `maintained_tools` entry in the consumer's `nen/repos.json`; required when none or several are pinned. Refused unless it is an `owner/name` slug. |
+| `--ref <tag>` | no, when the registry pins it | The tag of `--source` the mirror is rendered from, as the marker cites it. | Defaults to `--source`'s recorded `pinned` tag. Refused unless tag-shaped (`v<major>.<minor>[.<patch>][-pre]`), whichever way it arrived. |
+| `--surfaces <a,b,...>` | one of the two | The surfaces to render into; overrides the file's `surfaces:`. | Neither given, or an empty list, is refused (exit 2) naming the known surfaces; so is a name that is not a row. "Every supported surface" is deliberately not a default. |
+| `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2); so is a value that is not the plain token [`canon resolve`](#nen-canon-resolve) requires (no `/`, no whitespace, no leading or trailing `.`/`_`/`-`), because it is written into every marker and read back by `check`. |
+| `--not-mirrored <a,b>` | no | Files in `--rules-dir` that are never mirrored. | The canon directory's own meta files (`README.md,placeholders.md`). Default: none. |
+| `--dry-run` | no | Report every write, deletion and foreign file; write nothing. | |
+
+**Output and exit codes** -- prints `source: <owner/name>@<ref> (scenario <name>)`, `root: <path>`, then per surface `surface: <name> -> <location>` with indented `written:`, `unchanged:`, `deleted (orphaned):` lists (each `(none)` when empty), a `foreign (the consumer's own, left alone):` line when there are any, and `note:` lines (a block past a document surface's documented read limit, a file past a surface's line advice). `--json`: `{ contract: "nen.canon.mirror.generate/v0.1", source, ref, scenario, root, dryRun, surfaces: [{ surface, location, written, unchanged, deleted, foreign, notes }] }`. Exit 0 on a completed run; exit **2** on a missing or malformed flag, an unknown or empty surface list, an unreadable `--canon-values` (the shared reader's named refusal, `could not read '<resolved path>' (ENOENT). --canon-values names the vocabulary every mirrored rule is keyed by, ...` -- [#101](https://github.com/zheref/nen/issues/101)), an unbound token, a rules file over a surface's byte limit, or a destination this mirror does not own (nothing written on any surface). The one-directory shape's flags (`--out-dir`, `--mirror-dir`, `--header-template`, `--header-pattern`) are refused by name with where each meaning went.
+
+**Example** -- a consumer whose `.claude/canon-values.yml` declares `scenario: swiftui-tca-uzf-v2` and `surfaces: claude-code, codex`, with the canonical repository checked out beside it at `v0.6.0`:
+
+```bash
+nen canon mirror generate --repo /path/to/consumer \
+  --rules-dir ../handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules \
+  --canon-values .claude/canon-values.yml \
+  --source owner/handbooks --ref v0.6.0 --not-mirrored README.md,placeholders.md
 ```
 ```text
-written: CON-32.md
-unchanged: CON-38.md, CON-22.md
-deleted (orphaned): CON-99.md
+source: owner/handbooks@v0.6.0 (scenario swiftui-tca-uzf-v2)
+root: /path/to/consumer
+surface: claude-code -> .claude/rules/
+  written: .claude/rules/00-overview.md, .claude/rules/01-folder-layout.md, ...
+  unchanged: (none)
+  deleted (orphaned): (none)
+  foreign (the consumer's own, left alone): .claude/rules/house-style.md
+surface: codex -> AGENTS.md
+  written: AGENTS.md
+  unchanged: (none)
+  deleted (orphaned): (none)
+  note: AGENTS.md's canon block is 158211 bytes; 'codex' documents that it stops reading project documents at 32768 bytes (project_doc_max_bytes in .codex/config.toml) ...
 ```
-(shape derived from `src/canon/mirror.ts`'s `generateMirror`/`writeMirror` and `src/canon/mirror.test.ts`)
+(shape derived from `src/canon/mirror.ts`'s `renderSurface`/`writeSurface` and `src/canon/command.test.ts`)
 
 ### `nen canon mirror check`
 
-Regenerates the mirror from the SAME inputs `generate` uses and diffs it against `--mirror-dir` WITHOUT writing anything -- the CI-safe half of the pair. `--header-pattern` reads the ref back out of the COMMITTED mirror file's own first line (a JS regex with named groups `(?<ref>...)`, `(?<scenario>...)`, `(?<file>...)`), which is what tells `stale` (ref moved) from `hand-edited` (content changed but header claims the same ref) apart.
+Renders the mirror from the SAME inputs `generate` takes and diffs **every declared surface's** committed copy against it, writing nothing -- the CI half of the pair. Drift is detected **per surface and per canon file**, not merely by presence: the marker every file carries names the pin it was rendered from, which is what tells `stale` (the pin moved and nobody regenerated) from `hand-edited` (this pin, other bytes) apart.
+
+Per surface, a file is:
+
+| Class | Meaning |
+|---|---|
+| `ok` | byte-identical to a fresh rendering at `--source@--ref` (line endings normalised, so a CRLF checkout is not drift) |
+| `missing` | canon has it; the mirror does not |
+| `extra` | the mirror has a **marked** file (or block section) with no canon source -- an orphan `generate` would delete |
+| `stale` | marked for another source, ref or scenario: generated, never regenerated after the pin moved |
+| `hand-edited` | marked for this pin but not a fresh rendering's bytes -- or carrying no marker at all where a canon file should be |
+| `foreign` | an unmarked file with no canon source beside the mirror: the consumer's own, reported, **not drift** |
+
+On a document surface the block's sections are classified one canon file at a time (a section canon dropped is `extra`; text between the `BEGIN` line and the first section is `extra` too, as `(text inside the block before its first canon section)`); a document with no block reads `missing` whole, a block whose marker pair is broken reads `hand-edited` whole, and prose outside the block is nobody's drift.
 
 **Usage**
 
 ```text
-nen canon mirror check --rules-dir <dir> --canon-values <path>
-                       --mirror-dir <dir> --ref <ref>
-                       --header-template <template> --header-pattern <regex>
-                       --not-mirrored <a,b>
-                       [--scenario <name>] [--markdown-out <path>]
+nen canon mirror check --repo <consumer> --rules-dir <dir> --canon-values <path>
+                       [--source <owner/name>] [--ref <tag>]
+                       [--surfaces <a,b,...>] [--scenario <name>]
+                       [--not-mirrored <a,b>] [--markdown-out <path>] [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
+| `--repo <path>` | yes | The consumer whose committed mirror is checked. | Same as `generate`; never written to. |
 | `--rules-dir <dir>` | yes | Same as `generate`. | |
 | `--canon-values <path>` | yes | Same as `generate`. | |
-| `--mirror-dir <dir>` | yes | The COMMITTED mirror being checked. | Never written to. |
-| `--ref <ref>` | yes | The ref this run expects. | Compared against what `--header-pattern` reads out of each mirror file. |
-| `--header-template <template>` | yes | Regenerates the in-memory comparison copy. | |
-| `--header-pattern <regex>` | yes | Reads `ref`/`scenario`/`file` back out of the mirror file's FIRST LINE only. | No need to anchor with `^` -- only the first line is ever matched. |
-| `--not-mirrored a,b` | yes (may be empty) | Same as `generate`. | |
+| `--source <owner/name>` | no, when the registry pins it | Same as `generate`. | A file whose marker names another source is `stale`. |
+| `--ref <tag>` | no, when the registry pins it | The pin this run expects; defaults to the recorded one. | A file whose marker names another ref is `stale` -- so moving the recorded pin without regenerating is exactly what turns every mirror file stale. |
+| `--surfaces <a,b,...>` | one of the two | Same as `generate`. | |
 | `--scenario <name>` | no | Same override as `generate`. | |
-| `--markdown-out <path>` | no | Also write the report as a markdown table. | Written regardless of `--json`. |
+| `--not-mirrored <a,b>` | no | Same as `generate`. | |
+| `--markdown-out <path>` | no | Also write the drift as a table: `Surface \| File \| Issue`. | Written regardless of `--json`; an empty value is refused. `--dry-run` is refused here: check writes nothing to begin with. |
 
-**Output and exit codes** -- prints `ok: <n>`, `missing: <list>`, `extra: <list>`, `stale: <list>`, `hand-edited: <list>`. `--json`: the full report, same four buckets plus `ok`. Exit 0 when missing/extra/stale/hand-edited are all empty; exit **1** on any drift. An unreadable `--canon-values` is exit **2**, not 1 — which matters here more than on `generate`: while both answered 1, an unreadable values file and real drift were indistinguishable by exit code alone, and a caller had to read the stderr line to tell a typo from a finding ([#101](https://github.com/zheref/nen/issues/101)). Exit 2 on a missing `--scenario` with no `scenario:` field in the values file, on a missing required flag, or on a regeneration error.
+**Output and exit codes** -- prints the same `source:` and `root:` lines as `generate`, then per surface `surface: <name> -> <location>` with indented `ok: <n>`, `missing:`, `extra:`, `stale:`, `hand-edited:` lists (each `(none)` when empty) and a `foreign (the consumer's own, not drift):` line when there are any, closing with `drift: none` or `drift: yes`. `--json`: `{ contract: "nen.canon.mirror.check/v0.1", source, ref, scenario, root, drift, surfaces: [{ surface, location, ok, missing, extra, stale, handEdited, foreign }] }`. Exit 0 when no surface has drift; exit **1** iff any surface has a missing, extra, stale or hand-edited entry. An unreadable `--canon-values`, an unbound token, an unknown surface or a missing flag is exit **2**, not 1 -- a typo and a finding must stay distinguishable by exit code alone ([#101](https://github.com/zheref/nen/issues/101)).
 
 **Example**
 
 ```bash
-nen canon mirror check --rules-dir handbooks/rules --canon-values .claude/canon-values.yml \
-  --mirror-dir .claude/mirror --ref v0.2.0 \
-  --header-template "<!-- GENERATED from {file} at {ref} for {scenario}; do not edit -->" \
-  --header-pattern "GENERATED from (?<file>\S+) at (?<ref>\S+) for (?<scenario>\S+)" \
-  --not-mirrored README.md
+nen canon mirror check --repo /path/to/consumer \
+  --rules-dir ../handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules \
+  --canon-values .claude/canon-values.yml \
+  --source owner/handbooks --ref v0.7.0 --not-mirrored README.md,placeholders.md \
+  --markdown-out .nen/canon-drift.md
 ```
 ```text
-ok: 1
-missing: (none)
-extra: (none)
-stale: CON-38.md
-hand-edited: (none)
+source: owner/handbooks@v0.7.0 (scenario swiftui-tca-uzf-v2)
+root: /path/to/consumer
+surface: claude-code -> .claude/rules/
+  ok: 0
+  missing: (none)
+  extra: (none)
+  stale: .claude/rules/00-overview.md, .claude/rules/01-folder-layout.md, ...
+  hand-edited: (none)
+  foreign (the consumer's own, not drift): .claude/rules/house-style.md
+surface: codex -> AGENTS.md
+  ok: 0
+  missing: (none)
+  extra: (none)
+  stale: 00-overview.md, 01-folder-layout.md, ...
+  hand-edited: (none)
+drift: yes
 ```
-(shape derived from `src/canon/mirror.ts`'s `checkMirror` and `src/canon/mirror.test.ts`)
+(the pin moved to `v0.7.0` and nothing was regenerated: every file is stale on every surface, and the fix is one `generate` at the new pin; shape derived from `src/canon/mirror.ts`'s `checkSurface` and `src/canon/command.test.ts`)
+
+**Driving the pair from a skill or CI.** The sequence a sync skill runs is: `nen canon pin --repo <consumer> --json` to learn the canonical repository and the tag the consumer is pinned to; check that repository out **at the tag**; `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; `nen canon mirror generate --repo <consumer> --rules-dir <that> --canon-values <path>` (source and ref default to the recorded pin; its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check` with the same inputs and fails on exit 1 -- the drift check `CON-13` asks for. Repinning is then one edit to `maintained_tools[].pinned` followed by one `generate`; a repin without the regenerate is what `check` reports as stale on every surface.
 
 <a id="family-quality"></a>
 
@@ -8932,7 +9018,7 @@ fields; [#227](https://github.com/zheref/nen/issues/227)) and the verbatim one:
 | personas | **no markdown persona file** — every one becomes a `## <name>` section of a generated `AGENTS.md` ([docs](https://learn.chatgpt.com/docs/agent-configuration/agents-md)); with `--models`, also one `agents/<stem>.toml` apiece (`name`, `description`, `model`, `developer_instructions`) for `.codex/agents/` | one file per persona under `<out>/agents/<stem>.md`, frontmatter reduced to `name`, `description`, `model`, `readonly`, `is_background` ([docs](https://cursor.com/docs/agent/subagents)) | one file per persona under `<out>/agents/<stem>.md`, keys `name`, `description`, `tools`, `mainAgent`, `subagent`, `model`, `commandExecutionPolicy`, `mcpServers`, `skills` ([docs](https://antigravity.google/docs/subagents)) | `agents/<stem>.md`, verbatim |
 | hooks (`--hooks`) | `hooks.json` → `.codex/hooks.json`, grouped shape, events `Stop` / `PreToolUse` / `SessionStart` | `hooks.json` → `.cursor/hooks.json`, `{ version: 1, hooks: { stop, beforeShellExecution, sessionStart } }`, one `{ command }` per entry | `hooks.json` → `.agents/hooks.json`, grouped, `Stop` / `PreToolUse` (matcher `run_command`) / **`PreInvocation`** — there is no SessionStart event | `hooks/hooks.json`, byte for byte |
 | model map (`--models`) | not on the appendix; `config.toml.fragment` carries `[agents] default_subagent_model = <models.codex.fast>`, and the TOML personas carry `model` | **`model: inherit` for every persona** — the page documents `model:` as inherit (the default) or a specific model ID, and a tier alias from `models.cursor` is neither, so the tier is resolved (a bad value is still refused) and reported as `modelMapped: <persona>: <tier> -> inherit`; an explicit `inherit` is carried | `model: <tier>` → `models.antigravity.<tier>`; `inherit` carried; an alias outside `inherit`/`flash`/`pro` is emitted and named | none |
-| rules (`--rules`) | none — `AGENTS.md` is the prose surface, read up to 32 KiB (`project_doc_max_bytes`); an appendix past it is named in the report | `rules/<stem>.mdc` → `.cursor/rules/`, with `description: <stem>` / `alwaysApply: true` frontmatter; no character limit, the page advises under 500 lines | `rules/<stem>.md` → `.agents/rules/`, **12,000-character limit**, over it refused ([docs](https://antigravity.google/docs/rules-workflows)) | none |
+| rules (`--rules`) | none — `AGENTS.md` is the prose surface, read up to 32 KiB (`project_doc_max_bytes`); an appendix past it is named in the report | `rules/<stem>.mdc` → `.cursor/rules/`, with `description: <stem>` / `alwaysApply: true` frontmatter; no character limit, the page advises under 500 lines | `rules/<stem>.md` → `.agents/rules/`, with `trigger: always_on` / `description: <stem>` frontmatter -- the page (re-read 2026-09-28) says every rules file must open with one or is silently discarded; **24,000-byte limit**, over it refused ([docs](https://antigravity.google/docs/rules)) | none |
 | description budget | **186** chars | **30** chars | none | none here (the documented 1,536 is a capabilities fact) |
 | permissions (`--permissions`) | `config.toml` → `.codex/config.toml` (approval policy, sandbox, `writable_roots = []` for the installer to fill) | `cli.json` → `.cursor/cli.json` (`Shell(exe:args)` / `Shell(exe)` allow/deny — the documented grammar — plus whatever `surfaces.cursor` in the source declares, verbatim) | **none** — no allowlist file exists, and `commandExecutionPolicy: auto` would approve arbitrary commands, so nothing is written and the report says `not supported` | `settings.local.json` (`Bash(exe args)` allow/deny), for the consumer to merge |
 
@@ -9055,7 +9141,7 @@ nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --
 | `--manifest <plugin.json>` | no | a Claude plugin manifest (`.claude-plugin/plugin.json`) | a row that documents a plugin manifest of its own — Antigravity's `plugin.json` (`name`, `version`, `description`; `name` and `description` required) — gets `<out>/plugin.json` carrying those keys from the source under a `$generated` marker; every other row reports `manifest: not supported` and writes nothing. A required key the source lacks is refused at exit 2 |
 | `--models <workflow.json>` | no | a `nen/workflow.json` (or any JSON carrying its `models` block) whose `models.<surface>` maps tiers (`frontier`, `deep`, `fast`, `economy`, …) to the surface's own aliases | on a surface whose row maps models, a persona's `model: <tier>` is rewritten to `models.<surface>.<tier>` **from that file**; `model: inherit` is carried as `inherit` where the surface documents it (Cursor, Antigravity) and dropped elsewhere with a `droppedInherit[]` line. **Cursor writes `model: inherit` for every persona whatever the tier** (`modelInheritOnly` on its row): its page documents `model:` as `inherit` — the default — or a specific model ID, and a tier alias such as `composer` or `grok` from `models.cursor` is not a documented ID; the tier is still resolved, so an unknown value is still refused, and reaches only the report as `modelMapped: <persona>: <tier> -> inherit (cursor writes no model id)` (`modelMapped[]` under `--json`). Codex and Antigravity write the alias as before; a tier the file does not declare is refused at exit 2 by pointer (`models.<surface>.<tier>`), as is a file with no `models.<surface>` at all. An alias outside the surface's documented set (Antigravity documents `inherit`, `flash`, `pro`) is emitted verbatim — it is the repository's own word — and named in `undocumentedAliases[]`. **Codex** additionally gets `config.toml.fragment` carrying `[agents]` / `default_subagent_model = "<models.codex.fast>"` — a fragment the consumer merges; `config.toml` itself is never a destination for it — and one `agents/<stem>.toml` per persona for `.codex/agents/` |
 | `--source-surface <name>` | no | the surface the **source** personas were written for; default `claude` — the key every real workflow spells its Claude Code row under | a canonical persona file is read directly by one surface, so its `model:` carries *that* surface's alias (`opus`), never a tier — rewriting the source to tiers would break the surface that reads it unmirrored. With `--models`, a persona's value is resolved in two steps: first as a tier of `models.<surface>` (written as-is), else as an alias under `models.<source-surface>` read back to **the one tier** it sits under (`opus` → `deep`), then tier → `models.<surface>.<tier>` (`deep` → `pro` on Antigravity). An alias under two tiers of the source row, a value that is neither, or a source row the file lacks when a persona needs it are each refused at exit 2 by pointer; in the last case, when exactly one declared row *would* resolve the alias, the refusal ends `Did you mean --source-surface <name>?` (two candidates is a choice, and nen names none). The value is a key of the caller's own `models` matrix and nothing else — a workflow that spells the row `claude-code` passes `--source-surface claude-code` |
-| `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity), the marker first and the source verbatim under it — its invocation mentions are **not** rewritten. Over the surface's documented character limit (Antigravity: 12,000) it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
+| `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity, with `trigger: always_on` / `description: <stem>` prepended, because that surface discards a rules file with no frontmatter), the marker first and the source verbatim under it — its invocation mentions are **not** rewritten. Over the surface's documented limit (Antigravity: 24,000 bytes) it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
 | `--permissions <file.json>` | no | a permissions source: `{ "allow": [ { "exe", "args" } ], "deny": [ … ], "surfaces": { "<surface>": { "allow": [ "<row>" ], "deny": [ "<row>" ], "network_access": <boolean> } } }`; every other key is ignored | emitted as the row's pack: `settings.local.json` with `Bash(exe args)` patterns (claude-code); `cli.json` with `Shell(exe:args)` — or `Shell(exe)` when `args` is empty — patterns, Cursor's documented grammar (`Shell(commandBase)` with an optional `:args`; never `Shell(exe args)`) (cursor); `config.toml` stating the approval policy and workspace-write sandbox with **`writable_roots = []`** under a comment naming what fills it — the working tree, each linked worktree, the git common dir — never a placeholder string a consumer could copy beside a live setting; the report says `writableRootsPlaceholder: true` and adds a `note:` so an installer knows to fill it (codex). **The source decides `network_access`**: the sandbox block carries a `network_access = true|false` line **only when `surfaces.codex.network_access` declares it** (a boolean; anything else is refused by pointer); absent, no line is written — Codex's own default applies, nen never chooses a boundary the source did not state — and the report says `network: not declared (no network_access line; the surface's own default applies)`, or `network: declared (network_access = true)` when it was (`permissionNetworkAccess` under `--json`: the boolean, or null). A `network_access` under a surface whose pack states no sandbox (cursor, claude-code) is refused, since it has no line to land on. **Nothing the source did not declare is written**: the `Read(./**)` / `Write(./**)` grants Cursor needs come from a `surfaces.cursor.allow` block in the source, transcribed verbatim after the shared rows *for that surface only* and counted in the report as `permissions: written (+N surface rows)` (`permissionSurfaceRows` under `--json`); a block for a surface whose pack has no rows (codex) is refused. Antigravity has no allowlist file, so nothing is written and the report says `permissions: not supported`. A malformed row is refused by pointer, as is a `(` or `)` in an `exe` or `args` — every pack wraps the row in the surface's own `Tool(...)`, and a parenthesis inside it would close that early |
 | `--stamp <version>` | no | `MAJOR.MINOR.PATCH` of the source (a `-pre`/`+build` tail is accepted and ignored) | written into every marker as `, stamp: <version>`; anything not version-shaped is refused at exit 2 |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
@@ -9160,7 +9246,7 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "undocumentedAliases": ["illumi: flash_lite"],
   "modelMapped": [],
   "hooks": "written",
-  "rules": { "path": "rules/rules.md", "chars": 4210, "limit": 12000 },
+  "rules": { "path": "rules/rules.md", "chars": 4257, "bytes": 4301, "limit": 24000 },
   "permissions": "not supported",
   "manifest": "none",
   "notes": [],
@@ -9202,7 +9288,7 @@ v0.13.0 `hookEvents[]` (every event the surface documents, in its own spelling),
 states the number and "documented" with the page where one does), `permissionsShape` (the pack shape
 `nen surface mirror generate --permissions` writes: `claude-settings`, `codex-toml`, `cursor-cli-json`, or
 null where it writes none), then `source` and a `caveat`. In text the new facts render as `permissions
-shape:`, `hook events:`, `rules file: … (limit N chars)` and `description budget: N chars (source)`.
+shape:`, `hook events:`, `rules file: … (limit N bytes)` and `description budget: N chars (source)`.
 
 **`--json`** — one surface: `{ contract: "nen.surface.capabilities/v0.1", surface, ask, subagent, hooks, worktreeIsolation,
 sandboxExtraRoots, artifact, notify, permissionsFile, agentModelKey, hookEvents, rulesFile, rulesLimit, descriptionBudget,

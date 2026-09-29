@@ -101,12 +101,14 @@ export interface RepoRegistry {
    * which is how five independent skill ports each rediscovered that the
    * registry's own source repo "is not in this registry" (zheref/nen#27).
    *
-   * ONLY THE SLUG IS IN THIS LIST. Each entry carries more (`role`, `status`,
-   * `reason`, ...), and that prose is the target repository's business, on the
-   * same discipline that keeps `callerPins` raw: the slug is the one fact
-   * token resolution needs, and modelling the rest would be this binary
-   * learning another repository's onboarding vocabulary. The one further
-   * field nen DOES act on -- `scenario` -- is on `listed`, below.
+   * ONLY THE SLUG IS IN THIS LIST -- with the two exceptions `toolPins` and
+   * `listed` state. Each entry carries more (`role`, `status`, `reason`, ...),
+   * and that prose is the target repository's business, on the same
+   * discipline that keeps `callerPins` raw: the slug is the one fact token
+   * resolution needs, and modelling the rest would be this binary learning
+   * another repository's onboarding vocabulary. The two further fields nen
+   * DOES act on -- the canon `pinned` tag and the `scenario` -- are on
+   * `toolPins` and `listed`, below.
    */
   readonly maintainedTools: readonly string[];
   /** `owner/name` slugs listed under `pending_onboarding`, in file order. See `maintainedTools`. */
@@ -125,6 +127,19 @@ export interface RepoRegistry {
    * consumers[] states one.
    */
   readonly listed?: readonly ListedEntry[];
+  /**
+   * `owner/name` -> the tag a `maintained_tools` entry records as `pinned`,
+   * for the entries that record one. THE CANON PIN (CON-13): a consumer
+   * repository mirrors the canonical handbooks repository at a TAG, and that
+   * tag has to be data a sync (`nen canon mirror`) and a drift check can
+   * read, not prose in a `$comment`. It lives on the `maintained_tools` entry
+   * because that is where a canon repository is recorded: a `consumers[]`
+   * entry classifies as a consumer at G2 (../repo/classify.ts), a canon
+   * repository stands at G4, and `maintained_tools` is the list whose entries
+   * classify as canon. The same `pinned` spelling `consumers[]` uses, so a
+   * reader meets one word for one idea.
+   */
+  readonly toolPins: Readonly<Record<string, string>>;
   byRepo(repo: string): ConsumerEntry | undefined;
   byCode(code: string): ConsumerEntry | undefined;
   /** Consumers whose `consumes` intersects `changed`. Order is the file's. */
@@ -146,9 +161,14 @@ const CALLER_PIN_SUFFIX = "_pinned";
 // the three sections as one source. A number or an object there used to pass
 // unread, since nothing consulted the field; now that a lookup acts on it, a
 // malformed one is refused by pointer rather than read as "no scenario".
-function parseListedRepos(path: string, section: ListedSection, raw: unknown): readonly ListedEntry[] {
+interface ListedRepo extends ListedEntry {
+  /** The entry's `pinned` tag, when it records one (a canon pin -- see `RepoRegistry.toolPins`). */
+  readonly pinned: string | null;
+}
+
+function parseListedRepos(path: string, section: ListedSection, raw: unknown): readonly ListedRepo[] {
   if (raw === undefined || raw === null) return [];
-  return requireArray(path, section, raw).map((entry, index): ListedEntry => {
+  return requireArray(path, section, raw).map((entry, index): ListedRepo => {
     const pointer = `${section}[${index}]`;
     const record = requireRecord(path, pointer, entry);
     const repo = requireString(path, `${pointer}.repo`, record["repo"]);
@@ -164,6 +184,7 @@ function parseListedRepos(path: string, section: ListedSection, raw: unknown): r
       section,
       index,
       scenario: optionalString(path, `${pointer}.scenario`, record["scenario"]),
+      pinned: optionalString(path, `${pointer}.pinned`, record["pinned"]),
     };
   });
 }
@@ -269,8 +290,13 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
 
   const maintained = parseListedRepos(path, "maintained_tools", root["maintained_tools"]);
   const pending = parseListedRepos(path, "pending_onboarding", root["pending_onboarding"]);
-  const slugs = (entries: readonly ListedEntry[]): readonly string[] =>
+  const slugs = (entries: readonly ListedRepo[]): readonly string[] =>
     entries.map((entry): string => entry.repo);
+  const toolPins: Record<string, string> = {};
+  for (const tool of maintained) if (tool.pinned !== null) toolPins[tool.repo] = tool.pinned;
+  // `listed` carries the four fields its type names and not the pin, which
+  // `toolPins` already holds keyed by slug -- one home per fact.
+  const asEntry = ({ repo, section, index, scenario }: ListedRepo): ListedEntry => ({ repo, section, index, scenario });
 
   return {
     path,
@@ -279,7 +305,8 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     productCodes,
     maintainedTools: slugs(maintained),
     pendingOnboarding: slugs(pending),
-    listed: [...maintained, ...pending],
+    listed: [...maintained, ...pending].map(asEntry),
+    toolPins,
     byRepo: (repo): ConsumerEntry | undefined => byRepoIndex.get(repo),
     byCode: (code): ConsumerEntry | undefined => byCodeIndex.get(code),
     affectedBy: (changed): readonly ConsumerEntry[] => {

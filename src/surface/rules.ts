@@ -83,6 +83,67 @@ export type HookShape = "verbatim" | "groups" | "cursor-v1";
 /** The permission-pack file shapes this binary knows how to write. */
 export type PermissionShape = "claude-settings" | "codex-toml" | "cursor-cli-json";
 
+/**
+ * How a surface auto-loads a consumer repository's rules, for the canon
+ * mirror (../canon/mirror.ts). Two shapes, and the shape is the whole
+ * difference between the surfaces:
+ *
+ * - `directory`: the surface reads every file of a given extension in one
+ *   directory at the repository root, so each canon rule file becomes one
+ *   file there, `<dir>/<stem><extension>`, with the frontmatter the surface
+ *   needs above it (or none). Only the directory's IMMEDIATE children are the
+ *   mirror's: a consumer's own rules can live in a subdirectory untouched.
+ * - `document`: the surface reads one prose file (an `AGENTS.md`) and has no
+ *   rules directory, so the whole rule set lands as ONE managed block inside
+ *   that file, between a BEGIN and an END marker; the consumer's own prose
+ *   outside the block is preserved byte for byte.
+ */
+export type CanonMirrorRule =
+  | {
+      readonly kind: "directory";
+      /** Repository-relative, `/`-separated, e.g. `.claude/rules`. */
+      readonly dir: string;
+      /** Appended to the canon file's stem to make the filename. */
+      readonly extension: string;
+      /**
+       * Frontmatter the surface needs at the top of a rules file, with
+       * `{name}` standing for the canon file's stem; null where the surface
+       * reads a file with none. A surface that DISCARDS a file without
+       * frontmatter (antigravity) must state one here, or the mirror is a
+       * mirror nothing loads.
+       */
+      readonly frontmatter: string | null;
+      /**
+       * The documented per-file ceiling in BYTES, or null. A canon file whose
+       * rendering exceeds it is REFUSED at generate time, never written
+       * truncated: the surface would cut it silently, and a rule the surface
+       * never reads is a rule nobody follows. The fix is upstream -- split the
+       * canon file -- and the refusal says so.
+       */
+      readonly limitBytes: number | null;
+      /** Advice the page gives about length, in lines, reported and never enforced; or null. */
+      readonly lineGuidance: number | null;
+      readonly source: string;
+      /** A fact about loading on this surface a caller should know; printed with the report, never acted on. */
+      readonly caveat: string;
+    }
+  | {
+      readonly kind: "document";
+      /** Repository-relative file the surface reads as prose, e.g. `AGENTS.md`. */
+      readonly file: string;
+      /**
+       * The size past which the surface documents that it stops reading the
+       * document, in bytes, or null. Never a refusal -- the block is written
+       * whole -- but the generate report names a block over it, because the
+       * rules past the cut-off are rules the surface never met.
+       */
+      readonly warnBytes: number | null;
+      /** The setting a consumer raises to read past `warnBytes`, named in that note; null where none is documented. */
+      readonly warnSetting: string | null;
+      readonly source: string;
+      readonly caveat: string;
+    };
+
 export interface SurfaceRow {
   /** The `--surface` value that selects this row. */
   readonly surface: string;
@@ -202,6 +263,17 @@ export interface SurfaceRow {
     readonly source: string;
   } | null;
   /**
+   * Where the surface auto-loads a CONSUMER REPOSITORY's rules from, for
+   * `nen canon mirror` (CON-13's per-surface mirror), or null for a surface
+   * that documents no such location. Distinct from `rules` above, which is
+   * where a `--rules` document lands inside a staged skills mirror: this one
+   * is a path relative to the consumer's own root, and the thing written
+   * there is the canonical stack rule set, one file per canon file (a
+   * `directory`) or one managed block inside the surface's prose document
+   * (a `document`).
+   */
+  readonly canonMirror: CanonMirrorRule | null;
+  /**
    * The length past which a skill's `description` is not shown whole, in
    * characters, or null. A longer description is kept AS-IS and a `summary:`
    * key holding its first sentence trimmed to the budget is ADDED (so
@@ -253,11 +325,24 @@ export interface SurfaceRow {
 }
 
 /**
- * The documented rules-file ceiling on Antigravity: "Rules files are limited to
- * 12,000 characters each." Read 2026-09-20 from
- * https://antigravity.google/docs/rules-workflows.
+ * The documented rules-file ceiling on Antigravity: "Antigravity truncates any
+ * single rule file that exceeds 24,000 bytes." Re-read 2026-09-28 from
+ * https://antigravity.google/docs/rules (the page the row cited on 2026-09-20,
+ * `/docs/rules-workflows`, now redirects there and the figure moved from
+ * 12,000 characters to 24,000 bytes). The same page documents that every
+ * `.md` under `rules/` "must start with YAML frontmatter declaring a valid
+ * `trigger`" -- a file without one is silently discarded -- which is why the
+ * antigravity row's rules frontmatter is no longer null.
  */
-export const ANTIGRAVITY_RULES_LIMIT = 12_000;
+export const ANTIGRAVITY_RULES_LIMIT = 24_000;
+
+/**
+ * Codex's `project_doc_max_bytes` default, and the setting a consumer raises
+ * to read past it: "Codex skips empty files and stops adding files once the
+ * combined size reaches the limit." Re-read 2026-09-28 from
+ * https://learn.chatgpt.com/docs/agent-configuration/agents-md.
+ */
+export const CODEX_PROJECT_DOC_SETTING = "project_doc_max_bytes in .codex/config.toml";
 
 /**
  * The two description budgets no page states. Measured 2026-09-19 in the
@@ -340,6 +425,18 @@ export const SURFACES: readonly SurfaceRow[] = [
       source: "https://learn.chatgpt.com/docs/config-file/config-reference",
     },
     rules: null,
+    // The surface documents no rules directory: AGENTS.md IS the rules
+    // location, read root-down and concatenated. So the canon rule set lands
+    // as one managed block inside the consumer's own AGENTS.md.
+    canonMirror: {
+      kind: "document",
+      file: "AGENTS.md",
+      warnBytes: CODEX_PROJECT_DOC_MAX_BYTES,
+      warnSetting: CODEX_PROJECT_DOC_SETTING,
+      source: "https://learn.chatgpt.com/docs/agent-configuration/agents-md",
+      caveat:
+        "AGENTS.md is read as plain prose by more than this surface: Cursor and Antigravity read it at any level, and Claude Code (v2.1.277+) reads it when the consumer has no CLAUDE.md, .claude/CLAUDE.md or CLAUDE.local.md at or above the root -- so a consumer rendering another surface beside this one loads the canon twice there unless it keeps a CLAUDE.md. The Claude Code setting that reads both files is honoured in user and managed scope only and cannot ship in a repository. This surface stops reading project documents at project_doc_max_bytes (32 KiB by default)",
+    },
     descriptionBudget: CODEX_DESCRIPTION_BUDGET,
     descriptionBudgetSource: MEASURED,
     permissions: {
@@ -423,6 +520,21 @@ export const SURFACES: readonly SurfaceRow[] = [
       frontmatter: "---\ndescription: {name}\nalwaysApply: true\n---\n",
       source: "https://cursor.com/docs/context/rules",
     },
+    canonMirror: {
+      kind: "directory",
+      dir: ".cursor/rules",
+      // "A plain .md file in .cursor/rules is ignored by the rules system
+      // because it has no frontmatter"; `alwaysApply: true` means "Always
+      // included. Globs and description are ignored."
+      extension: ".mdc",
+      frontmatter: "---\ndescription: {name}\nalwaysApply: true\n---\n",
+      limitBytes: null,
+      // "Keep rules under 500 lines" -- advice, not a ceiling.
+      lineGuidance: 500,
+      source: "https://cursor.com/docs/context/rules",
+      caveat:
+        "a plain .md under .cursor/rules is ignored, so each canon file lands as .mdc with alwaysApply: true; nested directories are read too, so a consumer's own rules can live in one. This surface also reads an AGENTS.md at the root as plain prose",
+    },
     descriptionBudget: CURSOR_DESCRIPTION_BUDGET,
     descriptionBudgetSource: MEASURED,
     permissions: {
@@ -490,8 +602,23 @@ export const SURFACES: readonly SurfaceRow[] = [
       documentedPath: ".agents/rules/<stem>.md",
       limit: ANTIGRAVITY_RULES_LIMIT,
       lineGuidance: null,
-      frontmatter: null,
-      source: "https://antigravity.google/docs/rules-workflows",
+      // "Every .md file inside rules/ must start with YAML frontmatter
+      // declaring a valid trigger" (always_on | model_decision | glob |
+      // manual); a rules document is always on, and `description` is
+      // "recommended for all rules".
+      frontmatter: "---\ntrigger: always_on\ndescription: {name}\n---\n",
+      source: "https://antigravity.google/docs/rules",
+    },
+    canonMirror: {
+      kind: "directory",
+      dir: ".agents/rules",
+      extension: ".md",
+      frontmatter: "---\ntrigger: always_on\ndescription: {name}\n---\n",
+      limitBytes: ANTIGRAVITY_RULES_LIMIT,
+      lineGuidance: null,
+      source: "https://antigravity.google/docs/rules",
+      caveat:
+        "every .md under .agents/rules/ must start with frontmatter declaring a trigger or the surface silently discards it, so each canon file lands with trigger: always_on; a file over 24,000 bytes is truncated by the surface, so nen refuses to write one instead; only the directory's immediate children are scanned. This surface also reads an AGENTS.md at any level as plain, always-on prose",
     },
     descriptionBudget: null,
     descriptionBudgetSource: null,
@@ -549,6 +676,22 @@ export const SURFACES: readonly SurfaceRow[] = [
     modelAliases: ["sonnet", "opus", "haiku", "fable", "inherit"],
     subagentModelFragment: null,
     rules: null,
+    // The skills row is the verbatim plugin identity, but the RULES location
+    // is a documented fact about the surface all the same: "Place markdown
+    // files in your project's .claude/rules/ directory ... All .md files are
+    // discovered recursively"; "Rules without paths frontmatter are loaded at
+    // launch with the same priority as .claude/CLAUDE.md". Read 2026-09-28.
+    canonMirror: {
+      kind: "directory",
+      dir: ".claude/rules",
+      extension: ".md",
+      frontmatter: null,
+      limitBytes: null,
+      lineGuidance: null,
+      source: "https://code.claude.com/docs/en/memory",
+      caveat:
+        ".claude/rules/ is discovered recursively and only its immediate children are this mirror's, so a consumer's own rules can live in a subdirectory; the files load beside CLAUDE.md, and beside AGENTS.md when no CLAUDE.md, .claude/CLAUDE.md or CLAUDE.local.md exists at or above the root (v2.1.277+)",
+    },
     // The page documents 1,536 characters for description + when_to_use
     // combined, but a verbatim row adds no summary key: the number lives in
     // ./capabilities.ts, where it is a fact and not an instruction.
@@ -593,4 +736,19 @@ export function invocationFor(row: SurfaceRow, name: string): string | null {
 /** `<skillsDir>/<name>/SKILL.md`, or `<name>/SKILL.md` when the row's skills sit at the root. */
 export function skillPath(row: SurfaceRow, name: string): string {
   return row.skillsDir === "" ? `${name}/SKILL.md` : `${row.skillsDir}/${name}/SKILL.md`;
+}
+
+/** The rows a canon mirror can be rendered into: every surface that documents a rules location. */
+export function canonSurfaces(): readonly SurfaceRow[] {
+  return SURFACES.filter((row): boolean => row.canonMirror !== null);
+}
+
+/** Those rows' names, for a refusal that lists what it would have accepted. */
+export function canonSurfaceNames(): readonly string[] {
+  return canonSurfaces().map((row): string => row.surface);
+}
+
+/** The repository-relative location a canon rule writes to, for a report line: the directory with a trailing `/`, or the one file. */
+export function canonLocation(rule: CanonMirrorRule): string {
+  return rule.kind === "directory" ? `${rule.dir}/` : rule.file;
 }
