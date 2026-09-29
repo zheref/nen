@@ -225,11 +225,16 @@ describe("nen commit format -- nen/workflow.json's attribution-trailer policy", 
     expect(result.err.join("\n")).toContain("'Co-Authored-By'");
   });
 
-  it("does not read the policy at all when the invocation carries no trailer", async () => {
-    // A message that could not have violated the policy must not fail on one.
+  it("reads the policy on EVERY run now, trailer or not: commits.subjectCase can refuse any subject (zheref/nen#263)", async () => {
+    // No message is one that could not have violated the policy any more, so a
+    // malformed file is exit 1 without a --trailer too -- nen will not shape a
+    // message under a policy it could not read.
     const root = repoWithPolicy({ allowedAttributionTrailers: [] });
     writeFileSync(join(root, "nen", "workflow.json"), "{ not json");
-    expect((await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root)).code).toBe(0);
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/states the commit policy -- which attribution trailers a commit may carry, and commits\.subjectCase -- and nen will not shape a message under a policy it could not read/);
   });
 
   it("exits 1, not 2, on a MALFORMED policy -- the invocation was correct", async () => {
@@ -246,7 +251,7 @@ describe("nen commit format -- nen/workflow.json's attribution-trailer policy", 
   });
 });
 
-// ── the repository's own commitlint subject-case rule (part of zheref/nen#263)
+// ── the repository's own commitlint subject-case rule (zheref/nen#263)
 
 /** A checkout root (it has a `.git` entry) holding exactly these commitlint files, and optionally a trailer policy. */
 function repoWithCommitlint(files: Record<string, string>, commits?: unknown): string {
@@ -258,7 +263,7 @@ function repoWithCommitlint(files: Record<string, string>, commits?: unknown): s
 
 const CONVENTIONAL_RC = { ".commitlintrc.json": JSON.stringify({ extends: ["@commitlint/config-conventional"] }) };
 
-describe("nen commit format -- the repository's commitlint subject-case rule (part of zheref/nen#263)", () => {
+describe("nen commit format -- the repository's commitlint subject-case rule (zheref/nen#263)", () => {
   it("refuses the issue's own subjects at exit 2, before any message is printed, with commitlint's verdict", async () => {
     const root = repoWithCommitlint(CONVENTIONAL_RC);
     for (const subject of ["Start the timer", "Escape key closes the modal"]) {
@@ -399,5 +404,75 @@ describe("nen commit format -- the repository's commitlint subject-case rule (pa
     const missing = join(tmpdir(), "nen-commit-no-such-repo", "nowhere");
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, missing);
     expect(result.code).toBe(2);
+  });
+});
+
+describe("nen commit format -- commits.subjectCase in nen/workflow.json, the rule declared as data (zheref/nen#263)", () => {
+  const KRO_PWA = { "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" };
+
+  it("refuses 'Escape closes it' at exit 2 in a kro-pwa-shaped repo that declares 'config-conventional'", async () => {
+    const root = repoWithCommitlint(KRO_PWA, { subjectCase: "config-conventional" });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "Escape closes it"], false, root);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err).toEqual([
+      expect.stringMatching(
+        /^nen: subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen\/workflow\.json, 'config-conventional'.*nen applies it because .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute\): subject must not be sentence-case\./,
+      ),
+    ]);
+  });
+
+  it("warns at exit 0 in the SAME repo without the key -- only the declaration binds", async () => {
+    const root = repoWithCommitlint(KRO_PWA);
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "Escape closes it"], false, root);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: warning: subject-case NOT checked: .*commits\.subjectCase/)]);
+  });
+
+  it("prints the message and a note naming nen/workflow.json when the subject passes the declared rule", async () => {
+    const root = repoWithCommitlint(KRO_PWA, { subjectCase: "config-conventional" });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "escape closes it"], true, root);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ message: "fix: escape closes it" });
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: subject-case checked against commits\.subjectCase in .*nen\/workflow\.json/)]);
+  });
+
+  it("applies an explicit tuple: [2, 'always', 'lower-case'] refuses a capitalized subject", async () => {
+    const root = repoWithCommitlint(KRO_PWA, { subjectCase: [2, "always", "lower-case"] });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "Start the timer"], false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/the rule \[2,"always",\["lower-case"\]\].*subject must be lower-case/);
+  });
+
+  it("lets a readable data commitlint config win over the declaration, and says the declaration was not applied", async () => {
+    const root = repoWithCommitlint(CONVENTIONAL_RC, { subjectCase: [2, "always", "upper-case"] });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "start the timer"], false, root);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["fix: start the timer"]);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: commits\.subjectCase in .*nen\/workflow\.json is not applied: .*\.commitlintrc\.json states the commitlint config as data/)]);
+  });
+
+  it("applies where there is no commitlint config at all", async () => {
+    const root = repoWithCommitlint({}, { subjectCase: "config-conventional" });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "Start the timer"], false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("because no commitlint config was found at");
+  });
+
+  it.each([
+    ["conventional", "commits.subjectCase"],
+    [[3, "never", "lower-case"], "commits.subjectCase[0]"],
+    [[2, "never", ["shouty-case"]], "commits.subjectCase[2][0]"],
+  ])("refuses a malformed commits.subjectCase %j at exit 1, by pointer %s", async (subjectCase, pointer) => {
+    const root = repoWithCommitlint(KRO_PWA, { subjectCase });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "start the timer"], false, root);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toContain(pointer);
+  });
+
+  it("leaves a repository with no key and no commitlint config unchanged", async () => {
+    const root = repoWithCommitlint({}, { allowedAttributionTrailers: [] });
+    expect(await capture(["commit", "format", "--type", "fix", "--subject", "Start the timer"], false, root)).toMatchObject({ code: 0, out: ["fix: Start the timer"], err: [] });
   });
 });

@@ -3,15 +3,19 @@
 //
 // THE TWO THINGS THIS VERB READS FROM A REPOSITORY, AND WHY NEITHER IS A
 // LITERAL. The first is the trailer policy, below. The second
-// (part of zheref/nen#263) is the repository's own commitlint `subject-case`
-// rule, read by ./commitlint.ts from where commitlint reads it: when the
-// config is DATA, a subject commitlint's commit-msg hook would refuse is
-// refused HERE, at the same exit as every other shape violation, before the
-// commit exists; when it is CODE, nen only warns that it did not check, and
-// commitlint still refuses after the commit exists (./commitlint.ts's header
-// states that limit). With no commitlint config the verb is unchanged. Unlike
-// the trailer policy it is read on EVERY invocation, because every subject
-// can break it.
+// (zheref/nen#263) is the repository's own commitlint `subject-case` rule,
+// read by ./commitlint.ts from where commitlint reads it -- or, where that
+// config is code nen does not execute (or there is none), from the rule the
+// repository DECLARES in nen/workflow.json's `commits.subjectCase`. Either
+// way a subject the rule refuses is refused HERE, at the same exit as every
+// other shape violation, before the commit exists; ./commitlint.ts's header
+// states the precedence between the two. With neither, the verb is
+// unchanged.
+//
+// nen/workflow.json IS THEREFORE READ ON EVERY INVOCATION, not only when a
+// --trailer is carried: `commits.subjectCase` can refuse any subject, so no
+// message is one that could not have violated the policy -- the argument that
+// used to let a trailer-less run skip the file no longer holds for it.
 //
 // ./format.ts's header is explicit that a trailer KEY is the caller's data and
 // never a name baked in here. That rule is unchanged; what is added is the
@@ -31,12 +35,12 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { emit, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { SchemaError } from "../schema/errors.js";
-import { attributionRefusalMessages, loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
+import { attributionRefusalMessages, loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
 import { PROGRAM } from "../version.js";
 import { proofRelativePath } from "../shu/proof.js";
 import { readTextFile } from "../cli/inputs.js";
 import { runCheck } from "./check.js";
-import { CommitlintConfigError, subjectCaseFindings } from "./commitlint.js";
+import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
 import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
 import {
   COMMIT_TYPES,
@@ -80,9 +84,9 @@ usage:
               are the caller's data, never a literal baked in here -- see
               src/commit/format.ts's header for why.
   --repo      the repository whose ${WORKFLOW_FILE} states the trailer policy
-              (read only when this invocation carries at least one --trailer)
-              and whose commitlint config states 'subject-case' (read on
-              every invocation). Defaults to the current directory.
+              and commits.subjectCase, and whose commitlint config states
+              'subject-case' -- both read on every invocation. Defaults to the
+              current directory.
 
 Validates shape (a declared type, a non-empty subject under 72 characters, no
 trailing punctuation) -- never content. What changed and why stays yours to
@@ -97,18 +101,26 @@ default ('never' sentence-, start-, pascal-, upper-case) when it is extended.
 The subject commitlint's parser would find in the header gets commitlint's
 own verdict (quoted and backticked spans are not checked): a break at level 2
 is refused at exit 2 with the rest; level 1 is a 'warning:' line at exit 0;
-level 0 and no config change nothing. A JavaScript or TypeScript config is
-NEVER executed: nen prints a warning naming the file and saying the rule was
-NOT checked, with config-conventional's verdict for reference only, at exit 0
--- so a repository whose commitlint config is code still meets a subject-case
-refusal from commitlint AFTER the commit exists. The same warning covers a
-preset other than config-conventional that may set the rule, a package.json or
-package.yaml whose 'commitlint' key will not parse, and a '!' header under a
-config with no parserPreset (commitlint's default parser does not read it). A
-.commitlintrc that is present and malformed is exit 1: nen will not judge a
-subject under a rule it could not read. Parent directories, commitlint's
-global config and a hook's --config are not read; with no config found and no
-.git entry under --repo, a warning says so and names --repo.
+level 0 and no config change nothing. A '!' header under a config with no
+parserPreset gets no verdict (commitlint's default parser does not read it),
+said in a warning. A .commitlintrc that is present and malformed is exit 1:
+nen will not judge a subject under a rule it could not read. Parent
+directories, commitlint's global config and a hook's --config are not read.
+
+A JavaScript or TypeScript commitlint config is NEVER executed, so the rule
+can also be DECLARED as data in ${WORKFLOW_FILE}: 'commits.subjectCase' is
+either "config-conventional" or a commitlint rule [level, "always"|"never",
+cases]. PRECEDENCE: a commitlint config nen can read as data wins -- it is the
+gate commitlint runs -- and a declaration beside it is reported as not
+applied. The declaration is BINDING where the commitlint config is code, where
+nen cannot otherwise read the rule from it (an unresolvable preset, '$import',
+a package 'commitlint' key that will not parse), and where there is none:
+level 2 refuses at exit 2, and a 'note:' line (or the refusal itself) says the
+rule came from ${WORKFLOW_FILE}. With neither -- code and no declaration -- nen
+only warns that the rule was NOT checked, with config-conventional's verdict
+for reference, at exit 0, and commitlint can still refuse AFTER the commit
+exists. With no config, nothing declared, and no .git entry under --repo, a
+warning says so and names --repo.
 
 TRAILER POLICY, WHEN THE REPOSITORY STATES ONE. If ${WORKFLOW_FILE} is present
 under --repo, a --trailer whose key is ATTRIBUTION-shaped and is not listed in
@@ -119,7 +131,8 @@ commit -- plus every key the file's own 'commits.forbiddenTrailers' adds.
 Matching ignores case, because every tool that reads the finished commit does.
 With NO workflow file, nothing is refused and this verb behaves exactly as it
 always has. A workflow file that is present and MALFORMED is exit 1, naming the
-pointer: nen will not shape a message under a policy it could not read.
+pointer, with or without a --trailer: nen will not shape a message under a
+policy it could not read.
 
 'check' ANSWERS ONE QUESTION: is this working copy the one a green build proved?
 '${PROGRAM} shu build' records ${proofRelativePath("<lane>")} when every step
@@ -139,7 +152,8 @@ ref moves. Read the code and decide, as with 'shu coverage --threshold'.
 
 'write' COMMITS THE INDEX with a message file, validated whole under the SAME
 rules 'format' applies (the Conventional Commits shape, this repository's
-attribution-trailer policy, and its commitlint 'subject-case' rule -- one
+attribution-trailer policy, and its 'subject-case' rule -- commitlint's own or
+the one commits.subjectCase declares, under the same precedence -- one
 validator, never a second copy of it).
 
   --message-file <path>   the message; relative paths resolve against --repo.
@@ -162,32 +176,16 @@ composed message is written there and removed afterwards. --json's contract is
 [{ key, value }], dryRun }.`;
 
 /**
- * Every trailer this invocation carries that the repository's policy refuses.
- *
- * IT IS A LIST, NOT THE FIRST ONE. The rest of this CLI reports every problem
- * it can see in one pass (../cli/command.ts's `splitIntegerList` states the
- * argument), and a caller fixing one refused trailer at a time is exactly the
- * round trip that costs a session.
- *
- * THE WORDING ITSELF LIVES IN ../schema/workflow.ts's attributionRefusalMessages
- * NOW, shared with `nen wc squash` -- the other caller that shapes a whole
- * commit message under this same policy -- so the two verbs cannot drift into
- * two different sentences for the same refusal. This function's own job is
- * unchanged: decide WHETHER to look (no trailers, no read at all) and load
- * the policy the caller's --repo points at.
+ * The exit-1 line for a nen/workflow.json that will not load, shared by
+ * `format` and `write`. Exit 1 and not 2: the invocation was correct; the
+ * repository's own file is not, which is "the thing you asked for did not
+ * work" (../index.ts's header). It is also not something either verb may
+ * work AROUND -- a message shaped under a policy nen could not read is a
+ * message nobody checked, whether the policy's say was a trailer or the
+ * subject's case.
  */
-function policyRefusals(context: CommandContext, trailers: readonly Trailer[]): readonly string[] {
-  // NO WORK AT ALL WHEN THERE ARE NO TRAILERS, and that is not an optimisation:
-  // it keeps `nen commit format --type chore --subject x` from touching the
-  // filesystem -- or failing on somebody's malformed policy -- over a message
-  // that could not have violated one.
-  if (trailers.length === 0) return [];
-  const root = assertRepoRoot({ repoFlag: context.repoFlag });
-  const loaded = loadWorkflow(root);
-  return attributionRefusalMessages(
-    loaded,
-    trailers.map((trailer): string => trailer.key),
-  );
+function policyFailure(error: SchemaError, act: "shape a message" | "commit"): string {
+  return `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states the commit policy -- which attribution trailers a commit may carry, and commits.subjectCase -- and nen will not ${act} under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`;
 }
 
 /**
@@ -248,6 +246,7 @@ function runWrite(context: CommandContext): number {
       requireProof: context.args.values["require-proof"] ?? null,
       dryRun: context.args.booleans.has("dry-run"),
       warn: (warning): void => context.io.err(`nen: warning: ${warning}`),
+      note: (note): void => context.io.err(`nen: note: ${note}`),
     });
   } catch (error) {
     if (error instanceof CommitlintConfigError) {
@@ -255,10 +254,9 @@ function runWrite(context: CommandContext): number {
       return 1;
     }
     // A POLICY THAT WILL NOT LOAD IS EXIT 1, NOT 2, exactly as `format`'s own
-    // trailer-policy read: a message shaped under a policy nen could not read
-    // is a message nobody actually checked.
+    // read of the same file.
     if (!(error instanceof SchemaError)) throw error;
-    context.io.err(`nen: ${error.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry, and nen will not commit under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`);
+    context.io.err(policyFailure(error, "commit"));
     return 1;
   }
   if (outcome.kind === "usage") {
@@ -309,30 +307,42 @@ export const commitCommand: Command = {
     // trip this CLI reports whole runs to avoid.
     const refusals = [...validateCommitMessage(input)];
     const failures: string[] = [];
+    // An --repo that does not exist is a RepoRootError, exit 2: both reads
+    // below need the directory.
+    const root = assertRepoRoot({ repoFlag: context.repoFlag });
+    // THE POLICY FILE, READ ONCE, ON EVERY RUN -- its trailer policy AND its
+    // commits.subjectCase (this module's header says why no run skips it).
+    // Every refused trailer is named, not the first: the rest of this CLI
+    // reports every problem it can see in one pass, and the wording is
+    // ../schema/workflow.ts's attributionRefusalMessages, shared with `nen wc
+    // squash` so the two verbs cannot drift into two sentences for one
+    // refusal.
+    let loaded: LoadedWorkflow | null = null;
     try {
-      refusals.push(...policyRefusals(context, input.trailers));
+      loaded = loadWorkflow(root);
+      refusals.push(...attributionRefusalMessages(loaded, input.trailers.map((trailer): string => trailer.key)));
     } catch (error) {
-      // A POLICY THAT WILL NOT LOAD IS EXIT 1, NOT 2. The invocation was
-      // correct; the repository's own file is not, which is "the thing you
-      // asked for did not work" (../index.ts's header). It is also not
-      // something this verb may format AROUND -- a message shaped under a
-      // policy nen could not read is a message nobody checked.
       if (!(error instanceof SchemaError)) throw error;
-      failures.push(
-        `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry, and nen will not shape a message under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`,
-      );
+      failures.push(policyFailure(error, "shape a message"));
     }
     try {
-      // The header exactly as it will be committed -- the first line of the
-      // formatted message -- because commitlint's parser finds the subject
-      // in the header, not in the flag. An --repo that does not exist is a
-      // RepoRootError, exit 2, exactly as it is for the trailer policy.
-      const header = formatCommitMessage(input).split("\n")[0] ?? "";
-      const found = subjectCaseFindings(assertRepoRoot({ repoFlag: context.repoFlag }), header);
-      refusals.push(...found.refusals);
-      // Warnings print whatever else happens: they are facts about the
-      // subject, not about whether this run succeeded.
-      for (const warning of found.warnings) context.io.err(`nen: warning: ${warning}`);
+      if (loaded === null) {
+        // The declaration could not be read, so no verdict is given -- but a
+        // broken commitlint config is still named beside the broken policy,
+        // two problems in one pass.
+        readSubjectCaseRule(root);
+      } else {
+        // The header exactly as it will be committed -- the first line of the
+        // formatted message -- because commitlint's parser finds the subject
+        // in the header, not in the flag.
+        const header = formatCommitMessage(input).split("\n")[0] ?? "";
+        const found = subjectCaseFindings(root, header, declaredSubjectCase(loaded));
+        refusals.push(...found.refusals);
+        // Warnings and notes print whatever else happens: they are facts about
+        // the subject and its rule, not about whether this run succeeded.
+        for (const warning of found.warnings) context.io.err(`nen: warning: ${warning}`);
+        for (const note of found.notes) context.io.err(`nen: note: ${note}`);
+      }
     } catch (error) {
       if (!(error instanceof CommitlintConfigError)) throw error;
       failures.push(commitlintFailure(error));

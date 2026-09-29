@@ -12,15 +12,18 @@
 // trailer this verb accepted that `commit format` would refuse is the drift
 // that sharing prevents.
 //
-// AND THE REPOSITORY'S OWN COMMITLINT `subject-case` RULE (part of
-// zheref/nen#263), through ./commitlint.ts's `subjectCaseFindings` -- the one
-// function `commit format` calls too -- on the composed message's header
-// exactly as it will be committed. A level-2 break joins the shape reasons (exit 2); a level-1
-// break, or a config nen cannot read the rule from, is handed to the
-// caller's `warn` the moment it is known, so it is printed whether the commit
-// then lands, is refused, or fails in git. It is asked here rather than in
-// ../wc/messagefile.ts because that reader is `wc squash`'s too, and this fix
-// is scoped to the two `commit` verbs.
+// AND THE REPOSITORY'S `subject-case` RULE (zheref/nen#263) -- commitlint's
+// own, or the one nen/workflow.json's `commits.subjectCase` declares, under
+// the precedence ./commitlint.ts's header states -- through
+// `subjectCaseFindings`, the one function `commit format` calls too, on the
+// composed message's header exactly as it will be committed. The policy file
+// is therefore read on every run here too, not only when a trailer could
+// trip it. A level-2 break joins the shape reasons (exit 2); a level-1 break,
+// a rule nen could not check, and the note saying which rule applied are
+// handed to the caller's `warn` / `note` the moment they are known, so they
+// are printed whether the commit then lands, is refused, or fails in git. It
+// is asked here rather than in ../wc/messagefile.ts because that reader is
+// `wc squash`'s too, and this change is scoped to the two `commit` verbs.
 //
 // THE PROOF GATE IS `commit check`'s OWN VERDICT (./check.ts's
 // `proofVerdict`), asked and then acted on: `--require-proof <lane>` refuses
@@ -40,7 +43,8 @@ import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { messageFileRefusals, parseCommitMessageFile } from "../wc/messagefile.js";
 import type { Trailer } from "./format.js";
 import { proofVerdict } from "./check.js";
-import { NO_FINDINGS, subjectCaseFindings } from "./commitlint.js";
+import { declaredSubjectCase, NO_FINDINGS, subjectCaseFindings } from "./commitlint.js";
+import { loadWorkflow } from "../schema/workflow.js";
 
 export const WRITE_CONTRACT = "nen.commit.write/v0.1";
 
@@ -81,6 +85,8 @@ export interface WriteOptions {
    * no outcome: a `git commit` the repository's own hook refused, which throws.
    */
   readonly warn: (warning: string) => void;
+  /** The same, for a line that is neither: which rule a verdict came from, or which declaration was not applied. */
+  readonly note: (note: string) => void;
 }
 
 /** Each `--trailer` parsed, or the reasons the shape refused. */
@@ -126,10 +132,13 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
   const parsed = parseCommitMessageFile(message);
   // The subject-case rule is asked even when the shape already failed, so
   // one run names every reason -- and only of a header that parsed, since an
-  // unparsed one has no subject to judge. Throws CommitlintConfigError on a
-  // data config nen could not read; ./command.ts turns that into exit 1.
-  const subjectCase = parsed.ok ? subjectCaseFindings(root, message.split("\n")[0] ?? "") : NO_FINDINGS;
+  // unparsed one has no subject to judge. Throws SchemaError on a malformed
+  // nen/workflow.json and CommitlintConfigError on a .commitlintrc nen could
+  // not read; ./command.ts turns each into exit 1.
+  const declared = declaredSubjectCase(loadWorkflow(root));
+  const subjectCase = parsed.ok ? subjectCaseFindings(root, message.split("\n")[0] ?? "", declared) : NO_FINDINGS;
   for (const warning of subjectCase.warnings) options.warn(warning);
+  for (const note of subjectCase.notes) options.note(note);
   const reasons = [...shapeReasons, ...subjectCase.refusals];
   if (reasons.length > 0) return { kind: "usage", reasons };
   /* c8 ignore next -- messageFileRefusals has just proved the message parses */

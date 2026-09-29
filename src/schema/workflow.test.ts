@@ -339,11 +339,13 @@ describe("refusedTrailerKeys / trailerRefusal / trailerAdmitted", () => {
     allowedAttributionTrailers: readonly string[];
     forbiddenTrailers: readonly string[];
     runTrailer: string | null;
+    subjectCase: null;
     raw: Readonly<Record<string, unknown>>;
   } => ({
     allowedAttributionTrailers,
     forbiddenTrailers,
     runTrailer: null,
+    subjectCase: null,
     raw: {},
   });
 
@@ -431,6 +433,65 @@ describe("commits.runTrailer", () => {
       repoWith({ commits: { allowedAttributionTrailers: ["X-Run"], runTrailer: "X-Run" } }),
     );
     expect(workflow.commits.runTrailer).toBe("X-Run");
+  });
+});
+
+describe("commits.subjectCase -- the commitlint subject-case rule, declared as data (zheref/nen#263)", () => {
+  it("is null when the key is absent or null -- no default rule, ever", () => {
+    expect(loadWorkflow(tempRoot()).workflow.commits.subjectCase).toBeNull();
+    expect(loadWorkflow(repoWith({ commits: { allowedAttributionTrailers: ["X-Agent"] } })).workflow.commits.subjectCase).toBeNull();
+    expect(loadWorkflow(repoWith({ commits: { subjectCase: null } })).workflow.commits.subjectCase).toBeNull();
+  });
+
+  it("reads 'config-conventional' as that preset's published default", () => {
+    expect(loadWorkflow(repoWith({ commits: { subjectCase: "config-conventional" } })).workflow.commits.subjectCase).toEqual({
+      form: "config-conventional",
+      level: 2,
+      when: "never",
+      checks: ["sentence-case", "start-case", "pascal-case", "upper-case"].map((name) => ({ when: "always", case: name })),
+    });
+  });
+
+  it("reads an explicit commitlint tuple, normalized as commitlint normalizes it", () => {
+    const read = (rule: unknown): unknown => loadWorkflow(repoWith({ commits: { subjectCase: rule } })).workflow.commits.subjectCase;
+    expect(read([2, "always", "lower-case"])).toEqual({ form: "rule", level: 2, when: "always", checks: [{ when: "always", case: "lower-case" }] });
+    expect(read([1, "never", ["upper-case", { case: "pascal-case", when: "never" }]])).toEqual({
+      form: "rule",
+      level: 1,
+      when: "never",
+      checks: [
+        { when: "always", case: "upper-case" },
+        { when: "never", case: "pascal-case" },
+      ],
+    });
+    expect(read([0])).toEqual({ form: "rule", level: 0, when: "always", checks: [] });
+    // Disabled, so its case list is never read -- commitlint does not reject a bad one either.
+    expect(read([0, "never", ["shouty-case"]])).toMatchObject({ level: 0, checks: [] });
+  });
+
+  it.each([
+    ["conventional", "commits.subjectCase", /'conventional' is not a subject-case rule nen can apply.*'config-conventional'/],
+    ["@commitlint/config-conventional", "commits.subjectCase", /any other preset is a JavaScript package nen does not execute/],
+    [{ level: 2 }, "commits.subjectCase", /expected 'config-conventional' or a commitlint rule/],
+    [2, "commits.subjectCase", /expected 'config-conventional' or a commitlint rule/],
+    [[3, "never", "lower-case"], "commits.subjectCase[0]", /a level of 0, 1 or 2/],
+    [["2", "never"], "commits.subjectCase[0]", /a level of 0, 1 or 2/],
+    [[2], "commits.subjectCase", /2 or 3 items long/],
+    [[2, "never", "lower-case", "x"], "commits.subjectCase", /2 or 3 items long/],
+    [[2, "sometimes", "lower-case"], "commits.subjectCase[1]", /'always' or 'never'/],
+    [[2, "never", "shouty-case"], "commits.subjectCase[2]", /"shouty-case", which is not a case commitlint knows/],
+    [[2, "never", ["lower-case", "shouty-case"]], "commits.subjectCase[2][1]", /which is not a case commitlint knows/],
+    [[2, "never", [{ when: "never" }]], "commits.subjectCase[2][0]", /which is not a case commitlint knows/],
+  ])("refuses %j by pointer, at %s", (rule, pointer, message) => {
+    const error = refusal({ commits: { subjectCase: rule } });
+    expect(error.pointer).toBe(pointer);
+    expect(error.message).toMatch(message);
+  });
+
+  it("refuses a near-miss of the key rather than preserving it unread", () => {
+    const error = refusal({ commits: { subjectcase: "config-conventional" } });
+    expect(error.pointer).toBe("commits.subjectcase");
+    expect(error.message).toContain("one letter away from 'subjectCase'");
   });
 });
 

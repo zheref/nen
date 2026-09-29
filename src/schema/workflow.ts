@@ -60,6 +60,7 @@ import {
 import { requireEnum, withinOneEdit } from "./contract.js";
 import { readSchemaJson, resolveSchemaFile, type SchemaLocation } from "./source.js";
 import { matchesPattern } from "../report/patterns.js";
+import { CONVENTIONAL_SUBJECT_CASE, parseSubjectCaseTuple, type SubjectCaseSpec } from "../commit/rule.js";
 
 /** Where the policy file lives inside the target repository. */
 export const WORKFLOW_FILE = "nen/workflow.json";
@@ -360,8 +361,40 @@ export interface CommitsPolicy {
    * admits, on every automated commit.
    */
   readonly runTrailer: string | null;
+  /**
+   * The commitlint `subject-case` rule this repository DECLARES for nen, or
+   * `null` when it declares none (zheref/nen#263).
+   *
+   * WHY A REPOSITORY WOULD STATE IT TWICE. `nen commit format` and `commit
+   * write` read the rule from the repository's own commitlint config -- but a
+   * config that is code (commitlint.config.cjs and kin) can only be read by
+   * executing it, which nen never does, so there the verbs could only warn.
+   * This key is the rule written where nen CAN read it: `"config-conventional"`
+   * (that preset's published default) or an explicit commitlint tuple
+   * `[level, "always"|"never", cases]`, validated by ../commit/rule.ts -- the
+   * same validator a commitlint data config's own rule goes through.
+   *
+   * IT DOES NOT OVERRIDE A READABLE COMMITLINT DATA CONFIG. That config is the
+   * gate commitlint actually runs, so where nen can read it, it wins and this
+   * key is reported as not applied; the key binds only where the commitlint
+   * config is code, or nen cannot otherwise read the rule from it, or there is
+   * none. ../commit/commitlint.ts states the precedence in full.
+   *
+   * NO DEFAULT. A default rule would be nen deciding somebody's commit
+   * convention, exactly as a default `models` matrix would be.
+   */
+  readonly subjectCase: DeclaredSubjectCase | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
+
+/** `commits.subjectCase`, read: which of the two forms it was stated in, and the rule it means. */
+export interface DeclaredSubjectCase extends SubjectCaseSpec {
+  /** `config-conventional` for the preset string, `rule` for an explicit tuple. */
+  readonly form: "config-conventional" | "rule";
+}
+
+/** The one string `commits.subjectCase` accepts; any other preset is a JavaScript package nen cannot read. */
+export const SUBJECT_CASE_PRESET = "config-conventional";
 
 export interface MonitorPolicy {
   readonly maxCycles: number;
@@ -498,7 +531,7 @@ export function defaultWorkflow(): Workflow {
       raw: empty,
     },
     notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
-    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, raw: empty },
+    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
     review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
@@ -543,6 +576,7 @@ const COMMITS_KEYS: readonly string[] = [
   "allowedAttributionTrailers",
   "forbiddenTrailers",
   "runTrailer",
+  "subjectCase",
 ];
 const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds"];
 const PROFILE_KEYS: readonly string[] = ["default", "allowed"];
@@ -1258,8 +1292,40 @@ function requireTrailerKey(path: string, pointer: string, key: string): string {
   );
 }
 
+/**
+ * `commits.subjectCase`: the preset string, or a commitlint tuple held to
+ * ../commit/rule.ts's checks -- the same ones a commitlint data config's rule
+ * meets -- and refused BY POINTER, down to the tuple element at fault, rather
+ * than defaulted around. Any other string is refused naming the one accepted,
+ * because another preset is a JavaScript package nen would have to execute.
+ */
+function parseSubjectCase(path: string, value: unknown): DeclaredSubjectCase | null {
+  const pointer = "commits.subjectCase";
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") {
+    if (value === SUBJECT_CASE_PRESET) return { form: "config-conventional", ...CONVENTIONAL_SUBJECT_CASE };
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${value}' is not a subject-case rule nen can apply. It takes the string '${SUBJECT_CASE_PRESET}' (@commitlint/config-conventional's default: [2, "never", ["sentence-case", "start-case", "pascal-case", "upper-case"]]) or an explicit commitlint rule [level, "always"|"never", cases]; any other preset is a JavaScript package nen does not execute, so state its rule as the tuple instead`,
+    );
+  }
+  if (!Array.isArray(value)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `expected '${SUBJECT_CASE_PRESET}' or a commitlint rule [level, "always"|"never", cases], got ${describeValue(value)}`,
+    );
+  }
+  const parsed = parseSubjectCaseTuple(value);
+  if (!parsed.ok) {
+    throw new SchemaError(path, `${pointer}${parsed.at}`, `the subject-case rule ${parsed.problem}, received ${JSON.stringify(value)}`);
+  }
+  return { form: "rule", ...parsed.spec };
+}
+
 function parseCommits(path: string, value: unknown): CommitsPolicy {
-  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's three keys are");
+  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's four keys are");
   const read = (key: string): readonly string[] =>
     stringsOr(path, `commits.${key}`, raw[key], []).map((entry, index): string =>
       requireTrailerKey(path, `commits.${key}[${index}]`, entry),
@@ -1293,7 +1359,7 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
   // every commit unconditionally. Caught here, at load, by pointer, rather
   // than as a hook nobody can ever get past.
   if (runTrailer !== null) {
-    const refused = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, raw: {} }).find(
+    const refused = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, subjectCase: null, raw: {} }).find(
       (key): boolean => key.toLowerCase() === runTrailer.toLowerCase(),
     );
     if (refused !== undefined) {
@@ -1304,7 +1370,7 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
       );
     }
   }
-  return { allowedAttributionTrailers, forbiddenTrailers, runTrailer, raw };
+  return { allowedAttributionTrailers, forbiddenTrailers, runTrailer, subjectCase: parseSubjectCase(path, raw["subjectCase"]), raw };
 }
 
 function parseMonitor(path: string, value: unknown): MonitorPolicy {

@@ -1,19 +1,23 @@
 // src/commit/commitlint.test.ts -- finding the repository's own commitlint
 // `subject-case` rule where commitlint finds it, and the one check both
-// `commit` verbs run with it (part of zheref/nen#263).
+// `commit` verbs run with it (zheref/nen#263).
 
 import { describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadWorkflow } from "../schema/workflow.js";
 import {
   COMMITLINT_SEARCH_PLACES,
   CONFIG_CONVENTIONAL,
   CONVENTIONAL_SUBJECT_CASE,
   CommitlintConfigError,
   commitlintSubject,
+  declaredSubjectCase,
   readSubjectCaseRule,
   subjectCaseFindings,
+  type DeclaredRule,
+  type SubjectCaseFindings,
 } from "./commitlint.js";
 
 /**
@@ -31,6 +35,12 @@ function repo(files: Record<string, string>, checkoutRoot = true): string {
 const conventional = JSON.stringify({ extends: [CONFIG_CONVENTIONAL] });
 const explicit = (rule: unknown, extra: Record<string, unknown> = {}): string => JSON.stringify({ ...extra, rules: { "subject-case": rule } });
 
+/** The check with nothing declared in nen/workflow.json -- the commitlint config alone decides. */
+const findings = (root: string, header: string): SubjectCaseFindings => subjectCaseFindings(root, header, null);
+
+/** Nothing to say at all. */
+const NONE: SubjectCaseFindings = { refusals: [], warnings: [], notes: [] };
+
 function thrown(root: string): CommitlintConfigError {
   try {
     readSubjectCaseRule(root);
@@ -45,21 +55,21 @@ describe("where the config is found -- commitlint's own search places, in its or
   it("finds nothing in a checkout root with no config, and the check then says nothing", () => {
     const root = repo({});
     expect(readSubjectCaseRule(root)).toEqual({ kind: "absent" });
-    expect(subjectCaseFindings(root, "fix: Start the timer")).toEqual({ refusals: [], warnings: [] });
+    expect(findings(root, "fix: Start the timer")).toEqual(NONE);
   });
 
   it("says 'NOT checked' when nothing is found in a directory with no .git entry -- commitlint would look in the parents", () => {
     const root = repo({}, false);
-    expect(subjectCaseFindings(root, "fix: Start the timer")).toEqual({
-      refusals: [],
+    expect(findings(root, "fix: Start the timer")).toEqual({
+      ...NONE,
       warnings: [`subject-case NOT checked: no commitlint config at ${root}, and commitlint also looks in parent directories -- pass --repo <checkout root>`],
     });
     // A .git FILE counts too -- that is what a worktree or a submodule has.
     writeFileSync(join(root, ".git"), "gitdir: /elsewhere\n");
-    expect(subjectCaseFindings(root, "fix: Start the timer")).toEqual({ refusals: [], warnings: [] });
+    expect(findings(root, "fix: Start the timer")).toEqual(NONE);
     // And a config found there is read whatever the directory is.
     const found = repo({ ".commitlintrc.json": JSON.stringify({ extends: [CONFIG_CONVENTIONAL] }) }, false);
-    expect(subjectCaseFindings(found, "fix: Start the timer").refusals).toHaveLength(1);
+    expect(findings(found, "fix: Start the timer").refusals).toHaveLength(1);
   });
 
   it("lists @commitlint/load 21.2.3's eighteen places, data first, package.json first of all", () => {
@@ -129,7 +139,7 @@ describe("a package file is commitlint's only through a 'commitlint' key", () =>
   it("steps past a package file whose text has no 'commitlint' key WITHOUT parsing it -- an anchored package.yaml, a malformed package.json", () => {
     const anchored = repo({ "package.yaml": "defaults: &defaults\n  node: 20\nengines: *defaults\n" });
     expect(readSubjectCaseRule(anchored)).toEqual({ kind: "absent" });
-    expect(subjectCaseFindings(anchored, "fix: Start the timer")).toEqual({ refusals: [], warnings: [] });
+    expect(findings(anchored, "fix: Start the timer")).toEqual(NONE);
     const malformed = repo({ "package.json": '{ "name": "x", "devDependencies": { "@commitlint/cli": "^21" ' });
     expect(readSubjectCaseRule(malformed)).toEqual({ kind: "absent" });
     // ...and the search goes on past it, to the config that IS commitlint's.
@@ -146,7 +156,7 @@ describe("a package file is commitlint's only through a 'commitlint' key", () =>
       const rule = readSubjectCaseRule(root);
       expect(rule, place).toMatchObject({ kind: "unreadable", file: join(root, place) });
       if (rule.kind === "unreadable") expect(rule.reason, place).toMatch(/carries a 'commitlint' key, but nen could not parse the file/);
-      const found = subjectCaseFindings(root, "fix: Start the timer");
+      const found = findings(root, "fix: Start the timer");
       expect(found.refusals).toEqual([]);
       expect(found.warnings).toEqual([expect.stringMatching(/^subject-case NOT checked: .*For reference only/)]);
     }
@@ -174,7 +184,7 @@ describe("which rule the config states -- explicit rules, then extends", () => {
   it("lets an explicit rules['subject-case'] override what is extended -- including turning it off", () => {
     const off = repo({ ".commitlintrc.json": explicit([0], { extends: [CONFIG_CONVENTIONAL] }) });
     expect(readSubjectCaseRule(off)).toMatchObject({ kind: "rule", origin: "rules", level: 0 });
-    expect(subjectCaseFindings(off, "fix: Start the timer")).toEqual({ refusals: [], warnings: [] });
+    expect(findings(off, "fix: Start the timer")).toEqual(NONE);
     const lower = repo({ ".commitlintrc.json": explicit([2, "always", "lower-case"], { extends: [CONFIG_CONVENTIONAL, "@acme/commitlint-config"] }) });
     expect(readSubjectCaseRule(lower)).toMatchObject({ kind: "rule", origin: "rules", level: 2, when: "always", checks: [{ when: "always", case: "lower-case" }] });
   });
@@ -184,7 +194,7 @@ describe("which rule the config states -- explicit rules, then extends", () => {
     expect(readSubjectCaseRule(rulesOnly)).toEqual({ kind: "none", file: join(rulesOnly, ".commitlintrc.json") });
     const empty = repo({ ".commitlintrc.json": JSON.stringify({ extends: [] }) });
     expect(readSubjectCaseRule(empty)).toEqual({ kind: "none", file: join(empty, ".commitlintrc.json") });
-    expect(subjectCaseFindings(empty, "fix: Start the timer")).toEqual({ refusals: [], warnings: [] });
+    expect(findings(empty, "fix: Start the timer")).toEqual(NONE);
   });
 
   it("will not guess a preset it cannot read AFTER config-conventional -- it may set the rule, so 'not checked'", () => {
@@ -245,21 +255,21 @@ describe("the subject commitlint's parser finds -- recorded from commitlint 21.2
 
   it("judges the subject commitlint finds, not the one nen was handed: 'fix(a): Foo (b): bar' passes config-conventional", () => {
     const root = repo({ ".commitlintrc.json": conventional });
-    expect(subjectCaseFindings(root, "fix(a): Foo (b): bar")).toEqual({ refusals: [], warnings: [] });
-    expect(subjectCaseFindings(root, "fix(a): foo (b): Bar").refusals[0]).toContain("subject 'Bar' breaks");
-    expect(subjectCaseFindings(root, "feat(x)!: Foo bar").refusals[0]).toContain("subject 'Foo bar' breaks");
+    expect(findings(root, "fix(a): Foo (b): bar")).toEqual(NONE);
+    expect(findings(root, "fix(a): foo (b): Bar").refusals[0]).toContain("subject 'Bar' breaks");
+    expect(findings(root, "feat(x)!: Foo bar").refusals[0]).toContain("subject 'Foo bar' breaks");
   });
 
   it("gives a '!' header no verdict under a rules-only config -- commitlint's default parser cannot split it -- and says so", () => {
     const root = repo({ ".commitlintrc.json": explicit([2, "never", ["sentence-case"]]) });
     for (const header of ["feat!: Foo bar", "feat(x)!: Foo bar"]) {
-      const found = subjectCaseFindings(root, header);
+      const found = findings(root, header);
       expect(found.refusals, header).toEqual([]);
       expect(found.warnings, header).toEqual([expect.stringMatching(/^subject-case NOT checked: .*names no parserPreset and extends no preset.*default parser \(conventional-changelog-angular's\).*no '!' form/)]);
     }
-    expect(subjectCaseFindings(root, "feat: Foo bar").refusals).toHaveLength(1);
+    expect(findings(root, "feat: Foo bar").refusals).toHaveLength(1);
     const named = repo({ ".commitlintrc.json": explicit([2, "never", ["sentence-case"]], { parserPreset: "conventional-changelog-conventionalcommits" }) });
-    expect(subjectCaseFindings(named, "feat!: Foo bar").refusals).toHaveLength(1);
+    expect(findings(named, "feat!: Foo bar").refusals).toHaveLength(1);
   });
 });
 
@@ -292,7 +302,7 @@ describe("a config nen cannot read the rule from is a CommitlintConfigError, nam
       expect(error.message).toContain(`${join(root, file)} could not be read for its commitlint 'subject-case' rule`);
       expect(error.message).toMatch(fault);
       // subjectCaseFindings is the verbs' door, and it does not swallow it.
-      expect(() => subjectCaseFindings(root, "fix: start the timer")).toThrow(CommitlintConfigError);
+      expect(() => findings(root, "fix: start the timer")).toThrow(CommitlintConfigError);
     });
   }
 });
@@ -301,7 +311,7 @@ describe("subjectCaseFindings -- the one check both commit verbs run", () => {
   it("refuses the issue's own subjects under config-conventional, naming the rule, the file and the fix", () => {
     const root = repo({ ".commitlintrc.json": conventional });
     for (const subject of ["Start the timer", "Escape key closes the modal"]) {
-      const found = subjectCaseFindings(root, `fix(ui): ${subject}`);
+      const found = findings(root, `fix(ui): ${subject}`);
       expect(found.warnings).toEqual([]);
       expect(found.refusals).toHaveLength(1);
       const [line] = found.refusals;
@@ -316,13 +326,13 @@ describe("subjectCaseFindings -- the one check both commit verbs run", () => {
   it("passes a lower-case subject, a backticked proper name, and a digit-leading one", () => {
     const root = repo({ ".commitlintrc.json": conventional });
     for (const subject of ["start the timer", "`Escape` key closes the modal", "2fa for admins"]) {
-      expect(subjectCaseFindings(root, `fix: ${subject}`), subject).toEqual({ refusals: [], warnings: [] });
+      expect(findings(root, `fix: ${subject}`), subject).toEqual(NONE);
     }
   });
 
   it("makes a level-1 break a warning, and says commitlint still commits unless --strict", () => {
     const root = repo({ ".commitlintrc.json": explicit([1, "never", ["sentence-case"]]) });
-    const found = subjectCaseFindings(root, "fix: Start the timer");
+    const found = findings(root, "fix: Start the timer");
     expect(found.refusals).toEqual([]);
     expect(found.warnings).toHaveLength(1);
     expect(found.warnings[0]).toMatch(/set under 'rules' in .*\.commitlintrc\.json.*level 1.*--strict/);
@@ -330,22 +340,22 @@ describe("subjectCaseFindings -- the one check both commit verbs run", () => {
 
   it("words the fix for the rule actually broken: 'not <case>' for never, 'to <case>' for always", () => {
     const never = repo({ ".commitlintrc.json": explicit([2, "never", "lower-case"]) });
-    expect(subjectCaseFindings(never, "fix: start the timer").refusals[0]).toMatch(/recase the subject so it is not lower-case/);
+    expect(findings(never, "fix: start the timer").refusals[0]).toMatch(/recase the subject so it is not lower-case/);
     const always = repo({ ".commitlintrc.json": explicit([2, "always", "lower-case"]) });
-    expect(subjectCaseFindings(always, "fix: Start the timer").refusals[0]).toMatch(/recase the subject to lower-case --/);
+    expect(findings(always, "fix: Start the timer").refusals[0]).toMatch(/recase the subject to lower-case --/);
     const either = repo({ ".commitlintrc.json": explicit([2, "always", ["kebab-case", "snake-case"]]) });
-    expect(subjectCaseFindings(either, "fix: Start the timer").refusals[0]).toMatch(/recase the subject to one of kebab-case, snake-case/);
+    expect(findings(either, "fix: Start the timer").refusals[0]).toMatch(/recase the subject to one of kebab-case, snake-case/);
   });
 
   it("says 'NOT checked' for a code config -- that commitlint still refuses AFTER the commit -- with config-conventional's verdict only as a labelled reference", () => {
     const root = repo({ "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" });
-    const refused = subjectCaseFindings(root, "fix: Escape closes it");
+    const refused = findings(root, "fix: Escape closes it");
     expect(refused.refusals).toEqual([]);
     expect(refused.warnings).toHaveLength(1);
     expect(refused.warnings[0]).toMatch(/^subject-case NOT checked: .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config/);
     expect(refused.warnings[0]).toMatch(/when the commit is made, after the commit exists\./);
     expect(refused.warnings[0]).toMatch(/For reference only: .*would be refused \(subject must not be sentence-case\)/);
-    const fine = subjectCaseFindings(root, "fix: start the timer");
+    const fine = findings(root, "fix: start the timer");
     expect(fine.warnings).toHaveLength(1);
     expect(fine.warnings[0]).toMatch(/NOT checked/);
     expect(fine.warnings[0]).not.toMatch(/For reference/);
@@ -353,8 +363,127 @@ describe("subjectCaseFindings -- the one check both commit verbs run", () => {
 
   it("adds no reference line when the rule nen could not read is an unresolved preset and the subject is fine", () => {
     const root = repo({ ".commitlintrc.json": JSON.stringify({ extends: ["@acme/commitlint-config"] }) });
-    const found = subjectCaseFindings(root, "feat: add a thing");
+    const found = findings(root, "feat: add a thing");
     expect(found.refusals).toEqual([]);
     expect(found.warnings).toEqual([expect.stringMatching(/^subject-case NOT checked: .*extends '@acme\/commitlint-config'/)]);
+  });
+});
+
+describe("commits.subjectCase -- the rule declared in nen/workflow.json, and its precedence (zheref/nen#263)", () => {
+  /** Write nen/workflow.json into `root` declaring `subjectCase`, and return what the verbs would pass. */
+  function declare(root: string, subjectCase: unknown): DeclaredRule {
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { subjectCase } }));
+    const declared = declaredSubjectCase(loadWorkflow(root));
+    if (declared === null) throw new Error("expected a declaration");
+    return declared;
+  }
+  const KRO_PWA = { "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" };
+
+  it("reads nothing declared when the file is absent or states no key", () => {
+    expect(declaredSubjectCase(loadWorkflow(repo({})))).toBeNull();
+    const root = repo({});
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: [] } }));
+    expect(declaredSubjectCase(loadWorkflow(root))).toBeNull();
+  });
+
+  it("makes the rule BINDING where the commitlint config is code: a kro-pwa-shaped repo refuses 'Escape closes it'", () => {
+    const root = repo(KRO_PWA);
+    const declared = declare(root, "config-conventional");
+    const found = subjectCaseFindings(root, "fix: Escape closes it", declared);
+    expect(found.warnings).toEqual([]);
+    expect(found.notes).toEqual([]);
+    expect(found.refusals).toHaveLength(1);
+    const [line] = found.refusals;
+    expect(line).toContain("subject 'Escape closes it' breaks the subject-case rule this repository declares");
+    expect(line).toContain(`commits.subjectCase in ${join(root, "nen", "workflow.json")}, 'config-conventional' (@commitlint/config-conventional's default)`);
+    expect(line).toContain(`nen applies it because ${join(root, "commitlint.config.cjs")} is a JavaScript/TypeScript commitlint config nen does not execute`);
+    expect(line).toMatch(/subject must not be sentence-case\. The declaration makes the rule binding, so nen refuses it: start the subject with a lower-case word/);
+  });
+
+  it("replaces the 'NOT checked' warning with a note saying the rule came from nen/workflow.json, when the subject passes", () => {
+    const root = repo(KRO_PWA);
+    const found = subjectCaseFindings(root, "fix: escape closes it", declare(root, "config-conventional"));
+    expect(found.refusals).toEqual([]);
+    expect(found.warnings).toEqual([]);
+    expect(found.notes).toEqual([
+      `subject-case checked against commits.subjectCase in ${join(root, "nen", "workflow.json")}, 'config-conventional' (@commitlint/config-conventional's default): nen applies it because ${join(root, "commitlint.config.cjs")} is a JavaScript/TypeScript commitlint config nen does not execute -- keep the two in step, since commitlint still runs its own rule at commit time`,
+    ]);
+  });
+
+  it("still only warns in the same repo WITHOUT the key -- the declaration is what binds", () => {
+    const found = findings(repo(KRO_PWA), "fix: Escape closes it");
+    expect(found.refusals).toEqual([]);
+    expect(found.warnings).toEqual([expect.stringMatching(/^subject-case NOT checked: .*Declare the rule as data in nen\/workflow\.json's commits\.subjectCase.*For reference only/)]);
+  });
+
+  it("lets a readable DATA commitlint config win, and says the declaration was not applied", () => {
+    // The data config turns the rule off; the declaration would refuse. The real gate decides.
+    const off = repo({ ".commitlintrc.json": explicit([0], { extends: [CONFIG_CONVENTIONAL] }) });
+    const offFound = subjectCaseFindings(off, "fix: Start the timer", declare(off, "config-conventional"));
+    expect(offFound.refusals).toEqual([]);
+    expect(offFound.notes).toEqual([expect.stringMatching(/^commits\.subjectCase in .*nen\/workflow\.json is not applied: .*\.commitlintrc\.json states the commitlint config as data, and that config is the gate commitlint runs/)]);
+    // The data config refuses; the declaration would allow. Still the data config.
+    const lower = repo({ ".commitlintrc.json": explicit([2, "always", "upper-case"]) });
+    const lowerFound = subjectCaseFindings(lower, "fix: start the timer", declare(lower, [2, "always", "lower-case"]));
+    expect(lowerFound.refusals).toEqual([expect.stringContaining("set under 'rules' in")]);
+    expect(lowerFound.notes).toHaveLength(1);
+    // A readable config that states no rule is honoured too: commitlint checks nothing.
+    const none = repo({ ".commitlintrc.json": JSON.stringify({ rules: {} }) });
+    const noneFound = subjectCaseFindings(none, "fix: Start the timer", declare(none, "config-conventional"));
+    expect(noneFound.refusals).toEqual([]);
+    expect(noneFound.notes).toHaveLength(1);
+  });
+
+  it("applies an explicit tuple, naming it: level 2 refuses, level 1 warns, level 0 turns it off", () => {
+    const refuse = repo(KRO_PWA);
+    const refused = subjectCaseFindings(refuse, "fix: Start the timer", declare(refuse, [2, "always", "lower-case"]));
+    expect(refused.refusals[0]).toContain(`the rule [2,"always",["lower-case"]]`);
+    expect(refused.refusals[0]).toMatch(/subject must be lower-case\. The declaration makes the rule binding.*recase the subject to lower-case/);
+    const warn = repo(KRO_PWA);
+    const warned = subjectCaseFindings(warn, "fix: Start the timer", declare(warn, [1, "never", ["sentence-case", { case: "upper-case", when: "never" }]]));
+    expect(warned.refusals).toEqual([]);
+    expect(warned.warnings[0]).toContain(`the rule [1,"never",["sentence-case",{"case":"upper-case","when":"never"}]]`);
+    expect(warned.warnings[0]).toMatch(/declared at level 1, so nen only warns/);
+    const off = repo(KRO_PWA);
+    const offFound = subjectCaseFindings(off, "fix: Start the timer", declare(off, [0]));
+    expect(offFound).toEqual({ ...NONE, notes: [expect.stringMatching(/^subject-case is off: commits\.subjectCase in .*, the rule \[0\] disables it, and nen applies it because/)] });
+  });
+
+  it("applies where there is no commitlint config at all -- and then needs no 'keep in step', and no --repo warning", () => {
+    const root = repo({}, false);
+    const declared = declare(root, "config-conventional");
+    expect(subjectCaseFindings(root, "fix: Start the timer", declared).refusals[0]).toContain(`nen applies it because no commitlint config was found at ${root}`);
+    expect(subjectCaseFindings(root, "fix: start the timer", declared)).toEqual({
+      ...NONE,
+      notes: [`subject-case checked against commits.subjectCase in ${join(root, "nen", "workflow.json")}, 'config-conventional' (@commitlint/config-conventional's default): nen applies it because no commitlint config was found at ${root}`],
+    });
+  });
+
+  it("applies wherever nen cannot otherwise read the rule: an unresolved preset, $import, an unparseable package key", () => {
+    const cases: Record<string, readonly [Record<string, string>, RegExp]> = {
+      preset: [{ ".commitlintrc.json": JSON.stringify({ extends: ["@acme/commitlint-config"] }) }, /extends '@acme\/commitlint-config', which nen cannot resolve/],
+      import: [{ ".commitlintrc.json": JSON.stringify({ $import: "./base.json" }) }, /uses cosmiconfig's '\$import'/],
+      package: [{ "package.json": '{ "commitlint": { ' }, /carries a 'commitlint' key but will not parse/],
+    };
+    for (const [name, [files, cause]] of Object.entries(cases)) {
+      const root = repo(files);
+      const found = subjectCaseFindings(root, "fix: Start the timer", declare(root, "config-conventional"));
+      expect(found.refusals, name).toHaveLength(1);
+      expect(found.refusals[0], name).toMatch(cause);
+    }
+  });
+
+  it("does not rescue a malformed .commitlintrc -- a broken gate is exit 1 whatever is declared", () => {
+    const root = repo({ ".commitlintrc.json": "{ nope" });
+    expect(() => subjectCaseFindings(root, "fix: start the timer", declare(root, "config-conventional"))).toThrow(CommitlintConfigError);
+  });
+
+  it("judges a declared rule with the conventionalcommits grammar: '!' and greedy scopes as config-conventional reads them", () => {
+    const root = repo(KRO_PWA);
+    const declared = declare(root, "config-conventional");
+    expect(subjectCaseFindings(root, "feat(x)!: Foo bar", declared).refusals).toHaveLength(1);
+    expect(subjectCaseFindings(root, "fix(a): Foo (b): bar", declared).refusals).toEqual([]);
   });
 });

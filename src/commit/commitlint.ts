@@ -1,31 +1,45 @@
 // src/commit/commitlint.ts -- the repository's OWN commitlint `subject-case`
-// rule, read from where commitlint reads it, and the one check `commit
-// format` and `commit write` both run with it (part of zheref/nen#263).
+// rule, read from where commitlint reads it -- or from where the repository
+// DECLARES it for nen -- and the one check `commit format` and `commit write`
+// both run with it (zheref/nen#263).
 //
 // WHY THIS EXISTS. A builder runs `nen commit format` so they do not have to
 // guess whether the repository's commit-msg hook will accept a message. When
 // the hook runs commitlint and commitlint enforces a rule nen does not, the
 // builder gets a green from nen, commits, and meets the real gate afterwards
 // -- in the sitting this issue came from, 'Start…' and 'Escape…' subjects,
-// twice, each an amend and a recommit. So nen now reads the rule the
-// repository itself states, WHEN IT STATES IT AS DATA, and gives commitlint's
-// verdict first.
+// twice, each an amend and a recommit. So nen now gives commitlint's verdict
+// first, under the rule the repository itself states.
 //
-// THE LIMIT THIS LEAVES, STATED RATHER THAN SOFTENED. A repository whose
-// commitlint config is CODE (commitlint.config.cjs and the other .js/.ts
-// forms -- the repository this issue came from is one) still meets a
-// subject-case refusal from commitlint AFTER the commit exists: nen does not
-// execute the file, so it only warns that the rule was NOT checked and gives
-// @commitlint/config-conventional's verdict for reference, at exit 0. A
-// caller that gates on the exit code alone is not protected there. Closing
-// that needs the rule declared somewhere nen can read as data, which is a new
-// policy surface and the maintainer's decision, not this module's.
+// TWO PLACES THE RULE CAN BE STATED, AND THE PRECEDENCE BETWEEN THEM:
+//
+//   1. THE COMMITLINT CONFIG, WHEN NEN CAN READ IT AS DATA. It is the gate
+//      commitlint actually runs at commit time, so where it is readable it
+//      WINS: its rule is applied (or its absence of one is honoured), and a
+//      `commits.subjectCase` beside it is reported as not applied -- never
+//      silently ignored, and never allowed to overrule the real gate, which
+//      would refuse subjects commitlint accepts or pass ones it refuses.
+//   2. `commits.subjectCase` IN nen/workflow.json, everywhere else: when the
+//      commitlint config is CODE (commitlint.config.cjs and kin, which nen
+//      never executes), when nen cannot otherwise read the rule from it (an
+//      unresolvable preset, cosmiconfig's `$import`, a package manifest whose
+//      `commitlint` key will not parse), and when there is no commitlint config
+//      at all. There the declared rule is BINDING -- level 2 refuses at the
+//      verb's exit 2 through the same path a commitlint rule does -- and the
+//      output says the rule came from nen/workflow.json. The repository that
+//      declares it owns keeping it in step with its commitlint config.
+//
+// With neither -- a code config and no declaration -- the verb can only warn
+// that the rule was NOT checked, with config-conventional's verdict for
+// reference, at exit 0; a caller gating on the exit code alone is not
+// protected there, which is exactly what the declaration exists to close.
 //
 // SCOPE: `subject-case`, AND NOTHING ELSE commitlint checks. This is not a
 // commitlint reimplementation; nen's own shape rules (./format.ts) are
 // unchanged and are not reconciled with the repository's other commitlint
-// rules. ./case.ts holds the rule's semantics; this module finds the rule and
-// the subject commitlint would hand it.
+// rules. ./case.ts holds the rule's semantics, ./rule.ts the tuple both places
+// state it in; this module finds the rule and the subject commitlint would
+// hand it.
 //
 // WHERE COMMITLINT LOOKS, AND WHERE NEN DOES. @commitlint/load 21.2.3
 // (src/utils/load-config.ts) asks cosmiconfig 9 for the first of
@@ -37,12 +51,13 @@
 // deliberately). A config that lives only above the checkout or in the global
 // directory, a `--config <path>` the hook passes, and cosmiconfig's meta
 // configuration (`.config/config.*`) are therefore NOT read. Where that could
-// matter is said out loud: when nothing is found and the directory has no
-// `.git` entry, so it is probably not a checkout root, the verb warns that
-// the rule was not checked and names `--repo`. Cosmiconfig's own rules are
-// kept: package.json and package.yaml count only when they carry a
-// `commitlint` key, and a file that is blank or holds `null` is skipped and
-// the search goes on to the next place, exactly as cosmiconfig skips it.
+// matter is said out loud: when nothing is found, nothing is declared, and
+// the directory has no `.git` entry, so it is probably not a checkout root,
+// the verb warns that the rule was not checked and names `--repo`.
+// Cosmiconfig's own rules are kept: package.json and package.yaml count only
+// when they carry a `commitlint` key, and a file that is blank or holds `null`
+// is skipped and the search goes on to the next place, exactly as cosmiconfig
+// skips it.
 //
 // DATA IS READ; CODE IS NOT. JSON (package.json, .commitlintrc.json), YAML
 // (.commitlintrc.yaml/.yml, package.yaml -- through ../schema/yaml.ts, the one
@@ -50,22 +65,22 @@
 // first, then YAML: cosmiconfig loads it as YAML, of which JSON is a subset)
 // are parsed. A .js/.cjs/.mjs/.ts/.cts/.mts config is NOT, because the only
 // way to read one is to execute the repository's code, and a message
-// formatter has no business doing that. It is not a silent pass either: the
-// verb prints a warning naming the file and saying the rule was not checked.
-// The YAML reader is the strict one the taxonomy files use, so a YAML config
-// built with anchors, aliases, tags or merge keys -- which commitlint's own
-// YAML loader accepts -- is refused by name rather than half-read.
+// formatter has no business doing that. The YAML reader is the strict one the
+// taxonomy files use, so a YAML config built with anchors, aliases, tags or
+// merge keys -- which commitlint's own YAML loader accepts -- is refused by
+// name rather than half-read.
 //
 // A PACKAGE FILE IS NOT COMMITLINT'S UNTIL IT SAYS SO. package.json and
 // package.yaml belong to the repository's package manager; most of them carry
 // no `commitlint` key at all, and an idiomatic package.yaml uses the very
 // anchors the strict reader refuses. So a package file whose TEXT has no
 // `commitlint` key is stepped past unparsed, and one that has the key but
-// will not parse is a "not checked" warning, never exit 1 -- a repository
-// without commitlint must never have its commit verbs stopped by its package
-// manifest. The .commitlintrc forms are commitlint's by name, so a malformed
-// one stays exit 1, and so does a package key that parses into a config
-// commitlint itself would reject.
+// will not parse is a rule nen could not read (precedence 2 above), never
+// exit 1 -- a repository without commitlint must never have its commit verbs
+// stopped by its package manifest. The .commitlintrc forms are commitlint's
+// by name, so a malformed one stays exit 1 whatever nen/workflow.json
+// declares, and so does a package key that parses into a config commitlint
+// itself would reject.
 //
 // `extends`, AS FAR AS DATA CAN SEE. commitlint merges a config's `extends`
 // in order, each over the last, and the file's own `rules` over all of them
@@ -73,9 +88,9 @@
 // therefore decisive whatever is extended. Without one, the rule comes from
 // the last preset that sets it -- and a preset is a JavaScript package, so the
 // one nen can answer for is the one whose rule is published and fixed:
-// `@commitlint/config-conventional`, whose default this module carries. Any
+// `@commitlint/config-conventional`, whose default ./rule.ts carries. Any
 // other preset AFTER the last config-conventional may set the rule too, so
-// that is a stated "not checked", never a guess. A preset BEFORE it is
+// that is a rule nen cannot read, never a guess. A preset BEFORE it is
 // overridden by it and does not matter.
 //
 // THE SUBJECT IS THE ONE COMMITLINT'S PARSER FINDS, not the one nen was
@@ -88,21 +103,26 @@
 // angular's, which has no `!`: `feat!: Foo bar` does not parse, commitlint
 // finds no subject, and gives it no subject-case verdict. nen then gives none
 // either, and says so in a warning rather than refusing what commitlint
-// accepts.
+// accepts. A rule DECLARED in nen/workflow.json is judged with the
+// conventionalcommits grammar -- the Conventional Commits header nen renders,
+// and config-conventional's own.
 //
 // THE OUTCOMES, AND WHO SEES EACH:
 //
-//   * no config, or one that states no subject-case -> nothing at all; the
-//     verb behaves exactly as it did before this module existed (plus the
-//     not-a-checkout-root warning above, when it applies).
-//   * a rule at level 2 that the subject breaks -> a refusal, at the verb's
-//     existing shape-refusal exit (2): commitlint would refuse the commit.
+//   * no config, nothing declared, or a readable config that states no
+//     subject-case -> nothing at all; the verb behaves exactly as it did
+//     before this module existed (plus the not-a-checkout-root warning above,
+//     when it applies, and the not-applied note when something is declared).
+//   * a rule at level 2 that the subject breaks -- read from commitlint's
+//     config or declared in nen/workflow.json -> a refusal, at the verb's
+//     existing shape-refusal exit (2).
 //   * a rule at level 1 -> a `warning:` line and exit 0: commitlint warns and
 //     still commits (unless the hook runs it with --strict).
-//   * a config nen cannot read the rule from (code, an unknown preset,
-//     cosmiconfig's `$import`, a package file with a `commitlint` key that
-//     will not parse), or a header commitlint's default parser cannot split
-//     -> a `warning:` line saying NOT CHECKED, and exit 0.
+//   * a declared rule the subject passes -> a `note:` line saying the rule
+//     came from nen/workflow.json and why it was applied.
+//   * a config nen cannot read the rule from with nothing declared, or a
+//     header commitlint's default parser cannot split -> a `warning:` line
+//     saying NOT CHECKED, and exit 0.
 //   * a .commitlintrc that is present but malformed, or a config commitlint
 //     itself would reject -> CommitlintConfigError, which the verbs turn into
 //     exit 1, on the same argument as a malformed nen/workflow.json: nen will
@@ -120,7 +140,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseYaml, YamlError } from "../schema/yaml.js";
-import { isCaseName, subjectCaseVerdict, type CaseCheck, type CaseName, type CaseVerdict, type Condition } from "./case.js";
+import type { DeclaredSubjectCase, LoadedWorkflow } from "../schema/workflow.js";
+import { subjectCaseVerdict, type CaseCheck, type CaseName, type CaseVerdict, type Condition } from "./case.js";
+import { CONFIG_CONVENTIONAL, CONVENTIONAL_SUBJECT_CASE, parseSubjectCaseTuple, type SubjectCaseSpec } from "./rule.js";
+
+export { CONFIG_CONVENTIONAL, CONVENTIONAL_SUBJECT_CASE };
 
 /** @commitlint/load 21.2.3's searchPlaces, in its order: the first present, non-empty one is the config. */
 export const COMMITLINT_SEARCH_PLACES: readonly string[] = [
@@ -157,19 +181,6 @@ const PACKAGE_PLACES: ReadonlySet<string> = new Set(["package.json", "package.ya
  * `"@commitlint/cli":` does not match, because the key must begin the token.
  */
 const COMMITLINT_KEY = /(?:^|[\s{,])["']?commitlint["']?\s*:/m;
-
-export const CONFIG_CONVENTIONAL = "@commitlint/config-conventional";
-
-/**
- * @commitlint/config-conventional's `subject-case`, as published in its
- * src/index.ts (21.2.3, and unchanged for many majors before it):
- * `[2, "never", ["sentence-case", "start-case", "pascal-case", "upper-case"]]`.
- */
-export const CONVENTIONAL_SUBJECT_CASE: { readonly level: 0 | 1 | 2; readonly when: Condition; readonly checks: readonly CaseCheck[] } = {
-  level: 2,
-  when: "never",
-  checks: (["sentence-case", "start-case", "pascal-case", "upper-case"] as const).map((name): CaseCheck => ({ when: "always", case: name })),
-};
 
 /**
  * The header grammars commitlint's parser can use, by preset. Each list is
@@ -215,20 +226,20 @@ export type SubjectCaseRule =
   | { readonly kind: "absent" }
   /** A config that states no subject-case rule: commitlint checks nothing, and neither does nen. */
   | { readonly kind: "none"; readonly file: string }
-  /** A config nen cannot read the rule from; `reason` says why, and what would let nen read it. */
-  | { readonly kind: "unreadable"; readonly file: string; readonly reason: string }
-  | {
+  /**
+   * A config nen cannot read the rule from. `reason` says why and what would
+   * let nen read it; `cause` is the same fact in a clause, for the line that
+   * says a declared rule was applied instead.
+   */
+  | { readonly kind: "unreadable"; readonly file: string; readonly reason: string; readonly cause: string }
+  | (SubjectCaseSpec & {
       readonly kind: "rule";
       readonly file: string;
       /** Where the rule was stated: the file's own `rules`, or config-conventional through `extends`. */
       readonly origin: "rules" | "extends";
-      /** 0 disables it, 1 is a warning, 2 an error -- the only three commitlint's schema admits. */
-      readonly level: 0 | 1 | 2;
-      readonly when: Condition;
-      readonly checks: readonly CaseCheck[];
       /** The header grammar commitlint's parser uses under this config. */
       readonly grammar: HeaderGrammar;
-    };
+    });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -280,54 +291,28 @@ function loadData(place: string, text: string): Loaded {
 }
 
 /**
- * A rule's case list, normalized as @commitlint/rules normalizes it: absent
- * is `[]`, a single value is a list of one, a bare name is `always`, and an
- * object entry's `when` negates only when it is exactly "never".
+ * An explicit `rules['subject-case']`, through ./rule.ts's one validator --
+ * the same one nen/workflow.json's `commits.subjectCase` goes through.
  *
- * AN UNKNOWN CASE NAME IS REFUSED FOR EVERY SUBJECT, where nen is
- * deliberately stricter than commitlint: commitlint throws only when
- * it reaches the transform, so a subject that does not open with a letter
- * slips past a list it cannot evaluate. A gate that crashes on nearly every
- * message is broken rather than configured, and saying so once, by name,
- * beats passing the one subject in twenty that happens to dodge it.
- */
-function parseChecks(file: string, value: unknown): CaseCheck[] {
-  if (value === undefined) return [];
-  const entries = Array.isArray(value) ? value : [value];
-  return entries.map((entry): CaseCheck => {
-    const name: unknown = isRecord(entry) ? entry["case"] : entry;
-    if (!isCaseName(name)) {
-      throw new CommitlintConfigError(
-        file,
-        `rule 'subject-case' lists ${JSON.stringify(entry)}, which is not a case commitlint knows -- it would throw "Unknown target case" on every subject. Use one of the names @commitlint/ensure accepts (lower-case, upper-case, camel-case, kebab-case, pascal-case, sentence-case, snake-case, start-case)`,
-      );
-    }
-    return { when: isRecord(entry) && entry["when"] === "never" ? "never" : "always", case: name };
-  });
-}
-
-/**
- * An explicit `rules['subject-case']`, held to the checks commitlint makes
- * before it runs any rule -- @commitlint/config-validator's schema (a level
- * of exactly 0, 1 or 2; 'always' or 'never') and @commitlint/lint's own (2 or
- * 3 items) -- whose failure makes commitlint throw rather than lint, so a
- * config that fails one is a gate that refuses every commit. Level 0 alone
- * (`[0]`) is the one short form both allow.
+ * A SHAPE FAULT IS ONE COMMITLINT REFUSES AT LOAD, so it is named as such. AN
+ * UNKNOWN CASE NAME IS REFUSED FOR EVERY SUBJECT, where nen is deliberately
+ * stricter than commitlint: commitlint throws only when it reaches the
+ * transform, so a subject that does not open with a letter slips past a list
+ * it cannot evaluate. A gate that crashes on nearly every message is broken
+ * rather than configured, and saying so once, by name, beats passing the one
+ * subject in twenty that happens to dodge it.
  */
 function parseExplicitRule(file: string, value: unknown, grammar: HeaderGrammar): SubjectCaseRule {
-  const refuse = (problem: string): never => {
-    throw new CommitlintConfigError(file, `rule 'subject-case' ${problem}, received ${JSON.stringify(value)} -- commitlint refuses the config too`);
-  };
-  if (!Array.isArray(value)) return refuse("must be an array ([level, 'always'|'never', cases])");
-  const [level, when] = value as unknown[];
-  if (level === 0 && value.length === 1) return { kind: "rule", file, origin: "rules", level: 0, when: "always", checks: [], grammar };
-  if (level !== 0 && level !== 1 && level !== 2) return refuse("must start with a level of 0, 1 or 2");
-  if (value.length < 2 || value.length > 3) return refuse("must be 2 or 3 items long");
-  if (when !== "always" && when !== "never") return refuse("must have 'always' or 'never' as its condition");
-  // A disabled rule is never run, so its case list is never read -- commitlint
-  // does not reject a bad one either.
-  const checks = level === 0 ? [] : parseChecks(file, value[2]);
-  return { kind: "rule", file, origin: "rules", level, when, checks, grammar };
+  const parsed = parseSubjectCaseTuple(value);
+  if (!parsed.ok) {
+    throw new CommitlintConfigError(
+      file,
+      parsed.refusedAtLoad
+        ? `rule 'subject-case' ${parsed.problem}, received ${JSON.stringify(value)} -- commitlint refuses the config too`
+        : `rule 'subject-case' ${parsed.problem}`,
+    );
+  }
+  return { kind: "rule", file, origin: "rules", ...parsed.spec, grammar };
 }
 
 /** The subject-case rule one loaded config states, following the `extends` merge as far as data allows. */
@@ -338,6 +323,7 @@ function resolveRule(file: string, config: unknown): SubjectCaseRule {
       kind: "unreadable",
       file,
       reason: `${file} pulls part of itself in through cosmiconfig's '$import', which nen does not follow`,
+      cause: `${file} uses cosmiconfig's '$import', which nen does not follow`,
     };
   }
   const extended = config["extends"];
@@ -360,6 +346,7 @@ function resolveRule(file: string, config: unknown): SubjectCaseRule {
       kind: "unreadable",
       file,
       reason: `${file} extends '${unresolved}', a shareable config nen cannot resolve (it is a JavaScript package, and nen does not execute one), and it may set the rule. Stating 'subject-case' under the file's own 'rules' makes it decisive, and nen then checks it`,
+      cause: `${file} extends '${unresolved}', which nen cannot resolve`,
     };
   }
   if (lastConventional === -1) return { kind: "none", file };
@@ -367,10 +354,11 @@ function resolveRule(file: string, config: unknown): SubjectCaseRule {
 }
 
 /**
- * The subject-case rule the repository at `root` states, read from the first
- * of COMMITLINT_SEARCH_PLACES that holds a config -- the one commitlint would
- * load from that directory. THROWS CommitlintConfigError when that place is a
- * .commitlintrc nen cannot parse, or a config commitlint itself would reject.
+ * The subject-case rule the repository at `root` states in its commitlint
+ * config, read from the first of COMMITLINT_SEARCH_PLACES that holds one --
+ * the one commitlint would load from that directory. THROWS
+ * CommitlintConfigError when that place is a .commitlintrc nen cannot parse,
+ * or a config commitlint itself would reject.
  */
 export function readSubjectCaseRule(root: string): SubjectCaseRule {
   for (const place of COMMITLINT_SEARCH_PLACES) {
@@ -381,7 +369,8 @@ export function readSubjectCaseRule(root: string): SubjectCaseRule {
       return {
         kind: "unreadable",
         file,
-        reason: `${file} is a JavaScript/TypeScript commitlint config, and nen does not execute a repository's code to read one. A data config (.commitlintrc.json, .commitlintrc.yaml, or package.json's 'commitlint' key) is one nen can check`,
+        reason: `${file} is a JavaScript/TypeScript commitlint config, and nen does not execute a repository's code to read one. Declare the rule as data in nen/workflow.json's commits.subjectCase ('config-conventional' or a commitlint rule tuple) and nen checks it`,
+        cause: `${file} is a JavaScript/TypeScript commitlint config nen does not execute`,
       };
     }
     const isPackage = PACKAGE_PLACES.has(place);
@@ -393,6 +382,7 @@ export function readSubjectCaseRule(root: string): SubjectCaseRule {
         kind: "unreadable",
         file,
         reason: `${file} carries a 'commitlint' key, but nen could not parse the file (${loaded.reason}), so it could not read the rule there`,
+        cause: `${file} carries a 'commitlint' key but will not parse`,
       };
     }
     const config = isPackage ? (isRecord(loaded.value) ? loaded.value["commitlint"] : undefined) : loaded.value;
@@ -402,14 +392,28 @@ export function readSubjectCaseRule(root: string): SubjectCaseRule {
   return { kind: "absent" };
 }
 
+/** A `commits.subjectCase` a repository declared, with the file it came from. */
+export interface DeclaredRule {
+  readonly file: string;
+  readonly rule: DeclaredSubjectCase;
+}
+
+/** The declaration a loaded nen/workflow.json carries, or null when it states none (or there is no file). */
+export function declaredSubjectCase(loaded: LoadedWorkflow): DeclaredRule | null {
+  const rule = loaded.present ? loaded.workflow.commits.subjectCase : null;
+  return rule === null ? null : { file: loaded.path, rule };
+}
+
 export interface SubjectCaseFindings {
   /** Lines that refuse the message: a level-2 rule the subject breaks. */
   readonly refusals: readonly string[];
   /** Lines to print and carry on: a level-1 rule the subject breaks, or a rule nen did not check. */
   readonly warnings: readonly string[];
+  /** Lines that are neither: which rule a verdict came from, or which declaration was not applied. */
+  readonly notes: readonly string[];
 }
 
-export const NO_FINDINGS: SubjectCaseFindings = { refusals: [], warnings: [] };
+export const NO_FINDINGS: SubjectCaseFindings = { refusals: [], warnings: [], notes: [] };
 
 /** The case names that begin with a capital: a `never` on any of them is fixed by a lower-case first word. */
 const CAPITAL_LEADING: ReadonlySet<CaseName> = new Set(["sentence-case", "sentencecase", "start-case", "pascal-case", "upper-case", "uppercase"]);
@@ -425,27 +429,67 @@ function fixFor(when: Condition, verdict: CaseVerdict): string {
   return `recase the subject to ${verdict.reported.length === 1 ? list : `one of ${list}`} -- ${exempt}`;
 }
 
+/** A declared rule as the tuple a reader would write, for the line that names it. */
+function describeDeclared(rule: DeclaredSubjectCase): string {
+  if (rule.form === "config-conventional") return `'config-conventional' (${CONFIG_CONVENTIONAL}'s default)`;
+  const cases = rule.checks.map((check: CaseCheck): unknown => (check.when === "never" ? { case: check.case, when: "never" } : check.case));
+  return `the rule ${JSON.stringify(rule.level === 0 && cases.length === 0 ? [0] : [rule.level, rule.when, cases])}`;
+}
+
+/**
+ * PRECEDENCE 2: the declared rule, applied because the commitlint config
+ * could not be read (`because` says why) or there is none. Binding exactly as
+ * a commitlint rule is -- level 2 refuses, level 1 warns -- and every outcome
+ * names nen/workflow.json as the rule's source, so no verdict here can be
+ * mistaken for one read from commitlint's own config.
+ */
+function judgeDeclared(declared: DeclaredRule, header: string, because: string, commitlintRuns: boolean): SubjectCaseFindings {
+  const { rule, file } = declared;
+  const source = `commits.subjectCase in ${file}, ${describeDeclared(rule)}`;
+  const why = `nen applies it because ${because}`;
+  if (rule.level === 0) return { ...NO_FINDINGS, notes: [`subject-case is off: ${source} disables it, and ${why}`] };
+  // The grammar config-conventional names and nen renders; a header nen
+  // rendered always parses under it.
+  const subject = commitlintSubject(header, "conventionalcommits");
+  const verdict = subject === null ? null : subjectCaseVerdict(subject, rule.when, rule.checks);
+  if (verdict === null || verdict.valid) {
+    const tail = commitlintRuns ? " -- keep the two in step, since commitlint still runs its own rule at commit time" : "";
+    return { ...NO_FINDINGS, notes: [`subject-case checked against ${source}: ${why}${tail}`] };
+  }
+  const head = `subject '${subject ?? ""}' breaks the subject-case rule this repository declares (${source}; ${why}): ${verdict.message ?? ""}.`;
+  const fix = fixFor(rule.when, verdict);
+  if (rule.level === 2) {
+    return { ...NO_FINDINGS, refusals: [`${head} The declaration makes the rule binding, so nen refuses it: ${fix}.`] };
+  }
+  return { ...NO_FINDINGS, warnings: [`${head} The rule is declared at level 1, so nen only warns. To clear it: ${fix}.`] };
+}
+
 /**
  * THE ONE CHECK `commit format` AND `commit write` RUN, so the two cannot
- * drift into two answers for the same message: read the rule at `root`, find
- * the subject commitlint's parser would find in `header` -- the message's
- * first line, exactly as it will be committed -- and judge it.
+ * drift into two answers for the same message: read the commitlint config at
+ * `root`, apply the precedence in this module's header against `declared`
+ * (nen/workflow.json's `commits.subjectCase`, or null), find the subject
+ * commitlint's parser would find in `header` -- the message's first line,
+ * exactly as it will be committed -- and judge it.
  *
- * THROWS CommitlintConfigError, as readSubjectCaseRule does.
+ * THROWS CommitlintConfigError, as readSubjectCaseRule does -- whatever is
+ * declared, because a malformed .commitlintrc is a broken gate, not a missing
+ * one.
  */
-export function subjectCaseFindings(root: string, header: string): SubjectCaseFindings {
+export function subjectCaseFindings(root: string, header: string, declared: DeclaredRule | null): SubjectCaseFindings {
   const rule = readSubjectCaseRule(root);
   if (rule.kind === "absent") {
+    if (declared !== null) return judgeDeclared(declared, header, `no commitlint config was found at ${root}`, false);
     // Not a checkout root, probably -- a subdirectory, with no --repo -- and
     // commitlint, unlike nen, would go on looking in the parents.
     if (existsSync(join(root, ".git"))) return NO_FINDINGS;
     return {
-      refusals: [],
+      ...NO_FINDINGS,
       warnings: [`subject-case NOT checked: no commitlint config at ${root}, and commitlint also looks in parent directories -- pass --repo <checkout root>`],
     };
   }
-  if (rule.kind === "none") return NO_FINDINGS;
   if (rule.kind === "unreadable") {
+    if (declared !== null) return judgeDeclared(declared, header, rule.cause, true);
     // FOR REFERENCE, NEVER AS A VERDICT: the preset most configs extend. The
     // warning already says the repository's own rule was not read; this only
     // saves a builder from meeting the commonest refusal after the fact.
@@ -456,11 +500,19 @@ export function subjectCaseFindings(root: string, header: string): SubjectCaseFi
         ? ""
         : ` For reference only: under ${CONFIG_CONVENTIONAL}'s default -- the preset most commitlint configs extend -- this subject would be refused (${conventional.message ?? ""}).`;
     return {
-      refusals: [],
+      ...NO_FINDINGS,
       warnings: [`subject-case NOT checked: ${rule.reason}. commitlint still applies whatever rule the file states when the commit is made, after the commit exists.${reference}`],
     };
   }
-  if (rule.level === 0) return NO_FINDINGS;
+  // PRECEDENCE 1: a readable commitlint config is the real gate. A declaration
+  // beside it is said to be unapplied, never silently dropped.
+  const shadowed: readonly string[] =
+    declared === null
+      ? []
+      : [
+          `commits.subjectCase in ${declared.file} is not applied: ${rule.file} states the commitlint config as data, and that config is the gate commitlint runs, so nen reads the rule there. The declaration is redundant here -- remove it, or keep it in step`,
+        ];
+  if (rule.kind === "none" || rule.level === 0) return { ...NO_FINDINGS, notes: shadowed };
   const subject = commitlintSubject(header, rule.grammar);
   if (subject === null) {
     return {
@@ -468,18 +520,20 @@ export function subjectCaseFindings(root: string, header: string): SubjectCaseFi
       warnings: [
         `subject-case NOT checked: ${rule.file} names no parserPreset and extends no preset, so commitlint splits the header with its default parser (conventional-changelog-angular's), which does not parse '${header}' -- it has no '!' form -- finds no subject, and gives no subject-case verdict; nen gives none either`,
       ],
+      notes: shadowed,
     };
   }
   const verdict = subjectCaseVerdict(subject, rule.when, rule.checks);
-  if (verdict.valid) return NO_FINDINGS;
+  if (verdict.valid) return { ...NO_FINDINGS, notes: shadowed };
   const where = rule.origin === "rules" ? `set under 'rules' in ${rule.file}` : `${CONFIG_CONVENTIONAL}'s default, which ${rule.file} extends`;
   const head = `subject '${subject}' breaks this repository's commitlint rule 'subject-case' (${where}): ${verdict.message ?? ""}.`;
   const fix = fixFor(rule.when, verdict);
   if (rule.level === 2) {
-    return { refusals: [`${head} commitlint refuses this message at commit time, so nen refuses it now: ${fix}.`], warnings: [] };
+    return { refusals: [`${head} commitlint refuses this message at commit time, so nen refuses it now: ${fix}.`], warnings: [], notes: shadowed };
   }
   return {
     refusals: [],
     warnings: [`${head} The rule is at level 1, so commitlint only warns and still commits -- unless the hook runs it with --strict, which refuses on a warning. To clear it: ${fix}.`],
+    notes: shadowed,
   };
 }

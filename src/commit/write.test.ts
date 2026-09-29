@@ -206,7 +206,7 @@ describe("nen commit write -- the write", () => {
   });
 });
 
-describe("nen commit write -- the repository's commitlint subject-case rule, through the check 'commit format' runs (part of zheref/nen#263)", () => {
+describe("nen commit write -- the repository's commitlint subject-case rule, through the check 'commit format' runs (zheref/nen#263)", () => {
   /** A checkout root (it has a `.git` entry) holding message.txt and these commitlint files. */
   function commitlintRepo(message: string, files: Record<string, string>): string {
     const root = repo({ message });
@@ -300,5 +300,53 @@ describe("nen commit write -- the repository's commitlint subject-case rule, thr
     const result = await capture(bang, ["--message-file", "message.txt", "--dry-run"], [STAGED]);
     expect(result.code).toBe(0);
     expect(result.err).toEqual([expect.stringMatching(/^nen: warning: subject-case NOT checked: .*default parser/)]);
+  });
+});
+
+describe("nen commit write -- commits.subjectCase in nen/workflow.json, agreeing with 'commit format' (zheref/nen#263)", () => {
+  const KRO_PWA = "module.exports = { extends: ['@commitlint/config-conventional'] }\n";
+  /** A checkout root holding message.txt, a code commitlint config, and the given commits block. */
+  function declaredRepo(message: string, commits: unknown, files: Record<string, string> = { "commitlint.config.cjs": KRO_PWA }): string {
+    const root = repo({ message, policy: { commits } });
+    mkdirSync(join(root, ".git"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, name), text, "utf8");
+    return root;
+  }
+
+  it("refuses 'Escape closes it' at exit 2 before any git call, naming nen/workflow.json -- the same verdict 'commit format' gives", async () => {
+    const root = declaredRepo("fix: Escape closes it\n", { subjectCase: "config-conventional" });
+    const written = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(written.code).toBe(2);
+    expect(written.seams.calls).toEqual([]);
+    expect(written.err.join("\n")).toMatch(/subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen\/workflow\.json/);
+    const err: string[] = [];
+    const io: Io = { out: (): void => {}, err: (line): void => void err.push(line) };
+    const formatted = await runFamily(commitCommand, ["commit", "format", "--type", "fix", "--subject", "Escape closes it"], root, false, io, new ScriptedSeams([]));
+    expect(formatted).toBe(2);
+    expect(written.err.join("\n")).toContain(err.join("\n").replace(/^nen: /, ""));
+  });
+
+  it("commits a subject the declared rule passes, with the note saying where the rule came from", async () => {
+    const root = declaredRepo("fix: escape closes it\n", { subjectCase: [2, "always", "lower-case"] });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["committed newsha00: fix: escape closes it"]);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: subject-case checked against commits\.subjectCase in .*the rule \[2,"always",\["lower-case"\]\]/)]);
+  });
+
+  it("lets a readable data commitlint config win, noting the declaration was not applied", async () => {
+    const root = declaredRepo("fix: start the timer\n", { subjectCase: [2, "always", "upper-case"] }, { ".commitlintrc.json": JSON.stringify({ extends: ["@commitlint/config-conventional"] }) });
+    const result = await capture(root, ["--message-file", "message.txt", "--dry-run"], [STAGED]);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: commits\.subjectCase in .* is not applied/)]);
+  });
+
+  it("refuses a malformed commits.subjectCase at exit 1 by pointer, even with no --trailer, and commits nothing", async () => {
+    const root = declaredRepo("fix: start the timer\n", { subjectCase: [2, "sometimes", "lower-case"] });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("commits.subjectCase[1]");
+    expect(result.err.join("\n")).toMatch(/nen will not commit under a policy it could not read/);
+    expect(result.seams.calls).toEqual([]);
   });
 });
