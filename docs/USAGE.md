@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 40 command
-families, 110 verbs, every flag checked against the binary this repository
+families, 111 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -325,7 +325,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | File | What it holds | What reads it |
 |---|---|---|
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
-| `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) |
+| `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
@@ -624,7 +624,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 110 verbs, grouped as the README groups them. **Reads** is what a
+All 111 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -708,6 +708,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
+| [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to | nen/repos.json | yes |
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | caller-named --rules-dir (a handbooks checkout at the pinned tag) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no git/gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | caller-named --rules-dir + --canon-values; the surface table; reads under --repo; no git/gh | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
@@ -5111,7 +5112,7 @@ post-steps (nen does NOT run these):
 
 **`nen canon`**
 
-Resolves which handbooks a target repository loads, and keeps a canonical-rule mirror in sync with a `canon-values.yml` -- in the rules location of **every agent surface the consumer declares**, not one directory. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and renders/diffs the stack's rule set into each surface's own location, the way the reference implementation's `scripts/sync_canon.py` did for one.
+Resolves which handbooks a target repository loads, reads the canon pin its registry records, and keeps a canonical-rule mirror in sync with a `canon-values.yml` -- in the rules location of **every agent surface the consumer declares**, not one directory. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and renders/diffs the stack's rule set into each surface's own location, the way the reference implementation's `scripts/sync_canon.py` did for one.
 
 **Where the canon lives.** The single canonical source of every handbook and rule set is the public [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks) repository (`CON-13`): `handbooks/INDEX.md` is its manifest -- the always-load set plus exactly one `stacks/<scenario>/` handbook per scenario, each stack carrying its operational `rules/` set. Every path flag on this family (`--always-load`, `--stack-dir`, `--rules-dir`) names a location inside a **checkout of that repository at the tag the consumer pins**; nen fetches nothing and knows no repository by name. The scenario-to-stack mapping is derived, not looked up: the recorded scenario IS the directory name under `--stack-dir`, so a stack added to the canon needs no change here. The reference implementation these verbs were ported from is frozen; nothing in this family reads it.
 
@@ -5152,6 +5153,41 @@ always load: handbooks/uzf-core.md, handbooks/security-baseline.md, handbooks/ux
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
+### `nen canon pin`
+
+Answers "which canonical handbooks repository does this consumer mirror, and at which tag" from the consumer's **own** `nen/repos.json`: the `pinned` field on that repository's `maintained_tools` entry. The pin is data there for two reasons this family depends on: a sync has to know the tag **before** it can check the canon out and render, and [`canon mirror check`](#nen-canon-mirror-check) has to know it to hold the mirror to it -- a mirror that cannot name the tag it was rendered from cannot be checked for drift against it. It lives on `maintained_tools`, not `consumers[]`, because [`repo classify`](#nen-repo-classify) reads a `consumers` entry as a consumer at G2 while a canon repository stands at G4, and `maintained_tools` is the list whose entries classify as canon. [`schema check`](#nen-schema-check) reports the same pin on its `nen/repos.json` row.
+
+**Usage**
+
+```text
+nen canon pin --repo <consumer> [--source <owner/name>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The consumer whose registry records the pin. | Listed unbracketed: omitted, exits 2 by name. |
+| `--source <owner/name>` | no | Which pinned tool is the canon, when the registry pins more than one. | Refused (exit 1) when the registry records no `pinned` for it. |
+
+**Output and exit codes** -- prints `source: <owner/name>`, `ref: <tag>`, `recorded in: <path> (maintained_tools[].pinned)`. `--json`: `{ contract: "nen.canon.pin/v0.1", source, ref, tagShaped, recordedIn }`. Exit 0 when exactly one pin answers. Exit **1**, with a distinct reason naming `maintained_tools[].pinned` as the field to record, when `--repo` has no `nen/repos.json`, when no maintained tool is pinned, when several are and `--source` does not say which, or when `--source` names a tool the registry does not pin. A recorded pin that is not tag-shaped (`main`, a SHA) is printed and then **exits 1** too: a canon mirror is rendered from a tag, never a floating branch (`CON-13`). Exit 2 on an omitted `--repo` or an empty `--source`.
+
+**Example**
+
+```bash
+nen canon pin --repo /path/to/consumer --json
+```
+```json
+{
+  "contract": "nen.canon.pin/v0.1",
+  "source": "owner/handbooks",
+  "ref": "v0.6.0",
+  "tagShaped": true,
+  "recordedIn": "nen/repos.json (maintained_tools[].pinned)"
+}
+```
+(for a registry whose `maintained_tools` carries `{ "repo": "owner/handbooks", "role": "canonical handbooks", "pinned": "v0.6.0" }`; shape from `src/canon/command.test.ts`)
+
 ### `nen canon mirror generate`
 
 Renders the stack's canonical rule set -- every `.md` in `--rules-dir` except `--not-mirrored` (the canon directory's own `README.md` and `placeholders.md`), with every `{{TOKEN}}` bound from `--canon-values` -- into the rules location of **each agent surface the consumer declares**, under the consumer's own root (`--repo`). The location, the file extension, the frontmatter the surface needs and its size limit are the surface's **row** in `src/surface/rules.ts` (its `canonMirror` block, each fact cited to the page it was read from); adding a surface is adding a row, never a change to this verb. Only files whose bytes changed are written; a mirror file whose canon source is gone is deleted as an orphan.
@@ -5167,15 +5203,15 @@ Renders the stack's canonical rule set -- every `.md` in `--rules-dir` except `-
 
 **The marker is the ownership claim -- the collision rule.** nen owns exactly the files that carry its marker. A destination that exists and carries none was written by hand: the **whole run is refused (exit 2) before the first byte is written on any surface**, naming the file -- move or rename the consumer's own rule, or delete it in favour of the canon one. An unmarked file in a rules directory with no canon source is the consumer's own (CON-13 leaves repo-specific, non-canon config to the consumer): never deleted, listed as **foreign**, never drift. Only a directory's *immediate* children are the mirror's, so a consumer's own rules can live in a subdirectory (`.claude/rules/local/`, say) untouched. A marked file with no canon source is an orphan and is deleted. A symbolic link at a destination is refused. A document whose block has lost its `END` marker (or gained a second `BEGIN`) is refused, because nen cannot tell where the hand-written prose resumes.
 
-**Pin discipline is enforced.** `--ref` must be tag-shaped (`v1.2`, `v1.2.3`, `v0.6.0-rc1`): a canon mirror is rendered from a **tag** of the canonical repository, never a branch or a bare commit -- the incident `CON-13` records is a consumer pinned to a tag that predated the canon, whose next regen wiped its mirror from an empty source. Cut the tag first, then pin. `--rules-dir` names the stack's `rules/` directory inside a checkout of that repository **at that tag** (`nen canon resolve --leaf rules` derives the path); nen fetches nothing and checks nothing out.
+**The pin is data, and the flags default to it.** `--source` and `--ref` may be omitted: they then come from the consumer's own `nen/repos.json` -- the `pinned` tag on the canonical repository's `maintained_tools` entry, the same fact [`canon pin`](#nen-canon-pin) reads -- when exactly one maintained tool is pinned, or the one `--source` names. Given, a flag overrides the recorded pin. Neither given nor recorded is refused by name, saying both ways to supply it. **Pin discipline is enforced** either way: the ref must be tag-shaped (`v1.2`, `v1.2.3`, `v0.6.0-rc1`) -- a canon mirror is rendered from a **tag** of the canonical repository, never a branch or a bare commit -- and the incident `CON-13` records is a consumer pinned to a tag that predated the canon, whose next regen wiped its mirror from an empty source. Cut the tag first, then pin. `--rules-dir` names the stack's `rules/` directory inside a checkout of that repository **at that tag** (`nen canon resolve --leaf rules` derives the path); nen fetches nothing and checks nothing out.
 
 **AGENTS.md is read by more than Codex** -- Cursor and Antigravity read it as plain prose, and Claude Code (v2.1.277+) reads it **only when the consumer has no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` at or above the root** (`~/.claude/CLAUDE.md`, a managed `CLAUDE.md` and `.claude/rules/` do not count and keep loading beside it). So rendering `claude-code` and `codex` into one consumer is safe -- the two coexist -- but a consumer that renders both keeps a `CLAUDE.md` (its project-specifics header) so each surface reads the canon once; the Claude Code setting that reads both files (`claude-md-and-agents-md`) is honoured in **user and managed scope only**, is ignored in a repository's settings files, and is therefore not part of this design. The portable single-file pattern, where a consumer wants one shared file, is a `CLAUDE.md` containing `@AGENTS.md` -- never double-loaded on any version or setting. Each surface's caveat, including this one, prints on stderr as `nen: note: <surface>: ...` and is never acted on.
 
 **Usage**
 
 ```text
-nen canon mirror generate --repo <consumer> --rules-dir <dir>
-                          --canon-values <path> --source <owner/name> --ref <tag>
+nen canon mirror generate --repo <consumer> --rules-dir <dir> --canon-values <path>
+                          [--source <owner/name>] [--ref <tag>]
                           [--surfaces <a,b,...>] [--scenario <name>]
                           [--not-mirrored <a,b>] [--dry-run] [--json]
 ```
@@ -5187,8 +5223,8 @@ nen canon mirror generate --repo <consumer> --rules-dir <dir>
 | `--repo <path>` | yes | The CONSUMER repository the mirror is rendered into. | Listed unbracketed: omitted, exits 2 by name. This verb writes into the consumer's tree, and a cwd default would render a mirror into whatever directory the shell was standing in. `--rules-dir`, `--canon-values` and `--markdown-out` resolve against it; an absolute value is used as-is ([#100](https://github.com/zheref/nen/issues/100)). |
 | `--rules-dir <dir>` | yes | The stack's `rules/` directory in a checkout of the canonical handbooks repository at `--ref`. | Refused (exit 2) if unreadable, if it holds no rule file (an empty rendering would delete every mirrored file as orphaned), or if it resolves inside a declared surface's own rules location (the mirror would be rendered from itself). |
 | `--canon-values <path>` | yes | The consumer's `{{TOKEN}}` bindings, plus its `scenario:` and `surfaces:`. | `surfaces:` is an inline comma list (`claude-code, codex`) or a `- name` block list. An unbound token refuses the run naming the file and the token (exit 2). |
-| `--source <owner/name>` | yes | The canonical handbooks repository, as the marker cites it. | Refused unless it is an `owner/name` slug. |
-| `--ref <tag>` | yes | The tag of `--source` the mirror is rendered from, as the marker cites it. | Refused unless tag-shaped (`v<major>.<minor>[.<patch>][-pre]`). |
+| `--source <owner/name>` | no, when the registry pins it | The canonical handbooks repository, as the marker cites it. | Defaults to the one pinned `maintained_tools` entry in the consumer's `nen/repos.json`; required when none or several are pinned. Refused unless it is an `owner/name` slug. |
+| `--ref <tag>` | no, when the registry pins it | The tag of `--source` the mirror is rendered from, as the marker cites it. | Defaults to `--source`'s recorded `pinned` tag. Refused unless tag-shaped (`v<major>.<minor>[.<patch>][-pre]`), whichever way it arrived. |
 | `--surfaces <a,b,...>` | one of the two | The surfaces to render into; overrides the file's `surfaces:`. | Neither given, or an empty list, is refused (exit 2) naming the known surfaces; so is a name that is not a row. "Every supported surface" is deliberately not a default. |
 | `--scenario <name>` | no | Overrides the scenario read from `--canon-values`. | Its absence with no `scenario:` field in the values file is a refusal (exit 2). |
 | `--not-mirrored <a,b>` | no | Files in `--rules-dir` that are never mirrored. | The canon directory's own meta files (`README.md,placeholders.md`). Default: none. |
@@ -5240,8 +5276,8 @@ On a document surface the block's sections are classified one canon file at a ti
 **Usage**
 
 ```text
-nen canon mirror check --repo <consumer> --rules-dir <dir>
-                       --canon-values <path> --source <owner/name> --ref <tag>
+nen canon mirror check --repo <consumer> --rules-dir <dir> --canon-values <path>
+                       [--source <owner/name>] [--ref <tag>]
                        [--surfaces <a,b,...>] [--scenario <name>]
                        [--not-mirrored <a,b>] [--markdown-out <path>] [--json]
 ```
@@ -5253,8 +5289,8 @@ nen canon mirror check --repo <consumer> --rules-dir <dir>
 | `--repo <path>` | yes | The consumer whose committed mirror is checked. | Same as `generate`; never written to. |
 | `--rules-dir <dir>` | yes | Same as `generate`. | |
 | `--canon-values <path>` | yes | Same as `generate`. | |
-| `--source <owner/name>` | yes | Same as `generate`. | A file whose marker names another source is `stale`. |
-| `--ref <tag>` | yes | The pin this run expects. | A file whose marker names another ref is `stale`. |
+| `--source <owner/name>` | no, when the registry pins it | Same as `generate`. | A file whose marker names another source is `stale`. |
+| `--ref <tag>` | no, when the registry pins it | The pin this run expects; defaults to the recorded one. | A file whose marker names another ref is `stale` -- so moving the recorded pin without regenerating is exactly what turns every mirror file stale. |
 | `--surfaces <a,b,...>` | one of the two | Same as `generate`. | |
 | `--scenario <name>` | no | Same override as `generate`. | |
 | `--not-mirrored <a,b>` | no | Same as `generate`. | |
@@ -5291,7 +5327,7 @@ drift: yes
 ```
 (the pin moved to `v0.7.0` and nothing was regenerated: every file is stale on every surface, and the fix is one `generate` at the new pin; shape derived from `src/canon/mirror.ts`'s `checkSurface` and `src/canon/command.test.ts`)
 
-**Driving the pair from a skill or CI.** The sequence a sync skill runs is: `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; check the canonical repository out **at the tag**; `nen canon mirror generate ...` (its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check ...` against the same tag and fails on exit 1 -- the drift check `CON-13` asks for.
+**Driving the pair from a skill or CI.** The sequence a sync skill runs is: `nen canon pin --repo <consumer> --json` to learn the canonical repository and the tag the consumer is pinned to; check that repository out **at the tag**; `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; `nen canon mirror generate --repo <consumer> --rules-dir <that> --canon-values <path>` (source and ref default to the recorded pin; its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check` with the same inputs and fails on exit 1 -- the drift check `CON-13` asks for. Repinning is then one edit to `maintained_tools[].pinned` followed by one `generate`; a repin without the regenerate is what `check` reports as stale on every surface.
 
 <a id="family-quality"></a>
 

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
-import { canonCommand, CHECK_CONTRACT, GENERATE_CONTRACT } from "./command.js";
+import { canonCommand, CHECK_CONTRACT, GENERATE_CONTRACT, PIN_CONTRACT } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { fileMarker } from "./mirror.js";
 
@@ -182,6 +182,127 @@ function mirrorArgs(sub: "generate" | "check", fx: Fixture, extra: readonly stri
 function json(result: { out: string[] }): Record<string, unknown> {
   return JSON.parse(result.out.join("\n")) as Record<string, unknown>;
 }
+
+/** Write a consumer registry under `root` whose maintained_tools carry the given pins (`null` = no pinned field). */
+function writeRegistry(root: string, tools: Readonly<Record<string, string | null>>): void {
+  mkdirSync(join(root, "nen"), { recursive: true });
+  const maintained = Object.entries(tools).map(([repo, pinned]): Record<string, string> =>
+    pinned === null ? { repo, role: "a tool" } : { repo, role: "a tool", pinned },
+  );
+  writeFileSync(join(root, "nen", "repos.json"), JSON.stringify({ consumers: [], maintained_tools: maintained, product_codes: {} }, null, 2));
+}
+
+/** The mirror args without --source/--ref, so the pin has to come from the registry -- `extra` is appended AFTER the filter, so a test can put one of them back. */
+function unpinnedArgs(sub: "generate" | "check", fx: Fixture, extra: readonly string[] = []): string[] {
+  const base = mirrorArgs(sub, fx).filter((arg, index, all): boolean => {
+    const previous = all[index - 1];
+    return arg !== "--source" && arg !== "--ref" && previous !== "--source" && previous !== "--ref";
+  });
+  return [...base, ...extra];
+}
+
+describe("nen canon pin -- the canon pin is data in the consumer's own registry", () => {
+  it("reads the one pinned maintained tool as source and ref, naming where it was recorded", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/tool": null });
+    const result = await capture(["canon", "pin"], fx.root);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    expect(result.out).toEqual(["source: owner/handbooks", "ref: v1.2.0", `recorded in: ${join(fx.root, "nen", "repos.json")} (maintained_tools[].pinned)`]);
+    const doc = json(await capture(["canon", "pin", "--json"], fx.root));
+    expect(doc).toEqual({ contract: PIN_CONTRACT, source: "owner/handbooks", ref: "v1.2.0", tagShaped: true, recordedIn: "nen/repos.json (maintained_tools[].pinned)" });
+  });
+
+  it("exits 1 naming the field when the consumer has no registry, or pins nothing", async () => {
+    const fx = fixture();
+    const none = await capture(["canon", "pin"], fx.root);
+    expect(none.code).toBe(1);
+    expect(none.err.join("\n")).toMatch(/has no nen\/repos\.json, so no canon pin is recorded.*maintained_tools\[\]\.pinned/);
+    writeRegistry(fx.root, { "owner/tool": null });
+    const unpinned = await capture(["canon", "pin"], fx.root);
+    expect(unpinned.code).toBe(1);
+    expect(unpinned.err.join("\n")).toMatch(/pins no maintained tool/);
+  });
+
+  it("needs --source when several tools are pinned, and refuses a --source the registry does not pin", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0" });
+    const ambiguous = await capture(["canon", "pin"], fx.root);
+    expect(ambiguous.code).toBe(1);
+    expect(ambiguous.err.join("\n")).toMatch(/pins 2 maintained tools \(owner\/handbooks, owner\/other\); name the canonical one with --source/);
+    const chosen = await capture(["canon", "pin", "--source", "owner/other"], fx.root);
+    expect(chosen.code).toBe(0);
+    expect(chosen.out[1]).toBe("ref: v3.0.0");
+    const unknown = await capture(["canon", "pin", "--source", "owner/nowhere"], fx.root);
+    expect(unknown.code).toBe(1);
+    expect(unknown.err.join("\n")).toMatch(/records no 'pinned' tag for owner\/nowhere under maintained_tools \(pinned there: owner\/handbooks, owner\/other\)/);
+  });
+
+  it("reports a recorded pin that is not tag-shaped, and exits 1: a branch is not a pin", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "main" });
+    const result = await capture(["canon", "pin", "--json"], fx.root);
+    expect(result.code).toBe(1);
+    expect(json(result)["tagShaped"]).toBe(false);
+    expect(result.err.join("\n")).toMatch(/the recorded pin 'main' is not tag-shaped/);
+  });
+
+  it("refuses an omitted --repo and an empty --source at exit 2", async () => {
+    expect((await capture(["canon", "pin"], null)).code).toBe(2);
+    const fx = fixture();
+    const empty = await capture(["canon", "pin", "--source", ""], fx.root);
+    expect(empty.code).toBe(2);
+    expect(empty.err.join("\n")).toMatch(/--source was given an empty value/);
+  });
+});
+
+describe("nen canon mirror -- --source and --ref default to the consumer's recorded pin", () => {
+  it("renders and checks with neither flag when the registry pins exactly one tool, and the marker names that pin", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const generated = await capture(unpinnedArgs("generate", fx, ["--surfaces", "claude-code"]), fx.root);
+    expect(generated.code, generated.err.join("\n")).toBe(0);
+    expect(readFileSync(join(fx.root, ".claude", "rules", "01-a.md"), "utf8")).toMatch(/^<!-- GENERATED by nen canon mirror from owner\/handbooks@v1\.2\.0: scenario-x\/01-a\.md/);
+    expect((await capture(unpinnedArgs("check", fx, ["--surfaces", "claude-code"]), fx.root)).code).toBe(0);
+    // Moving the recorded pin, with no flag anywhere, is what makes the mirror stale.
+    writeRegistry(fx.root, { "owner/handbooks": "v1.3.0" });
+    const moved = await capture(unpinnedArgs("check", fx, ["--surfaces", "claude-code"]), fx.root);
+    expect(moved.code).toBe(1);
+    expect(moved.out.join("\n")).toMatch(/stale: \.claude\/rules\/01-a\.md, \.claude\/rules\/02-b\.md/);
+  });
+
+  it("lets a flag override the recorded pin, and --source pick among several", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0" });
+    const picked = await capture([...unpinnedArgs("generate", fx, ["--surfaces", "claude-code", "--source", "owner/other", "--dry-run"]), "--json"], fx.root);
+    expect(picked.code, picked.err.join("\n")).toBe(0);
+    expect(json(picked)).toMatchObject({ source: "owner/other", ref: "v3.0.0" });
+    const overridden = await capture([...unpinnedArgs("generate", fx, ["--surfaces", "claude-code", "--source", "owner/other", "--ref", "v9.9.9", "--dry-run"]), "--json"], fx.root);
+    expect(json(overridden)).toMatchObject({ source: "owner/other", ref: "v9.9.9" });
+  });
+
+  it("refuses by name when neither the flags nor the registry give a pin, saying both ways to supply it", async () => {
+    const fx = fixture();
+    const noRegistry = await capture(unpinnedArgs("generate", fx), fx.root);
+    expect(noRegistry.code).toBe(2);
+    expect(noRegistry.err.join("\n")).toMatch(/--source not given and .* has no nen\/repos\.json\. Name the canonical handbooks repository with --source .* or record it under maintained_tools with a 'pinned' tag/);
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0" });
+    const ambiguous = await capture(unpinnedArgs("generate", fx), fx.root);
+    expect(ambiguous.code).toBe(2);
+    expect(ambiguous.err.join("\n")).toMatch(/--source not given and .* pins 2 maintained tools/);
+    writeRegistry(fx.root, { "owner/handbooks": null });
+    const unpinnedSource = await capture(unpinnedArgs("generate", fx, ["--source", "owner/handbooks"]), fx.root);
+    expect(unpinnedSource.code).toBe(2);
+    expect(unpinnedSource.err.join("\n")).toMatch(/--ref not given and .* records no 'pinned' tag for owner\/handbooks under maintained_tools\. Pass --ref <tag>, or record the pin/);
+  });
+
+  it("refuses a recorded pin that is not tag-shaped, naming it as the recorded pin rather than a flag", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "main" });
+    const result = await capture(unpinnedArgs("generate", fx), fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/the recorded pin for owner\/handbooks 'main' is not tag-shaped/);
+  });
+});
 
 describe("nen canon mirror generate -- CLI wiring", () => {
   it("renders every declared surface into its own location under --repo, and says so", async () => {

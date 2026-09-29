@@ -343,7 +343,11 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     }),
     run(REPOS_FILE, root, true, (): string => {
       const repos = loadRepoRegistry(root);
-      return `${repos.consumers.length} consumers, ${Object.keys(repos.productCodes).length} product codes, latest ${repos.latest ?? "(unrecorded)"}`;
+      // The canon pin (CON-13) is surfaced here because a pin nobody can see
+      // is a pin nobody knows has moved -- it was prose in a `$comment` until
+      // the loader modelled it.
+      const pins = Object.entries(repos.toolPins).map(([repo, tag]): string => `${repo}@${tag}`);
+      return `${repos.consumers.length} consumers, ${Object.keys(repos.productCodes).length} product codes, latest ${repos.latest ?? "(unrecorded)"}${pins.length === 0 ? "" : `, pinned tools: ${pins.join(", ")}`}`;
     }),
     colorsCheck(root),
     run(GATES_FILE, root, false, (): string => {
