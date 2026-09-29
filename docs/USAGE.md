@@ -677,13 +677,13 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`repo`](#family-repo) | [`nen repo classify`](#nen-repo-classify) | one verdict about a repository: role (canon / consumer / unregistered), kind (product / process / library / unknown), stack, lanes, and the gate a change there stands at | nen/repos.json + nen/contract.json under --repo; `git remote get-url origin` when no --target | yes |
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
-| [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges | yes |
+| [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance) | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
 | [`release`](#family-release) | [`nen release unit-check`](#nen-release-unit-check) | whether a pull request's changed files stay inside `--repo`'s declared `release.unitPaths` | github (`gh api --paginate --slurp repos/{owner}/{repo}/pulls/{n}/files`), nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
-| [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)) | git log --merges, CHANGELOG.md, changelog.d/ | yes |
+| [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)), except the range's terminal PR when its merge introduced the dated section | git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance), CHANGELOG.md, changelog.d/ | yes |
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
@@ -4378,6 +4378,16 @@ chores, an empty `changelog.d/` at the cut point, CON-33(c) reconciliation,
 and whether the tag name already exists — all six, always, never just the
 first failure.
 
+The CON-33(c) row runs the **same reconciliation** as
+[`nen changelog completeness`](#nen-changelog-completeness), including the
+**release-PR allowance** described there: for one range the two verbs give one
+verdict. When the allowance excuses the terminal PR, the row still passes and
+names it (`…, but one, excused by the release-PR allowance -- #N reconciled by
+the CON-33(c) release-PR allowance: …`). When it declines a terminal PR that is
+still missing, the row appends why (`missing: #N -- #N not reconciled by the
+release-PR allowance: …`). A `--range` with a revision beginning with `-` is
+refused at exit 2 as there, and here before any tool runs, `gh` included.
+
 **Usage**
 
 ```text
@@ -4402,8 +4412,11 @@ nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<
 
 **Output and exit codes** — human lines: `ok`/`FAIL` plus the check name and
 detail, one per row; `--json` top-level keys: `checks[]` (`name`, `ok`,
-`detail`), `liveChores[]`, `ok`. Exit 0 when every row passes, exit 1 when
-any row fails, exit 2 on a missing required flag.
+`detail`), `liveChores[]`, `releasePrAllowance` (the CON-33(c) row's
+release-PR allowance decision, the same object
+[`changelog completeness`](#nen-changelog-completeness) reports, or `null`
+when every merged PR was already cited), `ok`. Exit 0 when every row passes,
+exit 1 when any row fails, exit 2 on a missing required flag.
 
 **Example**
 
@@ -4733,6 +4746,55 @@ CON-33(c): every PR merged in `--range` has a CHANGELOG entry or an
 (un)collated fragment. `--owner-repo` scopes changelog link matching to this
 repository, so a foreign-repo link sharing a PR number never counts.
 
+**The release-PR allowance (zheref/nen#229).** The terminal PR whose merge
+introduced the dated section does not have to cite itself. That is what a
+release proposal does: it writes the dated section before its own number
+exists, so without this, its own merge could never pass. The terminal PR `#N`
+is reconciled without a citation only when all five of these hold, each read
+from git:
+
+1. `--range` is `<vPrev>..<vNew>`, and it ends at a two-parent
+   `Merge pull request #N` commit. This is the range's **terminal merge**.
+2. `#N` is uncited.
+3. `--changelog` opens with a **dated** section (`## vX.Y.Z` or `### vX.Y.Z`),
+   and the CHANGELOG at the terminal merge opens with the same dated section.
+4. That dated section is **absent at the merge's first parent**: the trunk did
+   not have it before this merge.
+5. No **other** merge on the PR's own branch introduced it, whether a PR merge
+   or a local `git merge`. "Introduced" means absent at that merge's first
+   parent and present at the merge.
+
+A heading whose trailing text is `unreleased` (any case, e.g.
+`## v0.14.0 — unreleased`) is **not dated**:
+
+- a `--changelog` that opens with one cuts no dated section, and declines
+  (`no-dated-section`);
+- one on the first parent does not count as present at condition 4, so the PR
+  that **dates** it is the PR that introduced the dated section.
+
+That is "introduced", and it is decided from commits and CHANGELOG blobs. No
+GitHub metadata is read. The boundary:
+
+- The allowance covers **at most one PR**, and only the range's terminal
+  merge.
+- Every **other** uncited merged PR still fails exactly as before.
+- A PR that **carried** the dated section to the trunk still fails
+  (condition 5) and must be cited. An example is a release bump merged into a
+  feature branch (by a PR or locally) that a later PR then merged to `main`.
+- A PR ending the range after the dated section was already on the trunk also
+  still fails (condition 4), for example a reconcile PR.
+- A git read that fails **declines** the allowance. It never grants it.
+- **What it cannot tell apart:** the history proves that the terminal PR's
+  merge introduced the dated section, not that the PR is a release proposal. A
+  delivery PR that opens the dated section itself, and ends the range, is
+  excused the same way.
+- A `git pull` merge on the branch whose first parent lacked the section and
+  whose second parent carried it reads as another merge introducing it, and
+  declines.
+
+This does not change CON-33 itself, `changelog fragment-required` (a), or
+`changelog collate` (b).
+
 **Usage**
 
 ```text
@@ -4743,17 +4805,53 @@ nen changelog completeness --range <vPrev>..<vNew> --changelog <path> --owner-re
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--range <vPrev>..<vNew>` | yes | as `git log --merges` understands it | — |
+| `--range <vPrev>..<vNew>` | yes | as `git log --merges` understands it | a revision beginning with `-` is refused at exit 2 before git runs (git would read it as an option); every revision reaches git behind `--end-of-options` |
 | `--changelog <path>` | yes | the `CHANGELOG.md` to reconcile against | — |
 | `--owner-repo <owner/name>` | yes | scopes changelog link matching to THIS repository | — |
 | `--fragment-dir <dir>` | no | same default/empty/non-directory rules as `release preflight` | default `changelog.d`; a missing directory means zero fragments, not a refusal |
-| `--repo <path>` | no | resolves relative `--changelog`/`--fragment-dir` and runs `git log` | default cwd |
+| `--repo <path>` | no | resolves relative `--changelog`/`--fragment-dir` and runs `git log` | default cwd; `--changelog` must sit inside it for the release-PR allowance to read its history |
 | `--json` | no | machine-readable result | — |
 
-**Output and exit codes** — human lines: a pass line, or `missing CHANGELOG
-entry or fragment for:` plus each `#<n>`; `--json` top-level keys: `ok`,
-`missing[]`. Exit 0 when every merged PR is covered, exit 1 when any PR is
-missing, exit 2 on a missing required flag.
+**Output and exit codes**
+
+Human lines are one of:
+
+- a pass line;
+- `missing CHANGELOG entry or fragment for:` plus each `#<n>`.
+
+The allowance is **named, never silently folded in**:
+
+- When it excuses the terminal PR, the pass line reads `…, but one, excused by
+  the release-PR allowance:` and is followed by
+  `  #N reconciled by the CON-33(c) release-PR allowance: <why>`. The line names
+  the rule, not an identity: see "what it cannot tell apart" above.
+- When it declines a terminal PR that is still missing, the list is followed by
+  `#N not reconciled by the release-PR allowance: <why>`.
+
+`--json` top-level keys, in this order: `missing[]` (after the allowance),
+`ok`, `releasePrAllowance`. `releasePrAllowance` is `null` when every merged
+PR was already cited. Otherwise it is `{ applied, verdict, pr, mergeSha,
+firstParentSha, section, carriedBy, detail }`, and `verdict` is one of:
+
+- `applied`
+- `range-not-two-dot`
+- `terminal-unreadable`
+- `terminal-not-pr-merge`
+- `terminal-pr-cited`
+- `no-dated-section`
+- `changelog-outside-repo`
+- `section-not-at-terminal`
+- `section-on-first-parent`
+- `section-carried` (with `carriedBy`, the PR whose merge introduced the
+  section, or `null` for a local merge, whose sha is in `detail`)
+- `history-unreadable`
+
+Exit codes:
+
+- `0` when every merged PR is covered, the allowance included;
+- `1` when any PR is missing;
+- `2` on a missing required flag, or a `--range` with a revision beginning
+  with `-`.
 
 **Example**
 
@@ -10166,8 +10264,14 @@ nen changelog collate --repo . --version v0.3.0 --theme "usage documentation" \
 ```
 
 `completeness` exits 1 listing each `#<n>` with neither a CHANGELOG entry nor a
-fragment. `collate` without `--write` touches no file and deletes no fragment;
-`--write` is the only thing that rewrites `CHANGELOG.md`.
+fragment. There is one exception. After the release PR merges, run it with the
+cut point as the range's end: the release PR is reconciled without citing
+itself, and is named on its own line, when its merge introduced the dated
+section being cut. Dating a `## vX.Y.Z — unreleased` heading that an earlier
+PR opened counts as introducing it. That is the
+[release-PR allowance](#nen-changelog-completeness), so no follow-up
+"reconcile" PR is needed. `collate` without `--write` touches no file and
+deletes no fragment; `--write` is the only thing that rewrites `CHANGELOG.md`.
 
 ```bash
 # 4. Cut the tag at the exact reconciled commit. --at is never defaulted to HEAD.

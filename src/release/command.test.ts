@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
-import type { CommandResult, Seams } from "../seam/exec.js";
+import { defaultSeams, spawnRunner, type CommandResult, type Seams } from "../seam/exec.js";
+import { changelogCommand } from "../changelog/command.js";
 import { releaseCommand } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 
@@ -843,5 +845,117 @@ describe("nen release -- refuses an unknown subcommand", () => {
   it("exits 2", async () => {
     const result = await capture(["release", "bogus"], BANKAI_REPO, new ScriptedSeams([]).run);
     expect(result.code).toBe(2);
+  });
+});
+
+// zheref/nen#229. `nen release preflight` and `nen changelog completeness`
+// share ONE reconciliation (../changelog/reconcile.ts), release-PR allowance
+// included, so for the same range they must reach the same verdict. Proven
+// on a REAL merge graph: `git log`/`ls-tree`/`cat-file` run for real, and only
+// the two calls that would reach GitHub or a remote (`gh variable get`, `git
+// ls-remote`) are answered by the fixture. The allowance's own shapes are
+// covered in ../changelog/reconcile.test.ts and its integration twin.
+describe("nen release preflight -- the SAME CON-33(c) verdict as 'nen changelog completeness' (zheref/nen#229)", () => {
+  const usable = ((): boolean => {
+    const probe = spawnSync("git", ["--version"], { encoding: "utf8" });
+    const version = /(\d+)\.(\d+)/.exec(probe.stdout ?? "");
+    return probe.status === 0 && version !== null && (Number(version[1]) > 2 || (Number(version[1]) === 2 && Number(version[2]) >= 28));
+  })();
+
+  function mustGit(cwd: string, args: readonly string[]): void {
+    const result = spawnSync("git", [...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    if (result.status !== 0) throw new Error(`git ${args.join(" ")} exited ${result.status}: ${result.stderr}`);
+  }
+
+  const LINK = (n: number): string => `[#${n}](https://github.com/o/r/pull/${n})`;
+
+  /** v1.0.0 tagged; #221 delivered; the release PR #222 introduces v1.1.0 citing `cites`, and ends the range. */
+  function releaseRepo(cites: readonly number[], stray: boolean): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-release-parity-"));
+    mustGit(root, ["init", "-q", "-b", "main"]);
+    for (const [key, value] of [["user.name", "nen test"], ["user.email", "nen@example.invalid"], ["commit.gpgsign", "false"], ["tag.gpgsign", "false"], ["core.autocrlf", "false"]] as const) {
+      mustGit(root, ["config", key, value]);
+    }
+    writeFileSync(join(root, "CHANGELOG.md"), "# Changelog\n\n## v1.0.0 — 2026-09-01\n");
+    mustGit(root, ["add", "CHANGELOG.md"]);
+    mustGit(root, ["commit", "-q", "-m", "chore(release): v1.0.0"]);
+    mustGit(root, ["tag", "-a", "-m", "v1.0.0", "v1.0.0"]);
+    for (const [branch, pr] of [...(stray ? [["stray", 220] as const] : []), ["feature", 221] as const]) {
+      mustGit(root, ["checkout", "-q", "-b", branch, "main"]);
+      writeFileSync(join(root, `${branch}.txt`), `${branch}\n`);
+      mustGit(root, ["add", `${branch}.txt`]);
+      mustGit(root, ["commit", "-q", "-m", `feat: ${branch}`]);
+      mustGit(root, ["checkout", "-q", "main"]);
+      mustGit(root, ["merge", "-q", "--no-ff", "-m", `Merge pull request #${pr} from o/${branch}`, branch]);
+    }
+    mustGit(root, ["checkout", "-q", "-b", "release", "main"]);
+    writeFileSync(join(root, "CHANGELOG.md"), `# Changelog\n\n## v1.1.0 — 2026-09-20\n\nRelease unit: ${cites.map(LINK).join(", ")}.\n\n## v1.0.0 — 2026-09-01\n`);
+    mustGit(root, ["add", "CHANGELOG.md"]);
+    mustGit(root, ["commit", "-q", "-m", "chore(release): v1.1.0"]);
+    mustGit(root, ["checkout", "-q", "main"]);
+    mustGit(root, ["merge", "-q", "--no-ff", "-m", "Merge pull request #222 from o/release", "release"]);
+    writeFileSync(join(root, "live-chores.json"), "[]");
+    return root;
+  }
+
+  /** Real git for history; the fixture answers only what would leave the machine. */
+  const localOnly: Seams["run"] = (command, args, options): CommandResult => {
+    if (command === "gh") return { code: 1, stdout: "", stderr: "variable RELEASE_HOLD was not found", spawnFailed: false };
+    if (args[0] === "ls-remote") return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+    return spawnRunner(command, args, options);
+  };
+
+  async function both(root: string): Promise<{ preflight: { code: number; out: string[] }; completeness: { code: number; out: string[] } }> {
+    const preflight = await capture(
+      ["release", "preflight", "--repo-slug", "o/r", "--tag", "v1.1.0", "--range", "v1.0.0..main", "--changelog", "CHANGELOG.md", "--owner-repo", "o/r", "--critical-issues", "", "--live-chores-from", "live-chores.json"],
+      root,
+      localOnly,
+    );
+    const out: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (): void => {} };
+    const seams: Seams = { ...defaultSeams(), run: localOnly };
+    const code = await runFamily(changelogCommand, ["changelog", "completeness", "--range", "v1.0.0..main", "--changelog", "CHANGELOG.md", "--owner-repo", "o/r"], root, false, io, seams);
+    return { preflight, completeness: { code, out } };
+  }
+
+  it.skipIf(!usable)("both pass when the only uncited PR is the terminal release PR, and both name it", async () => {
+    const { preflight, completeness } = await both(releaseRepo([221], false));
+    expect(completeness.code).toBe(0);
+    expect(preflight.code).toBe(0);
+    expect(preflight.out.join("\n")).toMatch(/ok {4}CON-33\(c\) reconciled -- every merged PR has a CHANGELOG entry or fragment, but one, excused by the release-PR allowance -- #222 reconciled by the CON-33\(c\) release-PR allowance/);
+    expect(completeness.out[1]).toMatch(/#222 reconciled by the CON-33\(c\) release-PR allowance/);
+  });
+
+  it.skipIf(!usable)("both fail on an uncited non-terminal PR, and both name it", async () => {
+    const { preflight, completeness } = await both(releaseRepo([221], true));
+    expect(completeness.code).toBe(1);
+    expect(completeness.out).toContain("  #220");
+    expect(preflight.code).toBe(1);
+    expect(preflight.out.join("\n")).toMatch(/FAIL {2}CON-33\(c\) reconciled -- missing: #220 -- #222 reconciled by the CON-33\(c\) release-PR allowance/);
+  });
+
+  // The review settlement's M2: the shared reconciliation refuses a --range
+  // with a revision beginning with '-' before ANY git call. Preflight's own
+  // `git log` used to take it as an option (--output=<file>), write the log to
+  // a file, and pass the CON-33(c) row on an empty merge list.
+  it("refuses --range=--output=<file>..HEAD at exit 2 -- no git and no gh runs, and no file is written", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    writeFileSync(join(dir, "CHANGELOG.md"), "no refs here\n");
+    writeFileSync(join(dir, "live-chores.json"), "[]");
+    const target = join(dir, "pwned");
+    const toolCalls: string[] = [];
+    const result = await capture(
+      ["release", "preflight", "--repo-slug", "o/r", "--tag", "v1.1.0", `--range=--output=${target}..HEAD`, "--changelog", "CHANGELOG.md", "--owner-repo", "o/r", "--critical-issues", "", "--live-chores-from", "live-chores.json"],
+      dir,
+      (command, args): CommandResult => {
+        toolCalls.push([command, ...args].join(" "));
+        if (command === "gh") return { code: 1, stdout: "", stderr: "variable RELEASE_HOLD was not found", spawnFailed: false };
+        return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/has a revision beginning with '-'/);
+    expect(toolCalls).toEqual([]);
+    expect(existsSync(target)).toBe(false);
   });
 });
