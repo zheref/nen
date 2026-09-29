@@ -18,12 +18,8 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { optionalDirectoryFlag, readJsonFile, readTextFile, splitList } from "../cli/inputs.js";
-import {
-  DEFAULT_FRAGMENT_DIR,
-  extractChangelogRefs,
-  extractFragmentRefs,
-  extractMergedPrNumbers,
-} from "../changelog/completeness.js";
+import { DEFAULT_FRAGMENT_DIR } from "../changelog/completeness.js";
+import { reconcileChangelog, refuseOptionShapedRange } from "../changelog/reconcile.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { GH, GIT, must, outputLines, ToolError, type CommandResult } from "../seam/exec.js";
 import { loadWorkflow } from "../schema/workflow.js";
@@ -239,6 +235,11 @@ export const releaseCommand: Command = {
     const repoSlug = requireValue(context.args, "repo-slug", "The owner/name to check RELEASE_HOLD and the tag against.");
     const tag = requireValue(context.args, "tag", "The tag being proposed for this cut.");
     const range = requireValue(context.args, "range", "The <vPrev>..<cut-point> range CON-33(c) reconciles.");
+    // Refused HERE, with the other usage checks, as well as inside the shared
+    // reconciliation: a --range git would read as an option is a usage error,
+    // and this verb reaches GitHub (`gh variable get`) before it reconciles --
+    // no tool should run for an invocation that is refused.
+    refuseOptionShapedRange(range);
     const changelogPath = requireValue(context.args, "changelog", "The CHANGELOG.md at the cut point.");
     const ownerRepo = requireValue(context.args, "owner-repo", "Scopes changelog link matching to this repository.");
     const holdVar = context.args.values["hold-var"] ?? DEFAULT_HOLD_VAR;
@@ -271,12 +272,18 @@ export const releaseCommand: Command = {
         : readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md"));
 
     const changelog = readTextFile(changelogPath, root);
-    const mergeLog = must(context.seams, GIT, ["log", range, "--merges", "--format=%s"], { cwd: root });
-    const mergedPrNumbers = extractMergedPrNumbers(outputLines(mergeLog.stdout));
-    const changelogRefs = extractChangelogRefs(changelog, ownerRepo);
-    const fragmentRefs = extractFragmentRefs(fragmentFiles);
-    const referenced = new Set([...changelogRefs, ...fragmentRefs]);
-    const missingChangelogPrs = mergedPrNumbers.filter((n): boolean => !referenced.has(n));
+    // THE SAME RECONCILIATION `nen changelog completeness` RUNS
+    // (../changelog/reconcile.ts), release-PR allowance included
+    // (zheref/nen#229). This used to be a second hand-spelling of the merge
+    // log read and the set difference; an allowance that lived in only one of
+    // the two would have let the verbs disagree about the same range.
+    const reconciliation = reconcileChangelog(context.seams, root, {
+      range,
+      changelogPath,
+      changelogText: changelog,
+      ownerRepo,
+      fragmentNames: fragmentFiles,
+    });
 
     const tagsResult = must(context.seams, GIT, ["ls-remote", "--tags", "origin"], { cwd: root });
     const tagAlreadyExists = outputLines(tagsResult.stdout).some((line): boolean => line.endsWith(`refs/tags/${tag}`));
@@ -289,7 +296,8 @@ export const releaseCommand: Command = {
       openCriticalIssueNumbers: criticalIssues,
       liveChores,
       fragmentFilesAtCutPoint: fragmentFiles,
-      missingChangelogPrs,
+      missingChangelogPrs: reconciliation.missing,
+      releasePrAllowance: reconciliation.releasePrAllowance,
       tagAlreadyExists,
       tag,
     });
