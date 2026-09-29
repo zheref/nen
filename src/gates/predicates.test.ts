@@ -10,6 +10,8 @@
 // are marked ADDED: the bats suite is a floor, not a ceiling (BC-9).
 
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { rollupEntryLabel } from "../github/types.js";
 import type {
   CheckRun,
@@ -33,12 +35,14 @@ import {
   reviewerLoginPattern,
   reviewerReviewCheckPattern,
   reviewsAllApprovedAtHead,
+  roundQuorum,
   unapprovedApprovers,
   defaultApprovers,
+  type EarlierHeadCheck,
   type OwedRound,
   type RoundInputs,
 } from "./predicates.js";
-import { loadGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 // --- the identities every case below is run against --------------------------
@@ -2250,5 +2254,450 @@ describe("the approve limb matches through the FILE's login_pattern", () => {
     const posted: Review[] = [review({ author: "stranger[bot]", commitId: "headsha" })];
     expect(reviewsAllApprovedAtHead(ALT, posted, "headsha", ["stranger"])).toBe(true);
     expect(reviewsAllApprovedAtHead(ALT, posted, "headsha", ["someone-absent"])).toBe(false);
+  });
+});
+
+// --- roundQuorum (maintainer ruling 2026-09-29) --------------------------------
+//
+// "Copilot credits are exhausted. Expect Cursor instead. Let's make it canon on
+// the repo so that we solve at least one round of reviews from both Copilot OR
+// Cursor (or both) as applicable." The quorum counts members that HAVE a round
+// through `reviewerRound` -- the same function `pendingRounds` clears a
+// reviewer with -- so these cases prove each of that function's branches is
+// reachable from the quorum, and that the two facts `pendingRounds` uses to
+// decide who is OWED (enrolment, the bounded exemption) do not decide who HAS.
+describe("roundQuorum (the `round_quorum` floor, ruling 2026-09-29)", () => {
+  const RAW = JSON.parse(
+    readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
+  ) as Record<string, unknown>;
+  const quorumOver = (anyOf: string[], minimum = 1): GateIdentities =>
+    parseGateIdentities("/fixture/nen/gates.json", {
+      ...RAW,
+      round_quorum: { any_of: anyOf, minimum },
+    });
+  const COPILOT_OR_BUGBOT = quorumOver(["copilot", "bugbot"]);
+
+  it("is null when the file declares no quorum -- the fixture as shipped", () => {
+    expect(roundQuorum(BANKAI, rounds(), "headsha", "bounded")).toBeNull();
+  });
+
+  it("counts NOBODY when nothing was posted and no check attached, naming each member's state", () => {
+    const result = roundQuorum(COPILOT_OR_BUGBOT, rounds(), "headsha", "bounded");
+    expect(result).toEqual({
+      anyOf: ["copilot", "bugbot"],
+      minimum: 1,
+      count: 0,
+      met: false,
+      members: [
+        { reviewer: "copilot", round: null, reading: "any-head", requested: false, roundCheck: null },
+        {
+          reviewer: "bugbot",
+          round: null,
+          reading: "any-head",
+          requested: false,
+          roundCheck: { pattern: "bugbot", name: null, state: "absent", conclusion: null, from: null, sha: null },
+        },
+      ],
+    });
+  });
+
+  it("counts a bounded_policy_exempt member's review at an EARLIER head -- exempt from being owed, not from having", () => {
+    const result = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({ reviews: [review({ author: "copilot-pull-request-reviewer[bot]", state: "COMMENTED", commitId: "oldsha" })] }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.met).toBe(true);
+    expect(result?.members[0]).toMatchObject({ reviewer: "copilot", round: "review" });
+  });
+
+  it("counts a member that was never ENROLLED once it has posted -- the configured set does not bound the count", () => {
+    // No Bugbot check at head, so defaultReviewers() would not enrol bugbot;
+    // its review posted at an earlier head still counts toward the floor.
+    const inputs = rounds({ reviews: [review({ author: "cursor[bot]", state: "COMMENTED", commitId: "oldsha" })] });
+    expect(defaultReviewers(COPILOT_OR_BUGBOT, inputs.checks)).not.toContain("bugbot");
+    const result = roundQuorum(COPILOT_OR_BUGBOT, inputs, "headsha", "bounded");
+    expect(result?.members[1]).toMatchObject({ reviewer: "bugbot", round: "review" });
+    expect(result?.count).toBe(1);
+  });
+
+  it("counts a round-check member whose check concluded SUCCESS at head, naming the check it found", () => {
+    const result = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({ checks: [checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" })] }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.met).toBe(true);
+    expect(result?.members[1]).toMatchObject({
+      round: "round-check",
+      roundCheck: { pattern: "bugbot", name: "Cursor Bugbot", state: "completed", conclusion: "SUCCESS", from: "head" },
+    });
+  });
+
+  it("C1: a NEUTRAL, FAILURE or CANCELLED run AT HEAD is NOT a round -- only SUCCESS is (zheref/nen#281)", () => {
+    // Bugbot's NEUTRAL is "found N issues" OR "cancelled because a newer commit
+    // was pushed"; findings always come with a review, which counts on its own.
+    for (const conclusion of ["NEUTRAL", "FAILURE", "CANCELLED", "TIMED_OUT"] as const) {
+      const inputs = rounds({ checks: [checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion })] });
+      const result = roundQuorum(COPILOT_OR_BUGBOT, inputs, "headsha", "bounded");
+      expect(result?.met, conclusion).toBe(false);
+      expect(result?.members[1]).toMatchObject({
+        round: null,
+        roundCheck: { state: "unsuccessful", conclusion, from: "head", sha: "headsha" },
+      });
+      // ...and an ENROLLED round-check reviewer stays owed on it: it is
+      // configured, and its run did not show a clean round.
+      expect(pendingRounds(BANKAI, inputs, "headsha", ["bugbot"], "bounded"), conclusion).toEqual([
+        { reviewer: "bugbot", reason: "no-round-at-head" },
+      ]);
+    }
+  });
+
+  it("C1: a NEUTRAL run WITH the review Bugbot posts for its findings counts -- through the review", () => {
+    const result = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({
+        checks: [checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "NEUTRAL" })],
+        reviews: [review({ author: "cursor[bot]", state: "COMMENTED", commitId: "headsha" })],
+      }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.members[1]?.round).toBe("review");
+  });
+
+  it("does NOT count an in-flight or SKIPPED round check, and says which", () => {
+    const pending = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({ checks: [checkRun({ name: "Cursor Bugbot", status: "IN_PROGRESS" })] }),
+      "headsha",
+      "bounded",
+    );
+    expect(pending?.met).toBe(false);
+    expect(pending?.members[1]?.roundCheck).toMatchObject({ name: "Cursor Bugbot", state: "pending" });
+
+    const skipped = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({ checks: [checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SKIPPED" })] }),
+      "headsha",
+      "bounded",
+    );
+    expect(skipped?.met).toBe(false);
+    expect(skipped?.members[1]?.roundCheck).toMatchObject({ name: "Cursor Bugbot", state: "skipped" });
+  });
+
+  it("reads the LATEST run per name: a rerun in flight supersedes an earlier completed run (bankai-core#577)", () => {
+    const result = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({
+        checks: [
+          checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-29T10:00:00Z" }),
+          checkRun({ name: "Cursor Bugbot", status: "IN_PROGRESS", startedAt: "2026-09-29T11:00:00Z" }),
+        ],
+      }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.met).toBe(false);
+    expect(result?.members[1]?.roundCheck?.state).toBe("pending");
+  });
+
+  it("an unanchored pattern matching several names reports the most-advanced state", () => {
+    const result = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({
+        checks: [
+          checkRun({ name: "Bugbot probe", status: "COMPLETED", conclusion: "SKIPPED" }),
+          checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" }),
+        ],
+      }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.members[1]).toMatchObject({
+      round: "round-check",
+      roundCheck: { name: "Cursor Bugbot", state: "completed" },
+    });
+  });
+
+  it("a legacy StatusContext can never be a round check, however it is spelled", () => {
+    const result = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({ checks: [statusContext({ context: "Cursor Bugbot", state: "SUCCESS" })] }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.met).toBe(false);
+    expect(result?.members[1]?.roundCheck?.state).toBe("absent");
+  });
+
+  it("REPORTS a pending request and never counts it -- a request is not a round, and it does not un-have one", () => {
+    const requestedOnly = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({ reviewRequests: [request("Copilot")] }),
+      "headsha",
+      "bounded",
+    );
+    expect(requestedOnly?.members[0]).toMatchObject({ round: null, requested: true });
+    expect(requestedOnly?.met).toBe(false);
+
+    const requestedAfterARound = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({
+        reviewRequests: [request("Copilot")],
+        reviews: [review({ author: "copilot-pull-request-reviewer[bot]", state: "COMMENTED", commitId: "oldsha" })],
+      }),
+      "headsha",
+      "bounded",
+    );
+    // Counted: the earlier round was had. Whether copilot is OWED again is
+    // pendingRounds' limb (i), which this predicate does not replace.
+    expect(requestedAfterARound?.members[0]).toMatchObject({ round: "review", requested: true });
+    expect(requestedAfterARound?.met).toBe(true);
+  });
+
+  it("under STRICT only a review AT HEAD counts, and the member says it was judged at head", () => {
+    const earlier = rounds({
+      reviews: [review({ author: "copilot-pull-request-reviewer[bot]", state: "COMMENTED", commitId: "oldsha" })],
+    });
+    const strict = roundQuorum(COPILOT_OR_BUGBOT, earlier, "headsha", "strict");
+    expect(strict?.met).toBe(false);
+    expect(strict?.members[0]).toMatchObject({ round: null, reading: "current-head" });
+
+    const atHead = rounds({
+      reviews: [review({ author: "copilot-pull-request-reviewer[bot]", state: "COMMENTED", commitId: "headsha" })],
+    });
+    expect(roundQuorum(COPILOT_OR_BUGBOT, atHead, "headsha", "strict")?.met).toBe(true);
+  });
+
+  it("never counts a PENDING (unsubmitted) review under bounded (zheref/nen#217)", () => {
+    const result = roundQuorum(
+      COPILOT_OR_BUGBOT,
+      rounds({ reviews: [review({ author: "cursor", state: "PENDING", commitId: null })] }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.met).toBe(false);
+  });
+
+  it("follows CON-40's reading for a delivery-holistic-pass member on a delivery PR", () => {
+    const holistic = quorumOver(["sasuke", "copilot"]);
+    // The KP-PR-#460 shape: holistic pass at `opensha`, abstain-green check at head.
+    const ok = roundQuorum(
+      holistic,
+      rounds({ checks: DELIVERY_CHECKS, reviews: DELIVERY_REVIEWS }),
+      "headsha",
+      "bounded",
+      true,
+    );
+    expect(ok?.members[0]).toMatchObject({ reviewer: "sasuke", round: "delivery-holistic-pass", reading: "current-head" });
+    expect(ok?.met).toBe(true);
+
+    // No definitive-SUCCESS review check at head: CON-40's round is not had.
+    const noCheck = roundQuorum(
+      holistic,
+      rounds({ reviews: DELIVERY_REVIEWS }),
+      "headsha",
+      "bounded",
+      true,
+    );
+    expect(noCheck?.members[0]?.round).toBeNull();
+    expect(noCheck?.met).toBe(false);
+  });
+
+  it("minimum 2 requires two DIFFERENT members with a round", () => {
+    const both = quorumOver(["copilot", "bugbot"], 2);
+    const one = roundQuorum(
+      both,
+      rounds({ reviews: [review({ author: "cursor[bot]", state: "COMMENTED" })] }),
+      "headsha",
+      "bounded",
+    );
+    expect(one).toMatchObject({ count: 1, met: false });
+    const two = roundQuorum(
+      both,
+      rounds({
+        reviews: [
+          review({ author: "cursor[bot]", state: "COMMENTED" }),
+          review({ author: "copilot-pull-request-reviewer[bot]", state: "COMMENTED" }),
+        ],
+      }),
+      "headsha",
+      "bounded",
+    );
+    expect(two).toMatchObject({ count: 2, met: true });
+  });
+
+  it("leaves pendingRounds' verdict untouched -- the quorum is a separate question on the same inputs", () => {
+    // The extraction of `reviewerRound` is behaviour-neutral: the whole ported
+    // suite above still passes against it, and on a quorum-carrying identity
+    // set pendingRounds answers exactly what it answers without one.
+    const inputs = rounds({ reviewRequests: [request("Copilot")] });
+    expect(pendingRounds(COPILOT_OR_BUGBOT, inputs, "headsha", ["copilot", "bugbot"], "bounded")).toEqual(
+      pendingRounds(BANKAI, inputs, "headsha", ["copilot", "bugbot"], "bounded"),
+    );
+  });
+});
+
+// --- the BOUNDED earlier-head round-check limb (ruling 2026-09-29, option B) ---
+//
+// Not a new policy: zheref/nen#214's `bounded` reading, applied to a reviewer
+// whose check IS its round. A completed, non-SKIPPED run on an EARLIER commit
+// of this pull request is the same fact a review at an earlier head is -- the
+// reviewer showed up for this PR -- so it counts under `bounded`, and under
+// `strict` only the head counts, exactly as for a review.
+describe("reviewerRound's bounded earlier-head round-check limb (option B, ruling 2026-09-29)", () => {
+  const RAW = JSON.parse(
+    readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
+  ) as Record<string, unknown>;
+  const QUORUM = parseGateIdentities("/fixture/nen/gates.json", {
+    ...RAW,
+    round_quorum: { any_of: ["copilot", "bugbot"], minimum: 1 },
+  });
+  const cleanEarlier = (fields: Partial<EarlierHeadCheck> = {}): EarlierHeadCheck => ({
+    sha: "earliersha",
+    name: "Cursor Bugbot",
+    status: "COMPLETED",
+    conclusion: "SUCCESS",
+    ...fields,
+  });
+
+  it("a clean run on an EARLIER head counts under BOUNDED -- for the quorum, reported with its head", () => {
+    const result = roundQuorum(QUORUM, rounds({ earlierChecks: [cleanEarlier()] }), "headsha", "bounded");
+    expect(result?.met).toBe(true);
+    expect(result?.members[1]).toEqual({
+      reviewer: "bugbot",
+      round: "round-check-earlier-head",
+      reading: "any-head",
+      requested: false,
+      roundCheck: {
+        pattern: "bugbot",
+        name: "Cursor Bugbot",
+        state: "completed",
+        conclusion: "SUCCESS",
+        from: "earlier-head",
+        sha: "earliersha",
+      },
+    });
+  });
+
+  it("...and clears a CONFIGURED round-check reviewer's owed round under BOUNDED, as an earlier review would", () => {
+    const inputs = rounds({ earlierChecks: [cleanEarlier()] });
+    expect(pendingRounds(BANKAI, inputs, "headsha", ["bugbot"], "bounded")).toEqual([]);
+    expect(pendingRounds(BANKAI, rounds(), "headsha", ["bugbot"], "bounded")).toEqual([
+      { reviewer: "bugbot", reason: "no-round-at-head" },
+    ]);
+  });
+
+  it("does NOT count under STRICT: only the head counts there, exactly as for a review", () => {
+    const inputs = rounds({ earlierChecks: [cleanEarlier()] });
+    expect(roundQuorum(QUORUM, inputs, "headsha", "strict")?.met).toBe(false);
+    expect(pendingRounds(BANKAI, inputs, "headsha", ["bugbot"], "strict")).toEqual([
+      { reviewer: "bugbot", reason: "no-round-at-head" },
+    ]);
+  });
+
+  it("does NOT count a SKIPPED, an unfinished, or a conclusion-less earlier run", () => {
+    for (const earlier of [
+      cleanEarlier({ conclusion: "SKIPPED" }),
+      cleanEarlier({ status: "IN_PROGRESS", conclusion: null }),
+      cleanEarlier({ status: "QUEUED", conclusion: null }),
+      cleanEarlier({ conclusion: null }),
+      cleanEarlier({ status: null }),
+    ]) {
+      expect(roundQuorum(QUORUM, rounds({ earlierChecks: [earlier] }), "headsha", "bounded")?.met).toBe(false);
+      expect(pendingRounds(BANKAI, rounds({ earlierChecks: [earlier] }), "headsha", ["bugbot"], "bounded")).toHaveLength(1);
+    }
+  });
+
+  it("C1: a CANCELLED run's NEUTRAL at an earlier head does NOT count -- zheref/nen#281's cc7a948", () => {
+    // #281 had no review at all; its only Bugbot run, on cc7a948, concluded
+    // NEUTRAL because the next push cancelled it. It is not a round.
+    const cancelled = cleanEarlier({ sha: "cc7a948", conclusion: "NEUTRAL" });
+    expect(roundQuorum(QUORUM, rounds({ earlierChecks: [cancelled] }), "headsha", "bounded")?.met).toBe(false);
+    expect(pendingRounds(BANKAI, rounds({ earlierChecks: [cancelled] }), "headsha", ["bugbot"], "bounded")).toHaveLength(1);
+  });
+
+  it("C1: a FAILURE at an earlier head does not count either", () => {
+    for (const conclusion of ["FAILURE", "CANCELLED", "TIMED_OUT"]) {
+      expect(
+        roundQuorum(QUORUM, rounds({ earlierChecks: [cleanEarlier({ conclusion })] }), "headsha", "bounded")?.met,
+        conclusion,
+      ).toBe(false);
+    }
+  });
+
+  it("C1: a newer cancelled run does not hide an older SUCCESS the blob also carries", () => {
+    const result = roundQuorum(
+      QUORUM,
+      rounds({
+        earlierChecks: [
+          cleanEarlier({ sha: "newer", conclusion: "NEUTRAL" }),
+          cleanEarlier({ sha: "older", conclusion: "SUCCESS" }),
+        ],
+      }),
+      "headsha",
+      "bounded",
+    );
+    expect(result?.members[1]?.roundCheck).toMatchObject({ from: "earlier-head", sha: "older" });
+  });
+
+  it("never reads a run AT THE HEAD through the earlier limb, nor one with no sha", () => {
+    expect(roundQuorum(QUORUM, rounds({ earlierChecks: [cleanEarlier({ sha: "headsha" })] }), "headsha", "bounded")?.met).toBe(false);
+    expect(roundQuorum(QUORUM, rounds({ earlierChecks: [cleanEarlier({ sha: "" })] }), "headsha", "bounded")?.met).toBe(false);
+  });
+
+  it("does not count a run whose name the pattern does not match", () => {
+    expect(
+      roundQuorum(QUORUM, rounds({ earlierChecks: [cleanEarlier({ name: "ci / build" })] }), "headsha", "bounded")?.met,
+    ).toBe(false);
+  });
+
+  it("a run IN FLIGHT at head supersedes history: an enrolled reviewer stays owed, and the member has no round", () => {
+    const inputs = rounds({
+      checks: [checkRun({ name: "Cursor Bugbot", status: "IN_PROGRESS" })],
+      earlierChecks: [cleanEarlier()],
+    });
+    expect(pendingRounds(BANKAI, inputs, "headsha", ["bugbot"], "bounded")).toEqual([
+      { reviewer: "bugbot", reason: "no-round-at-head" },
+    ]);
+    const member = roundQuorum(QUORUM, inputs, "headsha", "bounded")?.members[1];
+    expect(member?.round).toBeNull();
+    expect(member?.roundCheck).toMatchObject({ state: "pending", from: "head", sha: "headsha" });
+  });
+
+  it("a SKIPPED run at head does not erase an earlier completed one under BOUNDED", () => {
+    const inputs = rounds({
+      checks: [checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SKIPPED" })],
+      earlierChecks: [cleanEarlier()],
+    });
+    expect(roundQuorum(QUORUM, inputs, "headsha", "bounded")?.members[1]).toMatchObject({
+      round: "round-check-earlier-head",
+      roundCheck: { from: "earlier-head", sha: "earliersha" },
+    });
+  });
+
+  it("a completed run AT HEAD is reported as the head's, not history's, even with an earlier one present", () => {
+    const inputs = rounds({
+      checks: [checkRun({ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" })],
+      earlierChecks: [cleanEarlier()],
+    });
+    expect(roundQuorum(QUORUM, inputs, "headsha", "bounded")?.members[1]).toMatchObject({
+      round: "round-check",
+      roundCheck: { from: "head", sha: "headsha", state: "completed" },
+    });
+  });
+
+  it("enrolment still keys on the HEAD only: an earlier-head run enrols nobody", () => {
+    // defaultReviewers() takes the head rollup and nothing else -- an earlier
+    // run is evidence a reviewer SHOWED UP, not that it is configured NOW.
+    expect(defaultReviewers(QUORUM, [])).toEqual(["sasuke", "tenma", "copilot"]);
+  });
+
+  it("a reviewer with no round_check_pattern is untouched by earlier runs of any name", () => {
+    const inputs = rounds({ earlierChecks: [cleanEarlier({ name: "copilot" })] });
+    expect(roundQuorum(QUORUM, inputs, "headsha", "bounded")?.members[0]?.round).toBeNull();
   });
 });

@@ -16,8 +16,12 @@
 //
 // ── WHAT THIS ADOPTION CHANGES, AND WHAT IT MUST NOT ────────────────────────
 //
-// THE LOGIC IS UNCHANGED. Every branch, every ordering, every asymmetry and
-// every conservative direction is exactly as it was. The gate is NEVER PARTIALLY
+// THE LOGIC IS UNCHANGED, EXCEPT WHERE A NUMBERED DIVERGENCE BELOW SAYS
+// OTHERWISE -- (8) evaluates every row, (9) adds the `round_quorum` branch,
+// and (10) narrows which round-check run counts, which moves per-reviewer
+// verdicts for every file that declares a `round_check_pattern`. Otherwise
+// every branch, every ordering, every asymmetry and every conservative
+// direction is exactly as it was. The gate is NEVER PARTIALLY
 // READY -- the whole conjunction -- and the reason returned is always the FIRST
 // failing conjunct (every row is now EVALUATED rather than the walk stopping
 // there -- divergence (8) below -- but the verdict and its line are unchanged).
@@ -139,6 +143,47 @@
 //     NOT CHANGED, and is the point: no row's criterion, the verdict (still the
 //     whole conjunction), the LINE (still the first failing row's reason,
 //     byte for byte), `firstFailing`, and the exit code.
+//
+// (9) `round_quorum` IS A BRANCH THE ORIGINAL DOES NOT HAVE (maintainer ruling
+//     2026-09-29: "Copilot credits are exhausted. Expect Cursor instead. Let's
+//     make it canon on the repo so that we solve at least one round of
+//     reviews from both Copilot OR Cursor (or both) as applicable."). When
+//     the file declares one, the rounds-owed row ALSO fails while fewer than
+//     `minimum` of the named reviewers HAVE a round, counted by
+//     ./predicates.ts's `roundQuorum` through the very function that clears
+//     one reviewer. It is on ROW 4 rather than a row of its own because
+//     `conjuncts` is a closed set of six in the frozen `nen.pr.ready/v0.1`
+//     contract -- a seventh row changes what the table MEANS, which bumps the
+//     contract and every consumer with it -- and because in substance it IS
+//     CON-32(b)'s owed limb: "a round is owed at the current head", asked of a
+//     group. The QUORUM BRANCH only ever ADDS a failure: it excuses no
+//     per-reviewer owed round, and a file that declares no quorum gets from
+//     THIS branch byte-for-byte the table, the line and the JSON it got
+//     before. (Per-reviewer verdicts themselves DID move, for a different
+//     reason -- see (10).)
+//     Under `bounded`, a round-check reviewer's SUCCESS run on an EARLIER
+//     commit that GitHub lists against this pull request -- the blob's
+//     `earlier_round_checks`, read by ../github/pr_state.ts -- is also its
+//     round (option B of the same ruling): zheref/nen#214's any-head reading,
+//     applied to a check that IS the round. It is read by ./predicates.ts's
+//     `reviewerRound`, so it applies to every configured reviewer as well as
+//     to the quorum; a blob without the field reads exactly as before.
+//
+// (10) A ROUND CHECK COUNTS ONLY ON SUCCESS, AT HEAD AND EARLIER, AND AN
+//     EARLIER RUN ONLY WHEN GITHUB LISTS IT AGAINST THIS PULL REQUEST
+//     (Nobunaga's review of E7, findings C1 and H1, each confirmed live). The
+//     original cleared a round-check reviewer on ANY completed non-SKIPPED
+//     run. Cursor Bugbot's NEUTRAL means "found N issues" OR "cancelled
+//     because a newer commit was pushed" -- zheref/nen#281 had no review and
+//     its cancelled NEUTRAL run read as a round -- and a reviewer with
+//     findings posts a review, which counts on its own. So only SUCCESS
+//     counts now, and an earlier-head run must name THIS pull request (number
+//     AND base repository) in its `pull_requests`, since stacked PRs share
+//     commits. This is STRICTER than the shell for EVERY file that declares a
+//     `round_check_pattern`, with or without a quorum -- ./ready.test.ts had
+//     to change a NEUTRAL fixture to SUCCESS to keep proving its own subject --
+//     and it is fail-safe: a round-check reviewer can only become owed where
+//     it used to be cleared, never the reverse.
 // ============================================================================
 // pr_ready_gate.ts -- the TypeScript port of scripts/pr_ready_gate.sh
 // (BC-IS-#733 Phase 2, BC-IS-#737, rank 1).
@@ -230,7 +275,8 @@
 //                       so before it posts its only footprint is a pending
 //                       `reviewRequests` entry, and the old (a)/(b)/(d) gate read
 //                       `ready` in the 69 seconds between Sasuke's APPROVE and
-//                       Copilot's eight threads;
+//                       Copilot's eight threads. PLUS, where the file declares
+//                       one, the `round_quorum` floor -- divergence (9);
 //   CON-32(b) approve-- every APPROVING reviewer's LATEST round is an APPROVE
 //                       against the CURRENT head (CON-16's current-head rule);
 //   CON-32(d)        -- zero unresolved review threads.
@@ -260,9 +306,13 @@ import {
   pendingRounds,
   reviewsAllApprovedAtHead,
   reviewerReviewCheckPattern,
+  roundQuorum,
   unapprovedApprovers,
   unmatchedExcludeCheckNames,
+  type EarlierHeadCheck,
   type OwedRound,
+  type QuorumMember,
+  type QuorumResult,
   type RoundPolicy,
   type UnapprovedApprover,
 } from "./predicates.js";
@@ -427,6 +477,18 @@ export interface Conjunct {
    * what it acts on. Additive to `nen.pr.ready/v0.1`.
    */
   readonly missing: string | null;
+  /**
+   * `round_quorum`'s count, on the `rounds-owed` row ONLY, and only when the
+   * file declares a quorum AND the row was judged through the ordinary
+   * owed-round path (maintainer ruling 2026-09-29). ABSENT -- not `null` --
+   * everywhere else: on every other row, on a repository that declares no
+   * quorum, on a row the CON-30 carve-out satisfied, and on a row that could
+   * not be computed. Absent rather than `null` so that a repository which
+   * declares no quorum gets a `--json` report byte-identical to the one it got
+   * before the key existed. Additive to `nen.pr.ready/v0.1`, so the contract
+   * string does not move.
+   */
+  readonly roundQuorum?: QuorumResult;
 }
 
 interface ConjunctSpec {
@@ -587,6 +649,15 @@ export interface EvaluateOptions {
   readonly excludeCheckNames: readonly string[];
 }
 
+/**
+ * A check-name pattern as the reader should see it: `$(... | tr -d '^$')`, the
+ * shell's own rendering -- the anchors stripped and `\/` unescaped, so the
+ * message names the CHECK rather than the regex that matched it.
+ */
+function checkNameOf(source: string): string {
+  return source.replace(/[$^]/g, "").replace(/\\\//g, "/");
+}
+
 /** `pending_rounds`' four `pending+=(...)` sites, rendered as the shell does. */
 function describeOwedRound(identities: GateIdentities, owed: OwedRound): string {
   switch (owed.reason) {
@@ -603,8 +674,7 @@ function describeOwedRound(identities: GateIdentities, owed: OwedRound): string 
       // than the regex that matched it. The pattern is the FILE's, so the check
       // name in this message is the target repository's own.
       const pattern = reviewerReviewCheckPattern(identities, owed.reviewer);
-      const check =
-        pattern === null ? "" : pattern.source.replace(/[$^]/g, "").replace(/\\\//g, "/");
+      const check = pattern === null ? "" : checkNameOf(pattern.source);
       return (
         `${owed.reviewer} (delivery PR: no definitive-SUCCESS ${check} check at head ` +
         "— CON-40's abstain must report a pass, never a skip)"
@@ -613,6 +683,65 @@ function describeOwedRound(identities: GateIdentities, owed: OwedRound): string 
     case "no-round-at-head":
       return `${owed.reviewer} (no round at head)`;
   }
+}
+
+/**
+ * One `round_quorum` member, as the rounds-owed row names it: what it HAS, or
+ * what it LACKS and what stands where (maintainer ruling 2026-09-29). A member
+ * with no round says which reading judged it, whether a request for it is
+ * already pending, and -- for a reviewer whose check IS its round -- where that
+ * check stands on its latest run, because "no round" wants a different action
+ * when the check is still running than when it never attached at all.
+ */
+function describeQuorumMember(member: QuorumMember): string {
+  const facts: string[] = [];
+  const check = member.roundCheck;
+  if (member.round === "review") facts.push("round: review");
+  else if (member.round === "round-check") facts.push(`round: '${check?.name ?? "?"}' check completed`);
+  else if (member.round === "round-check-earlier-head") {
+    facts.push(
+      `round: '${check?.name ?? "?"}' check completed at earlier head ${(check?.sha ?? "?").slice(0, 7)}`,
+    );
+  } else if (member.round === "delivery-holistic-pass") facts.push("round: CON-40 holistic pass");
+  else facts.push(member.reading === "current-head" ? "no round at head" : "no round");
+  if (member.requested) facts.push("review requested, not yet posted");
+  if (member.round === null && check !== null) {
+    switch (check.state) {
+      case "absent":
+        facts.push(`no '${checkNameOf(check.pattern)}' check`);
+        break;
+      case "pending":
+        facts.push(`'${check.name ?? checkNameOf(check.pattern)}' check not yet completed`);
+        break;
+      case "skipped":
+        facts.push(`'${check.name ?? checkNameOf(check.pattern)}' check SKIPPED`);
+        break;
+      case "unsuccessful":
+        // Finding C1: only a definitive SUCCESS is a round -- a NEUTRAL may be
+        // a run cancelled by the next push -- so say what it concluded.
+        facts.push(
+          `'${check.name ?? checkNameOf(check.pattern)}' check concluded ${check.conclusion ?? "without a conclusion"}, not SUCCESS`,
+        );
+        break;
+      case "completed":
+        facts.push(`'${check.name ?? checkNameOf(check.pattern)}' check completed`);
+        break;
+    }
+  }
+  return `${member.reviewer} (${facts.join(", ")})`;
+}
+
+/**
+ * The quorum's own clause -- the reason on an unmet quorum, the note on a met
+ * one. EXPORTED so ../pr/blocker.ts's `owed-round` detail names an unmet quorum
+ * in the very words `nen pr ready` uses (Nobunaga's review of E7, finding H2).
+ */
+export function describeQuorum(quorum: QuorumResult): string {
+  return (
+    `round quorum ${quorum.met ? "met" : "not met"} (${quorum.count} of ${quorum.anyOf.length} ` +
+    `with a round, ${quorum.minimum} required, CON-32b): ` +
+    quorum.members.map(describeQuorumMember).join(", ")
+  );
 }
 
 /** `unapproved_approvers`' two message forms, one per CON-32(b) reading. */
@@ -651,6 +780,37 @@ export function deliveryEvidence(state: Record<string, unknown>): {
   };
 }
 
+/**
+ * `earlier_round_checks` -- the transport's earlier-head round-check runs
+ * (option B of the 2026-09-29 ruling), read TOLERANTLY in the one direction
+ * that is safe here: an entry that is not a well-formed run is DROPPED, which
+ * can only ever mean "not counted". Absent, `null` or not an array reads as
+ * none -- the head-only reading every older blob and replay already gets. It
+ * is never a parse error: this is evidence that can only ADD a round, so its
+ * absence is not a failure to read the pull request.
+ */
+export function earlierRoundChecks(state: Record<string, unknown>): EarlierHeadCheck[] {
+  const raw = state["earlier_round_checks"];
+  if (!Array.isArray(raw)) return [];
+  const checks: EarlierHeadCheck[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const sha = record["sha"];
+    const name = record["name"];
+    const status = record["status"];
+    const conclusion = record["conclusion"];
+    if (typeof sha !== "string" || sha === "" || typeof name !== "string" || name === "") continue;
+    checks.push({
+      sha,
+      name,
+      status: typeof status === "string" ? status : null,
+      conclusion: typeof conclusion === "string" ? conclusion : null,
+    });
+  }
+  return checks;
+}
+
 /** The ONE mapping of a ParseError to a verdict -- obligation (A), discharged. */
 function unreadable(error: ParseError): string {
   return (
@@ -667,12 +827,28 @@ function unreadable(error: ParseError): string {
  * did not get that far" -- the gate always gets that far now.
  */
 type RowResult =
-  | { readonly status: "ready"; readonly note: string | null }
-  | { readonly status: "failed"; readonly reason: string }
+  | {
+      readonly status: "ready";
+      readonly note: string | null;
+      readonly roundQuorum?: QuorumResult | undefined;
+    }
+  | {
+      readonly status: "failed";
+      readonly reason: string;
+      readonly roundQuorum?: QuorumResult | undefined;
+    }
   | { readonly status: "unevaluated"; readonly missing: string };
 
-const passed = (note: string | null = null): RowResult => ({ status: "ready", note });
-const failed = (reason: string): RowResult => ({ status: "failed", reason });
+const passed = (note: string | null = null, roundQuorum?: QuorumResult): RowResult => ({
+  status: "ready",
+  note,
+  roundQuorum,
+});
+const failed = (reason: string, roundQuorum?: QuorumResult): RowResult => ({
+  status: "failed",
+  reason,
+  roundQuorum,
+});
 const unknown = (missing: string): RowResult => ({ status: "unevaluated", missing });
 
 /**
@@ -686,6 +862,7 @@ const unknown = (missing: string): RowResult => ({ status: "unevaluated", missin
 function table(rows: Readonly<Record<ConjunctId, RowResult>>): readonly Conjunct[] {
   return CONJUNCTS.map((spec, index): Conjunct => {
     const row = rows[spec.id];
+    const quorum = row.status === "unevaluated" ? undefined : row.roundQuorum;
     return {
       ...spec,
       order: index + 1,
@@ -693,6 +870,10 @@ function table(rows: Readonly<Record<ConjunctId, RowResult>>): readonly Conjunct
       reason: row.status === "failed" ? row.reason : null,
       note: row.status === "ready" ? row.note : null,
       missing: row.status === "unevaluated" ? row.missing : null,
+      // Spread, never `roundQuorum: undefined`: the key must be ABSENT on
+      // every row that carries no quorum, so a repository that declares none
+      // serialises exactly as it did before the field existed.
+      ...(quorum === undefined ? {} : { roundQuorum: quorum }),
     };
   });
 }
@@ -1061,25 +1242,46 @@ export function evaluateReady(
       // The UN-excluded rollup, transcribed deliberately: `--exclude-run` is a
       // CON-32(a) carve-out for the asking job's own check, and it was never
       // scoped to change which reviewers owe a round.
-      const owed = pendingRounds(
-        identities,
-        {
-          reviewRequests: parsedRequests.value,
-          checks: parsedChecks.value,
-          reviews: parsedReviews.value,
-        },
-        head,
-        reviewers,
-        policy,
-        delivery,
-      );
-      owedRow =
+      const roundInputs = {
+        reviewRequests: parsedRequests.value,
+        checks: parsedChecks.value,
+        reviews: parsedReviews.value,
+        // Option B of the 2026-09-29 ruling: earlier-head round-check runs,
+        // counted under `bounded` only (./predicates.ts's `reviewerRound`).
+        earlierChecks: earlierRoundChecks(state),
+      };
+      const owed = pendingRounds(identities, roundInputs, head, reviewers, policy, delivery);
+      const owedReason =
         owed.length === 0
-          ? passed()
-          : failed(
-              "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
-                owed.map((entry): string => describeOwedRound(identities, entry)).join(";"),
-            );
+          ? null
+          : "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
+            owed.map((entry): string => describeOwedRound(identities, entry)).join(";");
+      // `round_quorum` (maintainer ruling 2026-09-29) -- ADOPTION DIVERGENCE
+      // (9) in the header. The quorum is judged on the SAME row and only ever
+      // ADDS a failure: an owed round above is never excused by a met quorum,
+      // and an unmet quorum fails the row even when nothing above is owed.
+      // It is read from the FILE, so it applies under `--reviewers` too -- the
+      // configured set decides who is OWED, the quorum is the repository's
+      // declared floor on who HAS reviewed -- and it is `null` on the
+      // `--reviewers`-only identity path, which names no file.
+      const quorum =
+        roundQuorum(identities, roundInputs, head, policy, delivery) ?? undefined;
+      if (quorum === undefined || quorum.met) {
+        owedRow =
+          owedReason === null
+            ? passed(quorum === undefined ? null : describeQuorum(quorum), quorum)
+            : failed(owedReason, quorum);
+      } else {
+        // Both failures on one row, owed first: the line a caller quotes
+        // keeps its existing opening for every PR the per-reviewer limb
+        // already refused, and the quorum's clause follows rather than hides.
+        owedRow = failed(
+          owedReason === null
+            ? `not-ready: ${describeQuorum(quorum)}`
+            : `${owedReason} — and ${describeQuorum(quorum)}`,
+          quorum,
+        );
+      }
       stalledRow = passed();
       const requestedAt = state["stall_requested_at"];
       const requestedAtText = typeof requestedAt === "string" ? requestedAt : "";
