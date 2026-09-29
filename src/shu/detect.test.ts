@@ -2744,7 +2744,7 @@ describe("nen shu detect -- the paparazzi rule survives into the declaration", (
     // never reach an argv, because an argv is the thing that gets pasted.
     const notes = detect(KRO_SHAPED).lanes[0]?.notes.join("\n") ?? "";
     expect(notes).toMatch(/A CONFLICT THIS PACK RECORDS AND REFUSES TO RESOLVE/);
-    expect(notes).toMatch(/bankai-core's compose handbook/);
+    expect(notes).toMatch(/the canonical `compose-uzf-v2` handbook/);
     expect(notes).toMatch(/Resolve it upstream in whichever source is wrong/);
     const project = (detect(KRO_SHAPED).proposal as unknown as Proposal).project;
     for (const [lane, verbs] of Object.entries(project.verbs)) {
