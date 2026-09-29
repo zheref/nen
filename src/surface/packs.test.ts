@@ -309,7 +309,13 @@ describe("rules", () => {
   it("names the file after the source's stem, in the row's directory and extension", () => {
     const rendered = renderRules(must(row("antigravity").rules), source, MARKER);
     expect(rendered.path).toBe("rules/rules.md");
-    expect(rendered.content.startsWith(`<!-- ${MARKER} -->\n# House rules`)).toBe(true);
+    // The page (re-read 2026-09-28) documents that every rules file "must
+    // start with YAML frontmatter declaring a valid trigger" or is silently
+    // discarded, so the row prepends one; the marker is the first MARKDOWN
+    // line under it, as on cursor.
+    const doc = splitDocument(rendered.content);
+    expect(doc.entries.map((entry): string => entry.lines.join("\n"))).toEqual(["trigger: always_on", "description: rules"]);
+    expect(doc.body.startsWith(`<!-- ${MARKER} -->\n# House rules`)).toBe(true);
     expect(rendered.chars).toBe(rendered.content.length);
   });
 
@@ -322,10 +328,10 @@ describe("rules", () => {
   });
 
   it("REFUSES a rendering over the documented limit, naming both numbers, and never truncates", () => {
-    const long = { stem: "long", text: "x".repeat(12_000) };
-    expect(() => renderRules(must(row("antigravity").rules), long, MARKER)).toThrow(/over the 12000-character limit/);
+    const long = { stem: "long", text: "x".repeat(24_000) };
+    expect(() => renderRules(must(row("antigravity").rules), long, MARKER)).toThrow(/over the 24000-character limit/);
     // The same text is fine where the row documents no limit.
-    expect(renderRules(must(row("cursor").rules), long, MARKER).chars).toBeGreaterThan(12_000);
+    expect(renderRules(must(row("cursor").rules), long, MARKER).chars).toBeGreaterThan(24_000);
   });
 
   it("refuses a --rules that cannot be read", () => {

@@ -538,10 +538,10 @@ describe("--rules", () => {
   it("refuses a rules file over antigravity's documented limit at exit 2, writing nothing", async () => {
     const out = tempDir();
     const long = join(tempDir(), "long.md");
-    writeFileSync(long, "y".repeat(12_000));
+    writeFileSync(long, "y".repeat(24_000));
     const result = await capture(generateArgv("antigravity", out, ["--rules", long]));
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/over the 12000-character limit/);
+    expect(result.err.join("\n")).toMatch(/over the 24000-character limit/);
     expect(readdirSync(out)).toEqual([]);
   });
 

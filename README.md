@@ -217,6 +217,23 @@ always load: handbooks/uzf-core.md, handbooks/security-baseline.md
 stack handbook: handbooks/stacks/swiftui-tca-uzf-v2/architecture.md
 ```
 
+Then keep the consumer's mirror of that stack's rule set current on **every
+agent surface it declares** (`CON-13`) -- `.claude/rules/` for Claude Code, a
+managed block in `AGENTS.md` for Codex, `.cursor/rules/` for Cursor,
+`.agents/rules/` for Antigravity; the surface set is a row table, the consumer
+names which rows in its `canon-values.yml` (`surfaces:`), and every rendered
+file carries a marker naming the tag it came from. A hand-written file where
+canon must land refuses the whole run before anything is written; `check` is
+the CI half and fails on a mirror that is missing, orphaned, stale or
+hand-edited on any surface:
+
+```bash
+nen canon mirror generate --repo /path/to/repo --rules-dir ../handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules \
+  --canon-values .claude/canon-values.yml --source owner/handbooks --ref v0.6.0 --not-mirrored README.md,placeholders.md
+nen canon mirror check    --repo /path/to/repo --rules-dir ../handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules \
+  --canon-values .claude/canon-values.yml --source owner/handbooks --ref v0.6.0 --not-mirrored README.md,placeholders.md
+```
+
 ### Use it every day
 
 **Is this pull request ready to merge, before you look any further?**
