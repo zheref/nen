@@ -71,6 +71,13 @@ export interface ListedEntry {
   /** `owner/name`. */
   readonly repo: string;
   readonly section: ListedSection;
+  /**
+   * The row's position inside its own section, so a message can name it by
+   * pointer (`maintained_tools[1]`). Two rows of one section may name the same
+   * repository -- this loader does not refuse that -- and a label without the
+   * index would print them identically.
+   */
+  readonly index: number;
   /** The scenario this row records. `null` when the row states none. */
   readonly scenario: string | null;
 }
@@ -155,6 +162,7 @@ function parseListedRepos(path: string, section: ListedSection, raw: unknown): r
     return {
       repo,
       section,
+      index,
       scenario: optionalString(path, `${pointer}.scenario`, record["scenario"]),
     };
   });

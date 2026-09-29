@@ -101,10 +101,11 @@ resolve:
 
 An unknown token is an error that lists the registry's codes. It is never a
 guess and never a widening to every repository. A --repo (or the current
-directory) that carries NEITHER nen/repos.json NOR the legacy
-schemas/repos.json is a DIFFERENT refusal, at exit 2: there is no registry to
-resolve a token against at all, a precondition this verb cannot proceed
-without -- not a token that failed to match one.
+directory) that carries no nen/repos.json is a DIFFERENT refusal, at exit 2
+(a legacy-only schemas/repos.json is refused the same way, naming the
+migration command): there is no registry to resolve a token against at all,
+a precondition this verb cannot proceed without -- not a token that failed to
+match one.
 
 inventory:
   senkei's live enumeration: every open issue carrying --epic-label with
@@ -130,10 +131,10 @@ scenario:
 
   --repo is REQUIRED (exit 2), never defaulted to the current directory:
   a cwd default surfaced as whatever registry happened to be there, not
-  as the forgotten flag (zheref/nen#28). Exits 2 when --repo carries
-  NEITHER nen/repos.json NOR the legacy schemas/repos.json -- there is
-  no registry to read at all, the same precondition 'repo resolve'
-  refuses the same way. Exits 1 with a DISTINCT reason when the registry
+  as the forgotten flag (zheref/nen#28). Exits 2 when --repo carries no
+  nen/repos.json (a legacy-only schemas/repos.json is refused the same
+  way, naming the migration command) -- there is no registry to read at
+  all, the same precondition 'repo resolve' refuses the same way. Exits 1 with a DISTINCT reason when the registry
   IS present and --target is not recorded in it at all; is recorded on a
   row that carries no scenario (the remedy names the section it is
   already in); is recorded only as a product_codes value; or has rows

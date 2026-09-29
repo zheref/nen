@@ -151,6 +151,28 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
     expect(resolveScenario(TOOLS, "ZHEREF/Nen")).toEqual({ ok: true, scenario: "bun-cli" });
   });
 
+  // An empty string names no scenario directory. Read as a scenario it was a
+  // blank line at exit 0 (a consumers[] entry did this before #219); it is now
+  // the "carries no scenario" refusal in every section, and it never counts
+  // as a second, disagreeing value beside a real one.
+  it("reads an EMPTY scenario as none -- never a blank success, never a conflict", () => {
+    const blank = parseRepoRegistry("/b/nen/repos.json", {
+      consumers: [{ repo: "o/consumer", consumes: [], scenario: "" }],
+      maintained_tools: [
+        { repo: "o/tool", scenario: "" },
+        { repo: "o/both", scenario: "bun-cli" },
+      ],
+      pending_onboarding: [{ repo: "o/both", scenario: "" }],
+    });
+    const consumer = resolveScenario(blank, "o/consumer");
+    expect(consumer.ok).toBe(false);
+    if (!consumer.ok) expect(consumer.reason).toMatch(/its entry carries no 'scenario' field/);
+    const tool = resolveScenario(blank, "o/tool");
+    expect(tool.ok).toBe(false);
+    if (!tool.ok) expect(tool.reason).toMatch(/Add one to its maintained_tools\[\] row/);
+    expect(resolveScenario(blank, "o/both")).toEqual({ ok: true, scenario: "bun-cli" });
+  });
+
   // Criterion 6: a consumers[] entry that states a scenario is read exactly
   // as before when the same repository is also a maintained tool whose row
   // states none -- the bankai-scaffold shape the live registry carries.
@@ -188,7 +210,7 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
     expect(resolveScenario(conflict, "zheref/bankai-scaffold")).toEqual({
       ok: false,
       reason:
-        "'zheref/bankai-scaffold' is recorded in /b/nen/repos.json with more than one scenario -- 'scaffold' (its consumers[] entry), 'tooling' (its maintained_tools[] row). A repository has one scenario, and reading any one of these would be a guess about which governs it. Make its rows agree, or state it on one row only.",
+        "'zheref/bankai-scaffold' is recorded in /b/nen/repos.json with more than one scenario -- 'scaffold' (its consumers[] entry), 'tooling' (its maintained_tools[0] row). A repository has one scenario, and reading any one of these would be a guess about which governs it. Make its rows agree, or state it on one row only.",
     });
   });
 
@@ -201,7 +223,26 @@ describe("resolveScenario -- maintained_tools[] and pending_onboarding[] rows ca
     const result = resolveScenario(conflict, "o/tool");
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toMatch(/'Scaffold' \(its maintained_tools\[\] row\), 'scaffold' \(its pending_onboarding\[\] row\)/);
+      expect(result.reason).toMatch(/'Scaffold' \(its maintained_tools\[0\] row\), 'scaffold' \(its pending_onboarding\[0\] row\)/);
+    }
+  });
+
+  // The loader does not refuse two rows of one section naming the same
+  // repository, so the conflict message must tell them apart by pointer --
+  // "its maintained_tools[] row" twice would name neither.
+  it("names two conflicting rows of ONE section by their own index", () => {
+    const twice = parseRepoRegistry("/b/nen/repos.json", {
+      consumers: [],
+      maintained_tools: [
+        { repo: "o/other", scenario: "x" },
+        { repo: "o/tool", scenario: "bun-cli" },
+        { repo: "O/Tool", scenario: "Bun-cli" },
+      ],
+    });
+    const result = resolveScenario(twice, "o/tool");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/'bun-cli' \(its maintained_tools\[1\] row\), 'Bun-cli' \(its maintained_tools\[2\] row\)/);
     }
   });
 

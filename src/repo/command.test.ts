@@ -344,7 +344,7 @@ describe("nen repo scenario -- maintained_tools[] and pending_onboarding[] carry
     });
     const result = await capture(["repo", "scenario", "--target", "zheref/bankai-scaffold"], undefined, root);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/with more than one scenario -- 'scaffold' \(its consumers\[\] entry\), 'tooling' \(its maintained_tools\[\] row\)/);
+    expect(result.err.join("\n")).toMatch(/with more than one scenario -- 'scaffold' \(its consumers\[\] entry\), 'tooling' \(its maintained_tools\[0\] row\)/);
   });
 
   // Criterion 4's refusal half: validated as a consumer's is, so a

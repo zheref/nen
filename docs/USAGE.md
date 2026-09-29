@@ -3701,11 +3701,17 @@ registry's own tool repositories, which consume nothing, could never have one, a
 the caller to re-file them as consumers ([#219](https://github.com/zheref/nen/issues/219)). A
 `product_codes` value is a name, not a row, and carries none. The field is validated alike in all three
 sections — optional, a string when present — so a non-string one is refused by pointer
-(`at maintained_tools[0].scenario, expected a string or nothing`) by this verb and by
-[`schema check`](#nen-schema-check), where it fails the `nen/repos.json` row. A repository recorded in
-more than one section (a maintained tool that is also a consumer) has **one** scenario: a value on any
-of its rows is read, the same value on several is fine, and rows stating **different** values are
-refused, naming each.
+(`at maintained_tools[0].scenario, expected a string or nothing`) **wherever the registry is loaded**:
+by every verb that reads `nen/repos.json` (`repo resolve`, `fanout`, `pr ready`'s ref resolution,
+`parse futon`, …), whatever target it was asked about, and by [`schema check`](#nen-schema-check),
+where it fails the `nen/repos.json` row. Through `v0.15.1` such a value on a `maintained_tools[]` or
+`pending_onboarding[]` row was ignored. An **empty** string states no scenario in any section — it is
+read as absent, never printed as a blank success. A repository recorded in more than one section (a maintained
+tool that is also a consumer) has **one** scenario: a value on any of its rows is read, the same value
+on several is fine, and rows stating **different** values are refused, naming each row by pointer
+(`its maintained_tools[1] row`). That disagreement is refused by this lookup only — `schema check`
+does not detect it and still reports the file `ok`, because refusing it at load would stop every verb
+for every target over one repository's rows.
 
 ```json
 "maintained_tools": [

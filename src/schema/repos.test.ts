@@ -206,9 +206,9 @@ describe("parseRepoRegistry -- a scenario on maintained_tools[]/pending_onboardi
       pending_onboarding: [{ repo: "zheref/KroCloud", status: "not-a-consumer", scenario: null }],
     });
     expect(registry.listed).toEqual([
-      { repo: "zheref/hatsu", section: "maintained_tools", scenario: "hatsu-plugin" },
-      { repo: "zheref/nen", section: "maintained_tools", scenario: null },
-      { repo: "zheref/KroCloud", section: "pending_onboarding", scenario: null },
+      { repo: "zheref/hatsu", section: "maintained_tools", index: 0, scenario: "hatsu-plugin" },
+      { repo: "zheref/nen", section: "maintained_tools", index: 1, scenario: null },
+      { repo: "zheref/KroCloud", section: "pending_onboarding", index: 0, scenario: null },
     ]);
     // Every reader that wants only the slugs gets precisely what it got before.
     expect(registry.maintainedTools).toEqual(["zheref/hatsu", "zheref/nen"]);
@@ -218,8 +218,8 @@ describe("parseRepoRegistry -- a scenario on maintained_tools[]/pending_onboardi
   it("sets `listed` on every registry the loader returns -- empty when neither section is present", () => {
     expect(parseRepoRegistry(at, { consumers: [] }).listed).toEqual([]);
     expect(loadRepoRegistry(BANKAI_REPO).listed).toEqual([
-      { repo: "zheref/bankai-scaffold", section: "maintained_tools", scenario: null },
-      { repo: "zheref/KroCloud", section: "pending_onboarding", scenario: null },
+      { repo: "zheref/bankai-scaffold", section: "maintained_tools", index: 0, scenario: null },
+      { repo: "zheref/KroCloud", section: "pending_onboarding", index: 0, scenario: null },
     ]);
   });
 

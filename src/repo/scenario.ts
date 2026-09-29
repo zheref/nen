@@ -101,8 +101,8 @@ interface RecordedLocation {
 function listedRowsFor(registry: RepoRegistry, repoSlug: string): readonly ListedEntry[] {
   const wanted = repoSlug.toLowerCase();
   const rows = registry.listed ?? [
-    ...registry.maintainedTools.map((repo): ListedEntry => ({ repo, section: "maintained_tools", scenario: null })),
-    ...registry.pendingOnboarding.map((repo): ListedEntry => ({ repo, section: "pending_onboarding", scenario: null })),
+    ...registry.maintainedTools.map((repo, index): ListedEntry => ({ repo, section: "maintained_tools", index, scenario: null })),
+    ...registry.pendingOnboarding.map((repo, index): ListedEntry => ({ repo, section: "pending_onboarding", index, scenario: null })),
   ];
   return rows.filter((row): boolean => row.repo.toLowerCase() === wanted);
 }
@@ -163,13 +163,16 @@ export function resolveScenario(registry: RepoRegistry, repoSlug: string): Scena
 
   // Every scenario a row recording this repository states, in file order:
   // the consumers[] entry first, then its maintained_tools/pending_onboarding
-  // rows.
+  // rows. An EMPTY string states nothing: it names no directory under canon
+  // resolve's --stack-dir (which refuses it outright), so reading it as a
+  // scenario would print a blank line at exit 0 -- a success with no answer.
+  const states = (scenario: string | null): scenario is string => scenario !== null && scenario !== "";
   const stated: StatedScenario[] = [];
-  if (consumer !== null && consumer.scenario !== null) {
+  if (consumer !== null && states(consumer.scenario)) {
     stated.push({ scenario: consumer.scenario, row: "its consumers[] entry" });
   }
   for (const row of rows) {
-    if (row.scenario !== null) stated.push({ scenario: row.scenario, row: `its ${row.section}[] row` });
+    if (states(row.scenario)) stated.push({ scenario: row.scenario, row: `its ${row.section}[${row.index}] row` });
   }
 
   // Cause 4: two rows, two answers. Compared exactly -- a scenario is a
