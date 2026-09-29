@@ -456,6 +456,7 @@ describe("checking -- the four drift classes", () => {
       extra: [],
       stale: [],
       handEdited: [],
+      relocated: [],
     });
   });
 

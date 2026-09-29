@@ -23,6 +23,19 @@
 // is compared with its own stamp masked, so a stamped mirror checked by a
 // caller who did not ask about stamps is not drift.
 //
+// AND ONE STALE CASE THE MARKER DOES NOT CARRY (zheref/nen#270). A body is
+// carried verbatim but for its relative links, which ./links.ts re-aims for
+// the depth the copy lands at; every build before that carried them as
+// written. A committed file byte for byte what such a build generated from
+// these same inputs is STALE too -- really generated, by an older build, and a
+// maintainer told "hand-edited" would look for an edit nobody made. So each
+// generated file whose links moved carries those older bytes
+// (`beforeLinkRewrite`), and `check` tells the two apart. The same holds for
+// a mirror whose links OUT of it were aimed from another location -- a copied
+// install, or a check run from another root than the generate: equal to a
+// fresh generation once those targets are masked (./links.ts's
+// `maskLinksOutOfMirror`), it is stale, and `relocated` says why.
+//
 // WHERE THE MARKER SITS, AND WHY IT IS NOT LINE 1. Every surface here loads a
 // SKILL.md by reading YAML frontmatter delimited by `---` AT THE START OF THE
 // FILE. An HTML comment above that fence means the file has no frontmatter at
@@ -52,6 +65,7 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hasValue, inlineValue, renderFrontmatter, splitDocument, type FrontmatterEntry } from "./frontmatter.js";
+import { headingAnchor, LinkRewriter, maskLinksOutOfMirror, mirrorPathsOf, type LinkOptions, type MirrorLocation } from "./links.js";
 import {
   compareVersions,
   isVersion,
@@ -62,6 +76,8 @@ import {
   renderPluginManifest,
   renderRules,
   rewriteModel,
+  rulesContent,
+  rulesPath,
   tomlMultiline,
   tomlString,
   type HooksManifest,
@@ -270,6 +286,15 @@ export interface GeneratedFile {
    * the manifest names as a script the plugin ships.
    */
   readonly markerless?: true;
+  /**
+   * The bytes a build that carried relative links verbatim -- every nen before
+   * zheref/nen#270 -- generated for this same file from these same inputs,
+   * present only where re-aiming the links (./links.ts) changed something.
+   * `check` calls a committed file equal to it STALE rather than hand-edited:
+   * it was really generated, by an older build, and calling it hand-edited
+   * would send its maintainer looking for an edit nobody made.
+   */
+  readonly beforeLinkRewrite?: string;
 }
 
 export interface GenerateOptions {
@@ -298,6 +323,14 @@ export interface GenerateOptions {
   readonly permissions?: PermissionsSource | null;
   /** `models.<surface>` and `models.<source-surface>` of `--models`, read; null when not given. */
   readonly models?: ModelMaps | null;
+  /**
+   * Where the inputs and `--out` sit on disk, as real paths
+   * (./links.ts's `resolveLinkOptions`), so every body's relative links are
+   * re-aimed for the depth its copy lands at (zheref/nen#270). Null or absent
+   * carries every link exactly as written -- the in-memory caller whose
+   * sources have no files behind them.
+   */
+  readonly links?: LinkOptions | null;
 }
 
 export interface GenerateReport {
@@ -329,6 +362,14 @@ export interface GenerateReport {
   readonly notes: readonly string[];
   /** The shared includes carried beside the personas, by source filename (`_shared.md`). */
   readonly includes: readonly string[];
+  /** Relative links re-aimed for the depth their copy lands at, counted per generated file. */
+  readonly linksRewritten: number;
+  /**
+   * `<mirror path>: <target>` for every relative link LEFT AS WRITTEN because
+   * its target or its copy sits outside the tree a rewritten link may reach
+   * (`LinkOptions.root`), sorted. Empty without `links`.
+   */
+  readonly linksVerbatim: readonly string[];
 }
 
 /**
@@ -372,7 +413,57 @@ export function firstSentence(text: string, budget: number): string {
   return (space > 0 ? cut.slice(0, space) : cut).trim();
 }
 
-function skillFile(options: GenerateOptions, skill: SourceSkill, truncated: string[]): GeneratedFile {
+/**
+ * Re-aims `text`'s relative links for `destination` (a path under `--out`),
+ * reading them from the source file at `source` -- or hands `text` back
+ * unchanged where there is nothing to aim from: no `links` in the options, a
+ * verbatim row, or an input whose location on disk was not given.
+ */
+type Relink = (text: string, source: string | null, destination: string) => string;
+
+/** A generated file, carrying the pre-zheref/nen#270 bytes only where re-aiming its links changed them. */
+function relinked(path: string, content: string, before: string): GeneratedFile {
+  return content === before ? { path, content } : { path, content, beforeLinkRewrite: before };
+}
+
+/** The real path of a persona or include under `--agents`, or null when `links` does not say where that is. */
+function agentSource(options: GenerateOptions, agent: SourceAgent): string | null {
+  const dir = options.links?.agentsDir ?? null;
+  return dir === null ? null : join(dir, agent.relative);
+}
+
+/**
+ * Every item this generation MIRRORS, keyed by the real path of its source:
+ * each skill's SKILL.md and its directory, each persona and include, and the
+ * rules file where the row writes one. A link that lands on one of these is
+ * re-aimed at the item's copy rather than at its source (./links.ts).
+ */
+function mirrorItems(options: GenerateOptions, links: LinkOptions): ReadonlyMap<string, MirrorLocation> {
+  const row = options.row;
+  const items = new Map<string, MirrorLocation>();
+  for (const skill of options.skills) {
+    const path = skillPath(row, skill.name);
+    items.set(join(links.sourceDir, skill.name, "SKILL.md"), { path, fragment: null });
+    items.set(join(links.sourceDir, skill.name), { path: path.slice(0, -"/SKILL.md".length), fragment: null });
+  }
+  if (links.agentsDir !== null) {
+    const rule = row.agents;
+    // On the appendix row a persona's copy is its own section of the one
+    // document, found by the anchor of the heading this module writes for it.
+    const place = (heading: string, stem: string): MirrorLocation =>
+      rule.kind === "files"
+        ? { path: `${rule.dir}/${stem}${rule.extension}`, fragment: null }
+        : { path: rule.file, fragment: headingAnchor(heading) };
+    for (const agent of options.agents) items.set(join(links.agentsDir, agent.relative), place(agent.name, agent.stem));
+    for (const include of options.includes ?? []) items.set(join(links.agentsDir, include.relative), place(include.stem, include.stem));
+  }
+  if (links.rulesFile !== null && row.rules !== null && options.rules !== undefined && options.rules !== null) {
+    items.set(links.rulesFile, { path: rulesPath(row.rules, options.rules.stem), fragment: null });
+  }
+  return items;
+}
+
+function skillFile(options: GenerateOptions, skill: SourceSkill, truncated: string[], relink: Relink): GeneratedFile {
   const row = options.row;
   const document = splitDocument(skill.text);
   if (!document.hasFrontmatter) {
@@ -405,7 +496,12 @@ function skillFile(options: GenerateOptions, skill: SourceSkill, truncated: stri
   }
   const front = renderFrontmatter(entries, new Set(row.skillKeys));
   const content = `${front}${markerFor(row.surface, options.stamp ?? null)}\n${document.body}`;
-  return { path, content: rewriteInvocations(content, row, options.invocationPrefix) };
+  const source = options.links === undefined || options.links === null ? null : join(options.links.sourceDir, skill.name, "SKILL.md");
+  return relinked(
+    path,
+    rewriteInvocations(relink(content, source, path), row, options.invocationPrefix),
+    rewriteInvocations(content, row, options.invocationPrefix),
+  );
 }
 
 interface AgentOutput {
@@ -416,7 +512,7 @@ interface AgentOutput {
   readonly notes: readonly string[];
 }
 
-function agentFiles(options: GenerateOptions): AgentOutput {
+function agentFiles(options: GenerateOptions, relink: Relink): AgentOutput {
   const row = options.row;
   const rule = row.agents;
   const stamp = options.stamp ?? null;
@@ -470,10 +566,15 @@ function agentFiles(options: GenerateOptions): AgentOutput {
         );
       }
       const content = `${front}${markerFor(row.surface, stamp)}\n${document.body}`;
-      return { path, content: rewriteInvocations(content, row, options.invocationPrefix) };
+      return relinked(
+        path,
+        rewriteInvocations(relink(content, agentSource(options, agent), path), row, options.invocationPrefix),
+        rewriteInvocations(content, row, options.invocationPrefix),
+      );
     });
     // The includes, beside the personas (S11): frontmatter reduced the same
-    // way, marker after it, body verbatim -- and NO required-key check and no
+    // way, marker after it, body verbatim but for its relative links (re-aimed
+    // like a persona's, ./links.ts) -- and NO required-key check and no
     // empty-frontmatter refusal, because an include is not a persona: nothing
     // routes on it, and a persona reads it by path. For the same reason its
     // `model` and `tools` are DROPPED rather than rewritten (Copilot on the
@@ -491,7 +592,13 @@ function agentFiles(options: GenerateOptions): AgentOutput {
       const document = splitDocument(include.text);
       const front = renderFrontmatter(document.entries.filter((entry): boolean => !INCLUDE_DROPPED_KEYS.has(entry.key)), new Set(rule.keys));
       const content = `${front}${markerFor(row.surface, stamp)}\n${document.body}`;
-      files.push({ path, content: rewriteInvocations(content, row, options.invocationPrefix) });
+      files.push(
+        relinked(
+          path,
+          rewriteInvocations(relink(content, agentSource(options, include), path), row, options.invocationPrefix),
+          rewriteInvocations(content, row, options.invocationPrefix),
+        ),
+      );
     }
     return { files, droppedInherit, undocumentedAliases, modelMapped, notes };
   }
@@ -501,23 +608,25 @@ function agentFiles(options: GenerateOptions): AgentOutput {
   // file this lands in has no frontmatter concept at all, and a stray `---`
   // fence in the middle of a prose document renders as a horizontal rule.
   const hashes = "#".repeat(rule.headingLevel);
-  const section = (agent: SourceAgent, heading: string): string => {
+  // Each section's links are aimed from ITS OWN source file: the one document
+  // gathers personas that each sat somewhere, and a link means what it meant
+  // there.
+  const section = (agent: SourceAgent, heading: string, aim: boolean): string => {
     const body = splitDocument(agent.text).body.replace(/^\n+/, "").replace(/\s+$/, "");
-    return `${hashes} ${heading}\n\n${body}\n`;
+    return `${hashes} ${heading}\n\n${aim ? relink(body, agentSource(options, agent), rule.file) : body}\n`;
   };
   // The includes follow the personas as `## _<stem>` sections (S11): a
   // persona's "read _review-preamble first" then lands on a heading in the
   // same document rather than on a file the surface never received.
-  const sections = [
-    ...options.agents.map((agent): string => section(agent, agent.name)),
-    ...includes.map((include): string => section(include, include.stem)),
-  ];
-  const appendix = rewriteInvocations(
-    `${markerFor(row.surface, stamp)}\n\n${sections.join("\n")}`,
-    row,
-    options.invocationPrefix,
-  );
-  const files: GeneratedFile[] = [{ path: rule.file, content: appendix }];
+  const appendixOf = (aim: boolean): string => {
+    const sections = [
+      ...options.agents.map((agent): string => section(agent, agent.name, aim)),
+      ...includes.map((include): string => section(include, include.stem, aim)),
+    ];
+    return rewriteInvocations(`${markerFor(row.surface, stamp)}\n\n${sections.join("\n")}`, row, options.invocationPrefix);
+  };
+  const appendix = appendixOf(true);
+  const files: GeneratedFile[] = [relinked(rule.file, appendix, appendixOf(false))];
   if (rule.warnBytes !== null) {
     const bytes = Buffer.byteLength(appendix, "utf8");
     if (bytes > rule.warnBytes) {
@@ -542,16 +651,22 @@ function agentFiles(options: GenerateOptions): AgentOutput {
           `'${agent.relative}' has no 'description' in its frontmatter, and '${row.surface}' documents it as required for ${row.agentToml.documentedPath} (${row.agentToml.source}). Add it to the source rather than to the mirror.`,
         );
       }
-      const body = rewriteInvocations(document.body.replace(/^\n+/, "").replace(/\s+$/, ""), row, options.invocationPrefix);
-      const lines = [
-        `# ${markerText(row.surface, stamp)}`,
-        `name = ${tomlString(agent.name)}`,
-        `description = ${tomlString(rewriteInvocations(description, row, options.invocationPrefix))}`,
-        ...(result.alias === null || result.alias === "inherit" ? [] : [`model = ${tomlString(result.alias)}`]),
-        `developer_instructions = ${tomlMultiline(body)}`,
-        "",
-      ];
-      files.push({ path: `${row.agentToml.dir}/${agent.stem}.toml`, content: lines.join("\n") });
+      const path = `${row.agentToml.dir}/${agent.stem}.toml`;
+      // The persona's prose again, at the agents depth of a flat mirror: its
+      // links are aimed from the persona's source for THIS file's directory.
+      const tomlOf = (aim: boolean): string => {
+        const own = (text: string): string =>
+          rewriteInvocations(aim ? relink(text, agentSource(options, agent), path) : text, row, options.invocationPrefix);
+        return [
+          `# ${markerText(row.surface, stamp)}`,
+          `name = ${tomlString(agent.name)}`,
+          `description = ${tomlString(own(description))}`,
+          ...(result.alias === null || result.alias === "inherit" ? [] : [`model = ${tomlString(result.alias)}`]),
+          `developer_instructions = ${tomlMultiline(own(document.body.replace(/^\n+/, "").replace(/\s+$/, "")))}`,
+          "",
+        ].join("\n");
+      };
+      files.push(relinked(path, tomlOf(true), tomlOf(false)));
     }
   }
   return { files, droppedInherit, undocumentedAliases, modelMapped, notes };
@@ -570,8 +685,17 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
   const stamp = options.stamp ?? null;
   const truncated: string[] = [];
   const notes: string[] = [];
-  const files: GeneratedFile[] = options.skills.map((skill): GeneratedFile => skillFile(options, skill, truncated));
-  const agents = agentFiles(options);
+  // The verbatim row is the identity (./rules.ts): nothing in it is rewritten,
+  // links included.
+  const links = options.links ?? null;
+  const rewriter =
+    links === null || row.verbatim
+      ? null
+      : new LinkRewriter({ root: links.root, outDir: links.outDir, items: mirrorItems(options, links) });
+  const relink: Relink = (text, source, destination): string =>
+    rewriter === null || source === null ? text : rewriter.rewrite(text, source, destination);
+  const files: GeneratedFile[] = options.skills.map((skill): GeneratedFile => skillFile(options, skill, truncated, relink));
+  const agents = agentFiles(options, relink);
   files.push(...agents.files);
   notes.push(...agents.notes);
 
@@ -606,8 +730,12 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
   if (options.rules !== undefined && options.rules !== null) {
     if (row.rules === null) rules = "not supported";
     else {
-      const rendered = renderRules(row.rules, options.rules, markerText(row.surface, stamp));
-      files.push({ path: rendered.path, content: rendered.content });
+      // The limit is applied to the bytes that are WRITTEN -- the re-aimed
+      // links included, which can be longer than the ones in the source.
+      const marker = markerText(row.surface, stamp);
+      const text = relink(options.rules.text, links?.rulesFile ?? null, rulesPath(row.rules, options.rules.stem));
+      const rendered = renderRules(row.rules, { ...options.rules, text }, marker);
+      files.push(relinked(rendered.path, rendered.content, rulesContent(row.rules, options.rules, marker)));
       rules = { path: rendered.path, chars: rendered.chars, bytes: rendered.bytes, limit: row.rules.limit };
       if (row.rules.lineGuidance !== null && rendered.lines > row.rules.lineGuidance) {
         notes.push(
@@ -677,6 +805,8 @@ export function generateSurfaceMirrorReport(options: GenerateOptions): GenerateR
     manifest,
     notes,
     includes: (options.includes ?? []).map((include): string => include.relative),
+    linksRewritten: rewriter?.rewritten ?? 0,
+    linksVerbatim: rewriter?.verbatim ?? [],
   };
 }
 
@@ -894,6 +1024,13 @@ export interface MirrorReport {
   readonly extra: readonly string[];
   readonly stale: readonly string[];
   readonly handEdited: readonly string[];
+  /**
+   * The part of `stale` that is stale ONLY because its links out of the mirror
+   * were aimed from another location, for the text report's reason line.
+   * Never part of the `--json` shape: the command strips it, so the check
+   * contract does not move.
+   */
+  readonly relocated: readonly string[];
 }
 
 /**
@@ -912,6 +1049,11 @@ export function checkSurfaceMirror(
   const missing: string[] = [];
   const stale: string[] = [];
   const handEdited: string[] = [];
+  const relocated: string[] = [];
+  const inside = mirrorPathsOf(generated.map((file): string => file.path));
+  /** The two texts, equal once every link out of the mirror is masked on both sides. */
+  const sameButAimedElsewhere = (existing: string, file: GeneratedFile): boolean =>
+    maskLinksOutOfMirror(withoutStamp(existing), file.path, inside) === maskLinksOutOfMirror(withoutStamp(file.content), file.path, inside);
 
   for (const file of generated) {
     const path = join(outDir, ...file.path.split("/"));
@@ -932,7 +1074,27 @@ export function checkSurfaceMirror(
     // same fact as "not this source's" -- and a check that exited 2 over it
     // could never report the file it was asked about.
     else if (stamp !== null && (marker.stamp === null || !isVersion(marker.stamp) || compareVersions(marker.stamp, stamp) !== 0)) stale.push(file.path);
-    else if (withoutStamp(existing) !== withoutStamp(file.content)) handEdited.push(file.path);
+    // Byte for byte what a build before zheref/nen#270 generated -- its
+    // relative links carried verbatim -- is STALE too, for the reason the
+    // stamp is: really generated, really out of date, and "hand-edited" would
+    // send its maintainer looking for an edit nobody made. So the fixed build
+    // forces the regeneration rather than leaving it optional.
+    else if (
+      file.beforeLinkRewrite !== undefined &&
+      withoutStamp(existing) !== withoutStamp(file.content) &&
+      withoutStamp(existing) === withoutStamp(file.beforeLinkRewrite)
+    )
+      stale.push(file.path);
+    // Aimed from another location (Nobunaga, the #270 review): the links OUT
+    // of the mirror are spelled for where it was generated -- a copied
+    // install, a check run from another root -- and every other byte is a
+    // fresh generation's. Really generated, for somewhere else: stale. A hand
+    // edit confined to such a target reads stale too; either way the check
+    // fails and a regenerate heals it.
+    else if (withoutStamp(existing) !== withoutStamp(file.content) && sameButAimedElsewhere(existing, file)) {
+      stale.push(file.path);
+      relocated.push(file.path);
+    } else if (withoutStamp(existing) !== withoutStamp(file.content)) handEdited.push(file.path);
     // The same bytes under a different mode is a hand edit too (N6): a hook
     // script at 0644 is one the surface cannot run.
     else if (file.mode !== undefined && modeOf(path) !== file.mode) handEdited.push(file.path);
@@ -949,10 +1111,11 @@ export function checkSurfaceMirror(
     extra: extra.sort(),
     stale: stale.sort(),
     handEdited: handEdited.sort(),
+    relocated: relocated.sort(),
   };
 }
 
-export function mirrorReportOk(report: MirrorReport): boolean {
+export function mirrorReportOk(report: Pick<MirrorReport, "missing" | "extra" | "stale" | "handEdited">): boolean {
   return (
     report.missing.length === 0 &&
     report.extra.length === 0 &&
