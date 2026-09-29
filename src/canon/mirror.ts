@@ -330,11 +330,44 @@ export function readCanonSources(
       `--rules-dir '${rulesDir}' holds no rule file (a .md outside --not-mirrored). A mirror rendered from nothing would delete every mirrored file as orphaned, so it is refused -- point --rules-dir at the stack's rules/ directory, at a tag that contains the canon.`,
     );
   }
-  return files.map((file): CanonSource => {
+  const sources = files.map((file): CanonSource => {
     const raw = normalizeEol(readFileSync(join(rulesDir, file), "utf8"));
     const bound = substitute(raw, file, values);
     return { file, stem: file.slice(0, -".md".length), body: bound.endsWith("\n") ? bound : `${bound}\n` };
   });
+  refuseEmbeddedSectionMarkers(rulesDir, sources);
+  return sources;
+}
+
+/**
+ * A canon body may not carry a line that IS a section marker.
+ *
+ * The document shape (`AGENTS.md`) delimits one canon file from the next with a
+ * `<!-- canon: <file> -->` line, and `sections()` splits on that shape wherever
+ * it appears -- it cannot be first-line-only the way a file marker is, because
+ * a document holds many bodies in sequence. So a canon file whose own body
+ * contains that exact line would be split into a section that generate never
+ * wrote, and the very next `check` would report the block generate had just
+ * written as extra/missing/hand-edited (Bugbot, PR #278).
+ *
+ * Refused HERE, before anything is rendered on ANY surface, for the same reason
+ * the filename guard above is: a body that cannot survive the round trip in one
+ * shape is an upstream canon defect, not a per-surface accident, and a run that
+ * wrote the directory surfaces and then refused the document one would leave a
+ * consumer half-mirrored.
+ */
+function refuseEmbeddedSectionMarkers(rulesDir: string, sources: readonly CanonSource[]): void {
+  const offenders: string[] = [];
+  for (const source of sources) {
+    const lines = source.body.split("\n");
+    for (const [index, line] of lines.entries()) {
+      if (SECTION_RE.test(line)) offenders.push(`'${source.file}' line ${index + 1}`);
+    }
+  }
+  if (offenders.length === 0) return;
+  throw new CanonMirrorError(
+    `--rules-dir '${rulesDir}' holds ${offenders.length === 1 ? "a canon body that carries" : "canon bodies that carry"} a line which IS a section marker: ${offenders.join(", ")}. The document surface delimits its sections with that exact shape, so generate would write a block its own check reads as split -- change the line upstream (indent it, fence it, or reword it), or list the file under --not-mirrored.`,
+  );
 }
 
 // ---------------------------------------------------------------------------

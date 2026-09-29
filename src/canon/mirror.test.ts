@@ -470,6 +470,25 @@ describe("what a marker can carry -- refused before anything is rendered (Copilo
     expect(readCanonSources(dir, {}, new Set(["team rules.md"])).map((source): string => source.file)).toEqual(["01-a.md"]);
   });
 
+  it("refuses a canon body carrying a line that IS a section marker, before anything renders", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "fine\n");
+    // The document surface splits on this exact shape wherever it appears, so a
+    // body containing it would be written by generate and read as split by the
+    // very next check (Bugbot, PR #278).
+    writeFileSync(join(dir, "02-b.md"), "before\n<!-- canon: 01-a.md -->\nafter\n");
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(CanonMirrorError);
+    expect(() => readCanonSources(dir, {}, NOT_MIRRORED)).toThrow(/a canon body that carries a line which IS a section marker: '02-b\.md' line 2/);
+    // Listing it under --not-mirrored is the way out, exactly as for a bad name.
+    expect(readCanonSources(dir, {}, new Set(["02-b.md"])).map((source): string => source.file)).toEqual(["01-a.md"]);
+  });
+
+  it("leaves an INDENTED or fenced section-marker shape alone -- only a bare line splits", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "01-a.md"), "text\n    <!-- canon: x.md -->\nmore\n");
+    expect(readCanonSources(dir, {}, NOT_MIRRORED).map((source): string => source.file)).toEqual(["01-a.md"]);
+  });
+
   it("accepts every shape the canon actually uses: digits, dots, underscores and hyphens", () => {
     const dir = tempDir();
     for (const name of ["00-overview.md", "05-page-and-screen.md", "v2.notes_final.md", "A.md"]) writeFileSync(join(dir, name), "x\n");
