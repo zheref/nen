@@ -119,7 +119,7 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
 const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
-nen release unit-check --pr <n|owner/name#n> --repo <path> [--json]
+nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 
 preflight:
   Every precondition of the release preflight table, checked and reported
@@ -177,9 +177,22 @@ unit-check:
   A DETERMINISTIC replacement for a human re-reading the diff: this was one
   of the three things "judged by reading rather than by a nen command"
   (maintainer's ruling, 2026-09-26).
-  --pr <n|owner/name#n>     A bare number resolves against --repo's own
+  --pr <n|owner/name#n|CODE#n>
+                            A bare number resolves against --repo's own
                             'origin' remote; 'owner/name#n' names the
-                            repository explicitly.
+                            repository explicitly; 'CODE#n' (zheref/nen#269)
+                            resolves a product code through --repo's
+                            nen/repos.json by the SAME lookup 'pr ready
+                            <CODE>#<N>' uses -- an unknown code, a code
+                            matching two keys that differ only by letter
+                            case, or a registry that cannot be read, is
+                            exit 2. Like
+                            'owner/name#n', a code may name a repository
+                            other than --repo's origin: this verb only
+                            reads ('pr merge', which shares this grammar,
+                            refuses that). The '#' is required: the no-'#'
+                            shorthand 'pr ready' also takes (AB123) is not
+                            accepted here.
   Exit 0: every changed path is inside the unit. Exit 1: lists every path
   outside it. Exit 2: usage, OR --repo declares no 'release.unitPaths' --
   the message names the exact key to add, because "everything is outside
@@ -362,8 +375,10 @@ function unitCheck(context: CommandContext): number {
   );
   // Usage lists --repo unbracketed: this verb reads --repo's own
   // nen/workflow.json AND (absent an explicit owner/name in --pr) its own
-  // origin remote, so a silent cwd default would check the wrong checkout's
-  // policy against the wrong repository's pull request (zheref/nen#28).
+  // origin remote -- or, for a <CODE>#<n> ref (zheref/nen#269), its own
+  // nen/repos.json -- so a silent cwd default would check the wrong
+  // checkout's policy against the wrong repository's pull request
+  // (zheref/nen#28).
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the checkout whose nen/workflow.json declares release.unitPaths."),
   });

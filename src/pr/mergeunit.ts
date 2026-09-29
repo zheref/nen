@@ -550,7 +550,12 @@ export interface MergeUnitOptions {
   readonly deps?: PrReadyDeps;
 }
 
-/** Resolves `<ref>` to a target and PR number, sharing `release unit-check`'s own grammar rather than a second one. */
+/**
+ * Resolves `<ref>` to a target and PR number, sharing `release unit-check`'s
+ * own grammar rather than a second one: `<n>`, `<owner/name>#<n>` or (zheref/nen#269)
+ * `<CODE>#<n>`, the '#' required -- see ../release/unitcheck.ts's
+ * `resolvePrRef` for why the no-'#' shorthand `pr ready` accepts is not.
+ */
 export function resolveMergeRef(typedRef: string): ResolvedPrRef {
   try {
     return resolvePrRef(typedRef);
@@ -566,6 +571,15 @@ export function resolveMergeRef(typedRef: string): ResolvedPrRef {
  * a typed `owner/name#n` that does not match the checkout `--repo` points at
  * is a caller error (which checkout did you mean?), not a merge-gate
  * failure.
+ *
+ * A `<CODE>#<n>` IS HELD TO THE SAME RULE (zheref/nen#269). The code is
+ * resolved through `--repo`'s own registry, and a registry legitimately lists
+ * OTHER repositories' codes -- in a hatsu checkout `NE#5` is zheref/nen's
+ * pull request, and `pr ready NE#5` reads it there without complaint. A merge
+ * is not a read: a code that resolves anywhere but `--repo`'s origin is
+ * refused here, before any gate runs, naming the code, what it resolved to,
+ * and the origin, so this verb never merges a repository the checkout it was
+ * pointed at does not name.
  */
 function resolveTargetForMerge(seams: Seams, root: string, ref: ResolvedPrRef): Target {
   const target = ((): Target => {
@@ -576,7 +590,7 @@ function resolveTargetForMerge(seams: Seams, root: string, ref: ResolvedPrRef): 
       throw error;
     }
   })();
-  if (ref.slug === null) return target;
+  if (ref.slug === null && ref.code === null) return target;
   let origin: Target;
   try {
     origin = targetFromRemote(seams, root);
@@ -585,6 +599,11 @@ function resolveTargetForMerge(seams: Seams, root: string, ref: ResolvedPrRef): 
     throw error;
   }
   if (origin.slug !== target.slug) {
+    if (ref.code !== null) {
+      throw new MergeUnitUsageError(
+        `'${ref.code}#${ref.number}' resolves '${ref.code}' to '${target.slug}' through --repo's own registry, but '--repo' at '${root}' has an origin of '${origin.slug}' -- these must be the same repository, and nen pr merge never merges a repository --repo does not name. Point --repo at a checkout of '${target.slug}', or write the ref as a bare <n> to merge in '${origin.slug}'.`,
+      );
+    }
     throw new MergeUnitUsageError(
       `'--repo' at '${root}' has an origin of '${origin.slug}', but the ref names '${target.slug}' -- these must be the same repository. Point --repo at a checkout of '${target.slug}', or drop the owner/name and let the ref resolve against this checkout's own origin.`,
     );

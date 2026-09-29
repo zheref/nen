@@ -1,6 +1,9 @@
 // src/release/unitcheck.test.ts -- the pure pieces of `nen release unit-check`.
 
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ScriptedSeams } from "../seam/scripted.js";
 import {
   assembleUnitCheck,
@@ -17,14 +20,49 @@ import {
   UnitCheckRefError,
   type JValue,
 } from "./unitcheck.js";
+import { RefError, resolveProductCode, resolveRef } from "../verbs/pr_ready.js";
 
-describe("resolvePrRef -- <n> or <owner/name>#<n>, never a guess", () => {
-  it("reads a bare number with no slug", () => {
-    expect(resolvePrRef("42")).toEqual({ slug: null, number: 42 });
+describe("resolvePrRef -- <n>, <owner/name>#<n> or <CODE>#<n>, never a guess", () => {
+  it("reads a bare number with no slug and no code", () => {
+    expect(resolvePrRef("42")).toEqual({ slug: null, code: null, number: 42 });
   });
 
   it("reads owner/name#n", () => {
-    expect(resolvePrRef("acme/widgets#7")).toEqual({ slug: "acme/widgets", number: 7 });
+    expect(resolvePrRef("acme/widgets#7")).toEqual({ slug: "acme/widgets", code: null, number: 7 });
+  });
+
+  // zheref/nen#269: 'HA#117' matched this grammar and was then handed to the
+  // owner/name parser, which refused 'HA' as "not an owner/name slug".
+  it("reads <CODE>#<n> as a product code, not as a malformed slug (zheref/nen#269)", () => {
+    expect(resolvePrRef("HA#117")).toEqual({ slug: null, code: "HA", number: 117 });
+  });
+
+  it("keeps the code as typed; the lookup, not the parser, is case-insensitive", () => {
+    expect(resolvePrRef("ha#117")).toEqual({ slug: null, code: "ha", number: 117 });
+  });
+
+  it("reads a code that ends in a digit, because the '#' says where it ends", () => {
+    expect(resolvePrRef("A2#925")).toEqual({ slug: null, code: "A2", number: 925 });
+  });
+
+  it("refuses the no-'#' shorthand pr ready accepts -- deliberately narrower here, and says the '#' is required", () => {
+    try {
+      resolvePrRef("HA117");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnitCheckRefError);
+      expect((error as Error).message).toMatch(/<CODE>#<n> \(a product code in --repo's nen\/repos\.json, the '#' required\)/);
+    }
+  });
+
+  it("refuses a prefix that is neither a slug nor a code, naming both shapes", () => {
+    try {
+      resolvePrRef("H-A#1");
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnitCheckRefError);
+      expect((error as Error).message).toMatch(/'H-A' is neither an owner\/name slug .* nor a product code/);
+    }
   });
 
   it("refuses a token with no digits", () => {
@@ -36,10 +74,26 @@ describe("resolvePrRef -- <n> or <owner/name>#<n>, never a guess", () => {
   });
 });
 
+/** A checkout carrying only a nen/repos.json -- the registry a `<CODE>#<n>` ref is resolved through. */
+function registryRepo(registry: unknown): string {
+  const dir = mkdtempSync(join(tmpdir(), "nen-unit-check-registry-"));
+  mkdirSync(join(dir, "nen"), { recursive: true });
+  writeFileSync(join(dir, "nen", "repos.json"), JSON.stringify(registry));
+  return dir;
+}
+
+const REGISTRY = {
+  consumers: [
+    { repo: "acme/widgets", consumes: [], code: "AW" },
+    { repo: "acme/gadgets", consumes: [], code: "AG" },
+  ],
+  product_codes: { AW: "widgets", AG: "gadgets", HA: "hatsu" },
+};
+
 describe("resolveUnitCheckTarget", () => {
   it("uses the explicit slug without touching git at all", () => {
     const seams = new ScriptedSeams([]);
-    const target = resolveUnitCheckTarget(seams, "/repo", { slug: "acme/widgets", number: 1 });
+    const target = resolveUnitCheckTarget(seams, "/repo", { slug: "acme/widgets", code: null, number: 1 });
     expect(target.slug).toBe("acme/widgets");
   });
 
@@ -47,13 +101,178 @@ describe("resolveUnitCheckTarget", () => {
     const seams = new ScriptedSeams([
       { match: "git remote get-url origin", result: { code: 0, stdout: "git@github.com:acme/widgets.git\n" } },
     ]);
-    const target = resolveUnitCheckTarget(seams, "/repo", { slug: null, number: 1 });
+    const target = resolveUnitCheckTarget(seams, "/repo", { slug: null, code: null, number: 1 });
     expect(target.slug).toBe("acme/widgets");
   });
 
   it("refuses a malformed explicit slug", () => {
     const seams = new ScriptedSeams([]);
-    expect(() => resolveUnitCheckTarget(seams, "/repo", { slug: "not-a-slug", number: 1 })).toThrow(UnitCheckRefError);
+    expect(() => resolveUnitCheckTarget(seams, "/repo", { slug: "not-a-slug", code: null, number: 1 })).toThrow(UnitCheckRefError);
+  });
+
+  describe("a <CODE>#<n> ref (zheref/nen#269) -- resolved through --repo's registry by pr ready's own lookup", () => {
+    it("resolves a consumer's code to its slug, touching neither git nor gh", () => {
+      const seams = new ScriptedSeams([]);
+      const target = resolveUnitCheckTarget(seams, registryRepo(REGISTRY), { slug: null, code: "AG", number: 1 });
+      expect(target.slug).toBe("acme/gadgets");
+      expect(seams.calls).toEqual([]);
+    });
+
+    it("is case-insensitive, exactly as pr ready's lookup is", () => {
+      const target = resolveUnitCheckTarget(new ScriptedSeams([]), registryRepo(REGISTRY), { slug: null, code: "aw", number: 1 });
+      expect(target.slug).toBe("acme/widgets");
+    });
+
+    it("takes a product_codes bare name's owner from the consumers when they agree on one", () => {
+      const target = resolveUnitCheckTarget(new ScriptedSeams([]), registryRepo(REGISTRY), { slug: null, code: "HA", number: 1 });
+      expect(target.slug).toBe("acme/hatsu");
+    });
+
+    it("refuses an unknown code, naming the known ones and the file it read", () => {
+      const root = registryRepo(REGISTRY);
+      try {
+        resolveUnitCheckTarget(new ScriptedSeams([]), root, { slug: null, code: "ZZ", number: 1 });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnitCheckRefError);
+        const message = (error as Error).message;
+        expect(message).toMatch(/'ZZ' is not a product code/);
+        expect(message).toMatch(/Known codes: AG, AW, HA/);
+        expect(message).toContain(join(root, "nen", "repos.json"));
+      }
+    });
+
+    it("refuses when the owner of a bare product_codes name cannot be stated, pointing at owner/name#<n> -- not pr ready's --gh-repo", () => {
+      const root = registryRepo({
+        consumers: [
+          { repo: "acme/widgets", consumes: [], code: "AW" },
+          { repo: "other/thing", consumes: [], code: "OT" },
+        ],
+        product_codes: { HA: "hatsu" },
+      });
+      try {
+        resolveUnitCheckTarget(new ScriptedSeams([]), root, { slug: null, code: "HA", number: 1 });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnitCheckRefError);
+        const message = (error as Error).message;
+        expect(message).toMatch(/Pass owner\/hatsu#<n>/);
+        expect(message).not.toMatch(/--gh-repo/);
+      }
+    });
+
+    it("refuses when --repo carries no registry at all, naming the file", () => {
+      const root = mkdtempSync(join(tmpdir(), "nen-unit-check-noregistry-"));
+      try {
+        resolveUnitCheckTarget(new ScriptedSeams([]), root, { slug: null, code: "AW", number: 1 });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnitCheckRefError);
+        expect((error as Error).message).toMatch(/'AW#<n>' is resolved through --repo's own registry, and it could not be read/);
+        expect((error as Error).message).toMatch(/repos\.json/);
+      }
+    });
+
+    // Feitan (E3 review): the registry loader refuses a duplicate code by
+    // EXACT comparison, so 'NE' and 'ne' both load -- and the lookup, which
+    // ignores case, used to take whichever came first.
+    it("refuses a code that matches two differently-cased keys, naming both keys and repositories and the file", () => {
+      const root = registryRepo({
+        consumers: [
+          { repo: "zheref/nen", consumes: [], code: "NE" },
+          { repo: "evil/other", consumes: [], code: "ne" },
+        ],
+      });
+      try {
+        resolveUnitCheckTarget(new ScriptedSeams([]), root, { slug: null, code: "nE", number: 5 });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnitCheckRefError);
+        const message = (error as Error).message;
+        expect(message).toMatch(/'nE' matches 2 differently-spelled product codes/);
+        expect(message).toContain("consumers[].code 'NE' -> 'zheref/nen'");
+        expect(message).toContain("consumers[].code 'ne' -> 'evil/other'");
+        expect(message).toContain(join(root, "nen", "repos.json"));
+      }
+    });
+
+    it("never matches a non-ASCII key to an ASCII code: a KELVIN SIGN key does not answer 'K#5'", () => {
+      const root = registryRepo({ consumers: [{ repo: "evil/kelvin", consumes: [], code: "\u212A" }] });
+      try {
+        resolveUnitCheckTarget(new ScriptedSeams([]), root, { slug: null, code: "K", number: 5 });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnitCheckRefError);
+        const message = (error as Error).message;
+        expect(message).toMatch(/'K' is not a product code/);
+        // The key is printed so it cannot pass for the 'K' that was typed.
+        expect(message).toContain("Known codes: \\u{212a}");
+        expect(message).not.toContain("evil/kelvin");
+      }
+    });
+  });
+});
+
+describe("resolveProductCode (../verbs/pr_ready.ts) -- the one lookup pr ready, pr merge and unit-check share", () => {
+  const LOOKUP = { explicitForm: (name: string): string => `owner/${name}#<n>` };
+
+  it("still folds ASCII case: 'kp' finds 'KP'", () => {
+    expect(resolveProductCode("kp", { productCodes: {}, consumers: [{ repo: "zheref/KroApple", code: "KP" }] }, LOOKUP)).toEqual({
+      owner: "zheref",
+      repo: "KroApple",
+    });
+  });
+
+  it("refuses two consumers whose codes differ only by case, whichever is listed first", () => {
+    const consumers = [
+      { repo: "zheref/nen", code: "NE" },
+      { repo: "evil/other", code: "ne" },
+    ];
+    for (const ordered of [consumers, [...consumers].reverse()]) {
+      expect(() => resolveProductCode("NE", { productCodes: {}, consumers: ordered }, LOOKUP)).toThrow(
+        /'NE' matches 2 differently-spelled product codes/,
+      );
+    }
+  });
+
+  it("refuses two product_codes keys that differ only by case, naming both", () => {
+    try {
+      resolveProductCode("ne", { productCodes: { NE: "zheref/nen", ne: "evil/other" }, consumers: [] }, LOOKUP);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(RefError);
+      expect((error as Error).message).toContain("product_codes 'NE' -> 'zheref/nen', product_codes 'ne' -> 'evil/other'");
+    }
+  });
+
+  it("refuses a consumer code and a product_codes key that differ only by case", () => {
+    expect(() =>
+      resolveProductCode("NE", { productCodes: { ne: "other" }, consumers: [{ repo: "zheref/nen", code: "NE" }] }, LOOKUP),
+    ).toThrow(RefError);
+  });
+
+  it("the SAME spelling declared in consumers[] and product_codes is one key, not an ambiguity -- consumers first, as before", () => {
+    expect(
+      resolveProductCode("KP", { productCodes: { KP: "KroApple" }, consumers: [{ repo: "zheref/KroApple", code: "KP" }] }, LOOKUP),
+    ).toEqual({ owner: "zheref", repo: "KroApple" });
+  });
+
+  it("a KELVIN SIGN key matches neither 'K' nor 'k' -- toLowerCase() would have folded it to 'k'", () => {
+    const loaded = { productCodes: { "\u212A": "evil/kelvin" }, consumers: [] };
+    expect("\u212A".toLowerCase()).toBe("k"); // the fold this lookup no longer uses
+    expect(() => resolveProductCode("K", loaded, LOOKUP)).toThrow(/'K' is not a product code/);
+    expect(() => resolveProductCode("k", loaded, LOOKUP)).toThrow(/'k' is not a product code/);
+  });
+
+  it("pr ready's own resolveRef gets the same refusal, because it calls the same lookup", () => {
+    const registry = (): { productCodes: Record<string, string>; consumers: { repo: string; code: string | null }[] } => ({
+      productCodes: {},
+      consumers: [
+        { repo: "zheref/nen", code: "NE" },
+        { repo: "evil/other", code: "ne" },
+      ],
+    });
+    expect(() => resolveRef("ne#5", undefined, registry)).toThrow(/matches 2 differently-spelled product codes/);
   });
 });
 
