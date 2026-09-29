@@ -94,6 +94,48 @@ describe("nen canon resolve -- CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/is recorded in .*under 'pending_onboarding'/);
   });
 
+  // zheref/nen#219: the path the issue exists for. A tool repository recorded
+  // under maintained_tools[] -- never a consumer of anything -- resolves its
+  // pinned handbook through the scenario its own row states, and a
+  // disagreement between its rows is repo scenario's refusal, seen here too.
+  it("resolves a maintained tool's stack handbook from the scenario on its maintained_tools[] row", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-canon-listed-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(
+      join(root, "nen", "repos.json"),
+      JSON.stringify({
+        consumers: [],
+        product_codes: { HA: "zheref/hatsu" },
+        maintained_tools: [{ repo: "zheref/hatsu", role: "workflow prose", scenario: "bun-cli" }],
+      }),
+    );
+    const result = await capture(
+      resolveArgs({ target: "zheref/hatsu", "always-load": "handbooks/uzf-core.md", "stack-dir": "handbooks/stacks" }),
+      root,
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toMatch(/stack handbook: handbooks\/stacks\/bun-cli\/architecture\.md/);
+  });
+
+  it("refuses a maintained tool whose rows state different scenarios, as repo scenario does", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-canon-listed-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(
+      join(root, "nen", "repos.json"),
+      JSON.stringify({
+        consumers: [],
+        maintained_tools: [{ repo: "zheref/hatsu", scenario: "bun-cli" }],
+        pending_onboarding: [{ repo: "zheref/hatsu", scenario: "other" }],
+      }),
+    );
+    const result = await capture(
+      resolveArgs({ target: "zheref/hatsu", "always-load": "handbooks/uzf-core.md", "stack-dir": "handbooks/stacks" }),
+      root,
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/with more than one scenario -- 'bun-cli' \(its maintained_tools\[0\] row\), 'other' \(its pending_onboarding\[0\] row\)/);
+  });
+
   // zheref/nen#28: --repo is listed unbracketed on the usage line, so omitting
   // it is refused at the parser like --target/--stack-dir/--always-load --
   // never silently defaulted to the cwd to fail later as "no such file".
