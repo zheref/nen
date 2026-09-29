@@ -628,11 +628,28 @@ export interface RenderedRules {
   readonly lines: number;
 }
 
+/** Where the rules file lands under `--out`: `<dir>/<source stem><extension>`. */
+export function rulesPath(rule: RulesRule, stem: string): string {
+  return `${rule.dir}/${stem}${rule.extension}`;
+}
+
+/**
+ * The rules file's bytes -- frontmatter (if the row has one), marker, source
+ * -- with no limit applied. `renderRules` is the half that refuses; this one
+ * stands apart so ./mirror.ts can also name the bytes an older build wrote
+ * (`beforeLinkRewrite`) without that older rendering being refused.
+ */
+export function rulesContent(rule: RulesRule, source: RulesSource, marker: string): string {
+  const front = rule.frontmatter === null ? "" : rule.frontmatter.replace("{name}", source.stem);
+  return `${front}<!-- ${marker} -->\n${source.text}`;
+}
+
 /**
  * The rules file at `<dir>/<stem><extension>`, frontmatter (if the row has
- * one) then marker then the source verbatim. Over the row's `limit` it is
- * REFUSED with the two numbers: the surface would truncate it silently, and
- * a rules file whose tail the surface never reads is a rule nobody enforces.
+ * one) then marker then the source (its relative links re-aimed by the caller,
+ * ./links.ts). Over the row's `limit` it is REFUSED with the two numbers: the
+ * surface would truncate it silently, and a rules file whose tail the surface
+ * never reads is a rule nobody enforces.
  *
  * THE LIMIT IS COMPARED IN BYTES. The page states it in bytes ("truncates
  * any single rule file that exceeds 24,000 bytes"), and a character count
@@ -641,11 +658,10 @@ export interface RenderedRules {
  * (Copilot, PR #274). `chars` is still reported, beside `bytes`.
  */
 export function renderRules(rule: RulesRule, source: RulesSource, marker: string): RenderedRules {
-  const front = rule.frontmatter === null ? "" : rule.frontmatter.replace("{name}", source.stem);
-  const content = `${front}<!-- ${marker} -->\n${source.text}`;
+  const content = rulesContent(rule, source, marker);
   const chars = content.length;
   const bytes = Buffer.byteLength(content, "utf8");
-  const path = `${rule.dir}/${source.stem}${rule.extension}`;
+  const path = rulesPath(rule, source.stem);
   if (rule.limit !== null && bytes > rule.limit) {
     throw new SurfacePackError(
       `--rules '${source.stem}' renders to ${bytes} bytes at ${path}, over the ${rule.limit}-byte limit the surface documents (${rule.source}). The surface would truncate it silently; shorten the source instead -- nen never cuts a rules file.`,

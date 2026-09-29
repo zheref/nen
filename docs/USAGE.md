@@ -691,8 +691,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
-| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
-| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, or with `--stamp` for another version) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
@@ -9459,11 +9459,108 @@ still this generator's output, and is exactly what `check` calls `extra` and
 `generate` deletes. Both verbs read the same list, so what one reports the other
 clears.
 
+**Relative links are re-aimed for the depth each copy lands at**
+([#270](https://github.com/zheref/nen/issues/270)). A body is carried
+verbatim *but for its relative links*: a link is a statement about where its
+file is, and the same text copied one directory deeper (antigravity's nested
+`skills/<name>/`), to another depth than its source (every `agents/<stem>.md`:
+`surfaces/<s>/agents/` sits a level deeper than `claude/agents/`), to the
+mirror's root (codex's `AGENTS.md`) or into a TOML string (codex's
+`agents/<stem>.toml`) names another file — usually none. Every relative link in a skill, a persona,
+an include, an `AGENTS.md` section, a persona TOML body and the rules file is
+resolved against **its source file's own directory** and then:
+
+- when it names a **mirrored item** — a skill's `SKILL.md` or its directory, a
+  persona, a shared include, the `--rules` file — it is pointed at **that
+  item's copy** (a Cursor persona's `../skills/<name>/SKILL.md` becomes
+  `../<name>/SKILL.md`; a skill's `../../agents/<p>.md` becomes
+  `../agents/<p>.md`, and `../../rules/<stem>.md` the row's own
+  `../rules/<stem>.mdc`; a link to a skill's *directory* lands on the mirror's
+  directory for it, which holds only the generated `SKILL.md` — the skill's
+  other files stay where they are). On **codex**, whose personas are prose, a persona's
+  copy is its `## <name>` section: the link becomes `AGENTS.md#<anchor>`
+  (`../AGENTS.md#<anchor>` from a skill or a persona TOML, a bare
+  `#<anchor>` inside `AGENTS.md` itself), where `<anchor>` is the renderer's
+  slug of the heading — or the fragment the source link already carried;
+- otherwise it is pointed at **the same file on disk** — whatever its suffix,
+  `.md`, `.json`, `.sh`, `.html`, an image — so antigravity's nested
+  `../../../docs/<page>` becomes `../../../../docs/<page>`, a persona's
+  `../../docs/<page>` becomes `../../../docs/<page>`, and a link to a file
+  beside a skill in the source (`references/notes.md`) reaches that file where
+  it is;
+
+either way relative to the **destination** file's directory, the `#fragment`
+kept, the form kept (`](<target>)` stays bracketed, a `"title"`, `'title'` or `(title)` stays, a
+reference definition `[label]: target` is re-aimed in place). An inline link
+inside a **fenced** block is still re-aimed — a reader copies a path out of a
+fence, and a copied dangling path dangles the same — but a reference
+definition there is not (a fence is code: `[warn]: deprecated` in it is a log
+line), and nothing inside an **inline code span** is read at all, as a
+renderer reads it: CommonMark's backtick-string rule (a run of N backticks
+closed by the next run of exactly N in the same paragraph; a
+backslash-escaped backtick opens nothing). And a `[` directly after a word
+character, a `]`, a `)` or a backslash does not open a link — that is code
+(`handlers[name](event)`, `xs[0](value)`) or an escaped bracket, and
+re-aiming `event` as a path would corrupt the sample. Only path
+arithmetic is done: whether the target exists is never asked, so a link that
+dangles in the source dangles the same way in the mirror, re-aimed at the same
+missing file.
+
+**The tree a re-aimed link may reach is `--repo <path>`, else the working
+directory** — the base every verb here takes. Every end (that root, the
+sources, `--out`) is resolved through symlinks first, so a mirror reached
+through a symlink — a plugin directory pointing at the committed mirror —
+regenerates to the committed bytes. A link whose target **or** whose copy
+lies outside that tree — a mirror written straight into an installed surface
+(`~/.codex`, another repository's `.cursor/`) — would have to spell this
+machine's layout above both, so it is **carried as written** and named in the
+report (`linksVerbatim[]`, `<mirror path>: <target>`); nen never invents a
+path there. A link to a **mirrored item** is always re-aimed, wherever `--out`
+is: its target moves with the mirror. Run `generate` and `check` from the same
+root, or pass both the same `--repo`.
+
+Per surface, where a link to each mirrored item lands and what is left as written:
+
+| | `codex` | `cursor` | `antigravity` | `claude-code` |
+|---|---|---|---|---|
+| a skill's copy | flat `<name>/SKILL.md`: a link out of the mirror gains or loses a `../` for each directory `--out` sits deeper or shallower than `--source` — none in the common `claude/skills` → `surfaces/<s>` layout | `<name>/SKILL.md`, the same | `skills/<name>/SKILL.md` — **one directory deeper**, so every link out of the mirror gains a `../` | nothing is re-aimed: the row is the identity |
+| a persona's copy | its `## <name>` section of `AGENTS.md` (`#<anchor>`); the `agents/<stem>.toml` bodies are aimed from `agents/` | `agents/<stem>.md`, at another depth than its source (`surfaces/<s>/agents/` is a level deeper than `claude/agents/`) | `agents/<stem>.md`, the same | nothing |
+| the rules file's copy | none (no rules row): a link to the rules source lands on the source on disk | `rules/<stem>.mdc` | `rules/<stem>.md` | nothing |
+| carried as written | the forms below, plus a heading anchor a same-text heading earlier in `AGENTS.md` would displace (not computed) | the forms below | the forms below | every link |
+
+**Carried as written, on every surface, and why**: an absolute path, any
+`scheme:` target (`http(s):`, `mailto:`), a bare `#fragment` and a `~`-rooted
+path do not depend on where the file sits; an HTML `href`/`src` attribute and
+a path written as prose are not markdown links, and nen does not guess which
+prose is a path; anything inside an inline code span, a reference definition
+inside a fence, and a link written flush against a word (`foo[bar](baz)`,
+which CommonMark does render — the rarer case, left alone rather than risk a
+code sample) are carried too; the code-span reading does not model raw HTML or
+an autolink that CommonMark would let win over a backtick, nor an indented
+(four-space) code block; a footnote definition (`[^n]: text`) is not a
+link definition; a target carrying a character no portable path spelling uses
+(whitespace outside `<…>`, `[ ] { } ^ * | $ < > " '`, a backtick, a
+backslash) is a regex or a placeholder inside an example; and a "target"
+followed by anything but a title (`](a b)`) is not a link. Destinations and
+titles are read by CommonMark's rules, not a pattern: a bare destination may
+hold **balanced** parentheses (`a(b).md`), a `<…>` one spaces and parentheses
+(`<a (b).md>`), and a title parentheses of its own — so all three are
+re-aimed; unbalanced parentheses are not a link, and a link whose destination
+and title are split across lines (which CommonMark allows) is read as none,
+because the consumer's guard reads a link a line at a time. On **codex** the
+heading anchor is the renderer's slug of the persona's name; a heading with
+the same text *earlier* in `AGENTS.md` would move that anchor to `-1`, which
+nen does not compute — a repository keeps its persona names unique. The
+verbatim **claude-code** row rewrites nothing, links included: its copy *is*
+the source's own layout.
+
 ### `nen surface mirror generate`
 
 Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
 — `<out>/skills/<name>/SKILL.md` on the two plugin-shaped rows, `antigravity`
-and `claude-code`, whose mirror is a plugin root — with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
+and `claude-code`, whose mirror is a plugin root — with the body verbatim but
+for its relative links, re-aimed for the depth the copy lands at (above), the
+frontmatter reduced to the keys `--surface`'s row
 documents, and — with `--invocation-prefix` — every `<prefix><name>` mention
 rewritten into that surface's own spelling. Writes only files whose content
 actually changed, and deletes an orphan whose source is gone (plus the directory
@@ -9481,7 +9578,7 @@ that is the self-healing the mirror is for.
 
 ```text
 nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --out <dir>
-                            [--agents <dir>] [--invocation-prefix <prefix>]
+                            [--agents <dir>] [--invocation-prefix <prefix>] [--repo <path>]
                             [--hooks <hooks.json>] [--hooks-root <expr>]
                             [--manifest <plugin.json>] [--models <nen/workflow.json>]
                             [--source-surface <name>] [--rules <file.md>]
@@ -9503,11 +9600,11 @@ nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --
 | `--manifest <plugin.json>` | no | a Claude plugin manifest (`.claude-plugin/plugin.json`) | a row that documents a plugin manifest of its own — Antigravity's `plugin.json` (`name`, `version`, `description`; `name` and `description` required) — gets `<out>/plugin.json` carrying those keys from the source under a `$generated` marker; every other row reports `manifest: not supported` and writes nothing. A required key the source lacks is refused at exit 2 |
 | `--models <workflow.json>` | no | a `nen/workflow.json` (or any JSON carrying its `models` block) whose `models.<surface>` maps tiers (`frontier`, `deep`, `fast`, `economy`, …) to the surface's own aliases | on a surface whose row maps models, a persona's `model: <tier>` is rewritten to `models.<surface>.<tier>` **from that file**; `model: inherit` is carried as `inherit` where the surface documents it (Cursor, Antigravity) and dropped elsewhere with a `droppedInherit[]` line. **Cursor writes `model: inherit` for every persona whatever the tier** (`modelInheritOnly` on its row): its page documents `model:` as `inherit` — the default — or a specific model ID, and a tier alias such as `composer` or `grok` from `models.cursor` is not a documented ID; the tier is still resolved, so an unknown value is still refused, and reaches only the report as `modelMapped: <persona>: <tier> -> inherit (cursor writes no model id)` (`modelMapped[]` under `--json`). Codex and Antigravity write the alias as before; a tier the file does not declare is refused at exit 2 by pointer (`models.<surface>.<tier>`), as is a file with no `models.<surface>` at all. An alias outside the surface's documented set (Antigravity documents `inherit`, `flash`, `pro`) is emitted verbatim — it is the repository's own word — and named in `undocumentedAliases[]`. **Codex** additionally gets `config.toml.fragment` carrying `[agents]` / `default_subagent_model = "<models.codex.fast>"` — a fragment the consumer merges; `config.toml` itself is never a destination for it — and one `agents/<stem>.toml` per persona for `.codex/agents/` |
 | `--source-surface <name>` | no | the surface the **source** personas were written for; default `claude` — the key every real workflow spells its Claude Code row under | a canonical persona file is read directly by one surface, so its `model:` carries *that* surface's alias (`opus`), never a tier — rewriting the source to tiers would break the surface that reads it unmirrored. With `--models`, a persona's value is resolved in two steps: first as a tier of `models.<surface>` (written as-is), else as an alias under `models.<source-surface>` read back to **the one tier** it sits under (`opus` → `deep`), then tier → `models.<surface>.<tier>` (`deep` → `pro` on Antigravity). An alias under two tiers of the source row, a value that is neither, or a source row the file lacks when a persona needs it are each refused at exit 2 by pointer; in the last case, when exactly one declared row *would* resolve the alias, the refusal ends `Did you mean --source-surface <name>?` (two candidates is a choice, and nen names none). The value is a key of the caller's own `models` matrix and nothing else — a workflow that spells the row `claude-code` passes `--source-surface claude-code` |
-| `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity, with `trigger: always_on` / `description: <stem>` prepended, because that surface discards a rules file with no frontmatter), the marker first and the source verbatim under it — its invocation mentions are **not** rewritten. Over the surface's documented limit (Antigravity: 24,000 bytes) it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
+| `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity, with `trigger: always_on` / `description: <stem>` prepended, because that surface discards a rules file with no frontmatter), the marker first and the source under it — its relative links re-aimed like a skill's (a link to a mirrored skill lands on its copy), its invocation mentions **not** rewritten. Over the surface's documented limit (Antigravity: 24,000 bytes), counted on what is written — the re-aimed links included — it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
 | `--permissions <file.json>` | no | a permissions source: `{ "allow": [ { "exe", "args" } ], "deny": [ … ], "surfaces": { "<surface>": { "allow": [ "<row>" ], "deny": [ "<row>" ], "network_access": <boolean> } } }`; every other key is ignored | emitted as the row's pack: `settings.local.json` with `Bash(exe args)` patterns (claude-code); `cli.json` with `Shell(exe:args)` — or `Shell(exe)` when `args` is empty — patterns, Cursor's documented grammar (`Shell(commandBase)` with an optional `:args`; never `Shell(exe args)`) (cursor); `config.toml` stating the approval policy and workspace-write sandbox with **`writable_roots = []`** under a comment naming what fills it — the working tree, each linked worktree, the git common dir — never a placeholder string a consumer could copy beside a live setting; the report says `writableRootsPlaceholder: true` and adds a `note:` so an installer knows to fill it (codex). **The source decides `network_access`**: the sandbox block carries a `network_access = true|false` line **only when `surfaces.codex.network_access` declares it** (a boolean; anything else is refused by pointer); absent, no line is written — Codex's own default applies, nen never chooses a boundary the source did not state — and the report says `network: not declared (no network_access line; the surface's own default applies)`, or `network: declared (network_access = true)` when it was (`permissionNetworkAccess` under `--json`: the boolean, or null). A `network_access` under a surface whose pack states no sandbox (cursor, claude-code) is refused, since it has no line to land on. **Nothing the source did not declare is written**: the `Read(./**)` / `Write(./**)` grants Cursor needs come from a `surfaces.cursor.allow` block in the source, transcribed verbatim after the shared rows *for that surface only* and counted in the report as `permissions: written (+N surface rows)` (`permissionSurfaceRows` under `--json`); a block for a surface whose pack has no rows (codex) is refused. Antigravity has no allowlist file, so nothing is written and the report says `permissions: not supported`. A malformed row is refused by pointer, as is a `(` or `)` in an `exe` or `args` — every pack wraps the row in the surface's own `Tool(...)`, and a parenthesis inside it would close that early |
 | `--stamp <version>` | no | `MAJOR.MINOR.PATCH` of the source (a `-pre`/`+build` tail is accepted and ignored) | written into every marker as `, stamp: <version>`; anything not version-shaped is refused at exit 2 |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
-| `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values`, `--mirror-dir` and `--markdown-out` resolve against this root, not the process's directory; an absolute value is used as-is. |
+| `--repo <path>` | no | the tree a re-aimed relative link may reach; default the working directory | a link whose target or copy lies outside it is carried as written and listed under `linksVerbatim[]`; a link to a mirrored item is re-aimed wherever `--out` is. Resolved through symlinks, like `--source` and `--out`. The path flags themselves still resolve against the working directory, as they always have — `--repo` does not rebase them. A value that is empty or does not exist is refused at exit 2. Give `check` the same `--repo` |
 
 **Hook scripts travel with the manifest.** On every non-verbatim row, each
 script a `--hooks` command names as `${CLAUDE_PLUGIN_ROOT}/hooks/<file>` is
@@ -9535,20 +9632,30 @@ outside the surface's documented set (…):`, `modelMapped: … (<surface> write
 `permissions:` and `manifest:` (`none` when the flag was not given, `not
 supported` when the row has no such file, else what was written), a
 `network:` line after `permissions:` when the pack states a sandbox (codex),
-then any `note:` lines; the row's
+then `links re-aimed for this mirror's depth: <n>` when any link moved and
+`links left as written (the target or the copy is outside <root>, the tree
+--repo names): <mirror path>: <target>, …` when any was declined, then any
+`note:` lines; the row's
 caveat goes to **stderr**, so `--json` stays one document. `--json`:
 `{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
 dryRun, written, unchanged, deleted, stamp, skippedAgents, truncated,
 droppedInherit, undocumentedAliases, modelMapped, hooks, rules, permissions, manifest, notes,
-permissionSurfaceRows, writableRootsPlaceholder, permissionNetworkAccess, includes }` — the
-keys after `deleted` are v0.13.0's, appended at the end of the key order;
+permissionSurfaceRows, writableRootsPlaceholder, permissionNetworkAccess, includes,
+linkRoot, linksRewritten, linksVerbatim }` — the
+keys after `deleted` are v0.13.0's, appended at the end of the key order, and
+the last three are [#270](https://github.com/zheref/nen/issues/270)'s, appended
+after them: `linkRoot` is the real path of the tree a re-aimed link may reach,
+`linksRewritten` the number of relative links re-aimed (counted per generated
+file), `linksVerbatim` every `<mirror path>: <target>` carried as written
+because it would have left that tree (sorted, `[]` when none);
 `modelMapped` is `[]` except on a `modelInheritOnly` row (cursor) and
 `permissionNetworkAccess` is the declared boolean or null;
 `rules` is `"none"`, `"not supported"` or `{ path, chars, limit }`. Exit 0 on
-any completed run; exit 2 on a missing or unknown flag, an `--out` inside
+any completed run; exit 2 on a missing or unknown flag, a `--repo` that is
+empty or does not exist, an `--out` inside
 `--source`, a `--source` with no `SKILL.md`, a `SKILL.md` with no frontmatter
 block or missing a key the surface documents as required, a rules file over the
-surface's limit, a tier `--models` does not declare, a malformed pack file, a
+surface's limit (its links re-aimed), a tier `--models` does not declare, a malformed pack file, a
 stamp that is not a version, the verbatim `claude-code` row, or a destination
 that exists and carries no marker.
 
@@ -9615,7 +9722,10 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "permissionSurfaceRows": 0,
   "writableRootsPlaceholder": false,
   "permissionNetworkAccess": null,
-  "includes": ["_review-preamble.md"]
+  "includes": ["_review-preamble.md"],
+  "linkRoot": "/home/me/checkout",
+  "linksRewritten": 223,
+  "linksVerbatim": []
 }
 ```
 The same command with `--surface codex` writes `AGENTS.md`, one
@@ -9670,6 +9780,8 @@ Regenerates from the SAME inputs `generate` uses and diffs the result against
 | `stale` | it carries a marker, but for a **different surface** — really generated, really out of date |
 | `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright — or the bytes match but a file that declares a mode (a `hooks/` script, 0755) sits under another one: a hook at 0644 is one the surface cannot run |
 | `stale` (with `--stamp`) | the marker is for this surface but carries **no stamp, or a stamp other than `--stamp`** — an older one is the case that matters (a mirror generated from an older source than the one now asked about); a newer one is not this source's either. A file with no stamp is stale **only when `--stamp` is given**; without it the stamp is masked on both sides and never a drift class. A marker whose stamp is not a `MAJOR.MINOR.PATCH` version is stale too, named like any other — never an exit-2 refusal, which could not have reported the file it was asked about. Ordering: a missing marker is `hand-edited`, another surface's is `stale`, then the stamp, then the bytes |
+| `stale` (an older build) | the marker is for this surface (and the stamp, if asked, matches), and the bytes are **byte for byte what a build before [#270](https://github.com/zheref/nen/issues/270) generated from these same inputs** — its relative links carried as written rather than re-aimed. Really generated, by an older nen, so the regeneration is forced rather than optional, and `hand-edited` would send its maintainer looking for an edit nobody made. A file whose links moved AND that somebody also edited is `hand-edited`. Checked after the stamp, before the bytes |
+| `stale` (aimed from elsewhere) | the bytes are a fresh generation's **once every relative link that leaves the mirror is masked on both sides** — the links inside it (to a mirrored skill, persona, include or rules file, or a directory holding one) must still match. The mirror was really generated, for another location: a **copied install**, or a `generate` run from another root or `--repo` than this check. The text report names these files on a line of their own, `stale because their links out of the mirror are aimed from another location (…): <files>`; the `--json` shape does not change (they are in `stale`). A hand edit confined to such a link's target reads `stale` too — either way the check fails and a regenerate heals it. Checked after the older-build case |
 
 `stale` is where [`canon mirror check`](#nen-canon-mirror-check)'s `--ref` sits
 in this verb: the facts the marker carries are the **surface** and, when
@@ -9684,7 +9796,7 @@ match the source and `hand-edited` otherwise, and `stale` is never reported.
 
 ```text
 nen surface mirror check --source <dir> --surface <name> --out <dir>
-                         [--agents <dir>] [--invocation-prefix <prefix>]
+                         [--agents <dir>] [--invocation-prefix <prefix>] [--repo <path>]
                          [--hooks <hooks.json>] [--models <workflow.json>]
                          [--rules <file.md>] [--permissions <permissions.json>]
                          [--stamp <version>] [--json]
@@ -9697,10 +9809,15 @@ flags the generate run had: a `hooks.json` the check does not regenerate is a
 file it reports as `extra`, and one it regenerates but the mirror lacks is
 `missing`. `--stamp <version>` compares the marker's stamp by version
 (numerically, component by component; a `-pre`/`+build` tail is ignored).
+Give the same `--repo` (or run from the same directory) as well: the re-aimed
+links are part of the generation, and a check run from another root
+regenerates them for that root.
 
 **Output and exit codes** — prints `surface:`, `stamp:` (when given),
 `ok: <n>`, then `missing:`, `extra:`, `stale:` and `hand-edited:` (each `(none)`
-when empty). `--json`: `{ contract: "nen.surface.mirror.check/v0.1", surface,
+when empty), with a `stale because their links out of the mirror are aimed
+from another location (…): <files>` line after `stale:` only when some are
+(text only — the `--json` shape below is unchanged). `--json`: `{ contract: "nen.surface.mirror.check/v0.1", surface,
 ok, missing, extra, stale, handEdited, stamp }` — `stamp` (the value asked
 about, or null) is v0.13.0's, appended at the end; the contract stays v0.1
 because nothing before it moved. Exit **0** when all four drift lists are
@@ -9778,6 +9895,19 @@ the same five classes: `ok`, `missing` (generated, not installed), `stale`
 (installed from another surface or, with `--stamp`, another version),
 `hand-edited` (installed bytes differ), `extra` (in the installed tree's mirror
 universe, with no source).
+
+**Relative links are regenerated for the installed directory's own location**,
+resolved through symlinks. An install that is a **symlink** to the committed
+mirror (a plugin directory pointing at `surfaces/<s>`) resolves to it and
+compares clean. An install that is a **copy** placed outside `--repo` carries
+its links out of the mirror as they were aimed where it was generated, while
+the fresh generation for its location carries them as written (see *the tree
+a re-aimed link may reach*): such a file is `stale` (aimed from elsewhere),
+named on the `stale because …` text line, and never `hand-edited` unless its
+prose or a link inside the mirror changed too. A fresh copy therefore exits
+1 with only `stale` — generate into the installed location itself
+(`generate --out <installed dir>`) to make it `ok`, or check the committed
+mirror with `--out`.
 
 **`--surface claude-code`** is the case the verbatim row exists for: a Claude
 Code plugin's installed copy is the source tree itself, so the "generation" is
