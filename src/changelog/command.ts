@@ -13,13 +13,7 @@ import {
 } from "../cli/command.js";
 import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, optionalDirectoryFlag, readTextFile, splitList } from "../cli/inputs.js";
 import { collateIntoChangelog, sortFragments, type Fragment } from "./collate.js";
-import {
-  checkCompleteness,
-  DEFAULT_FRAGMENT_DIR,
-  extractChangelogRefs,
-  extractFragmentRefs,
-  extractMergedPrNumbers,
-} from "./completeness.js";
+import { DEFAULT_FRAGMENT_DIR, describeReleasePrAllowance } from "./completeness.js";
 import {
   fragmentRequired,
   firstDatedEntryCount,
@@ -27,8 +21,8 @@ import {
   unreleasedEntryCount,
   type FragmentInputs,
 } from "./fragment.js";
+import { reconcileChangelog } from "./reconcile.js";
 import { resolveRepoRoot } from "../repo/root.js";
-import { GIT, must, normalizeEol } from "../seam/exec.js";
 
 const USAGE = `nen changelog fragment-required --spec-paths <a,b> --fragment-dir <dir> (--files ... | --files-from ... | --range ...) [--body-from <path>] [--base-changelog <path>] --head-changelog <path> [--base-repos <path>] [--head-repos <path>]
 nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--write]
@@ -54,6 +48,27 @@ completeness:
   repository root), and so is a path that is not a directory. A directory
   that does not exist contributes no fragments rather than refusing: a
   repository that has collated everything has none at the cut point.
+
+  THE RELEASE-PR ALLOWANCE (zheref/nen#229): the terminal PR whose merge
+  introduced the dated section need not cite itself -- the release proposal,
+  which is written before its own number exists. When the range ends at a
+  'Merge pull request #N' merge, #N is uncited, and that merge INTRODUCED the
+  DATED section --changelog opens with (the dated section opens the CHANGELOG
+  at the merge, is absent at its first parent, and no other merge on its
+  branch -- a PR merge or a local one -- introduced it), #N is reconciled and
+  named on its own line. Only that one PR, only at the range's end: every
+  other uncited PR still fails, and so does a PR that merely CARRIED the
+  dated section to the trunk. A heading whose trailing text is 'unreleased'
+  is NOT dated: a --changelog opening with one cuts no dated section, and
+  the PR that DATES it is the one that introduced the dated section. The
+  history cannot tell a release proposal from a DELIVERY PR that opens the
+  dated section itself; that PR is excused the same way. A git read that
+  fails declines the allowance; it never grants it. --json's
+  'releasePrAllowance' records the decision and its verdict either way (null
+  when every merged PR was already cited).
+
+  --range is refused at exit 2, before git runs, when any revision in it
+  begins with '-': git would read it as an option.
 
   --repo <path>    The checkout that --changelog and --fragment-dir
                    resolve against. Defaults to the current directory, so
@@ -213,11 +228,6 @@ function completenessCmd(context: CommandContext): number {
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const changelog = readTextFile(changelogPath, root);
 
-  const result = must(context.seams, GIT, ["log", range, "--merges", "--format=%s"], { cwd: root });
-  const subjects = normalizeEol(result.stdout).split("\n").filter((line): boolean => line !== "");
-  const mergedPrNumbers = extractMergedPrNumbers(subjects);
-  const changelogRefs = extractChangelogRefs(changelog, ownerRepo);
-
   // THE SAME SEAM ../release/command.ts USES, not a second hand-spelling of
   // it: a directory that is not there is "no fragments" rather than a
   // refusal, an explicitly empty `--fragment-dir` is a usage error rather
@@ -225,12 +235,32 @@ function completenessCmd(context: CommandContext): number {
   // rather than surfacing as a raw ENOTDIR. See ../cli/inputs.ts.
   const fragmentDirFull = optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root);
   const names = fragmentDirFull === null ? [] : readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md"));
-  const fragmentRefs = extractFragmentRefs(names);
 
-  const report = checkCompleteness({ mergedPrNumbers, changelogRefs, fragmentRefs });
+  // THE SHARED RECONCILIATION (./reconcile.ts), release-PR allowance
+  // included: the merge-log read, the citation check and the allowance live
+  // there once, so this verb and `nen release preflight` cannot answer the
+  // same range two ways (zheref/nen#229).
+  const report = reconcileChangelog(context.seams, root, {
+    range,
+    changelogPath,
+    changelogText: changelog,
+    ownerRepo,
+    fragmentNames: names,
+  });
+  // The allowance is NAMED, never silently folded into a pass: an auditor
+  // reading "every PR ... has an entry" must be able to see that one of them
+  // did not, and which rule let it through. A clean range with no allowance
+  // prints exactly the line it always printed.
+  const allowance = describeReleasePrAllowance(report.releasePrAllowance);
   const lines = report.ok
-    ? [`every PR merged in ${range} has a CHANGELOG entry or fragment.`]
-    : [`missing CHANGELOG entry or fragment for:`, ...report.missing.map((n): string => `  #${n}`)];
+    ? allowance === null
+      ? [`every PR merged in ${range} has a CHANGELOG entry or fragment.`]
+      : [`every PR merged in ${range} has a CHANGELOG entry or fragment, but one, excused by the release-PR allowance:`, `  ${allowance}`]
+    : [
+        `missing CHANGELOG entry or fragment for:`,
+        ...report.missing.map((n): string => `  #${n}`),
+        ...(allowance === null ? [] : [allowance]),
+      ];
   emit(context.io, context.json, report, lines);
   return report.ok ? 0 : 1;
 }

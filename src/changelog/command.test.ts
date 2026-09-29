@@ -335,3 +335,78 @@ describe("nen changelog collate -- an unreadable --changelog is a usage refusal"
     expect(said).toMatch(/names the file this verb REWRITES/);
   });
 });
+
+// zheref/nen#229. The allowance's verb-level surface, against the blanket stub
+// this file's other cases use: every git read answers the merge-log line, so
+// the allowance's own read of the range's end gets an answer it cannot parse
+// and DECLINES. The human output must then be exactly what it always was --
+// a decline that never reached a PR has nothing to add to the list -- while
+// --json still records that the allowance was evaluated and why it declined.
+// The applied and carried shapes run against a real git in
+// ./reconcile.integration.test.ts.
+describe("nen changelog completeness -- a declined release-PR allowance", () => {
+  const mergedFive = (): CommandResult => ({ code: 0, stdout: "Merge pull request #5 from x/y\n", stderr: "", spawnFailed: false });
+
+  it("adds no line to the human output when the decline names no PR", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, "## v1.1.0 — 2026-01-01\n");
+    const result = await capture(["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r"], dir, mergedFive);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual(["missing CHANGELOG entry or fragment for:", "  #5"]);
+  });
+
+  it("records the decline in --json as 'releasePrAllowance', beside 'missing' and 'ok'", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, "## v1.1.0 — 2026-01-01\n");
+    const result = await capture(
+      ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--json"],
+      dir,
+      mergedFive,
+    );
+    expect(result.code).toBe(1);
+    const parsed = JSON.parse(result.out.join("\n")) as { missing: number[]; ok: boolean; releasePrAllowance: { applied: boolean; verdict: string } };
+    expect(Object.keys(parsed)).toEqual(["missing", "ok", "releasePrAllowance"]);
+    expect(parsed.missing).toEqual([5]);
+    expect(parsed.releasePrAllowance).toMatchObject({ applied: false, verdict: "terminal-unreadable" });
+  });
+
+  it("reports 'releasePrAllowance: null' when every merged PR is cited -- the allowance was never needed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, "https://github.com/o/r/pull/5\n");
+    const result = await capture(
+      ["changelog", "completeness", "--range", "v1..v2", "--changelog", changelog, "--owner-repo", "o/r", "--json"],
+      dir,
+      mergedFive,
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ missing: [], ok: true, releasePrAllowance: null });
+  });
+});
+
+// zheref/nen#229 review settlement (M2). `--range` reached `git log` as a bare
+// argument, so `--range=--output=pwned..HEAD` made git write the log to a
+// file, left nothing to reconcile, and passed the gate at exit 0. It is now a
+// usage refusal before ANY git call; the real-git twin in
+// ./reconcile.integration.test.ts proves no file is written.
+describe("nen changelog completeness -- a --range that is an option is refused", () => {
+  it("exits 2 naming the revision, and runs no git at all", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    writeFileSync(changelog, "no refs here");
+    const calls: string[] = [];
+    const result = await capture(
+      ["changelog", "completeness", "--range=--output=pwned..HEAD", "--changelog", changelog, "--owner-repo", "o/r"],
+      dir,
+      (command, args): CommandResult => {
+        calls.push([command, ...args].join(" "));
+        return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--range '--output=pwned\.\.HEAD' has a revision beginning with '-'/);
+    expect(calls).toEqual([]);
+  });
+});

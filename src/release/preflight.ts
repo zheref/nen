@@ -18,7 +18,10 @@
 //                              unless none has partial scope on main.
 //   changelog.d/ empty          at the CUT POINT.
 //   CON-33(c) reconciled        every PR merged in <vPrev>..<cut-point> has a
-//                              CHANGELOG entry or fragment.
+//                              CHANGELOG entry or fragment -- or is the
+//                              release PR itself, excused by the release-PR
+//                              allowance (zheref/nen#229), which this row
+//                              names rather than hides.
 //   Tag does not already exist  re-tagging is never the fix.
 //
 // EVERY CHECK RUNS, ALWAYS. This module never short-circuits on the first
@@ -42,6 +45,8 @@
 // module applies getsuga §2's AND across the three, per chore, and reports
 // which chores are LIVE (hold) versus which have no partial scope on main
 // (the G5 judgement getsuga §5 says is never this tool's call to make alone).
+
+import { describeReleasePrAllowance, type ReleasePrAllowance } from "../changelog/completeness.js";
 
 export interface LiveChoreCandidate {
   readonly name: string;
@@ -113,6 +118,14 @@ export interface PreflightInputs {
   readonly liveChores: Supplied<LiveChoreCandidate>;
   readonly fragmentFilesAtCutPoint: readonly string[];
   readonly missingChangelogPrs: readonly number[];
+  /**
+   * The release-PR allowance's decision from ../changelog/reconcile.ts -- the
+   * SAME reconciliation `nen changelog completeness` runs, whose `missing`
+   * is what `missingChangelogPrs` above carries (zheref/nen#229). Optional so
+   * a caller that reconciles without it still types; omitted reads as "no
+   * allowance evaluated", and the row renders exactly as it always did.
+   */
+  readonly releasePrAllowance?: ReleasePrAllowance | null;
   readonly tagAlreadyExists: boolean;
   readonly tag: string;
 }
@@ -126,12 +139,18 @@ export interface PreflightCheck {
 export interface PreflightReport {
   readonly checks: readonly PreflightCheck[];
   readonly liveChores: readonly LiveChoreResult[];
+  /** The CON-33(c) row's release-PR allowance decision, or null when none was evaluated. */
+  readonly releasePrAllowance: ReleasePrAllowance | null;
   readonly ok: boolean;
 }
 
 export function runPreflight(inputs: PreflightInputs): PreflightReport {
   const liveChores = inputs.liveChores === null ? [] : evaluateLiveChores(inputs.liveChores);
   const liveNames = liveChores.filter((chore): boolean => chore.live).map((chore): string => chore.name);
+  const releasePrAllowance = inputs.releasePrAllowance ?? null;
+  // Worded by the SAME function `nen changelog completeness` prints with, so
+  // the two verbs cannot describe one decision two ways.
+  const allowanceNote = describeReleasePrAllowance(releasePrAllowance);
 
   const checks: PreflightCheck[] = [
     {
@@ -199,10 +218,15 @@ export function runPreflight(inputs: PreflightInputs): PreflightReport {
     {
       name: "CON-33(c) reconciled",
       ok: inputs.missingChangelogPrs.length === 0,
+      // A pass the allowance made possible says so, naming the PR; a failure
+      // whose terminal PR the allowance declined says why. With no allowance
+      // in play the detail is byte-for-byte what it always was.
       detail:
         inputs.missingChangelogPrs.length === 0
-          ? "every merged PR has a CHANGELOG entry or fragment"
-          : `missing: ${inputs.missingChangelogPrs.map((n): string => `#${n}`).join(", ")}`,
+          ? allowanceNote === null
+            ? "every merged PR has a CHANGELOG entry or fragment"
+            : `every merged PR has a CHANGELOG entry or fragment, but one, excused by the release-PR allowance -- ${allowanceNote}`
+          : `missing: ${inputs.missingChangelogPrs.map((n): string => `#${n}`).join(", ")}${allowanceNote === null ? "" : ` -- ${allowanceNote}`}`,
     },
     {
       name: "tag does not already exist",
@@ -211,5 +235,5 @@ export function runPreflight(inputs: PreflightInputs): PreflightReport {
     },
   ];
 
-  return { checks, liveChores, ok: checks.every((check): boolean => check.ok) };
+  return { checks, liveChores, releasePrAllowance, ok: checks.every((check): boolean => check.ok) };
 }

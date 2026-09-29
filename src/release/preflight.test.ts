@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ReleasePrAllowance } from "../changelog/completeness.js";
 import { evaluateLiveChores, runPreflight, type HoldState, type PreflightInputs } from "./preflight.js";
 
 const UNSET: HoldState = { kind: "unset" };
@@ -160,5 +161,60 @@ describe("runPreflight", () => {
       expect(row?.ok).toBe(false);
       expect(row?.detail).toContain("not supplied");
     });
+  });
+});
+
+// zheref/nen#229. The CON-33(c) row renders the release-PR allowance the
+// shared reconciliation (../changelog/reconcile.ts) decided, worded by the
+// same function `nen changelog completeness` prints with -- so the two verbs
+// reach one verdict and describe it one way. The row's pass/fail is still
+// `missingChangelogPrs` alone: the allowance only ever arrives as a PR
+// already removed from that list, never as a second way to pass.
+describe("the CON-33(c) row names the release-PR allowance (zheref/nen#229)", () => {
+  const applied: ReleasePrAllowance = {
+    applied: true,
+    verdict: "applied",
+    pr: 222,
+    mergeSha: "a".repeat(40),
+    firstParentSha: "b".repeat(40),
+    section: "v0.12.0",
+    carriedBy: null,
+    detail: "the range ends at its merge aaaaaaa, which introduced v0.12.0",
+  };
+  const row = (overrides: Partial<PreflightInputs>): { ok: boolean; detail: string } | undefined =>
+    runPreflight(inputs(overrides)).checks.find((c): boolean => c.name === "CON-33(c) reconciled");
+
+  it("a pass the allowance made possible names the PR it excused", () => {
+    const passed = row({ missingChangelogPrs: [], releasePrAllowance: applied });
+    expect(passed?.ok).toBe(true);
+    expect(passed?.detail).toBe(
+      "every merged PR has a CHANGELOG entry or fragment, but one, excused by the release-PR allowance -- #222 reconciled by the CON-33(c) release-PR allowance: the range ends at its merge aaaaaaa, which introduced v0.12.0",
+    );
+  });
+
+  it("a failure still lists every missing PR, and names the one the allowance excused beside them", () => {
+    const failed = row({ missingChangelogPrs: [220], releasePrAllowance: applied });
+    expect(failed?.ok).toBe(false);
+    expect(failed?.detail).toMatch(/^missing: #220 -- #222 reconciled by the CON-33\(c\) release-PR allowance/);
+  });
+
+  it("a declined terminal PR that is still missing says why the exception did not cover it", () => {
+    const declined: ReleasePrAllowance = { ...applied, applied: false, verdict: "section-carried", pr: 225, carriedBy: 222, detail: "carried" };
+    const failed = row({ missingChangelogPrs: [225], releasePrAllowance: declined });
+    expect(failed?.ok).toBe(false);
+    expect(failed?.detail).toBe("missing: #225 -- #225 not reconciled by the release-PR allowance: carried");
+  });
+
+  it("with no allowance in play the row is byte-for-byte what it always was", () => {
+    expect(row({})?.detail).toBe("every merged PR has a CHANGELOG entry or fragment");
+    expect(row({ missingChangelogPrs: [5] })?.detail).toBe("missing: #5");
+    expect(row({ missingChangelogPrs: [5], releasePrAllowance: { ...applied, applied: false, verdict: "terminal-not-pr-merge", pr: null } })?.detail).toBe(
+      "missing: #5",
+    );
+  });
+
+  it("carries the decision into the report for --json, and null when none was evaluated", () => {
+    expect(runPreflight(inputs({ releasePrAllowance: applied })).releasePrAllowance).toBe(applied);
+    expect(runPreflight(inputs()).releasePrAllowance).toBeNull();
   });
 });
