@@ -647,13 +647,13 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
-| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json | yes |
+| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
-| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch to the remote its upstream names, as the branch it names (origin, or `--remote`, under its own name when it has none), refusing a detached HEAD, the trunk as local name **or as destination** (a branch tracking `origin/main` is pushed under its own name and `-u` retracks it), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
+| [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
@@ -684,7 +684,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
-| [`release`](#family-release) | [`nen release unit-check`](#nen-release-unit-check) | whether a pull request's changed files stay inside `--repo`'s declared `release.unitPaths` | github (`gh api --paginate --slurp repos/{owner}/{repo}/pulls/{n}/files`), nen/workflow.json | yes |
+| [`release`](#family-release) | [`nen release unit-check`](#nen-release-unit-check) | whether a pull request's changed files stay inside `--repo`'s declared `release.unitPaths` | github (`gh api --paginate --slurp repos/{owner}/{repo}/pulls/{n}/files`), nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)) | git log --merges, CHANGELOG.md, changelog.d/ | yes |
@@ -695,8 +695,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
-| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
-| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, or with `--stamp` for another version) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
@@ -902,7 +902,7 @@ commit. Three things make that visible:
 **Usage**
 
 ```text
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>[,<name>...]] [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 ```
 
 **Arguments**
@@ -916,7 +916,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
 | `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded`; see above |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
-| `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | comma-joined for more than one name; this CLI's flag reader refuses a *repeated* occurrence of the same flag, so `--exclude-check a,b` is the form, not `--exclude-check a --exclude-check b` |
+| `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | **repeatable**, one name per occurrence ([zheref/nen#243](https://github.com/zheref/nen/issues/243)); one value may also join names with commas, and a comma inside `()`/`[]`/`{}` is part of the name — see below |
 | `--gates <path>` | no | read reviewer identities from this file instead of `nen/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
 | `--require-head <sha>` | no | judge only this commit: 7–40 hex digits, a case-insensitive prefix of GitHub's head | any other head is exit `8` (`head-mismatch`), both SHAs printed, no verdict; malformed is exit `2` |
@@ -943,9 +943,39 @@ are reported in `--explain` and in `--json`'s `meta.excludedChecks`. A name
 that matches **no** entry in the rollup is never a silent no-op: it is
 reported as a `meta.warnings` entry (`--exclude-check '<name>' matched no
 check in the rollup`), printed under `--explain`, and the rollup is otherwise
-left intact. Because the flag is comma-joined, a check name that itself
-contains a comma cannot be expressed and every name is trimmed of
-surrounding whitespace before matching.
+left intact. Every name is trimmed of surrounding whitespace before
+matching, and a name given twice is applied (and warned about) once.
+
+**Naming a check whose name contains a comma (zheref/nen#243).** A GitHub
+Actions matrix job is named `<job> (<v1>, <v2>, ...)` — this repository's own
+CI reports `check (Windows, ["self-hosted","Windows","X64"])` — and through
+v0.15.x `--exclude-check` split its one value on every comma, so such a name
+fragmented into pieces that matched nothing and the verdict stayed
+`not-ready` on a job the maintainer had ruled out
+([zheref/nen#242](https://github.com/zheref/nen/pull/242)). The flag now
+**repeats** — `--exclude-check readiness --exclude-check 'check (Windows,
+["self-hosted","Windows","X64"])'` is two names — and within one occurrence a
+comma separates names **only outside brackets**: `(`, `[` and `{` open a
+group, the matching closer ends it, and a comma inside a group belongs to the
+name. So `--exclude-check a,b` is still two names, exactly as before, and a
+matrix name is one name with or without the repeat:
+
+```bash
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'check (Windows, ["self-hosted","Windows","X64"])'
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'compile,check (Windows, ["self-hosted","Windows","X64"])'
+```
+
+Two shapes are stated rather than guessed. A value with an opener that is
+**never closed and a comma after it** (`--exclude-check 'lint (,build'`) has
+two readings — the comma separates `lint (` from `build`, or belongs to one
+name — and is **refused at exit `2`**, naming the character; give each check
+its own occurrence instead. (An unclosed opener with no comma after it, such
+as `lint (`, is not ambiguous and is kept as typed; a closer with no opener
+is an ordinary character.) And a name with a comma **outside every bracket**
+(`lint, format`) still splits and cannot be named by this flag — no Actions
+matrix name is shaped that way; a declared, pattern-capable exclusion is
+[zheref/nen#249](https://github.com/zheref/nen/issues/249)'s. The grammar is
+`src/pr/excludecheck.ts`'s header.
 
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
@@ -1262,8 +1292,11 @@ carries `roundQuorum` when the file declares a `round_quorum`), `caveats[]`, `re
 Exit 0 only on `verdict: ready`.
 Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
 "cleared" (SKILL.md §4's "absence is never a pass").
-Exit 2 on a malformed ref, an unresolvable code, a malformed `--require-head`, or no
-reviewer-identity source at all. That is a usage problem, never a verdict.
+Exit 2 on a malformed ref, an unresolvable code (unknown, or matching two registry keys
+that differ only by letter case), a malformed `--require-head`, a non-numeric
+`--exclude-run`, an ambiguous `--exclude-check` value (an opener never closed, with a
+comma after it), or no reviewer-identity source at all. That is a usage problem, never a
+verdict.
 Exit **8** on `head-mismatch`: `--require-head` named a commit that is not GitHub's head, and no verdict was
 decided.
 
@@ -1644,7 +1677,7 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 | `--add-reviewers <a,b>` | one of this or `--add-bots` | comma-separated reviewer logins, resolved one by one (see above) | a login that resolves to NEITHER a known bot nor a collaborator is refused at exit 2, naming it and pointing at `--add-bots` |
 | `--add-bots <id,id>` | one of this or `--add-reviewers` | comma-separated Bot **node ids** (GraphQL global ids), routed straight to the mutation's `botIds` | the one way to request a bot this pull request has never seen — nothing short of the id resolves one |
 | `--dry-run` | no | resolves every `--add-reviewers` login (still reads GitHub) and prints which route each name or id would go to, then requests nothing | not network-free — see the `--dry-run` discipline table above |
-| `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) alongside `ok`/`message` |
+| `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) and an `unrecordedBots` array (`{ id, login }` per requested bot GitHub did not record — see exit `9`) alongside `ok`/`message` |
 
 Both flags absent (or both empty) is refused at exit 1, naming both:
 `no reviewers named -- --add-reviewers takes a comma-separated list of
@@ -1665,9 +1698,46 @@ echo of what this verb sent — see `src/pr/bots.ts`'s header for why:
 the identical mutation call has been observed answering `NOT_FOUND` for a
 botId under one token and succeeding under another, so success is reported
 from GitHub's answer, never assumed from an exit code alone); `--json`
-top-level keys: `ok`, `message`, `routing`. Exit 0 on success (or a
+top-level keys: `ok`, `message`, `routing`, `unrecordedBots` (a `--dry-run`
+carries `ok`, `dryRun`, `routing`, `message`). Exit 0 on success (or a
 `--dry-run`), exit 1 when no reviewers were named or a route's `gh` call
-failed, exit 2 on a missing `--pr` or an unresolved `--add-reviewers` login.
+failed or answered something unreadable, exit 2 on a missing `--pr` or an
+unresolved `--add-reviewers` login, and **exit `9` when every call was
+accepted but GitHub did not record at least one requested bot**.
+
+**Exit `9` — a bot request GitHub accepted and never recorded
+([zheref/nen#277](https://github.com/zheref/nen/issues/277)).** On
+zheref/hatsu#123, #128 and #130 (2026-09-29) the `requestReviews` mutation
+for Copilot's node id exited 0 and answered, but its own `reviewRequests`
+listed no pending request from that bot, GitHub recorded no
+`ReviewRequestedEvent`, and no review arrived — while this verb reported
+`ok: true`, "pending review requests now include bot(s): (none reported
+back)". Every requested bot is now looked for in the mutation's response **by
+node id**, and one that is absent fails the call:
+
+```text
+zheref/hatsu#130: GitHub accepted the bot review request but did not record it for BOT_kgDOCnlnWA -- the mutation's own response lists no pending review request from that bot, so no review round should be expected from it. Pending bot review requests it does list: (none).
+```
+
+The bot is named `login (id)` where this pull request already knows it (its
+own `reviewRequests` or `timelineItems`) and by id alone otherwise; `--json`
+carries the same fact as `ok: false` and `unrecordedBots: [{ id, login }]`
+(`login` `null` for a bot the pull request has never seen), and
+`unrecordedBots` is `[]` on success. A caller should read `9` as **no review
+round to expect from that bot**, not as a failure to retry: nothing on the call
+itself failed. One limit, stated rather than hidden: the response's
+`reviewRequests` is read as a single `first:100` page, so on a pull request with
+more than 100 pending review requests a bot that *did* land can fall past it and
+be reported here — a false refusal, never a false success, which is the
+direction this verdict is allowed to err in. When one
+route's `gh` call failed outright in the same invocation, exit `1` wins and
+`unrecordedBots` still names the bot; a response with no `reviewRequests` list
+at all is exit `1` too (nothing was read that could say which bot landed). The
+code was chosen, like [`pr ready`](#nen-pr-ready)'s `8`, because it collides
+with nothing else this CLI or its bootstrap returns. The PR timeline's
+`ReviewRequestedEvent` is deliberately **not** read: telling this request's
+event from an earlier request's needs a clock window, and the mutation's own
+response is the same transaction's answer.
 
 **Example — a login this pull request already knows as a bot**
 
@@ -1942,19 +2012,52 @@ standalone verb would print:
 **Usage**
 
 ```text
-nen pr merge <n|owner/name#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
+nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `<n\|owner/name#n>` | **yes** | the pull request to merge | positional; a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` must name the SAME repository `--repo`'s `origin` does, or exit 2 |
+| `<n\|owner/name#n\|CODE#n>` | **yes** | the pull request to merge | positional; a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` and `CODE#n` must name the SAME repository `--repo`'s `origin` does, or exit 2 — see *The ref* below |
 | `--release-unit` | **yes** | says explicitly that this is a bounded release-unit merge | omitted: exit 2, "nen pr merge only merges a release unit" — there is no general-purpose merge here |
 | `--requirements-from <path>` | **yes** | the same `{ name, pattern }` JSON array `pr body-check` takes | validated (exists, non-empty, parseable) BEFORE any `gh` call; checked against the pull request's CURRENT body, read live over `gh` — never a `--body-from` file, which could have drifted from what GitHub will merge |
 | `--repo <path>` | **yes** | the checkout whose `origin` remote and `nen/gates.json` this merge is judged against | required, exit 2 if omitted; `release.unitPaths` itself is read from the PULL REQUEST'S BASE, not this checkout |
 | `--run` | no | execute the merge once every gate passes | omit to see the plan only |
 | `--json` | no | machine-readable result | — |
+
+**The ref, and why it is narrower than `pr ready`'s
+([zheref/nen#269](https://github.com/zheref/nen/issues/269)).** `pr merge`
+and [`release unit-check`](#nen-release-unit-check) share one ref grammar:
+`<n>`, `<owner/name>#<n>`, or `<CODE>#<n>`. Through v0.15.x that grammar
+*matched* `HA#117` and then handed `HA` to the `owner/name` parser, which
+refused it — `--target takes an owner/name repository slug and 'HA' is not
+one` — so a ref that `pr ready HA#117` had just accepted was refused here.
+The prefix is now told apart by shape: a `/` makes it an `owner/name` slug, a
+code's shape (a letter, then letters and digits) makes it a **product code**,
+resolved through `--repo`'s own `nen/repos.json` by **the same lookup `pr
+ready <CODE>#<N>` uses** (`consumers[].code` first, then `product_codes`,
+case-insensitive over ASCII letters only), and anything else is refused naming
+the three forms. An unknown code (the refusal lists the known ones and the file
+it read), a code that matches two registry keys differing only by letter case
+(the refusal names every key and the repository each names — nen never picks
+one), or a registry that cannot be read is exit 2. Case is folded for `A`–`Z`
+alone, never by Unicode's rules, so a non-ASCII key (one spelled with U+212A
+KELVIN SIGN, which Unicode lowercases to `k`) never answers a typed `K`; a
+refusal prints such a key as `\u{212a}`. A code that resolves to any
+repository **other than `--repo`'s origin** is refused at exit 2 before any
+gate runs — a registry legitimately lists other repositories' codes, and this
+verb never merges a repository `--repo` does not name:
+
+```text
+nen pr: 'HA#130' resolves 'HA' to 'zheref/hatsu' through --repo's own registry, but '--repo' at '/path/to/nen' has an origin of 'zheref/nen' -- these must be the same repository, and nen pr merge never merges a repository --repo does not name. Point --repo at a checkout of 'zheref/hatsu', or write the ref as a bare <n> to merge in 'zheref/nen'.
+```
+
+**The `#` is required — a deliberate narrowing.** `pr ready` also accepts
+the no-`#` shorthand (`HA117`), whose split is a stated rule (the number is
+the longest trailing digit run), not a delimiter; that is a fair trade for a
+read-only verdict, and not one a verb that merges takes. `HA117` is refused
+at exit 2 naming the `<CODE>#<n>` form.
 
 **Without `--run`:** prints the plan only (every verdict line, plus the
 exact `gh pr merge` argv that WOULD run, carrying `--match-head-commit`)
@@ -1969,8 +2072,10 @@ GitHub's own `MERGED` state is reported as `merged:`; anything else prints
 
 **Exit codes:** 0 merged, or a passing plan printed without `--run`; 1 at
 least one gate did not pass; 2 usage (missing `--release-unit`, a bad ref,
+an unknown product code or an unreadable `nen/repos.json`,
 missing/empty/unparseable `--requirements-from`, `--repo`'s origin naming a
-different repository than the ref, or an unknown flag such as
+different repository than the ref or its code resolves to, or an unknown
+flag such as
 `--admin`/`--auto`); 5 `gh` REFUSED the merge (branch protection, a
 required review, …) — its stderr and the exact command are printed for a
 human to run once the refusal is resolved; 6 `gh` could not be RUN at all
@@ -2433,40 +2538,80 @@ would run: git rebase origin/main  (2 ahead, 3 behind)
 
 ### `nen wc publish`
 
-Pushes the **current branch** to **the remote its upstream names** and nothing
-else (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push
-[-u] <remote> -- refs/heads/<branch>:refs/heads/<destination>`, the refspec
-spelled in full behind `--` so that no branch *name* can change what the push
-does. A branch tracking `fork/feature` is pushed to `fork`, and the
-fast-forward check below is made against `fork/feature` — the ref the push
-moves — never against `origin` while pushing somewhere else (Copilot review on
-[#231](https://github.com/zheref/nen/pull/231)). **The destination is the
-branch the upstream names**: a local `feature` tracking `fork/topic` is pushed
-as `refs/heads/feature:refs/heads/topic`, so the ref the preflight fetched and
-compared is the ref the push updates, never a same-named `fork/feature` the
-check never looked at (Copilot round 3 on #231). A branch with **no upstream**
-goes to `origin`, or to `--remote <name>` when one is given, under its own
-name (`--set-upstream` then tracks `<remote>/<branch>`). Everything that
-could rewrite somebody else's history is refused before the push.
+Pushes the **current branch**, **under its own name**, and nothing else
+(v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — `git push [-u]
+<remote> -- refs/heads/<branch>:refs/heads/<branch>`, the refspec spelled in
+full behind `--` so that no branch *name* can change what the push does.
+Everything that could rewrite somebody else's history is refused before the
+push. **Which remote** it goes to is decided in this order, and nowhere else:
+
+1. **No upstream:** `--remote <name>` when given (it must be one `git remote`
+   lists), else `origin`; `--set-upstream` then tracks `<remote>/<branch>`.
+2. **An upstream of the same name** (`fork/feature` for `feature`), kept — no
+   `--set-upstream`, or `--set-upstream` without `--remote`: the upstream's
+   remote, with the fast-forward check made against `fork/feature`, the ref
+   the push moves (Copilot review on
+   [#231](https://github.com/zheref/nen/pull/231)). A `--remote` that names
+   another remote is refused at exit 2 **without `--set-upstream`**, and the
+   refusal names `--set-upstream --remote <name>` as the route — never `git
+   branch --set-upstream-to <name>/<branch>`, which git itself refuses while
+   that remote has no such branch, i.e. on a first publish.
+3. **`--set-upstream` replacing the upstream** — one of another name (below),
+   or one of the same name with a `--remote` naming another remote:
+   `--remote <name>` when given (validated against `git remote` exactly as in
+   1), else **`origin`** when this repository has one, else the upstream's own
+   remote. A branch cut from `upstream/main` in a fork workflow, whose `origin`
+   is the fork, is published to `origin` — never created on the canonical
+   repository it was cut from.
+
+**The destination is always the branch's own name**
+([#271](https://github.com/zheref/nen/issues/271)). An upstream whose
+branch name differs from the current branch's — a stacked branch tracking the
+effort it was cut from, a branch cut from `origin/main` that still tracks it,
+a local `feature` tracking `fork/topic` — is a fact to report, **never a
+destination to follow**. Until #271 the push followed it (`feature` tracking
+`fork/topic` went out as `refs/heads/feature:refs/heads/topic`, Copilot round 3
+on #231), and on 2026-09-28 that put a stacked effort's commit on its base
+branch and on the pull request open from it. Now:
+
+- **Without `--set-upstream`** such a branch is **refused at exit 2**, before
+  any fetch, naming the branch, the upstream and the upstream's branch, and
+  naming `--set-upstream` as the way through. `--dry-run` reaches the same
+  refusal; nothing is fetched or pushed and no document is printed.
+- **With `--set-upstream`** the push goes to `<remote>/<branch>` — the remote
+  rule 3 above resolves, the branch's own name — and its `-u` **replaces** the
+  mismatched upstream: the report says `retargetedUpstream: true`, with
+  `upstreamBefore` still naming what it tracked before and `destination` equal
+  to `branch`. The fast-forward is judged against `<remote>/<branch>` when the
+  remote already has it (`git ls-remote --exit-code`; exit 2 means no such
+  ref, so there is nothing a push could rewrite) and **never** against the
+  upstream's branch, which this push does not move. When it is not a
+  fast-forward the answer is `needsForce: true` at exit 1: nothing is pushed
+  and **nothing is retracked** (`retargetedUpstream: false`).
+- **An upstream being replaced may already be gone** — a stacked branch whose
+  base was merged and deleted still names it. Its fetch only feeds `ahead`, so
+  on this route alone git's `couldn't find remote ref` is an answer, not a
+  failure: `ahead: null`, and the text says `nothing counted: '<upstream>' is
+  gone from <remote>`. Any other failure of that fetch, and the same answer on
+  any other route, is still exit 1.
+- An upstream naming the branch's **own** name on another remote
+  (`fork/feature` for `feature`) is not a mismatch: it publishes to that
+  remote as before (rule 2).
 
 **The destination is never the trunk** (v0.13.1,
 [#234](https://github.com/zheref/nen/issues/234)). `git worktree add -b x
-origin/main` leaves `x` tracking `origin/main`, and under the rule above the
-destination would be `main` — on 2026-09-21 that pushed
-`refs/heads/x:refs/heads/main` and fast-forwarded the trunk with no pull
-request. So the branch name the push would update is computed first, and
-when it is `branch.base`, `main` or `master` (or `refs/heads/` of those,
-compared normalized) the answer is exit 2 naming the destination and the
-upstream. A branch that **tracks** the trunk is the worktree convention, not
-a mistake: it is published under its **own** name
-(`refs/heads/x:refs/heads/x`), its fast-forward judged against `<remote>/x`
-when the remote already has it (`git ls-remote --exit-code`; exit 2 means no
-such ref, so there is nothing a push could rewrite) and never against the
-trunk. With `--set-upstream` the `-u` retracks the branch to `<remote>/x`
-— never left on the trunk — and the report says `retargetedUpstream: true`
-with `upstreamBefore: "origin/main"` and `destination: "x"`; without it the
-push still goes to `x`, the upstream stays where it was, and the text says
-so and names `--set-upstream` as the retrack.
+origin/main` leaves `x` tracking `origin/main`; on 2026-09-21 a push that
+followed it went out as `refs/heads/x:refs/heads/main` and fast-forwarded the
+trunk with no pull request. A branch that tracks the trunk is one more
+upstream of another name: since #271 a bare publish of it **refuses** (the
+refusal says the upstream is the trunk) where v0.13.1–v0.15.1 pushed it under
+its own name and left the upstream on the trunk — the same answer git's own
+`push.default=simple` gives — and `--set-upstream` publishes it as `x` and
+retracks it to `<remote>/x`. A trunk **destination** (`main`, `master` or
+`branch.base`, compared normalized) is still checked on the final refspec,
+right before the push, as a **defensive belt only**: while the destination is
+the local name it cannot fire, because a local name that is the trunk was
+refused first.
 
 **Usage**
 
@@ -2477,8 +2622,8 @@ nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run] [--j
 | Flag | Required | Meaning |
 |---|---|---|
 | `--repo <path>` | **yes** | the working tree whose current branch is pushed |
-| `--set-upstream` | no | push with `-u`, so the branch tracks `<remote>/<branch>` afterwards |
-| `--remote <name>` | no | where a branch with **no upstream** goes (default `origin`); must be a remote `git remote` lists, and is refused at exit 2 when the branch already tracks a *different* remote — the branch says where it goes; `--remote` on any other `wc` subcommand is refused rather than ignored |
+| `--set-upstream` | no | push with `-u`, so the branch tracks `<remote>/<branch>` afterwards — **replacing** an upstream of another name, which is the only way past that refusal ([#271](https://github.com/zheref/nen/issues/271)), or one on another remote than `--remote` names |
+| `--remote <name>` | no | where a branch with **no upstream** goes (default `origin`), and where `--set-upstream` takes a branch whose upstream it replaces (default `origin` when it exists, else the upstream's remote) — rules 1 and 3 above; must be a remote `git remote` lists. Without `--set-upstream` it is refused at exit 2 when a same-name upstream names a *different* remote, naming `--set-upstream --remote <name>` as the route (rule 2); `--remote` on any other `wc` subcommand is refused rather than ignored |
 | `--dry-run` | no | print the push line; push nothing (the upstream is still fetched — a read) |
 | `--json` | no | `nen.wc.publish/v0.1` — see below |
 
@@ -2503,33 +2648,41 @@ and `git push origin +main` is a force push of `main`; and anything that
 looks like a refspec or a force on the command line: a positional, a `+`, a
 `:`, and `--force`, which the strict parser already refuses as an unknown
 option; a `--remote` shaped like an option, a refspec or a path, one `git
-remote` does not list, or one that contradicts the upstream. The branch the
+remote` does not list, or one that contradicts a same-name upstream without
+`--set-upstream` (rule 2); and an upstream whose branch name is not the
+current branch's, without `--set-upstream` (#271, above). The branch the
 upstream tracks passes the same two checks before it is fetched, and the
 fetch is `git fetch --end-of-options <remote>
 refs/heads/<branch>:refs/remotes/<remote>/<branch>`, from the upstream's own
 remote. **Exit 1, nothing
-pushed:** the upstream exists and the local branch is not a fast-forward of
-it (fetched first, then `git merge-base --is-ancestor <upstream> HEAD`) — the
-push would need `--force`, and this verb never forces; the report says
-`needsForce: true` and the text names [`wc catch-up`](#nen-wc-catch-up) as
-the repair.
+pushed:** any other fetch failure, including a missing ref on a kept upstream;
+and the ref the push moves exists and the local branch is not a
+fast-forward of it (fetched first, then `git merge-base --is-ancestor <ref>
+HEAD` — the upstream, or `<remote>/<branch>` when `--set-upstream` is
+replacing the upstream) — the push would need `--force`, and
+this verb never forces; the report says `needsForce: true` and the text names
+[`wc catch-up`](#nen-wc-catch-up) as the repair.
 
 **`--json`** — `nen.wc.publish/v0.1`: `{ contract, branch, remote,
 destination, upstreamBefore, ahead, needsForce, pushed, dryRun,
 retargetedUpstream }`. `branch`
 is the local branch, the source half of the refspec; `remote` is the one
-pushed to — the upstream's, or `origin`/`--remote` when there was none;
-`destination` is the branch name on that remote the push updates — the
-upstream's branch when one exists, else `branch`; `upstreamBefore` is `null`
-and `ahead` is `null` when the branch tracked nothing before this call;
-`retargetedUpstream` is `true` only when the upstream named the trunk and
-`--set-upstream` retracked the branch to `<remote>/<branch>`. The
-text line says `pushed '<branch>' to <remote> as '<destination>'` when the two
-names differ, and appends `-- its upstream 'origin/main' named the trunk, so
-it went under its own name and now tracks origin/<branch>` (or, without
-`--set-upstream`, `... the upstream still names the trunk (pass
---set-upstream to retrack it to origin/<branch>)`) for a trunk-tracking
-branch.
+pushed to, by rules 1–3 above; `destination` is the branch name on that remote the push updates — **always
+`branch`** since #271, kept so a reader of the v0.1 contract has nothing to
+change; `upstreamBefore` is `null` and `ahead` is `null` when the branch
+tracked nothing before this call — or when the upstream `--set-upstream`
+replaces is gone from its remote — and otherwise `ahead` counts the commits
+not on `upstreamBefore`; `retargetedUpstream` is `true` only when `--set-upstream` replaced the
+upstream — one of another name, or one on another remote than `--remote`
+names — with `<remote>/<branch>` (on `--dry-run`, would replace it), and `false` whenever
+nothing is (or would be) pushed, `needsForce` included. The refusals above are
+exit 2 with the reason on stderr and **no** document. The text line is
+`pushed '<branch>' to <remote>[ (upstream set)][ -- <n> commit(s) ahead of
+<upstream>]` (or `-- nothing counted: '<upstream>' is gone from <remote>`),
+and a retarget appends `-- its upstream '<upstreamBefore>' named another
+branch` (or `the trunk`, or `another remote ('<name>')`) `, so it went to
+<remote> under its own name and now tracks <remote>/<branch>`; `--dry-run`
+says `would go` / `then track`.
 
 **Example**
 
@@ -3985,6 +4138,31 @@ value `canon resolve`/quality-tooling lookups read elsewhere in this CLI. `--rep
 never defaulted to cwd here specifically because a cwd default previously surfaced whatever unrelated
 registry happened to be there instead of the forgotten flag (issue #28).
 
+**Which sections carry `scenario`.** A `scenario` string on a row of **`consumers[]`,
+`maintained_tools[]` or `pending_onboarding[]`** — whichever section is true of the repository,
+never one chosen to hold the field. Through `v0.15.1` only a `consumers[]` entry carried it, so a
+registry's own tool repositories, which consume nothing, could never have one, and the refusal told
+the caller to re-file them as consumers ([#219](https://github.com/zheref/nen/issues/219)). A
+`product_codes` value is a name, not a row, and carries none. The field is validated alike in all three
+sections — optional, a string when present — so a non-string one is refused by pointer
+(`at maintained_tools[0].scenario, expected a string or nothing`) **wherever the registry is loaded**:
+by every verb that reads `nen/repos.json` (`repo resolve`, `fanout`, `pr ready`'s ref resolution,
+`parse futon`, …), whatever target it was asked about, and by [`schema check`](#nen-schema-check),
+where it fails the `nen/repos.json` row. Through `v0.15.1` such a value on a `maintained_tools[]` or
+`pending_onboarding[]` row was ignored. An **empty** string states no scenario in any section — it is
+read as absent, never printed as a blank success. A repository recorded in more than one section (a maintained
+tool that is also a consumer) has **one** scenario: a value on any of its rows is read, the same value
+on several is fine, and rows stating **different** values are refused, naming each row by pointer
+(`its maintained_tools[1] row`). That disagreement is refused by this lookup only — `schema check`
+does not detect it and still reports the file `ok`, because refusing it at load would stop every verb
+for every target over one repository's rows.
+
+```json
+"maintained_tools": [
+  { "repo": "zheref/nen", "role": "Shared deterministic machinery", "scenario": "<scenario>" }
+]
+```
+
 **Usage**
 
 ```text
@@ -3996,13 +4174,17 @@ nen repo scenario --repo <path> --target <owner/name>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The checkout whose `nen/repos.json` records `--target`'s scenario. | Listed unbracketed; omitting it is refused BY NAME at exit 2, never silently defaulted. |
-| `--target <owner/name>` | yes | The repository whose scenario is read back. | Missing -> exit 1 (same inconsistency as above). |
+| `--target <owner/name>` | yes | The repository whose scenario is read back. | Missing or malformed -> exit 2, by name. |
 
 **Output and exit codes** — human rendering is the bare scenario string on success, or `"nen: <reason>"`
-on stderr otherwise. `--json` prints `{ ok, scenario }` or `{ ok, reason }`. Exit 0 when a scenario was
-found; exit 1 with a DISTINCT reason for each of: `--repo` carries no `nen/repos.json`, `--target`
-is not recorded anywhere in it, or it is recorded but carries no `scenario` field; exit 2 when `--repo`
-is omitted.
+on stderr otherwise. `--json` prints `{ ok, scenario }` or `{ ok, reason }`, unchanged by #219. Exit 0
+when a scenario was found. Exit 1 with a DISTINCT reason for each of: `--target` is not recorded
+anywhere in the registry; it is recorded on a row that carries no `scenario` (the remedy names the
+section it is **already** in — *"Add one to its maintained_tools[] row"* — never a move to another
+section); it is recorded only as a `product_codes` value (the remedy lays out what each section is for,
+so the new row goes where it is true); or its rows state different scenarios. Exit 1 too when the
+registry is present but malformed. Exit 2 when `--repo` is omitted, or carries no `nen/repos.json` at
+all (the same precondition [`repo resolve`](#nen-repo-resolve) refuses the same way).
 
 **Example**
 
@@ -4405,14 +4587,14 @@ resolving the merge base from the same base/head it read there.
 **Usage**
 
 ```text
-nen release unit-check --pr <n|owner/name#n> --repo <path> [--json]
+nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 ```
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--pr <n\|owner/name#n>` | **yes** | the pull request to check | a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` names the repository explicitly |
+| `--pr <n\|owner/name#n\|CODE#n>` | **yes** | the pull request to check | a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` names the repository explicitly; `CODE#n` ([zheref/nen#269](https://github.com/zheref/nen/issues/269)) resolves a product code through `--repo`'s `nen/repos.json` by the same lookup `pr ready <CODE>#<N>` uses — an unknown code, a code matching two registry keys that differ only by letter case (see [`pr merge`](#nen-pr-merge)'s *The ref*), or an unreadable registry is exit 2. Like `owner/name#n`, a code may name a repository other than `--repo`'s origin: this verb only reads (`pr merge`, which shares the grammar, refuses that). The `#` is required; the no-`#` shorthand `pr ready` also accepts is not |
 | `--repo <path>` | **yes** | the checkout whose `nen/workflow.json` declares `release.unitPaths` | required, exit 2 if omitted (#28) |
 | `--json` | no | machine-readable result | — |
 
@@ -5423,12 +5605,12 @@ nen canon resolve --repo <path> --target <owner/name>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The checkout whose `nen/repos.json` maps `--target` to a scenario. | Listed unbracketed: omitted, exits 2 by name. |
-| `--target <owner/name>` | yes | The consumer repository being resolved. | Refused (exit 1) if unrecorded, or recorded but not a consumer (`nen/repos.json`'s `consumers[]`). |
+| `--target <owner/name>` | yes | The repository being resolved -- a consumer, a maintained tool or a pending onboarding. | Its scenario is read exactly as [`repo scenario`](#nen-repo-scenario) reads it, off its `consumers[]`, `maintained_tools[]` or `pending_onboarding[]` row ([#219](https://github.com/zheref/nen/issues/219)). Refused (exit 1) if unrecorded, recorded on no row that states a scenario, or recorded with conflicting ones -- each with `repo scenario`'s own reason. |
 | `--always-load <path,path,...>` | yes | The repository's own unconditional-load manifest. | An empty list is refused -- there is no meaningful "loads nothing" empty form. |
 | `--stack-dir <dir>` | yes | Directory the one stack handbook is resolved under. | The `handbooks/stacks` directory of a `bankai-handbooks` checkout at the pinned tag; the stack path is `<stack-dir>/<scenario>/<leaf>`. |
 | `--leaf <file>` | no | The stack handbook's filename. | Defaults to `architecture.md`. `--leaf rules` resolves the stack's operational rule directory, which is what [`canon mirror generate`](#nen-canon-mirror-generate) takes as `--rules-dir`. |
 
-**Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line even under `--json`. Exit 0 on a resolved scenario; exit 1 on an unrecorded/non-consumer target or an invalid scenario shape.
+**Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line even under `--json`. Exit 0 on a resolved scenario; exit 1 on an unrecorded target, one with no (or conflicting) recorded scenario, or an invalid scenario shape.
 
 **Example** -- for a consumer whose `consumers[]` entry records `swiftui-tca-uzf-v2` (`owner/name` and `/path/to/repo` are placeholders), passing the five always-load baselines `handbooks/INDEX.md` names at `v0.6.0`:
 
@@ -8053,13 +8235,28 @@ nen shu warmup --repo <path> --branch <name> [--from <trunk>] [--discard | --car
 |---|---|---|---|
 | `--repo <path>` | **yes** | The working copy to warm. | No default, unlike every other `shu` verb: a verb that fetches into a repository, moves a branch ref and checks out a new branch must never do it to "wherever this process happens to be". |
 | `--branch <name>` | **yes** | The branch to cut from the freshly-fetched trunk. | Nen never invents one. Validated with git's own `check-ref-format --branch`, and refused at 2 if it already exists **locally or on `origin`** — never reused, reset or force-moved. A name beginning with `-` is refused before git can read it as an option. |
-| `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
+| `--from <trunk>` | no | The **local** trunk to fast-forward, and what `--branch` is cut from (as `origin/<trunk>`) — **never what it tracks**: the cut is `--no-track` ([#271](https://github.com/zheref/nen/issues/271)). | Defaults to `main` **when that local branch exists**, and refuses at 2 naming this flag when it does not. Nen infers a trunk from no remote `HEAD`, from no checked-out branch and from no lone branch. |
 | `--discard` | no | Throw uncommitted work away instead of refusing it. | `git reset --hard` then `git clean -fd`, in that order, with the exact list printed first — **and then the tree is read again**. **Never `git clean -x`**: an ignored file is the developer's own cache. **Never a second `-f`** either: that deletes a nested repository. On an already-clean tree it runs neither command. See [what `--discard` will and will not remove](#what---discard-removes). **Never together with `--carry`** — exit 2, naming both. |
 | `--carry` | no | The **third door**: preserve uncommitted work (tracked **and** untracked) across the warm-up instead of refusing it or throwing it away. | `git stash push --include-untracked -m "nen shu warmup --carry <branch> <instant>#<pid>"` runs where `--discard`'s reset/clean would — after every free question and before the fetch — and `git stash list --format=%H%x09%s` right afterwards finds **that message** and reads its SHA (never `refs/stash`, which names whatever was pushed last by anybody; a message matched by zero or several entries refuses without popping). That SHA is this run's own **identity** for the entry, carried in `carry.stashed` and named in every message from here to the end. On an already-clean tree it is a no-op: no stash command runs at all. Once the branch is cut and the declared build (and, with `--tests`, the declared test) has answered — pass **or** fail — `git stash apply <sha>` restores it **by the object itself**, which no other stash push can shift; only the drop that follows needs a `stash@{n}` ref, and that ref is re-resolved with `git stash list --format=%H%x09%gd`, checked with `git rev-parse --verify` immediately before `git stash drop`, and confirmed by a second list afterwards — a drop that took a foreign entry (a push landing in between) is put back with `git stash store` and named. Nothing runs `git stash pop`, whose restore-and-drop by stack index is the race. **Never together with `--discard`** — exit 2, naming both. See [what `--carry` does and does not restore](#what---carry-restores). |
 | `--tests` | no | Also run the lane's declared `test` after the build. | Off by default — a test suite is the slow half and a warm-up is the fast one. The test is skipped when the build did not pass. |
 | `--lane <name>` | no | Which lane the build/test verification runs on. | Defaults to `project.defaultLane`. An unknown lane is refused at 2 **before a single git call** — a caller who mistyped it must not have their working copy cleaned to find out. The lane is then **resolved again** from the declaration on the branch this verb cut, which is the tree the build actually runs in. |
 | `--dry-run` | no | Print every command, in order, and **mutate nothing**. | It performs exactly **one** command and the list is closed: `git worktree list --porcelain`, the one question the plan cannot honestly guess at (see above). Not the fetch, not the status, not a probe. That row carries its real exit code and is labelled `ran:`; every other row is labelled `would run:`, and `dryRun` on the report says which form this is. Two lines still say what a real run would decide differently: that `main` is an assumption, and that the orphan-commit count is asked only on a detached `HEAD`. |
 | `--json` | no | The report as one object. | See below. |
+
+<a id="the-new-branch-tracks-nothing"></a>
+
+**The new branch tracks nothing** ([#271](https://github.com/zheref/nen/issues/271)). `git switch -c
+<name> origin/<trunk>` starts from a remote-tracking ref, and under git's **default**
+`branch.autoSetupMerge` that makes `<name>` *track* `origin/<trunk>` — the trunk without `--from`, and
+another effort's branch with `--from <that branch>`. An upstream of another name is exactly what
+[`wc publish`](#nen-wc-publish) used to follow: on 2026-09-28 a stacked effort cut with `--from` its
+base pushed its commit onto the base branch and its pull request. So the cut is **`git switch
+--no-track`**, an explicit flag rather than a reliance on the host's configuration, and the new branch
+has **no upstream** until its first `nen wc publish --set-upstream` gives it its own name on `origin`.
+The cut's row says so in both forms, on the report's `steps[].note` (and so in `--json` too):
+`upstream: none -- --no-track leaves '<name>' tracking nothing, never origin/<trunk>, whatever
+branch.autoSetupMerge says. …`. A branch cut by an older warmup still tracks what it was cut from, and
+`wc publish` refuses it at exit 2 until `--set-upstream` retracks it.
 
 **The remote is `origin`, and only `origin`.** There is no `--remote`: a flag like that would have to
 answer "and what does it mean when the trunk exists on two of them" the day somebody used it, and a
@@ -8091,7 +8288,7 @@ that is not a local branch, a name git will not accept, a name that is already a
 | 8 | `git merge-base --is-ancestor <trunk> origin/<trunk>` | the local trunk has **diverged** (exit 2). A code *above* 1 is git failing to answer and is reported as that, never as "diverged" |
 | 9 | `git merge --ff-only origin/<trunk>` *(this checkout is on the trunk)*, `git branch --force <trunk> origin/<trunk>` *(no worktree holds it)*, or **nothing at all** *(another worktree holds it)* | it fails. Three shapes because git has three: a checked-out branch cannot be moved by `branch --force`, one that is not checked out cannot be advanced by `merge`, and one checked out in **another** worktree cannot be moved from here at all — so it is skipped, named, and step 11 cuts from the fetched ref regardless |
 | 10 | `git ls-remote --heads origin refs/heads/<name>` | the name is already on `origin` (exit 2) — **or the look-up itself failed**, which is never read as "absent". The ref is spelled in **full**: `ls-remote` matches a bare pattern against the *tail* of every ref on slash boundaries, so `--branch x` asked as a bare `x` would match an existing `refs/heads/feat/x` and refuse a name that is free |
-| 11 | `git switch -c <name> origin/<trunk>` | it fails |
+| 11 | `git switch --no-track -c <name> origin/<trunk>` | it fails. **`--no-track` is explicit**: the new branch tracks nothing, whatever `branch.autoSetupMerge` says — see [below](#the-new-branch-tracks-nothing) |
 | 12 | the lane's declared `build`, then (with `--tests`) its `test` | see the exit codes below |
 | 12a | `git stash apply <sha>`, then `git stash list --format=%H%x09%gd`, `git rev-parse --verify --quiet <stash@{n}>`, `git stash drop <stash@{n}>`, `git stash list --format=%H` | only with `--carry`, and only when step 6b actually stashed something. Runs **after** step 12, whether it passed or failed — `--carry`'s promise is that the work comes back, not that it comes back only when the build does. The apply restores by the object step 6b recorded, so nothing else's stash push can shift it; the four lines after it resolve, check, drop and confirm the entry's ref. An entry already gone from the list is reported and the work is restored all the same. A conflict or a failure on the apply does **not** drop the stash: see [below](#what---carry-restores) |
 
@@ -8246,7 +8443,7 @@ would run:     git fetch origin
 would run:     git merge-base --is-ancestor main origin/main
 would run:     git branch --force main origin/main
 would run:     git ls-remote --heads origin refs/heads/my-idea
-would run:     git switch -c my-idea origin/main
+would run:     git switch --no-track -c my-idea origin/main
 would run:     pnpm turbo run build
 ```
 
@@ -8290,8 +8487,9 @@ ran:           git show-ref --verify --quiet refs/heads/my-idea  -- exit 1 in 12
 ran:           git fetch origin  -- exit 0 in 30ms
 ran:           git merge-base --is-ancestor main origin/main  -- exit 0 in 11ms
 ran:           git ls-remote --heads origin refs/heads/my-idea  -- exit 0 in 18ms
-ran:           git switch -c my-idea origin/main  -- exit 0 in 16ms
+ran:           git switch --no-track -c my-idea origin/main  -- exit 0 in 16ms
                cut from origin/main, the tip this run just fetched
+               upstream: none -- --no-track leaves 'my-idea' tracking nothing, never origin/main, whatever branch.autoSetupMerge says. Its first 'nen wc publish --set-upstream' pushes it to origin/my-idea and tracks that
 ```
 
 (exit 0; there is **no** `git branch --force` row at all, and the same run under `--dry-run` prints the
@@ -9422,11 +9620,108 @@ still this generator's output, and is exactly what `check` calls `extra` and
 `generate` deletes. Both verbs read the same list, so what one reports the other
 clears.
 
+**Relative links are re-aimed for the depth each copy lands at**
+([#270](https://github.com/zheref/nen/issues/270)). A body is carried
+verbatim *but for its relative links*: a link is a statement about where its
+file is, and the same text copied one directory deeper (antigravity's nested
+`skills/<name>/`), to another depth than its source (every `agents/<stem>.md`:
+`surfaces/<s>/agents/` sits a level deeper than `claude/agents/`), to the
+mirror's root (codex's `AGENTS.md`) or into a TOML string (codex's
+`agents/<stem>.toml`) names another file — usually none. Every relative link in a skill, a persona,
+an include, an `AGENTS.md` section, a persona TOML body and the rules file is
+resolved against **its source file's own directory** and then:
+
+- when it names a **mirrored item** — a skill's `SKILL.md` or its directory, a
+  persona, a shared include, the `--rules` file — it is pointed at **that
+  item's copy** (a Cursor persona's `../skills/<name>/SKILL.md` becomes
+  `../<name>/SKILL.md`; a skill's `../../agents/<p>.md` becomes
+  `../agents/<p>.md`, and `../../rules/<stem>.md` the row's own
+  `../rules/<stem>.mdc`; a link to a skill's *directory* lands on the mirror's
+  directory for it, which holds only the generated `SKILL.md` — the skill's
+  other files stay where they are). On **codex**, whose personas are prose, a persona's
+  copy is its `## <name>` section: the link becomes `AGENTS.md#<anchor>`
+  (`../AGENTS.md#<anchor>` from a skill or a persona TOML, a bare
+  `#<anchor>` inside `AGENTS.md` itself), where `<anchor>` is the renderer's
+  slug of the heading — or the fragment the source link already carried;
+- otherwise it is pointed at **the same file on disk** — whatever its suffix,
+  `.md`, `.json`, `.sh`, `.html`, an image — so antigravity's nested
+  `../../../docs/<page>` becomes `../../../../docs/<page>`, a persona's
+  `../../docs/<page>` becomes `../../../docs/<page>`, and a link to a file
+  beside a skill in the source (`references/notes.md`) reaches that file where
+  it is;
+
+either way relative to the **destination** file's directory, the `#fragment`
+kept, the form kept (`](<target>)` stays bracketed, a `"title"`, `'title'` or `(title)` stays, a
+reference definition `[label]: target` is re-aimed in place). An inline link
+inside a **fenced** block is still re-aimed — a reader copies a path out of a
+fence, and a copied dangling path dangles the same — but a reference
+definition there is not (a fence is code: `[warn]: deprecated` in it is a log
+line), and nothing inside an **inline code span** is read at all, as a
+renderer reads it: CommonMark's backtick-string rule (a run of N backticks
+closed by the next run of exactly N in the same paragraph; a
+backslash-escaped backtick opens nothing). And a `[` directly after a word
+character, a `]`, a `)` or a backslash does not open a link — that is code
+(`handlers[name](event)`, `xs[0](value)`) or an escaped bracket, and
+re-aiming `event` as a path would corrupt the sample. Only path
+arithmetic is done: whether the target exists is never asked, so a link that
+dangles in the source dangles the same way in the mirror, re-aimed at the same
+missing file.
+
+**The tree a re-aimed link may reach is `--repo <path>`, else the working
+directory** — the base every verb here takes. Every end (that root, the
+sources, `--out`) is resolved through symlinks first, so a mirror reached
+through a symlink — a plugin directory pointing at the committed mirror —
+regenerates to the committed bytes. A link whose target **or** whose copy
+lies outside that tree — a mirror written straight into an installed surface
+(`~/.codex`, another repository's `.cursor/`) — would have to spell this
+machine's layout above both, so it is **carried as written** and named in the
+report (`linksVerbatim[]`, `<mirror path>: <target>`); nen never invents a
+path there. A link to a **mirrored item** is always re-aimed, wherever `--out`
+is: its target moves with the mirror. Run `generate` and `check` from the same
+root, or pass both the same `--repo`.
+
+Per surface, where a link to each mirrored item lands and what is left as written:
+
+| | `codex` | `cursor` | `antigravity` | `claude-code` |
+|---|---|---|---|---|
+| a skill's copy | flat `<name>/SKILL.md`: a link out of the mirror gains or loses a `../` for each directory `--out` sits deeper or shallower than `--source` — none in the common `claude/skills` → `surfaces/<s>` layout | `<name>/SKILL.md`, the same | `skills/<name>/SKILL.md` — **one directory deeper**, so every link out of the mirror gains a `../` | nothing is re-aimed: the row is the identity |
+| a persona's copy | its `## <name>` section of `AGENTS.md` (`#<anchor>`); the `agents/<stem>.toml` bodies are aimed from `agents/` | `agents/<stem>.md`, at another depth than its source (`surfaces/<s>/agents/` is a level deeper than `claude/agents/`) | `agents/<stem>.md`, the same | nothing |
+| the rules file's copy | none (no rules row): a link to the rules source lands on the source on disk | `rules/<stem>.mdc` | `rules/<stem>.md` | nothing |
+| carried as written | the forms below, plus a heading anchor a same-text heading earlier in `AGENTS.md` would displace (not computed) | the forms below | the forms below | every link |
+
+**Carried as written, on every surface, and why**: an absolute path, any
+`scheme:` target (`http(s):`, `mailto:`), a bare `#fragment` and a `~`-rooted
+path do not depend on where the file sits; an HTML `href`/`src` attribute and
+a path written as prose are not markdown links, and nen does not guess which
+prose is a path; anything inside an inline code span, a reference definition
+inside a fence, and a link written flush against a word (`foo[bar](baz)`,
+which CommonMark does render — the rarer case, left alone rather than risk a
+code sample) are carried too; the code-span reading does not model raw HTML or
+an autolink that CommonMark would let win over a backtick, nor an indented
+(four-space) code block; a footnote definition (`[^n]: text`) is not a
+link definition; a target carrying a character no portable path spelling uses
+(whitespace outside `<…>`, `[ ] { } ^ * | $ < > " '`, a backtick, a
+backslash) is a regex or a placeholder inside an example; and a "target"
+followed by anything but a title (`](a b)`) is not a link. Destinations and
+titles are read by CommonMark's rules, not a pattern: a bare destination may
+hold **balanced** parentheses (`a(b).md`), a `<…>` one spaces and parentheses
+(`<a (b).md>`), and a title parentheses of its own — so all three are
+re-aimed; unbalanced parentheses are not a link, and a link whose destination
+and title are split across lines (which CommonMark allows) is read as none,
+because the consumer's guard reads a link a line at a time. On **codex** the
+heading anchor is the renderer's slug of the persona's name; a heading with
+the same text *earlier* in `AGENTS.md` would move that anchor to `-1`, which
+nen does not compute — a repository keeps its persona names unique. The
+verbatim **claude-code** row rewrites nothing, links included: its copy *is*
+the source's own layout.
+
 ### `nen surface mirror generate`
 
 Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
 — `<out>/skills/<name>/SKILL.md` on the two plugin-shaped rows, `antigravity`
-and `claude-code`, whose mirror is a plugin root — with the body verbatim, the frontmatter reduced to the keys `--surface`'s row
+and `claude-code`, whose mirror is a plugin root — with the body verbatim but
+for its relative links, re-aimed for the depth the copy lands at (above), the
+frontmatter reduced to the keys `--surface`'s row
 documents, and — with `--invocation-prefix` — every `<prefix><name>` mention
 rewritten into that surface's own spelling. Writes only files whose content
 actually changed, and deletes an orphan whose source is gone (plus the directory
@@ -9444,7 +9739,7 @@ that is the self-healing the mirror is for.
 
 ```text
 nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --out <dir>
-                            [--agents <dir>] [--invocation-prefix <prefix>]
+                            [--agents <dir>] [--invocation-prefix <prefix>] [--repo <path>]
                             [--hooks <hooks.json>] [--hooks-root <expr>]
                             [--manifest <plugin.json>] [--models <nen/workflow.json>]
                             [--source-surface <name>] [--rules <file.md>]
@@ -9466,11 +9761,11 @@ nen surface mirror generate --source <dir> --surface codex|cursor|antigravity --
 | `--manifest <plugin.json>` | no | a Claude plugin manifest (`.claude-plugin/plugin.json`) | a row that documents a plugin manifest of its own — Antigravity's `plugin.json` (`name`, `version`, `description`; `name` and `description` required) — gets `<out>/plugin.json` carrying those keys from the source under a `$generated` marker; every other row reports `manifest: not supported` and writes nothing. A required key the source lacks is refused at exit 2 |
 | `--models <workflow.json>` | no | a `nen/workflow.json` (or any JSON carrying its `models` block) whose `models.<surface>` maps tiers (`frontier`, `deep`, `fast`, `economy`, …) to the surface's own aliases | on a surface whose row maps models, a persona's `model: <tier>` is rewritten to `models.<surface>.<tier>` **from that file**; `model: inherit` is carried as `inherit` where the surface documents it (Cursor, Antigravity) and dropped elsewhere with a `droppedInherit[]` line. **Cursor writes `model: inherit` for every persona whatever the tier** (`modelInheritOnly` on its row): its page documents `model:` as `inherit` — the default — or a specific model ID, and a tier alias such as `composer` or `grok` from `models.cursor` is not a documented ID; the tier is still resolved, so an unknown value is still refused, and reaches only the report as `modelMapped: <persona>: <tier> -> inherit (cursor writes no model id)` (`modelMapped[]` under `--json`). Codex and Antigravity write the alias as before; a tier the file does not declare is refused at exit 2 by pointer (`models.<surface>.<tier>`), as is a file with no `models.<surface>` at all. An alias outside the surface's documented set (Antigravity documents `inherit`, `flash`, `pro`) is emitted verbatim — it is the repository's own word — and named in `undocumentedAliases[]`. **Codex** additionally gets `config.toml.fragment` carrying `[agents]` / `default_subagent_model = "<models.codex.fast>"` — a fragment the consumer merges; `config.toml` itself is never a destination for it — and one `agents/<stem>.toml` per persona for `.codex/agents/` |
 | `--source-surface <name>` | no | the surface the **source** personas were written for; default `claude` — the key every real workflow spells its Claude Code row under | a canonical persona file is read directly by one surface, so its `model:` carries *that* surface's alias (`opus`), never a tier — rewriting the source to tiers would break the surface that reads it unmirrored. With `--models`, a persona's value is resolved in two steps: first as a tier of `models.<surface>` (written as-is), else as an alias under `models.<source-surface>` read back to **the one tier** it sits under (`opus` → `deep`), then tier → `models.<surface>.<tier>` (`deep` → `pro` on Antigravity). An alias under two tiers of the source row, a value that is neither, or a source row the file lacks when a persona needs it are each refused at exit 2 by pointer; in the last case, when exactly one declared row *would* resolve the alias, the refusal ends `Did you mean --source-surface <name>?` (two candidates is a choice, and nen names none). The value is a key of the caller's own `models` matrix and nothing else — a workflow that spells the row `claude-code` passes `--source-surface claude-code` |
-| `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity, with `trigger: always_on` / `description: <stem>` prepended, because that surface discards a rules file with no frontmatter), the marker first and the source verbatim under it — its invocation mentions are **not** rewritten. Over the surface's documented limit (Antigravity: 24,000 bytes) it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
+| `--rules <file.md>` | no | a rules document | emitted at the row's rules directory as `<stem><extension>` (`rules/<stem>.mdc` on Cursor, with `description: <stem>` / `alwaysApply: true` prepended; `rules/<stem>.md` on Antigravity, with `trigger: always_on` / `description: <stem>` prepended, because that surface discards a rules file with no frontmatter), the marker first and the source under it — its relative links re-aimed like a skill's (a link to a mirrored skill lands on its copy), its invocation mentions **not** rewritten. Over the surface's documented limit (Antigravity: 24,000 bytes), counted on what is written — the re-aimed links included — it is **refused at exit 2 naming both numbers, never truncated**; past a page's line advice (Cursor: 500) it is written and a note says so. A row with no rules file reports `rules: not supported` |
 | `--permissions <file.json>` | no | a permissions source: `{ "allow": [ { "exe", "args" } ], "deny": [ … ], "surfaces": { "<surface>": { "allow": [ "<row>" ], "deny": [ "<row>" ], "network_access": <boolean> } } }`; every other key is ignored | emitted as the row's pack: `settings.local.json` with `Bash(exe args)` patterns (claude-code); `cli.json` with `Shell(exe:args)` — or `Shell(exe)` when `args` is empty — patterns, Cursor's documented grammar (`Shell(commandBase)` with an optional `:args`; never `Shell(exe args)`) (cursor); `config.toml` stating the approval policy and workspace-write sandbox with **`writable_roots = []`** under a comment naming what fills it — the working tree, each linked worktree, the git common dir — never a placeholder string a consumer could copy beside a live setting; the report says `writableRootsPlaceholder: true` and adds a `note:` so an installer knows to fill it (codex). **The source decides `network_access`**: the sandbox block carries a `network_access = true|false` line **only when `surfaces.codex.network_access` declares it** (a boolean; anything else is refused by pointer); absent, no line is written — Codex's own default applies, nen never chooses a boundary the source did not state — and the report says `network: not declared (no network_access line; the surface's own default applies)`, or `network: declared (network_access = true)` when it was (`permissionNetworkAccess` under `--json`: the boolean, or null). A `network_access` under a surface whose pack states no sandbox (cursor, claude-code) is refused, since it has no line to land on. **Nothing the source did not declare is written**: the `Read(./**)` / `Write(./**)` grants Cursor needs come from a `surfaces.cursor.allow` block in the source, transcribed verbatim after the shared rows *for that surface only* and counted in the report as `permissions: written (+N surface rows)` (`permissionSurfaceRows` under `--json`); a block for a surface whose pack has no rows (codex) is refused. Antigravity has no allowlist file, so nothing is written and the report says `permissions: not supported`. A malformed row is refused by pointer, as is a `(` or `)` in an `exe` or `args` — every pack wraps the row in the surface's own `Tool(...)`, and a parenthesis inside it would close that early |
 | `--stamp <version>` | no | `MAJOR.MINOR.PATCH` of the source (a `-pre`/`+build` tail is accepted and ignored) | written into every marker as `, stamp: <version>`; anything not version-shaped is refused at exit 2 |
 | `--dry-run` | no | compute the same three lists and write nothing | including the orphans it would delete |
-| `--repo <path>` | no | The root every relative path flag on this verb resolves against. | Since [#100](https://github.com/zheref/nen/issues/100) `--rules-dir`, `--canon-values`, `--mirror-dir` and `--markdown-out` resolve against this root, not the process's directory; an absolute value is used as-is. |
+| `--repo <path>` | no | the tree a re-aimed relative link may reach; default the working directory | a link whose target or copy lies outside it is carried as written and listed under `linksVerbatim[]`; a link to a mirrored item is re-aimed wherever `--out` is. Resolved through symlinks, like `--source` and `--out`. The path flags themselves still resolve against the working directory, as they always have — `--repo` does not rebase them. A value that is empty or does not exist is refused at exit 2. Give `check` the same `--repo` |
 
 **Hook scripts travel with the manifest.** On every non-verbatim row, each
 script a `--hooks` command names as `${CLAUDE_PLUGIN_ROOT}/hooks/<file>` is
@@ -9498,20 +9793,30 @@ outside the surface's documented set (…):`, `modelMapped: … (<surface> write
 `permissions:` and `manifest:` (`none` when the flag was not given, `not
 supported` when the row has no such file, else what was written), a
 `network:` line after `permissions:` when the pack states a sandbox (codex),
-then any `note:` lines; the row's
+then `links re-aimed for this mirror's depth: <n>` when any link moved and
+`links left as written (the target or the copy is outside <root>, the tree
+--repo names): <mirror path>: <target>, …` when any was declined, then any
+`note:` lines; the row's
 caveat goes to **stderr**, so `--json` stays one document. `--json`:
 `{ contract: "nen.surface.mirror.generate/v0.1", surface, skillsPath, out,
 dryRun, written, unchanged, deleted, stamp, skippedAgents, truncated,
 droppedInherit, undocumentedAliases, modelMapped, hooks, rules, permissions, manifest, notes,
-permissionSurfaceRows, writableRootsPlaceholder, permissionNetworkAccess, includes }` — the
-keys after `deleted` are v0.13.0's, appended at the end of the key order;
+permissionSurfaceRows, writableRootsPlaceholder, permissionNetworkAccess, includes,
+linkRoot, linksRewritten, linksVerbatim }` — the
+keys after `deleted` are v0.13.0's, appended at the end of the key order, and
+the last three are [#270](https://github.com/zheref/nen/issues/270)'s, appended
+after them: `linkRoot` is the real path of the tree a re-aimed link may reach,
+`linksRewritten` the number of relative links re-aimed (counted per generated
+file), `linksVerbatim` every `<mirror path>: <target>` carried as written
+because it would have left that tree (sorted, `[]` when none);
 `modelMapped` is `[]` except on a `modelInheritOnly` row (cursor) and
 `permissionNetworkAccess` is the declared boolean or null;
 `rules` is `"none"`, `"not supported"` or `{ path, chars, limit }`. Exit 0 on
-any completed run; exit 2 on a missing or unknown flag, an `--out` inside
+any completed run; exit 2 on a missing or unknown flag, a `--repo` that is
+empty or does not exist, an `--out` inside
 `--source`, a `--source` with no `SKILL.md`, a `SKILL.md` with no frontmatter
 block or missing a key the surface documents as required, a rules file over the
-surface's limit, a tier `--models` does not declare, a malformed pack file, a
+surface's limit (its links re-aimed), a tier `--models` does not declare, a malformed pack file, a
 stamp that is not a version, the verbatim `claude-code` row, or a destination
 that exists and carries no marker.
 
@@ -9578,7 +9883,10 @@ nen surface mirror generate --source claude/skills --agents claude/agents \
   "permissionSurfaceRows": 0,
   "writableRootsPlaceholder": false,
   "permissionNetworkAccess": null,
-  "includes": ["_review-preamble.md"]
+  "includes": ["_review-preamble.md"],
+  "linkRoot": "/home/me/checkout",
+  "linksRewritten": 223,
+  "linksVerbatim": []
 }
 ```
 The same command with `--surface codex` writes `AGENTS.md`, one
@@ -9633,6 +9941,8 @@ Regenerates from the SAME inputs `generate` uses and diffs the result against
 | `stale` | it carries a marker, but for a **different surface** — really generated, really out of date |
 | `hand-edited` | the marker is for this surface and the bytes differ, or the marker was deleted outright — or the bytes match but a file that declares a mode (a `hooks/` script, 0755) sits under another one: a hook at 0644 is one the surface cannot run |
 | `stale` (with `--stamp`) | the marker is for this surface but carries **no stamp, or a stamp other than `--stamp`** — an older one is the case that matters (a mirror generated from an older source than the one now asked about); a newer one is not this source's either. A file with no stamp is stale **only when `--stamp` is given**; without it the stamp is masked on both sides and never a drift class. A marker whose stamp is not a `MAJOR.MINOR.PATCH` version is stale too, named like any other — never an exit-2 refusal, which could not have reported the file it was asked about. Ordering: a missing marker is `hand-edited`, another surface's is `stale`, then the stamp, then the bytes |
+| `stale` (an older build) | the marker is for this surface (and the stamp, if asked, matches), and the bytes are **byte for byte what a build before [#270](https://github.com/zheref/nen/issues/270) generated from these same inputs** — its relative links carried as written rather than re-aimed. Really generated, by an older nen, so the regeneration is forced rather than optional, and `hand-edited` would send its maintainer looking for an edit nobody made. A file whose links moved AND that somebody also edited is `hand-edited`. Checked after the stamp, before the bytes |
+| `stale` (aimed from elsewhere) | the bytes are a fresh generation's **once every relative link that leaves the mirror is masked on both sides** — the links inside it (to a mirrored skill, persona, include or rules file, or a directory holding one) must still match. The mirror was really generated, for another location: a **copied install**, or a `generate` run from another root or `--repo` than this check. The text report names these files on a line of their own, `stale because their links out of the mirror are aimed from another location (…): <files>`; the `--json` shape does not change (they are in `stale`). A hand edit confined to such a link's target reads `stale` too — either way the check fails and a regenerate heals it. Checked after the older-build case |
 
 `stale` is where [`canon mirror check`](#nen-canon-mirror-check)'s `--ref` sits
 in this verb: the facts the marker carries are the **surface** and, when
@@ -9647,7 +9957,7 @@ match the source and `hand-edited` otherwise, and `stale` is never reported.
 
 ```text
 nen surface mirror check --source <dir> --surface <name> --out <dir>
-                         [--agents <dir>] [--invocation-prefix <prefix>]
+                         [--agents <dir>] [--invocation-prefix <prefix>] [--repo <path>]
                          [--hooks <hooks.json>] [--models <workflow.json>]
                          [--rules <file.md>] [--permissions <permissions.json>]
                          [--stamp <version>] [--json]
@@ -9660,10 +9970,15 @@ flags the generate run had: a `hooks.json` the check does not regenerate is a
 file it reports as `extra`, and one it regenerates but the mirror lacks is
 `missing`. `--stamp <version>` compares the marker's stamp by version
 (numerically, component by component; a `-pre`/`+build` tail is ignored).
+Give the same `--repo` (or run from the same directory) as well: the re-aimed
+links are part of the generation, and a check run from another root
+regenerates them for that root.
 
 **Output and exit codes** — prints `surface:`, `stamp:` (when given),
 `ok: <n>`, then `missing:`, `extra:`, `stale:` and `hand-edited:` (each `(none)`
-when empty). `--json`: `{ contract: "nen.surface.mirror.check/v0.1", surface,
+when empty), with a `stale because their links out of the mirror are aimed
+from another location (…): <files>` line after `stale:` only when some are
+(text only — the `--json` shape below is unchanged). `--json`: `{ contract: "nen.surface.mirror.check/v0.1", surface,
 ok, missing, extra, stale, handEdited, stamp }` — `stamp` (the value asked
 about, or null) is v0.13.0's, appended at the end; the contract stays v0.1
 because nothing before it moved. Exit **0** when all four drift lists are
@@ -9741,6 +10056,19 @@ the same five classes: `ok`, `missing` (generated, not installed), `stale`
 (installed from another surface or, with `--stamp`, another version),
 `hand-edited` (installed bytes differ), `extra` (in the installed tree's mirror
 universe, with no source).
+
+**Relative links are regenerated for the installed directory's own location**,
+resolved through symlinks. An install that is a **symlink** to the committed
+mirror (a plugin directory pointing at `surfaces/<s>`) resolves to it and
+compares clean. An install that is a **copy** placed outside `--repo` carries
+its links out of the mirror as they were aimed where it was generated, while
+the fresh generation for its location carries them as written (see *the tree
+a re-aimed link may reach*): such a file is `stale` (aimed from elsewhere),
+named on the `stale because …` text line, and never `hand-edited` unless its
+prose or a link inside the mirror changed too. A fresh copy therefore exits
+1 with only `stale` — generate into the installed location itself
+(`generate --out <installed dir>`) to make it `ok`, or check the committed
+mirror with `--out`.
 
 **`--surface claude-code`** is the case the verbatim row exists for: a Claude
 Code plugin's installed copy is the source tree itself, so the "generation" is

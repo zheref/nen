@@ -3,7 +3,7 @@
 // unit-check (policy read from the pull request's BASE), and whose-pr.
 
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -183,6 +183,78 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/someone-else/other.git\n" } },
     ];
     await expect(run(root, script)).rejects.toThrow(/must be the same repository/);
+  });
+
+  // zheref/nen#269: `pr ready HA#117` worked and `pr merge HA#117` refused
+  // 'HA' as "not an owner/name slug". The code now resolves through --repo's
+  // own nen/repos.json by pr ready's own lookup.
+  describe("a <CODE>#<n> ref (zheref/nen#269)", () => {
+    /** tmpRoot() plus a registry in which EX is this checkout's own repository and OT is another. */
+    function codedRoot(): string {
+      const root = tmpRoot();
+      writeFileSync(
+        join(root, "nen", "repos.json"),
+        JSON.stringify({
+          consumers: [
+            { repo: "zheref/example", consumes: [], code: "EX" },
+            { repo: "zheref/other", consumes: [], code: "OT" },
+          ],
+        }),
+      );
+      return root;
+    }
+
+    const commandLines = (seams: ScriptedSeams): string[] =>
+      seams.calls.map((call): string => [call.command, ...call.args].join(" "));
+
+    it("resolves the code through --repo's registry and plans exactly what owner/name#n would", async () => {
+      const root = codedRoot();
+      const outcome = await run(root, passingScript(), { typedRef: "EX#9" });
+      expect(outcome.report.ok).toBe(true);
+      expect(outcome.report.target).toBe("zheref/example");
+      expect(outcome.report.pr).toBe(9);
+      expect(outcome.report.mergeArgv).toEqual([
+        "pr", "merge", "9", "--repo", "zheref/example", "--merge", "--match-head-commit", HEAD,
+      ]);
+    });
+
+    it("is case-insensitive about the code, as pr ready is", async () => {
+      const root = codedRoot();
+      const outcome = await run(root, passingScript(), { typedRef: "ex#9" });
+      expect(outcome.report.target).toBe("zheref/example");
+    });
+
+    it("REFUSES a code that resolves to a repository other than --repo's origin -- never merges the wrong repo", async () => {
+      const root = codedRoot();
+      const seams = new ScriptedSeams([ORIGIN_CALL]);
+      await expect(
+        mergeUnit({ typedRef: "OT#9", repoFlag: root, requirements: REQUIREMENTS, run: true, seams, root, deps: readyDeps(readySource()) }),
+      ).rejects.toThrow(/'OT#9' resolves 'OT' to 'zheref\/other' through --repo's own registry, but '--repo' at '.*' has an origin of 'zheref\/example'/);
+      // Refused before any gate ran: nothing but the origin read reached a tool.
+      expect(commandLines(seams)).toEqual(["git remote get-url origin"]);
+    });
+
+    it("refuses an unknown code (a usage error naming the known codes), before any tool is called", async () => {
+      const root = codedRoot();
+      const seams = new ScriptedSeams([]);
+      const error = await mergeUnit({ typedRef: "ZZ#9", repoFlag: root, requirements: REQUIREMENTS, run: false, seams, root, deps: readyDeps(null) }).catch(
+        (caught: unknown): unknown => caught,
+      );
+      expect(error).toBeInstanceOf(MergeUnitUsageError);
+      expect((error as Error).message).toMatch(/'ZZ' is not a product code/);
+      expect((error as Error).message).toMatch(/Known codes: EX, OT/);
+      expect(seams.calls).toEqual([]);
+    });
+
+    it("refuses a code when --repo carries no registry, naming the file", async () => {
+      const root = tmpRoot();
+      await expect(run(root, [], { typedRef: "EX#9" })).rejects.toThrow(/resolved through --repo's own registry, and it could not be read/);
+    });
+
+    it("refuses the no-'#' shorthand pr ready accepts -- a merging verb takes only the unambiguous form", async () => {
+      const root = codedRoot();
+      await expect(run(root, [], { typedRef: "EX9" })).rejects.toThrow(/the '#' required/);
+    });
   });
 
   it("plans (no --run) when every gate passes, and never touches gh's merge endpoint", async () => {

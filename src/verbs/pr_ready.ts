@@ -91,6 +91,7 @@ import {
 import { loadRepoRegistry } from "../schema/repos.js";
 import { GATES_FILE, readSchemaJson, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
+import { ExcludeCheckError, parseExcludeCheckNames } from "../pr/excludecheck.js";
 
 /**
  * The flags this verb adds to the CLI's declared surface.
@@ -106,11 +107,14 @@ export const PR_READY_FLAGS = {
     "approvers",
     "round-policy",
     "exclude-run",
-    "exclude-check",
     "gates",
     "token-env",
     "require-head",
   ],
+  // `--exclude-check` REPEATS (zheref/nen#243): one occurrence per name is the
+  // one spelling that can carry a check name the comma-joined form cannot --
+  // see ../pr/excludecheck.ts for the whole grammar.
+  lists: ["exclude-check"],
   booleans: ["explain"],
 } as const;
 
@@ -174,6 +178,13 @@ export interface PrReadyInput {
   readonly positionals: readonly string[];
   readonly values: Readonly<Record<string, string>>;
   readonly booleans: ReadonlySet<string>;
+  /**
+   * The repeatable flags (`PR_READY_FLAGS.lists`), every occurrence in argv
+   * order. OPTIONAL because this is an in-process contract too --
+   * ../pr/mergeunit.ts, ../shadow/run.ts and ../report/objects.ts all build a
+   * `PrReadyInput` directly -- and none of the three excludes a check.
+   */
+  readonly lists?: Readonly<Record<string, readonly string[]>>;
   readonly repoFlag: string | null;
 }
 
@@ -530,7 +541,7 @@ function splitSlug(slug: string): PrRef | null {
 export function resolveRef(
   typed: string,
   ghRepoFlag: string | undefined,
-  registry: () => { productCodes: Readonly<Record<string, string>>; consumers: readonly { repo: string; code: string | null }[] },
+  registry: () => ProductCodeRegistry,
 ): ResolvedRef {
   const explicit = ghRepoFlag === undefined ? null : splitSlug(ghRepoFlag);
   if (ghRepoFlag !== undefined && explicit === null) {
@@ -565,18 +576,118 @@ export function resolveRef(
   // does not list at all.
   if (explicit !== null) return { ...explicit, number, typed };
 
-  const loaded = registry();
-  const wanted = code.toLowerCase();
-  for (const consumer of loaded.consumers) {
-    if (consumer.code !== null && consumer.code.toLowerCase() === wanted) {
-      const slug = splitSlug(consumer.repo);
-      if (slug !== null) return { ...slug, number, typed };
-    }
+  // A no-# token that fails code resolution must say HOW it was split, or the
+  // refusal misdirects (zheref/nen#26): 'BC92' failing lookup reads as a
+  // registry problem, when the caller's actual problem may be the split itself.
+  const shorthandHint =
+    shorthand === null
+      ? ""
+      : ` The ref '${typed}' carries no '#', so it was split by the shorthand's rule -- the number is the longest trailing digit run -- as code '${code}' + number ${number}. If that is not the split you meant, put a '#' between code and number: <CODE>#<N> is the unambiguous form.`;
+  const slug = resolveProductCode(code, registry(), {
+    explicitForm: (name): string => `--gh-repo owner/${name}`,
+    unknownHint: shorthandHint,
+  });
+  return { ...slug, number, typed };
+}
+
+/** The registry view a product-code lookup reads: `loadRepoRegistry`'s own shape, narrowed to the two fields it consults. */
+export interface ProductCodeRegistry {
+  readonly productCodes: Readonly<Record<string, string>>;
+  readonly consumers: readonly { readonly repo: string; readonly code: string | null }[];
+}
+
+/** What a caller of `resolveProductCode` adds to its refusals -- the parts that differ per verb. */
+export interface ProductCodeLookup {
+  /**
+   * How THIS verb lets a caller name the repository explicitly, given the bare
+   * repository name -- `pr ready`'s `--gh-repo owner/<name>`, `pr merge`'s
+   * `owner/<name>#<n>` -- for the refusal when the registry cannot state an
+   * owner. A remedy naming a flag the verb does not take is no remedy.
+   */
+  readonly explicitForm: (name: string) => string;
+  /** Appended to the unknown-code refusal (`resolveRef`'s shorthand-split hint). */
+  readonly unknownHint?: string;
+}
+
+/**
+ * ASCII-ONLY case folding: `A`-`Z` become `a`-`z`, and every other character
+ * is left exactly as it is (Feitan, E3 review of zheref/nen#269).
+ *
+ * NOT `toLowerCase()`, which folds by Unicode's rules: U+212A KELVIN SIGN
+ * lowercases to an ASCII `k`, so a registry key spelled with it matched a
+ * typed `K#5` -- a code nobody can see is different from `K` resolving a ref
+ * to whatever repository that key names. Every code a caller can TYPE is ASCII
+ * (`resolveRef`'s HASH_REF/SHORTHAND_REF, ../release/unitcheck.ts's
+ * PRODUCT_CODE), so folding ASCII only loses no legitimate match, and a
+ * non-ASCII key can now match nothing a caller typed.
+ */
+function foldAsciiCase(value: string): string {
+  return value.replace(/[A-Z]/g, (letter): string => letter.toLowerCase());
+}
+
+/**
+ * A registry key as a refusal prints it: every character outside printable
+ * ASCII written as its `\u{...}` code point, so a KELVIN SIGN key reads
+ * `\u{212a}` rather than a `K` indistinguishable from the one that did not
+ * match it.
+ */
+function displayCode(value: string): string {
+  return value.replace(/[^\x20-\x7e]/gu, (char): string => `\\u{${(char.codePointAt(0) ?? 0).toString(16)}}`);
+}
+
+/**
+ * A product code, resolved to the repository it names through the target
+ * repository's registry: `consumers[].code` first (a full slug), then
+ * `product_codes` (a bare name, owner taken from the consumers only when they
+ * agree on one). Case-insensitive over ASCII letters only (`foldAsciiCase`).
+ * An unknown code is a `RefError` naming the known ones -- never a guess.
+ *
+ * A CODE THAT MATCHES TWO DIFFERENTLY-SPELLED KEYS IS REFUSED, NEVER PICKED
+ * (Feitan, E3 review). ../schema/repos.ts refuses a duplicate code by EXACT
+ * comparison, so consumers coded `NE` and `ne` both load -- and a
+ * case-insensitive lookup that took the first match resolved `nE#5` to
+ * whichever one the file happened to list first. `release unit-check` allows a
+ * code naming another repository, so that was a read of the wrong
+ * repository's pull request with nothing on screen to say so. The refusal
+ * names every matching key, where it sits, and the repository it names. "Two
+ * keys" means two SPELLINGS: the same code declared in both `consumers[]` and
+ * `product_codes` (`KP` and `KP`) is the ordinary registry shape, one key in
+ * two places, and keeps its consumers-first precedence.
+ *
+ * EXPORTED SO THERE IS ONE LOOKUP (zheref/nen#269). `pr merge` and `release
+ * unit-check` accept `<CODE>#<n>` too, and "resolves the same way `pr ready`
+ * does" is only true by construction if they call THIS rather than a second
+ * copy that could drift -- zheref/nen#20 is what two sibling resolvers
+ * drifting apart looks like.
+ */
+export function resolveProductCode(code: string, loaded: ProductCodeRegistry, lookup: ProductCodeLookup): PrRef {
+  const wanted = foldAsciiCase(code);
+  const consumerMatches = loaded.consumers.filter(
+    (consumer): boolean => consumer.code !== null && foldAsciiCase(consumer.code) === wanted,
+  );
+  const productCodeMatches = Object.entries(loaded.productCodes).filter(
+    ([key]): boolean => foldAsciiCase(key) === wanted,
+  );
+  const spellings = new Set([
+    ...consumerMatches.map((consumer): string => consumer.code ?? ""),
+    ...productCodeMatches.map(([key]): string => key),
+  ]);
+  if (spellings.size > 1) {
+    const matched = [
+      ...consumerMatches.map((consumer): string => `consumers[].code '${displayCode(consumer.code ?? "")}' -> '${consumer.repo}'`),
+      ...productCodeMatches.map(([key, name]): string => `product_codes '${displayCode(key)}' -> '${name}'`),
+    ];
+    throw new RefError(
+      `'${code}' matches ${spellings.size} differently-spelled product codes in the target repository's registry once letter case is ignored: ${matched.join(", ")}. nen will not pick one -- a guess here resolves the ref to a repository nobody named. Make the codes differ by more than letter case in the registry.`,
+    );
   }
-  for (const [key, name] of Object.entries(loaded.productCodes)) {
-    if (key.toLowerCase() !== wanted) continue;
+  for (const consumer of consumerMatches) {
+    const slug = splitSlug(consumer.repo);
+    if (slug !== null) return slug;
+  }
+  for (const [, name] of productCodeMatches) {
     const slug = splitSlug(name);
-    if (slug !== null) return { ...slug, number, typed };
+    if (slug !== null) return slug;
     // The registry's `product_codes` map a code to a bare repository NAME,
     // while `consumers[].repo` carries a full slug. When only the bare name is
     // available the owner is taken from the registry's own consumers -- and
@@ -589,10 +700,10 @@ export function resolveRef(
     );
     if (owners.size === 1) {
       const owner = [...owners][0] ?? "";
-      return { owner, repo: name, number, typed };
+      return { owner, repo: name };
     }
     throw new RefError(
-      `'${code}' resolves to the repository name '${name}', but the registry does not state its owner and its consumers name ${owners.size} different owners. Pass --gh-repo owner/${name}.`,
+      `'${code}' resolves to the repository name '${name}', but the registry does not state its owner and its consumers name ${owners.size} different owners. Pass ${lookup.explicitForm(name)}.`,
     );
   }
   const known = [
@@ -601,15 +712,8 @@ export function resolveRef(
       ...loaded.consumers.map((consumer): string => consumer.code ?? "").filter((c): boolean => c !== ""),
     ]),
   ].sort();
-  // A no-# token that fails code resolution must say HOW it was split, or the
-  // refusal misdirects (zheref/nen#26): 'BC92' failing lookup reads as a
-  // registry problem, when the caller's actual problem may be the split itself.
-  const shorthandHint =
-    shorthand === null
-      ? ""
-      : ` The ref '${typed}' carries no '#', so it was split by the shorthand's rule -- the number is the longest trailing digit run -- as code '${code}' + number ${number}. If that is not the split you meant, put a '#' between code and number: <CODE>#<N> is the unambiguous form.`;
   throw new RefError(
-    `'${code}' is not a product code in the target repository's registry. Known codes: ${known.join(", ") || "(none)"}. Codes are resolved from the file at run time, never from memory -- they change.${shorthandHint}`,
+    `'${code}' is not a product code in the target repository's registry. Known codes: ${known.map(displayCode).join(", ") || "(none)"}. Codes are resolved from the file at run time, never from memory -- they change.${lookup.unknownHint ?? ""}`,
   );
 }
 
@@ -1068,21 +1172,34 @@ export async function prReady(
     io.err(`${PROGRAM}: --exclude-run must be a numeric Actions run id (got '${excludeRun}').`);
     return 2;
   }
-  // `--exclude-check <name>` (name-based exclusion, zheref/nen#216): comma-joined, the same grammar
-  // `--reviewers` uses. THIS CLI'S ARGV READER REFUSES A REPEATED VALUE FLAG
-  // OUTRIGHT (../cli/args.ts: "no repeated VALUE flags -- neither collapsing
-  // into an array nor last-one-wins: a second occurrence is a usage error"),
-  // so "repeatable" here means what it means for every other multi-value flag
-  // this verb already has: `--exclude-check a,b` in one occurrence, not
-  // `--exclude-check a --exclude-check b`. A caller that types the flag twice
-  // gets that parser's own usage error, same as `--reviewers` would.
+  // `--exclude-check <name>` (name-based exclusion, zheref/nen#216), REPEATABLE
+  // and bracket-aware since zheref/nen#243: each occurrence is split on the
+  // commas OUTSIDE every `()`/`[]`/`{}` group, so a GitHub Actions matrix
+  // name -- `check (Windows, ["self-hosted","Windows","X64"])` -- is one name,
+  // and a comma-joined `a,b` is still two. The grammar, what it still cannot
+  // name, and the one value shape it refuses (exit 2) are
+  // ../pr/excludecheck.ts's header; it replaced the plain `splitCsv` that made
+  // any comma-bearing name unnamable.
   //
-  // LIMITATION, DOCUMENTED RATHER THAN FIXED: `splitCsv` below trims each name
-  // and splits on ',', so a check whose own name CONTAINS a comma can never be
-  // named through this flag, and leading/trailing whitespace around a name is
-  // never significant. See docs/USAGE.md's `pr ready` section for the same
-  // sentence aimed at the caller.
-  const excludeCheckNames = splitCsv(input.values["exclude-check"] ?? "");
+  // A `values["exclude-check"]` entry is read as ONE MORE OCCURRENCE, after
+  // the list's. The CLI never puts it there any more (the flag is declared as
+  // a list), but `PrReadyInput` is also an in-process contract, and a caller
+  // written against its earlier single-value shape keeps meaning what it
+  // meant rather than being silently ignored.
+  const excludeCheckOccurrences = [
+    ...(input.lists?.["exclude-check"] ?? []),
+    ...(input.values["exclude-check"] === undefined ? [] : [input.values["exclude-check"]]),
+  ];
+  let excludeCheckNames: readonly string[];
+  try {
+    excludeCheckNames = parseExcludeCheckNames(excludeCheckOccurrences);
+  } catch (error) {
+    if (error instanceof ExcludeCheckError) {
+      io.err(`${PROGRAM}: ${error.message}`);
+      return 2;
+    }
+    throw error;
+  }
   const reviewersCsv = input.values["reviewers"] ?? "";
   const reviewerNames = splitCsv(reviewersCsv);
   // `--approvers` OMITTED is not the same value as `--approvers ""`, and the

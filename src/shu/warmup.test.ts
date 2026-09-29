@@ -121,7 +121,7 @@ const FF_MERGE = "git merge --ff-only origin/main";
 const NAME_OK = `git check-ref-format --branch ${BRANCH}`;
 const LOCAL_REF = `git show-ref --verify --quiet refs/heads/${BRANCH}`;
 const REMOTE_REF = `git ls-remote --heads origin refs/heads/${BRANCH}`;
-const SWITCH = `git switch -c ${BRANCH} origin/main`;
+const SWITCH = `git switch --no-track -c ${BRANCH} origin/main`;
 const DECLARED_BUILD = "pnpm turbo run build";
 const DECLARED_TEST = "pnpm exec vitest run";
 /**
@@ -1560,15 +1560,43 @@ describe("the --json contract", () => {
     }
   });
 
-  it("uses --from for the trunk when it is given", async () => {
+  it("uses --from for the trunk when it is given -- and the cut still tracks nothing, never origin/<from> (zheref/nen#271)", async () => {
     const result = await capture(["warmup", "--branch", BRANCH, "--from", "trunk", "--json", "--dry-run"], {
       script: happyPath(),
     });
-    const report = JSON.parse(result.out.join("\n")) as { trunk: string; steps: readonly { argv: string[] }[] };
+    const report = JSON.parse(result.out.join("\n")) as { trunk: string; steps: readonly { argv: string[]; note: string | null }[] };
     expect(report.trunk).toBe("trunk");
-    expect(report.steps.map((step): string => step.argv.join(" "))).toContain(
-      "git switch -c my-idea origin/trunk",
+    const cut = report.steps.find((step): boolean => step.argv.includes("switch"));
+    expect(cut?.argv.join(" ")).toBe("git switch --no-track -c my-idea origin/trunk");
+    expect(cut?.note).toBe(
+      "upstream: none -- --no-track leaves 'my-idea' tracking nothing, never origin/trunk, whatever branch.autoSetupMerge says. Its first 'nen wc publish --set-upstream' pushes it to origin/my-idea and tracks that",
     );
+  });
+
+  it("the real run's cut carries --no-track and says, in the report, that the new branch has no upstream (zheref/nen#271)", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH, "--json"], { script: happyPath() });
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { steps: readonly { argv: string[]; exitCode: number | null; note: string | null }[] };
+    const cut = report.steps.find((step): boolean => step.argv.includes("switch"));
+    expect(cut?.argv).toEqual(["git", "switch", "--no-track", "-c", BRANCH, "origin/main"]);
+    expect(cut?.exitCode).toBe(0);
+    expect(cut?.note?.split("\n")).toEqual([
+      "cut from origin/main, the tip this run just fetched",
+      `upstream: none -- --no-track leaves '${BRANCH}' tracking nothing, never origin/main, whatever branch.autoSetupMerge says. Its first 'nen wc publish --set-upstream' pushes it to origin/${BRANCH} and tracks that`,
+    ]);
+    // No other git call in the run names a tracking flag: the cut is the one place an upstream could be set.
+    expect(argvOf(result.seams).filter((line): boolean => /--track|--set-upstream|branch\.autoSetupMerge/.test(line))).toEqual([]);
+    // And the human rendering says it on the cut's own row.
+    const text = await capture(["warmup", "--branch", BRANCH], { script: happyPath() });
+    expect(text.out.join("\n")).toMatch(/ran: {11}git switch --no-track -c my-idea origin\/main  -- exit 0 in \d+ms\n {15}cut from origin\/main, the tip this run just fetched\n {15}upstream: none -- --no-track leaves 'my-idea' tracking nothing/);
+  });
+
+  it("a cut that FAILS names the whole argv it ran, --no-track included", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([{ match: SWITCH, result: { code: 128, stderr: "fatal: a branch named 'my-idea' already exists" } }]),
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/git switch --no-track -c my-idea origin\/main/);
   });
 
   it("prints NO document on a refusal that changed nothing", async () => {

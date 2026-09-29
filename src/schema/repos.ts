@@ -50,6 +50,38 @@ export interface ConsumerEntry {
   readonly callerPins: Readonly<Record<string, string>>;
 }
 
+/** The two sections that record a repository WITHOUT listing it as a consumer. */
+export type ListedSection = "maintained_tools" | "pending_onboarding";
+
+/**
+ * One `maintained_tools[]` or `pending_onboarding[]` row: the slug, the
+ * section it came from, and the one further field nen reads off it.
+ *
+ * `scenario` IS MODELLED HERE FOR THE SAME REASON IT IS ON A CONSUMER: it is
+ * the value canon-resolve and the quality-tooling lookups read to pick a
+ * handbook and a tool set, so it is a fact nen acts on rather than prose.
+ * A registry's own tool repositories consume nothing -- `zheref/nen` does not
+ * consume `zheref/nen` -- so while only a consumers[] entry could carry one,
+ * neither tool repository could ever resolve a pinned handbook, and the only
+ * way to give one a scenario was to record a false consumption
+ * (zheref/nen#219). The rest of the row (`role`, `status`, `reason`, ...)
+ * stays unmodelled, on the discipline that keeps `callerPins` raw.
+ */
+export interface ListedEntry {
+  /** `owner/name`. */
+  readonly repo: string;
+  readonly section: ListedSection;
+  /**
+   * The row's position inside its own section, so a message can name it by
+   * pointer (`maintained_tools[1]`). Two rows of one section may name the same
+   * repository -- this loader does not refuse that -- and a label without the
+   * index would print them identically.
+   */
+  readonly index: number;
+  /** The scenario this row records. `null` when the row states none. */
+  readonly scenario: string | null;
+}
+
 export interface RepoRegistry {
   readonly path: string;
   /** Newest tag of the registry's own repository, as recorded. */
@@ -69,16 +101,32 @@ export interface RepoRegistry {
    * which is how five independent skill ports each rediscovered that the
    * registry's own source repo "is not in this registry" (zheref/nen#27).
    *
-   * ONLY THE SLUG IS MODELLED -- with the one exception `toolPins` states.
-   * Each entry carries more (`role`, `status`, `reason`, ...), and that prose
-   * is the target repository's business, on the same discipline that keeps
-   * `callerPins` raw: the slug is the one fact token resolution needs, and
-   * modelling the rest would be this binary learning another repository's
-   * onboarding vocabulary.
+   * ONLY THE SLUG IS IN THIS LIST -- with the two exceptions `toolPins` and
+   * `listed` state. Each entry carries more (`role`, `status`, `reason`, ...),
+   * and that prose is the target repository's business, on the same
+   * discipline that keeps `callerPins` raw: the slug is the one fact token
+   * resolution needs, and modelling the rest would be this binary learning
+   * another repository's onboarding vocabulary. The two further fields nen
+   * DOES act on -- the canon `pinned` tag and the `scenario` -- are on
+   * `toolPins` and `listed`, below.
    */
   readonly maintainedTools: readonly string[];
   /** `owner/name` slugs listed under `pending_onboarding`, in file order. See `maintainedTools`. */
   readonly pendingOnboarding: readonly string[];
+  /**
+   * Every `maintained_tools` row, then every `pending_onboarding` row, in file
+   * order, each with the `scenario` it states (zheref/nen#219). The two slug
+   * lists above are this list's `repo` column, kept as they were because
+   * every other reader wants exactly a slug list and nothing more.
+   *
+   * OPTIONAL IN THE TYPE, ALWAYS SET BY THE LOADER. parseRepoRegistry() fills
+   * it on every registry it returns; the `?` exists for a registry assembled
+   * by hand -- a test double that models only the consumers a fan-out reads
+   * -- which predates the field and records no listed row that could state a
+   * scenario. A reader treats its absence as exactly that: no row outside
+   * consumers[] states one.
+   */
+  readonly listed?: readonly ListedEntry[];
   /**
    * `owner/name` -> the tag a `maintained_tools` entry records as `pinned`,
    * for the entries that record one. THE CANON PIN (CON-13): a consumer
@@ -107,16 +155,21 @@ const CALLER_PIN_SUFFIX = "_pinned";
 // same reason a consumer must: an entry without one records nothing a
 // resolution (or a reader) can act on, and these lists exist to record exactly
 // the owner that `product_codes`' bare values omit.
-interface ListedRepo {
-  readonly repo: string;
+//
+// `scenario` IS VALIDATED EXACTLY AS A CONSUMER'S IS -- optional, and a string
+// when present -- because the lookup that reads it (../repo/scenario.ts) reads
+// the three sections as one source. A number or an object there used to pass
+// unread, since nothing consulted the field; now that a lookup acts on it, a
+// malformed one is refused by pointer rather than read as "no scenario".
+interface ListedRepo extends ListedEntry {
   /** The entry's `pinned` tag, when it records one (a canon pin -- see `RepoRegistry.toolPins`). */
   readonly pinned: string | null;
 }
 
-function parseListedRepos(path: string, field: string, raw: unknown): readonly ListedRepo[] {
+function parseListedRepos(path: string, section: ListedSection, raw: unknown): readonly ListedRepo[] {
   if (raw === undefined || raw === null) return [];
-  return requireArray(path, field, raw).map((entry, index): ListedRepo => {
-    const pointer = `${field}[${index}]`;
+  return requireArray(path, section, raw).map((entry, index): ListedRepo => {
+    const pointer = `${section}[${index}]`;
     const record = requireRecord(path, pointer, entry);
     const repo = requireString(path, `${pointer}.repo`, record["repo"]);
     if (!repo.includes("/")) {
@@ -126,7 +179,13 @@ function parseListedRepos(path: string, field: string, raw: unknown): readonly L
         `expected an 'owner/name' slug, got '${repo}'`,
       );
     }
-    return { repo, pinned: optionalString(path, `${pointer}.pinned`, record["pinned"]) };
+    return {
+      repo,
+      section,
+      index,
+      scenario: optionalString(path, `${pointer}.scenario`, record["scenario"]),
+      pinned: optionalString(path, `${pointer}.pinned`, record["pinned"]),
+    };
   });
 }
 
@@ -230,16 +289,23 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
   }
 
   const maintained = parseListedRepos(path, "maintained_tools", root["maintained_tools"]);
+  const pending = parseListedRepos(path, "pending_onboarding", root["pending_onboarding"]);
+  const slugs = (entries: readonly ListedRepo[]): readonly string[] =>
+    entries.map((entry): string => entry.repo);
   const toolPins: Record<string, string> = {};
   for (const tool of maintained) if (tool.pinned !== null) toolPins[tool.repo] = tool.pinned;
+  // `listed` carries the four fields its type names and not the pin, which
+  // `toolPins` already holds keyed by slug -- one home per fact.
+  const asEntry = ({ repo, section, index, scenario }: ListedRepo): ListedEntry => ({ repo, section, index, scenario });
 
   return {
     path,
     latest,
     consumers,
     productCodes,
-    maintainedTools: maintained.map((tool): string => tool.repo),
-    pendingOnboarding: parseListedRepos(path, "pending_onboarding", root["pending_onboarding"]).map((tool): string => tool.repo),
+    maintainedTools: slugs(maintained),
+    pendingOnboarding: slugs(pending),
+    listed: [...maintained, ...pending].map(asEntry),
     toolPins,
     byRepo: (repo): ConsumerEntry | undefined => byRepoIndex.get(repo),
     byCode: (code): ConsumerEntry | undefined => byCodeIndex.get(code),

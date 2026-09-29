@@ -3,6 +3,7 @@ import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import {
   BotResolutionError,
+  EXIT_BOT_REQUEST_UNRECORDED,
   collaboratorArgv,
   fetchPrAndKnownBots,
   isCollaborator,
@@ -207,8 +208,29 @@ describe("requestBotReviewsArgv / requestBotReviews", () => {
   // AN EXIT-0 CALL IS NOT, BY ITSELF, A PROMISE that every botId sent was
   // actually added: this is the exact shape the module header describes --
   // never echo the request back as the report; read what the mutation's own
-  // response says landed.
-  it("never claims a bot was requested when the mutation's own response does not say so, even at exit 0", () => {
+  // response says landed. zheref/nen#277: until then this exact response was
+  // `ok: true` with "(none reported back)", which is what zheref/hatsu#123,
+  // #128 and #130 received for Copilot's id while GitHub recorded nothing.
+  it("reports NOT recorded (ok false), naming the bot, when the accepted mutation's response lists no pending request for it (zheref/nen#277)", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`,
+        result: {
+          stdout: JSON.stringify({ data: { requestReviews: { pullRequest: { reviewRequests: { nodes: [] } } } } }),
+        },
+      },
+    ]);
+    const result = requestBotReviews(seams, TARGET, 9, "PR_1", ["BOT_kgDOCnlnWA"]);
+    expect(result.ok).toBe(false);
+    expect(result.pendingBotLogins).toEqual([]);
+    expect(result.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(result.message).toMatch(/GitHub accepted the bot review request but did not record it for BOT_kgDOCnlnWA/);
+    expect(result.message).toMatch(/so no review round should be expected from it\./);
+    expect(result.message).not.toMatch(/none will arrive/);
+    expect(result.message).not.toMatch(/none reported back/);
+  });
+
+  it("names an unrecorded bot by its login when this pull request already knows it, never guessing one from the id", () => {
     const seams = new ScriptedSeams([
       {
         match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`,
@@ -217,10 +239,85 @@ describe("requestBotReviewsArgv / requestBotReviews", () => {
         },
       },
     ]);
+    const result = requestBotReviews(seams, TARGET, 9, "PR_1", ["BOT_1"], [
+      { login: "copilot-pull-request-reviewer", id: "BOT_1" },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.unrecordedBots).toEqual([{ id: "BOT_1", login: "copilot-pull-request-reviewer" }]);
+    expect(result.message).toMatch(/copilot-pull-request-reviewer \(BOT_1\)/);
+  });
+
+  it("partially recorded: names ONLY the bot that did not land, and lists the one that did as pending", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1", "BOT_2"]).join(" ")}`,
+        result: {
+          stdout: JSON.stringify({
+            data: {
+              requestReviews: {
+                pullRequest: {
+                  reviewRequests: { nodes: [{ requestedReviewer: { __typename: "Bot", login: "first-bot", id: "BOT_1" } }] },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const result = requestBotReviews(seams, TARGET, 9, "PR_1", ["BOT_1", "BOT_2"]);
+    expect(result.ok).toBe(false);
+    expect(result.pendingBotLogins).toEqual(["first-bot"]);
+    expect(result.unrecordedBots).toEqual([{ id: "BOT_2", login: null }]);
+    expect(result.message).toMatch(/did not record it for BOT_2 --/);
+    expect(result.message).toMatch(/Pending bot review requests it does list: first-bot\./);
+  });
+
+  it("matches a recorded bot BY ID: a different bot pending in the response does not stand in for the one requested", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`,
+        result: {
+          stdout: JSON.stringify({
+            data: {
+              requestReviews: {
+                pullRequest: {
+                  reviewRequests: { nodes: [{ requestedReviewer: { __typename: "Bot", login: "some-other-bot", id: "BOT_1" } }] },
+                },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const result = requestBotReviews(seams, TARGET, 9, "PR_1", ["BOT_2"]);
+    expect(result.ok).toBe(false);
+    expect(result.unrecordedBots).toEqual([{ id: "BOT_2", login: null }]);
+  });
+
+  it("a response with no reviewRequests list at all is 'could not read' (unrecordedBots empty), not 'read, and absent'", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`,
+        result: { stdout: JSON.stringify({ data: { requestReviews: null } }) },
+      },
+    ]);
     const result = requestBotReviews(seams, TARGET, 9, "PR_1", ["BOT_1"]);
-    expect(result.ok).toBe(true);
-    expect(result.pendingBotLogins).toEqual([]);
-    expect(result.message).toMatch(/none reported back/);
+    expect(result.ok).toBe(false);
+    expect(result.unrecordedBots).toEqual([]);
+    expect(result.message).toMatch(/carries no reviewRequests list/);
+  });
+
+  it("a failed gh call carries no unrecordedBots -- nothing was read that could say which bot landed", () => {
+    const seams = new ScriptedSeams([
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`, result: { code: 1, stderr: "NOT_FOUND" } },
+    ]);
+    const result = requestBotReviews(seams, TARGET, 9, "PR_1", ["BOT_1"]);
+    expect(result.ok).toBe(false);
+    expect(result.unrecordedBots).toEqual([]);
+  });
+
+  it("EXIT_BOT_REQUEST_UNRECORDED is 9 -- distinct from 1 (a failed call), 2 (usage) and pr ready's 8", () => {
+    expect(EXIT_BOT_REQUEST_UNRECORDED).toBe(9);
   });
 
   it("fails rather than crashing when gh exits 0 but answers something that is not JSON", () => {
